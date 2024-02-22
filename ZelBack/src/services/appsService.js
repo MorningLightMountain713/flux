@@ -1075,74 +1075,75 @@ async function getAppFolderSize(appName) {
 function startAppMonitoring(appName) {
   if (!appName) {
     throw new Error('No App specified');
-  } else {
-    appsMonitored[appName] = {}; // oneMinuteInterval, fifteenMinInterval, oneMinuteStatsStore, fifteenMinStatsStore
-    if (!appsMonitored[appName].fifteenMinStatsStore) {
-      appsMonitored[appName].fifteenMinStatsStore = [];
-    }
-    if (!appsMonitored[appName].oneMinuteStatsStore) {
-      appsMonitored[appName].oneMinuteStatsStore = [];
-    }
-    clearInterval(appsMonitored[appName].oneMinuteInterval);
-    appsMonitored[appName].oneMinuteInterval = setInterval(async () => {
-      try {
-        if (!appsMonitored[appName]) {
-          log.error(`Monitoring of ${appName} already stopped`);
-          clearInterval(appsMonitored[appName].oneMinuteInterval);
-          return;
-        }
-        const dockerContainer = await dockerService.getDockerContainerOnly(appName);
-        if (!dockerContainer) {
-          log.error(`Monitoring of ${appName} not possible. App does not exist. Forcing stopping of monitoring`);
-          // eslint-disable-next-line no-use-before-define
-          stopAppMonitoring(appName, true);
-          return;
-        }
-        const statsNow = await dockerService.dockerContainerStats(appName);
-        const containerSize = await dockerService.dockerContainerInspect(appName, { size: true });
-        // const appFolderName = dockerService.getAppDockerNameIdentifier(appName).substring(1);
-        // const folderSize = await getAppFolderSize(appFolderName);
-        statsNow.disk_stats = {
-          used: containerSize.SizeRootFs ?? 0,
-        };
-        appsMonitored[appName].oneMinuteStatsStore.unshift({ timestamp: Date.now(), data: statsNow }); // Most recent stats object is at position 0 in the array
-        if (appsMonitored[appName].oneMinuteStatsStore.length > 60) {
-          appsMonitored[appName].oneMinuteStatsStore.length = 60; // Store stats every 1 min for the last hour only
-        }
-      } catch (error) {
-        log.error(error);
-      }
-    }, 1 * 60 * 1000);
-    clearInterval(appsMonitored[appName].fifteenMinInterval);
-    appsMonitored[appName].fifteenMinInterval = setInterval(async () => {
-      try {
-        if (!appsMonitored[appName]) {
-          log.error(`Monitoring of ${appName} already stopped`);
-          clearInterval(appsMonitored[appName].fifteenMinInterval);
-          return;
-        }
-        const dockerContainer = await dockerService.getDockerContainerOnly(appName);
-        if (!dockerContainer) {
-          log.error(`Monitoring of ${appName} not possible. App does not exist. Forcing stopping of monitoring`);
-          // eslint-disable-next-line no-use-before-define
-          stopAppMonitoring(appName, true);
-          return;
-        }
-        const statsNow = await dockerService.dockerContainerStats(appName);
-        const appFolderName = dockerService.getAppDockerNameIdentifier(appName).substring(1);
-        const folderSize = await getAppFolderSize(appFolderName);
-        statsNow.disk_stats = {
-          used: folderSize,
-        };
-        appsMonitored[appName].fifteenMinStatsStore.unshift({ timestamp: Date.now(), data: statsNow }); // Most recent stats object is at position 0 in the array
-        if (appsMonitored[appName].oneMinuteStatsStore.length > 96) {
-          appsMonitored[appName].fifteenMinStatsStore.length = 96; // Store stats every 15 mins for the last day only
-        }
-      } catch (error) {
-        log.error(error);
-      }
-    }, 15 * 60 * 1000);
   }
+
+  // this is making the intervals unreachable...
+  appsMonitored[appName] = {}; // oneMinuteInterval, fifteenMinInterval, oneMinuteStatsStore, fifteenMinStatsStore
+  if (!appsMonitored[appName].fifteenMinStatsStore) {
+    appsMonitored[appName].fifteenMinStatsStore = [];
+  }
+  if (!appsMonitored[appName].oneMinuteStatsStore) {
+    appsMonitored[appName].oneMinuteStatsStore = [];
+  }
+  clearInterval(appsMonitored[appName].oneMinuteInterval);
+  appsMonitored[appName].oneMinuteInterval = setInterval(async () => {
+    try {
+      if (!appsMonitored[appName]) {
+        log.error(`Monitoring of ${appName} already stopped`);
+        clearInterval(appsMonitored[appName].oneMinuteInterval);
+        return;
+      }
+      const dockerContainer = await dockerService.getDockerContainerOnly(appName);
+      if (!dockerContainer) {
+        log.error(`Monitoring of ${appName} not possible. App does not exist. Forcing stopping of monitoring`);
+        // eslint-disable-next-line no-use-before-define
+        stopAppMonitoring(appName, true);
+        return;
+      }
+      const statsNow = await dockerService.dockerContainerStats(appName);
+      const containerSize = await dockerService.dockerContainerInspect(appName, { size: true });
+      // const appFolderName = dockerService.getAppDockerNameIdentifier(appName).substring(1);
+      // const folderSize = await getAppFolderSize(appFolderName);
+      statsNow.disk_stats = {
+        used: containerSize.SizeRootFs ?? 0,
+      };
+      appsMonitored[appName].oneMinuteStatsStore.unshift({ timestamp: Date.now(), data: statsNow }); // Most recent stats object is at position 0 in the array
+      if (appsMonitored[appName].oneMinuteStatsStore.length > 60) {
+        appsMonitored[appName].oneMinuteStatsStore.length = 60; // Store stats every 1 min for the last hour only
+      }
+    } catch (error) {
+      log.error(error);
+    }
+  }, 1 * 60 * 1000);
+  clearInterval(appsMonitored[appName].fifteenMinInterval);
+  appsMonitored[appName].fifteenMinInterval = setInterval(async () => {
+    try {
+      if (!appsMonitored[appName]) {
+        log.error(`Monitoring of ${appName} already stopped`);
+        clearInterval(appsMonitored[appName].fifteenMinInterval);
+        return;
+      }
+      const dockerContainer = await dockerService.getDockerContainerOnly(appName);
+      if (!dockerContainer) {
+        log.error(`Monitoring of ${appName} not possible. App does not exist. Forcing stopping of monitoring`);
+        // eslint-disable-next-line no-use-before-define
+        stopAppMonitoring(appName, true);
+        return;
+      }
+      const statsNow = await dockerService.dockerContainerStats(appName);
+      const appFolderName = dockerService.getAppDockerNameIdentifier(appName).substring(1);
+      const folderSize = await getAppFolderSize(appFolderName);
+      statsNow.disk_stats = {
+        used: folderSize,
+      };
+      appsMonitored[appName].fifteenMinStatsStore.unshift({ timestamp: Date.now(), data: statsNow }); // Most recent stats object is at position 0 in the array
+      if (appsMonitored[appName].oneMinuteStatsStore.length > 96) {
+        appsMonitored[appName].fifteenMinStatsStore.length = 96; // Store stats every 15 mins for the last day only
+      }
+    } catch (error) {
+      log.error(error);
+    }
+  }, 15 * 60 * 1000);
 }
 
 /**
@@ -5762,7 +5763,7 @@ async function verifyAppSpecifications(appSpecifications, height, checkDockerAnd
 
 /**
  * To create a list of ports assigned to each local app.
- * @returns {object[]} Array of app specs objects.
+ * @returns {Promise<object[]>} Array of app specs objects.
  */
 async function assignedPortsInstalledApps() {
   // construct object ob app name and ports array
@@ -6484,7 +6485,7 @@ async function storeAppTemporaryMessage(message, furtherVerification = false) {
 /**
  * To store a message for a running app.
  * @param {object} message Message.
- * @returns {boolean} True if message is successfully stored and rebroadcasted. Returns false if message is old. Throws an error if invalid.
+ * @returns {Promise<boolean>} True if message is successfully stored and rebroadcasted. Returns false if message is old. Throws an error if invalid.
  */
 async function storeAppRunningMessage(message) {
   /* message object
@@ -8471,7 +8472,7 @@ async function getAppsLocation(req, res) {
 /**
  * To get all global app names.
  * @param {array} proj Array of wanted projection to get, If not submitted, all fields.
- * @returns {string[]} Array of app specifications or an empty array if an error is caught.
+ * @returns {Promise<string[]>} Array of app specifications or an empty array if an error is caught.
  */
 async function getAllGlobalApplications(proj = []) {
   try {
@@ -11893,7 +11894,7 @@ async function appendBackupTask(req, res) {
       backupInProgress.splice(indexToRemove, 1);
       res.end();
       return true;
-    // eslint-disable-next-line no-else-return
+      // eslint-disable-next-line no-else-return
     } else {
       const errMessage = messageHelper.errUnauthorizedMessage();
       return res.json(errMessage);
@@ -12045,7 +12046,7 @@ async function appendRestoreTask(req, res) {
       restoreInProgress.splice(indexToRemove, 1);
       res.end();
       return true;
-    // eslint-disable-next-line no-else-return
+      // eslint-disable-next-line no-else-return
     } else {
       const errMessage = messageHelper.errUnauthorizedMessage();
       return res.json(errMessage);

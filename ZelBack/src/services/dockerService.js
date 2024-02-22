@@ -669,7 +669,7 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
  * Starts app's docker.
  *
  * @param {string} idOrName
- * @returns {string} message
+ * @returns {Promise<string>} message
  */
 async function appDockerStart(idOrName) {
   // container ID or name
@@ -683,7 +683,7 @@ async function appDockerStart(idOrName) {
  * Stops app's docker.
  *
  * @param {string} idOrName
- * @returns {string} message
+ * @returns {Promise<string>} message
  */
 async function appDockerStop(idOrName) {
   // container ID or name
@@ -697,7 +697,7 @@ async function appDockerStop(idOrName) {
  * Restarts app's docker.
  *
  * @param {string} idOrName
- * @returns {string} message
+ * @returns {Promise<string>} message
  */
 async function appDockerRestart(idOrName) {
   // container ID or name
@@ -711,7 +711,7 @@ async function appDockerRestart(idOrName) {
  * Kills app's docker.
  *
  * @param {string} idOrName
- * @returns {string} message
+ * @returns {Promise<string>} message
  */
 async function appDockerKill(idOrName) {
   // container ID or name
@@ -725,7 +725,7 @@ async function appDockerKill(idOrName) {
  * Removes app's docker.
  *
  * @param {string} idOrName
- * @returns {string} message
+ * @returns {Promise<string>} message
  */
 async function appDockerRemove(idOrName) {
   // container ID or name
@@ -739,7 +739,7 @@ async function appDockerRemove(idOrName) {
  * Removes app's docker image.
  *
  * @param {string} idOrName
- * @returns {string} message
+ * @returns {Promise<string>} message
  */
 async function appDockerImageRemove(idOrName) {
   // container ID or name
@@ -752,7 +752,7 @@ async function appDockerImageRemove(idOrName) {
  * Pauses app's docker.
  *
  * @param {string} idOrName
- * @returns {string} message
+ * @returns {Promise<string>} message
  */
 async function appDockerPause(idOrName) {
   // container ID or name
@@ -766,7 +766,7 @@ async function appDockerPause(idOrName) {
  * Unpauses app's docker.
  *
  * @param {string} idOrName
- * @returns {string} message
+ * @returns {Promise<string>} message
  */
 async function appDockerUnpause(idOrName) {
   // container ID or name
@@ -780,7 +780,7 @@ async function appDockerUnpause(idOrName) {
  * Returns app's docker's active processes.
  *
  * @param {string} idOrName
- * @returns {string} message
+ * @returns {Promise<string>} message
  */
 async function appDockerTop(idOrName) {
   // container ID or name
@@ -793,7 +793,7 @@ async function appDockerTop(idOrName) {
 /**
  * Creates flux docker network if doesn't exist
  * OBSOLETE
- * @returns {object} response
+ * @returns {Promise<object>} response
  */
 async function createFluxDockerNetwork() {
   // check if fluxDockerNetwork exists
@@ -864,7 +864,7 @@ async function getFluxDockerNetworkSubnets() {
 /**
  * Creates flux application docker network if doesn't exist
  *
- * @returns {object} response
+ * @returns {Promise<object>} response
  */
 async function createFluxAppDockerNetwork(appname, number) {
   // check if fluxDockerNetwork of an appexists
@@ -895,7 +895,7 @@ async function createFluxAppDockerNetwork(appname, number) {
 /**
  * Removes flux application docker network if exists
  *
- * @returns {object} response
+ * @returns {Promise<object>} response
  */
 async function removeFluxAppDockerNetwork(appname) {
   // check if fluxDockerNetwork of an app exists
