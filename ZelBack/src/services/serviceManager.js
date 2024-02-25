@@ -268,7 +268,7 @@ async function startFluxFunctions() {
     await fluxNetworkHelper.purgeUFW();
     log.info('Firewall purged');
 
-    await fluxNetworkHelper.removeDockerContainerAccessToHost();
+    await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable();
     log.info('Docker to host firewall enabled');
 
     // what is the point of this? if it fails it just keeps going
