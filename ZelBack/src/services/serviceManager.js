@@ -14,6 +14,7 @@ const geolocationService = require('./geolocationService');
 const upnpService = require('./upnpService');
 const syncthingService = require('./syncthingService');
 const pgpService = require('./pgpService');
+const dockerService = require('./dockerService');
 const backupRestoreService = require('./backupRestoreService');
 const serviceHelper = require('./serviceHelper');
 var crypto = require("crypto");
@@ -268,7 +269,8 @@ async function startFluxFunctions() {
     await fluxNetworkHelper.purgeUFW();
     log.info('Firewall purged');
 
-    await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable();
+    const fluxNetworkInterfaces = await dockerService.getFluxDockerNetworkPhysicalInterfaceNames();
+    await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces);
     log.info('Docker to host firewall enabled');
 
     // what is the point of this? if it fails it just keeps going
