@@ -283,8 +283,7 @@ async function startFluxFunctions() {
     const unreachableApps = await appsService.openAppsPortsToInternet();
     appsService.forceAppsRemoval(unreachableApps);
 
-    // this is broken. needs refactoring
-    syncthingService.startSyncthing();
+    syncthingService.startSyncthingSentinel();
     log.info('Syncthing service started');
 
     await appsService.startMonitoringOfApps();
@@ -330,10 +329,10 @@ async function stopFluxFunctions() {
 
   await explorerService.stopBlockProcessing();
   await fluxNetworkHelper.stopNetworkSentinel();
+  await syncthingService.stopSyncthingSentinel();
 }
 
 module.exports = {
   startFluxFunctions,
   stopFluxFunctions,
-  FluxController,
 };
