@@ -2218,10 +2218,6 @@ async function configureDirectories() {
   await cmdAsync(execDIRownSyncthing).catch((error) => log.error(error));
 }
 
-/**
- * To Start Syncthing
- */
-
 async function stopSyncthing() {
   if (stc.aborted) return;
 
@@ -2230,14 +2226,14 @@ async function stopSyncthing() {
   const execKillC = 'sudo pkill -9 syncthing';
   const runningCmd = 'sudo pgrep syncthing';
 
-  const isRunningA = await cmdAsync(runningCmd).catch();
+  const isRunningA = await cmdAsync(runningCmd).catch(noop);
   if (isRunningA) {
     log.info('Stopping gracefully syncthing service');
     await cmdAsync(execKill).catch((error) => log.error(error));
     await cmdAsync(execKillB).catch((error) => log.error(error));
     await serviceHelper.delay(2 * 1000);
 
-    const isRunningB = await cmdAsync(runningCmd).catch();
+    const isRunningB = await cmdAsync(runningCmd).catch(noop);
     if (isRunningB) {
       log.info('Stopping syncthing service');
       await cmdAsync(execKillC).catch((error) => log.error(error));
