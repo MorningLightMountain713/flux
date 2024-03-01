@@ -2262,16 +2262,17 @@ async function runSyncthingSentinel() {
       await installSyncthingIdempotently();
       await configureDirectories();
       await stopSyncthing();
+
+      const exec = 'sudo nohup syncthing -logfile $HOME/.config/syncthing/syncthing.log --logflags=3 --log-max-old-files=2 --log-max-size=26214400 --allow-newer-config --no-browser --home=$HOME/.config/syncthing &';
+      log.info('Spawning Syncthing instance...');
+      await cmdAsync(exec).catch((err) => {
+        log.error(err);
+        log.info('Error starting synchting.');
+      });
+
     }
 
     if (stc.aborted) return 0;
-
-    const exec = 'sudo nohup syncthing -logfile $HOME/.config/syncthing/syncthing.log --logflags=3 --log-max-old-files=2 --log-max-size=26214400 --allow-newer-config --no-browser --home=$HOME/.config/syncthing &';
-    log.info('Spawning Syncthing instance...');
-    await cmdAsync(exec).catch((err) => {
-      log.error(err);
-      log.info('Error starting synchting.');
-    });
 
     // every 8 minutes call adjustSyncthing to check service folders
     // this will also run on first iteration
