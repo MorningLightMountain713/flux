@@ -151,3 +151,5 @@ async function initiate() {
 module.exports = {
   initiate,
 };
+
+initiate();
