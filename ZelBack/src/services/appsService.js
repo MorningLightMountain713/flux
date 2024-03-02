@@ -10107,6 +10107,7 @@ async function stopAllNonFluxRunningApps() {
  * @returns {Promise<void>}
  */
 async function forceAppsRemoval(appNames) {
+  log.info(`FORCING: ${appNames}`)
   // eslint-disable-next-line no-restricted-syntax
   for (const appName of appNames) {
     // eslint-disable-next-line no-await-in-loop
