@@ -138,7 +138,7 @@ async function initiate() {
          \/                     \/       \/        \/
 
 
-         `)
+  `)
 
   const branch = development ? userconfig.initial.branch || 'development' : 'master';
   await loadBranch(branch);
