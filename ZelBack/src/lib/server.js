@@ -6,6 +6,18 @@ const cors = require('cors');
 const expressWs = eWS(express());
 const { app } = expressWs;
 
+const logger = (req, res, next) => {
+  console.log(`
+
+    ${req.method}
+    ${req.url}
+    ${req.ip}
+
+  `);
+  next();
+};
+
+app.use(logger);
 // app.use(morgan('combined'));
 app.use(express.json());
 // app.use(express.urlencoded({ extended: true }));
