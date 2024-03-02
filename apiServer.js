@@ -138,8 +138,9 @@ async function initiate() {
          \/                     \/       \/        \/
 
 
-  `)
+`)
 
+  log.info(`Running as TTY: ${process.stdout.isTTY}`);
   const branch = development ? userconfig.initial.branch || 'development' : 'master';
   await loadBranch(branch);
 
