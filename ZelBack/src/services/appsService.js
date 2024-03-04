@@ -6637,8 +6637,7 @@ async function storeAppRemovedMessage(message) {
     return new Error('Invalid Flux App Removed message appName cannot be empty');
   }
 
-  log.info('New Flux App Removed message received.');
-  // log.info(message);
+  log.info(`App ${message.appName} removed from: ${message.ip}`);
 
   const validTill = message.broadcastedAt + (65 * 60 * 1000); // 3900 seconds
   if (validTill < Date.now()) {
