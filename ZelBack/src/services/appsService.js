@@ -2307,7 +2307,7 @@ async function appUninstallHard(appName, appId, appSpecifications, isComponent, 
     res.write(serviceHelper.ensureString(cleaningStatus));
   }
 
-  const { error: delAppRootError } = serviceHelper.runCommand('rm', {
+  const { error: delAppRootError } = await serviceHelper.runCommand('rm', {
     runAsRoot: true,
     params: ['-rf', appRoot],
   });
