@@ -22,8 +22,6 @@ const config = require('config');
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
-const util = require('util');
-const nodecmd = require('node-cmd');
 const hash = require('object-hash');
 const { watch } = require('fs/promises');
 
@@ -54,7 +52,6 @@ function loadFluxModules(options = {}) {
 
 loadFluxModules();
 
-const cmdAsync = util.promisify(nodecmd.get);
 const apiPort = userconfig.initial.apiport || config.server.apiport;
 const apiPortHttps = +apiPort + 1;
 const development = userconfig.initial.development || false;
@@ -159,9 +156,11 @@ async function initiate() {
   try {
     const certExists = fs.existsSync(path.join(__dirname, './certs/v1.key'));
     if (!certExists) {
-      const nodedpath = path.join(__dirname, './helpers');
-      const exec = `cd ${nodedpath} && bash createSSLcert.sh`;
-      await cmdAsync(exec);
+      const scriptDir = path.join(__dirname, './helpers');
+      const scriptPath = path.join(scriptDir, 'createSSLcert.sh');
+      await serviceHelper.runCommand(scriptPath, { cwd: scriptDir });
+      // const exec = `cd ${nodedpath} && bash createSSLcert.sh`;
+      // await cmdAsync(exec);
     }
     const key = fs.readFileSync(path.join(__dirname, './certs/v1.key'), 'utf8');
     const cert = fs.readFileSync(path.join(__dirname, './certs/v1.crt'), 'utf8');
