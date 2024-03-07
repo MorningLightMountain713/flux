@@ -7,12 +7,14 @@ const log = require('./log');
 const expressWs = eWS(express());
 const { app } = expressWs;
 
-const logger = (req, res, next) => {
-  log.info(`\n\n${req.method}\n${req.url}\n${req.ip}\n`)
-  next();
+const logger = () => {
+  return (req, res, next) => {
+    log.info({ url: req.url, method: req.method, ip: req.ip });
+    next();
+  }
 };
 
-app.use(logger);
+app.use(logger());
 app.use(express.json());
 // app.use(express.urlencoded({ extended: true }));
 app.use(cors());
