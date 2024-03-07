@@ -6,7 +6,6 @@ const http = require('http');
 // eslint-disable-next-line import/no-extraneous-dependencies
 const os = require('os');
 const path = require('path');
-const nodecmd = require('node-cmd');
 const df = require('node-df');
 const { LRUCache } = require('lru-cache');
 const systemcrontab = require('crontab');
@@ -42,7 +41,6 @@ const { invalidMessages } = require('./invalidMessages');
 const fluxDirPath = path.join(__dirname, '../../../');
 const appsFolder = `${fluxDirPath}ZelApps/`;
 
-const cmdAsync = util.promisify(nodecmd.get);
 const crontabLoad = util.promisify(systemcrontab.load);
 const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
 const dockerStatsStreamPromise = util.promisify(dockerService.dockerContainerStatsStream);
