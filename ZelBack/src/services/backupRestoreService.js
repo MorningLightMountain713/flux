@@ -46,7 +46,7 @@ function pathValidation(filepath) {
  */
 async function getVolumeDataOfComponent(req, res) {
   try {
-    console.log(req.params);
+    log.info(req.params);
     let { appname } = req.params;
     appname = appname || req.query.appname;
     let { component } = req.params;
@@ -94,7 +94,7 @@ async function getVolumeDataOfComponent(req, res) {
  */
 async function getLocalBackupList(req, res) {
   try {
-    console.log(req.params);
+    log.info(req.params);
     let { path: vPath } = req.params;
     vPath = vPath || req.query.path;
     let { multiplier } = req.params;
@@ -144,7 +144,7 @@ async function getLocalBackupList(req, res) {
  */
 async function getRemoteFileSize(req, res) {
   try {
-    console.log(req.params);
+    log.info(req.params);
     let { fileurl } = req.params;
     fileurl = fileurl || req.query.fileurl;
     let { multiplier } = req.params;
@@ -166,7 +166,7 @@ async function getRemoteFileSize(req, res) {
       }
       const response = messageHelper.createDataMessage(fileSize);
       return res ? res.json(response) : response;
-    // eslint-disable-next-line no-else-return
+      // eslint-disable-next-line no-else-return
     } else {
       const errorResponse = messageHelper.errUnauthorizedMessage();
       return res ? res.json(errorResponse) : errorResponse;
@@ -194,9 +194,9 @@ async function getRemoteFileSize(req, res) {
 //   const authorized = await verificationHelper.verifyPrivilege('appownerabove', req);
 //   if (authorized === true) {
 //     try {
-//       console.log();
+//       log.info();
 //       const bodyData = serviceHelper.ensureObject(req.body);
-//       console.log(bodyData);
+//       log.info(bodyData);
 //       if (!bodyData || bodyData.length === 0) {
 //         throw new Error('Request body must contain data (body parameters are required)');
 //       }
@@ -245,7 +245,7 @@ async function getRemoteFileSize(req, res) {
  */
 async function removeBackupFile(req, res) {
   try {
-    console.log(req.params);
+    log.info(req.params);
     let { filepath } = req.params;
     filepath = filepath || req.query.filepath;
     let { appname } = req.params;
@@ -261,7 +261,7 @@ async function removeBackupFile(req, res) {
       const output = await IOUtils.removeFile(filepath);
       const response = messageHelper.createSuccessMessage(output);
       return res.json(response);
-    // eslint-disable-next-line no-else-return
+      // eslint-disable-next-line no-else-return
     } else {
       const errMessage = messageHelper.errUnauthorizedMessage();
       return res.json(errMessage);
@@ -286,7 +286,7 @@ async function removeBackupFile(req, res) {
  */
 async function downloadLocalFile(req, res) {
   try {
-    console.log(req.params);
+    log.info(req.params);
     let { filepath } = req.params;
     filepath = filepath || req.query.filepath;
     let { appname } = req.params;
@@ -302,7 +302,7 @@ async function downloadLocalFile(req, res) {
       const fileNameArray = filepath.split('/');
       const fileName = fileNameArray[fileNameArray.length - 1];
       return res.download(filepath, fileName);
-    // eslint-disable-next-line no-else-return
+      // eslint-disable-next-line no-else-return
     } else {
       const errMessage = messageHelper.errUnauthorizedMessage();
       return res.json(errMessage);
