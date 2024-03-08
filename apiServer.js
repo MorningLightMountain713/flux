@@ -19,11 +19,10 @@ globalThis.userconfig = require('./config/userconfig');
 process.env.NODE_CONFIG_DIR = `${__dirname}/ZelBack/config/`;
 
 const config = require('config');
-const fs = require('node:fs/promises');
 const https = require('https');
 const path = require('path');
 const hash = require('object-hash');
-const { watch } = require('fs/promises');
+const fs = require('fs/promises');
 
 const apiPort = userconfig.initial.apiport || config.server.apiport;
 const apiPortHttps = +apiPort + 1;
@@ -87,7 +86,7 @@ async function loadUpnpIfRequired() {
 
 async function configReload() {
   try {
-    const watcher = watch(path.join(__dirname, '/config'));
+    const watcher = fs.watch(path.join(__dirname, '/config'));
     // eslint-disable-next-line
     for await (const event of watcher) {
       if (event.eventType === 'change' && event.filename === 'userconfig.js') {
@@ -166,25 +165,22 @@ async function initiate() {
 
   socket.initIO(server);
 
-  try {
-    const certExists = fs.existsSync(path.join(__dirname, './certs/v1.key'));
-    if (!certExists) {
-      const scriptDir = path.join(__dirname, './helpers');
-      const scriptPath = path.join(scriptDir, 'createSSLcert.sh');
-      await serviceHelper.runCommand(scriptPath, { cwd: scriptDir });
-      // const exec = `cd ${nodedpath} && bash createSSLcert.sh`;
-      // await cmdAsync(exec);
-    }
-    const key = fs.readFileSync(path.join(__dirname, './certs/v1.key'), 'utf8');
-    const cert = fs.readFileSync(path.join(__dirname, './certs/v1.crt'), 'utf8');
-    const credentials = { key, cert };
-    const httpsServer = https.createServer(credentials, app);
-    httpsServer.listen(apiPortHttps, () => {
-      log.info(`Flux https listening on port ${apiPortHttps}!`);
-    });
-  } catch (error) {
-    log.error(error);
-  }
+
+  const keyPath = path.join(__dirname, './certs/v1.key');
+  await fs.stat(keyPath).catch(async () => {
+    const scriptDir = path.join(__dirname, './helpers');
+    const scriptPath = path.join(scriptDir, 'createSSLcert.sh');
+    await serviceHelper.runCommand(scriptPath, { cwd: scriptDir });
+  })
+
+  const key = await fs.readFile(path.join(__dirname, './certs/v1.key'), 'utf8');
+  const cert = await fs.readFile(path.join(__dirname, './certs/v1.crt'), 'utf8');
+  const credentials = { key, cert };
+  const httpsServer = https.createServer(credentials, app);
+  httpsServer.listen(apiPortHttps, () => {
+    log.info(`Flux https listening on port ${apiPortHttps}!`);
+  });
+
   return apiPort;
 }
 
