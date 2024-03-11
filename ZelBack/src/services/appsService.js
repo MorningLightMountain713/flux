@@ -11372,7 +11372,8 @@ async function checkMyAppsAvailability() {
     const firewallActive = await serviceHelper.isFirewallActive();
     if (firewallActive) {
       // should check this is true
-      await fluxNetworkHelper.allowPort(testingPort);
+      const allowed = await fluxNetworkHelper.allowPort(testingPort);
+      log.info('PORT ALLOWED', allowed)
     }
     if (isUPNP) {
       const upnpMapResult = await upnpService.mapUpnpPort(testingPort, 'Flux_Test_App');
