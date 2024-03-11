@@ -9,7 +9,7 @@ const { app } = expressWs;
 
 const logger = () => {
   return (req, res, next) => {
-    log.info("Incomming request:", { url: req.url, method: req.method, ip: req.ip.replace('::ffff:', '') })
+    log.debug("Incomming request:", { url: req.url, method: req.method, ip: req.ip.replace('::ffff:', '') })
     next();
   }
 };
