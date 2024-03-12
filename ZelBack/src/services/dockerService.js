@@ -7,7 +7,7 @@ const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSend
 const pgpService = require('./pgpService');
 const generalService = require('./generalService');
 const deviceHelper = require('./deviceHelper');
-const log = require('../../../../lib/log');
+const log = require('../../../lib/log');
 
 const fluxDirPath = path.join(__dirname, '../../../');
 const appsFolder = `${fluxDirPath}ZelApps/`;
