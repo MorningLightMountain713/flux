@@ -2,7 +2,7 @@ const express = require('express');
 const eWS = require('express-ws');
 const cors = require('cors');
 
-const log = require('./log');
+const log = require('../../../lib/log');
 
 const expressWs = eWS(express());
 const { app } = expressWs;
