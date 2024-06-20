@@ -21,6 +21,9 @@
         ref="primaryTable"
         caption="Outbound Requests"
         caption-top
+        per-page="100"
+        current-page="1"
+        no-provider-paging
         table-variant="secondary"
         class="primary-table"
         :items="primaryRows"
