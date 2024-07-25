@@ -3400,7 +3400,7 @@ export default {
         this.showToast('danger', 'Test install/launch was already initiated');
         return;
       }
-      this.output = this.$set(this.output, []);
+      this.$set(this.output, []);
       this.downloadOutput = {};
       this.downloadOutputReturned = false;
       this.downloading = true;
@@ -3430,6 +3430,7 @@ export default {
 
         // eslint-disable-next-line no-restricted-syntax
         for await (const chunk of stream) {
+          // this should try parse it and add to buffer if it can't parse
           this.output.push(JSON.parse(chunk));
         }
 
