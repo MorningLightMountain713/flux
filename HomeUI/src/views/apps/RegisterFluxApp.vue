@@ -3431,7 +3431,9 @@ export default {
         // eslint-disable-next-line no-restricted-syntax
         for await (const chunk of stream) {
           // this should try parse it and add to buffer if it can't parse
-          this.output.push(JSON.parse(chunk));
+          console.log('CHUNK FOLLOWS');
+          console.log(chunk);
+          // this.output.push(JSON.parse(chunk));
         }
 
         for (let i = 0; i < this.output.length; i += 1) {
