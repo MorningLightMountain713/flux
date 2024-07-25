@@ -3400,7 +3400,7 @@ export default {
         this.showToast('danger', 'Test install/launch was already initiated');
         return;
       }
-      // const self = this;
+      const self = this;
       this.output = [];
       this.downloadOutput = {};
       this.downloadOutputReturned = false;
@@ -3414,10 +3414,7 @@ export default {
           zelidauth,
         },
         onDownloadProgress(progressEvent) {
-          console.log('PROGRESS EVENT');
-          console.log(progressEvent);
-          // console.log(progressEvent.target.response);
-          // self.output = JSON.parse(`[${progressEvent.target.response.replace(/}{/g, '},{')}]`);
+          self.output = JSON.parse(`[${progressEvent.event.target.response.replace(/}{/g, '},{')}]`);
         },
       };
       let response;
