@@ -3415,7 +3415,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
     };
     log.info(precheckForInstallation);
     if (res) {
-      res.write(precheckForInstallation);
+      res.write(serviceHelper.ensureString(precheckForInstallation));
       if (res.flush) res.flush();
     }
     // connect to mongodb
@@ -3424,7 +3424,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
     };
     log.info(dbOpenTest);
     if (res) {
-      res.write(dbOpenTest);
+      res.write(serviceHelper.ensureString(dbOpenTest));
       if (res.flush) res.flush();
     }
     const dbopen = dbHelper.databaseConnection();
@@ -3444,7 +3444,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
     };
     log.info(checkDb);
     if (res) {
-      res.write(checkDb);
+      res.write(serviceHelper.ensureString(checkDb));
       if (res.flush) res.flush();
     }
     const appResult = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
@@ -3495,7 +3495,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
       };
       log.info(dockerContainers);
       if (res) {
-        res.write(dockerContainers);
+        res.write(serviceHelper.ensureString(dockerContainers));
         if (res.flush) res.flush();
       }
       await dockerService.pruneContainers();
@@ -3503,7 +3503,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
         status: 'Docker containers cleaned.',
       };
       if (res) {
-        res.write(dockerContainers2);
+        res.write(serviceHelper.ensureString(dockerContainers2));
         if (res.flush) res.flush();
       }
 
@@ -3512,7 +3512,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
       };
       log.info(dockerNetworks);
       if (res) {
-        res.write(dockerNetworks);
+        res.write(serviceHelper.ensureString(dockerNetworks));
         if (res.flush) res.flush();
       }
       await dockerService.pruneNetworks();
@@ -3520,7 +3520,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
         status: 'Docker networks cleaned.',
       };
       if (res) {
-        res.write(dockerNetworks2);
+        res.write(serviceHelper.ensureString(dockerNetworks2));
         if (res.flush) res.flush();
       }
 
@@ -3529,7 +3529,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
       };
       log.info(dockerVolumes);
       if (res) {
-        res.write(dockerVolumes);
+        res.write(serviceHelper.ensureString(dockerVolumes));
         if (res.flush) res.flush();
       }
       await dockerService.pruneVolumes();
@@ -3537,7 +3537,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
         status: 'Docker volumes cleaned.',
       };
       if (res) {
-        res.write(dockerVolumes2);
+        res.write(serviceHelper.ensureString(dockerVolumes2));
         if (res.flush) res.flush();
       }
 
@@ -3546,7 +3546,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
       };
       log.info(dockerImages);
       if (res) {
-        res.write(dockerImages);
+        res.write(serviceHelper.ensureString(dockerImages));
         if (res.flush) res.flush();
       }
       await dockerService.pruneImages();
@@ -3554,7 +3554,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
         status: 'Docker images cleaned.',
       };
       if (res) {
-        res.write(dockerImages2);
+        res.write(serviceHelper.ensureString(dockerImages2));
         if (res.flush) res.flush();
       }
     }
@@ -3569,7 +3569,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
       };
       log.info(fluxNetworkStatus);
       if (res) {
-        res.write(fluxNetworkStatus);
+        res.write(serviceHelper.ensureString(fluxNetworkStatus));
         if (res.flush) res.flush();
       }
       let fluxNet = null;
@@ -3591,14 +3591,14 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
         status: accessRemoved ? `Private network access removed for ${appName}` : `Error removing private network access for ${appName}`,
       };
       if (res) {
-        res.write(accessRemovedRes);
+        res.write(serviceHelper.ensureString(accessRemovedRes));
         if (res.flush) res.flush();
       }
       const fluxNetResponse = {
         status: `Docker network of ${appName} initiated.`,
       };
       if (res) {
-        res.write(fluxNetResponse);
+        res.write(serviceHelper.ensureString(fluxNetResponse));
         if (res.flush) res.flush();
       }
     }
@@ -3608,7 +3608,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
     };
     log.info(appInstallation);
     if (res) {
-      res.write(appInstallation);
+      res.write(serviceHelper.ensureString(appInstallation));
       if (res.flush) res.flush();
     }
     if (!isComponent) {
@@ -3673,7 +3673,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false) {
     const successStatus = messageHelper.createSuccessMessage(`Flux App ${appName} successfully installed and launched`);
     log.info(successStatus);
     if (res) {
-      res.write(successStatus);
+      res.write(serviceHelper.ensureString(successStatus));
       res.end();
     }
     installationInProgress = false;
@@ -7584,7 +7584,7 @@ async function testAppInstall(req, res) {
         throw new Error(`Application ${appname} is already installed`);
       }
       appSpecifications.name += 'Test';
-
+      res.setHeader('Content-Type', 'application/json');
       await registerAppLocally(appSpecifications, undefined, res, true); // can throw
       removeAppLocally(appSpecifications.name, null, true, false, false);
     } else {

@@ -3400,7 +3400,8 @@ export default {
         this.showToast('danger', 'Test install/launch was already initiated');
         return;
       }
-      this.$set(this.output, []);
+      const self = this;
+      this.output = [];
       this.downloadOutput = {};
       this.downloadOutputReturned = false;
       this.downloading = true;
@@ -3411,7 +3412,12 @@ export default {
       const axiosConfig = {
         headers: {
           zelidauth,
-          responseType: 'stream',
+        },
+        onDownloadProgress(progressEvent) {
+          console.log('PROGRESS EVENT');
+          console.log(progressEvent);
+          // console.log(progressEvent.target.response);
+          // self.output = JSON.parse(`[${progressEvent.target.response.replace(/}{/g, '},{')}]`);
         },
       };
       let response;
@@ -3425,36 +3431,33 @@ export default {
         } else {
           response = await AppsService.justAPI().get(`/apps/testappinstall/${app}`, axiosConfig);
         }
-
-        const stream = response.data;
-
-        // eslint-disable-next-line no-restricted-syntax
-        for await (const chunk of stream) {
-          // this should try parse it and add to buffer if it can't parse
-          console.log('CHUNK FOLLOWS');
-          console.log(chunk);
-          // this.output.push(JSON.parse(chunk));
-        }
-
-        for (let i = 0; i < this.output.length; i += 1) {
-          if (this.output[i] && this.output[i].data && this.output[i].data.message && this.output[i].data.message.includes('Error occured')) {
-            // error is defined one line above
-            if (this.output[i - 1] && this.output[i - 1].data) {
-              this.showToast('danger', 'Error on Test, check logs');
-              this.testError = true;
-              return;
+        if (response.data.status === 'error') {
+          this.showToast('danger', response.data.data.message || response.data.data);
+          this.testError = true;
+        } else {
+          console.log(response);
+          this.output = JSON.parse(`[${response.data.replace(/}{/g, '},{')}]`);
+          console.log(this.output);
+          for (let i = 0; i < this.output.length; i += 1) {
+            if (this.output[i] && this.output[i].data && this.output[i].data.message && this.output[i].data.message.includes('Error occured')) {
+              // error is defined one line above
+              if (this.output[i - 1] && this.output[i - 1].data) {
+                this.showToast('danger', 'Error on Test, check logs');
+                this.testError = true;
+                return;
+              }
             }
           }
-        }
-        if (this.output[this.output.length - 1].status === 'error') {
-          this.testError = true;
-          this.showToast('danger', 'Error on Test, check logs');
-        } else if (this.output[this.output.length - 1].status === 'warning') {
-          this.testError = true;
-          this.showToast('warning', 'Warning on Test, check logs');
-        } else {
-          this.showToast('success', 'Test passed, you can continue with app payment');
-          this.testError = false;
+          if (this.output[this.output.length - 1].status === 'error') {
+            this.testError = true;
+            this.showToast('danger', 'Error on Test, check logs');
+          } else if (this.output[this.output.length - 1].status === 'warning') {
+            this.testError = true;
+            this.showToast('warning', 'Warning on Test, check logs');
+          } else {
+            this.showToast('success', 'Test passed, you can continue with app payment');
+            this.testError = false;
+          }
         }
       } catch (error) {
         this.showToast('danger', error.message || error);
