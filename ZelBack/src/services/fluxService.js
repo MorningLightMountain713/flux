@@ -1121,7 +1121,7 @@ async function getFluxInfo(req, res) {
       throw daemonInfoRes.data;
     }
     info.daemon.info = daemonInfoRes.data;
-    const zmqEnabled = daemonServiceUtils.getConfigValue('zmqpubhashblock') || null;
+    const zmqEnabled = Boolean(daemonServiceUtils.getConfigValue('zmqpubhashblock')) || null;
     info.daemon.zmqEnabled = zmqEnabled;
     const daemonNodeStatusRes = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
     if (daemonNodeStatusRes.status === 'error') {
