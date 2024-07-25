@@ -3400,7 +3400,7 @@ export default {
         this.showToast('danger', 'Test install/launch was already initiated');
         return;
       }
-      const self = this;
+      // const self = this;
       this.output = [];
       this.downloadOutput = {};
       this.downloadOutputReturned = false;
