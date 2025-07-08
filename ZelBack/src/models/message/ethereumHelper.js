@@ -1,4 +1,4 @@
-const nanoEthSigner = require("nano-ethereum-signer");
+const nanoEthSigner = require('nano-ethereum-signer');
 
 /**
  * Test if a string is trully a hex string
@@ -8,8 +8,8 @@ const nanoEthSigner = require("nano-ethereum-signer");
  */
 function isHexStrict(hex) {
   return (
-    (typeof hex === "string" || typeof hex === "number") &&
-    /^(-)?0x[0-9a-f]*$/i.test(hex)
+    (typeof hex === 'string' || typeof hex === 'number')
+    && /^(-)?0x[0-9a-f]*$/i.test(hex)
   );
 }
 
@@ -20,7 +20,7 @@ function isHexStrict(hex) {
  * @returns {string} returns string encoded as hex
  */
 function toHex(str) {
-  let result = "";
+  let result = '';
   for (let i = 0; i < str.length; i += 1) {
     result += str.charCodeAt(i).toString(16);
   }
@@ -39,7 +39,7 @@ function hexToBytes(hexString) {
   if (!isHexStrict(hex)) {
     throw new Error(`Given value "${hex}" is not a valid hex string.`);
   }
-  hex = hex.replace(/^0x/i, "");
+  hex = hex.replace(/^0x/i, '');
   const bytes = [];
   // eslint-disable-next-line vars-on-top
   for (let c = 0; c < hex.length; c += 2) {

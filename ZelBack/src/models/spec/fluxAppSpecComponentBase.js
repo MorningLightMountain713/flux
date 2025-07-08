@@ -1,8 +1,10 @@
-const { FluxAppSpecBase } = require("./fluxAppSpecBase");
+const { FluxAppSpecBase } = require('./fluxAppSpecBase');
 
 class FluxAppSpecComponentBase extends FluxAppSpecBase {
   static mandatoryProperties = [];
+
   static frontendPropertyMap = {};
+
   static propValidators = {};
 
   static generateRandomPorts(options = {}) {
@@ -27,7 +29,7 @@ class FluxAppSpecComponentBase extends FluxAppSpecBase {
     return randomPorts;
   }
 
-  static fromFrontendBlob(_data) {
+  static fromFrontendBlob() {
     throw FluxAppSpecBase.notImplemented;
   }
 }

@@ -1,5 +1,5 @@
 class FluxBase {
-  static notImplemented = new Error("Not Implemented");
+  static notImplemented = new Error('Not Implemented');
 
   static parseJson(data) {
     try {
@@ -22,9 +22,9 @@ class FluxBase {
     const tx = typeof x;
     const ty = typeof y;
 
-    return x && y && tx === "object" && tx === ty
-      ? ok(x).length === ok(y).length &&
-          ok(x).every((key) => deepEqual(x[key], y[key]))
+    return x && y && tx === 'object' && tx === ty
+      ? ok(x).length === ok(y).length
+          && ok(x).every((key) => this.objectDeepEqual(x[key], y[key]))
       : x === y;
   }
 
@@ -43,19 +43,24 @@ class FluxBase {
   sortRecursive(obj) {
     if (Object.isArray(obj)) {
       const sortedArray = [];
+      const objectLen = obj.len;
 
-      for (let i = 0, l = obj.length; i < l; i++)
-        sortedArray[i] = sortKeysRec(obj[i]);
+      for (let i = 0; i < objectLen; i += 1) {
+        sortedArray[i] = this.sortKeysRec(obj[i]);
+      }
+
       return sortedArray;
     }
 
-    if (typeof obj !== "object" || obj === null) return obj;
+    if (typeof obj !== 'object' || obj === null) return obj;
 
     const sortedKeys = Object.keys(obj).sort();
+    const keysLen = sortedKeys.length;
 
     const sortedObject = {};
-    for (let i = 0, l = sortedKeys.length; i < l; i++) {
-      sortedObject[sortedKeys[i]] = sortKeysRec(obj[sortedKeys[i]]);
+
+    for (let i = 0; i < keysLen; i += 1) {
+      sortedObject[sortedKeys[i]] = this.sortKeysRec(obj[sortedKeys[i]]);
     }
 
     return sortedObject;
@@ -63,13 +68,12 @@ class FluxBase {
 
   static validateBlob(blob) {
     if (
-      blob instanceof Array ||
-      typeof blob === "number" ||
-      typeof blob === "string"
-    )
-      return null;
+      blob instanceof Array
+      || typeof blob === 'number'
+      || typeof blob === 'string'
+    ) return null;
 
-    if (typeof blob !== "object") return null;
+    if (typeof blob !== 'object') return null;
 
     const serialized = this.serializeJson(blob);
 
@@ -78,7 +82,14 @@ class FluxBase {
     return serialized;
   }
 
+  /**
+   *
+   * @param {any} input
+   * @param {'string' | 'number' | 'boolean'} typeMatch
+   * @returns
+   */
   static typeOfValidator(input, typeMatch) {
+    // eslint-disable-next-line valid-typeof
     return typeof input === typeMatch;
   }
 
@@ -107,9 +118,9 @@ class FluxBase {
     const maxLen = options.maxLen || 0;
     const patterns = options.patterns || [];
 
-    const isString = this.typeOfValidator(input, "string");
+    const isString = this.typeOfValidator(input, 'string');
 
-    if (!isString) return new Error("Must be a string");
+    if (!isString) return new Error('Must be a string');
 
     if (minLen && input.length < minLen) {
       return new Error(`Input must be longer than: ${minLen} chars`);
@@ -121,6 +132,7 @@ class FluxBase {
 
     if (!patterns.length) return input;
 
+    // eslint-disable-next-line no-restricted-syntax
     for (const pattern of patterns) {
       if (pattern.test(input)) return input;
     }
@@ -129,9 +141,9 @@ class FluxBase {
   }
 
   static validateBoolean(input) {
-    const isBoolean = this.typeOfValidator(input, "boolean");
+    const isBoolean = this.typeOfValidator(input, 'boolean');
 
-    if (!isBoolean) return new Error("Must be a boolean");
+    if (!isBoolean) return new Error('Must be a boolean');
 
     return input;
   }
@@ -145,7 +157,7 @@ class FluxBase {
     let coersed = this.forceNumber(input);
 
     if (coersed === null) {
-      return new Error("Is not a number");
+      return new Error('Is not a number');
     }
 
     if (snapToExponent) {
@@ -158,7 +170,7 @@ class FluxBase {
     }
 
     if (maxValue && coersed > maxValue) {
-      console.log("TOTALLY FUCKED");
+      console.log('TOTALLY FUCKED');
       return new Error(`${coersed} is larger than maximum value: ${maxValue}`);
     }
 
@@ -176,7 +188,7 @@ class FluxBase {
     const memberValidator = options.memberValidator || null;
 
     if (!(input instanceof Array)) {
-      return new Error("Must be an Array");
+      return new Error('Must be an Array');
     }
 
     if (minLen && input.length < minLen) {
@@ -189,19 +201,20 @@ class FluxBase {
 
     if (!memberValidator) return input;
 
-    if (typeof memberValidator !== "function") {
-      return new Error("memberValidator must be a function");
+    if (typeof memberValidator !== 'function') {
+      return new Error('memberValidator must be a function');
     }
 
     const parsed = [];
 
-    input.forEach((member) => {
+    // eslint-disable-next-line no-restricted-syntax
+    for (const member of input) {
       const value = memberValidator(member);
 
       if (value instanceof Error) return value;
 
       parsed.push(value);
-    });
+    }
 
     return parsed;
   }

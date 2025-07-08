@@ -1,7 +1,7 @@
 // const dbHelper = require("../dbHelper");
 
-const { FluxAppSpecV8 } = require("../../spec/v8/fluxAppSpecV8");
-const { FluxBase } = require("../../fluxBase");
+const { FluxAppSpecV8 } = require('../../spec/v8/fluxAppSpecV8');
+const { FluxBase } = require('../../fluxBase');
 
 /**
  * @typedef {Object} FluxAppV8Options
@@ -12,23 +12,21 @@ const { FluxBase } = require("../../fluxBase");
 class FluxAppV8 extends FluxBase {
   static version = 8;
 
-  static mandatoryProperties = ["appSpecHash", "validFromHeight"];
+  static mandatoryProperties = ['appSpecHash', 'validFromHeight'];
 
   static dbPropertyMap = {
-    appSpecHash: "hash",
-    validFromHeight: "height",
+    appSpecHash: 'hash',
+    validFromHeight: 'height',
   };
 
   static propValidators = {
-    appSpecHash: (input) =>
-      this.validateString(input, {
-        patterns: [/^[a-fA-F0-9]{64}$/],
-      }),
-    validFromHeight: (input) =>
-      this.validateNumber(input, {
-        minValue: 694000,
-        maxDecimals: 0,
-      }),
+    appSpecHash: (input) => this.validateString(input, {
+      patterns: [/^[a-fA-F0-9]{64}$/],
+    }),
+    validFromHeight: (input) => this.validateNumber(input, {
+      minValue: 694000,
+      maxDecimals: 0,
+    }),
   };
 
   static fromBlob(blob) {
@@ -49,9 +47,10 @@ class FluxAppV8 extends FluxBase {
     // this could be non viable
     const spec = FluxAppSpecV8.fromBlob(specBlob);
 
+    // eslint-disable-next-line no-restricted-syntax
     for (const [prop, formatter] of Object.entries(this.propValidators)) {
       const key = this.dbPropertyMap[prop];
-      if (blob.hasOwnProperty(key) && blob[key] !== undefined) {
+      if (blob.hasOwn(key) && blob[key] !== undefined) {
         const value = formatter(blob[key]);
 
         if (!(value instanceof Error)) parsed[prop] = value;

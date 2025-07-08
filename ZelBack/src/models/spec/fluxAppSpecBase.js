@@ -1,31 +1,18 @@
-const crypto = require("node:crypto");
-const path = require("node:path");
+const crypto = require('node:crypto');
 
-const config = require("config");
+const config = require('config');
 
-const { FluxBase } = require("../fluxBase");
+const { FluxBase } = require('../fluxBase');
 
-const fluxosBasePath = process.env.FLUXOS_PATH;
-const fluxosServicePath = path.join(fluxosBasePath, "ZelBack/src/services");
-
-const dbHelper = require(path.join(fluxosServicePath, "dbHelper"));
-const benchmarkService = require(path.join(
-  fluxosServicePath,
-  "benchmarkService"
-));
-// const daemonServiceBlockchainRpcs = require(path.join(
-//   fluxosServicePath,
-//   "daemonService/daemonServiceBlockchainRpcs"
-// ));
+const dbHelper = require('../../services/dbHelper');
+const benchmarkService = require('../../services/benchmarkService');
 
 /**
  * @typedef {import("mongodb").MongoClient} MongoClient
  */
 
 class FluxAppSpecBase extends FluxBase {
-  #raw = "";
-
-  #decrypted = false;
+  #raw = '';
 
   /**
    * @type {MongoClient?}
@@ -42,11 +29,8 @@ class FluxAppSpecBase extends FluxBase {
    */
   #appMessagesCollection;
 
-  get decrypted() {
-    return this.#decrypted;
-  }
-
   get viable() {
+    // eslint-disable-next-line no-restricted-syntax
     for (const prop in this.mandatoryProperties) {
       if (this[prop] === null) {
         return false;
@@ -67,6 +51,7 @@ class FluxAppSpecBase extends FluxBase {
   get missingProperties() {
     const missing = [];
 
+    // eslint-disable-next-line no-restricted-syntax
     for (const prop in this.mandatoryProperties) {
       if (this[prop] === null) {
         missing.push(prop);
@@ -79,10 +64,11 @@ class FluxAppSpecBase extends FluxBase {
   get coersedProps() {
     if (!this.#raw) return {};
 
-    const formatted = this.formatted;
+    const { formatted } = this;
     const original = FluxAppSpecBase.parseJson(this.#raw);
     const coersed = {};
 
+    // eslint-disable-next-line no-restricted-syntax
     for (const key of Object.keys(formatted)) {
       const isEqual = FluxAppSpecBase.isEqual(formatted[key], original[key]);
 
@@ -96,41 +82,27 @@ class FluxAppSpecBase extends FluxBase {
     return this.#raw ? this.serialized !== this.#raw : false;
   }
 
-  get coersedProps() {
-    if (!this.#raw) return {};
-
-    const formatted = this.formatted;
-    const original = FluxAppSpecBase.parseJson(this.#raw);
-    const coersed = {};
-
-    for (const key of Object.keys(formatted)) {
-      const isEqual = FluxAppSpecBase.isEqual(formatted[key], original[key]);
-
-      if (!isEqual) coersed[key] = { from: original[key], to: formatted[key] };
-    }
-
-    return coersed;
-  }
-
   /**
    * Makes sure the keys are the correct order. This does not check values.
    */
   get reordered() {
     if (!this.#raw) return false;
 
-    const formatted = this.formatted;
+    const { formatted } = this;
     const original = FluxAppSpecBase.parseJson(this.#raw);
 
     const formattedKeys = Object.keys(formatted);
     const originalKeys = Object.keys(original);
+    const keysLength = formattedKeys.length;
 
-    for (let i = 0; (l = formattedKeys.length); i < l, i++) {
+    for (let i = 0; i < keysLength; i += 1) {
       if (formattedKeys[i] !== originalKeys[i]) return true;
     }
 
     return false;
   }
 
+  // eslint-disable-next-line class-methods-use-this
   get formatted() {
     throw FluxAppSpecBase.notImplemented;
   }
@@ -143,10 +115,9 @@ class FluxAppSpecBase extends FluxBase {
     super();
 
     this.#raw = raw;
-    config.database.appsglobal.collections.appsMessages;
     const {
       database: {
-        appsGlobal: {
+        appsglobal: {
           database: globalAppsDatabase,
           collections: { appsMessages: appMessagesCollection },
         },
@@ -156,14 +127,17 @@ class FluxAppSpecBase extends FluxBase {
     this.#appMessagesCollection = appMessagesCollection;
   }
 
+  // eslint-disable-next-line class-methods-use-this
   decrypt() {
     throw FluxAppSpecBase.notImplemented;
   }
 
-  verify(_blob) {
+  // eslint-disable-next-line class-methods-use-this
+  verify() {
     throw FluxAppSpecBase.notImplemented;
   }
 
+  // eslint-disable-next-line class-methods-use-this
   equal(other) {
     if (this.constructor !== other.constructor) return false;
 
@@ -197,20 +171,20 @@ class FluxAppSpecBase extends FluxBase {
     const db = this.#dbClient.db(this.#globalAppsDatabase);
 
     const query = {
-      "appSpecifications.name": appName,
-      type: "fluxappregister",
+      'appSpecifications.name': appName,
+      type: 'fluxappregister',
     };
 
     const permanentAppMessage = await dbHelper.findInDatabase(
       db,
       this.#appMessagesCollection,
-      query
+      query,
     );
 
     const lastAppRegistration = permanentAppMessage.at(-1);
     const { owner } = lastAppRegistration;
 
-    return owner | null;
+    return owner || null;
   }
 
   // /**
@@ -233,10 +207,15 @@ class FluxAppSpecBase extends FluxBase {
    * @param {string} appOwner Owner of the application
    * @returns {Promise<Object | null>} Returns decrypted object, or null on failure
    */
-  async decryptAesKeyWithRsaKey(appName, blockHeight, encryptedKey, appOwner) {
+  static async #decryptAesKeyWithRsaKey(
+    appName,
+    blockHeight,
+    encryptedKey,
+    appOwner,
+  ) {
     // const appOwner = fluxId || (await this.getAppOwnerFromDb(appName));
 
-    const payload = FluxBase.serializeJson({
+    const payload = FluxAppSpecBase.serializeJson({
       fluxID: appOwner,
       appName,
       message: encryptedKey,
@@ -254,12 +233,12 @@ class FluxAppSpecBase extends FluxBase {
 
     const { status: fluxbenchdStatus, data: rawData } = response;
 
-    if (fluxbenchdStatus !== "success") {
+    if (fluxbenchdStatus !== 'success') {
       // log
       return null;
     }
 
-    const parsed = FluxBase.parseJson(rawData);
+    const parsed = FluxAppSpecBase.parseJson(rawData);
 
     if (!parsed) {
       // log
@@ -268,7 +247,7 @@ class FluxAppSpecBase extends FluxBase {
 
     const { status: remoteStatus, message: base64AesKey } = parsed;
 
-    if (remoteStatus !== "ok") return null;
+    if (remoteStatus !== 'ok') return null;
 
     return base64AesKey;
   }
@@ -279,21 +258,18 @@ class FluxAppSpecBase extends FluxBase {
    * @param {Buffer} aesKey AES key bytes
    * @returns {any} decrypted data
    */
-  decryptAes256Gcm(base64EncodedData, aesKey, options = {}) {
-    const outputEncoding = options.outputEncoding || "utf-8";
-
-    const nonceCiphertextTag = Buffer.from(base64EncodedData, "base64");
+  static #decryptAes256Gcm(nonceCiphertextTag, aesKey, options = {}) {
+    const outputEncoding = options.outputEncoding || 'utf-8';
 
     const nonce = nonceCiphertextTag.subarray(0, 12);
     const ciphertext = nonceCiphertextTag.subarray(12, -16);
     const tag = nonceCiphertextTag.subarray(-16);
 
-    const decipher = crypto.createDecipheriv("aes-256-gcm", aesKey, nonce);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', aesKey, nonce);
     decipher.setAuthTag(tag);
 
-    const decrypted =
-      decipher.update(ciphertext, null, outputEncoding) +
-      decipher.final(outputEncoding);
+    const decrypted = decipher.update(ciphertext, null, outputEncoding)
+      + decipher.final(outputEncoding);
 
     return decrypted;
   }
@@ -320,19 +296,24 @@ class FluxAppSpecBase extends FluxBase {
    * @param {string} owner App owner
    * @returns {Promise<Object | null>} Returns contacts / components decrypted
    */
-  async decryptProperties(base64Encrypted, appName, daemonHeight, owner) {
-    const enterpriseBuf = Buffer.from(base64Encrypted, "base64");
+  static async decryptProperties(
+    base64Encrypted,
+    appName,
+    daemonHeight,
+    owner,
+  ) {
+    const enterpriseBuf = Buffer.from(base64Encrypted, 'base64');
     const aesKeyEncrypted = enterpriseBuf.subarray(0, 256);
     const nonceCiphertextTag = enterpriseBuf.subarray(256);
 
     // we encode this as we are passing it as an api call
-    const base64EncryptedAesKey = aesKeyEncrypted.toString("base64");
+    const base64EncryptedAesKey = aesKeyEncrypted.toString('base64');
 
-    const base64AesKey = await this.decryptAesKeyWithRsaKey(
+    const base64AesKey = await FluxAppSpecBase.#decryptAesKeyWithRsaKey(
       appName,
       daemonHeight,
       base64EncryptedAesKey,
-      owner
+      owner,
     );
 
     if (!base64AesKey) {
@@ -340,16 +321,21 @@ class FluxAppSpecBase extends FluxBase {
       return null;
     }
 
-    const decrypted = this.decryptAes256Gcm(nonceCiphertextTag, base64AesKey);
+    const aesKey = Buffer.from(base64AesKey, 'base64');
+
+    const decrypted = FluxAppSpecBase.#decryptAes256Gcm(
+      nonceCiphertextTag,
+      aesKey,
+    );
 
     if (!decrypted) {
       // log
       return null;
     }
 
-    const parsed = FluxBase.parseJson(decrypted);
+    const parsed = FluxAppSpecBase.parseJson(decrypted);
 
-    // this is the components and contacts. However, the components are still
+    // this is the components and contacts. However, they are still
     // stringified from the frontend
 
     return parsed;

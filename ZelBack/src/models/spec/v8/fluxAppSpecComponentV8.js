@@ -1,4 +1,4 @@
-const { FluxAppSpecComponentBase } = require("../fluxAppSpecComponentBase");
+const { FluxAppSpecComponentBase } = require('../fluxAppSpecComponentBase');
 
 /**
  * @typedef {Object} ComponentOptions
@@ -26,88 +26,73 @@ const { FluxAppSpecComponentBase } = require("../fluxAppSpecComponentBase");
  */
 
 class FluxAppSpecComponentV8 extends FluxAppSpecComponentBase {
-  static mandatoryProperties = ["name", "imageRef", "cpu", "memory", "storage"];
+  static mandatoryProperties = ['name', 'imageRef', 'cpu', 'memory', 'storage'];
 
   static frontendPropertyMap = {
-    name: "name",
-    description: "description",
-    imageRef: "repotag",
-    imageAuth: "repoauth",
-    imageCmd: "commands",
-    externalPorts: "ports",
-    internalPorts: "containerPorts",
-    volumeMountPoint: "containerData",
-    envVars: "environmentParameters",
-    domains: "domains",
-    cpu: "cpu",
-    memory: "ram",
-    disk: "hdd",
+    name: 'name',
+    description: 'description',
+    imageRef: 'repotag',
+    imageAuth: 'repoauth',
+    imageCmd: 'commands',
+    externalPorts: 'ports',
+    internalPorts: 'containerPorts',
+    volumeMountPoint: 'containerData',
+    envVars: 'environmentParameters',
+    domains: 'domains',
+    cpu: 'cpu',
+    memory: 'ram',
+    disk: 'hdd',
   };
 
   static propValidators = {
     name: (input) => this.validateString(input, { minLen: 2, maxLen: 256 }),
-    description: (input) =>
-      this.validateString(input, { minLen: 2, maxLen: 256 }),
+    description: (input) => this.validateString(input, { minLen: 2, maxLen: 256 }),
     imageRef: (input) => this.validateString(input, { minLen: 3, maxLen: 256 }),
     cpu: (input) => this.validateNumber(input, { maxDecimals: 2 }),
     memory: (input) => this.validateNumber(input, { snapToExponent: 2 }),
     disk: (input) => this.validateNumber(input, { maxDecimals: 0 }),
-    internalPorts: (input) =>
-      this.validateArray(input, {
-        memberValidator: (input) =>
-          this.validateNumber(input, {
-            minValue: 1,
-            maxValue: 65535,
-          }),
+    internalPorts: (input) => this.validateArray(input, {
+      memberValidator: (memberInput) => this.validateNumber(memberInput, {
+        minValue: 1,
+        maxValue: 65535,
       }),
-    externalPorts: (input) =>
-      this.validateArray(input, {
-        memberValidator: (input) =>
-          this.validateNumber(input, {
-            minValue: 1,
-            maxValue: 65535,
-          }),
+    }),
+    externalPorts: (input) => this.validateArray(input, {
+      memberValidator: (memberInput) => this.validateNumber(memberInput, {
+        minValue: 1,
+        maxValue: 65535,
       }),
-    envVars: (input) =>
-      this.validateArray(input, {
-        maxLen: 16,
-        memberValidator: (input) =>
-          this.validateString(input, {
-            minLength: 3,
-            maxLength: 256,
-          }),
+    }),
+    envVars: (input) => this.validateArray(input, {
+      maxLen: 16,
+      memberValidator: (memberInput) => this.validateString(memberInput, {
+        minLength: 3,
+        maxLength: 256,
       }),
-    commands: (input) =>
-      this.validateArray(input, {
-        maxLen: 16,
-        memberValidator: (input) =>
-          this.validateString(input, {
-            minLength: 3,
-            maxLength: 256,
-          }),
+    }),
+    commands: (input) => this.validateArray(input, {
+      maxLen: 16,
+      memberValidator: (memberInput) => this.validateString(memberInput, {
+        minLength: 3,
+        maxLength: 256,
       }),
-    imageCmd: (input) =>
-      this.validateArray(input, {
-        maxLen: 16,
-        memberValidator: (input) =>
-          this.validateString(input, {
-            minLength: 3,
-            maxLength: 256,
-          }),
+    }),
+    imageCmd: (input) => this.validateArray(input, {
+      maxLen: 16,
+      memberValidator: (memberInput) => this.validateString(memberInput, {
+        minLength: 3,
+        maxLength: 256,
       }),
-    volumeMountPoint: (input) =>
-      this.validateString(input, { minLen: 2, maxLen: 256 }),
-    imageAuth: (input) =>
-      this.validateString(input, { minLen: 2, maxLen: 256 }),
-    domains: (input) =>
-      this.validateArray(input, {
-        maxLen: 16,
-        memberValidator: (input) =>
-          this.validateString(input, {
-            minLength: 3,
-            maxLength: 256,
-          }),
+    }),
+    volumeMountPoint: (input) => this.validateString(input, { minLen: 2, maxLen: 256 }),
+    imageAuth: (input) => this.validateString(input, { minLen: 2, maxLen: 256 }),
+    domains: (input) => this.validateArray(input, {
+      maxLen: 16,
+      memberValidator: (memberInput) => this.validateString(memberInput, {
+        minLength: 3,
+        maxLength: 256,
       }),
+    }),
   };
 
   /**
@@ -118,13 +103,16 @@ class FluxAppSpecComponentV8 extends FluxAppSpecComponentBase {
   static hydrate(blob) {
     const parsed = {};
 
+    // eslint-disable-next-line no-restricted-syntax
     for (const [key, value] of Object.entries(blob)) {
-      if (value.startsWith("[") && value.endsWith("]")) {
+      if (value.startsWith('[') && value.endsWith(']')) {
         parsed[key] = this.parseJson(value);
       } else {
         parsed[key] = value;
       }
     }
+
+    return parsed;
   }
 
   /**
@@ -139,9 +127,10 @@ class FluxAppSpecComponentV8 extends FluxAppSpecComponentBase {
 
     const parsed = { raw: serialized };
 
+    // eslint-disable-next-line no-restricted-syntax
     for (const [prop, formatter] of Object.entries(this.propValidators)) {
       const key = this.frontendPropertyMap[prop];
-      if (blob.hasOwnProperty(key) && blob[key] !== undefined) {
+      if (blob.hasOwn(key) && blob[key] !== undefined) {
         const value = formatter(blob[key]);
 
         if (!(value instanceof Error)) parsed[prop] = value;
@@ -155,7 +144,7 @@ class FluxAppSpecComponentV8 extends FluxAppSpecComponentBase {
 
     // If there are no internal ports and external ports, we strip the external.
 
-    if (!("internalPorts" in parsed)) {
+    if (!('internalPorts' in parsed)) {
       parsed.externalPorts = [];
       return new FluxAppSpecComponentV8(parsed);
     }
@@ -192,19 +181,24 @@ class FluxAppSpecComponentV8 extends FluxAppSpecComponentBase {
    *
    * Strict: Blob must match exactly the keys and values required. No values are coersed.
    * Keys must be ordered correctly, as per the spec.
+   *
+   * maintainOrder: Same as loose, except the keys must be in the correct order.
    * @param {*} blob
-   * @param {{strict?: boolean}} options
+   * @param {{mode?: verifyModeType}} options
    * @returns {boolean}
    */
   static verify(blob, options = {}) {
-    const strict = options.strict ?? true;
+    const mode = options.mode || 'strict';
 
     const spec = FluxAppSpecComponentV8.fromBlob(blob);
 
     if (!spec) return false;
 
-    if (strict) return spec.viable && !spec.coersed;
+    if (mode === 'strict') return spec.viable && !spec.coersed;
 
+    if (mode === 'maintainOrder') return spec.viable && !spec.reordered;
+
+    // mode === "loose"
     return spec.viable;
   }
 
@@ -221,9 +215,9 @@ class FluxAppSpecComponentV8 extends FluxAppSpecComponentBase {
     this.memory = options.memory || null;
     this.disk = options.disk || null;
 
-    this.description = options.description || "";
-    this.imageAuth = options.imageAuth || "";
-    this.volumeMountPoint = options.volumeMountPoint || "/tmp";
+    this.description = options.description || '';
+    this.imageAuth = options.imageAuth || '';
+    this.volumeMountPoint = options.volumeMountPoint || '/tmp';
     this.imageCmd = options.imageCmd || [];
     this.envVars = options.envVars || [];
     this.domains = options.domains || [];
@@ -256,41 +250,41 @@ module.exports = { FluxAppSpecComponentV8 };
 
 if (require.main === module) {
   const componentRaw = {
-    name: "node",
-    description: "The Presearch node container",
-    repotag: "presearch/node:latest",
+    name: 'node',
+    description: 'The Presearch node container',
+    repotag: 'presearch/node:latest',
     ports: [39000, 8181, 7254],
-    domains: ["gravy.train.com"],
+    domains: ['gravy.train.com'],
     environmentParameters: [
-      "STAKE=disconnected:oldest#flux,wallet:minimum",
-      "ALLOW_DISCONNECTED_STAKE_TRANSFER_AFTER=30m",
-      "TAGS=flux",
-      "URL=https://home.runonflux.io",
-      "F_S_ENV=https://storage.runonflux.io/v2/env/presearch",
-      "REGISTRATION_CODE=194995fbb559f37e7c517d4293b66edb",
-      "DESCRIPTION=",
+      'STAKE=disconnected:oldest#flux,wallet:minimum',
+      'ALLOW_DISCONNECTED_STAKE_TRANSFER_AFTER=30m',
+      'TAGS=flux',
+      'URL=https://home.runonflux.io',
+      'F_S_ENV=https://storage.runonflux.io/v2/env/presearch',
+      'REGISTRATION_CODE=194995fbb559f37e7c517d4293b66edb',
+      'DESCRIPTION=',
     ],
-    commands: ["/bin/runner", "ls", "-la"],
+    commands: ['/bin/runner', 'ls', '-la'],
     containerPorts: [80, 3333, 7676],
-    containerData: "/app/node",
+    containerData: '/app/node',
     cpu: 0.3,
     ram: 333,
     hdd: 232.3,
-    repoauth: "gravySausage:weiner123",
+    repoauth: 'gravySausage:weiner123',
   };
 
   console.log(componentRaw);
 
   const component1 = FluxAppSpecComponentV8.fromBlob(componentRaw);
   const component2 = FluxAppSpecComponentV8.fromBlob(componentRaw);
-  console.log("----");
+  console.log('----');
   console.log(component1);
-  console.log("----");
+  console.log('----');
   console.log(component1.formatted);
-  console.log("VIABLE", component1.viable);
-  console.log("----");
+  console.log('VIABLE', component1.viable);
+  console.log('----');
   console.log(component1.serialized);
-  console.log("----");
-  console.log("EQUAL", component1.equal(component2));
+  console.log('----');
+  console.log('EQUAL', component1.equal(component2));
   // console.log(FluxAppComponent.generateRandomPorts({ count: 7 }));
 }
