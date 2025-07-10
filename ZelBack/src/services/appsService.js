@@ -17,7 +17,6 @@ const util = require('util');
 const fs = require('fs').promises;
 const execShell = util.promisify(require('child_process').exec);
 const httpShutdown = require('http-shutdown');
-const fluxCommunication = require('./fluxCommunication');
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const {
@@ -9085,7 +9084,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
  */
 async function checkAndRequestMultipleApps(apps, incoming = false, i = 1) {
   try {
-    const numberOfPeers = fluxCommunication.getNumberOfPeers();
+    const numberOfPeers = fluxNetworkHelper.getNumberOfPeers();
     if (numberOfPeers < 12) {
       log.info('checkAndRequestMultipleApps - Not enough connected peers to request missing Flux App messages');
       return;
@@ -9500,7 +9499,7 @@ async function continuousFluxAppHashesCheck(force = false) {
     }
     log.info('Requesting missing Flux App messages');
     continuousFluxAppHashesCheckRunning = true;
-    const numberOfPeers = fluxCommunication.getNumberOfPeers();
+    const numberOfPeers = fluxNetworkHelper.getNumberOfPeers();
     if (numberOfPeers < 12) {
       log.info('Not enough connected peers to request missing Flux App messages');
       continuousFluxAppHashesCheckRunning = false;
