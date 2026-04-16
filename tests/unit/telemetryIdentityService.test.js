@@ -176,9 +176,9 @@ describe('telemetryIdentityService tests', () => {
       expect(result).to.be.null;
     });
 
-    it('should resolve a standard flux app', async () => {
+    it('should resolve a standard flux app with image and container name', async () => {
       dockerServiceStub.dockerListContainers.resolves([
-        { Id: containerId, Names: ['/fluxMyApp'] },
+        { Id: containerId, Names: ['/fluxMyApp'], Image: 'nginx:1.25' },
       ]);
       dbHelperStub.findOneInDatabase.resolves({
         name: 'MyApp',
@@ -190,6 +190,8 @@ describe('telemetryIdentityService tests', () => {
       expect(result.app_name).to.equal('MyApp');
       expect(result.tags['flux.public.region']).to.equal('NA');
       expect(result.tags).to.not.have.property('flux.public.component');
+      expect(result.tags.image_name).to.equal('nginx:1.25');
+      expect(result.tags.container_name).to.equal('fluxMyApp');
     });
 
     it('should resolve a component container with component tag', async () => {

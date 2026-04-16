@@ -142,6 +142,13 @@ async function resolveIdentity(containerId) {
     tags['flux.public.component'] = componentName;
   }
 
+  // Container metadata — image name and container name for Datadog
+  // Container Map and dashboard filtering.
+  if (container.Image) {
+    tags.image_name = container.Image;
+  }
+  tags.container_name = dockerName;
+
   // Region from node geolocation (continentCode is a stable, coarse value
   // that doesn't leak precise location).
   try {
