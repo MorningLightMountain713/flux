@@ -188,8 +188,8 @@ describe('telemetryIdentityService tests', () => {
       const result = await service.resolveIdentity(containerId);
       expect(result).to.not.be.null;
       expect(result.app_name).to.equal('MyApp');
-      expect(result.tags['flux.public.region']).to.equal('NA');
-      expect(result.tags).to.not.have.property('flux.public.component');
+      expect(result.tags['region']).to.equal('NA');
+      expect(result.tags).to.not.have.property('component');
       expect(result.tags.image_name).to.equal('nginx:1.25');
       expect(result.tags.container_name).to.equal('fluxMyApp');
     });
@@ -207,8 +207,8 @@ describe('telemetryIdentityService tests', () => {
       const result = await service.resolveIdentity(containerId);
       expect(result).to.not.be.null;
       expect(result.app_name).to.equal('MyApp');
-      expect(result.tags['flux.public.component']).to.equal('frontend');
-      expect(result.tags['flux.public.region']).to.equal('NA');
+      expect(result.tags['component']).to.equal('frontend');
+      expect(result.tags['region']).to.equal('NA');
     });
 
     it('should resolve a legacy zel-prefixed app', async () => {
@@ -238,7 +238,7 @@ describe('telemetryIdentityService tests', () => {
       const result = await service.resolveIdentity(containerId);
       expect(result).to.not.be.null;
       expect(result.app_name).to.equal('MyApp');
-      expect(result.tags).to.not.have.property('flux.public.region');
+      expect(result.tags).to.not.have.property('region');
     });
 
     it('should handle geolocation throwing an error', async () => {
@@ -254,7 +254,7 @@ describe('telemetryIdentityService tests', () => {
       const result = await service.resolveIdentity(containerId);
       expect(result).to.not.be.null;
       expect(result.app_name).to.equal('MyApp');
-      expect(result.tags).to.not.have.property('flux.public.region');
+      expect(result.tags).to.not.have.property('region');
     });
   });
 
@@ -279,8 +279,8 @@ describe('telemetryIdentityService tests', () => {
       expect(response.ok).to.be.true;
       expect(response.identity).to.not.be.null;
       expect(response.identity.app_name).to.equal('WebApp');
-      expect(response.identity.tags['flux.public.component']).to.equal('frontend');
-      expect(response.identity.tags['flux.public.region']).to.equal('NA');
+      expect(response.identity.tags['component']).to.equal('frontend');
+      expect(response.identity.tags['region']).to.equal('NA');
     });
 
     it('should return null identity when Docker throws', async () => {
@@ -298,10 +298,11 @@ describe('telemetryIdentityService tests', () => {
 
   describe('TAG_ALLOWLIST', () => {
     it('should contain exactly the expected public tags', () => {
-      expect(service.TAG_ALLOWLIST.has('flux.public.region')).to.be.true;
-      expect(service.TAG_ALLOWLIST.has('flux.public.env')).to.be.true;
-      expect(service.TAG_ALLOWLIST.has('flux.public.component')).to.be.true;
-      expect(service.TAG_ALLOWLIST.size).to.equal(3);
+      expect(service.TAG_ALLOWLIST.has('region')).to.be.true;
+      expect(service.TAG_ALLOWLIST.has('component')).to.be.true;
+      expect(service.TAG_ALLOWLIST.has('image_name')).to.be.true;
+      expect(service.TAG_ALLOWLIST.has('container_name')).to.be.true;
+      expect(service.TAG_ALLOWLIST.size).to.equal(4);
     });
   });
 });

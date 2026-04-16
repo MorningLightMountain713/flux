@@ -38,9 +38,10 @@ const CONTAINER_ID_RE = /^[0-9a-f]{64}$/;
 // flux-telemetryd has its own compiled-in allowlist that independently
 // filters anything we return here.
 const TAG_ALLOWLIST = new Set([
-  'flux.public.region',
-  'flux.public.env',
-  'flux.public.component',
+  'region',
+  'component',
+  'image_name',
+  'container_name',
 ]);
 
 // Singleton server reference so we can shut down cleanly.
@@ -139,7 +140,7 @@ async function resolveIdentity(containerId) {
   const tags = {};
 
   if (componentName) {
-    tags['flux.public.component'] = componentName;
+    tags.component = componentName;
   }
 
   // Container metadata — image name and container name for Datadog
@@ -154,7 +155,7 @@ async function resolveIdentity(containerId) {
   try {
     const geo = await geolocationService.getNodeGeolocation();
     if (geo && geo.continentCode) {
-      tags['flux.public.region'] = geo.continentCode;
+      tags.region = geo.continentCode;
     }
   } catch (err) {
     // Non-fatal — node may not have geolocation yet at first boot.
