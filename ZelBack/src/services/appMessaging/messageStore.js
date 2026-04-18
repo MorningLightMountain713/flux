@@ -6,7 +6,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const messageVerifier = require('./messageVerifier');
 const appValidator = require('../appRequirements/appValidator');
 const registryManager = require('../appDatabase/registryManager');
-// const advancedWorkflows = require('../appLifecycle/advancedWorkflows'); // Moved to dynamic require to avoid circular dependency
+const { getPreviousAppSpecifications } = require('../appLifecycle/advancedWorkflows');
 const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
 const globalState = require('../utils/globalState');
 const {
@@ -86,15 +86,12 @@ async function storeAppTemporaryMessage(message, options = {}) {
   // data shall already be verified by the broadcasting node. But verify all again.
   // this takes roughly at least 1 second
   if (furtherVerification) {
-    // Dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const advancedWorkflows = require('../appLifecycle/advancedWorkflows');
     const appRegistration = message.type === 'zelappregister' || message.type === 'fluxappregister';
 
     // For updates, fetch previous app specs first - if registration doesn't exist yet, queue the update
     let previousAppSpecs = null;
     if (!appRegistration) {
-      previousAppSpecs = await advancedWorkflows.getPreviousAppSpecifications(appSpecFormatted, messageTimestamp);
+      previousAppSpecs = await getPreviousAppSpecifications(appSpecFormatted, messageTimestamp);
       if (!previousAppSpecs) {
         // Registration doesn't exist yet - queue this update for later processing
         const appName = appSpecFormatted.name;
