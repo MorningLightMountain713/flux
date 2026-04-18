@@ -1,13 +1,19 @@
-const { expect } = require('chai');
+const chai = require('chai');
+const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-describe('fluxOSCryptoProvider tests', () => {
-  let createProvider;
-  let benchmarkServiceStub;
-  let logStub;
+chai.use(chaiAsPromised);
+const { expect } = chai;
 
-  // Minimal mock of the CryptoProvider base class so instanceof checks pass.
+describe('FluxOSCryptoProvider', () => {
+  let benchmarkServiceStub;
+  let specLibsStub;
+  let fluxOSCryptoProvider;
+
+  // Minimal abstract base class stubbed in place of the real
+  // @megachips/flux-spec-backend CryptoProvider. Concrete subclass must
+  // define encrypt/decrypt; instanceof checks pass through.
   class MockCryptoProviderBase {
     constructor() {
       if (new.target === MockCryptoProviderBase) {
@@ -22,47 +28,40 @@ describe('fluxOSCryptoProvider tests', () => {
       unseal: sinon.stub(),
     };
 
-    logStub = {
-      info: sinon.stub(),
-      warn: sinon.stub(),
-      error: sinon.stub(),
+    specLibsStub = {
+      getSpecBackend: sinon.stub().resolves({ CryptoProvider: MockCryptoProviderBase }),
     };
 
-    // Stub the dynamic import() of @megachips/flux-spec-backend.
-    // proxyquire can't intercept dynamic import(), so we patch the
-    // lazy-loading function instead.
-    const mod = proxyquire('../../ZelBack/src/services/fluxOSCryptoProvider', {
-      './benchmarkService': benchmarkServiceStub,
-      '../lib/log': logStub,
-    });
-
-    // Override the lazy loader to return our mock base class
-    const originalCreate = mod.create;
-    createProvider = async (appName, owner) => {
-      // Temporarily patch the module-level cache by calling create
-      // with our mock. We do this by replacing the dynamic import.
-      const original = mod._getCryptoProviderBase;
-      // We need to monkey-patch for testing since dynamic import() is hard to stub
-      return originalCreate(appName, owner);
-    };
-
-    // Actually, let's take a simpler approach: test the seal/unseal
-    // integration directly by constructing via the module and stubbing
-    // the ESM import at the module level.
-    createProvider = mod.create;
+    fluxOSCryptoProvider = proxyquire(
+      '../../ZelBack/src/services/providers/FluxOSCryptoProvider',
+      {
+        '../benchmarkService': benchmarkServiceStub,
+        '../utils/specLibs': specLibsStub,
+      },
+    );
   });
 
   afterEach(() => {
     sinon.restore();
   });
 
-  // Since the real CryptoProvider base class requires ESM import of
-  // @megachips/flux-spec-backend (which isn't installed in fluxos yet),
-  // we test the benchmarkService integration at the function level
-  // by verifying the seal/unseal calls.
+  describe('create()', () => {
+    it('returns an instance of the CryptoProvider base class', async () => {
+      const provider = await fluxOSCryptoProvider.create('testapp', 'owner123');
+      expect(provider).to.be.instanceOf(MockCryptoProviderBase);
+      expect(typeof provider.encrypt).to.equal('function');
+      expect(typeof provider.decrypt).to.equal('function');
+    });
 
-  describe('seal/unseal RPC integration', () => {
-    it('seal should pass correct params to benchmarkService', async () => {
+    it('loads the base class lazily via specLibs', async () => {
+      expect(specLibsStub.getSpecBackend.called).to.be.false;
+      await fluxOSCryptoProvider.create('testapp', 'owner123');
+      expect(specLibsStub.getSpecBackend.calledOnce).to.be.true;
+    });
+  });
+
+  describe('encrypt()', () => {
+    it('forwards appName, owner, context, and base64-encoded plaintext to seal', async () => {
       benchmarkServiceStub.seal.resolves({
         status: 'success',
         data: {
@@ -74,60 +73,116 @@ describe('fluxOSCryptoProvider tests', () => {
         },
       });
 
-      const params = {
-        appName: 'TestApp',
-        owner: 'owner123',
-        context: 'FLUX_APP_ENCRYPT_v1',
-        plaintext: Buffer.from('hello').toString('base64'),
-        aad: Buffer.from('metadata').toString('base64'),
-      };
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+      const result = await provider.encrypt(Buffer.from('hello'), Buffer.from('metadata'));
 
-      const result = await benchmarkServiceStub.seal(params);
-      expect(result.status).to.equal('success');
-      expect(result.data.algorithm).to.equal('AES-256-GCM');
       expect(benchmarkServiceStub.seal.calledOnce).to.be.true;
+      const params = benchmarkServiceStub.seal.firstCall.args[0];
+      expect(params.appName).to.equal('TestApp');
+      expect(params.owner).to.equal('1abc');
+      expect(params.context).to.equal(fluxOSCryptoProvider.SPEC_ENCRYPT_CONTEXT);
+      expect(params.plaintext).to.equal(Buffer.from('hello').toString('base64'));
+      expect(params.aad).to.equal(Buffer.from('metadata').toString('base64'));
 
-      const call = benchmarkServiceStub.seal.firstCall.args[0];
-      expect(call.appName).to.equal('TestApp');
-      expect(call.owner).to.equal('owner123');
-      expect(call.context).to.equal('FLUX_APP_ENCRYPT_v1');
-    });
-
-    it('unseal should pass correct params to benchmarkService', async () => {
-      benchmarkServiceStub.unseal.resolves({
-        status: 'success',
-        data: {
-          status: 'ok',
-          plaintext: Buffer.from('hello').toString('base64'),
-        },
-      });
-
-      const params = {
-        appName: 'TestApp',
-        owner: 'owner123',
-        context: 'FLUX_APP_ENCRYPT_v1',
+      expect(result).to.deep.equal({
         algorithm: 'AES-256-GCM',
         ciphertext: 'Y2lwaGVy',
         nonce: 'bm9uY2U=',
         tag: 'dGFn',
-        aad: Buffer.from('metadata').toString('base64'),
-      };
+      });
+    });
 
-      const result = await benchmarkServiceStub.unseal(params);
-      expect(result.status).to.equal('success');
-      expect(Buffer.from(result.data.plaintext, 'base64').toString()).to.equal('hello');
+    it('omits aad from seal params when not provided', async () => {
+      benchmarkServiceStub.seal.resolves({
+        status: 'success',
+        data: { status: 'ok', algorithm: 'AES-256-GCM', ciphertext: '', nonce: '', tag: '' },
+      });
+
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+      await provider.encrypt(Buffer.from('hello'));
+
+      const params = benchmarkServiceStub.seal.firstCall.args[0];
+      expect(params).to.not.have.property('aad');
+    });
+
+    it('throws when the RPC call itself fails', async () => {
+      benchmarkServiceStub.seal.resolves({ status: 'error' });
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+
+      await expect(provider.encrypt(Buffer.from('hello')))
+        .to.be.rejectedWith(/seal RPC failed/);
+    });
+
+    it('throws when SAS rejects the seal request', async () => {
+      benchmarkServiceStub.seal.resolves({
+        status: 'success',
+        data: { status: 'bad_request' },
+      });
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+
+      await expect(provider.encrypt(Buffer.from('hello')))
+        .to.be.rejectedWith(/seal RPC rejected: bad_request/);
+    });
+
+    it('parses stringified data payloads from the RPC', async () => {
+      benchmarkServiceStub.seal.resolves({
+        status: 'success',
+        data: JSON.stringify({
+          status: 'ok',
+          algorithm: 'AES-256-GCM',
+          ciphertext: 'Y2lwaGVy',
+          nonce: 'bm9uY2U=',
+          tag: 'dGFn',
+        }),
+      });
+
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+      const result = await provider.encrypt(Buffer.from('hello'));
+      expect(result.ciphertext).to.equal('Y2lwaGVy');
     });
   });
 
-  describe('SPEC_ENCRYPT_CONTEXT', () => {
-    it('should be the expected domain separator', () => {
-      // Read the source to verify the constant is correct
-      const fs = require('fs');
-      const src = fs.readFileSync(
-        require.resolve('../../ZelBack/src/services/fluxOSCryptoProvider'),
-        'utf8',
-      );
-      expect(src).to.include("const SPEC_ENCRYPT_CONTEXT = 'FLUX_APP_ENCRYPT_v1'");
+  describe('decrypt()', () => {
+    it('forwards the full encrypted envelope plus aad to unseal', async () => {
+      benchmarkServiceStub.unseal.resolves({
+        status: 'success',
+        data: { status: 'ok', plaintext: Buffer.from('hello').toString('base64') },
+      });
+
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+      const encrypted = {
+        algorithm: 'AES-256-GCM',
+        ciphertext: 'Y2lwaGVy',
+        nonce: 'bm9uY2U=',
+        tag: 'dGFn',
+      };
+      const plaintext = await provider.decrypt(encrypted, Buffer.from('metadata'));
+
+      expect(plaintext.toString()).to.equal('hello');
+      const params = benchmarkServiceStub.unseal.firstCall.args[0];
+      expect(params.appName).to.equal('TestApp');
+      expect(params.owner).to.equal('1abc');
+      expect(params.algorithm).to.equal('AES-256-GCM');
+      expect(params.ciphertext).to.equal('Y2lwaGVy');
+      expect(params.nonce).to.equal('bm9uY2U=');
+      expect(params.tag).to.equal('dGFn');
+      expect(params.aad).to.equal(Buffer.from('metadata').toString('base64'));
     });
+
+    it('throws when SAS rejects the unseal request', async () => {
+      benchmarkServiceStub.unseal.resolves({
+        status: 'success',
+        data: { status: 'DECRYPT_FAILED' },
+      });
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+
+      await expect(provider.decrypt({
+        algorithm: 'AES-256-GCM', ciphertext: 'x', nonce: 'y', tag: 'z',
+      })).to.be.rejectedWith(/unseal RPC rejected: DECRYPT_FAILED/);
+    });
+  });
+
+  it('exports the HKDF domain separator as FLUX_APP_ENCRYPT_v1', () => {
+    expect(fluxOSCryptoProvider.SPEC_ENCRYPT_CONTEXT).to.equal('FLUX_APP_ENCRYPT_v1');
   });
 });

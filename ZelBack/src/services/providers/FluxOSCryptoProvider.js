@@ -9,33 +9,19 @@
  *   const provider = await FluxOSCryptoProvider.create(appName, owner);
  *   const decrypted = await encryptedSpec.decrypt(provider);
  *
- * This module uses dynamic import() to load the ESM @megachips/flux-spec
- * package from CommonJS fluxos code.
+ * The CryptoProvider base class is loaded via the shared lazy getter in
+ * ../utils/specLibs so the ESM @megachips/flux-spec-backend package only
+ * imports once per process.
  */
 
-const benchmarkService = require('./benchmarkService');
-const log = require('../lib/log');
+const benchmarkService = require('../benchmarkService');
+const { getSpecBackend } = require('../utils/specLibs');
 
 // HKDF domain separator for v9 spec encryption. Passed to SAS as the
 // `context` field so SAS uses it as the HKDF salt. Different HKDF
 // use-cases (spec encryption vs. auth challenges vs. future features)
 // each get their own context string for domain separation.
 const SPEC_ENCRYPT_CONTEXT = 'FLUX_APP_ENCRYPT_v1';
-
-// Lazy-loaded CryptoProvider base class (ESM module)
-let CryptoProviderBase = null;
-
-/**
- * Load the CryptoProvider base class from @megachips/flux-spec.
- * Cached after first load.
- */
-async function getCryptoProviderBase() {
-  if (!CryptoProviderBase) {
-    const mod = await import('@megachips/flux-spec-backend');
-    CryptoProviderBase = mod.CryptoProvider;
-  }
-  return CryptoProviderBase;
-}
 
 /**
  * Create a FluxOSCryptoProvider instance.
@@ -48,10 +34,10 @@ async function getCryptoProviderBase() {
  * @returns {Promise<CryptoProvider>} A concrete CryptoProvider instance
  */
 async function create(appName, owner) {
-  const Base = await getCryptoProviderBase();
+  const { CryptoProvider: Base } = await getSpecBackend();
 
   // Dynamically create a class that extends the real CryptoProvider
-  // so instanceof checks in EncryptedSpecV9 pass.
+  // so `instanceof CryptoProvider` checks in EncryptedSpecV9 pass.
   class FluxOSCryptoProvider extends Base {
     #appName;
     #owner;
@@ -138,6 +124,5 @@ async function create(appName, owner) {
 
 module.exports = {
   create,
-  // Exported for testing — allows injecting a mock base class
-  _getCryptoProviderBase: getCryptoProviderBase,
+  SPEC_ENCRYPT_CONTEXT,
 };
