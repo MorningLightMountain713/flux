@@ -5,8 +5,8 @@ const log = require('../../lib/log');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
-const appValidator = require('../appRequirements/appValidator');
 const registryManager = require('../appDatabase/registryManager');
+const { validateSubmissionSpec } = require('../utils/specLibs');
 const {
   getPreviousAppSpecifications,
   validateApplicationUpdateCompatibility,
@@ -116,7 +116,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
         );
         // eslint-disable-next-line no-use-before-define
         const appSpecFormattedDecrypted = specificationFormatter(appSpecDecrypted);
-        await appValidator.verifyAppSpecifications(appSpecFormattedDecrypted, block);
+        await validateSubmissionSpec(appSpecFormattedDecrypted, { height: block });
         if (appRegistration) {
           await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormattedDecrypted, message.hash);
         } else {
@@ -124,7 +124,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
         }
       }
     } else {
-      await appValidator.verifyAppSpecifications(appSpecFormatted, block);
+      await validateSubmissionSpec(appSpecFormatted, { height: block });
       if (appRegistration) {
         await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted, message.hash);
       } else {

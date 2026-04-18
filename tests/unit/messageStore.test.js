@@ -64,12 +64,12 @@ describe('messageStore tests', () => {
         instantiatePreviousSpec: sinon.stub().resolves(null),
         authorize: sinon.stub().resolves({ valid: true, signer: 'owner1' }),
       },
+      '../utils/specLibs': {
+        validateSubmissionSpec: sinon.stub().resolves(true),
+      },
       '../../lib/log': logStub,
       '../daemonService/daemonServiceMiscRpcs': {
         isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
-      },
-      '../appRequirements/appValidator': {
-        verifyAppSpecifications: sinon.stub().resolves(),
       },
       '../appDatabase/registryManager': {
         checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
@@ -229,12 +229,12 @@ describe('messageStore tests', () => {
           instantiatePreviousSpec: sinon.stub().resolves(null),
           authorize: sinon.stub().resolves({ valid: true, signer: 'owner1' }),
         },
+        '../utils/specLibs': {
+          validateSubmissionSpec: sinon.stub().resolves(true),
+        },
         '../../lib/log': logStub,
         '../daemonService/daemonServiceMiscRpcs': {
           isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
-        },
-        '../appRequirements/appValidator': {
-          verifyAppSpecifications: sinon.stub().resolves(),
         },
         '../appDatabase/registryManager': {
           checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),

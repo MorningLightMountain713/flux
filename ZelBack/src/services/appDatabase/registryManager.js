@@ -6,6 +6,7 @@ const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
+const { validateSubmissionSpec } = require('../utils/specLibs');
 const { checkAndDecryptAppSpecs, encryptEnterpriseFromSession } = require('../utils/enterpriseHelper');
 const { specificationFormatter, updateToLatestAppSpecifications } = require('../utils/appUtilities');
 const {
@@ -1375,8 +1376,6 @@ async function registerAppGlobalyApi(req, res) {
   // eslint-disable-next-line global-require
   const appUtilities = require('../utils/appUtilities');
   // eslint-disable-next-line global-require
-  const appValidator = require('../appRequirements/appValidator');
-  // eslint-disable-next-line global-require
   const imageManager = require('../appSecurity/imageManager');
   // eslint-disable-next-line global-require
   const messageVerifier = require('../appMessaging/messageVerifier');
@@ -1451,8 +1450,10 @@ async function registerAppGlobalyApi(req, res) {
 
       const appSpecFormatted = await appUtilities.specificationFormatter(appSpecDecrypted);
 
-      // parameters are now proper format and assigned. Check for their validity, if they are within limits, have propper ports, repotag exists, string lengths, specs are ok
-      await appValidator.verifyAppSpecifications(appSpecFormatted, daemonHeight, true);
+      await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
+      // eslint-disable-next-line global-require
+      const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
+      await verifyImageRegistryAndArchitectures(appSpecFormatted);
 
       if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
         // eslint-disable-next-line no-restricted-syntax

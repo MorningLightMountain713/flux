@@ -2847,8 +2847,11 @@ async function updateAppGlobaly(params) {
   const appSpecFormatted = specificationFormatter(appSpecDecrypted);
 
   // eslint-disable-next-line global-require
-  const appRequirements = require('../appRequirements/appValidator');
-  await appRequirements.verifyAppSpecifications(appSpecFormatted, daemonHeight, true);
+  const { validateSubmissionSpec } = require('../utils/specLibs');
+  // eslint-disable-next-line global-require
+  const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
+  await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
+  await verifyImageRegistryAndArchitectures(appSpecFormatted);
 
   if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
     // eslint-disable-next-line no-restricted-syntax
