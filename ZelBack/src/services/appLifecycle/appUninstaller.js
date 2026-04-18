@@ -17,7 +17,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { availableApps } = require('../appDatabase/registryManager');
 const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { specificationFormatter } = require('../utils/appSpecHelpers');
+const { specificationFormatter } = require('../utils/appUtilities');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const imageManager = require('../appSecurity/imageManager');
 

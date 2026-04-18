@@ -6,7 +6,7 @@ const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
 const appConstants = require('../utils/appConstants');
 const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { specificationFormatter } = require('../utils/appSpecHelpers');
+const { specificationFormatter } = require('../utils/appUtilities');
 const fluxCaching = require('../utils/cacheManager');
 const log = require('../../lib/log');
 

@@ -9,7 +9,7 @@ const upnpService = require('../upnpService');
 const serviceHelper = require('../serviceHelper');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
 const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { specificationFormatter } = require('../utils/appSpecHelpers');
+const { specificationFormatter } = require('../utils/appUtilities');
 const { localAppsInformation, globalAppsInformation } = require('../utils/appConstants');
 
 // Global cache for failed nodes

@@ -5,8 +5,7 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { checkAndDecryptAppSpecs } = require('./enterpriseHelper');
-const { appPricePerMonth } = require('./appUtilities');
-const { specificationFormatter } = require('./appUtilities');
+const { appPricePerMonth, specificationFormatter } = require('./appUtilities');
 const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const registryManager = require('../appDatabase/registryManager');
 const cacheManager = require('./cacheManager').default;
@@ -551,6 +550,4 @@ module.exports = {
   getAppPrice,
   getAppFluxOnChainPrice,
   checkFreeAppUpdate,
-  // Re-export for backward compatibility
-  specificationFormatter,
 };

@@ -89,7 +89,7 @@ describe('messageStore tests', () => {
         globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
         appsHashesCollection: 'appsHashes',
       },
-      '../utils/appSpecHelpers': {
+      '../utils/appUtilities': {
         specificationFormatter: sinon.stub().returnsArg(0),
       },
     });
@@ -257,7 +257,7 @@ describe('messageStore tests', () => {
           globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
           appsHashesCollection: 'appsHashes',
         },
-        '../utils/appSpecHelpers': {
+        '../utils/appUtilities': {
           specificationFormatter: sinon.stub().returnsArg(0),
         },
       });

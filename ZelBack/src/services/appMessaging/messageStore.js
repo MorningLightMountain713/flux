@@ -21,7 +21,7 @@ const {
   globalAppsInstallingErrorsLocations,
   appsHashesCollection,
 } = require('../utils/appConstants');
-const { specificationFormatter } = require('../utils/appSpecHelpers');
+const { specificationFormatter } = require('../utils/appUtilities');
 
 /**
  * Store temporary app message
