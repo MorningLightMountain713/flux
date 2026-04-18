@@ -78,6 +78,8 @@ describe('appEventVerifier', () => {
       getSpecBackend: sinon.stub().resolves({
         AppEventV1: FakeAppEventV1,
         AppEventV2: FakeAppEventV2,
+        computeMessageHash: sinon.stub().returns('v1-hash-abc'),
+        computeMessageHashV2: sinon.stub().returns('v2-hash-xyz'),
       }),
     };
 
@@ -319,6 +321,86 @@ describe('appEventVerifier', () => {
       await expect(
         appEventVerifier.authorize({ appEvent, daemonHeight: 1000 }),
       ).to.be.rejectedWith(/does not correspond with Flux App owner/);
+    });
+  });
+
+  describe('authorize (verifyHash option)', () => {
+    it('skips the hash check when verifyHash: false is passed (origination path)', async () => {
+      const appEvent = new FakeAppEvent({
+        spec: { owner: 'ownerA', name: 'myapp' },
+        hashValid: false, // would normally fail
+        validSignersByIteration: [new Set(['ownerA'])],
+      });
+      const result = await appEventVerifier.authorize({
+        appEvent, daemonHeight: 1000, verifyHash: false,
+      });
+      expect(result.valid).to.be.true;
+    });
+
+    it('still runs the hash check by default (receiving path)', async () => {
+      const appEvent = new FakeAppEvent({
+        spec: { owner: 'ownerA', name: 'myapp' },
+        hashValid: false,
+      });
+      await expect(
+        appEventVerifier.authorize({ appEvent, daemonHeight: 1000 }),
+      ).to.be.rejectedWith(/Invalid Flux App hash/);
+    });
+  });
+
+  describe('computeOutboundHash', () => {
+    it('delegates envelope v1 to computeMessageHash with the spec blob', async () => {
+      const hash = await appEventVerifier.computeOutboundHash({
+        type: 'fluxappregister',
+        envelopeVersion: 1,
+        specBlob: { name: 'myapp', version: 8 },
+        timestamp: 12345,
+        signature: 'sig',
+      });
+      expect(hash).to.equal('v1-hash-abc');
+
+      const backend = await specLibsStub.getSpecBackend();
+      expect(backend.computeMessageHash.calledOnce).to.be.true;
+      const args = backend.computeMessageHash.firstCall.args;
+      expect(args).to.deep.equal([
+        'fluxappregister', 1, { name: 'myapp', version: 8 }, 12345, 'sig',
+      ]);
+    });
+
+    it('delegates envelope v2 to computeMessageHashV2 with the content hash', async () => {
+      const hash = await appEventVerifier.computeOutboundHash({
+        type: 'fluxappregister',
+        envelopeVersion: 2,
+        contentHash: 'deadbeef',
+        timestamp: 12345,
+        signature: 'sig',
+      });
+      expect(hash).to.equal('v2-hash-xyz');
+
+      const backend = await specLibsStub.getSpecBackend();
+      expect(backend.computeMessageHashV2.calledOnce).to.be.true;
+      const args = backend.computeMessageHashV2.firstCall.args;
+      expect(args).to.deep.equal([
+        'fluxappregister', 2, 'deadbeef', 12345, 'sig',
+      ]);
+    });
+
+    it('rejects envelope v1 without a spec blob', async () => {
+      await expect(appEventVerifier.computeOutboundHash({
+        type: 'fluxappregister',
+        envelopeVersion: 1,
+        timestamp: 12345,
+        signature: 'sig',
+      })).to.be.rejectedWith(/envelope v1 requires specBlob/);
+    });
+
+    it('rejects envelope v2 without a content hash', async () => {
+      await expect(appEventVerifier.computeOutboundHash({
+        type: 'fluxappregister',
+        envelopeVersion: 2,
+        timestamp: 12345,
+        signature: 'sig',
+      })).to.be.rejectedWith(/envelope v2 requires contentHash/);
     });
   });
 

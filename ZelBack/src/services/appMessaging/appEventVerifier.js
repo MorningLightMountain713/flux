@@ -120,10 +120,14 @@ async function instantiatePreviousSpec(rawSpec) {
  * @returns {Promise<{valid: true, signer: string}>}
  * @throws {Error} on hash or signature failure
  */
-async function authorize({ appEvent, previousSpec, daemonHeight }) {
-  const hashResult = appEvent.verifyHash();
-  if (!hashResult.valid) {
-    throw new Error('Invalid Flux App hash received');
+async function authorize({
+  appEvent, previousSpec, daemonHeight, verifyHash = true,
+}) {
+  if (verifyHash) {
+    const hashResult = appEvent.verifyHash();
+    if (!hashResult.valid) {
+      throw new Error('Invalid Flux App hash received');
+    }
   }
 
   const signers = [appEvent.spec.owner];
@@ -159,10 +163,48 @@ async function authorize({ appEvent, previousSpec, daemonHeight }) {
   );
 }
 
+/**
+ * Compute the wire-format message hash for a freshly-signed submission.
+ *
+ * Envelope v1 (v1-v8 specs): SHA-256(type + envVer + JSON.stringify(specBlob) + ts + sig)
+ * Envelope v2 (v9 specs):   SHA-256(type + envVer + contentHash + ts + sig)
+ *
+ * The receiving-side AppEvent.verifyHash() recomputes this value and
+ * compares byte-for-byte, so the caller must pass the same `specBlob`
+ * shape that will ride on the wire (for enterprise apps today, that's
+ * the stripped form with empty compose/contacts — see registryManager's
+ * enterprise branch).
+ *
+ * @param {object} params
+ * @param {string} params.type - "fluxappregister" | "fluxappupdate" (or legacy zel*)
+ * @param {number} params.envelopeVersion - 1 for v1-v8, 2 for v9
+ * @param {object} [params.specBlob] - required for envelope v1
+ * @param {string} [params.contentHash] - required for envelope v2
+ * @param {number} params.timestamp
+ * @param {string} params.signature
+ * @returns {Promise<string>} hex-encoded SHA-256 digest
+ */
+async function computeOutboundHash({
+  type, envelopeVersion, specBlob, contentHash, timestamp, signature,
+}) {
+  const backend = await getSpecBackend();
+  if (envelopeVersion === 2) {
+    if (!contentHash) {
+      throw new Error('computeOutboundHash: envelope v2 requires contentHash');
+    }
+    return backend.computeMessageHashV2(type, envelopeVersion, contentHash, timestamp, signature);
+  }
+  if (!specBlob) {
+    throw new Error('computeOutboundHash: envelope v1 requires specBlob');
+  }
+  return backend.computeMessageHash(type, envelopeVersion, specBlob, timestamp, signature);
+}
+
 module.exports = {
   deserializeMessage,
   authorize,
   instantiatePreviousSpec,
+  computeOutboundHash,
   _internal: {
     isMarketplaceApp,
     resolveTeamSupportAddress,

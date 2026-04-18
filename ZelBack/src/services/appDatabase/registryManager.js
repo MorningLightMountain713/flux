@@ -5,6 +5,7 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const appEventVerifier = require('../appMessaging/appEventVerifier');
 const { checkAndDecryptAppSpecs, encryptEnterpriseFromSession } = require('../utils/enterpriseHelper');
 const { specificationFormatter, updateToLatestAppSpecifications } = require('../utils/appUtilities');
 const {
@@ -1367,9 +1368,10 @@ async function reconstructAppMessagesHashCollectionAPI(req, res) {
  * @returns {Promise<void>} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function registerAppGlobalyApi(req, res) {
-  // Import dependencies needed for this function
-  // eslint-disable-next-line global-require
-  const generalService = require('../generalService');
+  // Dynamic requires below guard real module cycles (verified): each of
+  // these modules either statically requires registryManager or closes a
+  // cycle through a module that does. Restructuring to eliminate the
+  // cycles is Stage 3.5+ scope — see fluxos/FLUXOS_MIGRATION_PLAN.md.
   // eslint-disable-next-line global-require
   const appUtilities = require('../utils/appUtilities');
   // eslint-disable-next-line global-require
@@ -1469,30 +1471,44 @@ async function registerAppGlobalyApi(req, res) {
         appSpecification.version >= 8 && appSpecification.enterprise,
       );
 
-      const toVerify = isEnterprise
+      // The signed form IS the broadcast form. For enterprise the user
+      // submits `{..., enterprise: <encrypted blob>, compose: [], contacts: []}`
+      // where the encrypted blob carries the real compose/contacts; the
+      // empty arrays are the on-wire sentinel. specificationFormatter
+      // normalizes field order without restoring cleartext values, so the
+      // formatted submission is the exact blob that the signature covers
+      // and that peers hash on receive. For non-enterprise the decrypted
+      // formatted spec is identical (no decryption ran).
+      const broadcastSpecBlob = isEnterprise
         ? await appUtilities.specificationFormatter(appSpecification)
         : appSpecFormatted;
 
-      // check if zelid owner is correct ( done in message verification )
-      // if signature is not correct, then specifications are not correct type or bad message received. Respond with 'Received message is invalid';
-      await messageVerifier.verifyAppMessageSignature(messageType, typeVersion, toVerify, timestamp, signature);
-
-      if (isEnterprise) {
-        appSpecFormatted.contacts = [];
-        appSpecFormatted.compose = [];
-      }
-
-      // if all ok, then sha256 hash of entire message = message + timestamp + signature. We are hashing all to have always unique value.
-      // If hashing just specificiations, if application goes back to previous specifications, it may pose some issues if we have indeed correct state
-      // We respond with a hash that is supposed to go to transaction.
-      const message = messageType + typeVersion + JSON.stringify(appSpecFormatted) + timestamp + signature;
-      const messageHASH = await generalService.messageHash(message);
-
-      // now all is great. Store appSpecFormatted, timestamp, signature and hash in appsTemporaryMessages. with 1 hours expiration time. Broadcast this message to all outgoing connections.
-      const temporaryAppMessage = { // specification of temp message
+      const signedEvent = await appEventVerifier.deserializeMessage({
         type: messageType,
         version: typeVersion,
-        appSpecifications: appSpecFormatted,
+        appSpecifications: broadcastSpecBlob,
+        timestamp,
+        signature,
+      });
+      await appEventVerifier.authorize({
+        appEvent: signedEvent,
+        daemonHeight,
+        verifyHash: false, // origination path — hash computed below
+      });
+
+      const messageHASH = await appEventVerifier.computeOutboundHash({
+        type: messageType,
+        envelopeVersion: typeVersion,
+        specBlob: broadcastSpecBlob,
+        timestamp,
+        signature,
+      });
+
+      // broadcast the same spec shape the hash was computed over
+      const temporaryAppMessage = {
+        type: messageType,
+        version: typeVersion,
+        appSpecifications: broadcastSpecBlob,
         hash: messageHASH,
         timestamp,
         signature,
