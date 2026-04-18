@@ -6,7 +6,10 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const messageVerifier = require('./messageVerifier');
 const appValidator = require('../appRequirements/appValidator');
 const registryManager = require('../appDatabase/registryManager');
-const { getPreviousAppSpecifications } = require('../appLifecycle/advancedWorkflows');
+const {
+  getPreviousAppSpecifications,
+  validateApplicationUpdateCompatibility,
+} = require('../appLifecycle/advancedWorkflows');
 const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
 const globalState = require('../utils/globalState');
 const {
@@ -116,7 +119,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
         if (appRegistration) {
           await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormattedDecrypted, message.hash);
         } else {
-          await advancedWorkflows.validateApplicationUpdateCompatibility(appSpecFormattedDecrypted, previousAppSpecs);
+          await validateApplicationUpdateCompatibility(appSpecFormattedDecrypted, previousAppSpecs);
         }
       }
     } else {
@@ -124,7 +127,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
       if (appRegistration) {
         await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted, message.hash);
       } else {
-        await advancedWorkflows.validateApplicationUpdateCompatibility(appSpecFormatted, previousAppSpecs);
+        await validateApplicationUpdateCompatibility(appSpecFormatted, previousAppSpecs);
       }
     }
 
