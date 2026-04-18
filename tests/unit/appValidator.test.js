@@ -122,6 +122,14 @@ describe('appValidator tests', () => {
           inboundCount: 0,
         },
       },
+      '../utils/specLibs': {
+        getSpec: sinon.stub().resolves({
+          FluxAppSpecBase: {
+            getVersionClass: () => ({ fromSubmission: sinon.stub() }),
+          },
+        }),
+        getSpecBackend: sinon.stub().resolves({}),
+      },
       '../fluxNetworkHelper': {
         getNumberOfPeers: sinon.stub().returns(10),
         isPortBanned: sinon.stub().returns(false),
@@ -134,37 +142,55 @@ describe('appValidator tests', () => {
   });
 
   describe('verifyAppSpecifications', () => {
-    it('should reject specs without name', async () => {
-      const invalidSpecs = {
-        version: 4,
-        cpu: 1,
-        ram: 1000,
-        hdd: 10,
-      };
+    it('surfaces VALIDATION_ERROR details from the spec class via fromSubmission', async () => {
+      // Re-proxy with a stub that simulates a schema validation failure,
+      // to verify appValidator translates the class library's structured
+      // VALIDATION_ERROR shape into a caller-friendly flat Error message.
+      const failingFromSubmission = sinon.stub().throws(Object.assign(
+        new Error('Validation failed'),
+        {
+          code: 'VALIDATION_ERROR',
+          errors: [{ field: 'name', message: 'Missing required property' }],
+        },
+      ));
+      const validator = proxyquire('../../ZelBack/src/services/appRequirements/appValidator', {
+        config: { fluxapps: { appSpecsEnforcementHeights: { 4: 0 } } },
+        '../utils/specLibs': {
+          getSpec: sinon.stub().resolves({
+            FluxAppSpecBase: { getVersionClass: () => ({ fromSubmission: failingFromSubmission }) },
+          }),
+          getSpecBackend: sinon.stub().resolves({}),
+        },
+      });
 
       try {
-        await appValidator.verifyAppSpecifications(invalidSpecs);
-        expect.fail('Should have thrown error');
+        await validator.verifyAppSpecifications({ version: 4 }, 100);
+        expect.fail('Should have thrown');
       } catch (error) {
         expect(error.message).to.include('name');
+        expect(error.message).to.include('Missing required property');
       }
     });
 
-    it('should reject specs with invalid version', async () => {
-      const invalidSpecs = {
-        name: 'testapp',
-        version: 999,
-        description: 'Test app',
-        owner: '1owner',
-        enterprise: false,
-      };
+    it('rejects specs whose version is not registered in the spec class registry', async () => {
+      // Re-proxy with a stub where getVersionClass returns undefined for
+      // unknown versions — matches how the real FluxAppSpecBase registry
+      // behaves when asked for a version that was never registered.
+      const validator = proxyquire('../../ZelBack/src/services/appRequirements/appValidator', {
+        config: { fluxapps: { appSpecsEnforcementHeights: {} } },
+        '../utils/specLibs': {
+          getSpec: sinon.stub().resolves({
+            FluxAppSpecBase: { getVersionClass: () => undefined },
+          }),
+          getSpecBackend: sinon.stub().resolves({}),
+        },
+      });
 
       try {
-        await appValidator.verifyAppSpecifications(invalidSpecs);
-        expect.fail('Should have thrown error');
+        await validator.verifyAppSpecifications({ name: 'x', version: 999 }, 100);
+        expect.fail('Should have thrown');
       } catch (error) {
-        // Should throw any error for invalid version
-        expect(error).to.be.an('error');
+        expect(error.message).to.include('Unsupported Flux App specification version');
       }
     });
 
