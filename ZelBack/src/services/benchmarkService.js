@@ -296,6 +296,53 @@ async function getPublicKey(message) {
   return executeCall(rpccall, rpcparameters);
 }
 
+/**
+ * Authenticated encryption via SAS. Derives an app-scoped AES-256 key
+ * via HKDF and encrypts the plaintext with AES-256-GCM, binding the
+ * optional AAD to the ciphertext.
+ *
+ * SAS key derivation:
+ *   HKDF-SHA256(ikm=nodeSecret, salt=context, info="${appName}:${owner}")
+ *
+ * @param {object} params
+ * @param {string} params.appName   - App name (HKDF info input)
+ * @param {string} params.owner     - fluxID / owner address (HKDF info input)
+ * @param {string} params.context   - HKDF salt / domain separator (e.g. "FLUX_APP_ENCRYPT_v1")
+ * @param {string} params.plaintext - Base64-encoded plaintext
+ * @param {string} [params.aad]     - Base64-encoded Additional Authenticated Data
+ * @returns {Promise<object>} { status, data: { algorithm, ciphertext, nonce, tag } }
+ */
+async function seal(params) {
+  const rpccall = 'seal';
+  const rpcparameters = [JSON.stringify(params)];
+  return executeCall(rpccall, rpcparameters);
+}
+
+/**
+ * Authenticated decryption via SAS. Derives the same app-scoped key
+ * and decrypts + verifies the GCM ciphertext. Throws if the auth tag
+ * doesn't match (tampered ciphertext or wrong AAD).
+ *
+ * SAS key derivation:
+ *   HKDF-SHA256(ikm=nodeSecret, salt=context, info="${appName}:${owner}")
+ *
+ * @param {object} params
+ * @param {string} params.appName    - App name (HKDF info input)
+ * @param {string} params.owner      - fluxID / owner address (HKDF info input)
+ * @param {string} params.context    - HKDF salt / domain separator (e.g. "FLUX_APP_ENCRYPT_v1")
+ * @param {string} params.algorithm  - "AES-256-GCM"
+ * @param {string} params.ciphertext - Base64-encoded ciphertext
+ * @param {string} params.nonce      - Base64-encoded 12-byte nonce
+ * @param {string} params.tag        - Base64-encoded 16-byte auth tag
+ * @param {string} [params.aad]      - Base64-encoded Additional Authenticated Data
+ * @returns {Promise<object>} { status, data: { plaintext } }
+ */
+async function unseal(params) {
+  const rpccall = 'unseal';
+  const rpcparameters = [JSON.stringify(params)];
+  return executeCall(rpccall, rpcparameters);
+}
+
 // == Control ==
 /**
  * To request help message.
@@ -451,4 +498,6 @@ module.exports = {
   getPublicKey,
   decryptRSAMessage,
   encryptMessage,
+  seal,
+  unseal,
 };

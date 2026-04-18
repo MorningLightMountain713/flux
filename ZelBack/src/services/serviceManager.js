@@ -49,6 +49,7 @@ const volumeValidationService = require('./volumeValidationService');
 const watchdogService = require('./watchdogService');
 const cloudUIUpdateService = require('./cloudUIUpdateService');
 const imageUpdateService = require('./imageUpdateService');
+const telemetryIdentityService = require('./telemetryIdentityService');
 // const throughputLogger = require('./utils/throughputLogger');
 
 // Initialize globalState caches with cacheManager
@@ -318,6 +319,14 @@ async function startFluxFunctions() {
     }, 10 * 60 * 1000); // every 10 minutes
     log.info('Starting setting Node Geolocation');
     geolocationService.setNodeGeolocation();
+    // Start telemetry identity socket server (flux-telemetryd IPC).
+    // Delayed to give geolocation time to populate so region tags are
+    // available on the first lookup.
+    setTimeout(() => {
+      telemetryIdentityService.start().catch((err) => {
+        log.error(`Telemetry identity service failed to start: ${err.message}`);
+      });
+    }, 30 * 1000);
     setTimeout(() => {
       const { daemon: { zmqport } } = config;
       log.info(`Ensuring zmq is enabled for fluxd on port: ${zmqport}`);
