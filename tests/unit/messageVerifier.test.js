@@ -297,7 +297,6 @@ describe('messageVerifier tests', () => {
     it('should export verification functions', () => {
       expect(messageVerifier.checkAppMessageExistence).to.be.a('function');
       expect(messageVerifier.checkAppTemporaryMessageExistence).to.be.a('function');
-      expect(messageVerifier.verifyAppHash).to.be.a('function');
       expect(messageVerifier.verifyAppMessageSignature).to.be.a('function');
     });
   });

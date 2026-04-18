@@ -35,76 +35,6 @@ const globalState = require('../utils/globalState');
 const hashesNumberOfSearchs = new Map();
 
 /**
- * Verify app hash against message content
- * @param {object} message - Message object to verify
- * @returns {Promise<boolean>} True if hash is valid
- */
-async function verifyAppHash(message) {
-  /* message object
-   * @param type string
-   * @param version number
-   * @param appSpecifications object
-   * @param hash string
-   * @param timestamp number
-   * @param signature string
-   */
-  const specifications = message.appSpecifications || message.zelAppSpecifications;
-  let messToHash = message.type + message.version + JSON.stringify(specifications) + message.timestamp + message.signature;
-  let messageHASH = await generalService.messageHash(messToHash);
-
-  if (messageHASH === message.hash) return true;
-
-  const appSpecsCopy = JSON.parse(JSON.stringify(specifications));
-
-  if (specifications.version <= 3) {
-    // as of specification changes, adjust our appSpecs order of owner and repotag
-    // in new scheme it is always version, name, description, owner, repotag... Old format was version, name, description, repotag, owner
-    delete appSpecsCopy.version;
-    delete appSpecsCopy.name;
-    delete appSpecsCopy.description;
-    delete appSpecsCopy.repotag;
-    delete appSpecsCopy.owner;
-
-    const appSpecOld = {
-      version: specifications.version,
-      name: specifications.name,
-      description: specifications.description,
-      repotag: specifications.repotag,
-      owner: specifications.owner,
-      ...appSpecsCopy,
-    };
-    messToHash = message.type + message.version + JSON.stringify(appSpecOld) + message.timestamp + message.signature;
-    messageHASH = await generalService.messageHash(messToHash);
-  } else if (specifications.version === 7) {
-    // fix for repoauth / secrets order change for apps created after 1750273721000
-    appSpecsCopy.compose.forEach((component) => {
-      // previously the order was secrets / repoauth. Now it's repoauth / secrets.
-      const comp = component;
-      const { secrets, repoauth } = comp;
-
-      delete comp.secrets;
-      delete comp.repoauth;
-
-      // try the old secrets / repoauth
-      comp.secrets = secrets;
-      comp.repoauth = repoauth;
-    });
-
-    messToHash = message.type + message.version + JSON.stringify(appSpecsCopy) + message.timestamp + message.signature;
-    messageHASH = await generalService.messageHash(messToHash);
-  }
-
-  if (messageHASH !== message.hash) {
-    log.error(`Hashes dont match - expected - ${message.hash} - calculated - ${messageHASH} for the message ${JSON.stringify(message)}`);
-    throw new Error('Invalid Flux App hash received');
-  }
-
-  // ToDo: fix this function. Should just return true / false and the upper layer deals with it,
-  // none of this needs to be async, crypto.createHash is synchronous
-  return true;
-}
-
-/**
  * Verify app message signature
  * @param {string} type - Message type
  * @param {number} version - Message version
@@ -1073,7 +1003,6 @@ async function triggerAppHashesCheckAPI(req, res) {
 }
 
 module.exports = {
-  verifyAppHash,
   verifyAppMessageSignature,
   verifyAppMessageUpdateSignature,
   isExpireOnlyUpdate,

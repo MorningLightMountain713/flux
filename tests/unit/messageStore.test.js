@@ -59,6 +59,11 @@ describe('messageStore tests', () => {
       '../dbHelper': dbHelperStub,
       '../serviceHelper': serviceHelperStub,
       './messageVerifier': messageVerifierStub,
+      './appEventVerifier': {
+        deserializeMessage: sinon.stub().resolves({}),
+        instantiatePreviousSpec: sinon.stub().resolves(null),
+        authorize: sinon.stub().resolves({ valid: true, signer: 'owner1' }),
+      },
       '../../lib/log': logStub,
       '../daemonService/daemonServiceMiscRpcs': {
         isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
@@ -209,8 +214,6 @@ describe('messageStore tests', () => {
 
       messageVerifierStub.checkAppMessageExistence.resolves(null);
       messageVerifierStub.checkAppTemporaryMessageExistence.resolves(null);
-      messageVerifierStub.verifyAppHash = sinon.stub().resolves();
-      messageVerifierStub.verifyAppMessageUpdateSignature = sinon.stub().resolves();
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
@@ -221,6 +224,11 @@ describe('messageStore tests', () => {
         '../dbHelper': dbHelperStub,
         '../serviceHelper': serviceHelperStub,
         './messageVerifier': messageVerifierStub,
+        './appEventVerifier': {
+          deserializeMessage: sinon.stub().resolves({}),
+          instantiatePreviousSpec: sinon.stub().resolves(null),
+          authorize: sinon.stub().resolves({ valid: true, signer: 'owner1' }),
+        },
         '../../lib/log': logStub,
         '../daemonService/daemonServiceMiscRpcs': {
           isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),

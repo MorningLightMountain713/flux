@@ -4,6 +4,7 @@ const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const messageVerifier = require('./messageVerifier');
+const appEventVerifier = require('./appEventVerifier');
 const appValidator = require('../appRequirements/appValidator');
 const registryManager = require('../appDatabase/registryManager');
 const {
@@ -131,15 +132,30 @@ async function storeAppTemporaryMessage(message, options = {}) {
       }
     }
 
-    await messageVerifier.verifyAppHash(message);
-    if (appRegistration) {
-      await messageVerifier.verifyAppMessageSignature(message.type, messageVersion, appSpecFormatted, messageTimestamp, message.signature);
-    } else {
-      // previousAppSpecs already fetched above for update validation
-      const { owner } = previousAppSpecs;
-      // here signature is checked against PREVIOUS app owner
-      await messageVerifier.verifyAppMessageUpdateSignature(message.type, messageVersion, appSpecFormatted, messageTimestamp, message.signature, owner, block, previousAppSpecs);
+    // Deserialize the wire message into an AppEvent. This validates the
+    // spec body via the version class's deserialize(), and encapsulates
+    // hash + signature verification (with version-specific serialization
+    // fallbacks) inside the class itself.
+    let appEvent;
+    try {
+      appEvent = await appEventVerifier.deserializeMessage(message);
+    } catch (err) {
+      log.error(err);
+      throw new Error(`Invalid Flux App message: ${err.message}`);
     }
+
+    // Instantiate the previous spec as a class instance so UpdatePolicy
+    // can compare via base-interface getters (needed for the
+    // usersToExtend TTL-only fallback in appEventVerifier.authorize).
+    const previousSpec = appRegistration
+      ? null
+      : await appEventVerifier.instantiatePreviousSpec(previousAppSpecs);
+
+    await appEventVerifier.authorize({
+      appEvent,
+      previousSpec,
+      daemonHeight: block,
+    });
   }
 
   const receivedAt = Date.now();

@@ -90,9 +90,7 @@ describe('appValidator tests', () => {
         availableApps: sinon.stub().resolves([]),
         checkApplicationRegistrationRequirements: sinon.stub().resolves(true),
       },
-      '../appMessaging/messageVerifier': {
-        verifyAppHash: sinon.stub().resolves(true),
-      },
+      '../appMessaging/messageVerifier': {},
       '../appSecurity/imageManager': imageManagerStub,
       '../appLifecycle/advancedWorkflows': {
         reindexGlobalAppsInformation: sinon.stub().resolves(),
