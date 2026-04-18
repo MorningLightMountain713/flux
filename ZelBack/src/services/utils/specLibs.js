@@ -42,8 +42,8 @@ async function getSpecPolicy() {
  *   2. Apply FluxOS's per-version fork-activation height policy —
  *      new spec versions are rejected before their enforcement height.
  *   3. Delegate all shape / type / semantic checks to the class's
- *      `fromSubmission`. Structured VALIDATION_ERROR results are
- *      flattened into a single-line `Error` for the caller.
+ *      `fromSubmission`. ValidationError instances are flattened into
+ *      a single-line `Error` for the caller.
  *
  * Platform-level checks (Docker registry, architecture compat, blocked
  * repos) are a separate concern — call
@@ -62,7 +62,7 @@ async function getSpecPolicy() {
  */
 async function validateSubmissionSpec(spec, { height } = {}) {
   await getSpecBackend(); // register v1-v8 classes into the shared version registry
-  const { FluxAppSpecBase } = await getSpec();
+  const { FluxAppSpecBase, ValidationError } = await getSpec();
   const VersionClass = spec && FluxAppSpecBase.getVersionClass(spec.version);
   if (!VersionClass) {
     throw new Error(`Unsupported Flux App specification version: ${spec && spec.version}`);
@@ -74,7 +74,7 @@ async function validateSubmissionSpec(spec, { height } = {}) {
   try {
     VersionClass.fromSubmission(spec);
   } catch (err) {
-    if (err.code === 'VALIDATION_ERROR' && Array.isArray(err.errors) && err.errors.length > 0) {
+    if (err instanceof ValidationError && Array.isArray(err.errors) && err.errors.length > 0) {
       const first = err.errors[0];
       const path = first.field ? `${first.field}: ` : '';
       throw new Error(`${path}${first.message}`);
