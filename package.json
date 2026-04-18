@@ -49,6 +49,9 @@
     "url": "https://github.com/runonflux/flux/issues"
   },
   "homepage": "https://github.com/runonflux/flux#readme",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "lint": "eslint --ext .js ./",
     "lint:fix": "eslint --ext .js ./ --fix",
@@ -80,7 +83,11 @@
   "dependencies": {
     "@aws-sdk/client-ecr": "^3.922.0",
     "@azure/identity": "^4.13.0",
+    "@hpke/core": "~1.9.0",
     "@isaacs/ttlcache": "~1.4.1",
+    "@megachips/flux-spec": "0.1.0",
+    "@megachips/flux-spec-backend": "0.1.0",
+    "@megachips/flux-spec-policy": "0.1.0",
     "@runonflux/nat-upnp": "~1.0.2",
     "apicache": "~1.6.3",
     "archiver": "~7.0.1",
