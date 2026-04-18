@@ -1,5 +1,6 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
+const appsMaintenance = require('./appsMaintenance');
 const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
@@ -1223,10 +1224,10 @@ async function updateAppSpecifications(appSpecs) {
 /**
  * Rebuild the global apps information collection from messages collection.
  *
- * Thin wrapper around dbHelper.reindexGlobalAppsInformation, which does the
- * heavy lifting in a single mongo aggregation + chunked bulk inserts. The
- * dbHelper version filters expired apps inside the aggregation (full PON fork
- * rate adjustment), so no separate expire pass is needed here.
+ * Thin wrapper around appsMaintenance.reindexGlobalAppsInformation, which
+ * does the heavy lifting in a single mongo aggregation + chunked bulk
+ * inserts. That version filters expired apps inside the aggregation (full
+ * PON fork rate adjustment), so no separate expire pass is needed here.
  *
  * @returns {Promise<boolean>} True on success
  */
@@ -1256,7 +1257,7 @@ async function reindexGlobalAppsInformation() {
       scannedHeightResult.generalScannedHeight,
     );
 
-    await dbHelper.reindexGlobalAppsInformation(
+    await appsMaintenance.reindexGlobalAppsInformation(
       appsGlobalDb,
       appsLocalDb,
       globalAppsMessages,

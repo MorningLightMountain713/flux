@@ -6,6 +6,7 @@ const https = require('https');
 const cacheManager = require('./utils/cacheManager').default;
 const log = require('../lib/log');
 const dbHelper = require('./dbHelper');
+const appsMaintenance = require('./appDatabase/appsMaintenance');
 const explorerService = require('./explorerService');
 const fluxCommunication = require('./fluxCommunication');
 const networkStateService = require('./networkStateService');
@@ -186,9 +187,9 @@ async function startFluxFunctions() {
 
     // This fixes an issue where the appsMessage db has NaN for valueSat. Once db is repaired on all nodes,
     // we can remove this.
-    await dbHelper.repairNanInAppsMessagesDb();
+    await appsMaintenance.repairNanInAppsMessagesDb();
 
-    const { appsToRemove } = await dbHelper.validateAppsInformation();
+    const { appsToRemove } = await appsMaintenance.validateAppsInformation();
 
     const appRemover = async () => {
       // eslint-disable-next-line no-restricted-syntax
