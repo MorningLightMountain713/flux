@@ -7,9 +7,7 @@ const verificationHelper = require('../verificationHelper');
 const dockerService = require('../dockerService');
 const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
-const generalService = require('../generalService');
 const benchmarkService = require('../benchmarkService');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const geolocationService = require('../geolocationService');
 const appUninstaller = require('./appUninstaller');
@@ -26,8 +24,9 @@ const pgpService = require('../pgpService');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { specificationFormatter, findCommonArchitectures } = require('../utils/appUtilities');
+const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
+const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
 const { appsFolder, localAppsInformation, scannedHeightCollection } = require('../utils/appConstants');
 const { checkAppTemporaryMessageExistence, checkAppMessageExistence } = require('../appMessaging/messageVerifier');
@@ -46,6 +45,51 @@ const cmdAsync = util.promisify(exec);
 const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
 
 const supportedArchitectures = ['amd64', 'arm64'];
+
+/**
+ * Parse a plain-object v1-v8 spec blob into its version class instance.
+ * Mirrors the helper in messageStore/registryManager — keeps ingestion
+ * validation consistent.
+ *
+ * @param {object} plainSpec
+ * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase>}
+ */
+async function deserializeSubmission(plainSpec) {
+  const { FluxAppSpecBase } = await getSpec();
+  await getSpecBackend();
+  const VersionClass = FluxAppSpecBase.getVersionClass(plainSpec.version);
+  if (!VersionClass) {
+    throw new Error(`Unsupported Flux App specification version: ${plainSpec.version}`);
+  }
+  return VersionClass.fromSubmission(plainSpec);
+}
+
+/**
+ * Route a plain-object encrypted v8 spec through the CryptoProvider seam.
+ * Returns a plain object with compose/contacts populated and the enterprise
+ * blob preserved — same shape the legacy checkAndDecryptAppSpecs produced,
+ * which is what downstream install code still expects.
+ *
+ * Non-enterprise (or already-decrypted) specs pass through unchanged.
+ *
+ * @param {object} plainSpec
+ * @returns {Promise<object>}
+ */
+async function decryptForInstall(plainSpec) {
+  if (!plainSpec || plainSpec.version < 8 || !plainSpec.enterprise) return plainSpec;
+  // Already-decrypted enterprise spec (compose populated) — no-op.
+  if (plainSpec.compose && plainSpec.compose.length > 0) return plainSpec;
+
+  const wireSpec = await deserializeSubmission(plainSpec);
+  const encryptedSpec = wireSpec.toEncryptedSpec();
+  const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+  const decrypted = await encryptedSpec.decrypt(provider);
+  const result = decrypted.spec.serialize();
+  // Preserve the enterprise blob so the DB-storage path (which zeroes
+  // compose/contacts for the wire shape) keeps the ciphertext.
+  result.enterprise = plainSpec.enterprise;
+  return result;
+}
 
 /**
  * Verify that the app volume is mounted
@@ -365,16 +409,6 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
       return false;
     }
     globalState.installationInProgress = true;
-    const tier = await generalService.nodeTier().catch((error) => log.error(error));
-    if (!tier) {
-      const rStatus = messageHelper.createErrorMessage('Failed to get Node Tier');
-      log.error(rStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(rStatus));
-        res.end();
-      }
-      return false;
-    }
 
     const benchmarkResponse = await benchmarkService.getBenchmarks();
     if (benchmarkResponse.status === 'error') {
@@ -562,19 +596,6 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
         throw new Error(`CRITICAL: Failed to create database entry for ${appSpecifications.name}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
       }
       log.info(`Database entry created for ${appSpecifications.name} BEFORE Docker container creation`);
-      const hddTier = `hdd${tier}`;
-      const ramTier = `ram${tier}`;
-      const cpuTier = `cpu${tier}`;
-      appSpecifications.cpu = test ? 0.2 : appSpecifications[cpuTier] || appSpecifications.cpu;
-      appSpecifications.ram = test ? 300 : appSpecifications[ramTier] || appSpecifications.ram;
-      appSpecifications.hdd = test ? 2 : appSpecifications[hddTier] || appSpecifications.hdd;
-    } else {
-      const hddTier = `hdd${tier}`;
-      const ramTier = `ram${tier}`;
-      const cpuTier = `cpu${tier}`;
-      appComponent.cpu = test ? 0.2 : appComponent[cpuTier] || appComponent.cpu;
-      appComponent.ram = test ? 300 : appComponent[ramTier] || appComponent.ram;
-      appComponent.hdd = test ? 2 : appComponent[hddTier] || appComponent.hdd;
     }
 
     const specificationsToInstall = isComponent ? appComponent : appSpecifications;
@@ -596,12 +617,6 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
         // eslint-disable-next-line no-restricted-syntax
         for (const appComponentSpecs of specificationsToInstall.compose) {
           isComponent = true;
-          const hddTier = `hdd${tier}`;
-          const ramTier = `ram${tier}`;
-          const cpuTier = `cpu${tier}`;
-          appComponentSpecs.cpu = test ? 0.2 : appComponentSpecs[cpuTier] || appComponentSpecs.cpu;
-          appComponentSpecs.ram = test ? 300 : appComponentSpecs[ramTier] || appComponentSpecs.ram;
-          appComponentSpecs.hdd = test ? 2 : appComponentSpecs[hddTier] || appComponentSpecs.hdd;
           // eslint-disable-next-line no-await-in-loop, no-use-before-define
           await installApplicationHard(appComponentSpecs, appName, isComponent, res, appSpecifications, test);
         }
@@ -805,7 +820,7 @@ async function installApplicationHard(appSpecifications, appName, isComponent, r
   // Dynamic require to avoid circular dependency
   // eslint-disable-next-line global-require
   const advancedWorkflows = require('./advancedWorkflows');
-  await advancedWorkflows.createAppVolume(appSpecifications, appName, isComponent, res);
+  await advancedWorkflows.createAppVolume(appSpecifications, appName, isComponent, res, test);
 
   // Verify that the volume was mounted successfully
   const verifyingMount = {
@@ -837,7 +852,7 @@ async function installApplicationHard(appSpecifications, appName, isComponent, r
     if (res.flush) res.flush();
   }
 
-  await dockerService.appDockerCreate(appSpecifications, appName, isComponent, fullAppSpecs);
+  await dockerService.appDockerCreate(appSpecifications, appName, isComponent, fullAppSpecs, test);
 
   const startStatus = {
     status: isComponent ? `Starting component ${appSpecifications.name} of Flux App ${appName}...` : `Starting Flux App ${appName}...`,
@@ -983,16 +998,9 @@ async function installAppLocally(req, res) {
         throw new Error(`Application Specifications of ${appname} not found`);
       }
 
-      // we have to do this as not all paths above decrypt the app specs
-      // this is a bit of a hack until we tidy up the app spec mess (use classes)
-      if (
-        appSpecifications.version >= 8
-        && appSpecifications.enterprise
-        && !appSpecifications.compose.length
-      ) {
-        appSpecifications = await checkAndDecryptAppSpecs(appSpecifications);
-        appSpecifications = specificationFormatter(appSpecifications);
-      }
+      // Normalize: any source above may hand us the encrypted v8 wire form.
+      // decryptForInstall is a no-op when already decrypted or non-enterprise.
+      appSpecifications = await decryptForInstall(appSpecifications);
 
       // get current height
       const dbopen = dbHelper.databaseConnection();
@@ -1144,25 +1152,8 @@ async function testAppInstall(req, res) {
         throw new Error(`Application Specifications of ${appname} not found`);
       }
 
-      // Decrypt enterprise specifications if needed
-      if (
-        appSpecifications.version >= 8
-        && appSpecifications.enterprise
-        && !appSpecifications.compose.length
-      ) {
-        // Get current daemon height for decryption
-        const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-        if (!syncStatus.data.synced) {
-          throw new Error('Daemon not yet synced.');
-        }
-        const daemonHeight = syncStatus.data.height;
-
-        appSpecifications = await checkAndDecryptAppSpecs(appSpecifications, {
-          daemonHeight,
-          owner: appSpecifications.owner,
-        });
-        appSpecifications = specificationFormatter(appSpecifications);
-      }
+      // Normalize: any source above may hand us the encrypted v8 wire form.
+      appSpecifications = await decryptForInstall(appSpecifications);
 
       // Test installation - similar to regular install but with test flag
       // Skip all requirement checks for test installations (geolocation, static IP, hardware, nodes)

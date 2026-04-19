@@ -13,6 +13,8 @@ describe('appInstaller tests', () => {
   let hwRequirementsStub;
   let enterpriseHelperStub;
   let appSpecHelpersStub;
+  let legacyCryptoProviderStub;
+  let specLibsStub;
   let messageVerifierStub;
 
   beforeEach(() => {
@@ -92,6 +94,38 @@ describe('appInstaller tests', () => {
 
     appSpecHelpersStub = {
       specificationFormatter: sinon.stub().returnsArg(0),
+    };
+
+    // Cutover stubs: class-instance seam + v8 CryptoProvider. The mock
+    // round-trips spec data — sufficient for the install flow without
+    // pulling real flux-spec into unit tests.
+    legacyCryptoProviderStub = {
+      create: sinon.stub().callsFake(async () => ({
+        decrypt: sinon.stub().callsFake(async () => Buffer.from(JSON.stringify({ compose: [], contacts: [] }))),
+      })),
+    };
+
+    specLibsStub = {
+      getSpec: sinon.stub().resolves({
+        FluxAppSpecBase: {
+          getVersionClass: sinon.stub().callsFake((version) => {
+            if (!version) return null;
+            return {
+              fromSubmission: (blob) => ({
+                version: blob.version,
+                name: blob.name,
+                owner: blob.owner,
+                enterprise: blob.enterprise,
+                serialize: () => ({ ...blob, compose: [], contacts: [] }),
+                toEncryptedSpec: () => ({
+                  decrypt: async () => ({ spec: { serialize: () => ({ ...blob, compose: [], contacts: [] }) } }),
+                }),
+              }),
+            };
+          }),
+        },
+      }),
+      getSpecBackend: sinon.stub().resolves({}),
     };
 
     messageVerifierStub = {
@@ -215,6 +249,13 @@ describe('appInstaller tests', () => {
       },
       '../utils/enterpriseHelper': enterpriseHelperStub,
       '../utils/appSpecHelpers': appSpecHelpersStub,
+      '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
+      '../utils/specLibs': specLibsStub,
+      '../appDatabase/appsRepository': {
+        getInstalledApp: sinon.stub().resolves(null),
+        getGlobalAppInfo: sinon.stub().resolves(null),
+        getAppMessage: sinon.stub().resolves(null),
+      },
       '../utils/registryCredentialHelper': {
         addCredentialsToImageVerifier: sinon.stub().resolves(),
       },
@@ -436,22 +477,24 @@ describe('appInstaller tests', () => {
         appSpecifications: enterpriseAppSpec,
       });
 
-      // Configure enterprise helper to return decrypted specs
-      enterpriseHelperStub.checkAndDecryptAppSpecs.resolves(decryptedAppSpec);
-      appSpecHelpersStub.specificationFormatter.returns(decryptedAppSpec);
-
       messageHelperStub.createErrorMessage.returns({ status: 'error' });
 
       try {
         await appInstaller.testAppInstall(req, res);
       } catch (e) {
-        // Installation may fail, but we're testing the decryption path
+        // Installation may fail downstream, but we're testing the decryption seam
       }
 
-      // Verify that decryption was called for enterprise app
-      expect(enterpriseHelperStub.checkAndDecryptAppSpecs.calledWith(enterpriseAppSpec)).to.be.true;
-      expect(appSpecHelpersStub.specificationFormatter.calledWith(decryptedAppSpec)).to.be.true;
+      // Enterprise v8 specs with empty compose should route through the
+      // CryptoProvider seam. The provider is constructed with (appName, owner).
+      expect(legacyCryptoProviderStub.create.called).to.be.true;
+      const createArgs = legacyCryptoProviderStub.create.firstCall.args;
+      expect(createArgs[0]).to.equal('enterpriseapp');
+      expect(createArgs[1]).to.equal('1K6nyw2VjV6jEN1f1CkbKn9htWnYkQabbR');
       expect(logStub.info.calledWith('testAppInstall: enterpriseapp')).to.be.true;
+      // Reference decryptedAppSpec to keep it in the fixture contract even
+      // though the cutover no longer stubs a plain-object decryption return.
+      expect(decryptedAppSpec.compose).to.have.length(1);
     });
 
     it('should skip installation when architecture is incompatible', async () => {
@@ -542,6 +585,13 @@ describe('appInstaller tests', () => {
         }),
         '../utils/enterpriseHelper': enterpriseHelperStub,
         '../utils/appSpecHelpers': appSpecHelpersStub,
+        '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
+        '../utils/specLibs': specLibsStub,
+        '../appDatabase/appsRepository': {
+          getInstalledApp: sinon.stub().resolves(null),
+          getGlobalAppInfo: sinon.stub().resolves(null),
+          getAppMessage: sinon.stub().resolves(null),
+        },
         util: {
           promisify: (fn) => fn,
         },
@@ -714,6 +764,13 @@ describe('appInstaller tests', () => {
         }),
         '../utils/enterpriseHelper': enterpriseHelperStub,
         '../utils/appSpecHelpers': appSpecHelpersStub,
+        '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
+        '../utils/specLibs': specLibsStub,
+        '../appDatabase/appsRepository': {
+          getInstalledApp: sinon.stub().resolves(null),
+          getGlobalAppInfo: sinon.stub().resolves(null),
+          getAppMessage: sinon.stub().resolves(null),
+        },
         util: {
           promisify: (fn) => fn,
         },
@@ -809,123 +866,6 @@ describe('appInstaller tests', () => {
       const result = await appInstaller.registerAppLocally(appSpec, componentSpecs, res);
 
       expect(logStub.error.called).to.be.true;
-      expect(result).to.be.false;
-    });
-
-    it('should return false if node tier does not return anything', async () => {
-      const appInstallerWithNodeTier = proxyquire('../../ZelBack/src/services/appLifecycle/appInstaller', {
-        config: configStub,
-        '../verificationHelper': verificationHelperStub,
-        '../messageHelper': messageHelperStub,
-        '../dbHelper': dbHelperStub,
-        '../serviceHelper': {
-          ensureString: sinon.stub().callsFake((param) => (typeof param === 'string' ? param : JSON.stringify(param))),
-          ensureNumber: sinon.stub().returnsArg(0),
-          delay: sinon.stub().resolves(),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves(undefined),
-          checkSynced: sinon.stub().resolves(true),
-        },
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: { ipaddress: '192.168.1.1' },
-          }),
-        },
-        '../fluxNetworkHelper': {
-          getNumberOfPeers: sinon.stub().returns(15),
-          isFirewallActive: sinon.stub().resolves(false),
-          allowPort: sinon.stub().resolves({ status: true }),
-          removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-        },
-        '../dockerService': {
-          dockerListContainers: sinon.stub().resolves([]),
-          pruneContainers: sinon.stub().resolves(),
-          pruneNetworks: sinon.stub().resolves(),
-          pruneVolumes: sinon.stub().resolves(),
-          pruneImages: sinon.stub().resolves(),
-          createFluxAppDockerNetwork: sinon.stub().resolves('network-created'),
-          getFluxDockerNetworkPhysicalInterfaceNames: sinon.stub().resolves([]),
-          appDockerCreate: sinon.stub().resolves(),
-          appDockerStart: sinon.stub().resolves('container-started'),
-          getAppIdentifier: sinon.stub().returns('testapp'),
-          dockerPullStream: sinon.stub().yields(null, 'pulled'),
-        },
-        './appUninstaller': {
-          removeAppLocally: sinon.stub().resolves(),
-        },
-        './advancedWorkflows': {
-          createAppVolume: sinon.stub().resolves(),
-        },
-        '../fluxCommunicationMessagesSender': {
-          broadcastMessageToOutgoing: sinon.stub().resolves(),
-          broadcastMessageToIncoming: sinon.stub().resolves(),
-        },
-        '../appMessaging/messageStore': {
-          storeAppRunningMessage: sinon.stub().resolves(),
-          storeAppInstallingErrorMessage: sinon.stub().resolves(),
-        },
-        '../appSystem/systemIntegration': {
-          systemArchitecture: sinon.stub().resolves('amd64'),
-        },
-        '../appSecurity/imageManager': {
-          checkApplicationImagesCompliance: sinon.stub().resolves(),
-        },
-        '../appManagement/appInspector': {
-          startAppMonitoring: sinon.stub(),
-        },
-        '../utils/imageVerifier': {
-          ImageVerifier: sinon.stub().returns({
-            addCredentials: sinon.stub(),
-            verifyImage: sinon.stub().resolves(),
-            throwIfError: sinon.stub(),
-            supported: true,
-            provider: 'docker.io',
-          }),
-        },
-        '../pgpService': {
-          decryptMessage: sinon.stub().resolves('user:token'),
-        },
-        '../upnpService': {
-          isUPNP: sinon.stub().returns(false),
-          mapUpnpPort: sinon.stub().resolves(true),
-        },
-        '../utils/globalState': globalStateStub,
-        '../../lib/log': logStub,
-        '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
-          config: configStub,
-        }),
-        '../appMessaging/messageVerifier': {
-          checkAppTemporaryMessageExistence: sinon.stub().resolves(null),
-          checkAppMessageExistence: sinon.stub().resolves(null),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-          getApplicationGlobalSpecifications: sinon.stub().resolves(null),
-        },
-        '../appRequirements/hwRequirements': hwRequirementsStub,
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-          listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
-        },
-        util: {
-          promisify: (fn) => fn,
-        },
-      });
-
-      const componentSpecs = false;
-      const res = {
-        write: sinon.stub(),
-        end: sinon.stub(),
-      };
-
-      const result = await appInstallerWithNodeTier.registerAppLocally(appSpec, componentSpecs, res);
-
-      expect(res.write.called).to.be.true;
       expect(result).to.be.false;
     });
 
@@ -1114,6 +1054,13 @@ describe('appInstaller tests', () => {
         '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
         '../utils/enterpriseHelper': enterpriseHelperStub,
         '../utils/appSpecHelpers': appSpecHelpersStub,
+        '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
+        '../utils/specLibs': specLibsStub,
+        '../appDatabase/appsRepository': {
+          getInstalledApp: sinon.stub().resolves(null),
+          getGlobalAppInfo: sinon.stub().resolves(null),
+          getAppMessage: sinon.stub().resolves(null),
+        },
         '../utils/globalState': { removalInProgress: false, installationInProgress: false, masterSlaveAppsRunning: false },
         '../../lib/log': logStub,
         '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', { config: configStub }),

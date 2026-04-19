@@ -701,8 +701,14 @@ const getContainerIP = async (containerName) => {
  * @param {bool} isComponent
  * @returns {object}
  */
-async function appDockerCreate(appSpecifications, appName, isComponent, fullAppSpecs) {
+async function appDockerCreate(appSpecifications, appName, isComponent, fullAppSpecs, test = false) {
   const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
+
+  // Test installs pin resources to a low fixed footprint regardless of what
+  // the spec declared — they only exist to validate image pullability and
+  // basic container bringup, not to honor declared resources.
+  const effectiveCpu = test ? 0.2 : appSpecifications.cpu;
+  const effectiveRam = test ? 300 : appSpecifications.ram;
   let exposedPorts = {};
   let portBindings = {};
   if (appSpecifications.version === 1) {
@@ -889,14 +895,14 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
   const burstLabels = burstEligible
     ? {
       'flux.burst.eligible': 'true',
-      'flux.burst.cores': String(appSpecifications.cpu),
+      'flux.burst.cores': String(effectiveCpu),
     }
     : null;
   const containerLabels = (labels || burstLabels)
     ? { ...(labels || {}), ...(burstLabels || {}) }
     : null;
   if (burstEligible) {
-    log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${appSpecifications.cpu})`);
+    log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${effectiveCpu})`);
   }
 
   const options = {
@@ -913,9 +919,9 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
     // Conditionally include Labels only if it's not null
     ...(containerLabels && { Labels: containerLabels }),
     HostConfig: {
-      NanoCPUs: Math.round(appSpecifications.cpu * 1e9),
-      Memory: Math.round(appSpecifications.ram * 1024 * 1024),
-      MemorySwap: Math.round((appSpecifications.ram + (config.fluxapps.defaultSwap * 1000)) * 1024 * 1024), // default 2GB swap
+      NanoCPUs: Math.round(effectiveCpu * 1e9),
+      Memory: Math.round(effectiveRam * 1024 * 1024),
+      MemorySwap: Math.round((effectiveRam + (config.fluxapps.defaultSwap * 1000)) * 1024 * 1024), // default 2GB swap
       // StorageOpt: { size: '5G' }, // root fs has max default 5G size, v8 is 5G + specified as per config.fluxapps.hddFileSystemMinimum
       Mounts: constructedVolumes, // Using modern Mount objects instead of legacy Binds
       Ulimits: [

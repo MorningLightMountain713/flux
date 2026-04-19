@@ -463,12 +463,17 @@ let dosMountMessage = '';
  * @param {string} appName - Application name
  * @param {boolean} isComponent - Whether this is a component
  * @param {object} res - Response object for streaming
+ * @param {boolean} [test=false] - Test install — use a minimal fixed volume
+ *   size instead of the declared hdd. Test installs exist to validate image
+ *   pullability and container bringup, not to honor declared storage.
  * @returns {Promise<void>}
  */
-async function createAppVolume(appSpecifications, appName, isComponent, res) {
+async function createAppVolume(appSpecifications, appName, isComponent, res, test = false) {
   const dfAsync = util.promisify(df);
   const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
   const appId = dockerService.getAppIdentifier(identifier);
+
+  const effectiveHdd = test ? 2 : appSpecifications.hdd;
 
   const searchSpace = {
     status: 'Searching available space...',
@@ -509,9 +514,9 @@ async function createAppVolume(appSpecifications, appName, isComponent, res) {
     throw new Error('Unable to obtain locked system resources by Flux App. Aborting.');
   }
   const hddLockedByApps = resourcesLocked.data.appsHddLocked;
-  const availableSpaceForApps = useableSpaceOnNode - hddLockedByApps + appSpecifications.hdd + config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap; // because our application is already accounted in locked resources
+  const availableSpaceForApps = useableSpaceOnNode - hddLockedByApps + effectiveHdd + config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap; // because our application is already accounted in locked resources
   // bigger or equal so we have the 1 gb free...
-  if (appSpecifications.hdd >= availableSpaceForApps) {
+  if (effectiveHdd >= availableSpaceForApps) {
     throw new Error('Insufficient space on Flux Node to spawn an application');
   }
   // now we know that most likely there is a space available. IF user does not have his own stuff on the node or space may be sharded accross hdds.
@@ -525,7 +530,7 @@ async function createAppVolume(appSpecifications, appName, isComponent, res) {
   const fluxSystemReserve = config.lockedSystemResources.hdd + config.lockedSystemResources.extrahdd - usedSpace > 0 ? config.lockedSystemResources.hdd + config.lockedSystemResources.extrahdd - usedSpace : 0;
   const minSystemReserve = Math.max(config.lockedSystemResources.extrahdd, fluxSystemReserve);
   const totalAvailableSpaceLeft = availableSpace - minSystemReserve;
-  if (appSpecifications.hdd >= totalAvailableSpaceLeft) {
+  if (effectiveHdd >= totalAvailableSpaceLeft) {
     // sadly user free space is not enough for this application
     throw new Error('Insufficient space on Flux Node. Space is already assigned to system files');
   }
@@ -535,7 +540,7 @@ async function createAppVolume(appSpecifications, appName, isComponent, res) {
   const totalVolumes = okVolumes.length;
   for (let i = 0; i < totalVolumes; i += 1) {
     // check available volumes one by one. If a sufficient is found. Use this one.
-    if (okVolumes[i].available > appSpecifications.hdd + minSystemReserve) {
+    if (okVolumes[i].available > effectiveHdd + minSystemReserve) {
       useThisVolume = okVolumes[i];
       break;
     }
@@ -565,11 +570,11 @@ async function createAppVolume(appSpecifications, appName, isComponent, res) {
       if (res.flush) res.flush();
     }
 
-    let execDD = `sudo fallocate -l ${appSpecifications.hdd}G ${useThisVolume.mount}/${appId}FLUXFSVOL`; // eg /mnt/sthMounted
+    let execDD = `sudo fallocate -l ${effectiveHdd}G ${useThisVolume.mount}/${appId}FLUXFSVOL`; // eg /mnt/sthMounted
     if (useThisVolume.mount === '/') {
       const execMkdir = `sudo mkdir -p ${fluxDirPath}appvolumes`;
       await cmdAsync(execMkdir);
-      execDD = `sudo fallocate -l ${appSpecifications.hdd}G ${fluxDirPath}appvolumes/${appId}FLUXFSVOL`; // if root mount then temp file is /flu/appvolumes
+      execDD = `sudo fallocate -l ${effectiveHdd}G ${fluxDirPath}appvolumes/${appId}FLUXFSVOL`; // if root mount then temp file is /flu/appvolumes
     }
 
     await cmdAsync(execDD);
