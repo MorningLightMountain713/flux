@@ -1,7 +1,7 @@
 /**
  * FluxOS authority policy for app-event signature verification.
  *
- * The @megachips/flux-spec-backend `AppEventV1.verifySignature(verifyFn, signers)`
+ * The @runonflux/flux-spec-backend `AppEventV1.verifySignature(verifyFn, signers)`
  * iterates serializations × signers and returns the first match. It does
  * not know who is authorized to sign — that policy lives here, in FluxOS.
  *

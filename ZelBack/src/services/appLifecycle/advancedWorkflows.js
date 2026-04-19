@@ -24,65 +24,15 @@ const {
   globalAppsLocations,
   appsFolder,
 } = require('../utils/appConstants');
-const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
-const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const {
+  toCanonicalSpec,
+  decryptIfEnterprise,
+} = require('../utils/specCutover');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const globalState = require('../utils/globalState');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
-
-/**
- * Parse a plain-object v1-v8 spec blob into its version class instance.
- * Same helper used in messageStore/registryManager/appInstaller — keeps
- * ingestion validation consistent across the submission + redeploy paths.
- *
- * @param {object} plainSpec
- * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase>}
- */
-async function deserializeSubmission(plainSpec) {
-  const { FluxAppSpecBase } = await getSpec();
-  await getSpecBackend();
-  const VersionClass = FluxAppSpecBase.getVersionClass(plainSpec.version);
-  if (!VersionClass) {
-    throw new Error(`Unsupported Flux App specification version: ${plainSpec.version}`);
-  }
-  return VersionClass.fromSubmission(plainSpec);
-}
-
-/**
- * Normalize a plain-object v1-v8 spec blob to its canonical wire shape via
- * the version class. Same byte-for-byte output as the legacy appUtilities
- * formatter on valid input, but rejects malformed specs via ValidationError.
- *
- * @param {object} plainSpec
- * @returns {Promise<object>}
- */
-async function toCanonicalSpec(plainSpec) {
-  return (await deserializeSubmission(plainSpec)).serialize();
-}
-
-/**
- * Route a plain-object encrypted v8 spec through the CryptoProvider seam.
- * Returns a plain object with compose/contacts populated and the enterprise
- * blob preserved. Non-enterprise (or already-decrypted) specs pass through.
- *
- * @param {object} plainSpec
- * @returns {Promise<object>}
- */
-async function decryptIfEnterprise(plainSpec) {
-  if (!plainSpec || plainSpec.version < 8 || !plainSpec.enterprise) return plainSpec;
-  // Already-decrypted enterprise spec (compose populated) — no-op.
-  if (plainSpec.compose && plainSpec.compose.length > 0) return plainSpec;
-
-  const wireSpec = await deserializeSubmission(plainSpec);
-  const encryptedSpec = wireSpec.toEncryptedSpec();
-  const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
-  const decrypted = await encryptedSpec.decrypt(provider);
-  const result = decrypted.spec.serialize();
-  result.enterprise = plainSpec.enterprise;
-  return result;
-}
 
 // Legacy apps that use old gateway IP assignment method
 const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated', 'isokosse', 'ChainBraryDApp', 'health', 'ethercalc'];

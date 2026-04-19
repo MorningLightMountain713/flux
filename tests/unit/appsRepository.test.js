@@ -21,8 +21,10 @@ describe('appsRepository', () => {
       removeDocumentsFromCollection: sinon.stub(),
     };
 
-    // getSpec() returns { FluxAppSpecBase: { getVersionClass } }
-    // getSpecBackend() is awaited for its side effect of registering v1-v8.
+    // getSpec() returns { FluxAppSpecBase: { getVersionClass } }.
+    // getSpecBackend() returns the dispatch helper: given a doc, route
+    // encrypted v8 to a stub EncryptedSpecV8.deserialize, everything else
+    // to the registered version class's deserialize.
     versionRegistry = new Map();
     specLibsStub = {
       getSpec: sinon.stub().resolves({
@@ -30,7 +32,20 @@ describe('appsRepository', () => {
           getVersionClass: (v) => versionRegistry.get(v),
         },
       }),
-      getSpecBackend: sinon.stub().resolves({}),
+      getSpecBackend: sinon.stub().resolves({
+        deserializeSpec: (doc) => {
+          // Match the real backend dispatcher: non-empty enterprise string
+          // on v8 → EncryptedSpecV8; else → VersionClass.deserialize.
+          if (doc.version === 8 && typeof doc.enterprise === 'string' && doc.enterprise !== '') {
+            throw new Error('appsRepository test: no EncryptedSpecV8 stub registered');
+          }
+          const VersionClass = versionRegistry.get(doc.version);
+          if (!VersionClass) {
+            throw new Error(`no spec class registered for version ${doc.version}`);
+          }
+          return VersionClass.deserialize(doc);
+        },
+      }),
     };
 
     logStub = { warn: sinon.stub(), error: sinon.stub(), info: sinon.stub() };

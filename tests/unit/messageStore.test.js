@@ -2,31 +2,26 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-// Round-trip stub for the flux-spec version class seam: fromSubmission echoes
-// the input as a minimal class-like object; serialize/decrypt round-trip back
-// to the same blob. Enough to satisfy messageStore without pulling real
-// flux-spec into the unit tests.
-function buildSpecStubs() {
-  const mockFluxAppSpecBase = {
-    getVersionClass: sinon.stub().callsFake((version) => {
-      if (!version) return null;
-      return {
-        fromSubmission: (blob) => ({
-          version: blob.version,
-          name: blob.name,
-          owner: blob.owner,
-          enterprise: blob.enterprise,
-          serialize: () => blob,
-          toEncryptedSpec: () => ({
-            decrypt: async () => ({ spec: { serialize: () => blob } }),
-          }),
-        }),
-      };
+// Round-trip stub for the specCutover seam: deserializeSubmission echoes
+// the input as a minimal class-like object; serialize/decrypt round-trip
+// back to the same blob. Enough to satisfy messageStore without pulling
+// real flux-spec into the unit tests.
+function buildCutoverStubs() {
+  const makeWireSpec = (blob) => ({
+    version: blob.version,
+    name: blob.name,
+    owner: blob.owner,
+    enterprise: blob.enterprise,
+    serialize: () => blob,
+    toEncryptedSpec: () => ({
+      decrypt: async () => ({ spec: { serialize: () => blob } }),
     }),
-  };
+  });
   return {
-    getSpec: sinon.stub().resolves({ FluxAppSpecBase: mockFluxAppSpecBase }),
-    getSpecBackend: sinon.stub().resolves({}),
+    deserializeSpec: sinon.stub().callsFake(async (blob) => makeWireSpec(blob)),
+    toCanonicalSpec: sinon.stub().callsFake(async (blob) => blob),
+    decryptIfEnterprise: sinon.stub().callsFake(async (blob) => blob),
+    decryptStoredSpec: sinon.stub().callsFake(async (blob) => blob),
   };
 }
 
@@ -82,7 +77,7 @@ describe('messageStore tests', () => {
     };
 
     // Proxy require
-    const specStubs = buildSpecStubs();
+    const cutoverStubs = buildCutoverStubs();
     messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', {
       config: configStub,
       '../dbHelper': dbHelperStub,
@@ -95,9 +90,9 @@ describe('messageStore tests', () => {
       },
       '../utils/specLibs': {
         validateSubmissionSpec: sinon.stub().resolves(true),
-        getSpec: specStubs.getSpec,
-        getSpecBackend: specStubs.getSpecBackend,
+        getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {} }),
       },
+      '../utils/specCutover': cutoverStubs,
       '../providers/FluxOSLegacyCryptoProvider': {
         create: sinon.stub().resolves({
           decrypt: sinon.stub().resolves(Buffer.from('{}')),
@@ -249,7 +244,7 @@ describe('messageStore tests', () => {
       dbHelperStub.findOneInDatabase.resolves(null);
       dbHelperStub.insertOneToDatabase.resolves();
 
-      const localSpecStubs = buildSpecStubs();
+      const localCutoverStubs = buildCutoverStubs();
       messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', {
         config: configStub,
         '../dbHelper': dbHelperStub,
@@ -262,9 +257,9 @@ describe('messageStore tests', () => {
         },
         '../utils/specLibs': {
           validateSubmissionSpec: sinon.stub().resolves(true),
-          getSpec: localSpecStubs.getSpec,
-          getSpecBackend: localSpecStubs.getSpecBackend,
+          getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {} }),
         },
+        '../utils/specCutover': localCutoverStubs,
         '../providers/FluxOSLegacyCryptoProvider': {
           create: sinon.stub().resolves({
             decrypt: sinon.stub().resolves(Buffer.from('{}')),

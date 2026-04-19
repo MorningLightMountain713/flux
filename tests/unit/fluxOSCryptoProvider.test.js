@@ -12,7 +12,7 @@ describe('FluxOSCryptoProvider', () => {
   let fluxOSCryptoProvider;
 
   // Minimal abstract base class stubbed in place of the real
-  // @megachips/flux-spec-backend CryptoProvider. Concrete subclass must
+  // @runonflux/flux-spec-backend CryptoProvider. Concrete subclass must
   // define encrypt/decrypt; instanceof checks pass through.
   class MockCryptoProviderBase {
     constructor() {

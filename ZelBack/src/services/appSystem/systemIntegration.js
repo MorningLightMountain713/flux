@@ -232,14 +232,12 @@ async function checkAppHWRequirements(appSpecs) {
   // eslint-disable-next-line global-require
   const appController = require('../appManagement/appController');
 
-  // appSpecs has hdd, cpu and ram assigned to correct tier
-  const tier = await generalService.nodeTier();
   const resourcesLocked = await appController.appsResources();
   if (resourcesLocked.status !== 'success') {
     throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
   }
 
-  const appHWrequirements = hwRequirements.totalAppHWRequirements(appSpecs, tier);
+  const appHWrequirements = await hwRequirements.totalAppHWRequirements(appSpecs);
   await getNodeSpecs();
   const totalSpaceOnNode = nodeSpecs.ssdStorage;
   if (totalSpaceOnNode === 0) {

@@ -18,6 +18,7 @@ const appUtilities = require('../utils/appUtilities');
 const systemIntegration = require('../appSystem/systemIntegration');
 const globalState = require('../utils/globalState');
 const { FluxCacheManager } = require('../utils/cacheManager');
+const { deserializeSpec } = require('../utils/specCutover');
 // const advancedWorkflows = require('./advancedWorkflows'); // Moved to dynamic require to avoid circular dependency
 
 let appInstaller; // Will be initialized to avoid circular dependency
@@ -453,8 +454,9 @@ async function trySpawningGlobalApplication() {
     }
 
     if (!appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater) {
-      const tier = await generalService.nodeTier();
-      const appHWrequirements = hwRequirements.totalAppHWRequirements(appSpecifications, tier);
+      const appHWrequirements = await hwRequirements.totalAppHWRequirements(
+        await deserializeSpec(appSpecifications),
+      );
       let delay = false;
       const isArcane = Boolean(process.env.FLUXOS_PATH);
       if (!appToRunAux.enterprise && isArcane) {

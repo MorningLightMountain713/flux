@@ -10,13 +10,9 @@ const registryManager = require('../appDatabase/registryManager');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const imageManager = require('../appSecurity/imageManager');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
-const { specificationFormatter } = require('../utils/appUtilities');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
 const { peerManager } = require('../utils/peerState');
 const { validateSubmissionSpec } = require('../utils/specLibs');
-
-const isArcane = Boolean(process.env.FLUXOS_PATH);
-
+const { decryptIfEnterprise, toCanonicalSpec } = require('../utils/specCutover');
 
 /**
  * Verify app registration parameters via API
@@ -43,16 +39,8 @@ async function verifyAppRegistrationParameters(req, res) {
         appSpecification.version >= 8 && appSpecification.enterprise,
       );
 
-      // Decrypt enterprise specifications if needed
-      const appSpecDecrypted = await checkAndDecryptAppSpecs(
-        appSpecification,
-        {
-          daemonHeight,
-          owner: appSpecification.owner,
-        },
-      );
-
-      const appSpecFormatted = specificationFormatter(appSpecDecrypted);
+      const appSpecDecrypted = await decryptIfEnterprise(appSpecification);
+      const appSpecFormatted = await toCanonicalSpec(appSpecDecrypted);
 
       await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
       await verifyImageRegistryAndArchitectures(appSpecFormatted);
@@ -114,9 +102,8 @@ async function validateAppUpdate(appSpecification) {
     appSpecification.version >= 8 && appSpecification.enterprise,
   );
 
-  const decryptedSpecs = await checkAndDecryptAppSpecs(appSpecification, { daemonHeight });
-
-  const appSpecFormatted = specificationFormatter(decryptedSpecs);
+  const decryptedSpecs = await decryptIfEnterprise(appSpecification);
+  const appSpecFormatted = await toCanonicalSpec(decryptedSpecs);
 
   await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
   await verifyImageRegistryAndArchitectures(appSpecFormatted);

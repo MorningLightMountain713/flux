@@ -11,7 +11,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 // Removed messageStore require to avoid circular dependency - will import locally where needed
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates, getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
+const { decryptIfEnterprise, decryptToCleartextClass } = require('../utils/specCutover');
 const { updateAppSpecifications } = require('../appDatabase/registryManager');
 const { getPreviousAppSpecifications } = require('../appLifecycle/advancedWorkflows');
 const {
@@ -264,18 +264,11 @@ async function verifyAppMessageUpdateSignature(type, version, appSpec, timestamp
   // so this works even when the app has expired from globalAppsInformation (e.g. during resync)
   const usersToExtend = config.fluxapps.usersToExtend || [];
   if (isValidSignature !== true && usersToExtend.length > 0 && previousAppSpec) {
-    // For v8+ enterprise apps, we need to decrypt specs before comparing
-    let newSpecToCompare = appSpec;
-    let prevSpecToCompare = previousAppSpec;
-    const specOwner = previousAppSpec.owner || appOwner;
-    if ((appSpec.version >= 8 && appSpec.enterprise) || (previousAppSpec.version >= 8 && previousAppSpec.enterprise)) {
-      if (appSpec.version >= 8 && appSpec.enterprise) {
-        newSpecToCompare = await checkAndDecryptAppSpecs(appSpec, { daemonHeight, owner: specOwner });
-      }
-      if (previousAppSpec.version >= 8 && previousAppSpec.enterprise) {
-        prevSpecToCompare = await checkAndDecryptAppSpecs(previousAppSpec, { daemonHeight, owner: specOwner });
-      }
-    }
+    // For v8+ enterprise apps, decrypt both sides before comparing so the
+    // isExpireOnlyUpdate check sees canonical cleartext on both sides.
+    // decryptIfEnterprise is a no-op for non-enterprise or non-v8 specs.
+    const newSpecToCompare = await decryptIfEnterprise(appSpec);
+    const prevSpecToCompare = await decryptIfEnterprise(previousAppSpec);
     // Check if signature matches any of the usersToExtend addresses
     // eslint-disable-next-line no-restricted-syntax
     for (const userToExtend of usersToExtend) {
@@ -623,9 +616,10 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
           const priceSpecifications = intervals[intervals.length - 1]; // filter does not change order
           if (tempMessage.type === 'zelappregister' || tempMessage.type === 'fluxappregister') {
           // check if value is optimal or higher
-            let appPrice = await appPricePerMonth(specifications, height, appPrices);
+            const spec = await decryptToCleartextClass(specifications);
+            let appPrice = await appPricePerMonth(spec, height, appPrices);
             // Use defaultExpire from outer scope which accounts for PON fork
-            const expireIn = specifications.expire || defaultExpire;
+            const expireIn = spec.expire || defaultExpire;
             // app prices are ceiled to highest 0.01
             const multiplier = expireIn / defaultExpire;
             appPrice *= multiplier;
@@ -715,8 +709,10 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
             const previousSpecs = messageInfo.appSpecifications || messageInfo.zelAppSpecifications;
             // here comparison of height differences and specifications
             // price shall be price for standard registration plus minus already paid price according to old specifics. height remains height valid for 22000 blocks
-            let appPrice = await appPricePerMonth(specifications, height, appPrices);
-            let previousSpecsPrice = await appPricePerMonth(previousSpecs, messageInfo.height || height, appPrices);
+            const spec = await decryptToCleartextClass(specifications);
+            const prevSpec = await decryptToCleartextClass(previousSpecs);
+            let appPrice = await appPricePerMonth(spec, height, appPrices);
+            let previousSpecsPrice = await appPricePerMonth(prevSpec, messageInfo.height || height, appPrices);
             // Calculate default expire for current and previous apps based on their registration heights
             const defaultExpireCurrent = height >= config.fluxapps.daemonPONFork
               ? config.fluxapps.blocksLasting * 4
@@ -724,8 +720,8 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
             const defaultExpirePrevious = (messageInfo.height || height) >= config.fluxapps.daemonPONFork
               ? config.fluxapps.blocksLasting * 4
               : config.fluxapps.blocksLasting;
-            const currentExpireIn = specifications.expire || defaultExpireCurrent;
-            const previousExpireIn = previousSpecs.expire || defaultExpirePrevious;
+            const currentExpireIn = spec.expire || defaultExpireCurrent;
+            const previousExpireIn = prevSpec.expire || defaultExpirePrevious;
             // app prices are ceiled to highest 0.01
             const multiplierCurrent = currentExpireIn / defaultExpireCurrent;
             appPrice *= multiplierCurrent;

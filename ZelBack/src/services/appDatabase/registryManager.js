@@ -9,7 +9,8 @@ const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
-const { validateSubmissionSpec, getSpec, getSpecBackend } = require('../utils/specLibs');
+const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
+const { deserializeSpec } = require('../utils/specCutover');
 const { encryptEnterpriseFromSession } = require('../utils/enterpriseHelper');
 const { updateToLatestAppSpecifications } = require('../utils/appUtilities');
 const {
@@ -24,51 +25,6 @@ const {
 } = require('../utils/appConstants');
 
 let reindexRunning = false;
-
-/**
- * Parse a plain-object v1-v8 spec blob into its version class instance.
- * Validates shape via the class's fromSubmission.
- *
- * @param {object} plainSpec - Raw spec blob (submission or storage shape)
- * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase>}
- */
-async function deserializeSubmission(plainSpec) {
-  const { FluxAppSpecBase } = await getSpec();
-  await getSpecBackend(); // registers v1-v8 classes
-  const VersionClass = FluxAppSpecBase.getVersionClass(plainSpec.version);
-  if (!VersionClass) {
-    throw new Error(`Unsupported Flux App specification version: ${plainSpec.version}`);
-  }
-  return VersionClass.fromSubmission(plainSpec);
-}
-
-/**
- * For a stored/raw spec document, decrypt v8 enterprise blobs to the
- * cleartext form (compose + contacts populated) while preserving the
- * hash/height metadata. Non-enterprise specs are returned as-is.
- *
- * Routes through the flux-spec CryptoProvider seam:
- * FluxAppSpecV8 → EncryptedSpecV8.decrypt(provider) → DecryptedCanonicalSpec.
- *
- * @param {object|null} dbAppSpec - Raw document from globalAppsInformation
- * @returns {Promise<object|null>} Plain object: either the original non-
- *   enterprise doc, or the canonical decrypted form plus height/hash.
- */
-async function decryptIfEnterprise(dbAppSpec) {
-  if (!dbAppSpec) return null;
-  if (dbAppSpec.version < 8 || !dbAppSpec.enterprise) return dbAppSpec;
-
-  const wireSpec = await deserializeSubmission(dbAppSpec);
-  const encryptedSpec = wireSpec.toEncryptedSpec();
-  const provider = await legacyCryptoProvider.create(
-    wireSpec.name, wireSpec.owner,
-  );
-  const decrypted = await encryptedSpec.decrypt(provider);
-  const result = decrypted.spec.serialize();
-  result.height = dbAppSpec.height;
-  result.hash = dbAppSpec.hash;
-  return result;
-}
 
 /**
  * Get all app hashes from the blockchain
@@ -392,9 +348,36 @@ async function getAppInstallingLocation(req, res) {
  * @param {string} appName - Application name
  * @returns {Promise<object|null>} App specifications
  */
+/**
+ * Get the stored global spec for an app as a plain-object canonical form.
+ *
+ * For encrypted v8 wire forms this CROSSES THE CLEARTEXT BOUNDARY:
+ * decrypts via the legacy provider and returns cleartext plain. For
+ * cleartext wire forms the stored wire form passes through.
+ *
+ * Returned plain form preserves `height` and `hash` storage metadata so
+ * legacy callers that read those fields continue to work. The
+ * `enterprise` blob is dropped from the output (decrypted specs are
+ * cleartext by definition).
+ *
+ * @param {string} appName
+ * @returns {Promise<object|null>}
+ */
 async function getApplicationGlobalSpecifications(appName) {
-  const dbAppSpec = await appsRepository.getGlobalAppInfoRaw(appName);
-  return decryptIfEnterprise(dbAppSpec);
+  const dbDoc = await appsRepository.getGlobalAppInfoRaw(appName);
+  if (!dbDoc) return null;
+
+  const wireSpec = await deserializeSpec(dbDoc);
+  const { EncryptedSpecBase } = await getSpecBackend();
+  if (!(wireSpec instanceof EncryptedSpecBase)) return dbDoc;
+
+  // Explicit cleartext crossing for encrypted wire forms.
+  const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+  const decrypted = await wireSpec.decrypt(provider);
+  const plain = decrypted.spec.serialize();
+  plain.height = dbDoc.height;
+  plain.hash = dbDoc.hash;
+  return plain;
 }
 
 /**
@@ -447,13 +430,12 @@ async function getApplicationSpecifications(appName) {
   //   hash: hash of message that has these paramenters,
   //   height: height containing the message
   // };
-  let appInfo = await appsRepository.getGlobalAppInfoRaw(appName);
-  if (!appInfo) {
-    // eslint-disable-next-line no-use-before-define
-    const allApps = await availableApps();
-    appInfo = allApps.find((app) => app.name.toLowerCase() === appName.toLowerCase());
-  }
-  return decryptIfEnterprise(appInfo);
+  const globalSpec = await getApplicationGlobalSpecifications(appName);
+  if (globalSpec) return globalSpec;
+
+  // eslint-disable-next-line no-use-before-define
+  const allApps = await availableApps();
+  return allApps.find((app) => app.name.toLowerCase() === appName.toLowerCase()) || null;
 }
 
 /**
@@ -1413,23 +1395,18 @@ async function registerAppGlobalyApi(req, res) {
       }
       const daemonHeight = syncStatus.data.height;
 
-      // Parse the on-wire form once. For enterprise apps this is the
-      // encrypted-shape class (empty compose/contacts, enterprise blob
-      // intact); for everyone else it IS the signed decrypted spec.
-      const wireSpec = await deserializeSubmission(appSpecification);
-      const isEnterprise = Boolean(
-        wireSpec.version >= 8 && wireSpec.enterprise,
-      );
+      // Parse the on-wire form. Encrypted wire forms land as
+      // EncryptedSpecV8; cleartext ones as the version's cleartext class.
+      const wireSpec = await deserializeSpec(appSpecification);
+      const { EncryptedSpecBase } = await getSpecBackend();
+      const isEnterprise = wireSpec instanceof EncryptedSpecBase;
 
-      // Decrypt via the provider when the enterprise blob is present,
-      // otherwise the wire spec is already the cleartext form.
+      // Explicitly cross the decrypt boundary when enterprise. The
+      // DecryptedCanonicalSpec.spec access is the audited unwrap site.
       let decryptedSpec = wireSpec;
       if (isEnterprise) {
-        const encryptedSpec = wireSpec.toEncryptedSpec();
-        const provider = await legacyCryptoProvider.create(
-          wireSpec.name, wireSpec.owner,
-        );
-        decryptedSpec = (await encryptedSpec.decrypt(provider)).spec;
+        const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+        decryptedSpec = (await wireSpec.decrypt(provider)).spec;
       }
 
       const appSpecFormatted = decryptedSpec.serialize();

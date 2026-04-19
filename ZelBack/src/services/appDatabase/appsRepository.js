@@ -55,27 +55,30 @@ function nameRegex(name) {
  * dispatch — for now throw loudly so it's caught early.
  *
  * @param {Object|null} doc - Raw Mongo document, or null from findOne miss.
- * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase|null>}
+ * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase|null>}
  */
 async function hydrate(doc) {
   if (!doc) return null;
 
-  const { FluxAppSpecBase } = await getSpec();
-  await getSpecBackend(); // registers v1-v8 version classes in the shared registry
+  await getSpec(); // ensure FluxAppSpecBase + v9 registration
+  const { deserializeSpec } = await getSpecBackend(); // registers v1-v8 + brings dispatch
 
-  const VersionClass = FluxAppSpecBase.getVersionClass(doc.version);
-  if (!VersionClass) {
-    log.warn(`appsRepository.hydrate: no version class for version ${doc.version} (name=${doc.name})`);
-    return null;
-  }
-
-  if (doc.version >= 9) {
+  if (doc.version === 9) {
     // v9 storage shape is nested under `appSpecifications` — hydration path
     // lands when the v9 ingestion cutover ships.
     throw new Error('appsRepository: v9 hydration not yet implemented');
   }
 
-  return VersionClass.deserialize(doc);
+  // deserializeSpec dispatches on wire shape: encrypted v8 (non-empty
+  // enterprise string) → EncryptedSpecV8, everything else → the cleartext
+  // VersionClass.deserialize. Returns a FluxAppSpecBase or
+  // EncryptedSpecBase instance. Callers branch with instanceof.
+  try {
+    return deserializeSpec(doc);
+  } catch (err) {
+    log.warn(`appsRepository.hydrate: ${err.message} (name=${doc.name}, version=${doc.version})`);
+    return null;
+  }
 }
 
 function globalDb() {
@@ -91,7 +94,7 @@ function localDb() {
  * into the appropriate class instance.
  *
  * @param {string} name
- * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase|null>}
+ * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase|null>}
  */
 async function getGlobalAppInfo(name) {
   const doc = await dbHelper.findOneInDatabase(
@@ -130,7 +133,7 @@ async function getGlobalAppInfoRaw(name, projection = {}) {
  * @param {Object} [options]
  * @param {Object} [options.filter] - Mongo filter. Defaults to all.
  * @param {Object} [options.sort]   - Mongo sort. Defaults to no sort.
- * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase[]>}
+ * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase[]>}
  */
 async function listGlobalAppInfo({ filter = {}, sort } = {}) {
   const options = { projection: { _id: 0 } };
@@ -216,7 +219,7 @@ async function removeGlobalAppInfo(name) {
  * hydrated into the appropriate class instance.
  *
  * @param {string} name
- * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase|null>}
+ * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase|null>}
  */
 async function getInstalledApp(name) {
   const doc = await dbHelper.findOneInDatabase(
@@ -231,7 +234,7 @@ async function getInstalledApp(name) {
 /**
  * List all installed apps on this node, hydrated.
  *
- * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase[]>}
+ * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase[]>}
  */
 async function listInstalledApps() {
   const docs = await dbHelper.findInDatabase(

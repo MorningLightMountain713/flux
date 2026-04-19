@@ -6,7 +6,8 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
-const { validateSubmissionSpec, getSpec, getSpecBackend } = require('../utils/specLibs');
+const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
+const { deserializeSpec } = require('../utils/specCutover');
 const {
   getPreviousAppSpecifications,
   validateApplicationUpdateCompatibility,
@@ -21,23 +22,6 @@ const {
   globalAppsInstallingErrorsLocations,
   appsHashesCollection,
 } = require('../utils/appConstants');
-
-/**
- * Parse a raw spec blob into its version class instance. Validates shape
- * via the class's fromSubmission and captures any ValidationError details.
- *
- * @param {object} plainSpec
- * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase>}
- */
-async function deserializeSubmission(plainSpec) {
-  const { FluxAppSpecBase } = await getSpec();
-  await getSpecBackend();
-  const VersionClass = FluxAppSpecBase.getVersionClass(plainSpec.version);
-  if (!VersionClass) {
-    throw new Error(`Unsupported Flux App specification version: ${plainSpec.version}`);
-  }
-  return VersionClass.fromSubmission(plainSpec);
-}
 
 /**
  * Store temporary app message
@@ -66,12 +50,12 @@ async function storeAppTemporaryMessage(message, options = {}) {
 
   const specifications = message.appSpecifications || message.zelAppSpecifications;
 
-  // Parse the on-wire spec into its version class. For v8 enterprise apps
-  // this is the encrypted form (empty compose/contacts + enterprise blob);
-  // for everything else it's the full spec. The class instance is the
-  // authoritative object used for branching, and its .serialize() produces
-  // the canonical byte form for DB storage + downstream consumers.
-  const wireSpec = await deserializeSubmission(specifications);
+  // Parse the on-wire spec into its class. Encrypted v8 wire forms land as
+  // EncryptedSpecV8; everything else lands as the cleartext version class.
+  // Downstream code dispatches with `instanceof EncryptedSpecBase`. The
+  // instance's .serialize() produces the canonical byte form for DB
+  // storage + downstream consumers.
+  const wireSpec = await deserializeSpec(specifications);
   const appSpecFormatted = wireSpec.serialize();
   const messageTimestamp = serviceHelper.ensureNumber(message.timestamp);
   const messageVersion = serviceHelper.ensureNumber(message.version);
@@ -127,21 +111,18 @@ async function storeAppTemporaryMessage(message, options = {}) {
       }
     }
 
-    // For v8 enterprise apps we need the decrypted cleartext to run the
-    // remaining checks. Route through the flux-spec CryptoProvider seam:
-    // wireSpec.toEncryptedSpec().decrypt(provider) returns a real
-    // FluxAppSpecV8 with compose/contacts populated. Non-encrypted specs
-    // skip the whole branch.
+    // For encrypted wire forms we need the decrypted cleartext to run the
+    // remaining checks. wireSpec is already an EncryptedSpecV8 instance
+    // via the deserializeSpec dispatch — cross the cleartext boundary
+    // explicitly via `.decrypt(provider)` → DecryptedCanonicalSpec.spec.
     let validationBlob;
-    if (wireSpec.version >= 8 && wireSpec.enterprise) {
+    const { EncryptedSpecBase } = await getSpecBackend();
+    if (wireSpec instanceof EncryptedSpecBase) {
       // eslint-disable-next-line global-require
       const fluxService = require('../fluxService');
       if (await fluxService.isSystemSecure()) {
-        const encryptedSpec = wireSpec.toEncryptedSpec();
-        const provider = await legacyCryptoProvider.create(
-          wireSpec.name, wireSpec.owner,
-        );
-        const decrypted = await encryptedSpec.decrypt(provider);
+        const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+        const decrypted = await wireSpec.decrypt(provider);
         validationBlob = decrypted.spec.serialize();
       }
     } else {

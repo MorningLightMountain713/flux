@@ -15,6 +15,7 @@ describe('appInstaller tests', () => {
   let appSpecHelpersStub;
   let legacyCryptoProviderStub;
   let specLibsStub;
+  let specCutoverStub;
   let messageVerifierStub;
 
   beforeEach(() => {
@@ -126,6 +127,31 @@ describe('appInstaller tests', () => {
         },
       }),
       getSpecBackend: sinon.stub().resolves({}),
+    };
+
+    // specCutover is the migration seam — echo the spec back with an empty
+    // compose/contacts pair when it looks like an enterprise blob, matching
+    // the real decrypt path that produces canonical cleartext.
+    specCutoverStub = {
+      deserializeSubmission: sinon.stub().callsFake(async (blob) => ({
+        version: blob.version,
+        name: blob.name,
+        owner: blob.owner,
+        enterprise: blob.enterprise,
+        serialize: () => blob,
+        toEncryptedSpec: () => ({
+          decrypt: async () => ({ spec: { serialize: () => blob } }),
+        }),
+      })),
+      toCanonicalSpec: sinon.stub().callsFake(async (blob) => blob),
+      decryptIfEnterprise: sinon.stub().callsFake(async (blob) => {
+        if (blob && blob.version >= 8 && blob.enterprise
+          && (!blob.compose || blob.compose.length === 0)) {
+          return { ...blob, compose: [], contacts: [], enterprise: blob.enterprise };
+        }
+        return blob;
+      }),
+      decryptStoredSpec: sinon.stub().callsFake(async (blob) => blob),
     };
 
     messageVerifierStub = {
@@ -251,6 +277,7 @@ describe('appInstaller tests', () => {
       '../utils/appSpecHelpers': appSpecHelpersStub,
       '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
       '../utils/specLibs': specLibsStub,
+      '../utils/specCutover': specCutoverStub,
       '../appDatabase/appsRepository': {
         getInstalledApp: sinon.stub().resolves(null),
         getGlobalAppInfo: sinon.stub().resolves(null),
@@ -486,11 +513,12 @@ describe('appInstaller tests', () => {
       }
 
       // Enterprise v8 specs with empty compose should route through the
-      // CryptoProvider seam. The provider is constructed with (appName, owner).
-      expect(legacyCryptoProviderStub.create.called).to.be.true;
-      const createArgs = legacyCryptoProviderStub.create.firstCall.args;
-      expect(createArgs[0]).to.equal('enterpriseapp');
-      expect(createArgs[1]).to.equal('1K6nyw2VjV6jEN1f1CkbKn9htWnYkQabbR');
+      // specCutover decrypt seam. The spec handed to it carries the app
+      // name and owner, which specCutover uses to build the provider.
+      expect(specCutoverStub.decryptIfEnterprise.called).to.be.true;
+      const decryptArg = specCutoverStub.decryptIfEnterprise.firstCall.args[0];
+      expect(decryptArg.name).to.equal('enterpriseapp');
+      expect(decryptArg.owner).to.equal('1K6nyw2VjV6jEN1f1CkbKn9htWnYkQabbR');
       expect(logStub.info.calledWith('testAppInstall: enterpriseapp')).to.be.true;
       // Reference decryptedAppSpec to keep it in the fixture contract even
       // though the cutover no longer stubs a plain-object decryption return.
@@ -587,6 +615,7 @@ describe('appInstaller tests', () => {
         '../utils/appSpecHelpers': appSpecHelpersStub,
         '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
         '../utils/specLibs': specLibsStub,
+        '../utils/specCutover': specCutoverStub,
         '../appDatabase/appsRepository': {
           getInstalledApp: sinon.stub().resolves(null),
           getGlobalAppInfo: sinon.stub().resolves(null),
@@ -766,6 +795,7 @@ describe('appInstaller tests', () => {
         '../utils/appSpecHelpers': appSpecHelpersStub,
         '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
         '../utils/specLibs': specLibsStub,
+        '../utils/specCutover': specCutoverStub,
         '../appDatabase/appsRepository': {
           getInstalledApp: sinon.stub().resolves(null),
           getGlobalAppInfo: sinon.stub().resolves(null),
@@ -1056,6 +1086,7 @@ describe('appInstaller tests', () => {
         '../utils/appSpecHelpers': appSpecHelpersStub,
         '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
         '../utils/specLibs': specLibsStub,
+        '../utils/specCutover': specCutoverStub,
         '../appDatabase/appsRepository': {
           getInstalledApp: sinon.stub().resolves(null),
           getGlobalAppInfo: sinon.stub().resolves(null),

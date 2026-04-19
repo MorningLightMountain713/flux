@@ -1,5 +1,5 @@
 /**
- * Lazy ESM loaders for the @megachips/flux-spec* packages.
+ * Lazy ESM loaders for the @runonflux/flux-spec* packages.
  *
  * FluxOS is CommonJS. The spec libraries are ESM-only (Node >=20).
  * Each getter imports its package on first call and caches the module for
@@ -20,15 +20,15 @@ let specBackendCache;
 let specPolicyCache;
 
 async function getSpec() {
-  return (specCache ??= await import('@megachips/flux-spec'));
+  return (specCache ??= await import('@runonflux/flux-spec'));
 }
 
 async function getSpecBackend() {
-  return (specBackendCache ??= await import('@megachips/flux-spec-backend'));
+  return (specBackendCache ??= await import('@runonflux/flux-spec-backend'));
 }
 
 async function getSpecPolicy() {
-  return (specPolicyCache ??= await import('@megachips/flux-spec-policy'));
+  return (specPolicyCache ??= await import('@runonflux/flux-spec-policy'));
 }
 
 /**

@@ -856,12 +856,13 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
     // Decrypt v8 enterprise blobs via the flux-spec CryptoProvider seam so
     // downstream helpers see cleartext compose/contacts. Non-enterprise
     // specs pass through untouched.
-    if (spec.version >= 8 && spec.enterprise) {
-      const encryptedSpec = spec.toEncryptedSpec();
-      const provider = await legacyCryptoProvider.create(
-        spec.name, spec.owner,
-      );
-      spec = (await encryptedSpec.decrypt(provider)).spec;
+    // appsRepository dispatches encrypted v8 docs to EncryptedSpecV8. Cross
+    // the cleartext boundary explicitly so the uninstall helpers below see
+    // populated components. DecryptedCanonicalSpec.spec is the audited unwrap.
+    const { EncryptedSpecBase } = await getSpecBackend();
+    if (spec instanceof EncryptedSpecBase) {
+      const provider = await legacyCryptoProvider.create(spec.name, spec.owner);
+      spec = (await spec.decrypt(provider)).spec;
     }
 
     let appId = dockerService.getAppIdentifier(app); // get app or app component identifier
@@ -1074,12 +1075,10 @@ async function softRemoveAppLocally(app, res, globalStateRef, stopAppMonitoring)
       throw new Error('Flux App not found');
     }
 
-    if (spec.version >= 8 && spec.enterprise) {
-      const encryptedSpec = spec.toEncryptedSpec();
-      const provider = await legacyCryptoProvider.create(
-        spec.name, spec.owner,
-      );
-      spec = (await encryptedSpec.decrypt(provider)).spec;
+    const { EncryptedSpecBase } = await getSpecBackend();
+    if (spec instanceof EncryptedSpecBase) {
+      const provider = await legacyCryptoProvider.create(spec.name, spec.owner);
+      spec = (await spec.decrypt(provider)).spec;
     }
 
     let appId = dockerService.getAppIdentifier(app);

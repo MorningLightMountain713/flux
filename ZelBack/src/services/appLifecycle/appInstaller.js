@@ -24,8 +24,7 @@ const pgpService = require('../pgpService');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
-const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
-const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const { decryptIfEnterprise } = require('../utils/specCutover');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
 const { appsFolder, localAppsInformation, scannedHeightCollection } = require('../utils/appConstants');
@@ -45,51 +44,6 @@ const cmdAsync = util.promisify(exec);
 const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
 
 const supportedArchitectures = ['amd64', 'arm64'];
-
-/**
- * Parse a plain-object v1-v8 spec blob into its version class instance.
- * Mirrors the helper in messageStore/registryManager — keeps ingestion
- * validation consistent.
- *
- * @param {object} plainSpec
- * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase>}
- */
-async function deserializeSubmission(plainSpec) {
-  const { FluxAppSpecBase } = await getSpec();
-  await getSpecBackend();
-  const VersionClass = FluxAppSpecBase.getVersionClass(plainSpec.version);
-  if (!VersionClass) {
-    throw new Error(`Unsupported Flux App specification version: ${plainSpec.version}`);
-  }
-  return VersionClass.fromSubmission(plainSpec);
-}
-
-/**
- * Route a plain-object encrypted v8 spec through the CryptoProvider seam.
- * Returns a plain object with compose/contacts populated and the enterprise
- * blob preserved — same shape the legacy checkAndDecryptAppSpecs produced,
- * which is what downstream install code still expects.
- *
- * Non-enterprise (or already-decrypted) specs pass through unchanged.
- *
- * @param {object} plainSpec
- * @returns {Promise<object>}
- */
-async function decryptForInstall(plainSpec) {
-  if (!plainSpec || plainSpec.version < 8 || !plainSpec.enterprise) return plainSpec;
-  // Already-decrypted enterprise spec (compose populated) — no-op.
-  if (plainSpec.compose && plainSpec.compose.length > 0) return plainSpec;
-
-  const wireSpec = await deserializeSubmission(plainSpec);
-  const encryptedSpec = wireSpec.toEncryptedSpec();
-  const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
-  const decrypted = await encryptedSpec.decrypt(provider);
-  const result = decrypted.spec.serialize();
-  // Preserve the enterprise blob so the DB-storage path (which zeroes
-  // compose/contacts for the wire shape) keeps the ciphertext.
-  result.enterprise = plainSpec.enterprise;
-  return result;
-}
 
 /**
  * Verify that the app volume is mounted
@@ -999,8 +953,8 @@ async function installAppLocally(req, res) {
       }
 
       // Normalize: any source above may hand us the encrypted v8 wire form.
-      // decryptForInstall is a no-op when already decrypted or non-enterprise.
-      appSpecifications = await decryptForInstall(appSpecifications);
+      // decryptIfEnterprise is a no-op when already decrypted or non-enterprise.
+      appSpecifications = await decryptIfEnterprise(appSpecifications);
 
       // get current height
       const dbopen = dbHelper.databaseConnection();
@@ -1153,7 +1107,7 @@ async function testAppInstall(req, res) {
       }
 
       // Normalize: any source above may hand us the encrypted v8 wire form.
-      appSpecifications = await decryptForInstall(appSpecifications);
+      appSpecifications = await decryptIfEnterprise(appSpecifications);
 
       // Test installation - similar to regular install but with test flag
       // Skip all requirement checks for test installations (geolocation, static IP, hardware, nodes)

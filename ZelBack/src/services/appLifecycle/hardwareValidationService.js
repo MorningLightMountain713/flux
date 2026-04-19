@@ -16,7 +16,7 @@ const registryManager = require('../appDatabase/registryManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const appUninstaller = require('./appUninstaller');
 const serviceHelper = require('../serviceHelper');
-const generalService = require('../generalService');
+const { deserializeSpec } = require('../utils/specCutover');
 
 const REMOVAL_DELAY = 5000; // 5 seconds between removals
 
@@ -82,8 +82,6 @@ async function validateAppsCumulatively(installedApps) {
   const appsToRemove = [];
 
   try {
-    // Get node tier and specs
-    const tier = await generalService.nodeTier();
     const nodeSpecs = await hwRequirements.getNodeSpecs();
 
     // Calculate available resources
@@ -113,16 +111,18 @@ async function validateAppsCumulatively(installedApps) {
     // Process each app in order (oldest to newest)
     for (const app of sortedApps) {
       try {
-        // Get full app spec (handles enterprise decryption)
-        const appSpec = await registryManager.getApplicationGlobalSpecifications(app.name);
+        // getApplicationGlobalSpecifications returns cleartext plain form
+        // (decrypts internally for encrypted wire). Hydrate to a class for
+        // the class-first totalAppHWRequirements.
+        const appSpecPlain = await registryManager.getApplicationGlobalSpecifications(app.name);
 
-        if (!appSpec) {
+        if (!appSpecPlain) {
           log.warn(`hardwareValidationService - No spec found for ${app.name}, skipping`);
           continue;
         }
 
-        // Calculate resources needed by this app
-        const appResources = hwRequirements.totalAppHWRequirements(appSpec, tier);
+        const appSpec = await deserializeSpec(appSpecPlain);
+        const appResources = await hwRequirements.totalAppHWRequirements(appSpec);
         const appCpu = appResources.cpu * 10;
         const appRam = appResources.ram;
         const appHdd = appResources.hdd + config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap;

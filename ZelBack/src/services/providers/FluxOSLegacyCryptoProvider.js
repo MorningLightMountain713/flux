@@ -34,7 +34,7 @@ const GCM_TAG_BYTES = 16;
  *
  * @param {string} appName - App name (fluxbenchd RSA key selection input)
  * @param {string} owner   - fluxID / owner address
- * @returns {Promise<import('@megachips/flux-spec-backend').CryptoProvider>}
+ * @returns {Promise<import('@runonflux/flux-spec-backend').CryptoProvider>}
  */
 async function create(appName, owner) {
   const { CryptoProvider: Base } = await getSpecBackend();

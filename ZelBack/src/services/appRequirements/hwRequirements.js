@@ -3,6 +3,8 @@ const config = require('config');
 const generalService = require('../generalService');
 const geolocationService = require('../geolocationService');
 const benchmarkService = require('../benchmarkService');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
 const log = require('../../lib/log');
 
 // Node specifications (shared state)
@@ -63,47 +65,19 @@ function returnNodeSpecs() {
 }
 
 /**
- * To return total app hardware requirements (CPU, RAM and HDD).
- * @param {object} appSpecifications App specifications.
- * @param {string} myNodeTier Node tier.
- * @returns {object} Values for CPU, RAM and HDD.
+ * Total app hardware requirements (CPU, RAM, HDD).
+ *
+ * Expects a FluxAppSpecBase class instance — callers hydrate plain blobs
+ * via `specCutover.decryptToCleartextClass()` first. Tiered resources are dead (see
+ * TIERED_DEPRECATION.md); the legacy `myNodeTier` argument is gone.
+ *
+ * @param {import('@runonflux/flux-spec').FluxAppSpecBase} spec
+ * @returns {Promise<{cpu: number, ram: number, hdd: number}>}
  */
-function totalAppHWRequirements(appSpecifications, myNodeTier) {
-  let cpu = 0;
-  let ram = 0;
-  let hdd = 0;
-
-  const hddTier = `hdd${myNodeTier}`;
-  const ramTier = `ram${myNodeTier}`;
-  const cpuTier = `cpu${myNodeTier}`;
-
-  if (appSpecifications.version <= 3) {
-    if (appSpecifications.tiered) {
-      cpu = appSpecifications[cpuTier] || appSpecifications.cpu;
-      ram = appSpecifications[ramTier] || appSpecifications.ram;
-      hdd = appSpecifications[hddTier] || appSpecifications.hdd;
-    } else {
-      // eslint-disable-next-line prefer-destructuring
-      cpu = appSpecifications.cpu;
-      // eslint-disable-next-line prefer-destructuring
-      ram = appSpecifications.ram;
-      // eslint-disable-next-line prefer-destructuring
-      hdd = appSpecifications.hdd;
-    }
-  } else {
-    appSpecifications.compose.forEach((appComponent) => {
-      if (appComponent.tiered) {
-        cpu += appComponent[cpuTier] || appComponent.cpu;
-        ram += appComponent[ramTier] || appComponent.ram;
-        hdd += appComponent[hddTier] || appComponent.hdd;
-      } else {
-        cpu += appComponent.cpu;
-        ram += appComponent.ram;
-        hdd += appComponent.hdd;
-      }
-    });
-  }
-
+async function totalAppHWRequirements(spec) {
+  const { DeploymentSpec } = await getSpecBackend();
+  const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+  const { cpu, memory: ram, storage: hdd } = deployment.totalResources();
   return { cpu, ram, hdd };
 }
 
@@ -377,15 +351,13 @@ async function appsResources() {
  * @returns {boolean} True if all checks passed.
  */
 async function checkAppHWRequirements(appSpecs) {
-  // appSpecs has hdd, cpu and ram assigned to correct tier
-  const tier = await generalService.nodeTier();
   const resourcesLocked = await appsResources();
 
   if (resourcesLocked.status !== 'success') {
     throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
   }
 
-  const appHWrequirements = totalAppHWRequirements(appSpecs, tier);
+  const appHWrequirements = await totalAppHWRequirements(appSpecs);
   const specs = await getNodeSpecs();
   const totalSpaceOnNode = specs.ssdStorage;
   if (totalSpaceOnNode === 0) {

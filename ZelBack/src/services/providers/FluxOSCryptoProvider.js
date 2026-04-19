@@ -10,7 +10,7 @@
  *   const decrypted = await encryptedSpec.decrypt(provider);
  *
  * The CryptoProvider base class is loaded via the shared lazy getter in
- * ../utils/specLibs so the ESM @megachips/flux-spec-backend package only
+ * ../utils/specLibs so the ESM @runonflux/flux-spec-backend package only
  * imports once per process.
  */
 

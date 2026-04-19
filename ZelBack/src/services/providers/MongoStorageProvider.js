@@ -1,7 +1,7 @@
 /**
  * MongoStorageProvider — concrete StorageProvider for fluxos.
  *
- * Maps logical store names (used by @megachips/flux-spec-backend domain
+ * Maps logical store names (used by @runonflux/flux-spec-backend domain
  * classes) to MongoDB { database, collection } pairs. Wraps a single
  * MongoClient connection and dispatches CRUD operations through
  * dbHelper, which already handles the one-liners uniformly.
