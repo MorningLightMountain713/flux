@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const benchmarkService = require('../benchmarkService');
+const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const log = require('../../lib/log');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
@@ -67,80 +68,12 @@ async function decryptAesKeyWithRsaKey(appName, daemonHeight, enterpriseKey, own
 }
 
 /**
- * Decrypts content with AES session key
- * @param {string} appName - Application name
- * @param {string} base64NonceCiphertextTag - Base64 encoded nonce, ciphertext and auth tag
- * @param {string} base64AesKey - Base64 encoded AES key
- * @returns {string} Decrypted content
- */
-function decryptWithAesSession(appName, base64NonceCiphertextTag, base64AesKey) {
-  if (!isArcane) {
-    throw new Error('Application Specifications can only be validated on a node running Arcane OS.');
-  }
-
-  try {
-    const key = Buffer.from(base64AesKey, 'base64');
-    const nonceCiphertextTag = Buffer.from(base64NonceCiphertextTag, 'base64');
-
-    const nonce = nonceCiphertextTag.subarray(0, 12);
-    const ciphertext = nonceCiphertextTag.subarray(12, -16);
-    const tag = nonceCiphertextTag.subarray(-16);
-
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
-    decipher.setAuthTag(tag);
-
-    const decrypted = decipher.update(ciphertext, '', 'utf8') + decipher.final('utf8');
-
-    return decrypted;
-  } catch (error) {
-    log.error(`Error decrypting ${appName}`);
-    throw error;
-  }
-}
-
-/**
- * Decrypts enterprise specifications from session
- * @param {string} base64Encrypted - Base64 encrypted enterprise content
- * @param {string} appName - Application name
- * @param {number} daemonHeight - Daemon block height
- * @param {string} owner - Application owner (optional)
- * @returns {Promise<object>} Decrypted enterprise object
- */
-async function decryptEnterpriseFromSession(base64Encrypted, appName, daemonHeight, owner = null) {
-  if (!isArcane) {
-    throw new Error('Application Specifications can only be validated on a node running Arcane OS.');
-  }
-
-  const enterpriseBuf = Buffer.from(base64Encrypted, 'base64');
-  const aesKeyEncrypted = enterpriseBuf.subarray(0, 256);
-  const nonceCiphertextTag = enterpriseBuf.subarray(256);
-
-  // we encode this as we are passing it as an api call
-  const base64EncryptedAesKey = aesKeyEncrypted.toString('base64');
-
-  const base64AesKey = await decryptAesKeyWithRsaKey(
-    appName,
-    daemonHeight,
-    base64EncryptedAesKey,
-    owner,
-  );
-
-  const jsonEnterprise = decryptWithAesSession(
-    appName,
-    nonceCiphertextTag.toString('base64'),
-    base64AesKey,
-  );
-
-  const decryptedEnterprise = JSON.parse(jsonEnterprise);
-
-  if (decryptedEnterprise) {
-    return decryptedEnterprise;
-  }
-  throw new Error('Error decrypting enterprise object.');
-}
-
-/**
- * Check and decrypt app specifications if enterprise
+ * Check and decrypt app specifications if enterprise.
+ *
+ * Facade retained for the ~15 legacy callsites that still work in
+ * plain-object mode. New class-instance consumers should talk to
+ * FluxOSLegacyCryptoProvider + EncryptedSpecV8.decrypt() directly.
+ *
  * @param {object} appSpec - Application specifications
  * @param {object} options - Options object with daemonHeight and owner
  * @returns {Promise<object>} Decrypted specifications
@@ -158,43 +91,19 @@ async function checkAndDecryptAppSpecs(appSpec, options = {}) {
   const appSpecs = JSON.parse(JSON.stringify(appSpec));
 
   let daemonHeight = options.daemonHeight || null;
-  let appOwner = options.owner || null;
-
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
-  const projection = {
-    projection: {
-      _id: 0,
-    },
-  };
-  let appsQuery = null;
-
-  if (!appOwner) {
-    log.info(`Searching register permanent messages for ${appSpecs.name} to get registration message`);
-    appsQuery = {
-      'appSpecifications.name': appSpecs.name,
-      type: 'fluxappregister',
-    };
-    const permanentAppMessage = await dbHelper.findInDatabase(database, globalAppsMessages, appsQuery, projection);
-    if (permanentAppMessage.length > 0) {
-      const lastAppRegistration = permanentAppMessage[permanentAppMessage.length - 1];
-      appOwner = lastAppRegistration.owner;
-    } else {
-      appOwner = appSpec.owner;
-    }
-  }
 
   if (!daemonHeight) {
     log.info(`Searching register permanent messages for ${appSpecs.name} to get latest update`);
-    appsQuery = {
-      'appSpecifications.name': appSpecs.name,
-    };
-    const allPermanentAppMessage = await dbHelper.findInDatabase(database, globalAppsMessages, appsQuery, projection);
+    const heightQuery = { 'appSpecifications.name': appSpecs.name };
+    const allPermanentAppMessage = await dbHelper.findInDatabase(
+      dbHelper.databaseConnection().db(config.database.appsglobal.database),
+      config.database.appsglobal.collections.appsMessages,
+      heightQuery,
+      { projection: { _id: 0 } },
+    );
     const lastUpdate = allPermanentAppMessage[allPermanentAppMessage.length - 1];
 
     if (!lastUpdate) {
-      // Not found in permanent messages, use height 0 (for test apps in temporary messages)
       log.info(`App ${appSpecs.name} not found in permanent messages, using height 0 for decryption`);
       daemonHeight = 0;
     } else {
@@ -202,12 +111,12 @@ async function checkAndDecryptAppSpecs(appSpec, options = {}) {
     }
   }
 
-  const enterprise = await decryptEnterpriseFromSession(
-    appSpecs.enterprise,
-    appSpecs.name,
-    daemonHeight,
-    appSpecs.owner,
-  );
+  const provider = await legacyCryptoProvider.create(appSpecs.name, appSpecs.owner, daemonHeight);
+  const plaintext = await provider.decrypt({
+    algorithm: 'AES-256-GCM',
+    ciphertext: appSpecs.enterprise,
+  });
+  const enterprise = JSON.parse(plaintext.toString('utf8'));
 
   appSpecs.contacts = enterprise.contacts;
   appSpecs.compose = enterprise.compose;
@@ -356,8 +265,5 @@ module.exports = {
   checkAndDecryptAppSpecs,
   encryptEnterpriseWithAes,
   encryptEnterpriseFromSession,
-  decryptEnterpriseFromSession,
-  decryptAesKeyWithRsaKey,
-  decryptWithAesSession,
   encryptWithAesSession,
 };
