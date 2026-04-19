@@ -16,8 +16,9 @@ const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { availableApps } = require('../appDatabase/registryManager');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { specificationFormatter } = require('../utils/appUtilities');
+const appsRepository = require('../appDatabase/appsRepository');
+const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
+const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const imageManager = require('../appSecurity/imageManager');
 
@@ -804,71 +805,94 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
     const appName = isComponent ? app.split('_')[1] : app;
     const appComponent = app.split('_')[0];
 
-    // Find app specifications in database
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const database = dbopen.db(config.database.appsglobal.database);
-
-    const appsQuery = { name: appName };
-    const appsProjection = {};
-    let appSpecifications = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-    if (!appSpecifications) {
+    // Fetch the stored spec as a class instance. Fallback chain:
+    // installed → global live → availableApps() (hardcoded/known apps) →
+    // latest permanent message.
+    let spec = await appsRepository.getInstalledApp(appName);
+    if (!spec) {
       if (!force) {
         throw new Error('Flux App not found');
       }
-      // get it from global Specifications
-      appSpecifications = await dbHelper.findOneInDatabase(database, globalAppsInformation, appsQuery, appsProjection);
-      if (!appSpecifications) {
-        // get it from locally available Specifications
+      spec = await appsRepository.getGlobalAppInfo(appName);
+      if (!spec) {
         const allApps = await availableApps();
-        appSpecifications = allApps.find((a) => a.name === appName);
-        // get it from permanent messages
-        if (!appSpecifications) {
-          const query = {};
-          const projection = { projection: { _id: 0 } };
-          const messages = await dbHelper.findInDatabase(database, globalAppsMessages, query, projection);
+        const hardcoded = allApps.find((a) => a.name === appName);
+        if (hardcoded) {
+          const { FluxAppSpecBase } = await getSpec();
+          await getSpecBackend();
+          const VersionClass = FluxAppSpecBase.getVersionClass(hardcoded.version);
+          if (VersionClass) {
+            spec = VersionClass.deserialize(hardcoded);
+          }
+        }
+        if (!spec) {
+          // Permanent-message fallback: walk globalAppsMessages for the
+          // highest-height message naming this app.
+          const dbopen = dbHelper.databaseConnection();
+          const database = dbopen.db(config.database.appsglobal.database);
+          const messages = await dbHelper.findInDatabase(
+            database, globalAppsMessages, {}, { projection: { _id: 0 } },
+          );
           const appMessages = messages.filter((message) => {
-            const specifications = message.appSpecifications || message.zelAppSpecifications;
-            return specifications.name === appName;
+            const s = message.appSpecifications || message.zelAppSpecifications;
+            return s && s.name === appName;
           });
-          let currentSpecifications;
+          let latest;
           appMessages.forEach((message) => {
-            if (!currentSpecifications || message.height > currentSpecifications.height) {
-              currentSpecifications = message;
-            }
+            if (!latest || message.height > latest.height) latest = message;
           });
-          if (currentSpecifications && currentSpecifications.height) {
-            appSpecifications = currentSpecifications.appSpecifications || currentSpecifications.zelAppSpecifications;
+          if (latest && latest.height) {
+            const result = await appsRepository.getAppMessage(latest.hash);
+            if (result) spec = result.spec;
           }
         }
       }
     }
 
-    if (!appSpecifications) {
+    if (!spec) {
       throw new Error('Flux App not found');
+    }
+
+    // Decrypt v8 enterprise blobs via the flux-spec CryptoProvider seam so
+    // downstream helpers see cleartext compose/contacts. Non-enterprise
+    // specs pass through untouched.
+    if (spec.version >= 8 && spec.enterprise) {
+      const encryptedSpec = spec.toEncryptedSpec();
+      const provider = await legacyCryptoProvider.create(
+        spec.name, spec.owner,
+      );
+      spec = (await encryptedSpec.decrypt(provider)).spec;
     }
 
     let appId = dockerService.getAppIdentifier(app); // get app or app component identifier
 
-    // do this temporarily - otherwise we have to move a bunch of functions around
-    appSpecifications = await checkAndDecryptAppSpecs(appSpecifications);
-    appSpecifications = specificationFormatter(appSpecifications);
-
-    if (appSpecifications.version >= 4 && !isComponent) {
-      // it is a composed application
+    // Helpers below still read the plain-object v1-v8 shape (.repotag,
+    // .ports array, etc.). Serialize the class instance back at the
+    // boundary so they see the same shape they've always seen. Full
+    // class-instance flow through the helpers lands in 3.5c/d when
+    // advancedWorkflows migrates (it shares these helpers).
+    if (spec.version >= 4 && !isComponent) {
+      // it is a composed application — iterate compose in reverse (same
+      // teardown order as historically). Object.values preserves the
+      // compose insertion order stored by the class.
+      const componentsReversed = Object.values(spec.components).reverse();
       // eslint-disable-next-line no-restricted-syntax
-      for (const appComposedComponent of appSpecifications.compose.reverse()) {
-        appId = dockerService.getAppIdentifier(`${appComposedComponent.name}_${appSpecifications.name}`);
-        const appComponentSpecifications = appComposedComponent;
+      for (const component of componentsReversed) {
+        appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
         // eslint-disable-next-line no-await-in-loop
-        await hardUninstallComponent(appName, appId, appComponentSpecifications, res, stopAppMonitoring, force);
+        await hardUninstallComponent(appName, appId, component.toCanonical(), res, stopAppMonitoring, force);
       }
     } else if (isComponent) {
-      const componentSpecifications = appSpecifications.compose.find((component) => component.name === appComponent);
-      appId = dockerService.getAppIdentifier(`${componentSpecifications.name}_${appSpecifications.name}`);
-      await hardUninstallComponent(appName, appId, componentSpecifications, res, stopAppMonitoring, force);
+      const component = spec.getComponent(appComponent);
+      if (!component) {
+        throw new Error(`Flux App component ${appComponent} not found in ${appName}`);
+      }
+      appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
+      await hardUninstallComponent(appName, appId, component.toCanonical(), res, stopAppMonitoring, force);
     } else {
-      await hardUninstallApplication(appName, appId, appSpecifications, res, stopAppMonitoring, force);
+      // v1-v3 flat spec: the serialized form carries the flat fields
+      // (.repotag, .port, etc.) that hardUninstallApplication expects.
+      await hardUninstallApplication(appName, appId, spec.serialize(), res, stopAppMonitoring, force);
     }
 
     if (sendMessage) {
@@ -971,7 +995,10 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
         res.write(serviceHelper.ensureString(databaseStatus));
         if (res.flush) res.flush();
       }
-      await dbHelper.findOneAndDeleteInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
+      const appsDatabase = dbHelper.databaseConnection().db(config.database.appslocal.database);
+      await dbHelper.findOneAndDeleteInDatabase(
+        appsDatabase, localAppsInformation, { name: appName }, {},
+      );
       const databaseStatus2 = {
         status: 'Database cleaned',
       };
@@ -1042,38 +1069,38 @@ async function softRemoveAppLocally(app, res, globalStateRef, stopAppMonitoring)
     const appName = isComponent ? app.split('_')[1] : app;
     const appComponent = app.split('_')[0];
 
-    // Find app specifications in database
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-
-    const appsQuery = { name: appName };
-    const appsProjection = {};
-    let appSpecifications = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-    if (!appSpecifications) {
+    let spec = await appsRepository.getInstalledApp(appName);
+    if (!spec) {
       throw new Error('Flux App not found');
+    }
+
+    if (spec.version >= 8 && spec.enterprise) {
+      const encryptedSpec = spec.toEncryptedSpec();
+      const provider = await legacyCryptoProvider.create(
+        spec.name, spec.owner,
+      );
+      spec = (await encryptedSpec.decrypt(provider)).spec;
     }
 
     let appId = dockerService.getAppIdentifier(app);
 
-    // do this temporarily - otherwise we have to move a bunch of functions around
-    appSpecifications = await checkAndDecryptAppSpecs(appSpecifications);
-    appSpecifications = specificationFormatter(appSpecifications);
-
-    if (appSpecifications.version >= 4 && !isComponent) {
-      // it is a composed application
+    if (spec.version >= 4 && !isComponent) {
+      const componentsReversed = Object.values(spec.components).reverse();
       // eslint-disable-next-line no-restricted-syntax
-      for (const appComposedComponent of appSpecifications.compose.reverse()) {
-        appId = dockerService.getAppIdentifier(`${appComposedComponent.name}_${appSpecifications.name}`);
-        const appComponentSpecifications = appComposedComponent;
+      for (const component of componentsReversed) {
+        appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
         // eslint-disable-next-line no-await-in-loop
-        await softUninstallComponent(appName, appId, appComponentSpecifications, res, stopAppMonitoring);
+        await softUninstallComponent(appName, appId, component.toCanonical(), res, stopAppMonitoring);
       }
     } else if (isComponent) {
-      const componentSpecifications = appSpecifications.compose.find((component) => component.name === appComponent);
-      appId = dockerService.getAppIdentifier(`${componentSpecifications.name}_${appSpecifications.name}`);
-      await softUninstallComponent(appName, appId, componentSpecifications, res, stopAppMonitoring);
+      const component = spec.getComponent(appComponent);
+      if (!component) {
+        throw new Error(`Flux App component ${appComponent} not found in ${appName}`);
+      }
+      appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
+      await softUninstallComponent(appName, appId, component.toCanonical(), res, stopAppMonitoring);
     } else {
-      await softUninstallApplication(appName, appId, appSpecifications, res, stopAppMonitoring);
+      await softUninstallApplication(appName, appId, spec.serialize(), res, stopAppMonitoring);
     }
 
     if (!isComponent) {
@@ -1085,7 +1112,10 @@ async function softRemoveAppLocally(app, res, globalStateRef, stopAppMonitoring)
         res.write(serviceHelper.ensureString(databaseStatus));
         if (res.flush) res.flush();
       }
-      await dbHelper.findOneAndDeleteInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
+      const appsDatabase = dbHelper.databaseConnection().db(config.database.appslocal.database);
+      await dbHelper.findOneAndDeleteInDatabase(
+        appsDatabase, localAppsInformation, { name: appName }, {},
+      );
       const databaseStatus2 = {
         status: 'Database cleaned',
       };

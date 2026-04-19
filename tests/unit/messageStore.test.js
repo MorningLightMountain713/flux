@@ -2,6 +2,34 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+// Round-trip stub for the flux-spec version class seam: fromSubmission echoes
+// the input as a minimal class-like object; serialize/decrypt round-trip back
+// to the same blob. Enough to satisfy messageStore without pulling real
+// flux-spec into the unit tests.
+function buildSpecStubs() {
+  const mockFluxAppSpecBase = {
+    getVersionClass: sinon.stub().callsFake((version) => {
+      if (!version) return null;
+      return {
+        fromSubmission: (blob) => ({
+          version: blob.version,
+          name: blob.name,
+          owner: blob.owner,
+          enterprise: blob.enterprise,
+          serialize: () => blob,
+          toEncryptedSpec: () => ({
+            decrypt: async () => ({ spec: { serialize: () => blob } }),
+          }),
+        }),
+      };
+    }),
+  };
+  return {
+    getSpec: sinon.stub().resolves({ FluxAppSpecBase: mockFluxAppSpecBase }),
+    getSpecBackend: sinon.stub().resolves({}),
+  };
+}
+
 describe('messageStore tests', () => {
   let messageStore;
   let dbHelperStub;
@@ -54,6 +82,7 @@ describe('messageStore tests', () => {
     };
 
     // Proxy require
+    const specStubs = buildSpecStubs();
     messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', {
       config: configStub,
       '../dbHelper': dbHelperStub,
@@ -66,6 +95,13 @@ describe('messageStore tests', () => {
       },
       '../utils/specLibs': {
         validateSubmissionSpec: sinon.stub().resolves(true),
+        getSpec: specStubs.getSpec,
+        getSpecBackend: specStubs.getSpecBackend,
+      },
+      '../providers/FluxOSLegacyCryptoProvider': {
+        create: sinon.stub().resolves({
+          decrypt: sinon.stub().resolves(Buffer.from('{}')),
+        }),
       },
       '../../lib/log': logStub,
       '../daemonService/daemonServiceMiscRpcs': {
@@ -78,9 +114,6 @@ describe('messageStore tests', () => {
         validateApplicationUpdateCompatibility: sinon.stub().resolves(),
         getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1' }),
       },
-      '../utils/enterpriseHelper': {
-        checkAndDecryptAppSpecs: sinon.stub().resolves({}),
-      },
       '../utils/appConstants': {
         globalAppsMessages: 'appsMessages',
         globalAppsTempMessages: 'appsTempMessages',
@@ -88,9 +121,6 @@ describe('messageStore tests', () => {
         globalAppsInstallingLocations: 'appsInstallingLocations',
         globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
         appsHashesCollection: 'appsHashes',
-      },
-      '../utils/appUtilities': {
-        specificationFormatter: sinon.stub().returnsArg(0),
       },
     });
   });
@@ -113,7 +143,7 @@ describe('messageStore tests', () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
-        appSpecifications: { name: 'test' },
+        appSpecifications: { name: 'test', version: 1 },
         hash: 'hash123',
         timestamp: Date.now(),
         signature: 'sig123',
@@ -134,7 +164,7 @@ describe('messageStore tests', () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
-        appSpecifications: { name: 'test' },
+        appSpecifications: { name: 'test', version: 1 },
         hash: 'hash123',
         timestamp: Date.now(),
         signature: 'sig123',
@@ -156,7 +186,7 @@ describe('messageStore tests', () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
-        appSpecifications: { name: 'test' },
+        appSpecifications: { name: 'test', version: 1 },
         hash: 'hash123',
         timestamp: Date.now(),
         signature: 'sig123',
@@ -179,7 +209,7 @@ describe('messageStore tests', () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
-        appSpecifications: { name: 'test' },
+        appSpecifications: { name: 'test', version: 1 },
         hash: 'hash123',
         timestamp: Date.now(),
         signature: 'sig123',
@@ -219,6 +249,7 @@ describe('messageStore tests', () => {
       dbHelperStub.findOneInDatabase.resolves(null);
       dbHelperStub.insertOneToDatabase.resolves();
 
+      const localSpecStubs = buildSpecStubs();
       messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', {
         config: configStub,
         '../dbHelper': dbHelperStub,
@@ -231,6 +262,13 @@ describe('messageStore tests', () => {
         },
         '../utils/specLibs': {
           validateSubmissionSpec: sinon.stub().resolves(true),
+          getSpec: localSpecStubs.getSpec,
+          getSpecBackend: localSpecStubs.getSpecBackend,
+        },
+        '../providers/FluxOSLegacyCryptoProvider': {
+          create: sinon.stub().resolves({
+            decrypt: sinon.stub().resolves(Buffer.from('{}')),
+          }),
         },
         '../../lib/log': logStub,
         '../daemonService/daemonServiceMiscRpcs': {
@@ -243,9 +281,6 @@ describe('messageStore tests', () => {
           validateApplicationUpdateCompatibility: sinon.stub().resolves(),
           getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1', version: 5 }),
         },
-        '../utils/enterpriseHelper': {
-          checkAndDecryptAppSpecs: sinon.stub().resolves({}),
-        },
         '../utils/globalState': {
           queuePendingUpdate: sinon.stub(),
         },
@@ -256,9 +291,6 @@ describe('messageStore tests', () => {
           globalAppsInstallingLocations: 'appsInstallingLocations',
           globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
           appsHashesCollection: 'appsHashes',
-        },
-        '../utils/appUtilities': {
-          specificationFormatter: sinon.stub().returnsArg(0),
         },
       });
 
@@ -286,7 +318,7 @@ describe('messageStore tests', () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
-        appSpecifications: { name: 'test' },
+        appSpecifications: { name: 'test', version: 1 },
         hash: 'hash123',
         timestamp: Date.now(),
         signature: 'sig123',

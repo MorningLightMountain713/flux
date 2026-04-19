@@ -60,7 +60,7 @@ describe('FluxOSLegacyCryptoProvider', () => {
 
   describe('create()', () => {
     it('returns an instance of the CryptoProvider base class', async () => {
-      const provider = await fluxOSLegacyCryptoProvider.create('testapp', 'owner123', 100);
+      const provider = await fluxOSLegacyCryptoProvider.create('testapp', 'owner123');
       expect(provider).to.be.instanceOf(MockCryptoProviderBase);
       expect(typeof provider.encrypt).to.equal('function');
       expect(typeof provider.decrypt).to.equal('function');
@@ -68,7 +68,7 @@ describe('FluxOSLegacyCryptoProvider', () => {
 
     it('loads the base class lazily via specLibs', async () => {
       expect(specLibsStub.getSpecBackend.called).to.be.false;
-      await fluxOSLegacyCryptoProvider.create('testapp', 'owner123', 100);
+      await fluxOSLegacyCryptoProvider.create('testapp', 'owner123');
       expect(specLibsStub.getSpecBackend.calledOnce).to.be.true;
     });
   });
@@ -84,7 +84,7 @@ describe('FluxOSLegacyCryptoProvider', () => {
         data: { status: 'ok', message: aesKey.toString('base64') },
       });
 
-      const provider = await fluxOSLegacyCryptoProvider.create('TestApp', '1abc', 500);
+      const provider = await fluxOSLegacyCryptoProvider.create('TestApp', '1abc');
       const result = await provider.decrypt({ algorithm: 'AES-256-GCM', ciphertext: blob });
 
       expect(result).to.be.instanceOf(Buffer);
@@ -94,7 +94,7 @@ describe('FluxOSLegacyCryptoProvider', () => {
       const input = JSON.parse(inputJson);
       expect(input.appName).to.equal('TestApp');
       expect(input.fluxID).to.equal('1abc');
-      expect(input.blockHeight).to.equal(500);
+      expect(input.blockHeight).to.equal(0);
       expect(input.message).to.be.a('string');
       expect(Buffer.from(input.message, 'base64').length).to.equal(256);
     });
@@ -109,14 +109,14 @@ describe('FluxOSLegacyCryptoProvider', () => {
         data: JSON.stringify({ status: 'ok', message: aesKey.toString('base64') }),
       });
 
-      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o', 1);
+      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o');
       const result = await provider.decrypt({ algorithm: 'AES-256-GCM', ciphertext: blob });
       expect(result.toString('utf8')).to.equal('hello');
     });
 
     it('rejects a blob shorter than the minimum layout', async () => {
       const short = Buffer.alloc(100).toString('base64'); // < 256+12+16
-      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o', 1);
+      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o');
       await expect(provider.decrypt({ algorithm: 'AES-256-GCM', ciphertext: short }))
         .to.be.rejectedWith(/shorter than minimum/);
       expect(benchmarkServiceStub.decryptRSAMessage.called).to.be.false;
@@ -126,7 +126,7 @@ describe('FluxOSLegacyCryptoProvider', () => {
       const { blob } = buildBlob(crypto.randomBytes(32), Buffer.from('x'));
       benchmarkServiceStub.decryptRSAMessage.resolves({ status: 'error' });
 
-      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o', 1);
+      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o');
       await expect(provider.decrypt({ algorithm: 'AES-256-GCM', ciphertext: blob }))
         .to.be.rejectedWith(/decryptRSAMessage RPC failed/);
     });
@@ -138,7 +138,7 @@ describe('FluxOSLegacyCryptoProvider', () => {
         data: { status: 'RSA_DECRYPT_FAILED' },
       });
 
-      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o', 1);
+      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o');
       await expect(provider.decrypt({ algorithm: 'AES-256-GCM', ciphertext: blob }))
         .to.be.rejectedWith(/decryptRSAMessage RPC rejected: RSA_DECRYPT_FAILED/);
     });
@@ -156,20 +156,20 @@ describe('FluxOSLegacyCryptoProvider', () => {
         data: { status: 'ok', message: aesKey.toString('base64') },
       });
 
-      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o', 1);
+      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o');
       await expect(provider.decrypt({ algorithm: 'AES-256-GCM', ciphertext: tampered.toString('base64') }))
         .to.be.rejected;
     });
   });
 
   describe('encrypt()', () => {
-    it('forwards fluxID/appName/blockHeight and base64 plaintext to encryptMessage', async () => {
+    it('forwards fluxID/appName and base64 plaintext to encryptMessage', async () => {
       benchmarkServiceStub.encryptMessage.resolves({
         status: 'success',
         data: { status: 'ok', message: 'encrypted-blob-base64' },
       });
 
-      const provider = await fluxOSLegacyCryptoProvider.create('TestApp', '1abc', 500);
+      const provider = await fluxOSLegacyCryptoProvider.create('TestApp', '1abc');
       const result = await provider.encrypt(Buffer.from('hello'));
 
       expect(benchmarkServiceStub.encryptMessage.calledOnce).to.be.true;
@@ -177,7 +177,7 @@ describe('FluxOSLegacyCryptoProvider', () => {
       const input = JSON.parse(inputJson);
       expect(input.appName).to.equal('TestApp');
       expect(input.fluxID).to.equal('1abc');
-      expect(input.blockHeight).to.equal(500);
+      expect(input.blockHeight).to.equal(0);
       expect(input.message).to.equal(Buffer.from('hello').toString('base64'));
 
       expect(result).to.deep.equal({
@@ -188,7 +188,7 @@ describe('FluxOSLegacyCryptoProvider', () => {
 
     it('throws when the RPC call itself fails', async () => {
       benchmarkServiceStub.encryptMessage.resolves({ status: 'error' });
-      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o', 1);
+      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o');
       await expect(provider.encrypt(Buffer.from('hello')))
         .to.be.rejectedWith(/encryptMessage RPC failed/);
     });
@@ -198,7 +198,7 @@ describe('FluxOSLegacyCryptoProvider', () => {
         status: 'success',
         data: { status: 'bad_request' },
       });
-      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o', 1);
+      const provider = await fluxOSLegacyCryptoProvider.create('A', 'o');
       await expect(provider.encrypt(Buffer.from('hello')))
         .to.be.rejectedWith(/encryptMessage RPC rejected: bad_request/);
     });

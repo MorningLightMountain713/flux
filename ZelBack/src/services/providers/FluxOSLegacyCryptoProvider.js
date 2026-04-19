@@ -34,23 +34,19 @@ const GCM_TAG_BYTES = 16;
  *
  * @param {string} appName - App name (fluxbenchd RSA key selection input)
  * @param {string} owner   - fluxID / owner address
- * @param {number} daemonHeight - Block height fluxbenchd uses to resolve the
- *   right RSA key version
  * @returns {Promise<import('@megachips/flux-spec-backend').CryptoProvider>}
  */
-async function create(appName, owner, daemonHeight) {
+async function create(appName, owner) {
   const { CryptoProvider: Base } = await getSpecBackend();
 
   class FluxOSLegacyCryptoProvider extends Base {
     #appName;
     #owner;
-    #daemonHeight;
 
-    constructor(app, own, height) {
+    constructor(app, own) {
       super();
       this.#appName = app;
       this.#owner = own;
-      this.#daemonHeight = height;
     }
 
     /**
@@ -62,11 +58,13 @@ async function create(appName, owner, daemonHeight) {
      * @returns {Promise<{ algorithm: string, ciphertext: string }>}
      */
     async encrypt(plaintext) {
+      // blockHeight is part of the fluxbenchd RPC contract but is not used
+      // for v8 key selection. Pass 0 to satisfy the wire shape.
       const inputData = JSON.stringify({
         fluxID: this.#owner,
         appName: this.#appName,
         message: plaintext.toString('base64'),
-        blockHeight: this.#daemonHeight,
+        blockHeight: 0,
       });
 
       const result = await benchmarkService.encryptMessage(inputData);
@@ -105,11 +103,13 @@ async function create(appName, owner, daemonHeight) {
       const ciphertext = nonceCtTag.subarray(GCM_NONCE_BYTES, -GCM_TAG_BYTES);
       const tag = nonceCtTag.subarray(-GCM_TAG_BYTES);
 
+      // blockHeight is part of the fluxbenchd RPC contract but is not used
+      // for v8 key selection. Pass 0 to satisfy the wire shape.
       const inputData = JSON.stringify({
         fluxID: this.#owner,
         appName: this.#appName,
         message: wrappedKey.toString('base64'),
-        blockHeight: this.#daemonHeight,
+        blockHeight: 0,
       });
 
       const rpcResult = await benchmarkService.decryptRSAMessage(inputData);
@@ -131,7 +131,7 @@ async function create(appName, owner, daemonHeight) {
     }
   }
 
-  return new FluxOSLegacyCryptoProvider(appName, owner, daemonHeight);
+  return new FluxOSLegacyCryptoProvider(appName, owner);
 }
 
 module.exports = {

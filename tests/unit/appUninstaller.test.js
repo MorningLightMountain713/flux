@@ -101,11 +101,21 @@ describe('appUninstaller tests', () => {
       '../appDatabase/registryManager': {
         availableApps: sinon.stub().resolves([]),
       },
-      '../utils/enterpriseHelper': {
-        checkAndDecryptAppSpecs: sinon.stub().returnsArg(0),
+      '../appDatabase/appsRepository': {
+        getInstalledApp: sinon.stub().resolves(null),
+        getGlobalAppInfo: sinon.stub().resolves(null),
+        getAppMessage: sinon.stub().resolves(null),
       },
-      '../utils/appSpecHelpers': {
-        specificationFormatter: sinon.stub().returnsArg(0),
+      '../providers/FluxOSLegacyCryptoProvider': {
+        create: sinon.stub().resolves({
+          decrypt: sinon.stub().resolves(Buffer.from('{}')),
+        }),
+      },
+      '../utils/specLibs': {
+        getSpec: sinon.stub().resolves({
+          FluxAppSpecBase: { getVersionClass: sinon.stub().returns(null) },
+        }),
+        getSpecBackend: sinon.stub().resolves({}),
       },
       '../appManagement/appInspector': {
         stopAppMonitoring: sinon.stub().resolves(),
@@ -477,11 +487,21 @@ describe('appUninstaller tests', () => {
         '../appDatabase/registryManager': {
           availableApps: sinon.stub().resolves([]),
         },
-        '../utils/enterpriseHelper': {
-          checkAndDecryptAppSpecs: sinon.stub().returnsArg(0),
+        '../appDatabase/appsRepository': {
+          getInstalledApp: sinon.stub().resolves(null),
+          getGlobalAppInfo: sinon.stub().resolves(null),
+          getAppMessage: sinon.stub().resolves(null),
         },
-        '../utils/appSpecHelpers': {
-          specificationFormatter: sinon.stub().returnsArg(0),
+        '../providers/FluxOSLegacyCryptoProvider': {
+          create: sinon.stub().resolves({
+            decrypt: sinon.stub().resolves(Buffer.from('{}')),
+          }),
+        },
+        '../utils/specLibs': {
+          getSpec: sinon.stub().resolves({
+            FluxAppSpecBase: { getVersionClass: sinon.stub().returns(null) },
+          }),
+          getSpecBackend: sinon.stub().resolves({}),
         },
         '../appManagement/appInspector': {
           stopAppMonitoring: sinon.stub().resolves(),
@@ -575,11 +595,37 @@ describe('appUninstaller tests', () => {
         '../appDatabase/registryManager': {
           availableApps: sinon.stub().resolves([]),
         },
-        '../utils/enterpriseHelper': {
-          checkAndDecryptAppSpecs: sinon.stub().returnsArg(0),
+        '../appDatabase/appsRepository': {
+          getInstalledApp: sinon.stub().resolves({
+            version: 2,
+            name: 'testapp',
+            owner: '1K6nyw2VjV6jEN1f1CkbKn9htWnYkQabbR',
+            enterprise: undefined,
+            components: {},
+            getComponent: () => undefined,
+            serialize: () => ({
+              version: 2,
+              name: 'testapp',
+              repotag: 'yurinnick/testapp',
+              ports: [30000],
+              containerPorts: [7396],
+              domains: [''],
+              cpu: 0.5, ram: 500, hdd: 5,
+            }),
+          }),
+          getGlobalAppInfo: sinon.stub().resolves(null),
+          getAppMessage: sinon.stub().resolves(null),
         },
-        '../utils/appSpecHelpers': {
-          specificationFormatter: sinon.stub().returnsArg(0),
+        '../providers/FluxOSLegacyCryptoProvider': {
+          create: sinon.stub().resolves({
+            decrypt: sinon.stub().resolves(Buffer.from('{}')),
+          }),
+        },
+        '../utils/specLibs': {
+          getSpec: sinon.stub().resolves({
+            FluxAppSpecBase: { getVersionClass: sinon.stub().returns(null) },
+          }),
+          getSpecBackend: sinon.stub().resolves({}),
         },
         '../appManagement/appInspector': {
           stopAppMonitoring: sinon.stub().resolves(),

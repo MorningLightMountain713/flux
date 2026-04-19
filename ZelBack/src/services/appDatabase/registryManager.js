@@ -1,15 +1,17 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const appsMaintenance = require('./appsMaintenance');
+const appsRepository = require('./appsRepository');
 const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
-const { validateSubmissionSpec } = require('../utils/specLibs');
-const { checkAndDecryptAppSpecs, encryptEnterpriseFromSession } = require('../utils/enterpriseHelper');
-const { specificationFormatter, updateToLatestAppSpecifications } = require('../utils/appUtilities');
+const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
+const { validateSubmissionSpec, getSpec, getSpecBackend } = require('../utils/specLibs');
+const { encryptEnterpriseFromSession } = require('../utils/enterpriseHelper');
+const { updateToLatestAppSpecifications } = require('../utils/appUtilities');
 const {
   globalAppsInformation,
   localAppsInformation,
@@ -22,6 +24,51 @@ const {
 } = require('../utils/appConstants');
 
 let reindexRunning = false;
+
+/**
+ * Parse a plain-object v1-v8 spec blob into its version class instance.
+ * Validates shape via the class's fromSubmission.
+ *
+ * @param {object} plainSpec - Raw spec blob (submission or storage shape)
+ * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase>}
+ */
+async function deserializeSubmission(plainSpec) {
+  const { FluxAppSpecBase } = await getSpec();
+  await getSpecBackend(); // registers v1-v8 classes
+  const VersionClass = FluxAppSpecBase.getVersionClass(plainSpec.version);
+  if (!VersionClass) {
+    throw new Error(`Unsupported Flux App specification version: ${plainSpec.version}`);
+  }
+  return VersionClass.fromSubmission(plainSpec);
+}
+
+/**
+ * For a stored/raw spec document, decrypt v8 enterprise blobs to the
+ * cleartext form (compose + contacts populated) while preserving the
+ * hash/height metadata. Non-enterprise specs are returned as-is.
+ *
+ * Routes through the flux-spec CryptoProvider seam:
+ * FluxAppSpecV8 → EncryptedSpecV8.decrypt(provider) → DecryptedCanonicalSpec.
+ *
+ * @param {object|null} dbAppSpec - Raw document from globalAppsInformation
+ * @returns {Promise<object|null>} Plain object: either the original non-
+ *   enterprise doc, or the canonical decrypted form plus height/hash.
+ */
+async function decryptIfEnterprise(dbAppSpec) {
+  if (!dbAppSpec) return null;
+  if (dbAppSpec.version < 8 || !dbAppSpec.enterprise) return dbAppSpec;
+
+  const wireSpec = await deserializeSubmission(dbAppSpec);
+  const encryptedSpec = wireSpec.toEncryptedSpec();
+  const provider = await legacyCryptoProvider.create(
+    wireSpec.name, wireSpec.owner,
+  );
+  const decrypted = await encryptedSpec.decrypt(provider);
+  const result = decrypted.spec.serialize();
+  result.height = dbAppSpec.height;
+  result.hash = dbAppSpec.hash;
+  return result;
+}
 
 /**
  * Get all app hashes from the blockchain
@@ -254,17 +301,7 @@ async function storeAppInstallingMessage(message) {
  * @returns {string|null} Owner.
  */
 async function getApplicationOwner(appName) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const query = { name: new RegExp(`^${appName}$`, 'i') };
-  const projection = {
-    projection: {
-      _id: 0,
-      owner: 1,
-    },
-  };
-  const globalAppsInfoCollection = config.database.appsglobal.collections.appsInformation;
-  const appSpecs = await dbHelper.findOneInDatabase(database, globalAppsInfoCollection, query, projection);
+  const appSpecs = await appsRepository.getGlobalAppInfoRaw(appName, { owner: 1 });
   if (appSpecs) {
     return appSpecs.owner;
   }
@@ -356,26 +393,8 @@ async function getAppInstallingLocation(req, res) {
  * @returns {Promise<object|null>} App specifications
  */
 async function getApplicationGlobalSpecifications(appName) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-
-  const query = { name: new RegExp(`^${appName}$`, 'i') };
-  const projection = {
-    projection: {
-      _id: 0,
-    },
-  };
-  const dbAppSpec = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-
-  // Decrypt and format specifications if needed
-  let appSpec = await checkAndDecryptAppSpecs(dbAppSpec);
-  if (appSpec && appSpec.version >= 8 && appSpec.enterprise) {
-    const { height, hash } = appSpec;
-    appSpec = specificationFormatter(appSpec);
-    appSpec.height = height;
-    appSpec.hash = hash;
-  }
-  return appSpec;
+  const dbAppSpec = await appsRepository.getGlobalAppInfoRaw(appName);
+  return decryptIfEnterprise(dbAppSpec);
 }
 
 /**
@@ -428,37 +447,13 @@ async function getApplicationSpecifications(appName) {
   //   hash: hash of message that has these paramenters,
   //   height: height containing the message
   // };
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-
-  const query = { name: new RegExp(`^${appName}$`, 'i') };
-  const projection = {
-    projection: {
-      _id: 0,
-    },
-  };
-  let appInfo = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
+  let appInfo = await appsRepository.getGlobalAppInfoRaw(appName);
   if (!appInfo) {
     // eslint-disable-next-line no-use-before-define
     const allApps = await availableApps();
     appInfo = allApps.find((app) => app.name.toLowerCase() === appName.toLowerCase());
   }
-
-  // This is abusing the spec formatter. It's not meant for this. This whole thing
-  // is kind of broken. The reason we have to use the spec formatter here is the
-  // frontend is passing properties as strings (then stringify the whole object)
-  // the frontend should parse the strings up front, and just pass an encrypted,
-  // stringified object.
-  //
-  // Will fix this in v9 specs. Move to model based specs with pre sorted keys.
-  appInfo = await checkAndDecryptAppSpecs(appInfo);
-  if (appInfo && appInfo.version >= 8 && appInfo.enterprise) {
-    const { height, hash } = appInfo;
-    appInfo = specificationFormatter(appInfo);
-    appInfo.height = height;
-    appInfo.hash = hash;
-  }
-  return appInfo;
+  return decryptIfEnterprise(appInfo);
 }
 
 /**
@@ -1354,8 +1349,6 @@ async function registerAppGlobalyApi(req, res) {
   // cycle through a module that does. Restructuring to eliminate the
   // cycles is Stage 3.5+ scope — see fluxos/FLUXOS_MIGRATION_PLAN.md.
   // eslint-disable-next-line global-require
-  const appUtilities = require('../utils/appUtilities');
-  // eslint-disable-next-line global-require
   const imageManager = require('../appSecurity/imageManager');
   // eslint-disable-next-line global-require
   const messageVerifier = require('../appMessaging/messageVerifier');
@@ -1420,21 +1413,35 @@ async function registerAppGlobalyApi(req, res) {
       }
       const daemonHeight = syncStatus.data.height;
 
-      const appSpecDecrypted = await checkAndDecryptAppSpecs(
-        appSpecification,
-        {
-          daemonHeight,
-          owner: appSpecification.owner,
-        },
+      // Parse the on-wire form once. For enterprise apps this is the
+      // encrypted-shape class (empty compose/contacts, enterprise blob
+      // intact); for everyone else it IS the signed decrypted spec.
+      const wireSpec = await deserializeSubmission(appSpecification);
+      const isEnterprise = Boolean(
+        wireSpec.version >= 8 && wireSpec.enterprise,
       );
 
-      const appSpecFormatted = await appUtilities.specificationFormatter(appSpecDecrypted);
+      // Decrypt via the provider when the enterprise blob is present,
+      // otherwise the wire spec is already the cleartext form.
+      let decryptedSpec = wireSpec;
+      if (isEnterprise) {
+        const encryptedSpec = wireSpec.toEncryptedSpec();
+        const provider = await legacyCryptoProvider.create(
+          wireSpec.name, wireSpec.owner,
+        );
+        decryptedSpec = (await encryptedSpec.decrypt(provider)).spec;
+      }
+
+      const appSpecFormatted = decryptedSpec.serialize();
 
       await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
       // eslint-disable-next-line global-require
       const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
       await verifyImageRegistryAndArchitectures(appSpecFormatted);
 
+      // v7 legacy secrets check — iterates the plain decrypted compose. This
+      // block becomes unreachable once v9 activation rejects new v1-v7
+      // registrations at the submission boundary.
       if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
         // eslint-disable-next-line no-restricted-syntax
         for (const appComponent of appSpecFormatted.compose) {
@@ -1445,23 +1452,14 @@ async function registerAppGlobalyApi(req, res) {
         }
       }
 
-      // check if name is not yet registered
       await checkApplicationRegistrationNameConflicts(appSpecFormatted);
 
-      const isEnterprise = Boolean(
-        appSpecification.version >= 8 && appSpecification.enterprise,
-      );
-
-      // The signed form IS the broadcast form. For enterprise the user
-      // submits `{..., enterprise: <encrypted blob>, compose: [], contacts: []}`
-      // where the encrypted blob carries the real compose/contacts; the
-      // empty arrays are the on-wire sentinel. specificationFormatter
-      // normalizes field order without restoring cleartext values, so the
-      // formatted submission is the exact blob that the signature covers
-      // and that peers hash on receive. For non-enterprise the decrypted
-      // formatted spec is identical (no decryption ran).
+      // The signed form IS the broadcast form. For enterprise that's the
+      // encrypted-shape wire spec (empty compose/contacts + enterprise
+      // blob), produced verbatim from wireSpec.serialize(). For everyone
+      // else the decrypted canonical spec IS the signed form.
       const broadcastSpecBlob = isEnterprise
-        ? await appUtilities.specificationFormatter(appSpecification)
+        ? wireSpec.serialize()
         : appSpecFormatted;
 
       const signedEvent = await appEventVerifier.deserializeMessage({

@@ -6,12 +6,12 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
-const { validateSubmissionSpec } = require('../utils/specLibs');
+const { validateSubmissionSpec, getSpec, getSpecBackend } = require('../utils/specLibs');
 const {
   getPreviousAppSpecifications,
   validateApplicationUpdateCompatibility,
 } = require('../appLifecycle/advancedWorkflows');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
+const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const globalState = require('../utils/globalState');
 const {
   globalAppsMessages,
@@ -21,7 +21,23 @@ const {
   globalAppsInstallingErrorsLocations,
   appsHashesCollection,
 } = require('../utils/appConstants');
-const { specificationFormatter } = require('../utils/appUtilities');
+
+/**
+ * Parse a raw spec blob into its version class instance. Validates shape
+ * via the class's fromSubmission and captures any ValidationError details.
+ *
+ * @param {object} plainSpec
+ * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase>}
+ */
+async function deserializeSubmission(plainSpec) {
+  const { FluxAppSpecBase } = await getSpec();
+  await getSpecBackend();
+  const VersionClass = FluxAppSpecBase.getVersionClass(plainSpec.version);
+  if (!VersionClass) {
+    throw new Error(`Unsupported Flux App specification version: ${plainSpec.version}`);
+  }
+  return VersionClass.fromSubmission(plainSpec);
+}
 
 /**
  * Store temporary app message
@@ -49,8 +65,14 @@ async function storeAppTemporaryMessage(message, options = {}) {
   }
 
   const specifications = message.appSpecifications || message.zelAppSpecifications;
-  // eslint-disable-next-line no-use-before-define
-  const appSpecFormatted = specificationFormatter(specifications);
+
+  // Parse the on-wire spec into its version class. For v8 enterprise apps
+  // this is the encrypted form (empty compose/contacts + enterprise blob);
+  // for everything else it's the full spec. The class instance is the
+  // authoritative object used for branching, and its .serialize() produces
+  // the canonical byte form for DB storage + downstream consumers.
+  const wireSpec = await deserializeSubmission(specifications);
+  const appSpecFormatted = wireSpec.serialize();
   const messageTimestamp = serviceHelper.ensureNumber(message.timestamp);
   const messageVersion = serviceHelper.ensureNumber(message.version);
 
@@ -105,30 +127,33 @@ async function storeAppTemporaryMessage(message, options = {}) {
       }
     }
 
-    if (appSpecFormatted.version >= 8 && appSpecFormatted.enterprise) {
+    // For v8 enterprise apps we need the decrypted cleartext to run the
+    // remaining checks. Route through the flux-spec CryptoProvider seam:
+    // wireSpec.toEncryptedSpec().decrypt(provider) returns a real
+    // FluxAppSpecV8 with compose/contacts populated. Non-encrypted specs
+    // skip the whole branch.
+    let validationBlob;
+    if (wireSpec.version >= 8 && wireSpec.enterprise) {
       // eslint-disable-next-line global-require
       const fluxService = require('../fluxService');
       if (await fluxService.isSystemSecure()) {
-        // eslint-disable-next-line no-use-before-define
-        const appSpecDecrypted = await checkAndDecryptAppSpecs(
-          appSpecFormatted,
-          { daemonHeight: block, owner: appSpecFormatted.owner },
+        const encryptedSpec = wireSpec.toEncryptedSpec();
+        const provider = await legacyCryptoProvider.create(
+          wireSpec.name, wireSpec.owner,
         );
-        // eslint-disable-next-line no-use-before-define
-        const appSpecFormattedDecrypted = specificationFormatter(appSpecDecrypted);
-        await validateSubmissionSpec(appSpecFormattedDecrypted, { height: block });
-        if (appRegistration) {
-          await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormattedDecrypted, message.hash);
-        } else {
-          await validateApplicationUpdateCompatibility(appSpecFormattedDecrypted, previousAppSpecs);
-        }
+        const decrypted = await encryptedSpec.decrypt(provider);
+        validationBlob = decrypted.spec.serialize();
       }
     } else {
-      await validateSubmissionSpec(appSpecFormatted, { height: block });
+      validationBlob = appSpecFormatted;
+    }
+
+    if (validationBlob) {
+      await validateSubmissionSpec(validationBlob, { height: block });
       if (appRegistration) {
-        await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted, message.hash);
+        await registryManager.checkApplicationRegistrationNameConflicts(validationBlob, message.hash);
       } else {
-        await validateApplicationUpdateCompatibility(appSpecFormatted, previousAppSpecs);
+        await validateApplicationUpdateCompatibility(validationBlob, previousAppSpecs);
       }
     }
 
