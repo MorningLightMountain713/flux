@@ -24,13 +24,65 @@ const {
   globalAppsLocations,
   appsFolder,
 } = require('../utils/appConstants');
-const { specificationFormatter } = require('../utils/appUtilities');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
+const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
+const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const globalState = require('../utils/globalState');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
+
+/**
+ * Parse a plain-object v1-v8 spec blob into its version class instance.
+ * Same helper used in messageStore/registryManager/appInstaller — keeps
+ * ingestion validation consistent across the submission + redeploy paths.
+ *
+ * @param {object} plainSpec
+ * @returns {Promise<import('@megachips/flux-spec').FluxAppSpecBase>}
+ */
+async function deserializeSubmission(plainSpec) {
+  const { FluxAppSpecBase } = await getSpec();
+  await getSpecBackend();
+  const VersionClass = FluxAppSpecBase.getVersionClass(plainSpec.version);
+  if (!VersionClass) {
+    throw new Error(`Unsupported Flux App specification version: ${plainSpec.version}`);
+  }
+  return VersionClass.fromSubmission(plainSpec);
+}
+
+/**
+ * Normalize a plain-object v1-v8 spec blob to its canonical wire shape via
+ * the version class. Same byte-for-byte output as the legacy appUtilities
+ * formatter on valid input, but rejects malformed specs via ValidationError.
+ *
+ * @param {object} plainSpec
+ * @returns {Promise<object>}
+ */
+async function toCanonicalSpec(plainSpec) {
+  return (await deserializeSubmission(plainSpec)).serialize();
+}
+
+/**
+ * Route a plain-object encrypted v8 spec through the CryptoProvider seam.
+ * Returns a plain object with compose/contacts populated and the enterprise
+ * blob preserved. Non-enterprise (or already-decrypted) specs pass through.
+ *
+ * @param {object} plainSpec
+ * @returns {Promise<object>}
+ */
+async function decryptIfEnterprise(plainSpec) {
+  if (!plainSpec || plainSpec.version < 8 || !plainSpec.enterprise) return plainSpec;
+  // Already-decrypted enterprise spec (compose populated) — no-op.
+  if (plainSpec.compose && plainSpec.compose.length > 0) return plainSpec;
+
+  const wireSpec = await deserializeSubmission(plainSpec);
+  const encryptedSpec = wireSpec.toEncryptedSpec();
+  const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+  const decrypted = await encryptedSpec.decrypt(provider);
+  const result = decrypted.spec.serialize();
+  result.enterprise = plainSpec.enterprise;
+  return result;
+}
 
 // Legacy apps that use old gateway IP assignment method
 const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated', 'isokosse', 'ChainBraryDApp', 'health', 'ethercalc'];
@@ -383,9 +435,6 @@ async function getPreviousAppSpecifications(specifications, verificationTimestam
   // we may not have the application in global apps. This can happen when we receive the message
   // after the app has already expired AND we need to get message right before our message.
   // Thus using messages system that is accurate
-  // eslint-disable-next-line no-shadow, global-require
-  const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
   const projection = {
@@ -445,11 +494,8 @@ async function getPreviousAppSpecifications(specifications, verificationTimestam
   if (!appSpecs) {
     throw new Error(`Previous specifications for ${specifications.name} update message does not exists! This should not happen.`);
   }
-  const heightForDecrypt = latestPermanentRegistrationMessage.height;
-  const decryptedPrev = await checkAndDecryptAppSpecs(appSpecs, { daemonHeight: heightForDecrypt });
-  const formattedPrev = specificationFormatter(decryptedPrev);
-
-  return formattedPrev;
+  const decryptedPrev = await decryptIfEnterprise(appSpecs);
+  return toCanonicalSpec(decryptedPrev);
 }
 
 // Global state management - using globalState module instead of local variables
@@ -952,16 +998,6 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
       return;
     }
     globalState.installationInProgress = true;
-    const tier = await generalService.nodeTier().catch((error) => log.error(error));
-    if (!tier) {
-      const rStatus = messageHelper.createErrorMessage('Failed to get Node Tier');
-      log.error(rStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(rStatus));
-        res.end();
-      }
-      return;
-    }
     const appSpecifications = appSpecs;
     const appComponent = componentSpecs;
     const appName = appSpecifications.name;
@@ -1086,19 +1122,6 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
         throw new Error(`CRITICAL: Failed to create database entry for ${appSpecifications.name} in soft registration. Database insert returned undefined - likely duplicate key error or database failure. Aborting soft registration to prevent orphaned Docker containers.`);
       }
       log.info(`Database entry created for ${appSpecifications.name} BEFORE Docker container creation (soft registration)`);
-      const hddTier = `hdd${tier}`;
-      const ramTier = `ram${tier}`;
-      const cpuTier = `cpu${tier}`;
-      appSpecifications.cpu = appSpecifications[cpuTier] || appSpecifications.cpu;
-      appSpecifications.ram = appSpecifications[ramTier] || appSpecifications.ram;
-      appSpecifications.hdd = appSpecifications[hddTier] || appSpecifications.hdd;
-    } else {
-      const hddTier = `hdd${tier}`;
-      const ramTier = `ram${tier}`;
-      const cpuTier = `cpu${tier}`;
-      appComponent.cpu = appComponent[cpuTier] || appComponent.cpu;
-      appComponent.ram = appComponent[ramTier] || appComponent.ram;
-      appComponent.hdd = appComponent[hddTier] || appComponent.hdd;
     }
 
     const specificationsToInstall = isComponent ? appComponent : appSpecifications;
@@ -1109,12 +1132,6 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
       // eslint-disable-next-line no-restricted-syntax
       for (const appComponentSpecs of specificationsToInstall.compose) {
         isComponent = true;
-        const hddTier = `hdd${tier}`;
-        const ramTier = `ram${tier}`;
-        const cpuTier = `cpu${tier}`;
-        appComponentSpecs.cpu = appComponentSpecs[cpuTier] || appComponentSpecs.cpu;
-        appComponentSpecs.ram = appComponentSpecs[ramTier] || appComponentSpecs.ram;
-        appComponentSpecs.hdd = appComponentSpecs[hddTier] || appComponentSpecs.hdd;
         // eslint-disable-next-line no-await-in-loop
         await appInstaller.installApplicationSoft(appComponentSpecs, appName, isComponent, res, appSpecifications);
       }
@@ -1314,9 +1331,9 @@ async function softRemoveAppLocally(app, res) {
       throw new Error('Flux App not found');
     }
 
-    // Decrypt and format specifications
-    appSpecifications = await checkAndDecryptAppSpecs(appSpecifications);
-    appSpecifications = specificationFormatter(appSpecifications);
+    // Decrypt and canonicalize specifications
+    appSpecifications = await decryptIfEnterprise(appSpecifications);
+    appSpecifications = await toCanonicalSpec(appSpecifications);
 
     const appId = dockerService.getAppIdentifier(app);
 
@@ -1583,8 +1600,8 @@ async function softRedeployComponent(appName, componentName, res) {
     }
 
     // Decrypt enterprise apps before accessing compose
-    if (appSpecifications.version >= 8 && appSpecifications.enterprise && isArcane) {
-      appSpecifications = await checkAndDecryptAppSpecs(appSpecifications);
+    if (isArcane) {
+      appSpecifications = await decryptIfEnterprise(appSpecifications);
     }
 
     // Find the component in the app specs
@@ -1696,8 +1713,8 @@ async function hardRedeployComponent(appName, componentName, res) {
       throw new Error(`Application ${appName} not found`);
     }
 
-    if (appSpecifications.version >= 8 && appSpecifications.enterprise && isArcane) {
-      appSpecifications = await checkAndDecryptAppSpecs(appSpecifications);
+    if (isArcane) {
+      appSpecifications = await decryptIfEnterprise(appSpecifications);
     }
 
     // Find the component in the app specs
@@ -2848,8 +2865,8 @@ async function updateAppGlobaly(params) {
   const daemonHeight = syncStatus.data.height;
 
   const appSpecObj = serviceHelper.ensureObject(appSpecification);
-  const appSpecDecrypted = await checkAndDecryptAppSpecs(appSpecObj, { daemonHeight });
-  const appSpecFormatted = specificationFormatter(appSpecDecrypted);
+  const appSpecDecrypted = await decryptIfEnterprise(appSpecObj);
+  const appSpecFormatted = await toCanonicalSpec(appSpecDecrypted);
 
   // eslint-disable-next-line global-require
   const { validateSubmissionSpec } = require('../utils/specLibs');
@@ -2885,7 +2902,9 @@ async function updateAppGlobaly(params) {
   const appOwner = appInfo.owner;
 
   const isEnterprise = Boolean(appSpecObj.version >= 8 && appSpecObj.enterprise);
-  const toVerify = isEnterprise ? specificationFormatter(appSpecObj) : appSpecFormatted;
+  // For enterprise updates, the signature covers the on-wire encrypted form
+  // (compose/contacts empty, enterprise blob intact), not the decrypted one.
+  const toVerify = isEnterprise ? await toCanonicalSpec(appSpecObj) : appSpecFormatted;
 
   // eslint-disable-next-line global-require
   const appMessaging = require('../appMessaging/messageVerifier');
@@ -3100,9 +3119,9 @@ async function reinstallOldApplications() {
       // eslint-disable-next-line no-await-in-loop
       let appSpecifications = await getStrictApplicationSpecifications(installedApp.name);
 
-      if (appSpecifications && appSpecifications.version >= 8 && appSpecifications.enterprise && isArcane) {
+      if (isArcane) {
         // eslint-disable-next-line no-await-in-loop
-        appSpecifications = await checkAndDecryptAppSpecs(appSpecifications);
+        appSpecifications = await decryptIfEnterprise(appSpecifications);
       }
 
       const randomNumber = Math.floor((Math.random() * config.fluxapps.redeploy.probability)); // 50%
@@ -3180,10 +3199,6 @@ async function reinstallOldApplications() {
 
 
           // check if node is capable to run it according to specifications
-          // run the verification
-          // get tier and adjust specifications
-          // eslint-disable-next-line no-await-in-loop
-          const tier = await generalService.nodeTier();
           if (appSpecifications.version >= 4 && installedApp.version <= 3) {
             if (globalState.removalInProgress) {
               log.warn(`Another application is undergoing removal. Skipping ${installedApp.name} for this cycle.`);
@@ -3265,15 +3280,6 @@ async function reinstallOldApplications() {
             // eslint-disable-next-line no-await-in-loop, no-use-before-define
             await appDockerRestart(appSpecifications.name);
           } else if (appSpecifications.version <= 3) {
-            if (appSpecifications.tiered) {
-              const hddTier = `hdd${tier}`;
-              const ramTier = `ram${tier}`;
-              const cpuTier = `cpu${tier}`;
-              appSpecifications.cpu = appSpecifications[cpuTier] || appSpecifications.cpu;
-              appSpecifications.ram = appSpecifications[ramTier] || appSpecifications.ram;
-              appSpecifications.hdd = appSpecifications[hddTier] || appSpecifications.hdd;
-            }
-
             if (globalState.removalInProgress) {
               log.warn(`Another application is undergoing removal. Skipping ${installedApp.name} for this cycle.`);
               // eslint-disable-next-line no-continue
@@ -3389,15 +3395,6 @@ async function reinstallOldApplications() {
               const reversedCompose = [...appSpecifications.compose].reverse();
               // eslint-disable-next-line no-restricted-syntax
               for (const appComponent of reversedCompose) {
-                if (appComponent.tiered) {
-                  const hddTier = `hdd${tier}`;
-                  const ramTier = `ram${tier}`;
-                  const cpuTier = `cpu${tier}`;
-                  appComponent.cpu = appComponent[cpuTier] || appComponent.cpu;
-                  appComponent.ram = appComponent[ramTier] || appComponent.ram;
-                  appComponent.hdd = appComponent[hddTier] || appComponent.hdd;
-                }
-
                 const installedComponent = installedApp.compose.find((component) => component.name === appComponent.name);
 
                 if (JSON.stringify(installedComponent) === JSON.stringify(appComponent)) {
@@ -3463,15 +3460,6 @@ async function reinstallOldApplications() {
               // Now install components - containers will be created but app is already in DB
               // eslint-disable-next-line no-restricted-syntax
               for (const appComponent of appSpecifications.compose) {
-                if (appComponent.tiered) {
-                  const hddTier = `hdd${tier}`;
-                  const ramTier = `ram${tier}`;
-                  const cpuTier = `cpu${tier}`;
-                  appComponent.cpu = appComponent[cpuTier] || appComponent.cpu;
-                  appComponent.ram = appComponent[ramTier] || appComponent.ram;
-                  appComponent.hdd = appComponent[hddTier] || appComponent.hdd;
-                }
-
                 const installedComponent = installedApp.compose.find((component) => component.name === appComponent.name);
 
                 if (JSON.stringify(installedComponent) === JSON.stringify(appComponent)) {
