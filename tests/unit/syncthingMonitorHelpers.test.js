@@ -54,51 +54,6 @@ describe('syncthingMonitorHelpers tests', () => {
     });
   });
 
-  describe('getContainerDataFlags', () => {
-    it('should extract flags from container string with flags', () => {
-      const container = 'sr:/data';
-      const result = helpers.getContainerDataFlags(container);
-      expect(result).to.equal('sr');
-    });
-
-    it('should return empty string for container without flags', () => {
-      const container = '/data';
-      const result = helpers.getContainerDataFlags(container);
-      expect(result).to.equal('');
-    });
-
-    it('should handle container with only path', () => {
-      const container = 'nocolon';
-      const result = helpers.getContainerDataFlags(container);
-      expect(result).to.equal('');
-    });
-  });
-
-  describe('requiresSyncing', () => {
-    it('should return true for s flag', () => {
-      expect(helpers.requiresSyncing('s')).to.be.true;
-    });
-
-    it('should return true for r flag', () => {
-      expect(helpers.requiresSyncing('r')).to.be.true;
-    });
-
-    it('should return true for g flag', () => {
-      expect(helpers.requiresSyncing('g')).to.be.true;
-    });
-
-    it('should return true for combined flags', () => {
-      expect(helpers.requiresSyncing('srg')).to.be.true;
-      expect(helpers.requiresSyncing('sr')).to.be.true;
-    });
-
-    it('should return false for no sync flags', () => {
-      expect(helpers.requiresSyncing('w')).to.be.false;
-      expect(helpers.requiresSyncing('')).to.be.false;
-      expect(helpers.requiresSyncing('xyz')).to.be.false;
-    });
-  });
-
   describe('getContainerFolderPath', () => {
     it('should return /appdata for first container (primary mount)', () => {
       const containersData = ['/data', 'r:/config'];

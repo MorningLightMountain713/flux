@@ -12,7 +12,6 @@ const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
 const { deserializeSpec } = require('../utils/specCutover');
 const { encryptEnterpriseFromSession } = require('../utils/enterpriseHelper');
-const { updateToLatestAppSpecifications } = require('../utils/appUtilities');
 const {
   globalAppsInformation,
   localAppsInformation,
@@ -578,84 +577,6 @@ async function getApplicationOwnerAPI(req, res) {
   }
 }
 
-/**
- * Update application specification to latest version via API
- * @param {object} req - Request object
- * @param {object} res - Response object
- * @returns {Promise<object|null>} Response with updated specifications
- */
-async function updateApplicationSpecificationAPI(req, res) {
-  try {
-    const { appname } = req.params;
-    if (!appname) {
-      throw new Error('appname parameter is mandatory');
-    }
-
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-    if (!syncStatus.data.synced) {
-      throw new Error('Daemon not yet synced.');
-    }
-
-    const { data: { height: daemonHeight } } = syncStatus;
-
-    const specifications = await getApplicationSpecifications(appname);
-    if (!specifications) {
-      throw new Error('Application not found');
-    }
-
-    const mainAppName = appname.split('_')[1] || appname;
-
-    const isEnterprise = Boolean(
-      specifications.version >= 8 && specifications.enterprise,
-    );
-
-    let encryptedEnterpriseKey = null;
-    if (isEnterprise) {
-      encryptedEnterpriseKey = req.headers['enterprise-key'];
-      if (!encryptedEnterpriseKey) {
-        throw new Error('Header with enterpriseKey is mandatory for enterprise Apps.');
-      }
-    }
-
-    const authorized = await verificationHelper.verifyPrivilege(
-      'appownerabove',
-      req,
-      mainAppName,
-    );
-
-    if (!authorized) {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-      return null;
-    }
-
-    const updatedSpecs = updateToLatestAppSpecifications(specifications);
-
-    if (isEnterprise) {
-      const enterprise = await encryptEnterpriseFromSession(
-        updatedSpecs,
-        daemonHeight,
-        encryptedEnterpriseKey,
-      );
-
-      updatedSpecs.enterprise = enterprise;
-      updatedSpecs.contacts = [];
-      updatedSpecs.compose = [];
-    }
-
-    const specResponse = messageHelper.createDataMessage(updatedSpecs);
-    res.json(specResponse);
-  } catch (error) {
-    log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    res.json(errorResponse);
-  }
-  return null;
-}
 
 /**
  * Get global apps specifications via API
@@ -1697,7 +1618,6 @@ module.exports = {
   getApplicationLocalSpecifications,
   getApplicationSpecifications,
   getApplicationSpecificationAPI,
-  updateApplicationSpecificationAPI,
   getApplicationOwner,
   getApplicationOwnerAPI,
   getGlobalAppsSpecifications,

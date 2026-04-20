@@ -89,13 +89,9 @@ describe('appInstaller tests', () => {
       checkAppGeolocationRequirements: sinon.stub(),
     };
 
-    enterpriseHelperStub = {
-      checkAndDecryptAppSpecs: sinon.stub().callsFake((specs) => Promise.resolve(specs)),
-    };
+    enterpriseHelperStub = {};
 
-    appSpecHelpersStub = {
-      specificationFormatter: sinon.stub().returnsArg(0),
-    };
+    appSpecHelpersStub = {};
 
     // Cutover stubs: class-instance seam + v8 CryptoProvider. The mock
     // round-trips spec data — sufficient for the install flow without

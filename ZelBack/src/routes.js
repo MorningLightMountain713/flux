@@ -400,9 +400,6 @@ module.exports = (app) => {
   app.get('/apps/latestspecificationversion', cache('5 minutes'), (req, res) => {
     appQueryService.getlatestApplicationSpecificationAPI(req, res);
   });
-  app.get('/apps/updatetolatestspecs/:appname', cache('30 seconds'), (req, res) => {
-    registryManager.updateApplicationSpecificationAPI(req, res);
-  });
   app.get('/apps/appspecifications/:appname/:decrypt?', (req, res) => {
     registryManager.getApplicationSpecificationAPI(req, res);
   });

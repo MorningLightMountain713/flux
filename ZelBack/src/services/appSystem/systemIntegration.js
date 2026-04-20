@@ -12,8 +12,6 @@ const daemonServiceFluxnodeRpcs = require('../daemonService/daemonServiceFluxnod
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const benchmarkService = require('../benchmarkService');
 const hwRequirements = require('../appRequirements/hwRequirements');
-const { getSpecBackend } = require('../utils/specLibs');
-const { appsFolder } = require('../utils/appConstants');
 const daemonServiceBenchmarkRpcs = require('../daemonService/daemonServiceBenchmarkRpcs');
 const generalService = require('../generalService');
 
@@ -222,72 +220,6 @@ async function nodeFullGeolocation() {
     throw new Error('Node Geolocation not set. Aborting.');
   }
   return `${nodeGeo.continentCode}_${nodeGeo.countryCode}_${nodeGeo.regionName}`;
-}
-
-/**
- * To check app requirements of HW for a node
- * @param {object} appSpecs App specifications.
- * @returns {boolean} True if all checks passed.
- */
-async function checkAppHWRequirements(appSpecs) {
-  // Import locally to avoid circular dependency
-  // eslint-disable-next-line global-require
-  const appController = require('../appManagement/appController');
-
-  const resourcesLocked = await appController.appsResources();
-  if (resourcesLocked.status !== 'success') {
-    throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
-  }
-
-  const { DeploymentSpec } = await getSpecBackend();
-  const { cpu, memory, storage } = DeploymentSpec.fromSpec(appSpecs, appsFolder).totalResources();
-
-  await getNodeSpecs();
-  const totalSpaceOnNode = nodeSpecs.ssdStorage;
-  if (totalSpaceOnNode === 0) {
-    throw new Error('Insufficient space on Flux Node to spawn an application');
-  }
-  const useableSpaceOnNode = totalSpaceOnNode * 0.95 - config.lockedSystemResources.hdd - config.lockedSystemResources.extrahdd;
-  const hddLockedByApps = resourcesLocked.data.appsHddLocked;
-  const availableSpaceForApps = useableSpaceOnNode - hddLockedByApps;
-  if (storage > availableSpaceForApps) {
-    throw new Error('Insufficient space on Flux Node to spawn an application');
-  }
-
-  const totalCpuOnNode = nodeSpecs.cpuCores * 10;
-  const useableCpuOnNode = totalCpuOnNode - config.lockedSystemResources.cpu;
-  const cpuLockedByApps = resourcesLocked.data.appsCpusLocked * 10;
-  const adjustedAppCpu = cpu * 10;
-  const availableCpuForApps = useableCpuOnNode - cpuLockedByApps;
-  if (adjustedAppCpu > availableCpuForApps) {
-    throw new Error('Insufficient CPU power on Flux Node to spawn an application');
-  }
-
-  const totalRamOnNode = nodeSpecs.ram;
-  const useableRamOnNode = totalRamOnNode - config.lockedSystemResources.ram;
-  const ramLockedByApps = resourcesLocked.data.appsRamLocked;
-  const availableRamForApps = useableRamOnNode - ramLockedByApps;
-  if (memory > availableRamForApps) {
-    throw new Error('Insufficient RAM on Flux Node to spawn an application');
-  }
-
-  return true;
-}
-
-/**
- * To check app requirements to include HDD space, CPU power, RAM and GEO for a node
- * @param {object} appSpecs App specifications.
- * @returns {boolean} True if all checks passed.
- */
-async function checkAppRequirements(appSpecs) {
-  // appSpecs has hdd, cpu and ram assigned to correct tier
-  await checkAppHWRequirements(appSpecs);
-  // check geolocation
-  checkAppStaticIpRequirements(appSpecs);
-  checkAppDataCenterRequirements(appSpecs);
-  await checkAppNodesRequirements(appSpecs);
-  await checkAppGeolocationRequirements(appSpecs);
-  return true;
 }
 
 /**
@@ -506,8 +438,6 @@ module.exports = {
   checkAppNodesRequirements,
   checkAppGeolocationRequirements,
   nodeFullGeolocation,
-  checkAppHWRequirements,
-  checkAppRequirements,
   checkHWParameters,
   checkComposeHWParameters,
   createFluxNetworkAPI,

@@ -46,9 +46,8 @@ async function deserializeSpec(plainSpec) {
 
 /**
  * Normalize a plain-object wire-form spec to its canonical plain-object
- * form via the class. Byte-for-byte equivalent to the legacy
- * `specificationFormatter` on valid input, but rejects malformed specs
- * via ValidationError instead of silently coercing. No encryption concern
+ * form via the class. Rejects malformed specs via ValidationError
+ * instead of silently coercing. No encryption concern
  * — operates on whatever wire shape was passed in.
  *
  * @param {object} plainSpec

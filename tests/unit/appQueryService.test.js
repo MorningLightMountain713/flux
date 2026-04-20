@@ -68,13 +68,9 @@ describe('appQueryService tests', () => {
       appInstallingLocation: sinon.stub(),
     };
 
-    enterpriseHelperStub = {
-      checkAndDecryptAppSpecs: sinon.stub().returnsArg(0), // Return app as-is by default
-    };
+    enterpriseHelperStub = {};
 
-    appSpecHelpersStub = {
-      specificationFormatter: sinon.stub().returnsArg(0), // Return app as-is by default
-    };
+    appSpecHelpersStub = {};
 
     cacheManagerStub = {
       default: {

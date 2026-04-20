@@ -58,8 +58,6 @@ const syncthingMonitorHelpersMock = {
   })),
   ensureStfolderExists: sinon.stub().resolves(),
   getContainerFolderPath: sinon.stub().returns(''),
-  getContainerDataFlags: sinon.stub().returns(''),
-  requiresSyncing: sinon.stub().returns(false),
   folderNeedsUpdate: sinon.stub().returns(false),
 };
 

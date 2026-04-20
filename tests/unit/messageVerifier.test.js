@@ -239,9 +239,7 @@ describe('messageVerifier tests', () => {
           getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 1 }]),
           getChainTeamSupportAddressUpdates: sinon.stub().returns([]),
         },
-        '../utils/enterpriseHelper': {
-          checkAndDecryptAppSpecs: sinon.stub().returnsArg(0),
-        },
+        '../utils/enterpriseHelper': {},
         '../messageHelper': {
           createDataMessage: sinon.stub(),
           createErrorMessage: sinon.stub(),

@@ -303,12 +303,8 @@ describe('appUninstaller tests', () => {
         '../appDatabase/registryManager': {
           availableApps: sinon.stub().resolves([]),
         },
-        '../utils/enterpriseHelper': {
-          checkAndDecryptAppSpecs: sinon.stub().returnsArg(0),
-        },
-        '../utils/appSpecHelpers': {
-          specificationFormatter: sinon.stub().returnsArg(0),
-        },
+        '../utils/enterpriseHelper': {},
+        '../utils/appSpecHelpers': {},
         '../appManagement/appInspector': {
           stopAppMonitoring: sinon.stub().resolves(),
         },
@@ -386,12 +382,8 @@ describe('appUninstaller tests', () => {
         '../appDatabase/registryManager': {
           availableApps: sinon.stub().resolves([]),
         },
-        '../utils/enterpriseHelper': {
-          checkAndDecryptAppSpecs: sinon.stub().returnsArg(0),
-        },
-        '../utils/appSpecHelpers': {
-          specificationFormatter: sinon.stub().returnsArg(0),
-        },
+        '../utils/enterpriseHelper': {},
+        '../utils/appSpecHelpers': {},
         '../appManagement/appInspector': {
           stopAppMonitoring: sinon.stub().resolves(),
         },

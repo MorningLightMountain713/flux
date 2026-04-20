@@ -223,26 +223,6 @@ function getContainerFolderPath(containersData, index) {
 }
 
 /**
- * Extract container data flags
- * @param {string} container - Container string
- * @returns {string} Container data flags
- */
-function getContainerDataFlags(container) {
-  return container.split(':')[1] ? container.split(':')[0] : '';
-}
-
-/**
- * Check if container requires syncing
- * @param {string} containerDataFlags - Container flags
- * @returns {boolean} True if sync is required
- */
-function requiresSyncing(containerDataFlags) {
-  return containerDataFlags.includes('s')
-    || containerDataFlags.includes('r')
-    || containerDataFlags.includes('g');
-}
-
-/**
  * Check if container should be running
  * @param {string} containerDataFlags - Container flags
  * @returns {boolean} True if container should be running
@@ -279,8 +259,6 @@ module.exports = {
   createSyncthingFolderConfig,
   ensureStfolderExists,
   getContainerFolderPath,
-  getContainerDataFlags,
-  requiresSyncing,
   shouldBeRunning,
   folderNeedsUpdate,
 };

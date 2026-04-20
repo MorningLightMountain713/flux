@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const benchmarkService = require('../benchmarkService');
-const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const log = require('../../lib/log');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
@@ -65,44 +64,6 @@ async function decryptAesKeyWithRsaKey(appName, daemonHeight, enterpriseKey, own
   } else {
     throw new Error('Error getting decrypted AES key.');
   }
-}
-
-/**
- * Check and decrypt app specifications if enterprise.
- *
- * Facade retained for the ~15 legacy callsites that still work in
- * plain-object mode. New class-instance consumers should talk to
- * FluxOSLegacyCryptoProvider + EncryptedSpecV8.decrypt() directly.
- *
- * Accepts a second arg for API back-compat — historical callers passed
- * `{daemonHeight, owner}`, both of which are now ignored because fluxbenchd's
- * RSA unwrap doesn't select keys on either.
- *
- * @param {object} appSpec - Application specifications
- * @returns {Promise<object>} Decrypted specifications
- */
-async function checkAndDecryptAppSpecs(appSpec) {
-  if (!appSpec || appSpec.version < 8 || !appSpec.enterprise) {
-    return appSpec;
-  }
-
-  if (!isArcane) {
-    throw new Error('Application Specifications can only be validated on a node running Arcane OS.');
-  }
-
-  const appSpecs = JSON.parse(JSON.stringify(appSpec));
-
-  const provider = await legacyCryptoProvider.create(appSpecs.name, appSpecs.owner);
-  const plaintext = await provider.decrypt({
-    algorithm: 'AES-256-GCM',
-    ciphertext: appSpecs.enterprise,
-  });
-  const enterprise = JSON.parse(plaintext.toString('utf8'));
-
-  appSpecs.contacts = enterprise.contacts;
-  appSpecs.compose = enterprise.compose;
-
-  return appSpecs;
 }
 
 /**
@@ -172,7 +133,6 @@ async function encryptEnterpriseFromSession(appSpec, daemonHeight, enterpriseKey
 }
 
 module.exports = {
-  checkAndDecryptAppSpecs,
   encryptEnterpriseFromSession,
   encryptWithAesSession,
 };
