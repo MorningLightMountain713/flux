@@ -27,6 +27,7 @@ const {
 const {
   toCanonicalSpec,
   decryptIfEnterprise,
+  deserializeSpec,
 } = require('../utils/specCutover');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
@@ -1086,14 +1087,11 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
         await appInstaller.installApplicationSoft(appComponentSpecs, appName, isComponent, res, appSpecifications);
       }
 
-      // Restore syncthing cache for apps with syncthing data to prevent data deletion
-      // This is necessary because cache might be lost (service restart) or corrupted (firstEncounterSkipped flag)
-      // During soft redeploy, data is preserved, so we mark apps as already synced
+      const redeploySpec = await deserializeSpec(appSpecifications).catch(() => null);
       // eslint-disable-next-line no-restricted-syntax
-      for (const appComponentSpecs of specificationsToInstall.compose) {
-        const hasSyncthingData = appComponentSpecs.containerData && (appComponentSpecs.containerData.includes('g:') || appComponentSpecs.containerData.includes('r:'));
-        if (hasSyncthingData) {
-          const identifier = `${appComponentSpecs.name}_${appName}`;
+      for (const [compName, comp] of Object.entries(redeploySpec?.components || {})) {
+        if (comp.persistentStorage?.hasSyncthing()) {
+          const identifier = `${compName}_${appName}`;
           const appId = dockerService.getAppIdentifier(identifier);
           globalState.receiveOnlySyncthingAppsCache.set(appId, {
             restarted: true,
@@ -1106,9 +1104,9 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
     } else {
       await appInstaller.installApplicationSoft(specificationsToInstall, appName, isComponent, res, appSpecifications);
 
-      // Restore syncthing cache for non-compose apps with syncthing data
-      const hasSyncthingData = specificationsToInstall.containerData && (specificationsToInstall.containerData.includes('g:') || specificationsToInstall.containerData.includes('r:'));
-      if (hasSyncthingData) {
+      const redeploySpec = await deserializeSpec(appSpecifications).catch(() => null);
+      const singleComp = redeploySpec ? Object.values(redeploySpec.components)[0] : null;
+      if (singleComp?.persistentStorage?.hasSyncthing()) {
         const identifier = isComponent ? `${specificationsToInstall.name}_${appName}` : appName;
         const appId = dockerService.getAppIdentifier(identifier);
         globalState.receiveOnlySyncthingAppsCache.set(appId, {
@@ -2102,49 +2100,32 @@ async function appDockerRestart(appname) {
     const registryManager = require('../appDatabase/registryManager');
 
     const mainAppName = appname.split('_')[1] || appname;
+    const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
+    if (!appSpecs) {
+      throw new Error('Application not found');
+    }
+    const spec = await deserializeSpec(appSpecs).catch(() => null);
     const isComponent = appname.includes('_');
     if (isComponent) {
-      // For component apps, fetch full specifications to ensure mount paths exist
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
-        throw new Error('Application not found');
-      }
-      // Find the specific component
       const componentName = appname.split('_')[0];
-      const componentSpec = appSpecs.compose.find((comp) => comp.name === componentName);
-      if (componentSpec && componentSpec.containerData) {
-        // Ensure mount paths exist before restarting (handles Syncthing cleanup)
+      const comp = spec?.components?.[componentName];
+      if (comp?.persistentStorage) {
         // eslint-disable-next-line no-use-before-define
-        await ensureMountPathsExist(componentSpec, mainAppName, true, appSpecs);
+        await ensureMountPathsExist(appSpecs.compose?.find((c) => c.name === componentName) || appSpecs, mainAppName, true, appSpecs);
       }
       await dockerService.appDockerRestart(appname);
       startAppMonitoring(appname);
     } else {
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
-        throw new Error('Application not found');
-      }
-      if (appSpecs.version <= 3) {
-        // Ensure mount paths exist before restarting (handles Syncthing cleanup)
-        if (appSpecs.containerData) {
-          // eslint-disable-next-line no-use-before-define
-          await ensureMountPathsExist(appSpecs, mainAppName, false, null);
+      for (const [compName, comp] of Object.entries(spec?.components || {})) {
+        if (comp.persistentStorage) {
+          const compPlain = appSpecs.compose?.find((c) => c.name === compName) || appSpecs;
+          // eslint-disable-next-line no-await-in-loop, no-use-before-define
+          await ensureMountPathsExist(compPlain, mainAppName, Object.keys(spec.components).length > 1, appSpecs);
         }
-        await dockerService.appDockerRestart(appname);
-        startAppMonitoring(appname);
-      } else {
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecs.compose) {
-          // Ensure mount paths exist before restarting (handles Syncthing cleanup)
-          // eslint-disable-next-line no-await-in-loop
-          if (appComponent.containerData) {
-            // eslint-disable-next-line no-await-in-loop, no-use-before-define
-            await ensureMountPathsExist(appComponent, appSpecs.name, true, appSpecs);
-          }
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerRestart(`${appComponent.name}_${appSpecs.name}`);
-          startAppMonitoring(`${appComponent.name}_${appSpecs.name}`);
-        }
+        const identifier = Object.keys(spec.components).length > 1 ? `${compName}_${mainAppName}` : mainAppName;
+        // eslint-disable-next-line no-await-in-loop
+        await dockerService.appDockerRestart(identifier);
+        startAppMonitoring(identifier);
       }
     }
   } catch (error) {
@@ -2237,12 +2218,10 @@ async function appendBackupTask(req, res) {
       // eslint-disable-next-line global-require
       const registryManager = require('../appDatabase/registryManager');
       const appDetails = await registryManager.getApplicationGlobalSpecifications(appname);
-      // eslint-disable-next-line no-restricted-syntax
-      const syncthing = appDetails.compose.find((comp) => comp.containerData.includes('g:') || comp.containerData.includes('r:') || comp.containerData.includes('s:'));
-      if (syncthing) {
-        // eslint-disable-next-line no-await-in-loop
+      const appSpec = await deserializeSpec(appDetails).catch(() => null);
+      const hasSyncthing = appSpec && appSpec.hasSyncthing();
+      if (hasSyncthing) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
-        // eslint-disable-next-line no-await-in-loop
         await stopSyncthingApp(appname, res);
       }
 
@@ -2279,14 +2258,14 @@ async function appendBackupTask(req, res) {
       }
       await serviceHelper.delay(5 * 1000);
       await sendChunk(res, 'Starting application...\n');
-      if (!syncthing) {
+      if (!hasSyncthing) {
         await appDockerStart(appname);
       } else {
-        const componentsWithoutGSyncthing = appDetails.compose.filter((comp) => !comp.containerData.includes('g:'));
-        // eslint-disable-next-line no-restricted-syntax
-        for (const component of componentsWithoutGSyncthing) {
-          // eslint-disable-next-line no-await-in-loop
-          await appDockerStart(`${component.name}_${appname}`);
+        for (const [compName, comp] of Object.entries(appSpec.components)) {
+          if (comp.persistentStorage?.sync?.mode !== 'activeStandby') {
+            // eslint-disable-next-line no-await-in-loop
+            await appDockerStart(`${compName}_${appname}`);
+          }
         }
       }
       await sendChunk(res, 'Finalizing...\n');
@@ -2358,12 +2337,10 @@ async function appendRestoreTask(req, res) {
       // eslint-disable-next-line global-require
       const registryManager = require('../appDatabase/registryManager');
       const appDetails = await registryManager.getApplicationGlobalSpecifications(appname);
-      // eslint-disable-next-line no-restricted-syntax
-      const syncthing = appDetails.compose.find((comp) => comp.containerData.includes('g:') || comp.containerData.includes('r:') || comp.containerData.includes('s:'));
-      if (syncthing) {
-        // eslint-disable-next-line no-await-in-loop
+      const restoreSpec = await deserializeSpec(appDetails).catch(() => null);
+      const restoreHasSyncthing = restoreSpec && restoreSpec.hasSyncthing();
+      if (restoreHasSyncthing) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
-        // eslint-disable-next-line no-await-in-loop
         await stopSyncthingApp(appname, res);
       }
       await sendChunk(res, 'Stopping application...\n');
@@ -2424,7 +2401,8 @@ async function appendRestoreTask(req, res) {
             // eslint-disable-next-line no-await-in-loop
             await IOUtils.removeFile(tarGzPath);
           }
-          const syncthingAux = appDetails.compose.find((comp) => comp.name === component.component && (comp.containerData.includes('g:') || comp.containerData.includes('r:')));
+          const restoreComp = restoreSpec?.components?.[component.component];
+          const syncthingAux = restoreComp?.persistentStorage?.hasSyncthing();
           if (syncthingAux) {
             // eslint-disable-next-line global-require
             const identifier = `${component.component}_${appname}`;
@@ -3631,20 +3609,19 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
       httpsAgent: agent,
     };
 
-    // Cleanup stale entries from maps to prevent memory leaks
     const validIdentifiers = new Set();
     // eslint-disable-next-line no-restricted-syntax
     for (const app of appsInstalled.data) {
-      if (app.version <= 3) {
-        if (app.containerData && app.containerData.includes('g:')) {
-          validIdentifiers.add(app.name);
-        }
-      } else if (app.compose) {
-        // eslint-disable-next-line no-restricted-syntax
-        for (const comp of app.compose) {
-          if (comp.containerData && comp.containerData.includes('g:')) {
-            validIdentifiers.add(`${comp.name}_${app.name}`);
-          }
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await deserializeSpec(app).catch(() => null);
+      if (!spec) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      for (const [compName, comp] of Object.entries(spec.components)) {
+        if (comp.persistentStorage?.sync?.mode === 'activeStandby') {
+          const id = Object.keys(spec.components).length === 1 ? app.name : `${compName}_${app.name}`;
+          validIdentifiers.add(id);
         }
       }
     }
@@ -3680,19 +3657,16 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
         // eslint-disable-next-line no-continue
         continue;
       }
-      if (installedApp.version <= 3) {
-        identifier = installedApp.name;
-        appId = dockerService.getAppIdentifier(identifier);
-        // Check all g: mode apps, not just those in cache with restarted flag
-        // The cache tracks sync state, but shouldn't gate primary selection
-        needsToBeChecked = installedApp.containerData.includes('g:');
-      } else {
-        const componentUsingMasterSlave = installedApp.compose.find((comp) => comp.containerData.includes('g:'));
-        if (componentUsingMasterSlave) {
-          identifier = `${componentUsingMasterSlave.name}_${installedApp.name}`;
-          appId = dockerService.getAppIdentifier(identifier);
-          // Check all g: mode apps, not just those in cache with restarted flag
-          needsToBeChecked = true;
+      // eslint-disable-next-line no-await-in-loop
+      const installedSpec = await deserializeSpec(installedApp).catch(() => null);
+      if (installedSpec) {
+        for (const [compName, comp] of Object.entries(installedSpec.components)) {
+          if (comp.persistentStorage?.sync?.mode === 'activeStandby') {
+            identifier = Object.keys(installedSpec.components).length === 1 ? installedApp.name : `${compName}_${installedApp.name}`;
+            appId = dockerService.getAppIdentifier(identifier);
+            needsToBeChecked = true;
+            break;
+          }
         }
       }
       if (needsToBeChecked) {
