@@ -8,8 +8,7 @@ const log = require('../../lib/log');
 const upnpService = require('../upnpService');
 const serviceHelper = require('../serviceHelper');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { specificationFormatter } = require('../utils/appUtilities');
+const { decryptIfEnterprise } = require('../utils/specCutover');
 const { localAppsInformation, globalAppsInformation } = require('../utils/appConstants');
 
 // Global cache for failed nodes
@@ -72,20 +71,10 @@ async function assignedPortsInstalledApps() {
   const projection = { projection: { _id: 0 } };
   const results = await dbHelper.findInDatabase(database, localAppsInformation, query, projection);
   const decryptedApps = [];
-  // ToDo: move the functions around so we can remove no-use-before-define
   // eslint-disable-next-line no-restricted-syntax
   for (const spec of results) {
-    const isEnterprise = Boolean(
-      spec.version >= 8 && spec.enterprise,
-    );
-    if (isEnterprise) {
-      // eslint-disable-next-line no-await-in-loop
-      const decrypted = await checkAndDecryptAppSpecs(spec);
-      const formatted = specificationFormatter(decrypted);
-      decryptedApps.push(formatted);
-    } else {
-      decryptedApps.push(spec);
-    }
+    // eslint-disable-next-line no-await-in-loop
+    decryptedApps.push(await decryptIfEnterprise(spec));
   }
   const apps = [];
   decryptedApps.forEach((app) => {

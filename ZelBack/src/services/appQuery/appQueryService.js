@@ -5,59 +5,46 @@ const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
 const appConstants = require('../utils/appConstants');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { specificationFormatter } = require('../utils/appUtilities');
+const { deserializeSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
+const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const fluxCaching = require('../utils/cacheManager');
 const log = require('../../lib/log');
 
 // Database collections
 const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
 
-/**
- * Decrypt enterprise apps from a list of apps
- * @param {Array} apps - Array of app specifications
- * @param {Object} options - Options for decryption
- * @param {boolean} options.formatSpecs - Whether to format specs (strips metadata like hash, height). Default: true
- * @returns {Promise<Array>} Array of decrypted app specifications
- */
-async function decryptEnterpriseApps(apps, options = {}) {
-  const { formatSpecs = true } = options;
+async function decryptEnterpriseApps(apps) {
   const decryptedApps = [];
   const cache = fluxCaching.default.enterpriseAppDecryptionCache;
+  const { EncryptedSpecBase } = await getSpecBackend();
 
   // eslint-disable-next-line no-restricted-syntax
   for (const spec of apps) {
-    const isEnterprise = Boolean(
-      spec.version >= 8 && spec.enterprise,
-    );
-    if (isEnterprise) {
-      try {
-        // Use app hash as cache key
-        const cacheKey = spec.hash;
-
-        // Check if decrypted app is in cache
-        let decrypted = cache.get(cacheKey);
-        if (decrypted) {
-          log.info(`Using cached decrypted app for ${spec.name} (${cacheKey})`);
-        } else {
-          // Decrypt and cache the app (unformatted)
-          // eslint-disable-next-line no-await-in-loop
-          decrypted = await checkAndDecryptAppSpecs(spec);
-
-          // Store unformatted in cache with 7-day TTL (configured in cacheManager)
-          cache.set(cacheKey, decrypted);
-          log.info(`Cached decrypted app for ${spec.name} (${cacheKey})`);
-        }
-
-        // Apply formatting if requested
-        const result = formatSpecs ? specificationFormatter(decrypted) : decrypted;
-        decryptedApps.push(result);
-      } catch (error) {
-        log.error(`Failed to decrypt enterprise app ${spec.name}: ${error.message}`);
-        // If decryption fails, we still want to include the app but log the error
-        decryptedApps.push(spec);
+    // eslint-disable-next-line no-await-in-loop
+    const wireSpec = await deserializeSpec(spec).catch(() => null);
+    if (!(wireSpec instanceof EncryptedSpecBase)) {
+      decryptedApps.push(spec);
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    try {
+      const cacheKey = spec.hash;
+      let decrypted = cache.get(cacheKey);
+      if (decrypted) {
+        log.info(`Using cached decrypted app for ${spec.name} (${cacheKey})`);
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+        const canonical = await wireSpec.decrypt(provider);
+        decrypted = canonical.spec.serialize();
+        decrypted.enterprise = spec.enterprise;
+        cache.set(cacheKey, decrypted);
+        log.info(`Cached decrypted app for ${spec.name} (${cacheKey})`);
       }
-    } else {
+      decryptedApps.push(decrypted);
+    } catch (error) {
+      log.error(`Failed to decrypt enterprise app ${spec.name}: ${error.message}`);
       decryptedApps.push(spec);
     }
   }

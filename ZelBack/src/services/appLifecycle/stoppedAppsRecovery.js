@@ -17,33 +17,9 @@ const registryManager = require('../appDatabase/registryManager');
 const advancedWorkflows = require('./advancedWorkflows');
 const appUninstaller = require('./appUninstaller');
 const { localAppsInformation } = require('../utils/appConstants');
+const { deserializeSpec } = require('../utils/specCutover');
 
 const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
-
-/**
- * Check if an app uses g: syncthing mode in ANY of its components
- * For legacy apps (v <= 3), checks containerData at root level
- * For compose apps (v > 3), checks containerData in each component
- * @param {Object} appSpec - App specification
- * @returns {boolean} True if ANY component uses g: syncthing mode
- */
-function appUsesGSyncthingMode(appSpec) {
-  if (!appSpec) {
-    return false;
-  }
-
-  // For compose apps (version >= 4), check all components
-  if (appSpec.compose && appSpec.compose.length > 0) {
-    return appSpec.compose.some((comp) => comp.containerData && comp.containerData.includes('g:'));
-  }
-
-  // For legacy single-component apps (version <= 3), check root containerData
-  if (appSpec.containerData) {
-    return appSpec.containerData.includes('g:');
-  }
-
-  return false;
-}
 
 /**
  * Check if an app still has a valid (non-expired) location record for this node's IP.
@@ -246,9 +222,10 @@ async function startStoppedAppsOnBoot() {
         continue;
       }
 
-      // Check if ANY component of the app uses g: syncthing mode
-      if (appUsesGSyncthingMode(appSpec)) {
-        log.info(`stoppedAppsRecovery - App ${appName} uses g: syncthing mode, skipping all its containers (managed by masterSlaveApps)`);
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await deserializeSpec(appSpec).catch(() => null);
+      if (spec && spec.hasActiveStandbySyncthing()) {
+        log.info(`stoppedAppsRecovery - App ${appName} uses activeStandby syncthing, skipping all its containers (managed by masterSlaveApps)`);
         results.appsSkippedGMode.push(appName);
         // eslint-disable-next-line no-continue
         continue;
@@ -318,7 +295,6 @@ async function startStoppedAppsOnBoot() {
 module.exports = {
   startStoppedAppsOnBoot,
   getStoppedFluxContainers,
-  appUsesGSyncthingMode,
   appHasValidLocationOnNode,
   parseContainerName,
 };

@@ -443,7 +443,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
       throw new Error('Unable to check running Apps');
     }
     const appsInstalled = installedAppsRes.data;
-    const decryptedAppsInstalled = await appQueryService.decryptEnterpriseApps(appsInstalled, { formatSpecs: false });
+    const decryptedAppsInstalled = await appQueryService.decryptEnterpriseApps(appsInstalled);
     const runningApps = runningAppsRes.data;
     const installedAppComponentNames = [];
     decryptedAppsInstalled.forEach((app) => {

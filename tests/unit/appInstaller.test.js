@@ -1116,7 +1116,7 @@ describe('appInstaller tests', () => {
       }
 
       expect(decryptEnterpriseAppsStub.calledOnce).to.be.true;
-      expect(decryptEnterpriseAppsStub.calledWith([encryptedApp], { formatSpecs: false })).to.be.true;
+      expect(decryptEnterpriseAppsStub.calledWith([encryptedApp])).to.be.true;
       // Decrypted enterprise app has a stopped component (MyComponent_enterpriseapp123 not running)
       // so pruneContainers should NOT be called
       expect(pruneContainersStub.called).to.be.false;

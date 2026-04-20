@@ -65,23 +65,6 @@ function returnNodeSpecs() {
 }
 
 /**
- * Total app hardware requirements (CPU, RAM, HDD).
- *
- * Expects a FluxAppSpecBase class instance — callers hydrate plain blobs
- * via `specCutover.decryptToCleartextClass()` first. Tiered resources are dead (see
- * TIERED_DEPRECATION.md); the legacy `myNodeTier` argument is gone.
- *
- * @param {import('@runonflux/flux-spec').FluxAppSpecBase} spec
- * @returns {Promise<{cpu: number, ram: number, hdd: number}>}
- */
-async function totalAppHWRequirements(spec) {
-  const { DeploymentSpec } = await getSpecBackend();
-  const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
-  const { cpu, memory: ram, storage: hdd } = deployment.totalResources();
-  return { cpu, ram, hdd };
-}
-
-/**
  * Get full node geolocation string
  * @returns {Promise<string>} Full geolocation string
  */
@@ -357,7 +340,10 @@ async function checkAppHWRequirements(appSpecs) {
     throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
   }
 
-  const appHWrequirements = await totalAppHWRequirements(appSpecs);
+  const { DeploymentSpec } = await getSpecBackend();
+  const deployment = DeploymentSpec.fromSpec(appSpecs, appsFolder);
+  const { cpu, memory, storage } = deployment.totalResources();
+
   const specs = await getNodeSpecs();
   const totalSpaceOnNode = specs.ssdStorage;
   if (totalSpaceOnNode === 0) {
@@ -366,15 +352,14 @@ async function checkAppHWRequirements(appSpecs) {
   const useableSpaceOnNode = totalSpaceOnNode * 0.95 - config.lockedSystemResources.hdd - config.lockedSystemResources.extrahdd;
   const hddLockedByApps = resourcesLocked.data.appsHddLocked;
   const availableSpaceForApps = useableSpaceOnNode - hddLockedByApps;
-  // bigger or equal so we have the 1 gb free...
-  if (appHWrequirements.hdd > availableSpaceForApps) {
+  if (storage > availableSpaceForApps) {
     throw new Error('Insufficient space on Flux Node to spawn an application');
   }
 
   const totalCpuOnNode = specs.cpuCores * 10;
   const useableCpuOnNode = totalCpuOnNode - config.lockedSystemResources.cpu;
   const cpuLockedByApps = resourcesLocked.data.appsCpusLocked * 10;
-  const adjustedAppCpu = appHWrequirements.cpu * 10;
+  const adjustedAppCpu = cpu * 10;
   const availableCpuForApps = useableCpuOnNode - cpuLockedByApps;
   if (adjustedAppCpu > availableCpuForApps) {
     throw new Error('Insufficient CPU power on Flux Node to spawn an application');
@@ -384,7 +369,7 @@ async function checkAppHWRequirements(appSpecs) {
   const useableRamOnNode = totalRamOnNode - config.lockedSystemResources.ram;
   const ramLockedByApps = resourcesLocked.data.appsRamLocked;
   const availableRamForApps = useableRamOnNode - ramLockedByApps;
-  if (appHWrequirements.ram > availableRamForApps) {
+  if (memory > availableRamForApps) {
     throw new Error('Insufficient RAM on Flux Node to spawn an application');
   }
 
@@ -411,7 +396,6 @@ module.exports = {
   getNodeSpecs,
   setNodeSpecs,
   returnNodeSpecs,
-  totalAppHWRequirements,
   checkAppHWRequirements,
   checkAppRequirements,
   nodeFullGeolocation,

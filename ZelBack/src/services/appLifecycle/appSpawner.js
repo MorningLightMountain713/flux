@@ -19,6 +19,8 @@ const systemIntegration = require('../appSystem/systemIntegration');
 const globalState = require('../utils/globalState');
 const { FluxCacheManager } = require('../utils/cacheManager');
 const { deserializeSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
 // const advancedWorkflows = require('./advancedWorkflows'); // Moved to dynamic require to avoid circular dependency
 
 let appInstaller; // Will be initialized to avoid circular dependency
@@ -454,9 +456,9 @@ async function trySpawningGlobalApplication() {
     }
 
     if (!appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater) {
-      const appHWrequirements = await hwRequirements.totalAppHWRequirements(
-        await deserializeSpec(appSpecifications),
-      );
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(await deserializeSpec(appSpecifications), appsFolder);
+      const appHWrequirements = deployment.totalResources();
       let delay = false;
       const isArcane = Boolean(process.env.FLUXOS_PATH);
       if (!appToRunAux.enterprise && isArcane) {
@@ -505,7 +507,7 @@ async function trySpawningGlobalApplication() {
         delay = true;
       } else if (appToRunAux.nodes.length > 0 && appToRunAux.nodes.find((ip) => ip === myIP)) {
         log.info(`trySpawningGlobalApplication - App ${appToRun} specs have this node as target ip`);
-      }else if (appToRunAux.nodes.length === 0 && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.ram < 6000 && appHWrequirements.hdd < 150) {
+      }else if (appToRunAux.nodes.length === 0 && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
         const appToCheck = {
           timeToCheck: appToRunAux.enterprise ? Date.now() + 0.5 * 60 * 60 * 1000 : Date.now() + 1.95 * 60 * 60 * 1000,
           appName: appToRun,
@@ -516,7 +518,7 @@ async function trySpawningGlobalApplication() {
         globalState.appsToBeCheckedLater.push(appToCheck);
         globalState.trySpawningGlobalAppCache.delete(appHash);
         delay = true;
-      } else if (appToRunAux.nodes.length === 0 && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.ram < 29000 && appHWrequirements.hdd < 370) {
+      } else if (appToRunAux.nodes.length === 0 && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memory < 29000 && appHWrequirements.storage < 370) {
         const appToCheck = {
           timeToCheck: appToRunAux.enterprise ? Date.now() + 0.35 * 60 * 60 * 1000 : Date.now() + 1.45 * 60 * 60 * 1000,
           appName: appToRun,
@@ -527,7 +529,7 @@ async function trySpawningGlobalApplication() {
         globalState.appsToBeCheckedLater.push(appToCheck);
         globalState.trySpawningGlobalAppCache.delete(appHash);
         delay = true;
-      } else if (appToRunAux.nodes.length === 0 && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.ram < 6000 && appHWrequirements.hdd < 150) {
+      } else if (appToRunAux.nodes.length === 0 && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
         const appToCheck = {
           timeToCheck: appToRunAux.enterprise ? Date.now() + 0.2 * 60 * 60 * 1000 : Date.now() + 0.95 * 60 * 60 * 1000,
           appName: appToRun,

@@ -12,6 +12,8 @@ const daemonServiceFluxnodeRpcs = require('../daemonService/daemonServiceFluxnod
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const benchmarkService = require('../benchmarkService');
 const hwRequirements = require('../appRequirements/hwRequirements');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
 const daemonServiceBenchmarkRpcs = require('../daemonService/daemonServiceBenchmarkRpcs');
 const generalService = require('../generalService');
 
@@ -237,7 +239,9 @@ async function checkAppHWRequirements(appSpecs) {
     throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
   }
 
-  const appHWrequirements = await hwRequirements.totalAppHWRequirements(appSpecs);
+  const { DeploymentSpec } = await getSpecBackend();
+  const { cpu, memory, storage } = DeploymentSpec.fromSpec(appSpecs, appsFolder).totalResources();
+
   await getNodeSpecs();
   const totalSpaceOnNode = nodeSpecs.ssdStorage;
   if (totalSpaceOnNode === 0) {
@@ -246,15 +250,14 @@ async function checkAppHWRequirements(appSpecs) {
   const useableSpaceOnNode = totalSpaceOnNode * 0.95 - config.lockedSystemResources.hdd - config.lockedSystemResources.extrahdd;
   const hddLockedByApps = resourcesLocked.data.appsHddLocked;
   const availableSpaceForApps = useableSpaceOnNode - hddLockedByApps;
-  // bigger or equal so we have the 1 gb free...
-  if (appHWrequirements.hdd > availableSpaceForApps) {
+  if (storage > availableSpaceForApps) {
     throw new Error('Insufficient space on Flux Node to spawn an application');
   }
 
   const totalCpuOnNode = nodeSpecs.cpuCores * 10;
   const useableCpuOnNode = totalCpuOnNode - config.lockedSystemResources.cpu;
   const cpuLockedByApps = resourcesLocked.data.appsCpusLocked * 10;
-  const adjustedAppCpu = appHWrequirements.cpu * 10;
+  const adjustedAppCpu = cpu * 10;
   const availableCpuForApps = useableCpuOnNode - cpuLockedByApps;
   if (adjustedAppCpu > availableCpuForApps) {
     throw new Error('Insufficient CPU power on Flux Node to spawn an application');
@@ -264,7 +267,7 @@ async function checkAppHWRequirements(appSpecs) {
   const useableRamOnNode = totalRamOnNode - config.lockedSystemResources.ram;
   const ramLockedByApps = resourcesLocked.data.appsRamLocked;
   const availableRamForApps = useableRamOnNode - ramLockedByApps;
-  if (appHWrequirements.ram > availableRamForApps) {
+  if (memory > availableRamForApps) {
     throw new Error('Insufficient RAM on Flux Node to spawn an application');
   }
 

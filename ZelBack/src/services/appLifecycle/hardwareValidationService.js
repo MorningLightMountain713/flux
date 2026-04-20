@@ -17,6 +17,8 @@ const hwRequirements = require('../appRequirements/hwRequirements');
 const appUninstaller = require('./appUninstaller');
 const serviceHelper = require('../serviceHelper');
 const { deserializeSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
 
 const REMOVAL_DELAY = 5000; // 5 seconds between removals
 
@@ -113,7 +115,7 @@ async function validateAppsCumulatively(installedApps) {
       try {
         // getApplicationGlobalSpecifications returns cleartext plain form
         // (decrypts internally for encrypted wire). Hydrate to a class for
-        // the class-first totalAppHWRequirements.
+        // DeploymentSpec.totalResources().
         const appSpecPlain = await registryManager.getApplicationGlobalSpecifications(app.name);
 
         if (!appSpecPlain) {
@@ -122,16 +124,18 @@ async function validateAppsCumulatively(installedApps) {
         }
 
         const appSpec = await deserializeSpec(appSpecPlain);
-        const appResources = await hwRequirements.totalAppHWRequirements(appSpec);
-        const appCpu = appResources.cpu * 10;
-        const appRam = appResources.ram;
-        const appHdd = appResources.hdd + config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap;
+        const { DeploymentSpec } = await getSpecBackend();
+        const deployment = DeploymentSpec.fromSpec(appSpec, appsFolder);
+        const { cpu, memory, storage } = deployment.totalResources();
+        const appCpu = cpu * 10;
+        const appRam = memory;
+        const appHdd = storage + config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap;
 
         // Check if this app individually exceeds node capacity
         if (appCpu > useableCpuOnNode) {
           appsToRemove.push({
             name: app.name,
-            reason: `App requires ${appResources.cpu} CPU but node only has ${useableCpuOnNode / 10} CPU available`,
+            reason: `App requires ${cpu} CPU but node only has ${useableCpuOnNode / 10} CPU available`,
             height: app.height || 0,
           });
           log.warn(`hardwareValidationService - ${app.name} individually exceeds CPU capacity`);

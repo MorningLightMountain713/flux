@@ -1102,7 +1102,7 @@ async function adjustExternalIP(ip) {
       // eslint-disable-next-line global-require
       const appController = require('./appManagement/appController');
       // eslint-disable-next-line global-require
-      const enterpriseHelper = require('./utils/enterpriseHelper');
+      const { decryptIfEnterprise } = require('./utils/specCutover');
       let apps = await appQueryService.installedApps();
       if (apps.status === 'success' && apps.data.length > 0) {
         apps = apps.data;
@@ -1113,16 +1113,13 @@ async function adjustExternalIP(ip) {
           // Only decrypt enterprise app specs if the app has enterprise field (v8+)
           if (app.version >= 7 && (app.staticip === true || app.enterprise)) {
             let appSpecs = app;
-            // Decrypt enterprise app specs if needed (v8+ with enterprise field)
-            if (app.enterprise) {
-              try {
-                // eslint-disable-next-line no-await-in-loop
-                appSpecs = await enterpriseHelper.checkAndDecryptAppSpecs(app);
-              } catch (decryptError) {
-                log.error(`Failed to decrypt enterprise specs for ${app.name}: ${decryptError.message}`);
-                // eslint-disable-next-line no-continue
-                continue;
-              }
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              appSpecs = await decryptIfEnterprise(app);
+            } catch (decryptError) {
+              log.error(`Failed to decrypt enterprise specs for ${app.name}: ${decryptError.message}`);
+              // eslint-disable-next-line no-continue
+              continue;
             }
             if (appSpecs.staticip === true) {
               log.info(`Application ${app.name} requires static IP but node IP has changed, uninstalling app`);

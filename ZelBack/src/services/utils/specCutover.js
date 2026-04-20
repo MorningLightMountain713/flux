@@ -105,7 +105,7 @@ async function decryptIfEnterprise(plainSpec) {
  * form, checking metadata like name/owner) should use `deserializeSpec`
  * directly and branch with `instanceof EncryptedSpecBase`. This helper
  * is specifically for the case "I need a cleartext class instance to
- * pass to a class-first helper (appPricePerMonth, totalAppHWRequirements,
+ * pass to a class-first helper (appPricePerMonth, DeploymentSpec,
  * etc.)".
  *
  * @param {object} plainSpec

@@ -9,7 +9,8 @@ const { appPricePerMonth } = require('./appUtilities');
 const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const registryManager = require('../appDatabase/registryManager');
 const cacheManager = require('./cacheManager').default;
-const hwRequirements = require('../appRequirements/hwRequirements');
+const { getSpecBackend } = require('./specLibs');
+const { appsFolder } = require('./appConstants');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const log = require('../../lib/log');
 
@@ -19,21 +20,6 @@ const globalAppsInformation = config.database.appsglobal.collections.appsInforma
 // Cache for fiat rates
 const myShortCache = cacheManager.fluxRatesCache;
 const myLongCache = cacheManager.appPriceBlockedRepoCache;
-
-/**
- * Whether any component replicates its primary volume via Syncthing in
- * `activeStandby` mode (the v1-v8 `g:` DSL flag; v9 explicit sync mode).
- * Used by the pricing path to apply the mirror-storage discount.
- *
- * @param {import('@runonflux/flux-spec').FluxAppSpecBase} spec
- * @returns {boolean}
- */
-function hasActiveStandbySync(spec) {
-  return Object.values(spec.components || {}).some((c) => {
-    const ps = c.persistentStorage;
-    return ps && ps.sync && ps.sync.mode === 'activeStandby';
-  });
-}
 
 /**
  * Get app Flux on-chain price
@@ -100,14 +86,15 @@ async function getAppFluxOnChainPrice(appSpecification) {
       }
     }
 
-    const appHWrequirements = await hwRequirements.totalAppHWRequirements(spec);
-    if (appHWrequirements.cpu < 3 && appHWrequirements.ram < 6000 && appHWrequirements.hdd < 150) {
+    const { DeploymentSpec } = await getSpecBackend();
+    const { cpu, memory, storage } = DeploymentSpec.fromSpec(spec, appsFolder).totalResources();
+    if (cpu < 3 && memory < 6000 && storage < 150) {
       actualPriceToPay *= 0.8;
-    } else if (appHWrequirements.cpu < 7 && appHWrequirements.ram < 29000 && appHWrequirements.hdd < 370) {
+    } else if (cpu < 7 && memory < 29000 && storage < 370) {
       actualPriceToPay *= 0.9;
     }
 
-    if (hasActiveStandbySync(spec)) {
+    if (spec.hasActiveStandbySyncthing()) {
       actualPriceToPay *= 0.8;
     }
 
@@ -346,17 +333,18 @@ async function getAppFiatAndFluxPrice(req, res) {
         }
       }
 
-      const appHWrequirements = await hwRequirements.totalAppHWRequirements(spec);
+      const { DeploymentSpec: DS } = await getSpecBackend();
+      const { cpu, memory, storage } = DS.fromSpec(spec, appsFolder).totalResources();
       const applyHWDiscount = spec.version <= 3 || spec.instances < 4;
       if (applyHWDiscount) {
-        if (appHWrequirements.cpu < 3 && appHWrequirements.ram < 6000 && appHWrequirements.hdd < 150) {
+        if (cpu < 3 && memory < 6000 && storage < 150) {
           actualPriceToPay *= 0.8;
-        } else if (appHWrequirements.cpu < 7 && appHWrequirements.ram < 29000 && appHWrequirements.hdd < 370) {
+        } else if (cpu < 7 && memory < 29000 && storage < 370) {
           actualPriceToPay *= 0.9;
         }
       }
 
-      if (hasActiveStandbySync(spec)) {
+      if (spec.hasActiveStandbySyncthing()) {
         actualPriceToPay *= 0.8;
       }
 

@@ -14,6 +14,7 @@ const appInspector = require('../appManagement/appInspector');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appInstaller = require('../appLifecycle/appInstaller');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
+const { deserializeSpec } = require('../utils/specCutover');
 const { localAppsInformation } = require('../utils/appConstants');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
@@ -42,14 +43,13 @@ async function recreateMissingContainers(componentIdentifier) {
     throw new Error(`App ${mainAppName} not found in local database`);
   }
 
-  appSpec = await decryptEnterpriseApps([appSpec], { formatSpecs: false });
+  appSpec = await decryptEnterpriseApps([appSpec]);
   appSpec = appSpec[0];
 
   if (!appSpec.compose || appSpec.compose.length === 0) {
     throw new Error(`App ${mainAppName} has no components to install`);
   }
 
-  const tier = await generalService.nodeTier();
   const isComponent = componentIdentifier.includes('_');
 
   if (isComponent) {
@@ -58,21 +58,9 @@ async function recreateMissingContainers(componentIdentifier) {
     if (!componentSpec) {
       throw new Error(`Component ${componentName} not found in app ${mainAppName}`);
     }
-    const hddTier = `hdd${tier}`;
-    const ramTier = `ram${tier}`;
-    const cpuTier = `cpu${tier}`;
-    componentSpec.cpu = componentSpec[cpuTier] || componentSpec.cpu;
-    componentSpec.ram = componentSpec[ramTier] || componentSpec.ram;
-    componentSpec.hdd = componentSpec[hddTier] || componentSpec.hdd;
     await appInstaller.installApplicationHard(componentSpec, mainAppName, true, null, appSpec);
   } else {
     for (const componentSpec of appSpec.compose) {
-      const hddTier = `hdd${tier}`;
-      const ramTier = `ram${tier}`;
-      const cpuTier = `cpu${tier}`;
-      componentSpec.cpu = componentSpec[cpuTier] || componentSpec.cpu;
-      componentSpec.ram = componentSpec[ramTier] || componentSpec.ram;
-      componentSpec.hdd = componentSpec[hddTier] || componentSpec.hdd;
       await appInstaller.installApplicationHard(componentSpec, mainAppName, true, null, appSpec);
     }
   }
@@ -171,7 +159,7 @@ async function checkAndNotifyPeersOfRunningApps(
       throw new Error('Unable to check running Apps');
     }
     let appsInstalled = installedAppsRes.data;
-    appsInstalled = await decryptEnterpriseApps(appsInstalled, { formatSpecs: false });
+    appsInstalled = await decryptEnterpriseApps(appsInstalled);
     const runningApps = runningAppsRes.data;
     const installedAppComponentNames = [];
     appsInstalled.forEach((app) => {
@@ -210,13 +198,15 @@ async function checkAndNotifyPeersOfRunningApps(
           const mainAppName = stoppedApp.split('_')[1] || stoppedApp;
           // eslint-disable-next-line no-await-in-loop
           const appDetails = await registryManager.getApplicationGlobalSpecifications(mainAppName);
-          const appInstalledMasterSlave = appsInstalled.find((app) => app.name === mainAppName);
-          const appInstalledSyncthing = appInstalledMasterSlave.compose.find((comp) => comp.containerData.includes('g:') || comp.containerData.includes('r:'));
-          const appInstalledMasterSlaveCheck = appInstalledMasterSlave.compose.find((comp) => comp.containerData.includes('g:'));
-          if (appInstalledSyncthing) {
-            masterSlaveAppsInstalled.push(appInstalledMasterSlave);
+          const appInstalledPlain = appsInstalled.find((app) => app.name === mainAppName);
+          // eslint-disable-next-line no-await-in-loop
+          const appInstalledSpec = await deserializeSpec(appInstalledPlain).catch(() => null);
+          const appHasSyncthing = appInstalledSpec && appInstalledSpec.hasSyncthing();
+          const appHasActiveStandby = appInstalledSpec && appInstalledSpec.hasActiveStandbySyncthing();
+          if (appHasSyncthing) {
+            masterSlaveAppsInstalled.push(appInstalledPlain);
           }
-          if (appInstalledMasterSlaveCheck && appDetails) {
+          if (appHasActiveStandby && appDetails) {
             const backupSkip = backupInProgress.some((backupItem) => stoppedApp === backupItem);
             const restoreSkip = restoreInProgress.some((backupItem) => stoppedApp === backupItem);
             if (!backupSkip && !restoreSkip) {
@@ -237,7 +227,7 @@ async function checkAndNotifyPeersOfRunningApps(
               const containerExists = await dockerService.getDockerContainerOnly(stoppedApp);
 
               // Check if container exists before applying syncthing delay
-              if (containerExists && appInstalledSyncthing) {
+              if (containerExists && appHasSyncthing) {
                 const db = dbHelper.databaseConnection();
                 const database = db.db(config.database.appsglobal.database);
                 const queryFind = { name: mainAppName, ip: myIP };

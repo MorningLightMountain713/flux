@@ -53,7 +53,6 @@ async function getCredentials(repotag, repoauth, specVersion, appName) {
     }
   } else {
     // v8+: repoauth is already plain text (was inside encrypted enterprise blob)
-    // The enterprise blob was decrypted by checkAndDecryptAppSpecs() earlier
     plainRepoauth = repoauth;
   }
 
