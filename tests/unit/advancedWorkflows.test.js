@@ -1593,26 +1593,29 @@ describe('advancedWorkflows tests', () => {
     });
 
     it('should escalate to hard redeploy when component count changes for v8+ app', async () => {
+      const v8Comp = (name, tag, port) => ({ name, description: '', repotag: tag, ports: [port], containerPorts: [port], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 });
+      const v8Base = { description: 'test', owner: '1abc', instances: 3, contacts: [], geolocation: [], expire: 22000, nodes: [], staticip: false };
       const installedApp = {
+        ...v8Base,
         name: 'TestApp',
         version: 8,
         compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0' },
-          { name: 'backend', repotag: 'repo/backend:1.0' },
+          v8Comp('frontend', 'repo/frontend:1.0', 30000),
+          v8Comp('backend', 'repo/backend:1.0', 30001),
         ],
       };
 
       const newAppSpecs = {
+        ...v8Base,
         name: 'TestApp',
         version: 8,
         compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0' },
-          { name: 'backend', repotag: 'repo/backend:1.0' },
-          { name: 'database', repotag: 'repo/database:1.0' },
+          v8Comp('frontend', 'repo/frontend:1.0', 30000),
+          v8Comp('backend', 'repo/backend:1.0', 30001),
+          v8Comp('database', 'repo/database:1.0', 30002),
         ],
       };
 
-      // Stub dbHelper.findInDatabase to return the installed app
       findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase').resolves([installedApp]);
 
       // Stub appUninstaller so hardRedeploy doesn't actually try to remove the app
@@ -1652,25 +1655,28 @@ describe('advancedWorkflows tests', () => {
     });
 
     it('should escalate to hard redeploy when component names change for v8+ app', async () => {
+      const v8Comp = (name, tag, port) => ({ name, description: '', repotag: tag, ports: [port], containerPorts: [port], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 });
+      const v8Base = { description: 'test', owner: '1abc', instances: 3, contacts: [], geolocation: [], expire: 22000, nodes: [], staticip: false };
       const installedApp = {
+        ...v8Base,
         name: 'TestApp',
         version: 8,
         compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0' },
-          { name: 'backend', repotag: 'repo/backend:1.0' },
+          v8Comp('frontend', 'repo/frontend:1.0', 30000),
+          v8Comp('backend', 'repo/backend:1.0', 30001),
         ],
       };
 
       const newAppSpecs = {
+        ...v8Base,
         name: 'TestApp',
         version: 8,
         compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0' },
-          { name: 'api', repotag: 'repo/api:1.0' }, // Renamed
+          v8Comp('frontend', 'repo/frontend:1.0', 30000),
+          v8Comp('api', 'repo/api:1.0', 30001),
         ],
       };
 
-      // Stub dbHelper.findInDatabase to return the installed app
       findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase').resolves([installedApp]);
 
       // Stub appUninstaller so hardRedeploy doesn't actually try to remove the app

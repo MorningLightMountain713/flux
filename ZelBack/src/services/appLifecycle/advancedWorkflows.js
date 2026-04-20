@@ -87,55 +87,17 @@ async function getInstalledAppsFromDb(options = {}) {
 }
 
 /**
- * Ensures that v8+ specs have a compose array.
- * @param {object} appSpecification - App specification.
- * @param {string} context - Calling context.
+ * Checks if component structure changed between two specs (count or names).
+ * Accepts class instances (FluxAppSpecBase).
+ * @param {import('@runonflux/flux-spec').FluxAppSpecBase} newSpec
+ * @param {import('@runonflux/flux-spec').FluxAppSpecBase} oldSpec
+ * @returns {boolean}
  */
-function assertV8ComposeArray(appSpecification, context) {
-  if (appSpecification.version >= 8 && !Array.isArray(appSpecification.compose)) {
-    throw new Error(`${context}: Invalid compose for v${appSpecification.version} app ${appSpecification.name}`);
-  }
-}
-
-/**
- * Resolves installed app specs for v8 component structure comparison.
- * @param {object} appSpecifications - New app specifications.
- * @param {object} installedApp - Installed app from local DB.
- * @param {string} context - Calling context.
- * @returns {object|null} Comparable installed app or null.
- */
-function resolveInstalledAppForStructureComparison(appSpecifications, installedApp, context) {
-  if (!installedApp || appSpecifications.version < 8 || installedApp.version < 8) {
-    return null;
-  }
-
-  assertV8ComposeArray(appSpecifications, context);
-
-  // Enterprise app specs cannot be decrypted on non-arcane nodes. Skip comparison there.
-  if ((appSpecifications.enterprise || installedApp.enterprise) && !isArcane) {
-    log.warn(`${context}: Skipping component structure comparison for enterprise app ${appSpecifications.name} on non-arcane node.`);
-    return null;
-  }
-
-  assertV8ComposeArray(installedApp, context);
-  return installedApp;
-}
-
-/**
- * Checks if v8 component structure changed (count or names).
- * @param {object} appSpecifications - New app specifications.
- * @param {object} installedApp - Installed app specifications.
- * @returns {boolean} True when structure changed.
- */
-function hasV8ComponentStructureChange(appSpecifications, installedApp) {
-  const componentCountChanged = appSpecifications.compose.length !== installedApp.compose.length;
-  const oldNames = new Set(installedApp.compose.map((component) => component && component.name).filter(Boolean));
-  const componentNamesChanged = !appSpecifications.compose
-    .map((component) => component && component.name)
-    .filter(Boolean)
-    .every((name) => oldNames.has(name));
-
-  return componentCountChanged || componentNamesChanged;
+function hasComponentStructureChange(newSpec, oldSpec) {
+  const newNames = Object.keys(newSpec.components);
+  const oldNames = new Set(Object.keys(oldSpec.components));
+  if (newNames.length !== oldNames.size) return true;
+  return !newNames.every((name) => oldNames.has(name));
 }
 
 // Get strict application specifications
@@ -1350,32 +1312,30 @@ async function softRedeploy(appSpecs, res) {
       return;
     }
 
-    // Check if component structure changed for version 8+ apps.
     if (appSpecs.version >= 8) {
       const installedAppsRes = await getInstalledAppsFromDb({ decryptApps: true });
       if (installedAppsRes.status === 'success') {
         const installedApp = installedAppsRes.data.find((app) => app.name === appSpecs.name);
-        const installedAppForComparison = resolveInstalledAppForStructureComparison(
-          appSpecs,
-          installedApp,
-          'softRedeploy',
-        );
-
-        if (installedAppForComparison && hasV8ComponentStructureChange(appSpecs, installedAppForComparison)) {
-          log.warn(`Soft redeploy requested for ${appSpecs.name}, but component structure changed.`);
-          log.warn(`Component count: ${installedAppForComparison.compose.length} -> ${appSpecs.compose.length}`);
-          log.warn('Automatically escalating to hard redeploy for component structure safety.');
-          const escalationMessage = messageHelper.createWarningMessage(
-            `Component structure changed for v${appSpecs.version} app. Escalating to hard redeploy for safety.`,
-          );
-          if (res) {
-            res.write(serviceHelper.ensureString(escalationMessage));
-            if (res.flush) res.flush();
+        if (installedApp && installedApp.version >= 8) {
+          const newSpec = await deserializeSpec(appSpecs).catch(() => null);
+          const oldSpec = await deserializeSpec(installedApp).catch(() => null);
+          if (newSpec && oldSpec && hasComponentStructureChange(newSpec, oldSpec)) {
+            const oldCount = Object.keys(oldSpec.components).length;
+            const newCount = Object.keys(newSpec.components).length;
+            log.warn(`Soft redeploy requested for ${appSpecs.name}, but component structure changed.`);
+            log.warn(`Component count: ${oldCount} -> ${newCount}`);
+            log.warn('Automatically escalating to hard redeploy for component structure safety.');
+            const escalationMessage = messageHelper.createWarningMessage(
+              `Component structure changed for v${appSpecs.version} app. Escalating to hard redeploy for safety.`,
+            );
+            if (res) {
+              res.write(serviceHelper.ensureString(escalationMessage));
+              if (res.flush) res.flush();
+            }
+            // eslint-disable-next-line no-use-before-define
+            await hardRedeploy(appSpecs, res);
+            return;
           }
-          // Call hardRedeploy instead
-          // eslint-disable-next-line no-use-before-define
-          await hardRedeploy(appSpecs, res);
-          return;
         }
       }
     }
@@ -3281,20 +3241,20 @@ async function reinstallOldApplications() {
             // eslint-disable-next-line global-require
             const appInstaller = require('./appInstaller');
 
-            // Check if component structure changed (count or names) for version 8+ apps.
-            const installedAppForComparison = resolveInstalledAppForStructureComparison(
-              appSpecifications,
-              installedApp,
-              'reinstallOldApplications',
-            );
-            const hasComponentStructureChange = Boolean(
-              installedAppForComparison && hasV8ComponentStructureChange(appSpecifications, installedAppForComparison),
+            // eslint-disable-next-line no-await-in-loop
+            const newSpec = await deserializeSpec(appSpecifications).catch(() => null);
+            // eslint-disable-next-line no-await-in-loop
+            const oldSpec = await deserializeSpec(installedApp).catch(() => null);
+            const structureChanged = Boolean(
+              newSpec && oldSpec && appSpecifications.version >= 8 && installedApp.version >= 8
+              && hasComponentStructureChange(newSpec, oldSpec),
             );
 
-            // For version 8+ apps with component structure changes, force full hard redeploy
-            if (appSpecifications.version >= 8 && hasComponentStructureChange) {
+            if (structureChanged) {
+              const oldCount = Object.keys(oldSpec.components).length;
+              const newCount = Object.keys(newSpec.components).length;
               log.warn(`Application ${appSpecifications.name} (v${appSpecifications.version}) has component structure changes.`);
-              log.warn(`Component count: ${installedAppForComparison.compose.length} -> ${appSpecifications.compose.length}`);
+              log.warn(`Component count: ${oldCount} -> ${newCount}`);
               log.warn('Performing full hard redeploy to handle component changes...');
               log.warn(`REMOVAL REASON: Component structure change (v8+) - ${appSpecifications.name} component count/names changed`);
 
@@ -3320,30 +3280,32 @@ async function reinstallOldApplications() {
             }
 
             try {
-              const reversedCompose = [...appSpecifications.compose].reverse();
+              const compNames = Object.keys(newSpec.components).reverse();
               // eslint-disable-next-line no-restricted-syntax
-              for (const appComponent of reversedCompose) {
-                const installedComponent = installedApp.compose.find((component) => component.name === appComponent.name);
+              for (const compName of compNames) {
+                const identifier = `${compName}_${appSpecifications.name}`;
+                const newComp = newSpec.components[compName];
+                const oldComp = oldSpec?.components?.[compName];
+                const newCanonical = newComp.toCanonical();
+                const oldCanonical = oldComp?.toCanonical();
 
-                if (JSON.stringify(installedComponent) === JSON.stringify(appComponent)) {
-                  log.warn(`Component ${appComponent.name}_${appSpecifications.name} specs were not changed, skipping.`);
-                } else if (appComponent.hdd === installedComponent.hdd) {
-                  log.warn(`Beginning Soft Redeployment of component ${appComponent.name}_${appSpecifications.name}...`);
-                  // soft redeployment
-                  const appId = dockerService.getAppIdentifier(`${appComponent.name}_${appSpecifications.name}`);
+                if (oldCanonical && JSON.stringify(oldCanonical) === JSON.stringify(newCanonical)) {
+                  log.warn(`Component ${identifier} specs were not changed, skipping.`);
+                } else if (oldComp && newComp.persistentStorage?.sizeGb === oldComp.persistentStorage?.sizeGb) {
+                  log.warn(`Beginning Soft Redeployment of component ${identifier}...`);
+                  const appId = dockerService.getAppIdentifier(identifier);
                   // eslint-disable-next-line no-await-in-loop
-                  await appUninstaller.softUninstallComponent(`${appComponent.name}_${appSpecifications.name}`, appId, appComponent, null, stopAppMonitoring);
-                  log.warn(`Application component ${appComponent.name}_${appSpecifications.name} softly removed. Awaiting installation...`);
+                  await appUninstaller.softUninstallComponent(identifier, appId, newCanonical, null, stopAppMonitoring);
+                  log.warn(`Application component ${identifier} softly removed. Awaiting installation...`);
                   // eslint-disable-next-line no-await-in-loop
                   await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
                 } else {
-                  log.warn(`Beginning Hard Redeployment of component ${appComponent.name}_${appSpecifications.name}...`);
-                  log.warn(`REMOVAL REASON: Hard redeployment (component) - ${appComponent.name}_${appSpecifications.name} HDD changed from ${installedComponent.hdd} to ${appComponent.hdd}`);
-                  // hard redeployment
-                  const appId = dockerService.getAppIdentifier(`${appComponent.name}_${appSpecifications.name}`);
+                  log.warn(`Beginning Hard Redeployment of component ${identifier}...`);
+                  log.warn(`REMOVAL REASON: Hard redeployment (component) - ${identifier} storage changed`);
+                  const appId = dockerService.getAppIdentifier(identifier);
                   // eslint-disable-next-line no-await-in-loop
-                  await appUninstaller.hardUninstallComponent(`${appComponent.name}_${appSpecifications.name}`, appId, appComponent, null, stopAppMonitoring);
-                  log.warn(`Application component ${appComponent.name}_${appSpecifications.name} removed. Awaiting installation...`);
+                  await appUninstaller.hardUninstallComponent(identifier, appId, newCanonical, null, stopAppMonitoring);
+                  log.warn(`Application component ${identifier} removed. Awaiting installation...`);
                   // eslint-disable-next-line no-await-in-loop
                   await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
                 }
@@ -3385,27 +3347,28 @@ async function reinstallOldApplications() {
               }
               log.info(`Database entry created for ${appSpecifications.name} BEFORE component Docker container creation (composed redeployment path)`);
 
-              // Now install components - containers will be created but app is already in DB
               // eslint-disable-next-line no-restricted-syntax
-              for (const appComponent of appSpecifications.compose) {
-                const installedComponent = installedApp.compose.find((component) => component.name === appComponent.name);
+              for (const compName of Object.keys(newSpec.components)) {
+                const identifier = `${compName}_${appSpecifications.name}`;
+                const newComp = newSpec.components[compName];
+                const oldComp = oldSpec?.components?.[compName];
+                const newCanonical = newComp.toCanonical();
+                const oldCanonical = oldComp?.toCanonical();
 
-                if (JSON.stringify(installedComponent) === JSON.stringify(appComponent)) {
-                  log.warn(`Component ${appComponent.name}_${appSpecifications.name} specs were not changed, skipping.`);
-                } else if (appComponent.hdd === installedComponent.hdd) {
-                  log.warn(`Continuing Soft Redeployment of component ${appComponent.name}_${appSpecifications.name}...`);
+                if (oldCanonical && JSON.stringify(oldCanonical) === JSON.stringify(newCanonical)) {
+                  log.warn(`Component ${identifier} specs were not changed, skipping.`);
+                } else if (oldComp && newComp.persistentStorage?.sizeGb === oldComp.persistentStorage?.sizeGb) {
+                  log.warn(`Continuing Soft Redeployment of component ${identifier}...`);
                   // eslint-disable-next-line no-await-in-loop
                   await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-                  // install the app
                   // eslint-disable-next-line no-await-in-loop
-                  await softRegisterAppLocally(appSpecifications, appComponent); // component
+                  await softRegisterAppLocally(appSpecifications, newCanonical);
                 } else {
-                  log.warn(`Continuing Hard Redeployment of component ${appComponent.name}_${appSpecifications.name}...`);
+                  log.warn(`Continuing Hard Redeployment of component ${identifier}...`);
                   // eslint-disable-next-line no-await-in-loop
                   await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-                  // install the app
                   // eslint-disable-next-line no-await-in-loop
-                  await appInstaller.registerAppLocally(appSpecifications, appComponent); // component
+                  await appInstaller.registerAppLocally(appSpecifications, newCanonical);
                 }
               }
               log.warn(`Composed application ${appSpecifications.name} updated.`);
