@@ -1041,12 +1041,13 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
 
     // eslint-disable-next-line global-require
     const appInstaller = require('./appInstaller');
-    if (specificationsToInstall.version >= 4) { // version is undefined for component
+    const softSpec = await deserializeSpec(appSpecifications).catch(() => null);
+    if (softSpec && Object.keys(softSpec.components).length > 1) {
       // eslint-disable-next-line no-restricted-syntax
-      for (const appComponentSpecs of specificationsToInstall.compose) {
+      for (const compCanonical of Object.values(softSpec.components).map((c) => c.toCanonical())) {
         isComponent = true;
         // eslint-disable-next-line no-await-in-loop
-        await appInstaller.installApplicationSoft(appComponentSpecs, appName, isComponent, res, appSpecifications);
+        await appInstaller.installApplicationSoft(compCanonical, appName, isComponent, res, appSpecifications);
       }
 
       const redeploySpec = await deserializeSpec(appSpecifications).catch(() => null);
@@ -1120,16 +1121,16 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
  * @returns {Promise<void>}
  */
 async function softUninstallComposedApp(appSpecifications, appName, res) {
-  // Dynamic require to avoid circular dependency
   // eslint-disable-next-line global-require
   const appUninstaller = require('./appUninstaller');
-
-  // Uninstall all components in reverse order
+  const spec = await deserializeSpec(appSpecifications).catch(() => null);
+  const compNames = spec ? Object.keys(spec.components).reverse() : [];
   // eslint-disable-next-line no-restricted-syntax
-  for (const appComposedComponent of appSpecifications.compose.reverse()) {
-    const appId = dockerService.getAppIdentifier(`${appComposedComponent.name}_${appSpecifications.name}`);
+  for (const compName of compNames) {
+    const identifier = `${compName}_${appSpecifications.name}`;
+    const appId = dockerService.getAppIdentifier(identifier);
     // eslint-disable-next-line no-await-in-loop
-    await appUninstaller.softUninstallComponent(appName, appId, appComposedComponent, res, stopAppMonitoring);
+    await appUninstaller.softUninstallComponent(appName, appId, spec.components[compName].toCanonical(), res, stopAppMonitoring);
   }
 }
 
@@ -1143,12 +1144,11 @@ async function softUninstallComposedApp(appSpecifications, appName, res) {
  * @returns {Promise<void>}
  */
 async function softUninstallSingleComponent(appSpecifications, appName, appComponent, appId, res) {
-  // Dynamic require to avoid circular dependency
   // eslint-disable-next-line global-require
   const appUninstaller = require('./appUninstaller');
-
-  const componentSpecifications = appSpecifications.compose.find((component) => component.name === appComponent);
-  await appUninstaller.softUninstallComponent(appName, appId, componentSpecifications, res, stopAppMonitoring);
+  const spec = await deserializeSpec(appSpecifications).catch(() => null);
+  const comp = spec?.components?.[appComponent];
+  await appUninstaller.softUninstallComponent(appName, appId, comp ? comp.toCanonical() : null, res, stopAppMonitoring);
 }
 
 /**
@@ -1512,13 +1512,13 @@ async function softRedeployComponent(appName, componentName, res) {
       appSpecifications = await decryptIfEnterprise(appSpecifications);
     }
 
-    // Find the component in the app specs
-    if (!appSpecifications.compose || appSpecifications.compose.length === 0) {
+    const spec = await deserializeSpec(appSpecifications).catch(() => null);
+    if (!spec || Object.keys(spec.components).length === 0) {
       throw new Error(`Application ${appName} is not a composed application`);
     }
 
-    const componentSpec = appSpecifications.compose.find((comp) => comp.name === componentName);
-    if (!componentSpec) {
+    const comp = spec.components[componentName];
+    if (!comp) {
       throw new Error(`Component ${componentName} not found in application ${appName}`);
     }
 
@@ -1526,7 +1526,7 @@ async function softRedeployComponent(appName, componentName, res) {
 
     try {
       log.warn(`Beginning Soft Redeployment of component ${fullComponentName}...`);
-      await appUninstaller.softUninstallComponent(fullComponentName, null, componentSpec, res, stopAppMonitoring);
+      await appUninstaller.softUninstallComponent(fullComponentName, null, comp.toCanonical(), res, stopAppMonitoring);
 
       const appRedeployResponse = messageHelper.createSuccessMessage(`Component ${fullComponentName} softly removed. Awaiting installation...`);
       log.info(appRedeployResponse);
@@ -1625,13 +1625,13 @@ async function hardRedeployComponent(appName, componentName, res) {
       appSpecifications = await decryptIfEnterprise(appSpecifications);
     }
 
-    // Find the component in the app specs
-    if (!appSpecifications.compose || appSpecifications.compose.length === 0) {
+    const spec = await deserializeSpec(appSpecifications).catch(() => null);
+    if (!spec || Object.keys(spec.components).length === 0) {
       throw new Error(`Application ${appName} is not a composed application`);
     }
 
-    const componentSpec = appSpecifications.compose.find((comp) => comp.name === componentName);
-    if (!componentSpec) {
+    const comp = spec.components[componentName];
+    if (!comp) {
       throw new Error(`Component ${componentName} not found in application ${appName}`);
     }
 
@@ -1641,7 +1641,7 @@ async function hardRedeployComponent(appName, componentName, res) {
       log.warn(`Beginning Hard Redeployment of component ${fullComponentName}...`);
       log.warn(`REMOVAL REASON: Hard redeploy initiated - ${fullComponentName} being removed as part of hard redeploy process (hardRedeployComponent)`);
 
-      await appUninstaller.hardUninstallComponent(fullComponentName, null, componentSpec, res, stopAppMonitoring, false);
+      await appUninstaller.hardUninstallComponent(fullComponentName, null, comp.toCanonical(), res, stopAppMonitoring, false);
 
       const appRedeployResponse = messageHelper.createSuccessMessage(`Component ${fullComponentName} removed. Awaiting installation...`);
       log.info(appRedeployResponse);
@@ -1991,16 +1991,12 @@ async function appDockerStart(appname) {
       if (!appSpecs) {
         throw new Error('Application not found');
       }
-      if (appSpecs.version <= 3) {
-        await dockerService.appDockerStart(appname);
-        startAppMonitoring(appname);
-      } else {
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecs.compose) {
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerStart(`${appComponent.name}_${appSpecs.name}`);
-          startAppMonitoring(`${appComponent.name}_${appSpecs.name}`);
-        }
+      const startSpec = await deserializeSpec(appSpecs).catch(() => null);
+      for (const compName of Object.keys(startSpec?.components || {})) {
+        const identifier = Object.keys(startSpec.components).length === 1 ? appname : `${compName}_${mainAppName}`;
+        // eslint-disable-next-line no-await-in-loop
+        await dockerService.appDockerStart(identifier);
+        startAppMonitoring(identifier);
       }
     }
   } catch (error) {
@@ -2028,16 +2024,12 @@ async function appDockerStop(appname) {
       if (!appSpecs) {
         throw new Error('Application not found');
       }
-      if (appSpecs.version <= 3) {
-        await dockerService.appDockerStop(appname);
-        stopAppMonitoring(appname, false);
-      } else {
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecs.compose) {
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerStop(`${appComponent.name}_${appSpecs.name}`);
-          stopAppMonitoring(`${appComponent.name}_${appSpecs.name}`, false);
-        }
+      const stopSpec = await deserializeSpec(appSpecs).catch(() => null);
+      for (const compName of Object.keys(stopSpec?.components || {})) {
+        const identifier = Object.keys(stopSpec.components).length === 1 ? appname : `${compName}_${mainAppName}`;
+        // eslint-disable-next-line no-await-in-loop
+        await dockerService.appDockerStop(identifier);
+        stopAppMonitoring(identifier, false);
       }
     }
   } catch (error) {
@@ -2580,29 +2572,29 @@ async function validateApplicationUpdateCompatibility(specifications, previousAp
         // Component count and names can change - will trigger hard redeploy
         log.info(`Version 8+ app "${specifications.name}" allows component structure changes`);
       } else {
-        // Component count must remain constant for v4-7
-        if (specifications.compose.length !== appSpecs.compose.length) {
+        const newSpec = await deserializeSpec(specifications).catch(() => null);
+        const oldSpec = await deserializeSpec(appSpecs).catch(() => null);
+        const newCompNames = newSpec ? Object.keys(newSpec.components) : [];
+        const oldCompNames = oldSpec ? Object.keys(oldSpec.components) : [];
+
+        if (newCompNames.length !== oldCompNames.length) {
           throw new Error(
             `Application update rejected: Cannot change the number of components for "${specifications.name}". `
-            + `Previous version has ${appSpecs.compose.length} component(s), new version has ${specifications.compose.length}. `
+            + `Previous version has ${oldCompNames.length} component(s), new version has ${newCompNames.length}. `
             + 'Component count must remain constant for v4-7 applications. Upgrade to version 8 to enable this feature.',
           );
         }
 
-        // Component names must remain constant (but repotag can change) for v4-7
-        appSpecs.compose.forEach((appComponent) => {
-          const newSpecComponentFound = specifications.compose.find((appComponentNew) => appComponentNew.name === appComponent.name);
-          if (!newSpecComponentFound) {
-            const oldNames = appSpecs.compose.map((c) => c.name).join(', ');
-            const newNames = specifications.compose.map((c) => c.name).join(', ');
+        const newNameSet = new Set(newCompNames);
+        for (const name of oldCompNames) {
+          if (!newNameSet.has(name)) {
             throw new Error(
-              `Application update rejected: Component "${appComponent.name}" not found in new specification for "${specifications.name}". `
-              + `Component names must remain constant for v4-7 applications. Previous components: [${oldNames}], New components: [${newNames}]. `
-              + 'Upgrade to version 8 to enable component name changes. Note: Docker image tags (repotag) can be changed.',
+              `Application update rejected: Component "${name}" not found in new specification for "${specifications.name}". `
+              + `Component names must remain constant for v4-7 applications. Previous components: [${oldCompNames.join(', ')}], New components: [${newCompNames.join(', ')}]. `
+              + 'Upgrade to version 8 to enable component name changes.',
             );
           }
-          // v4+ allows for changes of repotag (Docker image tags)
-        });
+        }
       }
     } else { // Update is v4+ and current app is v1-3
       // Node will perform hard redeploy of the app to migrate from v1-3 to v4+
@@ -3153,15 +3145,14 @@ async function reinstallOldApplications() {
             }
             log.info(`Database entry created for ${appSpecifications.name} BEFORE component Docker container creation (version upgrade path)`);
 
-            // Now install components - containers will be created but app is already in DB
+            const upgradeSpec = await deserializeSpec(appSpecifications).catch(() => null);
             // eslint-disable-next-line no-restricted-syntax
-            for (const appComponent of appSpecifications.compose) {
-              log.warn(`Continuing Hard Redeployment of component ${appComponent.name}_${appSpecifications.name}...`);
+            for (const compCanonical of Object.values(upgradeSpec?.components || {}).map((c) => c.toCanonical())) {
+              log.warn(`Continuing Hard Redeployment of component ${compCanonical.name}_${appSpecifications.name}...`);
               // eslint-disable-next-line no-await-in-loop
               await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-              // install the app
               // eslint-disable-next-line no-await-in-loop
-              await appInstaller.registerAppLocally(appSpecifications, appComponent); // component
+              await appInstaller.registerAppLocally(appSpecifications, compCanonical);
             }
             log.warn(`Composed application ${appSpecifications.name} updated.`);
             log.warn(`Restarting application ${appSpecifications.name}`);
@@ -4080,10 +4071,11 @@ async function ensureMountPathsExist(appSpecifications, appName, isComponent, fu
 
         let componentIdentifier;
         if (fullAppSpecs.version >= 4) {
-          if (mount.componentIndex < 0 || mount.componentIndex >= fullAppSpecs.compose.length) {
+          const compEntries = fullAppSpecs.compose || [];
+          if (mount.componentIndex < 0 || mount.componentIndex >= compEntries.length) {
             throw new Error(`Invalid component index: ${mount.componentIndex}`);
           }
-          const componentName = fullAppSpecs.compose[mount.componentIndex].name;
+          const componentName = compEntries[mount.componentIndex].name;
           componentIdentifier = `${componentName}_${appName}`;
         } else {
           componentIdentifier = appName;

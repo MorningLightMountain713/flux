@@ -325,8 +325,11 @@ describe('advancedWorkflows tests', () => {
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({
         name: 'myapp',
         version: 4,
+        description: 'test',
+        owner: '1abc',
+        instances: 3,
         compose: [
-          { name: 'backend', repotag: 'myapp/backend:1.0' },
+          { name: 'backend', description: '', repotag: 'myapp/backend:1.0', ports: [30000], containerPorts: [8080], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
         ],
       });
 
@@ -439,8 +442,11 @@ describe('advancedWorkflows tests', () => {
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({
         name: 'myapp',
         version: 4,
+        description: 'test',
+        owner: '1abc',
+        instances: 3,
         compose: [
-          { name: 'backend', repotag: 'myapp/backend:1.0' },
+          { name: 'backend', description: '', repotag: 'myapp/backend:1.0', ports: [30000], containerPorts: [8080], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
         ],
       });
 
@@ -1406,8 +1412,8 @@ describe('advancedWorkflows tests', () => {
         staticip: false,
         repoAuth: '',
         compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0', ports: ['8080'], containerPorts: ['8080'], domains: [], environmentParameters: [], commands: [], tiered: false },
-          { name: 'backend', repotag: 'repo/backend:1.0', ports: ['3000'], containerPorts: ['3000'], domains: [], environmentParameters: [], commands: [], tiered: false },
+          { name: 'frontend', description: '', repotag: 'repo/frontend:1.0', ports: [8080], containerPorts: [8080], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
+          { name: 'backend', description: '', repotag: 'repo/backend:1.0', ports: [3000], containerPorts: [3000], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
         ],
       };
 
@@ -1424,9 +1430,9 @@ describe('advancedWorkflows tests', () => {
         staticip: false,
         repoAuth: '',
         compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0', ports: ['8080'], containerPorts: ['8080'], domains: [], environmentParameters: [], commands: [], tiered: false },
-          { name: 'backend', repotag: 'repo/backend:1.0', ports: ['3000'], containerPorts: ['3000'], domains: [], environmentParameters: [], commands: [], tiered: false },
-          { name: 'database', repotag: 'repo/database:1.0', ports: ['5432'], containerPorts: ['5432'], domains: [], environmentParameters: [], commands: [], tiered: false },
+          { name: 'frontend', description: '', repotag: 'repo/frontend:1.0', ports: [8080], containerPorts: [8080], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
+          { name: 'backend', description: '', repotag: 'repo/backend:1.0', ports: [3000], containerPorts: [3000], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
+          { name: 'database', description: '', repotag: 'repo/database:1.0', ports: [5432], containerPorts: [5432], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
         ],
       };
 
@@ -1458,8 +1464,8 @@ describe('advancedWorkflows tests', () => {
         staticip: false,
         repoAuth: '',
         compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0', ports: ['8080'], containerPorts: ['8080'], domains: [], environmentParameters: [], commands: [], tiered: false },
-          { name: 'backend', repotag: 'repo/backend:1.0', ports: ['3000'], containerPorts: ['3000'], domains: [], environmentParameters: [], commands: [], tiered: false },
+          { name: 'frontend', description: '', repotag: 'repo/frontend:1.0', ports: [8080], containerPorts: [8080], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
+          { name: 'backend', description: '', repotag: 'repo/backend:1.0', ports: [3000], containerPorts: [3000], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
         ],
       };
 
@@ -1476,8 +1482,8 @@ describe('advancedWorkflows tests', () => {
         staticip: false,
         repoAuth: '',
         compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0', ports: ['8080'], containerPorts: ['8080'], domains: [], environmentParameters: [], commands: [], tiered: false },
-          { name: 'api', repotag: 'repo/api:1.0', ports: ['3000'], containerPorts: ['3000'], domains: [], environmentParameters: [], commands: [], tiered: false }, // Renamed from 'backend'
+          { name: 'frontend', description: '', repotag: 'repo/frontend:1.0', ports: [8080], containerPorts: [8080], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
+          { name: 'api', description: '', repotag: 'repo/api:1.0', ports: [3000], containerPorts: [3000], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
         ],
       };
 
@@ -1536,8 +1542,8 @@ describe('advancedWorkflows tests', () => {
         staticip: false,
         repoAuth: '',
         compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0', ports: ['8080'], containerPorts: ['8080'], domains: [], environmentParameters: [], commands: [], tiered: false },
-          { name: 'backend', repotag: 'repo/backend:1.0', ports: ['3000'], containerPorts: ['3000'], domains: [], environmentParameters: [], commands: [], tiered: false },
+          { name: 'frontend', description: '', repotag: 'repo/frontend:1.0', ports: [8080], containerPorts: [8080], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
+          { name: 'backend', description: '', repotag: 'repo/backend:1.0', ports: [3000], containerPorts: [3000], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
         ],
       };
 
@@ -1554,8 +1560,8 @@ describe('advancedWorkflows tests', () => {
         staticip: false,
         repoAuth: '',
         compose: [
-          { name: 'frontend', repotag: 'repo/frontend:2.0', ports: ['8080'], containerPorts: ['8080'], domains: [], environmentParameters: [], commands: [], tiered: false }, // Changed tag
-          { name: 'backend', repotag: 'repo/backend:2.0', ports: ['3000'], containerPorts: ['3000'], domains: [], environmentParameters: [], commands: [], tiered: false }, // Changed tag
+          { name: 'frontend', description: '', repotag: 'repo/frontend:2.0', ports: [8080], containerPorts: [8080], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
+          { name: 'backend', description: '', repotag: 'repo/backend:2.0', ports: [3000], containerPorts: [3000], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
         ],
       };
 
