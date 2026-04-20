@@ -249,7 +249,7 @@ async function handleFirstRun(params) {
   const {
     appId,
     syncFolder,
-    containerDataFlags,
+    syncMode,
     appDockerStopFn,
     appDeleteDataInMountPointFn,
     syncthingFolder,
@@ -429,7 +429,7 @@ async function handleReceiveOnlyTransition(params) {
     cache,
     runningAppList,
     myIP,
-    containerDataFlags,
+    syncMode,
     appDockerRestartFn,
     syncthingFolder,
   } = params;
@@ -447,7 +447,7 @@ async function handleReceiveOnlyTransition(params) {
 
     syncthingFolder.type = 'sendreceive';
 
-    if (containerDataFlags.includes('r')) {
+    if (syncMode === 'receiveOnly') {
       log.info(`handleReceiveOnlyTransition - starting ${appId}`);
       await appDockerRestartFn(appId);
     }
@@ -520,7 +520,7 @@ async function handleReceiveOnlyTransition(params) {
       await fixAppdataPermissions(appId);
 
       syncthingFolder.type = 'sendreceive';
-      if (containerDataFlags.includes('r')) {
+      if (syncMode === 'receiveOnly') {
         log.info(`handleReceiveOnlyTransition - starting ${appId}`);
         await appDockerRestartFn(appId);
       }
@@ -589,7 +589,7 @@ async function handleReceiveOnlyTransition(params) {
 
       syncthingFolder.type = 'sendreceive';
 
-      if (containerDataFlags.includes('r')) {
+      if (syncMode === 'receiveOnly') {
         log.info(`handleReceiveOnlyTransition - starting ${appId}`);
         await appDockerRestartFn(appId);
       }
@@ -634,14 +634,14 @@ async function handleNewApp(params) {
 /**
  * Ensure container is running if needed
  * @param {string} appId - App ID
- * @param {string} containerDataFlags - Container flags
+ * @param {string} syncMode - Container flags
  * @returns {Promise<void>}
  */
-async function ensureContainerRunning(appId, containerDataFlags) {
+async function ensureContainerRunning(appId, syncMode) {
   try {
     const containerInspect = await dockerService.dockerContainerInspect(appId);
 
-    if (!containerInspect.State.Running && containerDataFlags.includes('r')) {
+    if (!containerInspect.State.Running && syncMode === 'receiveOnly') {
       log.info(`ensureContainerRunning - ${appId} is not running, starting it`);
       await dockerService.appDockerStart(appId);
     }
@@ -661,7 +661,7 @@ async function manageFolderSyncState(params) {
   const {
     appId,
     syncFolder,
-    containerDataFlags,
+    syncMode,
     syncthingAppsFirstRun,
     receiveOnlySyncthingAppsCache,
     appLocation,
@@ -703,7 +703,7 @@ async function manageFolderSyncState(params) {
     }
 
     // Mount is safe, proceed normally
-    await ensureContainerRunning(appId, containerDataFlags);
+    await ensureContainerRunning(appId, syncMode);
     // Ensure cache entry exists so health monitor can track this folder
     const existingCache = receiveOnlySyncthingAppsCache.get(appId);
     const cache = existingCache || { restarted: true };
@@ -715,7 +715,7 @@ async function manageFolderSyncState(params) {
     const result = await handleFirstRun({
       appId,
       syncFolder,
-      containerDataFlags,
+      syncMode,
       appDockerStopFn,
       appDeleteDataInMountPointFn,
       syncthingFolder,
@@ -746,7 +746,7 @@ async function manageFolderSyncState(params) {
       cache,
       runningAppList,
       myIP,
-      containerDataFlags,
+      syncMode,
       appDockerRestartFn,
       appDockerStopFn,
       appDeleteDataInMountPointFn,
@@ -791,7 +791,7 @@ async function manageFolderSyncState(params) {
   }
 
   // Default case - ensure container is running
-  await ensureContainerRunning(appId, containerDataFlags);
+  await ensureContainerRunning(appId, syncMode);
   return { syncthingFolder, cache: null };
 }
 

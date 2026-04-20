@@ -8,6 +8,7 @@ const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const syncthingService = require('../syncthingService');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
+const { decryptToCleartextClass } = require('../utils/specCutover');
 const log = require('../../lib/log');
 const {
   MONITOR_INTERVAL_MS,
@@ -21,8 +22,6 @@ const {
   buildDeviceConfiguration,
   createSyncthingFolderConfig,
   ensureStfolderExists,
-  getContainerDataFlags,
-  requiresSyncing,
   folderNeedsUpdate,
 } = require('./syncthingMonitorHelpers');
 const {
@@ -54,27 +53,22 @@ async function checkAppFolderMounts(appsInstalled) {
 
   // eslint-disable-next-line no-restricted-syntax
   for (const installedApp of appsInstalled) {
-    if (installedApp.version <= 3) {
-      // Legacy app - single folder
-      const appId = dockerService.getAppIdentifier(installedApp.name);
+    // eslint-disable-next-line no-await-in-loop
+    const spec = await decryptToCleartextClass(installedApp).catch(() => null);
+    if (!spec) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const compNames = Object.keys(spec.components);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const compName of compNames) {
+      const identifier = compNames.length === 1 ? installedApp.name : `${compName}_${installedApp.name}`;
+      const appId = dockerService.getAppIdentifier(identifier);
       const appFolder = `${appsFolder}${appId}`;
       // eslint-disable-next-line no-await-in-loop
       const mountSafety = await verifyFolderMountSafety(appId, appFolder);
       if (!mountSafety.isSafe) {
-        // Folder exists but mount is not safe (empty and not mounted - likely unmounted loop device)
         unmountedApps.push({ appId, appName: installedApp.name, reason: mountSafety.reason });
-      }
-    } else {
-      // Newer app - check each component
-      // eslint-disable-next-line no-restricted-syntax
-      for (const component of installedApp.compose || []) {
-        const appId = dockerService.getAppIdentifier(`${component.name}_${installedApp.name}`);
-        const appFolder = `${appsFolder}${appId}`;
-        // eslint-disable-next-line no-await-in-loop
-        const mountSafety = await verifyFolderMountSafety(appId, appFolder);
-        if (!mountSafety.isSafe) {
-          unmountedApps.push({ appId, appName: installedApp.name, reason: mountSafety.reason });
-        }
       }
     }
   }
@@ -104,9 +98,9 @@ async function appLocation(appName) {
  * @param {Object} params - Parameters object
  * @returns {Promise<void>}
  */
-async function processContainerData(params) {
+async function processComponentSync(params) {
   const {
-    containerData,
+    syncMode,
     identifier,
     installedAppName,
     myIP,
@@ -124,14 +118,7 @@ async function processContainerData(params) {
     appDeleteDataInMountPointFn,
   } = params;
 
-  const containersData = containerData.split('|');
-
-  // Check if syncing is required (only check primary mount - index 0)
-  const primaryContainer = containersData[0];
-  const primaryContainerDataFlags = getContainerDataFlags(primaryContainer);
-
-  if (!requiresSyncing(primaryContainerDataFlags)) {
-    // No syncing required for this app
+  if (!syncMode) {
     return;
   }
 
@@ -164,13 +151,11 @@ async function processContainerData(params) {
   const syncthingFolder = createSyncthingFolderConfig(id, label, folder, devices);
   const syncFolder = allFoldersResp.data.find((x) => x.id === id);
 
-  // Handle receive-only or global sync flags
-  if (primaryContainerDataFlags.includes('r') || primaryContainerDataFlags.includes('g')) {
-    // Use state machine to manage folder sync transitions
+  if (syncMode === 'receiveOnly' || syncMode === 'activeStandby') {
     const { syncthingFolder: updatedFolder, cache, skipProcessing } = await manageFolderSyncState({
       appId,
       syncFolder,
-      containerDataFlags: primaryContainerDataFlags,
+      syncMode,
       syncthingAppsFirstRun: state.syncthingAppsFirstRun,
       receiveOnlySyncthingAppsCache: state.receiveOnlySyncthingAppsCache,
       appLocation,
@@ -436,29 +421,26 @@ async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn, appDo
         continue;
       }
 
-      // Process based on app version
-      if (installedApp.version <= 3) {
-        // Legacy app (version <= 3) - single containerData
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await decryptToCleartextClass(installedApp).catch(() => null);
+      if (!spec) {
+        log.warn(`syncthingAppsCore - Failed to deserialize ${installedApp.name}, skipping`);
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      // eslint-disable-next-line no-restricted-syntax
+      for (const [compName, comp] of Object.entries(spec.components)) {
+        const syncMode = comp.persistentStorage?.sync?.mode || null;
+        const identifier = Object.keys(spec.components).length === 1
+          ? installedApp.name
+          : `${compName}_${installedApp.name}`;
         // eslint-disable-next-line no-await-in-loop
-        await processContainerData({
+        await processComponentSync({
           ...sharedParams,
-          containerData: installedApp.containerData,
-          identifier: installedApp.name,
+          syncMode,
+          identifier,
           installedAppName: installedApp.name,
         });
-      } else {
-        // Newer app (version > 3) - compose with multiple components
-        // eslint-disable-next-line no-restricted-syntax
-        for (const installedComponent of installedApp.compose) {
-          const identifier = `${installedComponent.name}_${installedApp.name}`;
-          // eslint-disable-next-line no-await-in-loop
-          await processContainerData({
-            ...sharedParams,
-            containerData: installedComponent.containerData,
-            identifier,
-            installedAppName: installedApp.name,
-          });
-        }
       }
     }
 
