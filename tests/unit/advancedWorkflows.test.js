@@ -299,21 +299,17 @@ describe('advancedWorkflows tests', () => {
       }
     });
 
-    it('should throw error if app is not composed', async () => {
+    it('should throw error if app not found', async () => {
       sinon.stub(dbHelper, 'databaseConnection').returns({
         db: () => ({}),
       });
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves({
-        name: 'myapp',
-        version: 3,
-        // No compose field
-      });
+      sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
 
       try {
         await advancedWorkflows.softRedeployComponent('myapp', 'frontend', res);
         expect.fail('Should have thrown error');
       } catch (error) {
-        expect(error.message).to.include('is not a composed application');
+        expect(error.message).to.include('not found');
         expect(globalState.softRedeployInProgress).to.be.false;
       }
     });
@@ -416,21 +412,17 @@ describe('advancedWorkflows tests', () => {
       }
     });
 
-    it('should throw error if app is not composed', async () => {
+    it('should throw error if app not found', async () => {
       sinon.stub(dbHelper, 'databaseConnection').returns({
         db: () => ({}),
       });
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves({
-        name: 'myapp',
-        version: 3,
-        // No compose field
-      });
+      sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
 
       try {
         await advancedWorkflows.hardRedeployComponent('myapp', 'frontend', res);
         expect.fail('Should have thrown error');
       } catch (error) {
-        expect(error.message).to.include('is not a composed application');
+        expect(error.message).to.include('not found');
         expect(globalState.hardRedeployInProgress).to.be.false;
       }
     });

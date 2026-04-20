@@ -2,6 +2,7 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
+const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const appConstants = require('../utils/appConstants');
@@ -57,11 +58,7 @@ async function fluxUsage(req, res) {
 async function appsResources(req, res) {
   log.info('Checking appsResources');
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const appsQuery = {};
-    const appsProjection = { projection: { _id: 0 } };
-    const appsResult = await dbHelper.findInDatabase(appsDatabase, appConstants.localAppsInformation, appsQuery, appsProjection);
+    const appsResult = await appsRepository.listInstalledAppsRaw();
     let appsCpusLocked = 0;
     let appsRamLocked = 0;
     let appsHddLocked = 0;

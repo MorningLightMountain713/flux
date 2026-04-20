@@ -115,7 +115,7 @@ describe('appUninstaller tests', () => {
         getSpec: sinon.stub().resolves({
           FluxAppSpecBase: { getVersionClass: sinon.stub().returns(null) },
         }),
-        getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {} }),
+        getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {}, InstantiatedSpec: class InstantiatedSpec {} }),
       },
       '../appManagement/appInspector': {
         stopAppMonitoring: sinon.stub().resolves(),
@@ -493,7 +493,7 @@ describe('appUninstaller tests', () => {
           getSpec: sinon.stub().resolves({
             FluxAppSpecBase: { getVersionClass: sinon.stub().returns(null) },
           }),
-          getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {} }),
+          getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {}, InstantiatedSpec: class InstantiatedSpec {} }),
         },
         '../appManagement/appInspector': {
           stopAppMonitoring: sinon.stub().resolves(),
@@ -617,7 +617,7 @@ describe('appUninstaller tests', () => {
           getSpec: sinon.stub().resolves({
             FluxAppSpecBase: { getVersionClass: sinon.stub().returns(null) },
           }),
-          getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {} }),
+          getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {}, InstantiatedSpec: class InstantiatedSpec {} }),
         },
         '../appManagement/appInspector': {
           stopAppMonitoring: sinon.stub().resolves(),

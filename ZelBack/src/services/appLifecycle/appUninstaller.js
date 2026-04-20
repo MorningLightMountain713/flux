@@ -853,13 +853,15 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
       throw new Error('Flux App not found');
     }
 
-    // Decrypt v8 enterprise blobs via the flux-spec CryptoProvider seam so
-    // downstream helpers see cleartext compose/contacts. Non-enterprise
-    // specs pass through untouched.
-    // appsRepository dispatches encrypted v8 docs to EncryptedSpecV8. Cross
-    // the cleartext boundary explicitly so the uninstall helpers below see
-    // populated components. DecryptedCanonicalSpec.spec is the audited unwrap.
-    const { EncryptedSpecBase } = await getSpecBackend();
+    // appsRepository returns InstantiatedSpec; unwrap to inner spec since
+    // this function only needs the definition, not state metadata.
+    // Hardcoded/fallback paths may return a bare spec — handle both.
+    const { EncryptedSpecBase, InstantiatedSpec } = await getSpecBackend();
+    if (spec instanceof InstantiatedSpec) {
+      spec = spec.spec;
+    }
+
+    // Decrypt v8 enterprise blobs so downstream helpers see cleartext.
     if (spec instanceof EncryptedSpecBase) {
       const provider = await legacyCryptoProvider.create(spec.name, spec.owner);
       spec = (await spec.decrypt(provider)).spec;
@@ -1075,7 +1077,10 @@ async function softRemoveAppLocally(app, res, globalStateRef, stopAppMonitoring)
       throw new Error('Flux App not found');
     }
 
-    const { EncryptedSpecBase } = await getSpecBackend();
+    const { EncryptedSpecBase, InstantiatedSpec } = await getSpecBackend();
+    if (spec instanceof InstantiatedSpec) {
+      spec = spec.spec;
+    }
     if (spec instanceof EncryptedSpecBase) {
       const provider = await legacyCryptoProvider.create(spec.name, spec.owner);
       spec = (await spec.decrypt(provider)).spec;
@@ -1172,15 +1177,9 @@ async function removeAppLocallyApi(req, res) {
 
     // For vetted apps, only app owner or Flux Team can uninstall
     // First, get app specifications to check if vetted
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const database = dbopen.db(config.database.appsglobal.database);
-    const appsQuery = { name: appname };
-    const appsProjection = {};
-
-    let appSpecsForVettedCheck = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
+    let appSpecsForVettedCheck = await appsRepository.getInstalledAppRaw(appname);
     if (!appSpecsForVettedCheck) {
-      appSpecsForVettedCheck = await dbHelper.findOneInDatabase(database, globalAppsInformation, appsQuery, appsProjection);
+      appSpecsForVettedCheck = await appsRepository.getGlobalAppInfoRaw(appname);
     }
 
     if (appSpecsForVettedCheck) {

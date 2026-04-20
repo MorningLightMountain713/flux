@@ -4,6 +4,7 @@ const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
+const appsRepository = require('../appDatabase/appsRepository');
 const appConstants = require('../utils/appConstants');
 const { deserializeSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -59,25 +60,18 @@ async function decryptEnterpriseApps(apps) {
  */
 async function installedApps(req, res) {
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-
-    let appsQuery = {};
+    let filter = {};
     if (req && req.params && req.query) {
       let { appname } = req.params;
       appname = appname || req.query.appname;
       if (appname) {
-        appsQuery = { name: appname };
+        filter = { name: appname };
       }
     } else if (req && typeof req === 'string') {
-      appsQuery = { name: req };
+      filter = { name: req };
     }
 
-    const appsProjection = {
-      projection: { _id: 0 },
-    };
-
-    const apps = await dbHelper.findInDatabase(appsDatabase, appConstants.localAppsInformation, appsQuery, appsProjection);
+    const apps = await appsRepository.listInstalledAppsRaw({ filter });
     const dataResponse = messageHelper.createDataMessage(apps);
     return res ? res.json(dataResponse) : dataResponse;
   } catch (error) {

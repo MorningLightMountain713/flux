@@ -16,6 +16,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const registryManager = require('../appDatabase/registryManager');
 const advancedWorkflows = require('./advancedWorkflows');
 const appUninstaller = require('./appUninstaller');
+const appsRepository = require('../appDatabase/appsRepository');
 const { localAppsInformation } = require('../utils/appConstants');
 const { deserializeSpec } = require('../utils/specCutover');
 
@@ -55,20 +56,10 @@ async function appHasValidLocationOnNode(appName, myIp) {
   }
 }
 
-/**
- * Get all installed apps from local database
- * @returns {Promise<Array>} Array of installed app specifications
- */
 async function getInstalledAppsFromDb() {
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const appsQuery = {};
-    const appsProjection = {
-      projection: { _id: 0 },
-    };
-    const apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-    return apps || [];
+    const instantiatedSpecs = await appsRepository.listInstalledApps();
+    return instantiatedSpecs.map((is) => is.serialize());
   } catch (error) {
     log.error(`stoppedAppsRecovery - Error getting installed apps: ${error.message}`);
     return [];

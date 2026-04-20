@@ -15,6 +15,7 @@ const appUninstaller = require('../appLifecycle/appUninstaller');
 const appInstaller = require('../appLifecycle/appInstaller');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const { deserializeSpec } = require('../utils/specCutover');
+const appsRepository = require('../appDatabase/appsRepository');
 const { localAppsInformation } = require('../utils/appConstants');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
@@ -32,12 +33,8 @@ let checkAndNotifyPeersOfRunningAppsFirstRun = true;
  */
 async function recreateMissingContainers(componentIdentifier) {
   const mainAppName = componentIdentifier.split('_')[1] || componentIdentifier;
-  const dbopen = dbHelper.databaseConnection();
-  const appsDatabase = dbopen.db(config.database.appslocal.database);
 
-  const appsQuery = { name: mainAppName };
-  const appsProjection = { projection: { _id: 0 } };
-  let appSpec = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
+  let appSpec = await appsRepository.getInstalledAppRaw(mainAppName);
 
   if (!appSpec) {
     throw new Error(`App ${mainAppName} not found in local database`);

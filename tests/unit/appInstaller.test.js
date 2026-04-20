@@ -614,8 +614,11 @@ describe('appInstaller tests', () => {
         '../utils/specCutover': specCutoverStub,
         '../appDatabase/appsRepository': {
           getInstalledApp: sinon.stub().resolves(null),
+          getInstalledAppRaw: sinon.stub().resolves(null),
           getGlobalAppInfo: sinon.stub().resolves(null),
           getAppMessage: sinon.stub().resolves(null),
+          removeInstalledApp: sinon.stub().resolves(),
+          insertInstalledApp: sinon.stub().resolves({ insertedId: 'ok' }),
         },
         util: {
           promisify: (fn) => fn,
@@ -794,8 +797,11 @@ describe('appInstaller tests', () => {
         '../utils/specCutover': specCutoverStub,
         '../appDatabase/appsRepository': {
           getInstalledApp: sinon.stub().resolves(null),
+          getInstalledAppRaw: sinon.stub().resolves(null),
           getGlobalAppInfo: sinon.stub().resolves(null),
           getAppMessage: sinon.stub().resolves(null),
+          removeInstalledApp: sinon.stub().resolves(),
+          insertInstalledApp: sinon.stub().resolves({ insertedId: 'ok' }),
         },
         util: {
           promisify: (fn) => fn,
@@ -1085,8 +1091,11 @@ describe('appInstaller tests', () => {
         '../utils/specCutover': specCutoverStub,
         '../appDatabase/appsRepository': {
           getInstalledApp: sinon.stub().resolves(null),
+          getInstalledAppRaw: sinon.stub().resolves(null),
           getGlobalAppInfo: sinon.stub().resolves(null),
           getAppMessage: sinon.stub().resolves(null),
+          removeInstalledApp: sinon.stub().resolves(),
+          insertInstalledApp: sinon.stub().resolves({ insertedId: 'ok' }),
         },
         '../utils/globalState': { removalInProgress: false, installationInProgress: false, masterSlaveAppsRunning: false },
         '../../lib/log': logStub,

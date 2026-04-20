@@ -22,10 +22,37 @@ describe('appsRepository', () => {
     };
 
     // getSpec() returns { FluxAppSpecBase: { getVersionClass } }.
-    // getSpecBackend() returns the dispatch helper: given a doc, route
-    // encrypted v8 to a stub EncryptedSpecV8.deserialize, everything else
-    // to the registered version class's deserialize.
+    // getSpecBackend() returns { InstantiatedSpec } — hydrate() calls
+    // InstantiatedSpec.deserialize(doc) which wraps the spec with metadata.
     versionRegistry = new Map();
+
+    function mockDeserializeSpec(doc) {
+      if (doc.version === 8 && typeof doc.enterprise === 'string' && doc.enterprise !== '') {
+        throw new Error('appsRepository test: no EncryptedSpecV8 stub registered');
+      }
+      const VersionClass = versionRegistry.get(doc.version);
+      if (!VersionClass) {
+        throw new Error(`no spec class registered for version ${doc.version}`);
+      }
+      return VersionClass.deserialize(doc);
+    }
+
+    const MockInstantiatedSpec = {
+      deserialize: (doc) => {
+        const spec = mockDeserializeSpec(doc);
+        return {
+          spec,
+          hash: doc.hash,
+          height: doc.height,
+          registeredAt: doc.registeredAt ?? null,
+          name: spec.name,
+          version: spec.version,
+          owner: spec.owner,
+          isEncrypted: () => false,
+        };
+      },
+    };
+
     specLibsStub = {
       getSpec: sinon.stub().resolves({
         FluxAppSpecBase: {
@@ -33,18 +60,7 @@ describe('appsRepository', () => {
         },
       }),
       getSpecBackend: sinon.stub().resolves({
-        deserializeSpec: (doc) => {
-          // Match the real backend dispatcher: non-empty enterprise string
-          // on v8 → EncryptedSpecV8; else → VersionClass.deserialize.
-          if (doc.version === 8 && typeof doc.enterprise === 'string' && doc.enterprise !== '') {
-            throw new Error('appsRepository test: no EncryptedSpecV8 stub registered');
-          }
-          const VersionClass = versionRegistry.get(doc.version);
-          if (!VersionClass) {
-            throw new Error(`no spec class registered for version ${doc.version}`);
-          }
-          return VersionClass.deserialize(doc);
-        },
+        InstantiatedSpec: MockInstantiatedSpec,
       }),
     };
 
@@ -95,7 +111,7 @@ describe('appsRepository', () => {
       expect(result).to.be.null;
     });
 
-    it('dispatches to the registered version class', async () => {
+    it('dispatches to the registered version class and wraps in InstantiatedSpec', async () => {
       const v7Instance = { name: 'example', version: 7 };
       const V7 = { deserialize: sinon.stub().returns(v7Instance) };
       versionRegistry.set(7, V7);
@@ -104,7 +120,10 @@ describe('appsRepository', () => {
       dbHelperStub.findOneInDatabase.resolves(doc);
 
       const result = await appsRepository.getGlobalAppInfo('example');
-      expect(result).to.equal(v7Instance);
+      expect(result.spec).to.equal(v7Instance);
+      expect(result.hash).to.equal('h');
+      expect(result.height).to.equal(100);
+      expect(result.name).to.equal('example');
       expect(V7.deserialize.calledOnceWith(doc)).to.be.true;
     });
 
@@ -188,7 +207,7 @@ describe('appsRepository', () => {
   });
 
   describe('list accessors', () => {
-    it('listGlobalAppInfo hydrates every document', async () => {
+    it('listGlobalAppInfo hydrates every document into InstantiatedSpec', async () => {
       const inst1 = { name: 'a' };
       const inst2 = { name: 'b' };
       const V = { deserialize: sinon.stub() };
@@ -197,12 +216,16 @@ describe('appsRepository', () => {
       versionRegistry.set(7, V);
 
       dbHelperStub.findInDatabase.resolves([
-        { name: 'a', version: 7 },
-        { name: 'b', version: 7 },
+        { name: 'a', version: 7, hash: 'h1', height: 10 },
+        { name: 'b', version: 7, hash: 'h2', height: 20 },
       ]);
 
       const result = await appsRepository.listGlobalAppInfo();
-      expect(result).to.deep.equal([inst1, inst2]);
+      expect(result).to.have.length(2);
+      expect(result[0].spec).to.equal(inst1);
+      expect(result[0].hash).to.equal('h1');
+      expect(result[1].spec).to.equal(inst2);
+      expect(result[1].hash).to.equal('h2');
     });
 
     it('listGlobalAppInfo drops docs whose version class is missing', async () => {
@@ -210,8 +233,8 @@ describe('appsRepository', () => {
       versionRegistry.set(7, V);
 
       dbHelperStub.findInDatabase.resolves([
-        { name: 'a', version: 7 },
-        { name: 'b', version: 42 }, // no class registered
+        { name: 'a', version: 7, hash: 'h1', height: 10 },
+        { name: 'b', version: 42, hash: 'h2', height: 20 }, // no class registered
       ]);
 
       const result = await appsRepository.listGlobalAppInfo();
@@ -227,7 +250,7 @@ describe('appsRepository', () => {
       expect(result).to.be.null;
     });
 
-    it('hydrates the nested appSpecifications and returns both', async () => {
+    it('hydrates the nested appSpecifications into InstantiatedSpec', async () => {
       const specInstance = { name: 'x', version: 7 };
       const V = { deserialize: sinon.stub().returns(specInstance) };
       versionRegistry.set(7, V);
@@ -241,7 +264,9 @@ describe('appsRepository', () => {
 
       const result = await appsRepository.getAppMessage('abc');
       expect(result.message).to.equal(message);
-      expect(result.spec).to.equal(specInstance);
+      expect(result.spec.spec).to.equal(specInstance);
+      expect(result.spec.hash).to.equal('abc');
+      expect(result.spec.height).to.equal(500);
 
       // The hydrate call should have received the spec blob with hash/height appended
       const docForHydrate = V.deserialize.firstCall.args[0];
@@ -261,6 +286,7 @@ describe('appsRepository', () => {
 
       const result = await appsRepository.getAppMessage('legacy');
       expect(result.spec).to.not.be.null;
+      expect(result.spec.spec.name).to.equal('y');
     });
   });
 });

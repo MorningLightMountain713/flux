@@ -9,6 +9,7 @@ const geolocationService = require('../geolocationService');
 const log = require('../../lib/log');
 
 // Import modular services
+const appsRepository = require('../appDatabase/appsRepository');
 const appQueryService = require('../appQuery/appQueryService');
 const registryManager = require('../appDatabase/registryManager');
 const imageManager = require('../appSecurity/imageManager');
@@ -293,21 +294,7 @@ async function trySpawningGlobalApplication() {
     }
 
     // eslint-disable-next-line no-restricted-syntax
-    const dbopen = dbHelper.databaseConnection();
-    // eslint-disable-next-line global-require
-    const { localAppsInformation } = require('../utils/appConstants');
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const appsQuery = {}; // all
-    const appsProjection = {
-      projection: {
-        _id: 0,
-        name: 1,
-        version: 1,
-        repotag: 1,
-        compose: 1,
-      },
-    };
-    const apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
+    const apps = await appsRepository.listInstalledAppsRaw({ projection: { name: 1, version: 1, repotag: 1, compose: 1 } });
     const appExists = apps.find((app) => app.name === appSpecifications.name);
     if (appExists) { // double checked in installation process.
       log.info(`trySpawningGlobalApplication - Application ${appSpecifications.name} is already installed`);

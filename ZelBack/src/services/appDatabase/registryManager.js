@@ -385,14 +385,7 @@ async function getApplicationGlobalSpecifications(appName) {
  * @returns {Promise<object|null>} App specifications
  */
 async function getApplicationLocalSpecifications(appName) {
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appslocal.database);
-
-  const query = { name: new RegExp(`^${appName}$`, 'i') };
-  const projection = { projection: { _id: 0 } };
-
-  const appInfo = await dbHelper.findOneInDatabase(database, localAppsInformation, query, projection);
-  return appInfo;
+  return appsRepository.getInstalledAppRaw(appName);
 }
 
 /**
@@ -585,9 +578,7 @@ async function getApplicationOwnerAPI(req, res) {
  */
 async function getGlobalAppsSpecifications(req, res) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = {};
+    const filter = {};
     let { hash } = req.params;
     hash = hash || req.query.hash;
     let { owner } = req.params;
@@ -595,16 +586,15 @@ async function getGlobalAppsSpecifications(req, res) {
     let { appname } = req.params;
     appname = appname || req.query.appname;
     if (hash) {
-      query.hash = hash;
+      filter.hash = hash;
     }
     if (owner) {
-      query.owner = owner;
+      filter.owner = owner;
     }
     if (appname) {
-      query.name = appname;
+      filter.name = appname;
     }
-    const projection = { projection: { _id: 0 } };
-    const results = await dbHelper.findInDatabase(database, globalAppsInformation, query, projection);
+    const results = await appsRepository.listGlobalAppInfoRaw({ filter });
     const resultsResponse = messageHelper.createDataMessage(results);
     res.json(resultsResponse);
   } catch (error) {
@@ -625,20 +615,8 @@ async function getGlobalAppsSpecifications(req, res) {
  */
 async function availableApps(_req, res) {
   try {
-    // Get global apps
-    const globalDb = dbHelper.databaseConnection();
-    const globalDatabase = globalDb.db(config.database.appsglobal.database);
-    const globalQuery = {};
-    const globalProjection = { projection: { _id: 0 } };
-    const globalApps = await dbHelper.findInDatabase(globalDatabase, globalAppsInformation, globalQuery, globalProjection);
-
-    // Get local apps
-    const localDb = dbHelper.databaseConnection();
-    const localDatabase = localDb.db(config.database.appslocal.database);
-    const localQuery = {};
-    const localProjection = { projection: { _id: 0 } };
-    const localApps = await dbHelper.findInDatabase(localDatabase, localAppsInformation, localQuery, localProjection);
-
+    const globalApps = await appsRepository.listGlobalAppInfoRaw();
+    const localApps = await appsRepository.listInstalledAppsRaw();
     const allApps = [...globalApps, ...localApps];
 
     if (res) {
@@ -664,20 +642,8 @@ async function availableApps(_req, res) {
  * @returns {Promise<boolean>} True if no conflicts found
  */
 async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash) {
-  // check if name is not yet registered
   const dbopen = dbHelper.databaseConnection();
-
-  const appsDatabase = dbopen.db(config.database.appsglobal.database);
-  const appsQuery = { name: new RegExp(`^${appSpecFormatted.name}$`, 'i') }; // case insensitive
-  const appsProjection = {
-    projection: {
-      _id: 0,
-      name: 1,
-      height: 1,
-      expire: 1,
-    },
-  };
-  const appResult = await dbHelper.findOneInDatabase(appsDatabase, globalAppsInformation, appsQuery, appsProjection);
+  const appResult = await appsRepository.getGlobalAppInfoRaw(appSpecFormatted.name, { name: 1, height: 1, expire: 1 });
 
   if (appResult) {
     // in this case, check if hash of the message is older than our current app
@@ -744,28 +710,9 @@ async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash)
  * @returns {Promise<boolean>} Update result
  */
 async function updateAppSpecsForRescanReindex(appSpecs) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-
-  const query = { name: appSpecs.name };
-  const options = {
-    upsert: true,
-  };
-  const projection = {
-    projection: {
-      _id: 0,
-    },
-  };
-  const appInfo = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-  if (appInfo) {
-    if (appInfo.height < appSpecs.height) {
-      // replaceOne instead of $set to avoid accumulating ghost fields
-      // from prior spec versions (e.g. flat fields from v1-v3 lingering
-      // after upgrade to v4+ compose format)
-      await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, options);
-    }
-  } else {
-    await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, options);
+  const existing = await appsRepository.getGlobalAppInfoRaw(appSpecs.name);
+  if (!existing || existing.height < appSpecs.height) {
+    await appsRepository.upsertGlobalAppInfo(appSpecs);
   }
   return true;
 }
@@ -777,11 +724,7 @@ async function updateAppSpecsForRescanReindex(appSpecs) {
  */
 async function storeAppSpecificationInPermanentStorage(appSpec) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-
-    await dbHelper.insertOneToDatabase(database, globalAppsInformation, appSpec);
-
+    await appsRepository.upsertGlobalAppInfo(appSpec);
     log.info(`App specification stored permanently for ${appSpec.name}`);
     return { status: 'success', message: 'App specification stored' };
   } catch (error) {
@@ -797,14 +740,7 @@ async function storeAppSpecificationInPermanentStorage(appSpec) {
  */
 async function getAppSpecificationFromDb(appName) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-
-    const query = { name: new RegExp(`^${appName}$`, 'i') };
-    const projection = { projection: { _id: 0 } };
-
-    const appSpec = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-    return appSpec;
+    return await appsRepository.getGlobalAppInfoRaw(appName);
   } catch (error) {
     log.error(`Error getting app specification from database: ${error.message}`);
     return null;
@@ -831,14 +767,7 @@ async function getAllAppsInformation() {
  */
 async function getInstalledApps() {
   try {
-    const localDb = dbHelper.databaseConnection();
-    const localDatabase = localDb.db(config.database.appslocal.database);
-
-    const query = {};
-    const projection = { projection: { _id: 0 } };
-
-    const installedApps = await dbHelper.findInDatabase(localDatabase, localAppsInformation, query, projection);
-    return installedApps;
+    return await appsRepository.listInstalledAppsRaw();
   } catch (error) {
     log.error(`Error getting installed apps: ${error.message}`);
     return [];
@@ -920,18 +849,14 @@ function registrationInformation(_req, res) {
  */
 async function getAllGlobalApplications(proj = []) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = {};
-    const wantedProjection = {
-      _id: 0,
-    };
+    const projection = {};
     proj.forEach((field) => {
-      wantedProjection[field] = 1;
+      projection[field] = 1;
     });
-    const projection = { projection: wantedProjection, sort: { height: 1 } }; // ensure sort from oldest to newest
-    const results = await dbHelper.findInDatabase(database, globalAppsInformation, query, projection);
-    return results;
+    return await appsRepository.listGlobalAppInfoRaw({
+      projection: Object.keys(projection).length > 0 ? projection : undefined,
+      sort: { height: 1 },
+    });
   } catch (error) {
     log.error(error);
     return [];
@@ -964,16 +889,10 @@ async function expireGlobalApplications() {
     if (explorerHeight < config.fluxapps.newMinBlocksAllowanceBlock) {
       minExpirationHeight = explorerHeight - config.fluxapps.minBlocksAllowance; // do a pre search in db as every app has to live for at least minBlocksAllowance
     }
-    // get global applications specification that have up to date data
-    // find applications that have specifications height lower than minExpirationHeight
-    const databaseApps = dbopen.db(config.database.appsglobal.database);
-    const queryApps = { height: { $lt: minExpirationHeight } };
-    const projectionApps = {
-      projection: {
-        _id: 0, name: 1, hash: 1, expire: 1, height: 1,
-      },
-    };
-    const results = await dbHelper.findInDatabase(databaseApps, globalAppsInformation, queryApps, projectionApps);
+    const results = await appsRepository.listGlobalAppInfoRaw({
+      filter: { height: { $lt: minExpirationHeight } },
+      projection: { name: 1, hash: 1, expire: 1, height: 1 },
+    });
     const appsToExpire = [];
     results.forEach((appSpecs) => {
       // Determine default expire based on whether app was registered after PON fork
@@ -1004,15 +923,13 @@ async function expireGlobalApplications() {
     const appNamesToExpire = appsToExpire.map((res) => res.name);
     // remove appNamesToExpire apps from global database
     // eslint-disable-next-line no-restricted-syntax
+    const databaseApps = dbopen.db(config.database.appsglobal.database);
     for (const app of appsToExpire) {
       log.info(`Expiring application ${app.name}`);
-      const queryDeleteApp = { name: app.name };
       // eslint-disable-next-line no-await-in-loop
-      await dbHelper.findOneAndDeleteInDatabase(databaseApps, globalAppsInformation, queryDeleteApp, projectionApps);
-
-      const queryDeleteAppErrors = { name: app.name };
+      await appsRepository.removeGlobalAppInfo(app.name);
       // eslint-disable-next-line no-await-in-loop
-      await dbHelper.removeDocumentsFromCollection(databaseApps, globalAppsInstallingErrorsLocations, queryDeleteAppErrors);
+      await dbHelper.removeDocumentsFromCollection(databaseApps, globalAppsInstallingErrorsLocations, { name: app.name });
     }
 
     // get list of locally installed apps.
@@ -1086,33 +1003,14 @@ async function expireGlobalApplications() {
  */
 async function updateAppSpecifications(appSpecs) {
   try {
+    const existing = await appsRepository.getGlobalAppInfoRaw(appSpecs.name);
+    if (!existing || existing.height < appSpecs.height) {
+      await appsRepository.upsertGlobalAppInfo(appSpecs);
+    }
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.appsglobal.database);
-
-    const query = { name: appSpecs.name };
-    const options = {
-      upsert: true,
-    };
-    const projection = {
-      projection: {
-        _id: 0,
-      },
-    };
-    const appInfo = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-    if (appInfo) {
-      if (appInfo.height < appSpecs.height) {
-        // replaceOne instead of $set to avoid accumulating ghost fields
-        // from prior spec versions (e.g. flat fields from v1-v3 lingering
-        // after upgrade to v4+ compose format)
-        await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, options);
-      }
-    } else {
-      await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, options);
-    }
-    const queryDeleteAppErrors = { name: appSpecs.name };
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsLocations, queryDeleteAppErrors);
+    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsLocations, { name: appSpecs.name });
   } catch (error) {
-    // retry
     log.error(error);
     await serviceHelper.delay(60 * 1000);
     updateAppSpecifications(appSpecs);

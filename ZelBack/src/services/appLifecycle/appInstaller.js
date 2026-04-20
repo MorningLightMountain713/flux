@@ -27,6 +27,7 @@ const globalState = require('../utils/globalState');
 const { decryptIfEnterprise, deserializeSpec } = require('../utils/specCutover');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
+const appsRepository = require('../appDatabase/appsRepository');
 const { appsFolder, localAppsInformation, scannedHeightCollection } = require('../utils/appConstants');
 const { checkAppTemporaryMessageExistence, checkAppMessageExistence } = require('../appMessaging/messageVerifier');
 const { availableApps, getApplicationGlobalSpecifications } = require('../appDatabase/registryManager');
@@ -371,7 +372,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
       res.write(serviceHelper.ensureString(checkDb));
       if (res.flush) res.flush();
     }
-    const appResult = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
+    const appResult = await appsRepository.getInstalledAppRaw(appName, { name: 1 });
     if (appResult && !isComponent) {
       globalState.installationInProgress = false;
       const rStatus = messageHelper.createErrorMessage(`Flux App ${appName} already installed`);
@@ -487,17 +488,14 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
         dbSpecs.contacts = [];
       }
 
-      // Ensure no stale database entry exists before inserting
-      // This prevents duplicate key errors and ensures fresh data
-      const cleanupQuery = { name: appSpecifications.name };
-      const existingEntry = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, cleanupQuery, {});
+      const existingEntry = await appsRepository.getInstalledAppRaw(appSpecifications.name);
       if (existingEntry) {
         log.warn(`Found existing database entry for ${appSpecifications.name} during registration. Cleaning up stale entry.`);
-        await dbHelper.findOneAndDeleteInDatabase(appsDatabase, localAppsInformation, cleanupQuery, {});
+        await appsRepository.removeInstalledApp(appSpecifications.name);
         log.info(`Stale database entry for ${appSpecifications.name} removed. Proceeding with fresh insert.`);
       }
 
-      const insertResult = await dbHelper.insertOneToDatabase(appsDatabase, localAppsInformation, dbSpecs);
+      const insertResult = await appsRepository.insertInstalledApp(dbSpecs);
       if (!insertResult) {
         throw new Error(`CRITICAL: Failed to create database entry for ${appSpecifications.name}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
       }
@@ -510,9 +508,7 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
       // Validate database entry exists before creating Docker containers (atomic transaction check)
       // This prevents orphaned Docker containers if DB entry was deleted/corrupted between insert and Docker creation
       if (!isComponent) {
-        const dbValidationQuery = { name: appSpecifications.name };
-        const dbValidationProjection = { projection: { _id: 0, name: 1 } };
-        const dbEntryExists = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, dbValidationQuery, dbValidationProjection);
+        const dbEntryExists = await appsRepository.getInstalledAppRaw(appSpecifications.name, { name: 1 });
         if (!dbEntryExists) {
           throw new Error(`Database entry validation failed for ${appSpecifications.name}. Entry was inserted but disappeared before Docker container creation. Possible race condition or database corruption detected.`);
         }
@@ -931,16 +927,7 @@ async function installAppLocally(req, res) {
         appSpecifications.height = explorerHeight - config.fluxapps.blocksLasting + blockAllowance; // allow running for this amount of blocks
       }
 
-      const appsDatabase = dbopen.db(config.database.appslocal.database);
-      const appsQuery = {}; // all
-      const appsProjection = {
-        projection: {
-          _id: 0,
-          name: 1,
-        },
-      };
-      const apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-      const appExists = apps.find((app) => app.name === appSpecifications.name);
+      const appExists = await appsRepository.getInstalledAppRaw(appSpecifications.name, { name: 1 });
       if (appExists) { // double checked in installation process.
         throw new Error(`Application ${appname} is already installed`);
       }

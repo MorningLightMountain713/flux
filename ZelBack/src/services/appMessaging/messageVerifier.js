@@ -12,6 +12,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates, getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
 const { decryptIfEnterprise, decryptToCleartextClass } = require('../utils/specCutover');
+const appsRepository = require('../appDatabase/appsRepository');
 const { updateAppSpecifications } = require('../appDatabase/registryManager');
 const { getPreviousAppSpecifications } = require('../appLifecycle/advancedWorkflows');
 const {
@@ -759,21 +760,15 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
           // This handles the case where an update message was received after the app expired
           log.warn(`App ${specifications.name} has expired (expiration height ${actualExpirationHeight} <= daemon height ${daemonHeight}). Cleaning up stale data.`);
 
-          const db = dbHelper.databaseConnection();
-
           // Remove from global apps information if it exists with stale data
-          const databaseGlobal = db.db(config.database.appsglobal.database);
-          const queryDeleteApp = { name: specifications.name };
-          const projectionApps = { projection: { _id: 0, name: 1 } };
-          const existingGlobalApp = await dbHelper.findOneInDatabase(databaseGlobal, globalAppsInformation, queryDeleteApp, projectionApps);
+          const existingGlobalApp = await appsRepository.getGlobalAppInfoRaw(specifications.name, { name: 1 });
           if (existingGlobalApp) {
             log.warn(`Removing expired app ${specifications.name} from global apps database`);
-            await dbHelper.findOneAndDeleteInDatabase(databaseGlobal, globalAppsInformation, queryDeleteApp, projectionApps);
+            await appsRepository.removeGlobalAppInfo(specifications.name);
           }
 
           // Check if app is installed locally and remove it
-          const databaseLocal = db.db(config.database.appslocal.database);
-          const existingLocalApp = await dbHelper.findOneInDatabase(databaseLocal, localAppsInformation, queryDeleteApp, projectionApps);
+          const existingLocalApp = await appsRepository.getInstalledAppRaw(specifications.name, { name: 1 });
           if (existingLocalApp) {
             log.warn(`REMOVAL REASON: App expired - ${specifications.name} update received after expiration (messageVerifier)`);
             // Use dynamic require to avoid circular dependency

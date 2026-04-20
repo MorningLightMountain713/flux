@@ -4,6 +4,7 @@ const nodecmd = require('node-cmd');
 const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
+const appsRepository = require('../appDatabase/appsRepository');
 const { localAppsInformation, appsFolder } = require('../utils/appConstants');
 const dockerService = require('../dockerService');
 const appUninstaller = require('./appUninstaller');
@@ -20,14 +21,7 @@ async function getInstalledAppIds() {
   const installedAppIds = new Set();
 
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-
-    const appsProjection = {
-      projection: { _id: 0 },
-    };
-
-    const apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, {}, appsProjection);
+    const apps = await appsRepository.listInstalledAppsRaw();
 
     if (!apps || !Array.isArray(apps)) {
       return installedAppIds;

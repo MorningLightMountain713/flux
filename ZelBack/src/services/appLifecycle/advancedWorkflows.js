@@ -24,6 +24,7 @@ const {
   globalAppsLocations,
   appsFolder,
 } = require('../utils/appConstants');
+const appsRepository = require('../appDatabase/appsRepository');
 const {
   toCanonicalSpec,
   decryptIfEnterprise,
@@ -61,17 +62,11 @@ function getInstalledAppsForDocker() {
   }
 }
 
-// Get installed apps from database
 async function getInstalledAppsFromDb(options = {}) {
   try {
     const { decryptApps = false } = options;
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const appsQuery = {};
-    const appsProjection = {
-      projection: { _id: 0 },
-    };
-    let apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
+    const instantiatedSpecs = await appsRepository.listInstalledApps();
+    let apps = instantiatedSpecs.map((is) => is.serialize());
     if (decryptApps) {
       apps = await decryptEnterpriseApps(apps);
     }
@@ -100,20 +95,11 @@ function hasComponentStructureChange(newSpec, oldSpec) {
   return !newNames.every((name) => oldNames.has(name));
 }
 
-// Get strict application specifications
 async function getStrictApplicationSpecifications(appName) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-
-    const query = { name: appName };
-    const projection = {
-      projection: {
-        _id: 0,
-      },
-    };
-    const appInfo = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-    return appInfo;
+    const instantiated = await appsRepository.getGlobalAppInfo(appName);
+    if (!instantiated) return null;
+    return instantiated.serialize();
   } catch (error) {
     log.error(`Error getting strict app specifications for ${appName}:`, error);
     return null;
@@ -952,7 +938,7 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
       res.write(serviceHelper.ensureString(checkDb));
       if (res.flush) res.flush();
     }
-    const appResult = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
+    const appResult = await appsRepository.getInstalledAppRaw(appName, { name: 1 });
     if (appResult && !isComponent) {
       globalState.installationInProgress = false;
       const rStatus = messageHelper.createErrorMessage(`Flux App ${appName} already installed`);
@@ -1231,12 +1217,7 @@ async function softRemoveAppLocally(app, res) {
     const appComponent = app.split('_')[0];
 
     // Fetch app specifications from database
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const appsQuery = { name: appName };
-    const appsProjection = {};
-
-    let appSpecifications = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
+    let appSpecifications = await appsRepository.getInstalledAppRaw(appName);
     if (!appSpecifications) {
       throw new Error('Flux App not found');
     }
@@ -2768,11 +2749,7 @@ async function updateAppGlobaly(params) {
   }
 
   // verify that app exists, does not change repotag and is signed by app owner.
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const query = { name: appSpecFormatted.name };
-  const projection = { projection: { _id: 0 } };
-  const appInfo = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
+  const appInfo = await appsRepository.getGlobalAppInfoRaw(appSpecFormatted.name);
   if (!appInfo) {
     throw new Error('Flux App update received but application to update does not exist!');
   }

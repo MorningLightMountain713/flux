@@ -8,6 +8,7 @@ const log = require('../../lib/log');
 const upnpService = require('../upnpService');
 const serviceHelper = require('../serviceHelper');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
+const appsRepository = require('../appDatabase/appsRepository');
 const { decryptIfEnterprise } = require('../utils/specCutover');
 const { localAppsInformation, globalAppsInformation } = require('../utils/appConstants');
 
@@ -65,11 +66,7 @@ function ensureAppUniquePorts(appSpecFormatted) {
  */
 async function assignedPortsInstalledApps() {
   // construct object ob app name and ports array
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appslocal.database);
-  const query = {};
-  const projection = { projection: { _id: 0 } };
-  const results = await dbHelper.findInDatabase(database, localAppsInformation, query, projection);
+  const results = await appsRepository.listInstalledAppsRaw();
   const decryptedApps = [];
   // eslint-disable-next-line no-restricted-syntax
   for (const spec of results) {
@@ -116,17 +113,12 @@ async function assignedPortsInstalledApps() {
  * @returns {Promise<Array>} Array of objects with app names and their assigned ports
  */
 async function assignedPortsGlobalApps(appNames) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-
   if (!appNames || appNames.length === 0) {
     return [];
   }
 
   const appsQuery = appNames.map((app) => ({ name: app }));
-  const query = { $or: appsQuery };
-  const projection = { projection: { _id: 0 } };
-  const results = await dbHelper.findInDatabase(database, globalAppsInformation, query, projection);
+  const results = await appsRepository.listGlobalAppInfoRaw({ filter: { $or: appsQuery } });
 
   const appsWithPorts = [];
 

@@ -8,6 +8,7 @@ const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const imageVerifier = require('../utils/imageVerifier');
 const dbHelper = require('../dbHelper');
 const verificationHelper = require('../verificationHelper');
+const appsRepository = require('../appDatabase/appsRepository');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const log = require('../../lib/log');
 const { supportedArchitectures, globalAppsMessages, globalAppsInformation } = require('../utils/appConstants');
@@ -339,13 +340,8 @@ async function checkAppSecrets(appName, appComponentSpecs, appOwner, registratio
 
   const appComponentSecrets = normalizePGP(appComponentSpecs.secrets);
 
-  // Database connection
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const projection = { projection: { _id: 0 } };
-
   // Query global apps
-  const results = await dbHelper.findInDatabase(database, globalAppsInformation, {}, projection);
+  const results = await appsRepository.listGlobalAppInfoRaw();
 
   let foundSecretsWithSameAppName = false;
   let foundSecretsWithDifferentAppName = false;

@@ -1,8 +1,7 @@
 /**
  * Typed repository over the apps collections. Every read hydrates raw
- * Mongo documents into `FluxAppSpec*` class instances via the version
- * class's `deserialize` (or `fromCanonical` for v9+), so consumers never
- * reach into field names that only exist in one version's shape. Writes
+ * Mongo documents into `InstantiatedSpec` instances that carry the spec
+ * class plus hash, height, registeredAt, and expiry logic. Writes
  * still take the raw plain-object form — the submission path builds the
  * storage shape and passes it through.
  *
@@ -16,9 +15,9 @@
  * return the plain document — spec-shape fields aren't read.
  *
  * Enterprise decryption is NOT this module's concern. `getGlobalAppInfo`
- * on an encrypted v8 spec returns a `FluxAppSpecV8` with
- * `isEncrypted() === true`. Callers that need cleartext compose/env call
- * the enterprise decryption helpers separately.
+ * on an encrypted v8 app returns an `InstantiatedSpec` whose `.spec` is
+ * an `EncryptedSpecBase` instance (`instantiated.isEncrypted()` is true).
+ * Callers that need cleartext access the spec and decrypt explicitly.
  */
 
 const config = require('config');
@@ -41,40 +40,32 @@ function nameRegex(name) {
 }
 
 /**
- * Hydrate a raw spec document into the appropriate `FluxAppSpec*`
- * instance. Returns null if the version class isn't registered.
+ * Hydrate a raw Mongo document into an InstantiatedSpec — the domain
+ * type that carries the spec class plus hash, height, registeredAt, and
+ * expiry logic. Returns null if the version class isn't registered.
  *
  * v1-v8: document is the spec itself (flat or compose) with `hash` and
- * `height` appended. `VersionClass.deserialize(doc)` captures those as
- * private metadata.
+ * `height` as top-level fields.
  *
- * v9+: not yet wired here. v9 documents are shaped differently
- * (`{appSpecifications, hash, height, ...}`) and the flux-spec base
- * class doesn't expose `deserialize`. When the big-bang v9 cutover
- * starts flowing v9 records into these collections, extend this
- * dispatch — for now throw loudly so it's caught early.
+ * v9+: not yet wired here. v9 documents nest the spec under
+ * `appSpecifications` — extend this dispatch when v9 records flow into
+ * these collections.
  *
  * @param {Object|null} doc - Raw Mongo document, or null from findOne miss.
- * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase|null>}
+ * @returns {Promise<import('@runonflux/flux-spec-backend').InstantiatedSpec|null>}
  */
 async function hydrate(doc) {
   if (!doc) return null;
 
   await getSpec(); // ensure FluxAppSpecBase + v9 registration
-  const { deserializeSpec } = await getSpecBackend(); // registers v1-v8 + brings dispatch
+  const { InstantiatedSpec } = await getSpecBackend();
 
   if (doc.version === 9) {
-    // v9 storage shape is nested under `appSpecifications` — hydration path
-    // lands when the v9 ingestion cutover ships.
     throw new Error('appsRepository: v9 hydration not yet implemented');
   }
 
-  // deserializeSpec dispatches on wire shape: encrypted v8 (non-empty
-  // enterprise string) → EncryptedSpecV8, everything else → the cleartext
-  // VersionClass.deserialize. Returns a FluxAppSpecBase or
-  // EncryptedSpecBase instance. Callers branch with instanceof.
   try {
-    return deserializeSpec(doc);
+    return InstantiatedSpec.deserialize(doc);
   } catch (err) {
     log.warn(`appsRepository.hydrate: ${err.message} (name=${doc.name}, version=${doc.version})`);
     return null;
@@ -94,7 +85,7 @@ function localDb() {
  * into the appropriate class instance.
  *
  * @param {string} name
- * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase|null>}
+ * @returns {Promise<import('@runonflux/flux-spec-backend').InstantiatedSpec|null>}
  */
 async function getGlobalAppInfo(name) {
   const doc = await dbHelper.findOneInDatabase(
@@ -133,7 +124,7 @@ async function getGlobalAppInfoRaw(name, projection = {}) {
  * @param {Object} [options]
  * @param {Object} [options.filter] - Mongo filter. Defaults to all.
  * @param {Object} [options.sort]   - Mongo sort. Defaults to no sort.
- * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase[]>}
+ * @returns {Promise<import('@runonflux/flux-spec-backend').InstantiatedSpec[]>}
  */
 async function listGlobalAppInfo({ filter = {}, sort } = {}) {
   const options = { projection: { _id: 0 } };
@@ -219,7 +210,7 @@ async function removeGlobalAppInfo(name) {
  * hydrated into the appropriate class instance.
  *
  * @param {string} name
- * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase|null>}
+ * @returns {Promise<import('@runonflux/flux-spec-backend').InstantiatedSpec|null>}
  */
 async function getInstalledApp(name) {
   const doc = await dbHelper.findOneInDatabase(
@@ -234,7 +225,7 @@ async function getInstalledApp(name) {
 /**
  * List all installed apps on this node, hydrated.
  *
- * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase[]>}
+ * @returns {Promise<import('@runonflux/flux-spec-backend').InstantiatedSpec[]>}
  */
 async function listInstalledApps() {
   const docs = await dbHelper.findInDatabase(
@@ -250,6 +241,24 @@ async function listInstalledApps() {
     if (spec) specs.push(spec);
   }
   return specs;
+}
+
+/**
+ * Look up a single installed-on-this-node app spec by name, returning
+ * the raw document. Use when spec-shape fields aren't read.
+ *
+ * @param {string} name
+ * @param {Object} [projection]
+ * @returns {Promise<Object|null>}
+ */
+async function getInstalledAppRaw(name, projection = {}) {
+  const finalProjection = { _id: 0, ...projection };
+  return dbHelper.findOneInDatabase(
+    localDb(),
+    localAppsInformation,
+    { name: nameRegex(name) },
+    { projection: finalProjection },
+  );
 }
 
 /**
@@ -270,12 +279,42 @@ async function listInstalledAppsRaw({ filter = {}, projection } = {}) {
 }
 
 /**
+ * Remove an installed app by name (case-insensitive).
+ *
+ * @param {string} name
+ * @returns {Promise<import('mongodb').DeleteResult>}
+ */
+async function removeInstalledApp(name) {
+  return dbHelper.findOneAndDeleteInDatabase(
+    localDb(),
+    localAppsInformation,
+    { name: nameRegex(name) },
+    {},
+  );
+}
+
+/**
+ * Insert a spec into localAppsInformation. The caller supplies the
+ * storage-shape plain object.
+ *
+ * @param {Object} specDoc
+ * @returns {Promise<import('mongodb').InsertOneResult>}
+ */
+async function insertInstalledApp(specDoc) {
+  return dbHelper.insertOneToDatabase(
+    localDb(),
+    localAppsInformation,
+    specDoc,
+  );
+}
+
+/**
  * Look up a permanent app message by its hash. Messages are stored
  * with the spec nested under `appSpecifications`; hydrate that
  * nested shape for callers that want the class instance.
  *
  * @param {string} hash
- * @returns {Promise<Object|null>} `{ message: rawDoc, spec: FluxAppSpec*|null }`
+ * @returns {Promise<Object|null>} `{ message: rawDoc, spec: InstantiatedSpec|null }`
  *   or null if the hash isn't found.
  */
 async function getAppMessage(hash) {
@@ -304,7 +343,10 @@ module.exports = {
   upsertGlobalAppInfo,
   removeGlobalAppInfo,
   getInstalledApp,
+  getInstalledAppRaw,
   listInstalledApps,
   listInstalledAppsRaw,
+  removeInstalledApp,
+  insertInstalledApp,
   getAppMessage,
 };
