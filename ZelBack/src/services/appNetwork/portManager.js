@@ -9,54 +9,27 @@ const upnpService = require('../upnpService');
 const serviceHelper = require('../serviceHelper');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
 const appsRepository = require('../appDatabase/appsRepository');
-const { decryptIfEnterprise } = require('../utils/specCutover');
-const { localAppsInformation, globalAppsInformation } = require('../utils/appConstants');
+const { decryptToCleartextClass } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
+const { localAppsInformation, globalAppsInformation, appsFolder } = require('../utils/appConstants');
 
 // Global cache for failed nodes
 const failedNodesTestPortsCache = new Map();
 
-/**
- * Check if ports in array are unique
- * @param {number[]} portsArray - Array of port numbers
- * @returns {boolean} True if all ports are unique
- */
-function appPortsUnique(portsArray) {
-  return (new Set(portsArray)).size === portsArray.length;
+async function buildDeployment(plainSpec) {
+  const { DeploymentSpec } = await getSpecBackend();
+  const spec = await decryptToCleartextClass(plainSpec);
+  return DeploymentSpec.fromSpec(spec, appsFolder);
 }
 
-/**
- * Ensure that the app ports are unique within the app specification
- * @param {object} appSpecFormatted - App specifications
- * @returns {boolean} True if ports are unique
- * @throws {Error} If ports are not unique
- */
-function ensureAppUniquePorts(appSpecFormatted) {
-  if (appSpecFormatted.version === 1) {
-    return true;
+function ensureAppUniquePorts(deployment) {
+  const allHostPorts = [];
+  for (const comp of Object.values(deployment.components)) {
+    allHostPorts.push(...comp.hostPorts);
   }
-
-  if (appSpecFormatted.version <= 3) {
-    const portsUnique = appPortsUnique(appSpecFormatted.ports);
-    if (!portsUnique) {
-      throw new Error(`Flux App ${appSpecFormatted.name} must have unique ports specified`);
-    }
-  } else {
-    // For version 4+ compose applications
-    const allPorts = [];
-    if (appSpecFormatted.compose) {
-      appSpecFormatted.compose.forEach((component) => {
-        if (component.ports) {
-          allPorts.push(...component.ports);
-        }
-      });
-    }
-
-    const portsUnique = appPortsUnique(allPorts);
-    if (!portsUnique) {
-      throw new Error(`Flux App ${appSpecFormatted.name} must have unique ports specified accross all composition`);
-    }
+  if ((new Set(allHostPorts)).size !== allHostPorts.length) {
+    throw new Error(`Flux App ${deployment.appName} must have unique ports specified across all components`);
   }
-
   return true;
 }
 
@@ -65,45 +38,17 @@ function ensureAppUniquePorts(appSpecFormatted) {
  * @returns {Promise<Array>} Array of objects with app names and their assigned ports
  */
 async function assignedPortsInstalledApps() {
-  // construct object ob app name and ports array
   const results = await appsRepository.listInstalledAppsRaw();
-  const decryptedApps = [];
-  // eslint-disable-next-line no-restricted-syntax
-  for (const spec of results) {
-    // eslint-disable-next-line no-await-in-loop
-    decryptedApps.push(await decryptIfEnterprise(spec));
-  }
   const apps = [];
-  decryptedApps.forEach((app) => {
-    // there is no app
-    if (app.version === 1) {
-      const appSpecs = {
-        name: app.name,
-        ports: [Number(app.port)],
-      };
-      apps.push(appSpecs);
-    } else if (app.version <= 3) {
-      const appSpecs = {
-        name: app.name,
-        ports: [],
-      };
-      app.ports.forEach((port) => {
-        appSpecs.ports.push(Number(port));
-      });
-      apps.push(appSpecs);
-    } else if (app.version >= 4) {
-      const appSpecs = {
-        name: app.name,
-        ports: [],
-      };
-      app.compose.forEach((component) => {
-        component.ports.forEach((port) => {
-          appSpecs.ports.push(Number(port));
-        });
-      });
-      apps.push(appSpecs);
+  for (const rawSpec of results) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const deployment = await buildDeployment(rawSpec);
+      apps.push({ name: deployment.appName, ports: deployment.allHostPorts() });
+    } catch (err) {
+      log.warn(`assignedPortsInstalledApps: skipping ${rawSpec.name}: ${err.message}`);
     }
-  });
+  }
   return apps;
 }
 
@@ -113,53 +58,29 @@ async function assignedPortsInstalledApps() {
  * @returns {Promise<Array>} Array of objects with app names and their assigned ports
  */
 async function assignedPortsGlobalApps(appNames) {
-  if (!appNames || appNames.length === 0) {
-    return [];
-  }
+  if (!appNames || appNames.length === 0) return [];
 
   const appsQuery = appNames.map((app) => ({ name: app }));
   const results = await appsRepository.listGlobalAppInfoRaw({ filter: { $or: appsQuery } });
-
-  const appsWithPorts = [];
-
-  results.forEach((app) => {
-    const appPorts = [];
-
-    if (app.version === 1) {
-      if (app.port) {
-        appPorts.push(Number(app.port));
+  const apps = [];
+  for (const rawSpec of results) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const deployment = await buildDeployment(rawSpec);
+      const ports = deployment.allHostPorts();
+      if (ports.length > 0) {
+        apps.push({ name: deployment.appName, ports });
       }
-    } else if (app.version <= 3) {
-      if (app.ports && Array.isArray(app.ports)) {
-        app.ports.forEach((port) => {
-          appPorts.push(Number(port));
-        });
-      }
-    } else if (app.version >= 4 && app.compose) {
-      // For compose applications, collect ports from all components
-      app.compose.forEach((component) => {
-        if (component.ports && Array.isArray(component.ports)) {
-          component.ports.forEach((port) => {
-            appPorts.push(Number(port));
-          });
-        }
-      });
+    } catch (err) {
+      log.warn(`assignedPortsGlobalApps: skipping ${rawSpec.name}: ${err.message}`);
     }
-
-    if (appPorts.length > 0) {
-      appsWithPorts.push({
-        name: app.name,
-        ports: appPorts,
-      });
-    }
-  });
-
-  return appsWithPorts;
+  }
+  return apps;
 }
 
 /**
  * Ensure application ports are not already in use
- * @param {object} appSpecFormatted - App specifications
+ * @param {object} appSpecFormatted - Plain wire-form app spec
  * @param {string[]} globalCheckedApps - Global apps to check against
  * @returns {Promise<boolean>} True if ports are available
  * @throws {Error} If ports are already in use
@@ -172,29 +93,11 @@ async function ensureApplicationPortsNotUsed(appSpecFormatted, globalCheckedApps
     currentAppsPorts = currentAppsPorts.concat(globalAppsPorts);
   }
 
-  if (appSpecFormatted.version === 1) {
-    const portAssigned = currentAppsPorts.find((app) => app.ports.includes(Number(appSpecFormatted.port)));
-    if (portAssigned && portAssigned.name !== appSpecFormatted.name) {
-      throw new Error(`Flux App ${appSpecFormatted.name} port ${appSpecFormatted.port} already used with different application. Installation aborted.`);
-    }
-  } else if (appSpecFormatted.version <= 3) {
-    // eslint-disable-next-line no-restricted-syntax
-    for (const port of appSpecFormatted.ports) {
-      const portAssigned = currentAppsPorts.find((app) => app.ports.includes(Number(port)));
-      if (portAssigned && portAssigned.name !== appSpecFormatted.name) {
-        throw new Error(`Flux App ${appSpecFormatted.name} port ${port} already used with different application. Installation aborted.`);
-      }
-    }
-  } else {
-    // eslint-disable-next-line no-restricted-syntax
-    for (const appComponent of appSpecFormatted.compose) {
-      // eslint-disable-next-line no-restricted-syntax
-      for (const port of appComponent.ports) {
-        const portAssigned = currentAppsPorts.find((app) => app.ports.includes(port));
-        if (portAssigned && portAssigned.name !== appSpecFormatted.name) {
-          throw new Error(`Flux App ${appSpecFormatted.name} port ${port} already used with different application. Installation aborted.`);
-        }
-      }
+  const deployment = await buildDeployment(appSpecFormatted);
+  for (const port of deployment.allHostPorts()) {
+    const portAssigned = currentAppsPorts.find((app) => app.ports.includes(port));
+    if (portAssigned && portAssigned.name !== deployment.appName) {
+      throw new Error(`Flux App ${deployment.appName} port ${port} already used with different application. Installation aborted.`);
     }
   }
   return true;
@@ -667,7 +570,6 @@ async function callOtherNodeToKeepUpnpPortsOpen() {
 }
 
 module.exports = {
-  appPortsUnique,
   ensureAppUniquePorts,
   assignedPortsInstalledApps,
   assignedPortsGlobalApps,

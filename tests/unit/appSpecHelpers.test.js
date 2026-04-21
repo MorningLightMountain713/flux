@@ -7,6 +7,7 @@ const proxyquire = require('proxyquire');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 
 function mockComponent(plain) {
   return {
@@ -30,7 +31,36 @@ function mockClassSpec(plain) {
     instances: plain.instances,
     nodes: plain.nodes || [],
     components: componentsObj,
+    componentCount: comps.length,
     getComponent(name) { return componentsObj[name]; },
+    componentNames() { return Object.keys(componentsObj); },
+    componentEntries() { return Object.entries(componentsObj); },
+    firstComponent() { return comps[0]; },
+  };
+}
+
+function mockInstantiatedSpec(appInfo) {
+  if (!appInfo) return null;
+  const classSpec = mockClassSpec(appInfo);
+  const PON_FORK = 2020000;
+  const defaultExpire = appInfo.height >= PON_FORK ? 88000 : 22000;
+  const expire = appInfo.expire || defaultExpire;
+  let expiresAtHeight = appInfo.height + expire;
+  if (appInfo.height < PON_FORK) {
+    const naive = appInfo.height + expire;
+    if (naive > PON_FORK) {
+      expiresAtHeight = PON_FORK + ((naive - PON_FORK) * 4);
+    }
+  }
+  return {
+    spec: classSpec,
+    height: appInfo.height,
+    name: appInfo.name,
+    version: appInfo.version || 4,
+    hash: appInfo.hash || 'testhash',
+    expiresAtHeight,
+    isEncrypted: () => false,
+    serialize: () => ({ ...appInfo }),
   };
 }
 
@@ -72,7 +102,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
 
@@ -108,7 +138,7 @@ describe('appSpecHelpers tests', () => {
         ],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
 
@@ -136,7 +166,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.false;
@@ -162,7 +192,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.false;
@@ -188,7 +218,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.false;
@@ -214,7 +244,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.false;
@@ -240,7 +270,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.false;
@@ -267,7 +297,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
 
@@ -297,7 +327,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'node', cpu: 0.3, ram: 300, hdd: 2 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
 
@@ -328,7 +358,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'a', cpu: 1, ram: 2000, hdd: 50 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.false;
@@ -342,7 +372,7 @@ describe('appSpecHelpers tests', () => {
       });
       const daemonHeight = 100000;
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(null);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.false;
@@ -368,7 +398,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.false;
@@ -399,7 +429,7 @@ describe('appSpecHelpers tests', () => {
         height: 99000,
       });
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
       sinon.stub(dbHelper, 'findInDatabase').resolves(recentMessages);
 
@@ -429,7 +459,7 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
       };
 
-      sinon.stub(registryManager, 'getApplicationGlobalSpecifications').resolves(appInfo);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
 

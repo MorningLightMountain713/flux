@@ -12,6 +12,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates, getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
 const { decryptIfEnterprise, decryptToCleartextClass } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { updateAppSpecifications } = require('../appDatabase/registryManager');
 const { getPreviousAppSpecifications } = require('../appLifecycle/advancedWorkflows');
@@ -591,26 +592,13 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
 
         const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
         const daemonHeight = syncStatus.data.height;
-        // Determine default expire based on whether app was registered after PON fork
-        const defaultExpire = height >= config.fluxapps.daemonPONFork ? 88000 : 22000;
-        const expire = specifications.expire || defaultExpire;
-        let actualExpirationHeight = height + expire;
+        const { InstantiatedSpec } = await getSpecBackend();
+        const instantiated = InstantiatedSpec.deserialize({ ...specifications, hash: tempMessage.hash, height });
 
-        // If app was registered before fork block and we are past fork block
-        // the chain moves 4x faster, so we need to adjust the expiration
-        if (height < config.fluxapps.daemonPONFork && daemonHeight >= config.fluxapps.daemonPONFork) {
-          const originalExpirationHeight = height + expire;
-          if (originalExpirationHeight > config.fluxapps.daemonPONFork) {
-            // Calculate blocks that were supposed to live after fork block
-            const blocksAfterFork = originalExpirationHeight - config.fluxapps.daemonPONFork;
-            // Multiply by 4 to account for 4x faster chain
-            const adjustedBlocksAfterFork = blocksAfterFork * 4;
-            // New expiration = fork block + adjusted blocks
-            actualExpirationHeight = config.fluxapps.daemonPONFork + adjustedBlocksAfterFork;
-          }
-        }
-
-        if (actualExpirationHeight > daemonHeight) {
+        if (instantiated.expiresAtHeight > daemonHeight) {
+          const defaultExpire = height >= config.fluxapps.daemonPONFork
+            ? config.fluxapps.blocksLasting * 4
+            : config.fluxapps.blocksLasting;
           // we only do this validations if the app can still be currently running to insert it or update it in globalappspecifications
           const appPrices = await getChainParamsPriceUpdates();
           const intervals = appPrices.filter((interval) => interval.height < height);
@@ -619,7 +607,6 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
           // check if value is optimal or higher
             const spec = await decryptToCleartextClass(specifications);
             let appPrice = await appPricePerMonth(spec, height, appPrices);
-            // Use defaultExpire from outer scope which accounts for PON fork
             const expireIn = spec.expire || defaultExpire;
             // app prices are ceiled to highest 0.01
             const multiplier = expireIn / defaultExpire;

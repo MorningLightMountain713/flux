@@ -643,12 +643,10 @@ async function availableApps(_req, res) {
  */
 async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash) {
   const dbopen = dbHelper.databaseConnection();
-  const appResult = await appsRepository.getGlobalAppInfoRaw(appSpecFormatted.name, { name: 1, height: 1, expire: 1 });
+  const existingApp = await appsRepository.getGlobalAppInfo(appSpecFormatted.name);
 
-  if (appResult) {
-    // in this case, check if hash of the message is older than our current app
+  if (existingApp) {
     if (hash) {
-      // check if we have the hash of the app in our db
       const query = { hash };
       const projection = {
         projection: {
@@ -663,26 +661,11 @@ async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash)
       if (!result) {
         throw new Error(`Flux App ${appSpecFormatted.name} already registered. Flux App has to be registered under different name. Hash not found in collection.`);
       }
-      if (appResult.height <= result.height) {
-        log.debug(appResult);
+      if (existingApp.height <= result.height) {
+        log.debug(existingApp.serialize());
         log.debug(result);
-        // Determine default expire based on whether app was registered after PON fork
-        const defaultExpire = appResult.height >= config.fluxapps.daemonPONFork ? 88000 : 22000;
-        const expireIn = appResult.expire || defaultExpire;
-        let currentExpiration = appResult.height + expireIn;
 
-        // If app was registered before fork block and expiration extends past fork block
-        // the chain moves 4x faster, so we need to adjust the expiration
-        if (appResult.height < config.fluxapps.daemonPONFork && currentExpiration > config.fluxapps.daemonPONFork) {
-          // Calculate blocks that were supposed to live after fork block
-          const blocksAfterFork = currentExpiration - config.fluxapps.daemonPONFork;
-          // Multiply by 4 to account for 4x faster chain
-          const adjustedBlocksAfterFork = blocksAfterFork * 4;
-          // New expiration = fork block + adjusted blocks
-          currentExpiration = config.fluxapps.daemonPONFork + adjustedBlocksAfterFork;
-        }
-
-        if (currentExpiration >= result.height) {
+        if (existingApp.expiresAtHeight >= result.height) {
           throw new Error(`Flux App ${appSpecFormatted.name} already registered. Flux App has to be registered under different name. Hash is not older than our current app.`);
         } else {
           log.warn(`Flux App ${appSpecFormatted.name} active specifications are outdated. Will be cleaned on next expiration`);
@@ -889,38 +872,13 @@ async function expireGlobalApplications() {
     if (explorerHeight < config.fluxapps.newMinBlocksAllowanceBlock) {
       minExpirationHeight = explorerHeight - config.fluxapps.minBlocksAllowance; // do a pre search in db as every app has to live for at least minBlocksAllowance
     }
-    const results = await appsRepository.listGlobalAppInfoRaw({
+    const candidates = await appsRepository.listGlobalAppInfo({
       filter: { height: { $lt: minExpirationHeight } },
-      projection: { name: 1, hash: 1, expire: 1, height: 1 },
     });
-    const appsToExpire = [];
-    results.forEach((appSpecs) => {
-      // Determine default expire based on whether app was registered after PON fork
-      const defaultExpire = appSpecs.height >= config.fluxapps.daemonPONFork
-        ? config.fluxapps.blocksLasting * 4
-        : config.fluxapps.blocksLasting;
-      const expireIn = appSpecs.expire || defaultExpire;
-      let actualExpirationHeight = appSpecs.height + expireIn;
-
-      // If app was registered before fork block and we are past fork block
-      // the chain moves 4x faster, so we need to adjust the expiration
-      if (appSpecs.height < config.fluxapps.daemonPONFork && explorerHeight >= config.fluxapps.daemonPONFork) {
-        const originalExpirationHeight = appSpecs.height + expireIn;
-        if (originalExpirationHeight > config.fluxapps.daemonPONFork) {
-          // Calculate blocks that were supposed to live after fork block
-          const blocksAfterFork = originalExpirationHeight - config.fluxapps.daemonPONFork;
-          // Multiply by 4 to account for 4x faster chain
-          const adjustedBlocksAfterFork = blocksAfterFork * 4;
-          // New expiration = fork block + adjusted blocks
-          actualExpirationHeight = config.fluxapps.daemonPONFork + adjustedBlocksAfterFork;
-        }
-      }
-
-      if (actualExpirationHeight < explorerHeight) { // registered/updated on height, expires in expireIn is lower than current height
-        appsToExpire.push(appSpecs);
-      }
-    });
-    const appNamesToExpire = appsToExpire.map((res) => res.name);
+    const appsToExpire = candidates.filter(
+      (is) => is.expiresAtHeight < explorerHeight,
+    );
+    const appNamesToExpire = appsToExpire.map((is) => is.name);
     // remove appNamesToExpire apps from global database
     // eslint-disable-next-line no-restricted-syntax
     const databaseApps = dbopen.db(config.database.appsglobal.database);
@@ -932,52 +890,28 @@ async function expireGlobalApplications() {
       await dbHelper.removeDocumentsFromCollection(databaseApps, globalAppsInstallingErrorsLocations, { name: app.name });
     }
 
-    // get list of locally installed apps.
-    // Use dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const appQueryService = require('../appQuery/appQueryService');
-    const installedAppsRes = await appQueryService.installedApps();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
-    }
-    const appsInstalled = installedAppsRes.data;
-    // remove any installed app which height is lower (or not present) but is not infinite app
-    const appsToRemove = [];
-    appsInstalled.forEach((app) => {
+    const installedDocs = await appsRepository.listInstalledAppsRaw({});
+    const { InstantiatedSpec } = await getSpecBackend();
+    const appsToRemoveNames = [];
+    for (const app of installedDocs) {
       if (appNamesToExpire.includes(app.name)) {
-        appsToRemove.push(app);
+        appsToRemoveNames.push(app.name);
       } else if (!app.height) {
-        appsToRemove.push(app);
+        appsToRemoveNames.push(app.name);
       } else if (app.height === 0) {
-        // do nothing, forever lasting local app
+        // forever lasting local app — skip
       } else {
-        // Determine default expire based on whether app was registered after PON fork
-        const defaultExpire = app.height >= config.fluxapps.daemonPONFork
-          ? config.fluxapps.blocksLasting * 4
-          : config.fluxapps.blocksLasting;
-        const expireIn = app.expire || defaultExpire;
-        let actualExpirationHeight = app.height + expireIn;
-
-        // If app was registered before fork block and we are past fork block
-        // the chain moves 4x faster, so we need to adjust the expiration
-        if (app.height < config.fluxapps.daemonPONFork && explorerHeight >= config.fluxapps.daemonPONFork) {
-          const originalExpirationHeight = app.height + expireIn;
-          if (originalExpirationHeight > config.fluxapps.daemonPONFork) {
-            // Calculate blocks that were supposed to live after fork block
-            const blocksAfterFork = originalExpirationHeight - config.fluxapps.daemonPONFork;
-            // Multiply by 4 to account for 4x faster chain
-            const adjustedBlocksAfterFork = blocksAfterFork * 4;
-            // New expiration = fork block + adjusted blocks
-            actualExpirationHeight = config.fluxapps.daemonPONFork + adjustedBlocksAfterFork;
+        try {
+          const is = InstantiatedSpec.deserialize(app);
+          if (is.expiresAtHeight < explorerHeight) {
+            appsToRemoveNames.push(app.name);
           }
-        }
-
-        if (actualExpirationHeight < explorerHeight) {
-          appsToRemove.push(app);
+        } catch (err) {
+          log.warn(`expireGlobalApplications: failed to hydrate local app ${app.name}: ${err.message}`);
+          appsToRemoveNames.push(app.name);
         }
       }
-    });
-    const appsToRemoveNames = appsToRemove.map((app) => app.name);
+    }
 
     // remove appsToRemoveNames apps from locally running
     // Use dynamic require to avoid circular dependency

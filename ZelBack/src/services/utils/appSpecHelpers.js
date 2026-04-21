@@ -8,6 +8,7 @@ const { decryptToCleartextClass } = require('./specCutover');
 const { appPricePerMonth } = require('./appUtilities');
 const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const registryManager = require('../appDatabase/registryManager');
+const appsRepository = require('../appDatabase/appsRepository');
 const cacheManager = require('./cacheManager').default;
 const { getSpecBackend } = require('./specLibs');
 const { appsFolder } = require('./appConstants');
@@ -135,10 +136,8 @@ function countEnterprisePortsOn(component) {
  * @returns {boolean}
  */
 function hasResourceGrowth(spec, prevSpec) {
-  for (const compA of Object.values(spec.components)) {
-    const compB = prevSpec.getComponent
-      ? prevSpec.getComponent(compA.name)
-      : prevSpec.components[compA.name];
+  for (const [, compA] of spec.componentEntries()) {
+    const compB = prevSpec.getComponent(compA.name);
     if (!compB) return true;
     if (compA.cpu > compB.cpu) return true;
     if (compA.memory > compB.memory) return true;
@@ -163,24 +162,17 @@ function hasResourceGrowth(spec, prevSpec) {
  * @returns {Promise<boolean>}
  */
 async function checkFreeAppUpdate(spec, daemonHeight) {
-  const appInfoDoc = await registryManager.getApplicationGlobalSpecifications(spec.name);
-  if (!appInfoDoc || !appInfoDoc.expire || !appInfoDoc.height || !spec.expire) return false;
+  const instantiated = await appsRepository.getGlobalAppInfo(spec.name);
+  if (!instantiated || !spec.expire) return false;
 
-  const prevSpec = await decryptToCleartextClass(appInfoDoc);
+  const prevSpec = instantiated.isEncrypted()
+    ? await decryptToCleartextClass(instantiated.serialize())
+    : instantiated.spec;
 
-  // Adjust prevSpec's effective expire height for PON fork crossover.
-  let adjustedPrevExpire = prevSpec.expire;
-  if (appInfoDoc.height < config.fluxapps.daemonPONFork) {
-    const originalExpireHeight = appInfoDoc.height + prevSpec.expire;
-    if (originalExpireHeight > config.fluxapps.daemonPONFork) {
-      const blocksBeforeFork = config.fluxapps.daemonPONFork - appInfoDoc.height;
-      const blocksAfterFork = originalExpireHeight - config.fluxapps.daemonPONFork;
-      adjustedPrevExpire = blocksBeforeFork + (blocksAfterFork * 4);
-    }
-  }
-  const adjustedExpirationHeight = appInfoDoc.height + adjustedPrevExpire;
+  if (!prevSpec.expire) return false;
+
   const newExpirationHeight = Number(daemonHeight) + spec.expire;
-  const blocksToExtend = newExpirationHeight - adjustedExpirationHeight;
+  const blocksToExtend = newExpirationHeight - instantiated.expiresAtHeight;
 
   const staticipMatch = (spec.staticip ?? false) === (prevSpec.staticip ?? false);
   const aNodes = spec.nodes || [];

@@ -878,7 +878,7 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
       // it is a composed application — iterate compose in reverse (same
       // teardown order as historically). Object.values preserves the
       // compose insertion order stored by the class.
-      const componentsReversed = Object.values(spec.components).reverse();
+      const componentsReversed = spec.componentEntries().map(([, c]) => c).reverse();
       // eslint-disable-next-line no-restricted-syntax
       for (const component of componentsReversed) {
         appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
@@ -1089,7 +1089,7 @@ async function softRemoveAppLocally(app, res, globalStateRef, stopAppMonitoring)
     let appId = dockerService.getAppIdentifier(app);
 
     if (spec.version >= 4 && !isComponent) {
-      const componentsReversed = Object.values(spec.components).reverse();
+      const componentsReversed = spec.componentEntries().map(([, c]) => c).reverse();
       // eslint-disable-next-line no-restricted-syntax
       for (const component of componentsReversed) {
         appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);

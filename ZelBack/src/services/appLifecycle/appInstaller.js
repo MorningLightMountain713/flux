@@ -714,8 +714,8 @@ async function checkOrbitAppHealth(appSpecifications, appName, isComponent, res)
  */
 async function installApplicationHard(appSpecifications, appName, isComponent, res, fullAppSpecs, test = false) {
   const spec = await deserializeSpec(fullAppSpecs).catch(() => null);
-  const compName = isComponent ? appSpecifications.name : Object.keys(spec?.components || {})[0];
-  const comp = spec?.components?.[compName];
+  const compName = isComponent ? appSpecifications.name : spec?.componentNames()?.[0];
+  const comp = spec?.getComponent?.(compName);
 
   await setupApplicationPorts(comp, appName, isComponent, res, test);
   await verifyAndPullImage(comp, appName, isComponent, res, spec, fullAppSpecs);
@@ -801,8 +801,8 @@ async function installApplicationHard(appSpecifications, appName, isComponent, r
  */
 async function installApplicationSoft(appSpecifications, appName, isComponent, res, fullAppSpecs) {
   const spec = await deserializeSpec(fullAppSpecs).catch(() => null);
-  const compName = isComponent ? appSpecifications.name : Object.keys(spec?.components || {})[0];
-  const comp = spec?.components?.[compName];
+  const compName = isComponent ? appSpecifications.name : spec?.componentNames()?.[0];
+  const comp = spec?.getComponent?.(compName);
 
   await setupApplicationPorts(comp, appName, isComponent, res);
   await verifyAndPullImage(comp, appName, isComponent, res, spec, fullAppSpecs);

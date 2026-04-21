@@ -89,17 +89,14 @@ async function getInstalledAppsFromDb(options = {}) {
  * @returns {boolean}
  */
 function hasComponentStructureChange(newSpec, oldSpec) {
-  const newNames = Object.keys(newSpec.components);
-  const oldNames = new Set(Object.keys(oldSpec.components));
-  if (newNames.length !== oldNames.size) return true;
-  return !newNames.every((name) => oldNames.has(name));
+  if (newSpec.componentCount !== oldSpec.componentCount) return true;
+  const oldNames = new Set(oldSpec.componentNames());
+  return !newSpec.componentNames().every((name) => oldNames.has(name));
 }
 
 async function getStrictApplicationSpecifications(appName) {
   try {
-    const instantiated = await appsRepository.getGlobalAppInfo(appName);
-    if (!instantiated) return null;
-    return instantiated.serialize();
+    return await appsRepository.getGlobalAppInfo(appName);
   } catch (error) {
     log.error(`Error getting strict app specifications for ${appName}:`, error);
     return null;
@@ -285,8 +282,7 @@ async function checkAndRemoveEnterpriseAppsOnNonArcane() {
           continue;
         }
 
-        // Check if app is version 8+ and enterprise
-        const isEnterprise = Boolean(globalSpecs.version >= 8 && globalSpecs.enterprise);
+        const isEnterprise = globalSpecs.version >= 8 && globalSpecs.isEncrypted();
 
         if (isEnterprise) {
           log.warn(`Found enterprise app ${installedApp.name} (v${globalSpecs.version}) on non-arcaneOS node`);
@@ -1028,9 +1024,10 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
     // eslint-disable-next-line global-require
     const appInstaller = require('./appInstaller');
     const softSpec = await deserializeSpec(appSpecifications).catch(() => null);
-    if (softSpec && Object.keys(softSpec.components).length > 1) {
+    if (softSpec && softSpec.componentCount > 1) {
       // eslint-disable-next-line no-restricted-syntax
-      for (const compCanonical of Object.values(softSpec.components).map((c) => c.toCanonical())) {
+      for (const [, comp] of softSpec.componentEntries()) {
+        const compCanonical = comp.toCanonical();
         isComponent = true;
         // eslint-disable-next-line no-await-in-loop
         await appInstaller.installApplicationSoft(compCanonical, appName, isComponent, res, appSpecifications);
@@ -1038,7 +1035,7 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
 
       const redeploySpec = await deserializeSpec(appSpecifications).catch(() => null);
       // eslint-disable-next-line no-restricted-syntax
-      for (const [compName, comp] of Object.entries(redeploySpec?.components || {})) {
+      for (const [compName, comp] of redeploySpec?.componentEntries?.() || []) {
         if (comp.persistentStorage?.hasSyncthing()) {
           const identifier = `${compName}_${appName}`;
           const appId = dockerService.getAppIdentifier(identifier);
@@ -1054,7 +1051,7 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
       await appInstaller.installApplicationSoft(specificationsToInstall, appName, isComponent, res, appSpecifications);
 
       const redeploySpec = await deserializeSpec(appSpecifications).catch(() => null);
-      const singleComp = redeploySpec ? Object.values(redeploySpec.components)[0] : null;
+      const singleComp = redeploySpec?.firstComponent() ?? null;
       if (singleComp?.persistentStorage?.hasSyncthing()) {
         const identifier = isComponent ? `${specificationsToInstall.name}_${appName}` : appName;
         const appId = dockerService.getAppIdentifier(identifier);
@@ -1110,13 +1107,13 @@ async function softUninstallComposedApp(appSpecifications, appName, res) {
   // eslint-disable-next-line global-require
   const appUninstaller = require('./appUninstaller');
   const spec = await deserializeSpec(appSpecifications).catch(() => null);
-  const compNames = spec ? Object.keys(spec.components).reverse() : [];
+  const compNames = spec ? spec.componentNames().reverse() : [];
   // eslint-disable-next-line no-restricted-syntax
   for (const compName of compNames) {
     const identifier = `${compName}_${appSpecifications.name}`;
     const appId = dockerService.getAppIdentifier(identifier);
     // eslint-disable-next-line no-await-in-loop
-    await appUninstaller.softUninstallComponent(appName, appId, spec.components[compName].toCanonical(), res, stopAppMonitoring);
+    await appUninstaller.softUninstallComponent(appName, appId, spec.getComponent(compName).toCanonical(), res, stopAppMonitoring);
   }
 }
 
@@ -1301,8 +1298,8 @@ async function softRedeploy(appSpecs, res) {
           const newSpec = await deserializeSpec(appSpecs).catch(() => null);
           const oldSpec = await deserializeSpec(installedApp).catch(() => null);
           if (newSpec && oldSpec && hasComponentStructureChange(newSpec, oldSpec)) {
-            const oldCount = Object.keys(oldSpec.components).length;
-            const newCount = Object.keys(newSpec.components).length;
+            const oldCount = oldSpec.componentCount;
+            const newCount = newSpec.componentCount;
             log.warn(`Soft redeploy requested for ${appSpecs.name}, but component structure changed.`);
             log.warn(`Component count: ${oldCount} -> ${newCount}`);
             log.warn('Automatically escalating to hard redeploy for component structure safety.');
@@ -1482,23 +1479,26 @@ async function softRedeployComponent(appName, componentName, res) {
     globalState.softRedeployInProgress = true;
     log.info(`Starting soft redeploy of component ${componentName} from app ${appName}`);
 
-    // Get app specifications
-    let appSpecifications = await getStrictApplicationSpecifications(appName);
-    if (!appSpecifications) {
+    const instantiated = await getStrictApplicationSpecifications(appName);
+    if (!instantiated) {
       throw new Error(`Application ${appName} not found`);
     }
 
-    // Decrypt enterprise apps before accessing compose
-    if (isArcane) {
-      appSpecifications = await decryptIfEnterprise(appSpecifications);
+    let spec;
+    let appSpecPlain;
+    if (isArcane && instantiated.isEncrypted()) {
+      appSpecPlain = await decryptIfEnterprise(instantiated.serialize());
+      spec = await deserializeSpec(appSpecPlain);
+    } else {
+      spec = instantiated.spec;
+      appSpecPlain = instantiated.serialize();
     }
 
-    const spec = await deserializeSpec(appSpecifications).catch(() => null);
-    if (!spec || Object.keys(spec.components).length === 0) {
+    if (spec.componentCount === 0) {
       throw new Error(`Application ${appName} is not a composed application`);
     }
 
-    const comp = spec.components[componentName];
+    const comp = spec.getComponent(componentName);
     if (!comp) {
       throw new Error(`Component ${componentName} not found in application ${appName}`);
     }
@@ -1518,12 +1518,10 @@ async function softRedeployComponent(appName, componentName, res) {
 
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
 
-      // Verify requirements
-      await appInstaller.checkAppRequirements(appSpecifications);
+      await appInstaller.checkAppRequirements(appSpecPlain);
 
-      // Register component
       log.warn(`Continuing Soft Redeployment of component ${fullComponentName}...`);
-      await softRegisterAppLocally(appSpecifications, componentSpec, res);
+      await softRegisterAppLocally(appSpecPlain, comp.toCanonical(), res);
 
       log.info(`Component ${fullComponentName} softly redeployed`);
       globalState.softRedeployInProgress = false;
@@ -1596,22 +1594,26 @@ async function hardRedeployComponent(appName, componentName, res) {
     globalState.hardRedeployInProgress = true;
     log.info(`Starting hard redeploy of component ${componentName} from app ${appName}`);
 
-    // Get app specifications
-    let appSpecifications = await getStrictApplicationSpecifications(appName);
-    if (!appSpecifications) {
+    const instantiated = await getStrictApplicationSpecifications(appName);
+    if (!instantiated) {
       throw new Error(`Application ${appName} not found`);
     }
 
-    if (isArcane) {
-      appSpecifications = await decryptIfEnterprise(appSpecifications);
+    let spec;
+    let appSpecPlain;
+    if (isArcane && instantiated.isEncrypted()) {
+      appSpecPlain = await decryptIfEnterprise(instantiated.serialize());
+      spec = await deserializeSpec(appSpecPlain);
+    } else {
+      spec = instantiated.spec;
+      appSpecPlain = instantiated.serialize();
     }
 
-    const spec = await deserializeSpec(appSpecifications).catch(() => null);
-    if (!spec || Object.keys(spec.components).length === 0) {
+    if (spec.componentCount === 0) {
       throw new Error(`Application ${appName} is not a composed application`);
     }
 
-    const comp = spec.components[componentName];
+    const comp = spec.getComponent(componentName);
     if (!comp) {
       throw new Error(`Component ${componentName} not found in application ${appName}`);
     }
@@ -1633,12 +1635,10 @@ async function hardRedeployComponent(appName, componentName, res) {
 
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
 
-      // Verify requirements
-      await appInstaller.checkAppRequirements(appSpecifications);
+      await appInstaller.checkAppRequirements(appSpecPlain);
 
-      // Register component
       log.warn(`Continuing Hard Redeployment of component ${fullComponentName}...`);
-      await appInstaller.registerAppLocally(appSpecifications, componentSpec, res);
+      await appInstaller.registerAppLocally(appSpecPlain, comp.toCanonical(), res);
 
       log.info(`Component ${fullComponentName} hard redeployed`);
       globalState.hardRedeployInProgress = false;
@@ -1973,8 +1973,8 @@ async function appDockerStart(appname) {
         throw new Error('Application not found');
       }
       const startSpec = await deserializeSpec(appSpecs).catch(() => null);
-      for (const compName of Object.keys(startSpec?.components || {})) {
-        const identifier = Object.keys(startSpec.components).length === 1 ? appname : `${compName}_${mainAppName}`;
+      for (const compName of startSpec?.componentNames?.() || []) {
+        const identifier = startSpec.componentCount === 1 ? appname : `${compName}_${mainAppName}`;
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerStart(identifier);
         startAppMonitoring(identifier);
@@ -2006,8 +2006,8 @@ async function appDockerStop(appname) {
         throw new Error('Application not found');
       }
       const stopSpec = await deserializeSpec(appSpecs).catch(() => null);
-      for (const compName of Object.keys(stopSpec?.components || {})) {
-        const identifier = Object.keys(stopSpec.components).length === 1 ? appname : `${compName}_${mainAppName}`;
+      for (const compName of stopSpec?.componentNames?.() || []) {
+        const identifier = stopSpec.componentCount === 1 ? appname : `${compName}_${mainAppName}`;
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerStop(identifier);
         stopAppMonitoring(identifier, false);
@@ -2049,13 +2049,13 @@ async function appDockerRestart(appname) {
       await dockerService.appDockerRestart(appname);
       startAppMonitoring(appname);
     } else {
-      for (const [compName, comp] of Object.entries(spec?.components || {})) {
+      for (const [compName, comp] of spec?.componentEntries?.() || []) {
         if (comp.persistentStorage) {
           const compPlain = appSpecs.compose?.find((c) => c.name === compName) || appSpecs;
           // eslint-disable-next-line no-await-in-loop, no-use-before-define
-          await ensureMountPathsExist(compPlain, mainAppName, Object.keys(spec.components).length > 1, appSpecs);
+          await ensureMountPathsExist(compPlain, mainAppName, spec.componentCount > 1, appSpecs);
         }
-        const identifier = Object.keys(spec.components).length > 1 ? `${compName}_${mainAppName}` : mainAppName;
+        const identifier = spec.componentCount > 1 ? `${compName}_${mainAppName}` : mainAppName;
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerRestart(identifier);
         startAppMonitoring(identifier);
@@ -2194,7 +2194,7 @@ async function appendBackupTask(req, res) {
       if (!hasSyncthing) {
         await appDockerStart(appname);
       } else {
-        for (const [compName, comp] of Object.entries(appSpec.components)) {
+        for (const [compName, comp] of appSpec.componentEntries()) {
           if (comp.persistentStorage?.sync?.mode !== 'activeStandby') {
             // eslint-disable-next-line no-await-in-loop
             await appDockerStart(`${compName}_${appname}`);
@@ -2555,8 +2555,8 @@ async function validateApplicationUpdateCompatibility(specifications, previousAp
       } else {
         const newSpec = await deserializeSpec(specifications).catch(() => null);
         const oldSpec = await deserializeSpec(appSpecs).catch(() => null);
-        const newCompNames = newSpec ? Object.keys(newSpec.components) : [];
-        const oldCompNames = oldSpec ? Object.keys(oldSpec.components) : [];
+        const newCompNames = newSpec ? newSpec.componentNames() : [];
+        const oldCompNames = oldSpec ? oldSpec.componentNames() : [];
 
         if (newCompNames.length !== oldCompNames.length) {
           throw new Error(
@@ -2974,15 +2974,18 @@ async function reinstallOldApplications() {
       // if same, do nothing. if different remove and install.
 
       // eslint-disable-next-line no-await-in-loop
-      let appSpecifications = await getStrictApplicationSpecifications(installedApp.name);
+      const instantiated = await getStrictApplicationSpecifications(installedApp.name);
 
-      if (isArcane) {
+      let appSpecifications;
+      if (instantiated && isArcane && instantiated.isEncrypted()) {
         // eslint-disable-next-line no-await-in-loop
-        appSpecifications = await decryptIfEnterprise(appSpecifications);
+        appSpecifications = await decryptIfEnterprise(instantiated.serialize());
+      } else if (instantiated) {
+        appSpecifications = instantiated.serialize();
       }
 
       const randomNumber = Math.floor((Math.random() * config.fluxapps.redeploy.probability)); // 50%
-      if (appSpecifications && appSpecifications.hash !== installedApp.hash) {
+      if (instantiated && instantiated.hash !== installedApp.hash) {
         // eslint-disable-next-line no-await-in-loop
         log.warn(`Application ${installedApp.name} version is obsolete.`);
         if (randomNumber === 0) {
@@ -2991,11 +2994,11 @@ async function reinstallOldApplications() {
           // Check if this is an enterprise app on non-arcane node FIRST
           // CRITICAL: Must check BEFORE updating local database or attempting redeployment
           // If we update the local DB with enterprise specs, we lose the container/port info needed for cleanup
-          if (appSpecifications.version >= 8
-              && appSpecifications.enterprise
+          if (instantiated.version >= 8
+              && instantiated.isEncrypted()
               && !isArcane) {
-            log.warn(`Application ${appSpecifications.name} is enterprise version >= 8 but system is not running arcaneOS.`);
-            log.warn(`REMOVAL REASON: Enterprise app v${appSpecifications.version} requires arcaneOS - ${appSpecifications.name}`);
+            log.warn(`Application ${instantiated.name} is enterprise version >= 8 but system is not running arcaneOS.`);
+            log.warn(`REMOVAL REASON: Enterprise app v${instantiated.version} requires arcaneOS - ${instantiated.name}`);
 
             // Find and restore non-enterprise specs if needed for proper cleanup
             // eslint-disable-next-line no-await-in-loop
@@ -3104,9 +3107,7 @@ async function reinstallOldApplications() {
             await appInstaller.checkAppRequirements(appSpecifications); // entire app
 
             // Register the app in database BEFORE creating Docker containers to prevent race condition
-            const isEnterprise = Boolean(
-              appSpecifications.version >= 8 && appSpecifications.enterprise,
-            );
+            const isEnterprise = instantiated.version >= 8 && instantiated.isEncrypted();
 
             const dbSpecs = JSON.parse(JSON.stringify(appSpecifications));
 
@@ -3118,21 +3119,22 @@ async function reinstallOldApplications() {
             // eslint-disable-next-line no-await-in-loop
             const insertResult = await dbHelper.insertOneToDatabase(appsDatabase, localAppsInformation, dbSpecs);
             if (!insertResult) {
-              throw new Error(`CRITICAL: Failed to create database entry for ${appSpecifications.name} during version upgrade reinstallation. Database insert returned undefined - likely duplicate key error or database failure. Aborting reinstallation to prevent orphaned Docker containers.`);
+              throw new Error(`CRITICAL: Failed to create database entry for ${instantiated.name} during version upgrade reinstallation. Database insert returned undefined - likely duplicate key error or database failure. Aborting reinstallation to prevent orphaned Docker containers.`);
             }
-            log.info(`Database entry created for ${appSpecifications.name} BEFORE component Docker container creation (version upgrade path)`);
+            log.info(`Database entry created for ${instantiated.name} BEFORE component Docker container creation (version upgrade path)`);
 
-            const upgradeSpec = await deserializeSpec(appSpecifications).catch(() => null);
+            const upgradeSpec = !instantiated.isEncrypted() ? instantiated.spec : await deserializeSpec(appSpecifications).catch(() => null);
             // eslint-disable-next-line no-restricted-syntax
-            for (const compCanonical of Object.values(upgradeSpec?.components || {}).map((c) => c.toCanonical())) {
-              log.warn(`Continuing Hard Redeployment of component ${compCanonical.name}_${appSpecifications.name}...`);
+            for (const [, comp] of upgradeSpec?.componentEntries?.() || []) {
+              const compCanonical = comp.toCanonical();
+              log.warn(`Continuing Hard Redeployment of component ${compCanonical.name}_${instantiated.name}...`);
               // eslint-disable-next-line no-await-in-loop
               await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
               // eslint-disable-next-line no-await-in-loop
               await appInstaller.registerAppLocally(appSpecifications, compCanonical);
             }
-            log.warn(`Composed application ${appSpecifications.name} updated.`);
-            log.warn(`Restarting application ${appSpecifications.name}`);
+            log.warn(`Composed application ${instantiated.name} updated.`);
+            log.warn(`Restarting application ${instantiated.name}`);
             // eslint-disable-next-line no-await-in-loop, no-use-before-define
             await appDockerRestart(appSpecifications.name);
           } else if (appSpecifications.version <= 3) {
@@ -3209,51 +3211,48 @@ async function reinstallOldApplications() {
             // eslint-disable-next-line global-require
             const appInstaller = require('./appInstaller');
 
-            // eslint-disable-next-line no-await-in-loop
-            const newSpec = await deserializeSpec(appSpecifications).catch(() => null);
+            const newSpec = !instantiated.isEncrypted() ? instantiated.spec : await deserializeSpec(appSpecifications).catch(() => null);
             // eslint-disable-next-line no-await-in-loop
             const oldSpec = await deserializeSpec(installedApp).catch(() => null);
             const structureChanged = Boolean(
-              newSpec && oldSpec && appSpecifications.version >= 8 && installedApp.version >= 8
+              newSpec && oldSpec && instantiated.version >= 8 && installedApp.version >= 8
               && hasComponentStructureChange(newSpec, oldSpec),
             );
 
             if (structureChanged) {
-              const oldCount = Object.keys(oldSpec.components).length;
-              const newCount = Object.keys(newSpec.components).length;
-              log.warn(`Application ${appSpecifications.name} (v${appSpecifications.version}) has component structure changes.`);
+              const oldCount = oldSpec.componentCount;
+              const newCount = newSpec.componentCount;
+              log.warn(`Application ${instantiated.name} (v${instantiated.version}) has component structure changes.`);
               log.warn(`Component count: ${oldCount} -> ${newCount}`);
               log.warn('Performing full hard redeploy to handle component changes...');
-              log.warn(`REMOVAL REASON: Component structure change (v8+) - ${appSpecifications.name} component count/names changed`);
+              log.warn(`REMOVAL REASON: Component structure change (v8+) - ${instantiated.name} component count/names changed`);
 
               // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.removeAppLocally(appSpecifications.name, null, false, false);
+              await appUninstaller.removeAppLocally(instantiated.name, null, false, false);
               const appRedeployResponse = messageHelper.createSuccessMessage('Application removed. Awaiting installation...');
               log.info(appRedeployResponse);
 
               // eslint-disable-next-line no-await-in-loop
               await serviceHelper.delay(config.fluxapps.redeploy.delay * 1000);
 
-              // verify requirements
               // eslint-disable-next-line no-await-in-loop
               await appInstaller.checkAppRequirements(appSpecifications);
 
-              // register
               // eslint-disable-next-line no-await-in-loop
               await appInstaller.registerAppLocally(appSpecifications, undefined, null, false, true);
-              log.info(`Application ${appSpecifications.name} redeployed with new component structure`);
+              log.info(`Application ${instantiated.name} redeployed with new component structure`);
 
               // eslint-disable-next-line no-continue
               continue;
             }
 
             try {
-              const compNames = Object.keys(newSpec.components).reverse();
+              const compNames = newSpec.componentNames().reverse();
               // eslint-disable-next-line no-restricted-syntax
               for (const compName of compNames) {
-                const identifier = `${compName}_${appSpecifications.name}`;
-                const newComp = newSpec.components[compName];
-                const oldComp = oldSpec?.components?.[compName];
+                const identifier = `${compName}_${instantiated.name}`;
+                const newComp = newSpec.getComponent(compName);
+                const oldComp = oldSpec?.getComponent?.(compName);
                 const newCanonical = newComp.toCanonical();
                 const oldCanonical = oldComp?.toCanonical();
 
@@ -3297,9 +3296,7 @@ async function reinstallOldApplications() {
               await appInstaller.checkAppRequirements(appSpecifications); // entire app
 
               // Register the app in database BEFORE creating Docker containers to prevent race condition
-              const isEnterprise = Boolean(
-                appSpecifications.version >= 8 && appSpecifications.enterprise,
-              );
+              const isEnterprise = instantiated.version >= 8 && instantiated.isEncrypted();
 
               const dbSpecs = JSON.parse(JSON.stringify(appSpecifications));
 
@@ -3311,14 +3308,14 @@ async function reinstallOldApplications() {
               // eslint-disable-next-line no-await-in-loop
               const insertResult = await dbHelper.insertOneToDatabase(appsDatabase, localAppsInformation, dbSpecs);
               if (!insertResult) {
-                throw new Error(`CRITICAL: Failed to create database entry for ${appSpecifications.name} during composed app redeployment. Database insert returned undefined - likely duplicate key error or database failure. Aborting redeployment to prevent orphaned Docker containers.`);
+                throw new Error(`CRITICAL: Failed to create database entry for ${instantiated.name} during composed app redeployment. Database insert returned undefined - likely duplicate key error or database failure. Aborting redeployment to prevent orphaned Docker containers.`);
               }
-              log.info(`Database entry created for ${appSpecifications.name} BEFORE component Docker container creation (composed redeployment path)`);
+              log.info(`Database entry created for ${instantiated.name} BEFORE component Docker container creation (composed redeployment path)`);
 
               // eslint-disable-next-line no-restricted-syntax
-              for (const compName of Object.keys(newSpec.components)) {
-                const identifier = `${compName}_${appSpecifications.name}`;
-                const newComp = newSpec.components[compName];
+              for (const compName of newSpec.componentNames()) {
+                const identifier = `${compName}_${instantiated.name}`;
+                const newComp = newSpec.getComponent(compName);
                 const oldComp = oldSpec?.components?.[compName];
                 const newCanonical = newComp.toCanonical();
                 const oldCanonical = oldComp?.toCanonical();
@@ -3339,16 +3336,16 @@ async function reinstallOldApplications() {
                   await appInstaller.registerAppLocally(appSpecifications, newCanonical);
                 }
               }
-              log.warn(`Composed application ${appSpecifications.name} updated.`);
-              log.warn(`Restarting application ${appSpecifications.name}`);
+              log.warn(`Composed application ${instantiated.name} updated.`);
+              log.warn(`Restarting application ${instantiated.name}`);
               // eslint-disable-next-line no-await-in-loop, no-use-before-define
-              await appDockerRestart(appSpecifications.name);
+              await appDockerRestart(instantiated.name);
             } catch (error) {
               log.error(error);
-              log.warn(`REMOVAL REASON: Redeployment error - ${appSpecifications.name} failed during redeployment: ${error.message}`);
+              log.warn(`REMOVAL REASON: Redeployment error - ${instantiated.name} failed during redeployment: ${error.message}`);
               // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.removeAppLocally(appSpecifications.name, null, true, true, true); // remove entire app
-              log.info(`Cleanup completed for ${appSpecifications.name} after redeployment failure`);
+              await appUninstaller.removeAppLocally(instantiated.name, null, true, true, true); // remove entire app
+              log.info(`Cleanup completed for ${instantiated.name} after redeployment failure`);
             }
           }
         }
@@ -3549,9 +3546,9 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
         // eslint-disable-next-line no-continue
         continue;
       }
-      for (const [compName, comp] of Object.entries(spec.components)) {
+      for (const [compName, comp] of spec.componentEntries()) {
         if (comp.persistentStorage?.sync?.mode === 'activeStandby') {
-          const id = Object.keys(spec.components).length === 1 ? app.name : `${compName}_${app.name}`;
+          const id = spec.componentCount === 1 ? app.name : `${compName}_${app.name}`;
           validIdentifiers.add(id);
         }
       }
@@ -3591,9 +3588,9 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
       // eslint-disable-next-line no-await-in-loop
       const installedSpec = await deserializeSpec(installedApp).catch(() => null);
       if (installedSpec) {
-        for (const [compName, comp] of Object.entries(installedSpec.components)) {
+        for (const [compName, comp] of installedSpec.componentEntries()) {
           if (comp.persistentStorage?.sync?.mode === 'activeStandby') {
-            identifier = Object.keys(installedSpec.components).length === 1 ? installedApp.name : `${compName}_${installedApp.name}`;
+            identifier = installedSpec.componentCount === 1 ? installedApp.name : `${compName}_${installedApp.name}`;
             appId = dockerService.getAppIdentifier(identifier);
             needsToBeChecked = true;
             break;

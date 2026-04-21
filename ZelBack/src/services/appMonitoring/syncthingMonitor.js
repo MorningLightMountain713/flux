@@ -59,10 +59,10 @@ async function checkAppFolderMounts(appsInstalled) {
       // eslint-disable-next-line no-continue
       continue;
     }
-    const compNames = Object.keys(spec.components);
+    const compNames = spec.componentNames();
     // eslint-disable-next-line no-restricted-syntax
     for (const compName of compNames) {
-      const identifier = compNames.length === 1 ? installedApp.name : `${compName}_${installedApp.name}`;
+      const identifier = spec.componentCount === 1 ? installedApp.name : `${compName}_${installedApp.name}`;
       const appId = dockerService.getAppIdentifier(identifier);
       const appFolder = `${appsFolder}${appId}`;
       // eslint-disable-next-line no-await-in-loop
@@ -429,9 +429,9 @@ async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn, appDo
         continue;
       }
       // eslint-disable-next-line no-restricted-syntax
-      for (const [compName, comp] of Object.entries(spec.components)) {
+      for (const [compName, comp] of spec.componentEntries()) {
         const syncMode = comp.persistentStorage?.sync?.mode || null;
-        const identifier = Object.keys(spec.components).length === 1
+        const identifier = spec.componentCount === 1
           ? installedApp.name
           : `${compName}_${installedApp.name}`;
         // eslint-disable-next-line no-await-in-loop
