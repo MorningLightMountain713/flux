@@ -22,17 +22,6 @@ async function buildDeployment(plainSpec) {
   return DeploymentSpec.fromSpec(spec, appsFolder);
 }
 
-function ensureAppUniquePorts(deployment) {
-  const allHostPorts = [];
-  for (const comp of Object.values(deployment.components)) {
-    allHostPorts.push(...comp.hostPorts);
-  }
-  if ((new Set(allHostPorts)).size !== allHostPorts.length) {
-    throw new Error(`Flux App ${deployment.appName} must have unique ports specified across all components`);
-  }
-  return true;
-}
-
 /**
  * Get ports assigned by currently installed applications
  * @returns {Promise<Array>} Array of objects with app names and their assigned ports
@@ -570,7 +559,6 @@ async function callOtherNodeToKeepUpnpPortsOpen() {
 }
 
 module.exports = {
-  ensureAppUniquePorts,
   assignedPortsInstalledApps,
   assignedPortsGlobalApps,
   ensureApplicationPortsNotUsed,

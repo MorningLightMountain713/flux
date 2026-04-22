@@ -72,7 +72,7 @@ async function appsResources(req, res) {
         const spec = await decryptToCleartextClass(app);
         const deployment = DeploymentSpec.fromSpec(spec, appConstants.appsFolder);
         const { cpu, memory, storage } = deployment.totalResources();
-        const componentCount = Object.keys(deployment.components).length;
+        const componentCount = deployment.componentCount();
         appsCpusLocked += cpu;
         appsRamLocked += memory;
         appsHddLocked += storage + (config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap) * componentCount;
