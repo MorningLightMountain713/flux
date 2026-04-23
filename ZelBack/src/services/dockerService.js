@@ -701,114 +701,27 @@ const getContainerIP = async (containerName) => {
  * @param {bool} isComponent
  * @returns {object}
  */
-async function appDockerCreate(appSpecifications, appName, isComponent, fullAppSpecs, test = false) {
-  const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
+async function appDockerCreate(deployComp, {
+  appName, deployment, owner, test = false, secrets = null,
+}) {
+  const identifier = `${deployComp.name}_${appName}`;
 
   // Test installs pin resources to a low fixed footprint regardless of what
   // the spec declared — they only exist to validate image pullability and
   // basic container bringup, not to honor declared resources.
-  const effectiveCpu = test ? 0.2 : appSpecifications.cpu;
-  const effectiveRam = test ? 300 : appSpecifications.ram;
-  let exposedPorts = {};
-  let portBindings = {};
-  if (appSpecifications.version === 1) {
-    portBindings = {
-      [`${appSpecifications.containerPort.toString()}/tcp`]: [
-        {
-          HostPort: appSpecifications.port.toString(),
-        },
-      ],
-      [`${appSpecifications.containerPort.toString()}/udp`]: [
-        {
-          HostPort: appSpecifications.port.toString(),
-        },
-      ],
-    };
-    exposedPorts = {
-      [`${appSpecifications.port.toString()}/tcp`]: {},
-      [`${appSpecifications.containerPort.toString()}/tcp`]: {},
-      [`${appSpecifications.port.toString()}/udp`]: {},
-      [`${appSpecifications.containerPort.toString()}/udp`]: {},
-    };
-  } else {
-    appSpecifications.ports.forEach((port) => {
-      exposedPorts[[`${port.toString()}/tcp`]] = {};
-      exposedPorts[[`${port.toString()}/udp`]] = {};
-    });
-    appSpecifications.containerPorts.forEach((port) => {
-      exposedPorts[[`${port.toString()}/tcp`]] = {};
-      exposedPorts[[`${port.toString()}/udp`]] = {};
-    });
-    for (let i = 0; i < appSpecifications.containerPorts.length; i += 1) {
-      portBindings[[`${appSpecifications.containerPorts[i].toString()}/tcp`]] = [
-        {
-          HostPort: appSpecifications.ports[i].toString(),
-        },
-      ];
-      portBindings[[`${appSpecifications.containerPorts[i].toString()}/udp`]] = [
-        {
-          HostPort: appSpecifications.ports[i].toString(),
-        },
-      ];
-    }
-  }
-  // containerData can have flags eg. s (s:/data) for synthing enabled container data
-  // multiple data volumes can be attached, if containerData contains more paths separated by |
-  // Syntax supports:
-  //   - Primary mount: [flags]:<path>  (e.g., r:/data)
-  //   - Component ref: <number>:<path>  (e.g., 0:/shared)
-  //   - Directory mount: m:<subdir>:<path>  (e.g., m:logs:/var/log)
-  //   - File mount: f:<filename>:<path>  (e.g., f:config.yaml:/etc/config.yaml)
-  //   - Component dir: c:<number>:<subdir>:<path>  (e.g., c:0:backups:/backups)
-  //   - Component file: cf:<number>:<filename>:<path>  (e.g., cf:0:cert.pem:/etc/ssl/cert.pem)
-  // Note: Components can only reference components with lower indices (ordering restriction)
+  const effectiveCpu = test ? 0.2 : deployComp.cpu;
+  const effectiveMemoryMb = test ? 300 : deployComp.memory;
 
-  // Import mount parsing utilities
-  // eslint-disable-next-line global-require
-  const mountParser = require('./utils/mountParser');
-  // eslint-disable-next-line global-require
-  const volumeConstructor = require('./utils/volumeConstructor');
+  const portBindings = deployComp.toDockerPortBindings();
+  const exposedPorts = deployComp.toDockerExposedPorts();
 
-  // Parse containerData using new enhanced parser
-  let parsedMounts;
-  try {
-    parsedMounts = mountParser.parseContainerData(appSpecifications.containerData);
-    log.info(`Parsed ${parsedMounts.allMounts.length} mount(s) for ${identifier}`);
-  } catch (error) {
-    log.error(`Failed to parse containerData for ${identifier}: ${error.message}`);
-    throw error;
-  }
+  // Build env array from class, then layer FluxOS operational concerns.
+  const envParams = deployComp.toDockerEnv();
 
-  // Validate mount configuration
-  try {
-    volumeConstructor.validateMountConfiguration(parsedMounts, fullAppSpecs, appSpecifications);
-  } catch (error) {
-    log.error(`Mount configuration validation failed for ${identifier}: ${error.message}`);
-    throw error;
-  }
-
-  // Determine restart policy based on flags and owner
-  const appOwner = fullAppSpecs?.owner || null;
-  const restartPolicy = volumeConstructor.getRestartPolicy(parsedMounts.primary.flags, appOwner);
-
-  // Construct Docker bind mounts
-  let constructedVolumes;
-  try {
-    constructedVolumes = volumeConstructor.constructVolumes(
-      parsedMounts,
-      identifier,
-      appName,
-      fullAppSpecs,
-      appSpecifications,
-    );
-    log.info(`Constructed ${constructedVolumes.length} volume bind(s) for ${identifier}`);
-  } catch (error) {
-    log.error(`Failed to construct volumes for ${identifier}: ${error.message}`);
-    throw error;
-  }
-  const envParams = appSpecifications.environmentParameters || appSpecifications.enviromentParameters;
-  if (appSpecifications.secrets) {
-    const decodedEnvParams = await pgpService.decryptMessage(appSpecifications.secrets);
+  // Legacy v7 secrets: PGP-encrypted env vars appended to the env array.
+  // Dies when v7 apps expire off the network.
+  if (secrets) {
+    const decodedEnvParams = await pgpService.decryptMessage(secrets);
     const arraySecrets = JSON.parse(decodedEnvParams);
     if (Array.isArray(arraySecrets)) {
       arraySecrets.forEach((parameter) => {
@@ -822,21 +735,25 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
       throw new Error('Environment parameters from Secrets are invalid - not an array');
     }
   }
-  const adjustedCommands = [];
-  appSpecifications.commands.forEach((command) => {
-    if (command !== '--privileged') {
-      adjustedCommands.push(command);
-    }
-  });
 
-  const isSender = envParams?.some((env) => env.startsWith('LOG=SEND'));
-  const isCollector = envParams?.some((env) => env.startsWith('LOG=COLLECT'));
+  const adjustedCommands = (deployComp.cmd || []).filter((c) => c !== '--privileged');
+
+  // Syslog target discovery: scan deployment components for LOG=COLLECT.
+  const isSender = envParams.some((env) => env.startsWith('LOG=SEND'));
+  const isCollector = envParams.some((env) => env.startsWith('LOG=COLLECT'));
 
   let syslogTarget = null;
   let syslogIP = null;
 
-  if (fullAppSpecs && fullAppSpecs?.compose) {
-    syslogTarget = fullAppSpecs.compose.find((app) => app.environmentParameters?.some((env) => env.startsWith('LOG=COLLECT')))?.name;
+  if (deployment) {
+    const collectorEntry = Object.entries(deployment.components)
+      .find(([, c]) => {
+        const compEnv = c.toDockerEnv();
+        return compEnv.some((e) => e.startsWith('LOG=COLLECT'));
+      });
+    if (collectorEntry) {
+      syslogTarget = collectorEntry[0];
+    }
   }
 
   if (syslogTarget && isSender) {
@@ -871,7 +788,7 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
       Config: {
         'gelf-address': `udp://${syslogIP}:514`,
         'gelf-compression-type': 'none',
-        tag: `${appSpecifications.name}`,
+        tag: deployComp.name,
         labels: 'app_name,host_id,host_ip',
       },
     }
@@ -888,9 +805,8 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
   // scope, and stamped onto the container as docker labels. Every subsequent
   // start of this container (initial start, restart, recovery) reads the
   // labels in appDockerStart and reapplies burst — no per-caller plumbing.
-  const burstOwner = fullAppSpecs?.owner || null;
-  const burstEligible = burstOwner
-    && cpuBurstHelper.isEnterpriseOwner(burstOwner)
+  const burstEligible = owner
+    && cpuBurstHelper.isEnterpriseOwner(owner)
     && await cpuBurstHelper.isCpuBurstSupported();
   const burstLabels = burstEligible
     ? {
@@ -905,10 +821,23 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
     log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${effectiveCpu})`);
   }
 
+  // Restart policy: spec-driven (activeStandby → no), with FluxOS owner override.
+  let restartPolicy = deployComp.restartPolicyName();
+  const restartAlwaysOwners = config.fluxapps.restartAlwaysOwners || [];
+  if (owner && restartAlwaysOwners.includes(owner)) {
+    restartPolicy = 'always';
+  }
+
+  const nanoCpus = test ? Math.round(0.2 * 1e9) : deployComp.toDockerNanoCpus();
+  const memoryBytes = test ? Math.round(300 * 1024 * 1024) : deployComp.toDockerMemoryBytes();
+  const memorySwapBytes = test
+    ? Math.round(300 * 1024 * 1024)
+    : deployComp.toDockerMemorySwapBytes();
+
   const options = {
-    Image: appSpecifications.repotag,
+    Image: deployComp.image,
     name: getAppIdentifier(identifier),
-    Hostname: appSpecifications.name,
+    Hostname: deployComp.name,
     AttachStdin: true,
     AttachStdout: true,
     AttachStderr: true,
@@ -916,19 +845,17 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
     Env: envParams,
     Tty: false,
     ExposedPorts: exposedPorts,
-    // Conditionally include Labels only if it's not null
     ...(containerLabels && { Labels: containerLabels }),
     HostConfig: {
-      NanoCPUs: Math.round(effectiveCpu * 1e9),
-      Memory: Math.round(effectiveRam * 1024 * 1024),
-      MemorySwap: Math.round((effectiveRam + (config.fluxapps.defaultSwap * 1000)) * 1024 * 1024), // default 2GB swap
-      // StorageOpt: { size: '5G' }, // root fs has max default 5G size, v8 is 5G + specified as per config.fluxapps.hddFileSystemMinimum
-      Mounts: constructedVolumes, // Using modern Mount objects instead of legacy Binds
+      NanoCPUs: nanoCpus,
+      Memory: memoryBytes,
+      MemorySwap: memorySwapBytes,
+      Mounts: deployComp.mounts,
       Ulimits: [
         {
           Name: 'nofile',
           Soft: 100000,
-          Hard: 100000, // 1048576
+          Hard: 100000,
         },
       ],
       PortBindings: portBindings,
@@ -939,7 +866,6 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
       LogConfig: logConfig,
       ExtraHosts: [`fluxnode.service:${config.server.fluxNodeServiceAddress}`],
     },
-    // Conditionally include NetworkingConfig only if a static IP was determined.
     ...(autoAssignedIP && {
       NetworkingConfig: {
         EndpointsConfig: {
@@ -953,26 +879,23 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
     }),
   };
 
-  // get docker info about Backing Filesystem
+  // XFS quota: apply StorageOpt if the backing filesystem supports it.
   // eslint-disable-next-line no-use-before-define
   const dockerInfoResp = await dockerInfo();
   log.info(dockerInfoResp);
   const driverStatus = dockerInfoResp.DriverStatus;
-  const backingFs = driverStatus.find((status) => status[0] === 'Backing Filesystem'); // d_type must be true for overlay, docker would not work if not
+  const backingFs = driverStatus.find((status) => status[0] === 'Backing Filesystem');
   if (backingFs && backingFs[1] === 'xfs') {
-    // check that we have quota
-
     const mountTarget = isArcane ? '/dat/var/lib/docker' : '/var/lib/docker';
-
     const hasQuotaPossibility = await deviceHelper.hasQuotaOptionForMountTarget(mountTarget);
-
     if (hasQuotaPossibility) {
-      options.HostConfig.StorageOpt = { size: `${config.fluxapps.hddFileSystemMinimum}G` }; // must also have 'pquota' mount option
+      options.HostConfig.StorageOpt = { size: `${config.fluxapps.hddFileSystemMinimum}G` };
     }
   }
 
+  // Flux Storage: fetch env/cmd payloads from remote URLs.
   if (options.Env.length) {
-    const fluxStorageEnv = options.Env.find((env) => env.startsWith(('F_S_ENV=')));
+    const fluxStorageEnv = options.Env.find((env) => env.startsWith('F_S_ENV='));
     if (fluxStorageEnv) {
       const index = options.Env.indexOf(fluxStorageEnv);
       if (index > -1) {
@@ -995,7 +918,7 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
   }
 
   if (options.Cmd.length) {
-    const fluxStorageCmd = options.Cmd.find((cmd) => cmd.startsWith(('F_S_CMD=')));
+    const fluxStorageCmd = options.Cmd.find((cmd) => cmd.startsWith('F_S_CMD='));
     if (fluxStorageCmd) {
       const index = options.Cmd.indexOf(fluxStorageCmd);
       if (index > -1) {
@@ -1017,12 +940,9 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
     }
   }
 
-  // Ensure all required mount paths (files and directories) exist before creating container
-  // This prevents Docker mount errors when files have been deleted or don't exist yet
+  // Ensure all mount source paths exist before creating the container.
   try {
-    // eslint-disable-next-line global-require
-    const advancedWorkflows = require('./appLifecycle/advancedWorkflows');
-    await advancedWorkflows.ensureMountPathsExist(appSpecifications, appName, isComponent, fullAppSpecs);
+    await ensureMountSourcesExist(deployComp);
   } catch (error) {
     log.error(`Failed to ensure mount paths exist for ${identifier}: ${error.message}`);
     throw error;
@@ -1034,6 +954,33 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
   });
 
   return app;
+}
+
+/**
+ * Ensure all bind mount source paths exist on the host filesystem.
+ * Creates missing directories or files based on the mount's sourceType.
+ *
+ * @param {object} deployComp - DeploymentComponent with resolved mounts
+ */
+async function ensureMountSourcesExist(deployComp) {
+  const fs = require('fs').promises; // eslint-disable-line global-require
+
+  for (const mount of deployComp.mounts) {
+    try {
+      await fs.access(mount.Source); // eslint-disable-line no-await-in-loop
+    } catch {
+      log.warn(`Mount source missing, creating: ${mount.Source}`);
+      if (mount.sourceType === 'file') {
+        // eslint-disable-next-line no-await-in-loop
+        await serviceHelper.runCommand('touch', { params: [mount.Source], runAsRoot: true });
+        // eslint-disable-next-line no-await-in-loop
+        await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        await serviceHelper.runCommand('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
+      }
+    }
+  }
 }
 
 /**

@@ -25,6 +25,7 @@ const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
 const { decryptIfEnterprise, deserializeSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -753,7 +754,17 @@ async function installApplicationHard(appSpecifications, appName, isComponent, r
     if (res.flush) res.flush();
   }
 
-  await dockerService.appDockerCreate(appSpecifications, appName, isComponent, fullAppSpecs, test);
+  const { DeploymentSpec } = await getSpecBackend();
+  const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+  const deployComp = deployment.getComponent(compName);
+
+  await dockerService.appDockerCreate(deployComp, {
+    appName,
+    deployment,
+    owner: fullAppSpecs?.owner || null,
+    test,
+    secrets: appSpecifications.secrets || null,
+  });
 
   const startStatus = {
     status: isComponent ? `Starting component ${comp.name} of Flux App ${appName}...` : `Starting Flux App ${appName}...`,
@@ -816,7 +827,16 @@ async function installApplicationSoft(appSpecifications, appName, isComponent, r
     if (res.flush) res.flush();
   }
 
-  await dockerService.appDockerCreate(appSpecifications, appName, isComponent, fullAppSpecs);
+  const { DeploymentSpec } = await getSpecBackend();
+  const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+  const deployComp = deployment.getComponent(compName);
+
+  await dockerService.appDockerCreate(deployComp, {
+    appName,
+    deployment,
+    owner: fullAppSpecs?.owner || null,
+    secrets: appSpecifications.secrets || null,
+  });
 
   const startStatus = {
     status: isComponent ? `Starting component ${comp.name} of Flux App ${appName}...` : `Starting Flux App ${appName}...`,
