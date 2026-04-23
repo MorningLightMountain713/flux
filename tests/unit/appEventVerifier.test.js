@@ -44,10 +44,10 @@ describe('appEventVerifier', () => {
     }
   }
 
-  class FakeAppEventV1 {
+  class FakeAppEventLegacy {
     static deserialize(doc) { return { kind: 'v1', doc }; }
   }
-  class FakeAppEventV2 {
+  class FakeConfirmedAppEvent {
     static deserialize(doc) { return { kind: 'v2', doc }; }
   }
 
@@ -76,8 +76,8 @@ describe('appEventVerifier', () => {
         UpdatePolicy: fakeUpdatePolicy,
       }),
       getSpecBackend: sinon.stub().resolves({
-        AppEventV1: FakeAppEventV1,
-        AppEventV2: FakeAppEventV2,
+        AppEventLegacy: FakeAppEventLegacy,
+        ConfirmedAppEvent: FakeConfirmedAppEvent,
         computeMessageHash: sinon.stub().returns('v1-hash-abc'),
         computeMessageHashV2: sinon.stub().returns('v2-hash-xyz'),
       }),
@@ -113,21 +113,21 @@ describe('appEventVerifier', () => {
   });
 
   describe('deserializeMessage', () => {
-    it('dispatches envelope version 1 to AppEventV1', async () => {
+    it('dispatches envelope version 1 to AppEventLegacy', async () => {
       const msg = { version: 1, type: 'fluxappregister' };
       const result = await appEventVerifier.deserializeMessage(msg);
       expect(result).to.deep.equal({ kind: 'v1', doc: msg });
     });
 
-    it('dispatches envelope version 2 to AppEventV2', async () => {
+    it('dispatches envelope version 2 to ConfirmedAppEvent', async () => {
       const msg = { version: 2, type: 'fluxappregister' };
       const result = await appEventVerifier.deserializeMessage(msg);
       expect(result).to.deep.equal({ kind: 'v2', doc: msg });
     });
 
-    it('falls back to AppEventV1 for any other/legacy envelope version', async () => {
+    it('falls back to AppEventLegacy for any other/legacy envelope version', async () => {
       // Wire history has some zel*register messages with non-integer version
-      // fields. AppEventV1 is the compatibility path.
+      // fields. AppEventLegacy is the compatibility path.
       const msg = { version: 0, type: 'zelappregister' };
       const result = await appEventVerifier.deserializeMessage(msg);
       expect(result.kind).to.equal('v1');

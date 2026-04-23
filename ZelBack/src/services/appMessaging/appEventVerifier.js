@@ -1,7 +1,7 @@
 /**
  * FluxOS authority policy for app-event signature verification.
  *
- * The @runonflux/flux-spec-backend `AppEventV1.verifySignature(verifyFn, signers)`
+ * The @runonflux/flux-spec-backend `AppEventLegacy.verifySignature(verifyFn, signers)`
  * iterates serializations × signers and returns the first match. It does
  * not know who is authorized to sign — that policy lives here, in FluxOS.
  *
@@ -26,23 +26,23 @@ const { getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities')
 /**
  * Deserialize an incoming wire message into the right AppEvent subclass.
  *
- * Envelope version 1 → AppEventV1 (wraps v1-v8 specs).
- * Envelope version 2 → AppEventV2 (wraps v9+ specs).
+ * Envelope version 1 → AppEventLegacy (wraps v1-v8 specs).
+ * Envelope version 2 → ConfirmedAppEvent (wraps v9+ specs).
  *
  * The deserialize call validates the spec body via its version class's
  * `deserialize()` — throws if the body is malformed or references a
  * spec version with no registered class.
  *
  * @param {object} message - wire message
- * @returns {Promise<object>} AppEventV1 or AppEventV2 instance
+ * @returns {Promise<object>} AppEventLegacy or ConfirmedAppEvent instance
  * @throws {Error} if the envelope or spec body is invalid
  */
 async function deserializeMessage(message) {
-  const { AppEventV1, AppEventV2 } = await getSpecBackend();
+  const { AppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
   if (message.version === 2) {
-    return AppEventV2.deserialize(message);
+    return ConfirmedAppEvent.deserialize(message);
   }
-  return AppEventV1.deserialize(message);
+  return AppEventLegacy.deserialize(message);
 }
 
 /**
@@ -114,7 +114,7 @@ async function instantiatePreviousSpec(rawSpec) {
  *   Pass 2 (only if 1 fails AND update is TTL-only): [usersToExtend...]
  *
  * @param {object} params
- * @param {object} params.appEvent - AppEventV1 or AppEventV2 instance
+ * @param {object} params.appEvent - AppEventLegacy or ConfirmedAppEvent instance
  * @param {object|null} [params.previousSpec] - previous-spec class instance (for updates)
  * @param {number} params.daemonHeight
  * @returns {Promise<{valid: true, signer: string}>}

@@ -226,7 +226,7 @@ describe('checkHWParameters', () => {
   });
 
   // verifyAppHash was deleted in Stage 3.1a of the v9 migration — hash
-  // verification now lives in AppEventV1.verifyHash() inside
+  // verification now lives in AppEventLegacy.verifyHash() inside
   // @runonflux/flux-spec-backend, which runs its own 56k+ production-
   // fixture regression tests. Re-enable with the AppEvent-based path
   // once those packages are installed in FluxOS.
