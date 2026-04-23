@@ -1,4 +1,5 @@
 const config = require('config');
+const fs = require('node:fs/promises');
 const util = require('util');
 const df = require('node-df');
 const path = require('node:path');
@@ -30,6 +31,7 @@ const {
   decryptIfEnterprise,
   deserializeSpec,
 } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const globalState = require('../utils/globalState');
@@ -409,12 +411,12 @@ let dosMountMessage = '';
  *   pullability and container bringup, not to honor declared storage.
  * @returns {Promise<void>}
  */
-async function createAppVolume(appSpecifications, appName, isComponent, res, test = false) {
+async function createAppVolume(deployComp, res, test = false) {
   const dfAsync = util.promisify(df);
-  const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
+  const identifier = deployComp.identifier;
   const appId = dockerService.getAppIdentifier(identifier);
 
-  const effectiveHdd = test ? 2 : appSpecifications.hdd;
+  const effectiveHdd = test ? 2 : deployComp.storage;
 
   const searchSpace = {
     status: 'Searching available space...',
@@ -623,79 +625,39 @@ async function createAppVolume(appSpecifications, appName, isComponent, res, tes
       if (res.flush) res.flush();
     }
 
-    // Parse containerData to get all required local paths
-    // eslint-disable-next-line global-require
-    const mountParser = require('../utils/mountParser');
-    let parsedMounts;
-    try {
-      parsedMounts = mountParser.parseContainerData(appSpecifications.containerData);
-    } catch (error) {
-      log.error(`Failed to parse containerData: ${error.message}`);
-      throw error;
-    }
+    // Create mount source directories and files from resolved mounts.
+    const compDir = `${appsFolder}${appId}`;
+    log.info(`Creating ${deployComp.mounts.length} mount source(s) for ${appId}`);
 
-    const requiredPaths = mountParser.getRequiredLocalPaths(parsedMounts);
-    log.info(`Creating ${requiredPaths.length} local path(s) for ${appId}`);
-
-    // Create all required directories and files (appdata and additional mounts at same level)
-    // eslint-disable-next-line no-restricted-syntax
-    for (const pathInfo of requiredPaths) {
-      // Skip appdata itself as it's already created above
-      if (pathInfo.name === 'appdata') {
+    for (const mount of deployComp.mounts) {
+      if (mount.Source === `${compDir}/appdata`) {
         continue; // eslint-disable-line no-continue
       }
+      const sourceName = mount.Source.replace(`${compDir}/`, '');
+      if (mount.sourceType === 'file') {
+        const status = { status: `Creating file mount: ${sourceName}...` };
+        log.info(status);
+        if (res) { res.write(serviceHelper.ensureString(status)); if (res.flush) res.flush(); }
 
-      if (pathInfo.isFile) {
-        // For file mounts, create file directly with 777 permissions
-        // This allows any container user to write to the file
-        // File will be bind-mounted directly to the container
-
-        const createFileStatus = {
-          status: `Creating file mount: ${pathInfo.name}...`,
-        };
-        log.info(createFileStatus);
-        if (res) {
-          res.write(serviceHelper.ensureString(createFileStatus));
-          if (res.flush) res.flush();
-        }
-
-        // Create file directly at same level as appdata with 777 permissions
-        const filePath = `${appsFolder + appId}/${pathInfo.name}`;
-        const execCommands = `sudo touch ${filePath} && sudo chmod 777 ${filePath}`;
         // eslint-disable-next-line no-await-in-loop
-        await cmdAsync(execCommands);
+        await serviceHelper.runCommand('touch', { params: [mount.Source], runAsRoot: true });
+        // eslint-disable-next-line no-await-in-loop
+        await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
 
-        log.info(`File mount created with 777 permissions: ${pathInfo.name}`);
-
-        const createFileStatus2 = {
-          status: `File mount created: ${pathInfo.name}`,
-        };
-        log.info(createFileStatus2);
-        if (res) {
-          res.write(serviceHelper.ensureString(createFileStatus2));
-          if (res.flush) res.flush();
-        }
+        const done = { status: `File mount created: ${sourceName}` };
+        log.info(done);
+        if (res) { res.write(serviceHelper.ensureString(done)); if (res.flush) res.flush(); }
       } else {
-        // Create a directory at same level as appdata
-        const createDirStatus = {
-          status: `Creating directory: ${pathInfo.name}...`,
-        };
-        log.info(createDirStatus);
-        if (res) {
-          res.write(serviceHelper.ensureString(createDirStatus));
-          if (res.flush) res.flush();
-        }
-        const execSubDIR = `sudo mkdir -p ${appsFolder + appId}/${pathInfo.name}`;
+        const status = { status: `Creating directory: ${sourceName}...` };
+        log.info(status);
+        if (res) { res.write(serviceHelper.ensureString(status)); if (res.flush) res.flush(); }
+
         // eslint-disable-next-line no-await-in-loop
-        await cmdAsync(execSubDIR);
-        const createDirStatus2 = {
-          status: `Directory created: ${pathInfo.name}`,
-        };
-        log.info(createDirStatus2);
-        if (res) {
-          res.write(serviceHelper.ensureString(createDirStatus2));
-          if (res.flush) res.flush();
-        }
+        await serviceHelper.runCommand('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
+
+        const done = { status: `Directory created: ${sourceName}` };
+        log.info(done);
+        if (res) { res.write(serviceHelper.ensureString(done)); if (res.flush) res.flush(); }
       }
     }
 
@@ -716,21 +678,15 @@ async function createAppVolume(appSpecifications, appName, isComponent, res, tes
       res.write(serviceHelper.ensureString(permissionsDirectory));
       if (res.flush) res.flush();
     }
-    const execPERM = `sudo chmod 777 ${appsFolder + appId}`;
-    await cmdAsync(execPERM);
-    const execPERMdata = `sudo chmod 777 ${appsFolder + appId}/appdata`;
-    await cmdAsync(execPERMdata);
+    await serviceHelper.runCommand('chmod', { params: ['777', compDir], runAsRoot: true });
+    await serviceHelper.runCommand('chmod', { params: ['777', `${compDir}/appdata`], runAsRoot: true });
 
-    // Set permissions for all created paths (appdata and additional mounts at same level)
-    // eslint-disable-next-line no-restricted-syntax
-    for (const pathInfo of requiredPaths) {
-      // Skip appdata itself as it's already handled above
-      if (pathInfo.name === 'appdata') {
+    for (const mount of deployComp.mounts) {
+      if (mount.Source === `${compDir}/appdata`) {
         continue; // eslint-disable-line no-continue
       }
-      const execPERMpath = `sudo chmod 777 ${appsFolder + appId}/${pathInfo.name}`;
       // eslint-disable-next-line no-await-in-loop
-      await cmdAsync(execPERMpath);
+      await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
     }
     const permissionsDirectory2 = {
       status: 'Permissions adjusted',
@@ -741,12 +697,7 @@ async function createAppVolume(appSpecifications, appName, isComponent, res, tes
       if (res.flush) res.flush();
     }
 
-    // Check if primary mount has syncthing flags (r:, g:, or s:)
-    // Syncthing is configured ONCE for the entire appdata folder based on primary mount flags only
-    const primaryFlags = mountParser.getPrimaryFlags(parsedMounts);
-    const hasSyncthingFlag = primaryFlags.includes('r') || primaryFlags.includes('g') || primaryFlags.includes('s');
-
-    if (hasSyncthingFlag) {
+    if (deployComp.sync) {
       const stFolderCreation = {
         status: 'Creating .stfolder for syncthing...',
       };
@@ -755,9 +706,7 @@ async function createAppVolume(appSpecifications, appName, isComponent, res, tes
         res.write(serviceHelper.ensureString(stFolderCreation));
         if (res.flush) res.flush();
       }
-      // Create .stfolder in parent directory for syncthing (not inside appdata)
-      const execDIRst = `sudo mkdir -p ${appsFolder + appId}/.stfolder`;
-      await cmdAsync(execDIRst);
+      await serviceHelper.runCommand('mkdir', { params: ['-p', `${compDir}/.stfolder`], runAsRoot: true });
       const stFolderCreation2 = {
         status: '.stfolder created',
       };
@@ -767,10 +716,7 @@ async function createAppVolume(appSpecifications, appName, isComponent, res, tes
         if (res.flush) res.flush();
       }
 
-      // Create .stignore file to exclude backup directory (in parent directory)
-      const stignore = `sudo echo '/backup' >| ${appsFolder + appId}/.stignore`;
-      log.info(stignore);
-      await cmdAsync(stignore);
+      await fs.writeFile(`${compDir}/.stignore`, '/backup\n');
       const stiFileCreation = {
         status: '.stignore created',
       };
@@ -2038,27 +1984,27 @@ async function appDockerRestart(appname) {
       throw new Error('Application not found');
     }
     const spec = await deserializeSpec(appSpecs).catch(() => null);
+    const { DeploymentSpec } = await getSpecBackend();
+    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
     const isComponent = appname.includes('_');
     if (isComponent) {
       const componentName = appname.split('_')[0];
-      const comp = spec?.components?.[componentName];
-      if (comp?.persistentStorage) {
-        // eslint-disable-next-line no-use-before-define
-        await ensureMountPathsExist(appSpecs.compose?.find((c) => c.name === componentName) || appSpecs, mainAppName, true, appSpecs);
+      const deployComp = deployment.getComponent(componentName);
+      if (deployComp?.mounts?.length) {
+        await ensureMountSourcesExist(deployComp);
       }
       await dockerService.appDockerRestart(appname);
       startAppMonitoring(appname);
     } else {
-      for (const [compName, comp] of spec?.componentEntries?.() || []) {
-        if (comp.persistentStorage) {
-          const compPlain = appSpecs.compose?.find((c) => c.name === compName) || appSpecs;
-          // eslint-disable-next-line no-await-in-loop, no-use-before-define
-          await ensureMountPathsExist(compPlain, mainAppName, spec.componentCount > 1, appSpecs);
+      for (const [compName] of spec?.componentEntries?.() || []) {
+        const deployComp = deployment.getComponent(compName);
+        if (deployComp?.mounts?.length) {
+          // eslint-disable-next-line no-await-in-loop
+          await ensureMountSourcesExist(deployComp);
         }
-        const identifier = spec.componentCount > 1 ? `${compName}_${mainAppName}` : mainAppName;
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerRestart(identifier);
-        startAppMonitoring(identifier);
+        await dockerService.appDockerRestart(deployComp.identifier);
+        startAppMonitoring(deployComp.identifier);
       }
     }
   } catch (error) {
@@ -3962,136 +3908,25 @@ async function getPeerAppsInstallingErrorMessages() {
 }
 
 /**
- * Ensures all required local mount paths (files and directories) exist for a component.
- * This function should be called before creating a container to prevent Docker mount errors
- * when files or directories have been deleted or don't exist yet.
+ * Ensure all bind mount source paths exist on the host filesystem.
+ * Creates missing directories or files based on the mount's sourceType.
  *
- * @param {object} appSpecifications - Component specifications
- * @param {string} appName - Application name
- * @param {boolean} isComponent - Whether this is a component of a compose app
- * @param {object} fullAppSpecs - Full application specifications (for compose apps)
- * @returns {Promise<void>}
+ * @param {object} deployComp - DeploymentComponent with resolved mounts
  */
-async function ensureMountPathsExist(appSpecifications, appName, isComponent, fullAppSpecs) {
-  const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
-  const appId = dockerService.getAppIdentifier(identifier);
-
-  // Parse containerData to get required paths
-  // eslint-disable-next-line global-require
-  const mountParser = require('../utils/mountParser');
-  // eslint-disable-next-line global-require
-  const fs = require('fs').promises;
-  let parsedMounts;
-  try {
-    parsedMounts = mountParser.parseContainerData(appSpecifications.containerData);
-  } catch (error) {
-    log.error(`Failed to parse containerData for ${identifier}: ${error.message}`);
-    throw error;
-  }
-
-  const requiredPaths = mountParser.getRequiredLocalPaths(parsedMounts);
-  log.info(`Ensuring ${requiredPaths.length} local path(s) exist for ${appId}`);
-
-  // Create all required directories and files (appdata and additional mounts at same level)
-  // eslint-disable-next-line no-restricted-syntax
-  for (const pathInfo of requiredPaths) {
-    const fullPath = `${appsFolder}${appId}/${pathInfo.name}`;
-
-    // Check if path exists
+async function ensureMountSourcesExist(deployComp) {
+  for (const mount of deployComp.mounts) {
     try {
-      // eslint-disable-next-line no-await-in-loop
-      await fs.access(fullPath);
-      // Path exists, skip
-      log.info(`Path already exists: ${fullPath}`);
-    } catch (error) {
-      // Path doesn't exist, need to create it
-      log.warn(`Path missing, creating: ${fullPath}`);
-
-      if (pathInfo.isFile) {
-        // For file mounts, create file directly with 777 permissions
-        const execCommands = `sudo touch ${fullPath} && sudo chmod 777 ${fullPath}`;
+      await fs.access(mount.Source); // eslint-disable-line no-await-in-loop
+    } catch {
+      log.warn(`Mount source missing, creating: ${mount.Source}`);
+      if (mount.sourceType === 'file') {
         // eslint-disable-next-line no-await-in-loop
-        await cmdAsync(execCommands);
-
-        log.info(`Created file mount with 777 permissions: ${fullPath}`);
+        await serviceHelper.runCommand('touch', { params: [mount.Source], runAsRoot: true });
+        // eslint-disable-next-line no-await-in-loop
+        await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
       } else {
-        // Create directory
-        const execDIR = `sudo mkdir -p ${fullPath}`;
         // eslint-disable-next-line no-await-in-loop
-        await cmdAsync(execDIR);
-        log.info(`Created directory: ${fullPath}`);
-      }
-    }
-  }
-
-  // Also ensure component reference paths exist
-  // These are paths from OTHER components that this component is trying to mount
-  const componentReferenceMounts = parsedMounts.allMounts.filter((mount) => (
-    mount.type === mountParser.MountType.COMPONENT_PRIMARY
-    || mount.type === mountParser.MountType.COMPONENT_DIRECTORY
-    || mount.type === mountParser.MountType.COMPONENT_FILE
-  ));
-
-  if (componentReferenceMounts.length > 0) {
-    log.info(`Ensuring ${componentReferenceMounts.length} component reference path(s) exist for ${appId}`);
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const mount of componentReferenceMounts) {
-      try {
-        // Validate and get the component identifier
-        if (!fullAppSpecs) {
-          throw new Error(`Component reference mount requires full app specifications: ${mount.containerPath}`);
-        }
-
-        let componentIdentifier;
-        if (fullAppSpecs.version >= 4) {
-          const compEntries = fullAppSpecs.compose || [];
-          if (mount.componentIndex < 0 || mount.componentIndex >= compEntries.length) {
-            throw new Error(`Invalid component index: ${mount.componentIndex}`);
-          }
-          const componentName = compEntries[mount.componentIndex].name;
-          componentIdentifier = `${componentName}_${appName}`;
-        } else {
-          componentIdentifier = appName;
-        }
-
-        const componentAppId = dockerService.getAppIdentifier(componentIdentifier);
-
-        // Construct the full path for the component reference
-        let fullPath;
-        if (mount.subdir === 'appdata') {
-          fullPath = `${appsFolder}${componentAppId}/appdata`;
-        } else {
-          fullPath = `${appsFolder}${componentAppId}/${mount.subdir}`;
-        }
-
-        // Check if path exists
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          await fs.access(fullPath);
-          log.info(`Component reference path already exists: ${fullPath}`);
-        } catch (error) {
-          // Path doesn't exist, need to create it
-          log.warn(`Component reference path missing, creating: ${fullPath}`);
-
-          if (mount.isFile) {
-            // For component file mounts, create file directly with 777 permissions
-            const execCommands = `sudo touch ${fullPath} && sudo chmod 777 ${fullPath}`;
-            // eslint-disable-next-line no-await-in-loop
-            await cmdAsync(execCommands);
-
-            log.info(`Created file mount with 777 permissions for component reference: ${fullPath}`);
-          } else {
-            // Create directory
-            const execDIR = `sudo mkdir -p ${fullPath}`;
-            // eslint-disable-next-line no-await-in-loop
-            await cmdAsync(execDIR);
-            log.info(`Created directory for component reference: ${fullPath}`);
-          }
-        }
-      } catch (error) {
-        log.error(`Failed to ensure component reference path exists: ${error.message}`);
-        throw error;
+        await serviceHelper.runCommand('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
       }
     }
   }
@@ -4132,6 +3967,6 @@ module.exports = {
   forceAppRemovals,
   masterSlaveApps,
   getPeerAppsInstallingErrorMessages,
-  ensureMountPathsExist,
+  ensureMountSourcesExist,
   appDockerStart,
 };

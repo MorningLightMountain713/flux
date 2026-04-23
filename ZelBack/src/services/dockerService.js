@@ -702,9 +702,10 @@ const getContainerIP = async (containerName) => {
  * @returns {object}
  */
 async function appDockerCreate(deployComp, {
-  appName, deployment, owner, test = false, secrets = null,
+  deployment, owner, test = false, secrets = null,
 }) {
-  const identifier = `${deployComp.name}_${appName}`;
+  const { appName } = deployComp;
+  const identifier = deployComp.identifier;
 
   // Test installs pin resources to a low fixed footprint regardless of what
   // the spec declared — they only exist to validate image pullability and
@@ -942,7 +943,9 @@ async function appDockerCreate(deployComp, {
 
   // Ensure all mount source paths exist before creating the container.
   try {
-    await ensureMountSourcesExist(deployComp);
+    // eslint-disable-next-line global-require
+    const advancedWorkflows = require('./appLifecycle/advancedWorkflows');
+    await advancedWorkflows.ensureMountSourcesExist(deployComp);
   } catch (error) {
     log.error(`Failed to ensure mount paths exist for ${identifier}: ${error.message}`);
     throw error;
@@ -954,33 +957,6 @@ async function appDockerCreate(deployComp, {
   });
 
   return app;
-}
-
-/**
- * Ensure all bind mount source paths exist on the host filesystem.
- * Creates missing directories or files based on the mount's sourceType.
- *
- * @param {object} deployComp - DeploymentComponent with resolved mounts
- */
-async function ensureMountSourcesExist(deployComp) {
-  const fs = require('fs').promises; // eslint-disable-line global-require
-
-  for (const mount of deployComp.mounts) {
-    try {
-      await fs.access(mount.Source); // eslint-disable-line no-await-in-loop
-    } catch {
-      log.warn(`Mount source missing, creating: ${mount.Source}`);
-      if (mount.sourceType === 'file') {
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.runCommand('touch', { params: [mount.Source], runAsRoot: true });
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
-      } else {
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.runCommand('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
-      }
-    }
-  }
 }
 
 /**

@@ -718,12 +718,16 @@ async function installApplicationHard(appSpecifications, appName, isComponent, r
   const compName = isComponent ? appSpecifications.name : spec?.componentNames()?.[0];
   const comp = spec?.getComponent?.(compName);
 
+  const { DeploymentSpec } = await getSpecBackend();
+  const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+  const deployComp = deployment.getComponent(compName);
+
   await setupApplicationPorts(comp, appName, isComponent, res, test);
   await verifyAndPullImage(comp, appName, isComponent, res, spec, fullAppSpecs);
 
   // eslint-disable-next-line global-require
   const advancedWorkflows = require('./advancedWorkflows');
-  await advancedWorkflows.createAppVolume(appSpecifications, appName, isComponent, res, test);
+  await advancedWorkflows.createAppVolume(deployComp, res, test);
 
   const verifyingMount = {
     status: isComponent ? `Verifying volume mount for component ${comp.name}...` : `Verifying volume mount for ${appName}...`,
@@ -754,12 +758,7 @@ async function installApplicationHard(appSpecifications, appName, isComponent, r
     if (res.flush) res.flush();
   }
 
-  const { DeploymentSpec } = await getSpecBackend();
-  const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
-  const deployComp = deployment.getComponent(compName);
-
   await dockerService.appDockerCreate(deployComp, {
-    appName,
     deployment,
     owner: fullAppSpecs?.owner || null,
     test,
@@ -832,7 +831,6 @@ async function installApplicationSoft(appSpecifications, appName, isComponent, r
   const deployComp = deployment.getComponent(compName);
 
   await dockerService.appDockerCreate(deployComp, {
-    appName,
     deployment,
     owner: fullAppSpecs?.owner || null,
     secrets: appSpecifications.secrets || null,
