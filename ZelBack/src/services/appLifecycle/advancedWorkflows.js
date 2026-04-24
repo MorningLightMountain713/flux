@@ -1919,11 +1919,13 @@ async function appDockerStart(appname) {
         throw new Error('Application not found');
       }
       const startSpec = await deserializeSpec(appSpecs).catch(() => null);
-      for (const compName of startSpec?.componentNames?.() || []) {
-        const identifier = startSpec.componentCount === 1 ? appname : `${compName}_${mainAppName}`;
+      if (!startSpec) throw new Error('Application not found');
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(startSpec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerStart(identifier);
-        startAppMonitoring(identifier);
+        await dockerService.appDockerStart(deployComp.identifier);
+        startAppMonitoring(deployComp.identifier);
       }
     }
   } catch (error) {
@@ -1952,11 +1954,13 @@ async function appDockerStop(appname) {
         throw new Error('Application not found');
       }
       const stopSpec = await deserializeSpec(appSpecs).catch(() => null);
-      for (const compName of stopSpec?.componentNames?.() || []) {
-        const identifier = stopSpec.componentCount === 1 ? appname : `${compName}_${mainAppName}`;
+      if (!stopSpec) throw new Error('Application not found');
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(stopSpec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerStop(identifier);
-        stopAppMonitoring(identifier, false);
+        await dockerService.appDockerStop(deployComp.identifier);
+        stopAppMonitoring(deployComp.identifier, false);
       }
     }
   } catch (error) {
@@ -3484,6 +3488,7 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
     };
 
     const validIdentifiers = new Set();
+    const { DeploymentSpec } = await getSpecBackend();
     // eslint-disable-next-line no-restricted-syntax
     for (const app of appsInstalled.data) {
       // eslint-disable-next-line no-await-in-loop
@@ -3492,10 +3497,10 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
         // eslint-disable-next-line no-continue
         continue;
       }
-      for (const [compName, comp] of spec.componentEntries()) {
-        if (comp.persistentStorage?.sync?.mode === 'activeStandby') {
-          const id = spec.componentCount === 1 ? app.name : `${compName}_${app.name}`;
-          validIdentifiers.add(id);
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries()) {
+        if (deployComp.hasActiveStandbySyncthing()) {
+          validIdentifiers.add(deployComp.identifier);
         }
       }
     }
@@ -3534,9 +3539,10 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
       // eslint-disable-next-line no-await-in-loop
       const installedSpec = await deserializeSpec(installedApp).catch(() => null);
       if (installedSpec) {
-        for (const [compName, comp] of installedSpec.componentEntries()) {
-          if (comp.persistentStorage?.sync?.mode === 'activeStandby') {
-            identifier = installedSpec.componentCount === 1 ? installedApp.name : `${compName}_${installedApp.name}`;
+        const instDeploy = DeploymentSpec.fromSpec(installedSpec, appsFolder);
+        for (const [, deployComp] of instDeploy.componentEntries()) {
+          if (deployComp.hasActiveStandbySyncthing()) {
+            identifier = deployComp.identifier;
             appId = dockerService.getAppIdentifier(identifier);
             needsToBeChecked = true;
             break;

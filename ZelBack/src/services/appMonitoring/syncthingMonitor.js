@@ -1,5 +1,4 @@
 // Syncthing Monitor - Manages syncthing configuration for apps
-const path = require('node:path');
 const config = require('config');
 const dbHelper = require('../dbHelper');
 // eslint-disable-next-line no-unused-vars
@@ -9,6 +8,8 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const syncthingService = require('../syncthingService');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const { decryptToCleartextClass } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
 const log = require('../../lib/log');
 const {
   MONITOR_INTERVAL_MS,
@@ -36,11 +37,6 @@ const {
 // Global collections
 const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
-// Path constants
-const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
-const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
-const appsFolder = `${appsFolderPath}/`;
-
 /**
  * Check if app folders are properly mounted
  * Returns list of apps whose folders are not mounted yet
@@ -51,6 +47,7 @@ const appsFolder = `${appsFolderPath}/`;
 async function checkAppFolderMounts(appsInstalled) {
   const unmountedApps = [];
 
+  const { DeploymentSpec } = await getSpecBackend();
   // eslint-disable-next-line no-restricted-syntax
   for (const installedApp of appsInstalled) {
     // eslint-disable-next-line no-await-in-loop
@@ -59,11 +56,9 @@ async function checkAppFolderMounts(appsInstalled) {
       // eslint-disable-next-line no-continue
       continue;
     }
-    const compNames = spec.componentNames();
-    // eslint-disable-next-line no-restricted-syntax
-    for (const compName of compNames) {
-      const identifier = spec.componentCount === 1 ? installedApp.name : `${compName}_${installedApp.name}`;
-      const appId = dockerService.getAppIdentifier(identifier);
+    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+    for (const [, deployComp] of deployment.componentEntries()) {
+      const appId = dockerService.getAppIdentifier(deployComp.identifier);
       const appFolder = `${appsFolder}${appId}`;
       // eslint-disable-next-line no-await-in-loop
       const mountSafety = await verifyFolderMountSafety(appId, appFolder);
@@ -281,6 +276,7 @@ async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn, appDo
   let syncthingInitializedSuccessfully = false;
 
   try {
+    const { DeploymentSpec } = await getSpecBackend();
     // Get list of all installed apps
     const appsInstalled = await installedAppsFn();
     if (appsInstalled.status === 'error') {
@@ -428,17 +424,13 @@ async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn, appDo
         // eslint-disable-next-line no-continue
         continue;
       }
-      // eslint-disable-next-line no-restricted-syntax
-      for (const [compName, comp] of spec.componentEntries()) {
-        const syncMode = comp.persistentStorage?.sync?.mode || null;
-        const identifier = spec.componentCount === 1
-          ? installedApp.name
-          : `${compName}_${installedApp.name}`;
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
         await processComponentSync({
           ...sharedParams,
-          syncMode,
-          identifier,
+          syncMode: deployComp.sync?.mode || null,
+          identifier: deployComp.identifier,
           installedAppName: installedApp.name,
         });
       }

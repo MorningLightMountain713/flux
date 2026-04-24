@@ -5,6 +5,8 @@ const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const appsRepository = require('../appDatabase/appsRepository');
+const { deserializeSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
 const { localAppsInformation, appsFolder } = require('../utils/appConstants');
 const dockerService = require('../dockerService');
 const appUninstaller = require('./appUninstaller');
@@ -27,21 +29,16 @@ async function getInstalledAppIds() {
       return installedAppIds;
     }
 
-    apps.forEach((app) => {
-      if (app.version <= 3) {
-        // Legacy app - single app ID
-        const appId = dockerService.getAppIdentifier(app.name);
-        installedAppIds.add(appId);
-      } else {
-        // Newer app - multiple components
-        if (app.compose && Array.isArray(app.compose)) {
-          app.compose.forEach((component) => {
-            const appId = dockerService.getAppIdentifier(`${component.name}_${app.name}`);
-            installedAppIds.add(appId);
-          });
-        }
+    const { DeploymentSpec } = await getSpecBackend();
+    for (const app of apps) {
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await deserializeSpec(app).catch(() => null);
+      if (!spec) continue;
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries()) {
+        installedAppIds.add(dockerService.getAppIdentifier(deployComp.identifier));
       }
-    });
+    }
   } catch (error) {
     log.error(`getInstalledAppIds - Error: ${error.message}`);
   }

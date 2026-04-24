@@ -8,6 +8,8 @@ const appInspector = require('./appInspector');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const log = require('../../lib/log');
 const { deserializeSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
 
 /**
  * Get application locations from the global database
@@ -137,11 +139,13 @@ async function appStart(req, res) {
       throw new Error('Application not found');
     }
     const spec = await deserializeSpec(appSpecs);
+    const { DeploymentSpec } = await getSpecBackend();
+    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
 
     if (isComponent) {
       const compName = appname.split('_')[0];
-      const comp = spec.getComponent(compName);
-      if (comp && comp.hasActiveStandbySyncthing()) {
+      const deployComp = deployment.getComponent(compName);
+      if (deployComp && deployComp.hasActiveStandbySyncthing()) {
         try {
           const containers = await dockerService.dockerListContainers(false);
           const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(appname) || container.Id === appname);
@@ -158,25 +162,24 @@ async function appStart(req, res) {
       appRes = await dockerService.appDockerStart(appname);
       appInspector.startAppMonitoring(appname);
     } else {
-      for (const [name, comp] of spec.componentEntries()) {
-        const identifier = spec.componentCount === 1 ? appname : `${name}_${spec.name}`;
-        if (comp.hasActiveStandbySyncthing()) {
+      for (const [, deployComp] of deployment.componentEntries()) {
+        if (deployComp.hasActiveStandbySyncthing()) {
           try {
             // eslint-disable-next-line no-await-in-loop
             const containers = await dockerService.dockerListContainers(false);
-            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(identifier) || container.Id === identifier);
+            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(deployComp.identifier) || container.Id === deployComp.identifier);
             if (!isRunning) {
-              log.info(`Skipping start for activeStandby syncthing component ${identifier} - not currently running`);
+              log.info(`Skipping start for activeStandby syncthing component ${deployComp.identifier} - not currently running`);
               // eslint-disable-next-line no-continue
               continue;
             }
           } catch (error) {
-            log.warn(`Could not check running status for ${identifier}: ${error.message}`);
+            log.warn(`Could not check running status for ${deployComp.identifier}: ${error.message}`);
           }
         }
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerStart(identifier);
-        appInspector.startAppMonitoring(identifier);
+        await dockerService.appDockerStart(deployComp.identifier);
+        appInspector.startAppMonitoring(deployComp.identifier);
       }
       appRes = `Application ${spec.name} started`;
     }
@@ -242,11 +245,12 @@ async function appStop(req, res) {
         throw new Error('Application not found');
       }
       const spec = await deserializeSpec(appSpecs);
-      for (const name of [...spec.componentNames()].reverse()) {
-        const identifier = spec.componentCount === 1 ? appname : `${name}_${spec.name}`;
-        appInspector.stopAppMonitoring(identifier, false);
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
+        appInspector.stopAppMonitoring(deployComp.identifier, false);
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerStop(identifier);
+        await dockerService.appDockerStop(deployComp.identifier);
       }
       appRes = `Application ${spec.name} stopped`;
     }
@@ -308,11 +312,13 @@ async function appRestart(req, res) {
       throw new Error('Application not found');
     }
     const spec = await deserializeSpec(appSpecs);
+    const { DeploymentSpec } = await getSpecBackend();
+    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
 
     if (isComponent) {
       const compName = appname.split('_')[0];
-      const comp = spec.getComponent(compName);
-      if (comp && comp.hasActiveStandbySyncthing()) {
+      const deployComp = deployment.getComponent(compName);
+      if (deployComp && deployComp.hasActiveStandbySyncthing()) {
         try {
           const containers = await dockerService.dockerListContainers(false);
           const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(appname) || container.Id === appname);
@@ -328,24 +334,23 @@ async function appRestart(req, res) {
       }
       appRes = await dockerService.appDockerRestart(appname);
     } else {
-      for (const [name, comp] of spec.componentEntries()) {
-        const identifier = spec.componentCount === 1 ? appname : `${name}_${spec.name}`;
-        if (comp.hasActiveStandbySyncthing()) {
+      for (const [, deployComp] of deployment.componentEntries()) {
+        if (deployComp.hasActiveStandbySyncthing()) {
           try {
             // eslint-disable-next-line no-await-in-loop
             const containers = await dockerService.dockerListContainers(false);
-            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(identifier) || container.Id === identifier);
+            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(deployComp.identifier) || container.Id === deployComp.identifier);
             if (!isRunning) {
-              log.info(`Skipping restart for activeStandby syncthing component ${identifier} - not currently running`);
+              log.info(`Skipping restart for activeStandby syncthing component ${deployComp.identifier} - not currently running`);
               // eslint-disable-next-line no-continue
               continue;
             }
           } catch (error) {
-            log.warn(`Could not check running status for ${identifier}: ${error.message}`);
+            log.warn(`Could not check running status for ${deployComp.identifier}: ${error.message}`);
           }
         }
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerRestart(identifier);
+        await dockerService.appDockerRestart(deployComp.identifier);
       }
       appRes = `Application ${spec.name} restarted`;
     }
@@ -401,10 +406,11 @@ async function appKill(req, res) {
         throw new Error('Application not found');
       }
       const spec = await deserializeSpec(appSpecs);
-      for (const name of [...spec.componentNames()].reverse()) {
-        const identifier = spec.componentCount === 1 ? appname : `${name}_${spec.name}`;
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerKill(identifier);
+        await dockerService.appDockerKill(deployComp.identifier);
       }
       appRes = `Application ${spec.name} killed`;
     }
@@ -469,10 +475,11 @@ async function appPause(req, res) {
         throw new Error('Application not found');
       }
       const spec = await deserializeSpec(appSpecs);
-      for (const name of [...spec.componentNames()].reverse()) {
-        const identifier = spec.componentCount === 1 ? appname : `${name}_${spec.name}`;
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerPause(identifier);
+        await dockerService.appDockerPause(deployComp.identifier);
       }
       appRes = `Application ${spec.name} paused`;
     }
@@ -537,10 +544,11 @@ async function appUnpause(req, res) {
         throw new Error('Application not found');
       }
       const spec = await deserializeSpec(appSpecs);
-      for (const name of spec.componentNames()) {
-        const identifier = spec.componentCount === 1 ? appname : `${name}_${spec.name}`;
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerUnpause(identifier);
+        await dockerService.appDockerUnpause(deployComp.identifier);
       }
       appRes = `Application ${spec.name} unpaused`;
     }
