@@ -10,6 +10,9 @@ const upnpService = require('../upnpService');
 const networkStateService = require('../networkStateService');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
+const { deserializeSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
 const log = require('../../lib/log');
 
 // Helper function to sign check app data
@@ -119,7 +122,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
     }
 
     let isNodeConfirmed = false;
-    isNodeConfirmed = await generalService.isNodeStatusConfirmed().catch(() => null);
+    isNodeConfirmed = await generalService.isNodeStatusConfirmed();
 
     if (!isNodeConfirmed) {
       log.info('Flux Node not Confirmed. Application checks are disabled');
@@ -149,22 +152,14 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
 
     const apps = installedAppsRes.data;
     const appPorts = [];
-
-    apps.forEach((app) => {
-      if (app.version === 1) {
-        appPorts.push(+app.port);
-      } else if (app.version <= 3) {
-        app.ports.forEach((port) => {
-          appPorts.push(+port);
-        });
-      } else {
-        app.compose.forEach((component) => {
-          component.ports.forEach((port) => {
-            appPorts.push(+port);
-          });
-        });
-      }
-    });
+    const { DeploymentSpec } = await getSpecBackend();
+    for (const app of apps) {
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await deserializeSpec(app);
+      if (!spec) continue;
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      appPorts.push(...deployment.allHostPorts());
+    }
 
     if (dosState.nextTestingPort) {
       // eslint-disable-next-line no-param-reassign

@@ -96,105 +96,12 @@ describe('appUtilities tests', () => {
     // Tests that require sudo access removed - should be in integration tests
   });
 
-  describe('getAppPorts tests', () => {
-    it('should extract port from version 1 app', () => {
-      const appSpecs = {
-        version: 1,
-        port: 8080,
-      };
-
-      const ports = appUtilities.getAppPorts(appSpecs);
-
-      expect(ports).to.deep.equal([8080]);
-    });
-
-    it('should extract ports from version 2 app', () => {
-      const appSpecs = {
-        version: 2,
-        ports: [8080, 8081, 8082],
-      };
-
-      const ports = appUtilities.getAppPorts(appSpecs);
-
-      expect(ports).to.deep.equal([8080, 8081, 8082]);
-    });
-
-    it('should extract ports from version 3 app', () => {
-      const appSpecs = {
-        version: 3,
-        ports: [3000, 3001],
-      };
-
-      const ports = appUtilities.getAppPorts(appSpecs);
-
-      expect(ports).to.deep.equal([3000, 3001]);
-    });
-
-    it('should extract ports from version 4+ composed app', () => {
-      const appSpecs = {
-        version: 4,
-        compose: [
-          { name: 'Frontend', ports: [80, 443] },
-          { name: 'Backend', ports: [3000] },
-          { name: 'Database', ports: [5432] },
-        ],
-      };
-
-      const ports = appUtilities.getAppPorts(appSpecs);
-
-      expect(ports).to.deep.equal([80, 443, 3000, 5432]);
-    });
-
-    it('should convert string ports to numbers for version 1', () => {
-      const appSpecs = {
-        version: 1,
-        port: '8080',
-      };
-
-      const ports = appUtilities.getAppPorts(appSpecs);
-
-      expect(ports[0]).to.be.a('number');
-      expect(ports[0]).to.equal(8080);
-    });
-
-    it('should handle compose with no ports', () => {
-      const appSpecs = {
-        version: 4,
-        compose: [
-          { name: 'Worker', ports: [] },
-        ],
-      };
-
-      const ports = appUtilities.getAppPorts(appSpecs);
-
-      expect(ports).to.be.an('array').that.is.empty;
-    });
-
-    it('should handle multiple components with varying ports', () => {
-      const appSpecs = {
-        version: 5,
-        compose: [
-          { name: 'Web', ports: [80] },
-          { name: 'API', ports: [3000, 3001, 3002] },
-          { name: 'Cache', ports: [] },
-        ],
-      };
-
-      const ports = appUtilities.getAppPorts(appSpecs);
-
-      expect(ports).to.have.lengthOf(4);
-      expect(ports).to.include(80);
-      expect(ports).to.include(3000);
-    });
-  });
-
   describe('module exports tests', () => {
     it('should export all required functions', () => {
       expect(appUtilities.appPricePerMonth).to.be.a('function');
       expect(appUtilities.nodeFullGeolocation).to.be.a('function');
       expect(appUtilities.getAppFolderSize).to.be.a('function');
       expect(appUtilities.getContainerStorage).to.be.a('function');
-      expect(appUtilities.getAppPorts).to.be.a('function');
       expect(appUtilities.findCommonArchitectures).to.be.a('function');
     });
   });

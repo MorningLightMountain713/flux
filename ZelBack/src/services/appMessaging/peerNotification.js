@@ -126,7 +126,7 @@ async function checkAndNotifyPeersOfRunningApps(
     // Sync global state before checking
     getGlobalState();
     let isNodeConfirmed = false;
-    isNodeConfirmed = await generalService.isNodeStatusConfirmed().catch(() => null);
+    isNodeConfirmed = await generalService.isNodeStatusConfirmed();
     if (!isNodeConfirmed) {
       log.info('checkAndNotifyPeersOfRunningApps - FluxNode is not Confirmed');
       return;
@@ -197,7 +197,7 @@ async function checkAndNotifyPeersOfRunningApps(
           const appDetails = await registryManager.getApplicationGlobalSpecifications(mainAppName);
           const appInstalledPlain = appsInstalled.find((app) => app.name === mainAppName);
           // eslint-disable-next-line no-await-in-loop
-          const appInstalledSpec = await deserializeSpec(appInstalledPlain).catch(() => null);
+          const appInstalledSpec = await deserializeSpec(appInstalledPlain);
           const appHasSyncthing = appInstalledSpec && appInstalledSpec.hasSyncthing();
           const appHasActiveStandby = appInstalledSpec && appInstalledSpec.hasActiveStandbySyncthing();
           if (appHasSyncthing) {

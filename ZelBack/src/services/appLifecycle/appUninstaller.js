@@ -856,13 +856,12 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
     // appsRepository returns InstantiatedSpec; unwrap to inner spec since
     // this function only needs the definition, not state metadata.
     // Hardcoded/fallback paths may return a bare spec — handle both.
-    const { EncryptedSpecBase, InstantiatedSpec } = await getSpecBackend();
+    const { InstantiatedSpec } = await getSpecBackend();
     if (spec instanceof InstantiatedSpec) {
       spec = spec.spec;
     }
 
-    // Decrypt v8 enterprise blobs so downstream helpers see cleartext.
-    if (spec instanceof EncryptedSpecBase) {
+    if (spec.isEncrypted) {
       const provider = await legacyCryptoProvider.create(spec.name, spec.owner);
       spec = (await spec.decrypt(provider)).spec;
     }
@@ -1077,11 +1076,11 @@ async function softRemoveAppLocally(app, res, globalStateRef, stopAppMonitoring)
       throw new Error('Flux App not found');
     }
 
-    const { EncryptedSpecBase, InstantiatedSpec } = await getSpecBackend();
+    const { InstantiatedSpec } = await getSpecBackend();
     if (spec instanceof InstantiatedSpec) {
       spec = spec.spec;
     }
-    if (spec instanceof EncryptedSpecBase) {
+    if (spec.isEncrypted) {
       const provider = await legacyCryptoProvider.create(spec.name, spec.owner);
       spec = (await spec.decrypt(provider)).spec;
     }

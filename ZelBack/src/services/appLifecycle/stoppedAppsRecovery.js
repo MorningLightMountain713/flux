@@ -214,7 +214,7 @@ async function startStoppedAppsOnBoot() {
       }
 
       // eslint-disable-next-line no-await-in-loop
-      const spec = await deserializeSpec(appSpec).catch(() => null);
+      const spec = await deserializeSpec(appSpec);
       if (spec && spec.hasActiveStandbySyncthing()) {
         log.info(`stoppedAppsRecovery - App ${appName} uses activeStandby syncthing, skipping all its containers (managed by masterSlaveApps)`);
         results.appsSkippedGMode.push(appName);

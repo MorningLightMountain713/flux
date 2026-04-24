@@ -500,21 +500,13 @@ async function callOtherNodeToKeepUpnpPortsOpen() {
     const apps = installedAppsRes.data;
     const pubKey = await fluxNetworkHelper.getFluxNodePublicKey();
     const ports = [];
-    // eslint-disable-next-line no-restricted-syntax
+    const { DeploymentSpec } = await getSpecBackend();
     for (const app of apps) {
-      if (app.version === 1) {
-        ports.push(+app.port);
-      } else if (app.version <= 3) {
-        app.ports.forEach((port) => {
-          ports.push(+port);
-        });
-      } else {
-        app.compose.forEach((component) => {
-          component.ports.forEach((port) => {
-            ports.push(+port);
-          });
-        });
-      }
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await deserializeSpec(app);
+      if (!spec) continue;
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      ports.push(...deployment.allHostPorts());
     }
 
     // We don't add the api port, as the remote node will callback to our

@@ -18,13 +18,12 @@ const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
 async function decryptEnterpriseApps(apps) {
   const decryptedApps = [];
   const cache = fluxCaching.default.enterpriseAppDecryptionCache;
-  const { EncryptedSpecBase } = await getSpecBackend();
-
   // eslint-disable-next-line no-restricted-syntax
   for (const spec of apps) {
     // eslint-disable-next-line no-await-in-loop
-    const wireSpec = await deserializeSpec(spec).catch(() => null);
-    if (!(wireSpec instanceof EncryptedSpecBase)) {
+    const wireSpec = await deserializeSpec(spec);
+    if (!wireSpec) continue;
+    if (!wireSpec.isEncrypted) {
       decryptedApps.push(spec);
       // eslint-disable-next-line no-continue
       continue;

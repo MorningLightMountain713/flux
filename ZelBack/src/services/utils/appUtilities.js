@@ -205,30 +205,6 @@ async function getContainerStorage(appName) {
 }
 
 /**
- * Get app ports from specifications
- * @param {object} appSpecs - Application specifications
- * @returns {Array<number>} Array of port numbers
- */
-function getAppPorts(appSpecs) {
-  const appPorts = [];
-  // eslint-disable-next-line no-restricted-syntax
-  if (appSpecs.version === 1) {
-    appPorts.push(+appSpecs.port);
-  } else if (appSpecs.version <= 3) {
-    appSpecs.ports.forEach((port) => {
-      appPorts.push(+port);
-    });
-  } else {
-    appSpecs.compose.forEach((component) => {
-      component.ports.forEach((port) => {
-        appPorts.push(+port);
-      });
-    });
-  }
-  return appPorts;
-}
-
-/**
  * Find common architectures across all app components
  * @param {Array<{name: string, architectures: string[]}>} componentArchitectures - Array of component architecture info
  * @returns {string[]} Array of architecture strings common to all components
@@ -247,6 +223,5 @@ module.exports = {
   nodeFullGeolocation,
   getAppFolderSize,
   getContainerStorage,
-  getAppPorts,
   findCommonArchitectures,
 };

@@ -367,8 +367,7 @@ async function getApplicationGlobalSpecifications(appName) {
   if (!dbDoc) return null;
 
   const wireSpec = await deserializeSpec(dbDoc);
-  const { EncryptedSpecBase } = await getSpecBackend();
-  if (!(wireSpec instanceof EncryptedSpecBase)) return dbDoc;
+  if (!wireSpec || !wireSpec.isEncrypted) return dbDoc;
 
   // Explicit cleartext crossing for encrypted wire forms.
   const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);

@@ -714,7 +714,7 @@ async function checkOrbitAppHealth(appSpecifications, appName, isComponent, res)
  * @returns {Promise<void>} Installation result
  */
 async function installApplicationHard(appSpecifications, appName, isComponent, res, fullAppSpecs, test = false) {
-  const spec = await deserializeSpec(fullAppSpecs).catch(() => null);
+  const spec = await deserializeSpec(fullAppSpecs);
   const compName = isComponent ? appSpecifications.name : spec?.componentNames()?.[0];
   const comp = spec?.getComponent?.(compName);
 
@@ -810,7 +810,7 @@ async function installApplicationHard(appSpecifications, appName, isComponent, r
  * @returns {Promise<void>} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function installApplicationSoft(appSpecifications, appName, isComponent, res, fullAppSpecs) {
-  const spec = await deserializeSpec(fullAppSpecs).catch(() => null);
+  const spec = await deserializeSpec(fullAppSpecs);
   const compName = isComponent ? appSpecifications.name : spec?.componentNames()?.[0];
   const comp = spec?.getComponent?.(compName);
 

@@ -969,7 +969,7 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
 
     // eslint-disable-next-line global-require
     const appInstaller = require('./appInstaller');
-    const softSpec = await deserializeSpec(appSpecifications).catch(() => null);
+    const softSpec = await deserializeSpec(appSpecifications);
     if (softSpec && softSpec.componentCount > 1) {
       // eslint-disable-next-line no-restricted-syntax
       for (const [, comp] of softSpec.componentEntries()) {
@@ -979,7 +979,7 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
         await appInstaller.installApplicationSoft(compCanonical, appName, isComponent, res, appSpecifications);
       }
 
-      const redeploySpec = await deserializeSpec(appSpecifications).catch(() => null);
+      const redeploySpec = await deserializeSpec(appSpecifications);
       // eslint-disable-next-line no-restricted-syntax
       for (const [compName, comp] of redeploySpec?.componentEntries?.() || []) {
         if (comp.hasSyncthing()) {
@@ -996,7 +996,7 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
     } else {
       await appInstaller.installApplicationSoft(specificationsToInstall, appName, isComponent, res, appSpecifications);
 
-      const redeploySpec = await deserializeSpec(appSpecifications).catch(() => null);
+      const redeploySpec = await deserializeSpec(appSpecifications);
       const singleComp = redeploySpec?.firstComponent() ?? null;
       if (singleComp?.hasSyncthing()) {
         const identifier = isComponent ? `${specificationsToInstall.name}_${appName}` : appName;
@@ -1052,7 +1052,7 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
 async function softUninstallComposedApp(appSpecifications, appName, res) {
   // eslint-disable-next-line global-require
   const appUninstaller = require('./appUninstaller');
-  const spec = await deserializeSpec(appSpecifications).catch(() => null);
+  const spec = await deserializeSpec(appSpecifications);
   const compNames = spec ? spec.componentNames().reverse() : [];
   // eslint-disable-next-line no-restricted-syntax
   for (const compName of compNames) {
@@ -1075,7 +1075,7 @@ async function softUninstallComposedApp(appSpecifications, appName, res) {
 async function softUninstallSingleComponent(appSpecifications, appName, appComponent, appId, res) {
   // eslint-disable-next-line global-require
   const appUninstaller = require('./appUninstaller');
-  const spec = await deserializeSpec(appSpecifications).catch(() => null);
+  const spec = await deserializeSpec(appSpecifications);
   const comp = spec?.components?.[appComponent];
   await appUninstaller.softUninstallComponent(appName, appId, comp ? comp.toCanonical() : null, res, stopAppMonitoring);
 }
@@ -1241,8 +1241,8 @@ async function softRedeploy(appSpecs, res) {
       if (installedAppsRes.status === 'success') {
         const installedApp = installedAppsRes.data.find((app) => app.name === appSpecs.name);
         if (installedApp && installedApp.version >= 8) {
-          const newSpec = await deserializeSpec(appSpecs).catch(() => null);
-          const oldSpec = await deserializeSpec(installedApp).catch(() => null);
+          const newSpec = await deserializeSpec(appSpecs);
+          const oldSpec = await deserializeSpec(installedApp);
           if (newSpec && oldSpec && hasComponentStructureChange(newSpec, oldSpec)) {
             const oldCount = oldSpec.componentCount;
             const newCount = newSpec.componentCount;
@@ -1918,7 +1918,7 @@ async function appDockerStart(appname) {
       if (!appSpecs) {
         throw new Error('Application not found');
       }
-      const startSpec = await deserializeSpec(appSpecs).catch(() => null);
+      const startSpec = await deserializeSpec(appSpecs);
       if (!startSpec) throw new Error('Application not found');
       const { DeploymentSpec } = await getSpecBackend();
       const deployment = DeploymentSpec.fromSpec(startSpec, appsFolder);
@@ -1953,7 +1953,7 @@ async function appDockerStop(appname) {
       if (!appSpecs) {
         throw new Error('Application not found');
       }
-      const stopSpec = await deserializeSpec(appSpecs).catch(() => null);
+      const stopSpec = await deserializeSpec(appSpecs);
       if (!stopSpec) throw new Error('Application not found');
       const { DeploymentSpec } = await getSpecBackend();
       const deployment = DeploymentSpec.fromSpec(stopSpec, appsFolder);
@@ -1987,7 +1987,7 @@ async function appDockerRestart(appname) {
     if (!appSpecs) {
       throw new Error('Application not found');
     }
-    const spec = await deserializeSpec(appSpecs).catch(() => null);
+    const spec = await deserializeSpec(appSpecs);
     const { DeploymentSpec } = await getSpecBackend();
     const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
     const isComponent = appname.includes('_');
@@ -2101,7 +2101,7 @@ async function appendBackupTask(req, res) {
       // eslint-disable-next-line global-require
       const registryManager = require('../appDatabase/registryManager');
       const appDetails = await registryManager.getApplicationGlobalSpecifications(appname);
-      const appSpec = await deserializeSpec(appDetails).catch(() => null);
+      const appSpec = await deserializeSpec(appDetails);
       const hasSyncthing = appSpec && appSpec.hasSyncthing();
       if (hasSyncthing) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
@@ -2220,7 +2220,7 @@ async function appendRestoreTask(req, res) {
       // eslint-disable-next-line global-require
       const registryManager = require('../appDatabase/registryManager');
       const appDetails = await registryManager.getApplicationGlobalSpecifications(appname);
-      const restoreSpec = await deserializeSpec(appDetails).catch(() => null);
+      const restoreSpec = await deserializeSpec(appDetails);
       const restoreHasSyncthing = restoreSpec && restoreSpec.hasSyncthing();
       if (restoreHasSyncthing) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
@@ -2503,8 +2503,8 @@ async function validateApplicationUpdateCompatibility(specifications, previousAp
         // Component count and names can change - will trigger hard redeploy
         log.info(`Version 8+ app "${specifications.name}" allows component structure changes`);
       } else {
-        const newSpec = await deserializeSpec(specifications).catch(() => null);
-        const oldSpec = await deserializeSpec(appSpecs).catch(() => null);
+        const newSpec = await deserializeSpec(specifications);
+        const oldSpec = await deserializeSpec(appSpecs);
         const newCompNames = newSpec ? newSpec.componentNames() : [];
         const oldCompNames = oldSpec ? oldSpec.componentNames() : [];
 
@@ -3073,7 +3073,7 @@ async function reinstallOldApplications() {
             }
             log.info(`Database entry created for ${instantiated.name} BEFORE component Docker container creation (version upgrade path)`);
 
-            const upgradeSpec = !instantiated.isEncrypted() ? instantiated.spec : await deserializeSpec(appSpecifications).catch(() => null);
+            const upgradeSpec = !instantiated.isEncrypted() ? instantiated.spec : await deserializeSpec(appSpecifications);
             // eslint-disable-next-line no-restricted-syntax
             for (const [, comp] of upgradeSpec?.componentEntries?.() || []) {
               const compCanonical = comp.toCanonical();
@@ -3161,9 +3161,9 @@ async function reinstallOldApplications() {
             // eslint-disable-next-line global-require
             const appInstaller = require('./appInstaller');
 
-            const newSpec = !instantiated.isEncrypted() ? instantiated.spec : await deserializeSpec(appSpecifications).catch(() => null);
+            const newSpec = !instantiated.isEncrypted() ? instantiated.spec : await deserializeSpec(appSpecifications);
             // eslint-disable-next-line no-await-in-loop
-            const oldSpec = await deserializeSpec(installedApp).catch(() => null);
+            const oldSpec = await deserializeSpec(installedApp);
             const structureChanged = Boolean(
               newSpec && oldSpec && instantiated.version >= 8 && installedApp.version >= 8
               && hasComponentStructureChange(newSpec, oldSpec),
@@ -3492,7 +3492,7 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
     // eslint-disable-next-line no-restricted-syntax
     for (const app of appsInstalled.data) {
       // eslint-disable-next-line no-await-in-loop
-      const spec = await deserializeSpec(app).catch(() => null);
+      const spec = await deserializeSpec(app);
       if (!spec) {
         // eslint-disable-next-line no-continue
         continue;
@@ -3537,7 +3537,7 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
         continue;
       }
       // eslint-disable-next-line no-await-in-loop
-      const installedSpec = await deserializeSpec(installedApp).catch(() => null);
+      const installedSpec = await deserializeSpec(installedApp);
       if (installedSpec) {
         const instDeploy = DeploymentSpec.fromSpec(installedSpec, appsFolder);
         for (const [, deployComp] of instDeploy.componentEntries()) {

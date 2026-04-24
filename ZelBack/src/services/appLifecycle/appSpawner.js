@@ -15,7 +15,6 @@ const registryManager = require('../appDatabase/registryManager');
 const imageManager = require('../appSecurity/imageManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const portManager = require('../appNetwork/portManager');
-const appUtilities = require('../utils/appUtilities');
 const systemIntegration = require('../appSystem/systemIntegration');
 const globalState = require('../utils/globalState');
 const { FluxCacheManager } = require('../utils/cacheManager');
@@ -303,11 +302,12 @@ async function trySpawningGlobalApplication() {
       return;
     }
 
-    // Get app ports early - needed for both user-blocked check and public availability check
-    const appPorts = appUtilities.getAppPorts(appSpecifications);
+    const spec = await deserializeSpec(appSpecifications);
+    const { DeploymentSpec } = await getSpecBackend();
+    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+    const appPorts = deployment.allHostPorts();
 
     // EARLY CHECK: Verify app doesn't use user-blocked ports before expensive Docker Hub operations
-    // Skip this check for vetted apps
     const appIsVetted = await imageManager.isAppVetted(appSpecifications);
     if (!appIsVetted) {
       // eslint-disable-next-line no-restricted-syntax
@@ -336,18 +336,15 @@ async function trySpawningGlobalApplication() {
     });
 
     // verify requirements
-    await hwRequirements.checkAppRequirements(appSpecifications);
+    await hwRequirements.checkAppRequirements(spec);
 
     // ensure ports unused
-    // Get apps running specifically on this IP
-    const myIPAddress = myIP.split(':')[0]; // just IP address without port
+    const myIPAddress = myIP.split(':')[0];
     const runningAppsOnThisIP = await registryManager.getRunningAppIpList(myIPAddress);
     const runningAppsNames = runningAppsOnThisIP.map((app) => app.name);
 
     await portManager.ensureApplicationPortsNotUsed(appSpecifications, runningAppsNames);
 
-    // Note: User-blocked port check happens earlier (line ~353) before Docker Hub calls
-    // Check if ports are publicly available - critical for proper Flux network operation
     const portsPubliclyAvailable = await portManager.checkInstallingAppPortAvailable(appPorts);
     if (portsPubliclyAvailable === false) {
       log.error(`trySpawningGlobalApplication - Some of application ports of ${appSpecifications.name} are not available publicly. Installation aborted.`);
@@ -366,7 +363,6 @@ async function trySpawningGlobalApplication() {
       return;
     }
 
-    const spec = await deserializeSpec(appSpecifications);
     const syncthingApp = spec.hasSyncthing();
 
     const myIpWithoutPort = myIP.split(':')[0];

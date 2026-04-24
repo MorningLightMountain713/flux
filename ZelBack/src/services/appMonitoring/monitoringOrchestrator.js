@@ -4,6 +4,9 @@ const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const appInspector = require('../appManagement/appInspector');
 const log = require('../../lib/log');
+const { deserializeSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
 
 /**
  * Start monitoring multiple applications
@@ -23,16 +26,14 @@ async function startMonitoringOfApps(appSpecsToMonitor, appsMonitored, installed
       apps = installedAppsRes.data;
     }
 
-    // eslint-disable-next-line no-restricted-syntax
+    const { DeploymentSpec } = await getSpecBackend();
     for (const app of apps) {
-      if (app.version <= 3) {
-        appInspector.startAppMonitoring(app.name, appsMonitored);
-      } else {
-        // eslint-disable-next-line no-restricted-syntax
-        for (const component of app.compose) {
-          const monitoredName = `${component.name}_${app.name}`;
-          appInspector.startAppMonitoring(monitoredName, appsMonitored);
-        }
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await deserializeSpec(app);
+      if (!spec) continue;
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries()) {
+        appInspector.startAppMonitoring(deployComp.identifier, appsMonitored);
       }
     }
   } catch (error) {
@@ -60,16 +61,14 @@ async function stopMonitoringOfApps(appSpecsToMonitor, deleteData = false, appsM
       apps = installedAppsRes.data;
     }
 
-    // eslint-disable-next-line no-restricted-syntax
+    const { DeploymentSpec } = await getSpecBackend();
     for (const app of apps) {
-      if (app.version <= 3) {
-        appInspector.stopAppMonitoring(app.name, deleteData, appsMonitored);
-      } else {
-        // eslint-disable-next-line no-restricted-syntax
-        for (const component of app.compose) {
-          const monitoredName = `${component.name}_${app.name}`;
-          appInspector.stopAppMonitoring(monitoredName, deleteData, appsMonitored);
-        }
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await deserializeSpec(app);
+      if (!spec) continue;
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
+        appInspector.stopAppMonitoring(deployComp.identifier, deleteData, appsMonitored);
       }
     }
   } catch (error) {

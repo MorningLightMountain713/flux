@@ -27,21 +27,30 @@
 
 const { getSpec, getSpecBackend } = require('./specLibs');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
+const log = require('../../lib/log');
 
 /**
  * Deserialize a plain-object wire-form spec blob into its class instance.
  *
- * Thin async wrapper over flux-spec-backend's `deserializeSpec` dispatch.
- * Returns either a cleartext `FluxAppSpecBase` subclass or an
- * `EncryptedSpecBase` subclass depending on wire shape.
+ * Returns either a cleartext `FluxAppSpecBase` subclass, an
+ * `EncryptedSpecBase` subclass, or `null` if the blob cannot be parsed
+ * (unknown version, malformed fields, etc.). Logs a warning on failure
+ * so callers don't need per-site `.catch(() => null)` boilerplate.
  *
  * @param {object} plainSpec
- * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase | import('@runonflux/flux-spec-backend').EncryptedSpecBase>}
+ * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase | import('@runonflux/flux-spec-backend').EncryptedSpecBase | null>}
  */
 async function deserializeSpec(plainSpec) {
-  await getSpec();
-  const { deserializeSpec: impl } = await getSpecBackend();
-  return impl(plainSpec);
+  try {
+    await getSpec();
+    const { deserializeSpec: impl } = await getSpecBackend();
+    return impl(plainSpec);
+  } catch (error) {
+    const name = plainSpec?.name || 'unknown';
+    const version = plainSpec?.version ?? '?';
+    log.warn(`deserializeSpec: could not parse spec ${name} (v${version}): ${error.message}`);
+    return null;
+  }
 }
 
 /**
@@ -78,10 +87,10 @@ async function toCanonicalSpec(plainSpec) {
  * @returns {Promise<object>}
  */
 async function decryptIfEnterprise(plainSpec) {
-  if (!plainSpec) return plainSpec;
+  if (!plainSpec) return null;
   const wireSpec = await deserializeSpec(plainSpec);
-  const { EncryptedSpecBase } = await getSpecBackend();
-  if (!(wireSpec instanceof EncryptedSpecBase)) return plainSpec;
+  if (!wireSpec) return null;
+  if (!wireSpec.isEncrypted) return plainSpec;
 
   const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
   const decrypted = await wireSpec.decrypt(provider);
@@ -112,8 +121,7 @@ async function decryptIfEnterprise(plainSpec) {
  */
 async function decryptToCleartextClass(plainSpec) {
   const wireSpec = await deserializeSpec(plainSpec);
-  const { EncryptedSpecBase } = await getSpecBackend();
-  if (!(wireSpec instanceof EncryptedSpecBase)) return wireSpec;
+  if (!wireSpec || !wireSpec.isEncrypted) return wireSpec;
   const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
   const decrypted = await wireSpec.decrypt(provider);
   return decrypted.spec;

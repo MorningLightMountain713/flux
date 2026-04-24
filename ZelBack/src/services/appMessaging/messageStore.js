@@ -116,8 +116,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
     // via the deserializeSpec dispatch — cross the cleartext boundary
     // explicitly via `.decrypt(provider)` → DecryptedCanonicalSpec.spec.
     let validationBlob;
-    const { EncryptedSpecBase } = await getSpecBackend();
-    if (wireSpec instanceof EncryptedSpecBase) {
+    if (wireSpec && wireSpec.isEncrypted) {
       // eslint-disable-next-line global-require
       const fluxService = require('../fluxService');
       if (await fluxService.isSystemSecure()) {

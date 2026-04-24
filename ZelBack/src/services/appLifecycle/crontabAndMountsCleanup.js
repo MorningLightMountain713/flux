@@ -32,7 +32,7 @@ async function getInstalledAppIds() {
     const { DeploymentSpec } = await getSpecBackend();
     for (const app of apps) {
       // eslint-disable-next-line no-await-in-loop
-      const spec = await deserializeSpec(app).catch(() => null);
+      const spec = await deserializeSpec(app);
       if (!spec) continue;
       const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
       for (const [, deployComp] of deployment.componentEntries()) {
