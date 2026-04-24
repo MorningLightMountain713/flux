@@ -642,7 +642,7 @@ describe('appInstaller tests', () => {
         systemArchitecture: sinon.stub().resolves('amd64'), // Node is AMD64
       };
 
-      const registerAppLocallyStub = sinon.stub().resolves();
+      const installApplicationStub = sinon.stub().resolves();
 
       const appInstallerForArchTest = proxyquire('../../ZelBack/src/services/appLifecycle/appInstaller', {
         config: configStub,
@@ -786,7 +786,7 @@ describe('appInstaller tests', () => {
     });
   });
 
-  describe('registerAppLocally tests', () => {
+  describe('installApplication tests', () => {
     const appSpec = {
       version: 2,
       name: 'testapp',
@@ -834,7 +834,7 @@ describe('appInstaller tests', () => {
       };
       globalStateStub.removalInProgress = true;
 
-      const result = await appInstaller.registerAppLocally(appSpec, componentSpecs, res);
+      const result = await appInstaller.installApplication(appSpec, { res });
 
       expect(logStub.error.called).to.be.true;
       expect(result).to.be.false;
@@ -848,7 +848,7 @@ describe('appInstaller tests', () => {
       };
       globalStateStub.installationInProgress = true;
 
-      const result = await appInstaller.registerAppLocally(appSpec, componentSpecs, res);
+      const result = await appInstaller.installApplication(appSpec, { res });
 
       expect(logStub.error.called).to.be.true;
       expect(result).to.be.false;
@@ -972,7 +972,7 @@ describe('appInstaller tests', () => {
         end: sinon.stub(),
       };
 
-      const result = await appInstallerWithDb.registerAppLocally(appSpec, componentSpecs, res);
+      const result = await appInstallerWithDb.installApplication(appSpec, { res });
 
       expect(logStub.error.called).to.be.true;
       expect(res.write.called).to.be.true;
@@ -1056,7 +1056,7 @@ describe('appInstaller tests', () => {
 
       const newAppSpec = { version: 2, name: 'newapp', description: 'test', repotag: 'test/app', owner: '1abc', ports: [30000], containerPorts: [8080], domains: [''], cpu: 0.5, ram: 500, hdd: 5 };
       try {
-        await appInstallerFresh.registerAppLocally(newAppSpec, false, null);
+        await appInstallerFresh.installApplication(newAppSpec);
       } catch (e) {
         // Expected — we only care that the prune guard logic ran correctly
       }

@@ -636,13 +636,13 @@ async function trySpawningGlobalApplication() {
     // install the app
     let registerOk = false;
     try {
-      registerOk = await appInstaller.registerAppLocally(appSpecifications, null, null, false); // can throw
+      registerOk = await appInstaller.installApplication(appSpecifications);
     } catch (error) {
       log.error(error);
       registerOk = false;
     }
     if (!registerOk) {
-      log.info('trySpawningGlobalApplication - Error on registerAppLocally');
+      log.info('trySpawningGlobalApplication - Error on installApplication');
       await serviceHelper.delay(shortDelayTime);
       trySpawningGlobalApplication();
       return;

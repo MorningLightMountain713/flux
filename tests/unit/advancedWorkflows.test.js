@@ -6,6 +6,7 @@ const sinon = require('sinon');
 const advancedWorkflows = require('../../ZelBack/src/services/appLifecycle/advancedWorkflows');
 const appSpecHistory = require('../../ZelBack/src/services/appDatabase/appSpecHistory');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
+const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 
 describe('advancedWorkflows tests', () => {
@@ -1219,9 +1220,9 @@ describe('advancedWorkflows tests', () => {
 
       // Stub appInstaller so hardRedeploy doesn't actually try to install the app
       // eslint-disable-next-line global-require
-      const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
+
       sinon.stub(appInstaller, 'checkAppRequirements').resolves();
-      sinon.stub(appInstaller, 'registerAppLocally').resolves();
+      sinon.stub(appInstaller, 'installApplication').resolves();
 
       // Stub serviceHelper.delay so hardRedeploy doesn't wait
       // eslint-disable-next-line global-require
@@ -1280,9 +1281,9 @@ describe('advancedWorkflows tests', () => {
 
       // Stub appInstaller so hardRedeploy doesn't actually try to install the app
       // eslint-disable-next-line global-require
-      const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
+
       sinon.stub(appInstaller, 'checkAppRequirements').resolves();
-      sinon.stub(appInstaller, 'registerAppLocally').resolves();
+      sinon.stub(appInstaller, 'installApplication').resolves();
 
       // Stub serviceHelper.delay so hardRedeploy doesn't wait
       // eslint-disable-next-line global-require
@@ -1332,11 +1333,7 @@ describe('advancedWorkflows tests', () => {
 
       // Mock other required dependencies for soft redeploy
       sinon.stub(advancedWorkflows, 'softRemoveAppLocally').resolves();
-      sinon.stub(advancedWorkflows, 'softRegisterAppLocally').resolves();
-
-      // Stub appInstaller.checkAppRequirements so softRedeploy doesn't validate real env
-      // eslint-disable-next-line global-require
-      const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
+      sinon.stub(appInstaller, 'installApplication').resolves();
       sinon.stub(appInstaller, 'checkAppRequirements').resolves();
 
       const clock = sinon.useFakeTimers();
@@ -1382,11 +1379,7 @@ describe('advancedWorkflows tests', () => {
 
       // Mock other required dependencies
       sinon.stub(advancedWorkflows, 'softRemoveAppLocally').resolves();
-      sinon.stub(advancedWorkflows, 'softRegisterAppLocally').resolves();
-
-      // Stub appInstaller.checkAppRequirements so softRedeploy doesn't validate real env
-      // eslint-disable-next-line global-require
-      const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
+      sinon.stub(appInstaller, 'installApplication').resolves();
       sinon.stub(appInstaller, 'checkAppRequirements').resolves();
 
       const clock = sinon.useFakeTimers();
@@ -1426,11 +1419,7 @@ describe('advancedWorkflows tests', () => {
       findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase').resolves([installedApp]);
 
       sinon.stub(advancedWorkflows, 'softRemoveAppLocally').resolves();
-      sinon.stub(advancedWorkflows, 'softRegisterAppLocally').resolves();
-
-      // Stub appInstaller.checkAppRequirements so softRedeploy doesn't validate real env
-      // eslint-disable-next-line global-require
-      const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
+      sinon.stub(appInstaller, 'installApplication').resolves();
       sinon.stub(appInstaller, 'checkAppRequirements').resolves();
 
       const clock = sinon.useFakeTimers();

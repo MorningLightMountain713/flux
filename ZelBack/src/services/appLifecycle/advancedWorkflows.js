@@ -321,237 +321,6 @@ let dosMountMessage = '';
 
 
 /**
- * To soft register an app locally (with data volume already in existence). Performs pre-installation checks - database in place, Flux Docker network in place and if app already installed. Then registers app in database and performs soft install. If registration fails, the app is removed locally.
- * @param {object} appSpecs App specifications.
- * @param {object} componentSpecs Component specifications.
- * @param {object} res Response.
- * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
- */
-async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
-  // cpu, ram, hdd were assigned to correct tiered specs.
-  // get applications specifics from app messages database
-  // check if hash is in blockchain
-  // register and launch according to specifications in message
-  // throw without catching
-  try {
-    if (globalState.removalInProgress) {
-      const rStatus = messageHelper.createErrorMessage('Another application is undergoing removal');
-      log.error(rStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(rStatus));
-        res.end();
-      }
-      return;
-    }
-    if (globalState.installationInProgress) {
-      const rStatus = messageHelper.createErrorMessage('Another application is undergoing installation');
-      log.error(rStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(rStatus));
-        res.end();
-      }
-      return;
-    }
-    globalState.installationInProgress = true;
-    const appSpecifications = appSpecs;
-    const appComponent = componentSpecs;
-    const appName = appSpecifications.name;
-    let isComponent = !!appComponent;
-    const precheckForInstallation = {
-      status: 'Running initial checks for Flux App...',
-    };
-    log.info(precheckForInstallation);
-    if (res) {
-      res.write(serviceHelper.ensureString(precheckForInstallation));
-      if (res.flush) res.flush();
-    }
-    // connect to mongodb
-    const dbOpenTest = {
-      status: 'Connecting to database...',
-    };
-    log.info(dbOpenTest);
-    if (res) {
-      res.write(serviceHelper.ensureString(dbOpenTest));
-      if (res.flush) res.flush();
-    }
-    const dbopen = dbHelper.databaseConnection();
-
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const appsQuery = { name: appName };
-    const appsProjection = {
-      projection: {
-        _id: 0,
-        name: 1,
-      },
-    };
-
-    // check if app is already installed
-    const checkDb = {
-      status: 'Checking database...',
-    };
-    log.info(checkDb);
-    if (res) {
-      res.write(serviceHelper.ensureString(checkDb));
-      if (res.flush) res.flush();
-    }
-    const appResult = await appsRepository.getInstalledAppRaw(appName, { name: 1 });
-    if (appResult && !isComponent) {
-      globalState.installationInProgress = false;
-      const rStatus = messageHelper.createErrorMessage(`Flux App ${appName} already installed`);
-      log.error(rStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(rStatus));
-        res.end();
-      }
-      return;
-    }
-
-    if (!isComponent) {
-      let dockerNetworkAddrValue = Math.floor(Math.random() * 256);
-      if (appsThatMightBeUsingOldGatewayIpAssignment.includes(appName)) {
-        dockerNetworkAddrValue = appName.charCodeAt(appName.length - 1);
-      }
-      const fluxNetworkStatus = {
-        status: `Checking Flux App network of ${appName}...`,
-      };
-      log.info(fluxNetworkStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(fluxNetworkStatus));
-        if (res.flush) res.flush();
-      }
-      let fluxNet = null;
-      for (let i = 0; i <= 20; i += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        fluxNet = await dockerService.createFluxAppDockerNetwork(appName, dockerNetworkAddrValue).catch((error) => log.error(error));
-        if (fluxNet || appsThatMightBeUsingOldGatewayIpAssignment.includes(appName)) {
-          break;
-        }
-        dockerNetworkAddrValue = Math.floor(Math.random() * 256);
-      }
-      if (!fluxNet) {
-        throw new Error(`Flux App network of ${appName} failed to initiate. Not possible to create docker application network.`);
-      }
-      log.info(serviceHelper.ensureString(fluxNet));
-      const fluxNetworkInterfaces = await dockerService.getFluxDockerNetworkPhysicalInterfaceNames();
-      const accessRemoved = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces);
-      const accessRemovedRes = {
-        status: accessRemoved ? `Private network access removed for ${appName}` : `Error removing private network access for ${appName}`,
-      };
-      if (res) {
-        res.write(serviceHelper.ensureString(accessRemovedRes));
-        if (res.flush) res.flush();
-      }
-      const fluxNetResponse = {
-        status: `Docker network of ${appName} initiated.`,
-      };
-      if (res) {
-        res.write(serviceHelper.ensureString(fluxNetResponse));
-        if (res.flush) res.flush();
-      }
-    }
-
-    const appInstallation = {
-      status: isComponent ? `Initiating Flux App component ${appComponent.name} installation...` : `Initiating Flux App ${appName} installation...`,
-    };
-    log.info(appInstallation);
-    if (res) {
-      res.write(serviceHelper.ensureString(appInstallation));
-      if (res.flush) res.flush();
-    }
-    if (!isComponent) {
-      // register the app
-
-      const isEnterprise = Boolean(
-        appSpecifications.version >= 8 && appSpecifications.enterprise,
-      );
-
-      const dbSpecs = JSON.parse(JSON.stringify(appSpecifications));
-
-      if (isEnterprise) {
-        dbSpecs.compose = [];
-        dbSpecs.contacts = [];
-      }
-
-      const insertResult = await dbHelper.insertOneToDatabase(appsDatabase, localAppsInformation, dbSpecs);
-      if (!insertResult) {
-        throw new Error(`CRITICAL: Failed to create database entry for ${appSpecifications.name} in soft registration. Database insert returned undefined - likely duplicate key error or database failure. Aborting soft registration to prevent orphaned Docker containers.`);
-      }
-      log.info(`Database entry created for ${appSpecifications.name} BEFORE Docker container creation (soft registration)`);
-    }
-
-
-    const deployment = await deploymentProvider.getInstalledDeployment(appName);
-    if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
-
-    const owner = appSpecifications.owner || null;
-    const cpuBurstHelper = require('../utils/cpuBurstHelper');
-    const burstEligible = owner
-      && cpuBurstHelper.isEnterpriseOwner(owner)
-      && await cpuBurstHelper.isCpuBurstSupported();
-    const onStatus = res ? (msg) => {
-      const payload = typeof msg === 'string' ? { status: msg } : msg;
-      res.write(serviceHelper.ensureString(payload));
-      if (res.flush) res.flush();
-    } : null;
-    const syslogCollector = deployment.componentEntries()
-      .find(([, c]) => c.toDockerEnv().some((e) => e.startsWith('LOG=COLLECT')));
-    const syslogTarget = syslogCollector ? syslogCollector[0] : null;
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const [, component] of deployment.componentEntries()) {
-      // eslint-disable-next-line no-await-in-loop
-      await appInstaller.installComponent(component, {
-        onStatus,
-        createVolumes: false,
-        burstEligible,
-        specVersion: appSpecifications.version || null,
-        syslogTarget,
-      });
-
-      if (component.hasSyncthing()) {
-        const appId = dockerService.getAppIdentifier(component.identifier);
-        globalState.receiveOnlySyncthingAppsCache.set(appId, {
-          restarted: true,
-          numberOfExecutionsRequired: 4,
-          numberOfExecutions: 10,
-        });
-        log.info(`Restored syncthing cache for ${appId} during soft redeploy`);
-      }
-    }
-    // all done message
-    const successStatus = messageHelper.createSuccessMessage(`Flux App ${appName} successfully installed and launched`);
-    log.info(successStatus);
-    if (res) {
-      res.write(serviceHelper.ensureString(successStatus));
-      res.end();
-    }
-    globalState.installationInProgress = false;
-  } catch (error) {
-    globalState.installationInProgress = false;
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    log.error(errorResponse);
-    if (res) {
-      res.write(serviceHelper.ensureString(errorResponse));
-      if (res.flush) res.flush();
-    }
-    const removeStatus = messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appSpecs.name} removal`);
-    log.info(removeStatus);
-    log.warn(`REMOVAL REASON: Soft registration failure - ${appSpecs.name} failed during soft registration: ${error.message} (softRegisterAppLocally)`);
-    if (res) {
-      res.write(serviceHelper.ensureString(removeStatus));
-      if (res.flush) res.flush();
-    }
-    // eslint-disable-next-line global-require
-
-    appUninstaller.removeAppLocally(appSpecs.name, res, true);
-  }
-}
-
-/**
  * Clean up database after app removal
  * @param {object} appsDatabase - Database connection
  * @param {string} appName - Application name
@@ -732,7 +501,7 @@ async function softRedeploy(appSpecs, res) {
 
     await appInstaller.checkAppRequirements(appSpecs);
     // register
-    await softRegisterAppLocally(appSpecs, undefined, res);
+    await appInstaller.installApplication(appSpecs, { res, createVolumes: false });
     log.info('Application softly redeployed');
     globalState.softRedeployInProgress = false;
   } catch (error) {
@@ -805,7 +574,7 @@ async function hardRedeploy(appSpecs, res) {
 
     await appInstaller.checkAppRequirements(appSpecs);
     // register
-    await appInstaller.registerAppLocally(appSpecs, undefined, res, false, true); // can throw
+    await appInstaller.installApplication(appSpecs, { res, sendRemovalMessage: true });
     log.info('Application redeployed');
     globalState.hardRedeployInProgress = false;
   } catch (error) {
@@ -2246,15 +2015,17 @@ async function reinstallOldApplications() {
             }
             log.info(`Database entry created for ${instantiated.name} BEFORE component Docker container creation (version upgrade path)`);
 
-            const upgradeSpec = !instantiated.isEncrypted() ? instantiated.spec : await deserializeSpec(appSpecifications);
-            // eslint-disable-next-line no-restricted-syntax
-            for (const [, comp] of upgradeSpec?.componentEntries?.() || []) {
-              const compCanonical = comp.toCanonical();
-              log.warn(`Continuing Hard Redeployment of component ${compCanonical.name}_${instantiated.name}...`);
-              // eslint-disable-next-line no-await-in-loop
-              await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-              // eslint-disable-next-line no-await-in-loop
-              await appInstaller.registerAppLocally(appSpecifications, compCanonical);
+            // eslint-disable-next-line no-await-in-loop
+            const deployment = await deploymentProvider.getInstalledDeployment(instantiated.name);
+            if (deployment) {
+              // eslint-disable-next-line no-restricted-syntax
+              for (const [, comp] of deployment.componentEntries()) {
+                log.warn(`Continuing Hard Redeployment of component ${comp.identifier}...`);
+                // eslint-disable-next-line no-await-in-loop
+                await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+                // eslint-disable-next-line no-await-in-loop
+                await appInstaller.installComponent(comp, { createVolumes: true, specVersion: appSpecifications.version });
+              }
             }
             log.warn(`Composed application ${instantiated.name} updated.`);
             log.warn(`Restarting application ${instantiated.name}`);
@@ -2380,7 +2151,7 @@ async function reinstallOldApplications() {
               await appInstaller.checkAppRequirements(appSpecifications);
 
               // eslint-disable-next-line no-await-in-loop
-              await appInstaller.registerAppLocally(appSpecifications, undefined, null, false, true);
+              await appInstaller.installApplication(appSpecifications, { sendRemovalMessage: true });
               log.info(`Application ${instantiated.name} redeployed with new component structure`);
 
               // eslint-disable-next-line no-continue
@@ -2455,27 +2226,29 @@ async function reinstallOldApplications() {
               log.info(`Database entry created for ${instantiated.name} BEFORE component Docker container creation (composed redeployment path)`);
 
               // eslint-disable-next-line no-restricted-syntax
+              // eslint-disable-next-line no-await-in-loop
+              const deployment = await deploymentProvider.getInstalledDeployment(instantiated.name);
               for (const compName of newSpec.componentNames()) {
-                const identifier = `${compName}_${instantiated.name}`;
                 const newComp = newSpec.getComponent(compName);
                 const oldComp = oldSpec?.components?.[compName];
                 const newCanonical = newComp.toCanonical();
                 const oldCanonical = oldComp?.toCanonical();
+                const deployComp = deployment?.getComponent(compName);
 
                 if (oldCanonical && JSON.stringify(oldCanonical) === JSON.stringify(newCanonical)) {
-                  log.warn(`Component ${identifier} specs were not changed, skipping.`);
-                } else if (oldComp && newComp.persistentStorage?.sizeGb === oldComp.persistentStorage?.sizeGb) {
-                  log.warn(`Continuing Soft Redeployment of component ${identifier}...`);
+                  log.warn(`Component ${compName}_${instantiated.name} specs were not changed, skipping.`);
+                } else if (deployComp && oldComp && newComp.persistentStorage?.sizeGb === oldComp.persistentStorage?.sizeGb) {
+                  log.warn(`Continuing Soft Redeployment of component ${deployComp.identifier}...`);
                   // eslint-disable-next-line no-await-in-loop
                   await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
                   // eslint-disable-next-line no-await-in-loop
-                  await softRegisterAppLocally(appSpecifications, newCanonical);
-                } else {
-                  log.warn(`Continuing Hard Redeployment of component ${identifier}...`);
+                  await appInstaller.installComponent(deployComp, { createVolumes: false, specVersion: appSpecifications.version });
+                } else if (deployComp) {
+                  log.warn(`Continuing Hard Redeployment of component ${deployComp.identifier}...`);
                   // eslint-disable-next-line no-await-in-loop
                   await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
                   // eslint-disable-next-line no-await-in-loop
-                  await appInstaller.registerAppLocally(appSpecifications, newCanonical);
+                  await appInstaller.installComponent(deployComp, { createVolumes: true, specVersion: appSpecifications.version });
                 }
               }
               log.warn(`Composed application ${instantiated.name} updated.`);
@@ -3106,7 +2879,6 @@ async function getPeerAppsInstallingErrorMessages() {
 }
 
 module.exports = {
-  softRegisterAppLocally,
   softRemoveAppLocally,
   hardRedeploy,
   softRedeploy,
