@@ -18,6 +18,7 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const { availableApps } = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const imageManager = require('../appSecurity/imageManager');
@@ -1001,8 +1002,6 @@ async function softRemoveAppLocally(app, res, globalStateRef, stopAppMonitoring)
     const appName = isComponent ? app.split('_')[1] : app;
     const appComponent = app.split('_')[0];
 
-    // eslint-disable-next-line global-require
-    const deploymentProvider = require('../appRuntime/deploymentProvider');
     const deployment = await deploymentProvider.getInstalledDeployment(appName);
     if (!deployment) {
       throw new Error('Flux App not found');

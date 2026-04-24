@@ -24,6 +24,7 @@ const pgpService = require('../pgpService');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { decryptToCleartextClass, deserializeSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
@@ -387,8 +388,6 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
 
     // eslint-disable-next-line global-require
     const appQueryService = require('../appQuery/appQueryService');
-    // eslint-disable-next-line global-require
-    const deploymentProvider = require('../appRuntime/deploymentProvider');
     const deployments = await deploymentProvider.listInstalledDeployments();
     const runningAppsRes = await appQueryService.listRunningApps();
     if (runningAppsRes.status !== 'success') {
@@ -508,16 +507,13 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
         log.info(`Database entry validated for ${appSpecifications.name} before Docker container creation`);
       }
 
-      if (specificationsToInstall.version >= 4) { // version is undefined for component
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponentSpecs of specificationsToInstall.compose) {
-          isComponent = true;
-          // eslint-disable-next-line no-await-in-loop, no-use-before-define
-          await installApplicationHard(appComponentSpecs, appName, isComponent, res, appSpecifications, test);
-        }
-      } else {
-        // eslint-disable-next-line no-use-before-define
-        await installApplicationHard(specificationsToInstall, appName, isComponent, res, appSpecifications, test);
+      const deployment = await deploymentProvider.getInstalledDeployment(appName);
+      if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
+
+      // eslint-disable-next-line no-restricted-syntax
+      for (const [, deployComp] of deployment.componentEntries()) {
+        // eslint-disable-next-line no-await-in-loop, no-use-before-define
+        await installApplicationHard(deployComp, appName, deployment.componentCount() > 1, res, appSpecifications, test);
       }
     } catch (error) {
       if (!test) {
@@ -915,7 +911,6 @@ async function installAppLocally(req, res) {
 
       const installSpec = await decryptToCleartextClass(appSpecifications);
       if (!installSpec) throw new Error('Could not deserialize app specifications');
-      appSpecifications = installSpec.serialize();
 
       const dbopen = dbHelper.databaseConnection();
       if (!appSpecifications.height && appSpecifications.height !== 0) {

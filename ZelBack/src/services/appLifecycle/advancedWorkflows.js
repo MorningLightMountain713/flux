@@ -34,6 +34,7 @@ const {
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const globalState = require('../utils/globalState');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
@@ -1109,8 +1110,6 @@ async function softRemoveAppLocally(app, res) {
     const appName = isComponent ? app.split('_')[1] : app;
     const targetComponent = isComponent ? app.split('_')[0] : null;
 
-    // eslint-disable-next-line global-require
-    const deploymentProvider = require('../appRuntime/deploymentProvider');
     const deployment = await deploymentProvider.getInstalledDeployment(appName);
     if (!deployment) {
       throw new Error('Flux App not found');
@@ -1371,8 +1370,6 @@ async function softRedeployComponent(appName, componentName, res) {
     globalState.softRedeployInProgress = true;
     log.info(`Starting soft redeploy of component ${componentName} from app ${appName}`);
 
-    // eslint-disable-next-line global-require
-    const deploymentProvider = require('../appRuntime/deploymentProvider');
     const deployment = await deploymentProvider.getInstalledDeployment(appName);
     if (!deployment) {
       throw new Error(`Application ${appName} not found`);
@@ -2985,8 +2982,8 @@ async function reinstallOldApplications() {
 
             if (appSpecifications.hdd === installedApp.hdd) {
               log.warn(`Beginning Soft Redeployment of ${appSpecifications.name}...`);
-              // eslint-disable-next-line no-await-in-loop,global-require
-              const installedDeployment = await require('../appRuntime/deploymentProvider').getInstalledDeployment(appSpecifications.name);
+              // eslint-disable-next-line no-await-in-loop
+              const installedDeployment = await deploymentProvider.getInstalledDeployment(appSpecifications.name);
               if (installedDeployment) {
                 // eslint-disable-next-line no-restricted-syntax
                 for (const [, deployComp] of installedDeployment.componentEntries({ reverse: true })) {
@@ -3072,8 +3069,7 @@ async function reinstallOldApplications() {
             }
 
             try {
-              // eslint-disable-next-line global-require
-              const installedDeployment = await require('../appRuntime/deploymentProvider').getInstalledDeployment(instantiated.name);
+              const installedDeployment = await deploymentProvider.getInstalledDeployment(instantiated.name);
               const compNames = newSpec.componentNames().reverse();
               // eslint-disable-next-line no-restricted-syntax
               for (const compName of compNames) {
