@@ -113,8 +113,8 @@ async function validateAppUpdate(appSpecification) {
 
   const timestamp = Date.now();
   // eslint-disable-next-line global-require
-  const advancedWorkflows = require('../appLifecycle/advancedWorkflows');
-  const previousAppSpecs = await advancedWorkflows.getPreviousAppSpecifications(appSpecFormatted, timestamp);
+  const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
+  const previousAppSpecs = await getPreviousAppSpecifications(appSpecFormatted, timestamp);
   if (!previousAppSpecs) {
     throw new Error(`Flux App ${updateSpec.name} does not exist and cannot be updated`);
   }

@@ -274,8 +274,7 @@ describe('messageStore tests', () => {
         '../appDatabase/registryManager': {
           checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
         },
-        '../appLifecycle/advancedWorkflows': {
-          validateApplicationUpdateCompatibility: sinon.stub().resolves(),
+        '../appDatabase/appSpecHistory': {
           getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1', version: 5 }),
         },
         '../utils/globalState': {

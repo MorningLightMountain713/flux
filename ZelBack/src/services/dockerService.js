@@ -10,6 +10,7 @@ const generalService = require('./generalService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const log = require('../lib/log');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
+const appVolumeService = require('./appLifecycle/appVolumeService');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
 
@@ -903,9 +904,7 @@ async function appDockerCreate(deployComp, options = {}) {
   }
 
   try {
-    // eslint-disable-next-line global-require
-    const advancedWorkflows = require('./appLifecycle/advancedWorkflows');
-    await advancedWorkflows.ensureMountSourcesExist(deployComp);
+    await appVolumeService.ensureMountSourcesExist(deployComp);
   } catch (error) {
     log.error(`Failed to ensure mount paths exist for ${identifier}: ${error.message}`);
     throw error;

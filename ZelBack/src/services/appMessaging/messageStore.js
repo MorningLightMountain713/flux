@@ -8,7 +8,7 @@ const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
 const { validateSubmissionSpec, getSpecBackend, getSpec } = require('../utils/specLibs');
 const { deserializeSpec } = require('../utils/specCutover');
-const { getPreviousAppSpecifications } = require('../appLifecycle/advancedWorkflows');
+const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const globalState = require('../utils/globalState');
 const {

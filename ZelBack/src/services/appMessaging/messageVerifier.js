@@ -15,7 +15,7 @@ const { decryptToCleartextClass, deserializeSpec } = require('../utils/specCutov
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { updateAppSpecifications } = require('../appDatabase/registryManager');
-const { getPreviousAppSpecifications } = require('../appLifecycle/advancedWorkflows');
+const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
 const {
   globalAppsMessages,
   globalAppsTempMessages,

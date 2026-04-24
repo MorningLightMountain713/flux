@@ -26,6 +26,7 @@ const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appVolumeService = require('./appVolumeService');
 const { decryptToCleartextClass, deserializeSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
@@ -792,9 +793,7 @@ async function installComponent(component, options = {}) {
   status(`Pulling ${id} was successful`);
 
   if (createVolumes) {
-    // eslint-disable-next-line global-require
-    const advancedWorkflows = require('./advancedWorkflows');
-    await advancedWorkflows.createAppVolume(component, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null, test);
+    await appVolumeService.createAppVolume(component, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null, test);
 
     status(`Verifying volume mount for ${id}...`);
     await verifyAppVolumeMount(appName, id !== appName, component.name);

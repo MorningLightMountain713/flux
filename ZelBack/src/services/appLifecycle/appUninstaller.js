@@ -19,6 +19,7 @@ const { availableApps } = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appVolumeService = require('./appVolumeService');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const imageManager = require('../appSecurity/imageManager');
@@ -38,10 +39,7 @@ const crontabLoad = util.promisify(systemcrontab.load);
  */
 async function stopSyncthingAndCleanup(monitoredName, appId, res) {
   try {
-    // Dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const advancedWorkflows = require('./advancedWorkflows');
-    await advancedWorkflows.stopSyncthingApp(monitoredName, res);
+    await appVolumeService.removeSyncthingFolder(monitoredName, res);
 
     // Hard removal - delete syncthing cache since data will be deleted
     // eslint-disable-next-line no-shadow, global-require

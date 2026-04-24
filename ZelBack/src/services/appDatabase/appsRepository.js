@@ -335,6 +335,15 @@ async function getAppMessage(hash) {
   return { message: doc, spec };
 }
 
+async function listAppMessagesByName(name) {
+  const projection = { projection: { _id: 0 } };
+  const query1 = { 'appSpecifications.name': name };
+  const query2 = { 'zelAppSpecifications.name': name };
+  const results1 = await dbHelper.findInDatabase(globalDb(), globalAppsMessages, query1, projection);
+  const results2 = await dbHelper.findInDatabase(globalDb(), globalAppsMessages, query2, projection);
+  return [...results1, ...results2];
+}
+
 module.exports = {
   getGlobalAppInfo,
   getGlobalAppInfoRaw,
@@ -349,4 +358,5 @@ module.exports = {
   removeInstalledApp,
   insertInstalledApp,
   getAppMessage,
+  listAppMessagesByName,
 };

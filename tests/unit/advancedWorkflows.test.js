@@ -4,6 +4,8 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const sinon = require('sinon');
 const advancedWorkflows = require('../../ZelBack/src/services/appLifecycle/advancedWorkflows');
+const appSpecHistory = require('../../ZelBack/src/services/appDatabase/appSpecHistory');
+const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 
 describe('advancedWorkflows tests', () => {
@@ -21,7 +23,7 @@ describe('advancedWorkflows tests', () => {
       });
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
 
-      const result = await advancedWorkflows.getPreviousAppSpecifications(specifications, verificationTimestamp);
+      const result = await appSpecHistory.getPreviousAppSpecifications(specifications, verificationTimestamp);
       expect(result).to.be.null;
     });
   });
@@ -226,7 +228,7 @@ describe('advancedWorkflows tests', () => {
     });
   });
 
-  describe('softRedeployComponent tests', () => {
+  describe('redeployComponent (redeploy) tests', () => {
     let globalState;
     let res;
 
@@ -247,41 +249,41 @@ describe('advancedWorkflows tests', () => {
     it('should return early if removal is in progress', async () => {
       globalState.removalInProgress = true;
 
-      await advancedWorkflows.softRedeployComponent('myapp', 'frontend', res);
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
 
       expect(res.write.calledOnce).to.be.true;
       const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another application is undergoing removal');
+      expect(response).to.include('Another operation is in progress');
     });
 
     it('should return early if installation is in progress', async () => {
       globalState.installationInProgress = true;
 
-      await advancedWorkflows.softRedeployComponent('myapp', 'frontend', res);
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
 
       expect(res.write.calledOnce).to.be.true;
       const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another application is undergoing installation');
+      expect(response).to.include('Another operation is in progress');
     });
 
     it('should return early if soft redeploy is in progress', async () => {
       globalState.softRedeployInProgress = true;
 
-      await advancedWorkflows.softRedeployComponent('myapp', 'frontend', res);
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
 
       expect(res.write.calledOnce).to.be.true;
       const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another application is undergoing soft redeploy');
+      expect(response).to.include('Another operation is in progress');
     });
 
     it('should return early if hard redeploy is in progress', async () => {
       globalState.hardRedeployInProgress = true;
 
-      await advancedWorkflows.softRedeployComponent('myapp', 'frontend', res);
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
 
       expect(res.write.calledOnce).to.be.true;
       const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another application is undergoing hard redeploy');
+      expect(response).to.include('Another operation is in progress');
     });
 
     it('should throw error if application not found', async () => {
@@ -291,7 +293,7 @@ describe('advancedWorkflows tests', () => {
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
 
       try {
-        await advancedWorkflows.softRedeployComponent('myapp', 'frontend', res);
+        await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
         expect.fail('Should have thrown error');
       } catch (error) {
         expect(error.message).to.include('Application myapp not found');
@@ -306,7 +308,7 @@ describe('advancedWorkflows tests', () => {
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
 
       try {
-        await advancedWorkflows.softRedeployComponent('myapp', 'frontend', res);
+        await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
         expect.fail('Should have thrown error');
       } catch (error) {
         expect(error.message).to.include('not found');
@@ -330,7 +332,7 @@ describe('advancedWorkflows tests', () => {
       });
 
       try {
-        await advancedWorkflows.softRedeployComponent('myapp', 'frontend', res);
+        await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
         expect.fail('Should have thrown error');
       } catch (error) {
         expect(error.message).to.include('Component frontend not found');
@@ -339,7 +341,7 @@ describe('advancedWorkflows tests', () => {
     });
   });
 
-  describe('hardRedeployComponent tests', () => {
+  describe('redeployComponent (rebuild) tests', () => {
     let globalState;
     let res;
 
@@ -360,41 +362,41 @@ describe('advancedWorkflows tests', () => {
     it('should return early if removal is in progress', async () => {
       globalState.removalInProgress = true;
 
-      await advancedWorkflows.hardRedeployComponent('myapp', 'frontend', res);
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
 
       expect(res.write.calledOnce).to.be.true;
       const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another application is undergoing removal');
+      expect(response).to.include('Another operation is in progress');
     });
 
     it('should return early if installation is in progress', async () => {
       globalState.installationInProgress = true;
 
-      await advancedWorkflows.hardRedeployComponent('myapp', 'frontend', res);
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
 
       expect(res.write.calledOnce).to.be.true;
       const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another application is undergoing installation');
+      expect(response).to.include('Another operation is in progress');
     });
 
     it('should return early if soft redeploy is in progress', async () => {
       globalState.softRedeployInProgress = true;
 
-      await advancedWorkflows.hardRedeployComponent('myapp', 'frontend', res);
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
 
       expect(res.write.calledOnce).to.be.true;
       const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another application is undergoing soft redeploy');
+      expect(response).to.include('Another operation is in progress');
     });
 
     it('should return early if hard redeploy is in progress', async () => {
       globalState.hardRedeployInProgress = true;
 
-      await advancedWorkflows.hardRedeployComponent('myapp', 'frontend', res);
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
 
       expect(res.write.calledOnce).to.be.true;
       const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another application is undergoing hard redeploy');
+      expect(response).to.include('Another operation is in progress');
     });
 
     it('should throw error if application not found', async () => {
@@ -404,7 +406,7 @@ describe('advancedWorkflows tests', () => {
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
 
       try {
-        await advancedWorkflows.hardRedeployComponent('myapp', 'frontend', res);
+        await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
         expect.fail('Should have thrown error');
       } catch (error) {
         expect(error.message).to.include('Application myapp not found');
@@ -419,7 +421,7 @@ describe('advancedWorkflows tests', () => {
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
 
       try {
-        await advancedWorkflows.hardRedeployComponent('myapp', 'frontend', res);
+        await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
         expect.fail('Should have thrown error');
       } catch (error) {
         expect(error.message).to.include('not found');
@@ -443,7 +445,7 @@ describe('advancedWorkflows tests', () => {
       });
 
       try {
-        await advancedWorkflows.hardRedeployComponent('myapp', 'frontend', res);
+        await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
         expect.fail('Should have thrown error');
       } catch (error) {
         expect(error.message).to.include('Component frontend not found');
@@ -458,7 +460,7 @@ describe('advancedWorkflows tests', () => {
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
 
       try {
-        await advancedWorkflows.hardRedeployComponent('myapp', 'frontend', res);
+        await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
         expect.fail('Should have thrown error');
       } catch (error) {
         expect(globalState.hardRedeployInProgress).to.be.false;
@@ -500,7 +502,7 @@ describe('advancedWorkflows tests', () => {
     }
 
     function loadModule() {
-      return proxyquire('../../ZelBack/src/services/appLifecycle/advancedWorkflows', {
+      return proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
         'node:fs/promises': fsStub,
         '../serviceHelper': serviceHelperStub,
         '../../lib/log': logStub,
