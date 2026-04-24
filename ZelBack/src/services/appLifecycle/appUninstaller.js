@@ -578,33 +578,50 @@ async function cleanupPorts(appSpecifications, appName, res, entityName) {
   }
 }
 
-/**
- * Soft uninstall a component (container and image removal only, keeps data)
- * @param {string} appName - Parent application name
- * @param {string} appId - Component ID
- * @param {object} componentSpecifications - Component specifications
- * @param {object} res - Response object for streaming
- * @param {function} stopAppMonitoring - Function to stop monitoring
- // eslint-disable-next-line no-shadow
- * @returns {Promise<void>}
- */
-// eslint-disable-next-line no-shadow
-async function softUninstallComponent(appName, appId, componentSpecifications, res, stopAppMonitoring) {
-  const componentName = componentSpecifications.name;
-
-  // Stop monitoring
-  log.info(`Stopping Flux App Component ${componentName}...`);
+async function cleanupDeploymentPorts(deployComp, appName, res, entityName) {
+  const portStatus = { status: `Denying ${entityName} ports...` };
+  log.info(portStatus);
   if (res) {
-    res.write(serviceHelper.ensureString({ status: `Stopping Flux App Component ${componentName}...` }));
+    res.write(serviceHelper.ensureString(portStatus));
     if (res.flush) res.flush();
   }
 
-  const monitoredName = `${componentName}_${appName}`;
-  if (stopAppMonitoring) {
-    stopAppMonitoring(monitoredName, false);
+  const firewallActive = await fluxNetworkHelper.isFirewallActive();
+  const isUPNP = upnpService.isUPNP();
+  // eslint-disable-next-line no-restricted-syntax
+  for (const port of deployComp.hostPorts) {
+    if (firewallActive) {
+      // eslint-disable-next-line no-await-in-loop
+      await fluxNetworkHelper.deleteAllowPortRule(port);
+    }
+    if (isUPNP) {
+      // eslint-disable-next-line no-await-in-loop
+      await upnpService.removeMapUpnpPort(port, `Flux_App_${appName}`);
+    }
   }
 
-  // Stop container
+  const portStatus2 = { status: `Ports of ${entityName} denied` };
+  log.info(portStatus2);
+  if (res) {
+    res.write(serviceHelper.ensureString(portStatus2));
+    if (res.flush) res.flush();
+  }
+}
+
+// eslint-disable-next-line no-shadow
+async function softUninstallComponent(appName, appId, deployComp, res, stopAppMonitoring) {
+  const label = deployComp.name === appName ? appName : `component ${deployComp.name} of ${appName}`;
+
+  log.info(`Stopping Flux App ${label}...`);
+  if (res) {
+    res.write(serviceHelper.ensureString({ status: `Stopping Flux App ${label}...` }));
+    if (res.flush) res.flush();
+  }
+
+  if (stopAppMonitoring) {
+    stopAppMonitoring(deployComp.identifier, false);
+  }
+
   await dockerService.appDockerStop(appId).catch((error) => {
     const errorResponse = messageHelper.createErrorMessage(error.message || error, error.name, error.code);
     if (res) {
@@ -613,35 +630,33 @@ async function softUninstallComponent(appName, appId, componentSpecifications, r
     }
   });
 
-  log.info(`Flux App Component ${componentName} stopped`);
+  log.info(`Flux App ${label} stopped`);
   if (res) {
-    res.write(serviceHelper.ensureString({ status: `Flux App Component ${componentName} stopped` }));
+    res.write(serviceHelper.ensureString({ status: `Flux App ${label} stopped` }));
     if (res.flush) res.flush();
   }
 
-  // Remove container
-  log.info(`Removing Flux App component ${componentName} container...`);
+  log.info(`Removing Flux App ${label} container...`);
   if (res) {
-    res.write(serviceHelper.ensureString({ status: `Removing Flux App component ${componentName} container...` }));
+    res.write(serviceHelper.ensureString({ status: `Removing Flux App ${label} container...` }));
     if (res.flush) res.flush();
   }
 
   await dockerService.appDockerRemove(appId);
 
-  log.info(`Flux App component ${componentName} container removed`);
+  log.info(`Flux App ${label} container removed`);
   if (res) {
-    res.write(serviceHelper.ensureString({ status: `Flux App component ${componentName} container removed` }));
+    res.write(serviceHelper.ensureString({ status: `Flux App ${label} container removed` }));
     if (res.flush) res.flush();
   }
 
-  // Remove image
-  log.info(`Removing Flux App component ${componentName} image...`);
+  log.info(`Removing Flux App ${label} image...`);
   if (res) {
-    res.write(serviceHelper.ensureString({ status: `Removing Flux App component ${componentName} image...` }));
+    res.write(serviceHelper.ensureString({ status: `Removing Flux App ${label} image...` }));
     if (res.flush) res.flush();
   }
 
-  await dockerService.appDockerImageRemove(componentSpecifications.repotag).catch((error) => {
+  await dockerService.appDockerImageRemove(deployComp.image).catch((error) => {
     const errorResponse = messageHelper.createErrorMessage(error.message || error, error.name, error.code);
     log.error(errorResponse);
     if (res) {
@@ -650,107 +665,22 @@ async function softUninstallComponent(appName, appId, componentSpecifications, r
     }
   });
 
-  log.info(`Flux App component ${componentName} image operations done`);
+  log.info(`Flux App ${label} image operations done`);
   if (res) {
-    res.write(serviceHelper.ensureString({ status: `Flux App component ${componentName} image operations done` }));
+    res.write(serviceHelper.ensureString({ status: `Flux App ${label} image operations done` }));
     if (res.flush) res.flush();
   }
 
-  // Cleanup ports
   // eslint-disable-next-line no-use-before-define
-  await cleanupPorts(componentSpecifications, appName, res, `component ${componentName}`);
+  await cleanupDeploymentPorts(deployComp, appName, res, label);
 
-  log.info(`Flux App component ${componentName} of ${appName} was successfully removed`);
+  log.info(`Flux App ${label} was successfully removed`);
   if (res) {
-    res.write(serviceHelper.ensureString({ status: `Flux App component ${componentName} of ${appName} was successfully removed` }));
+    res.write(serviceHelper.ensureString({ status: `Flux App ${label} was successfully removed` }));
     if (res.flush) res.flush();
   }
 }
 
-/**
- * Soft uninstall an application (container and image removal only, keeps data)
- * @param {string} appName - Application name
- * @param {string} appId - Application ID
- * @param {object} appSpecifications - App specifications
- * @param {object} res - Response object for streaming
- // eslint-disable-next-line no-shadow
- * @param {function} stopAppMonitoring - Function to stop monitoring
- * @returns {Promise<void>}
- */
-// eslint-disable-next-line no-shadow
-async function softUninstallApplication(appName, appId, appSpecifications, res, stopAppMonitoring) {
-  // Stop monitoring
-  log.info(`Stopping Flux App ${appName}...`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Stopping Flux App ${appName}...` }));
-    if (res.flush) res.flush();
-  }
-
-  if (stopAppMonitoring) {
-    stopAppMonitoring(appName, false);
-  }
-
-  // Stop container
-  await dockerService.appDockerStop(appId).catch((error) => {
-    const errorResponse = messageHelper.createErrorMessage(error.message || error, error.name, error.code);
-    if (res) {
-      res.write(serviceHelper.ensureString(errorResponse));
-      if (res.flush) res.flush();
-    }
-  });
-
-  log.info(`Flux App ${appName} stopped`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Flux App ${appName} stopped` }));
-    if (res.flush) res.flush();
-  }
-
-  // Remove container
-  log.info(`Removing Flux App ${appName} container...`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Removing Flux App ${appName} container...` }));
-    if (res.flush) res.flush();
-  }
-
-  await dockerService.appDockerRemove(appId);
-
-  log.info(`Flux App ${appName} container removed`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Flux App ${appName} container removed` }));
-    if (res.flush) res.flush();
-  }
-
-  // Remove image
-  log.info(`Removing Flux App ${appName} image...`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Removing Flux App ${appName} image...` }));
-    if (res.flush) res.flush();
-  }
-
-  await dockerService.appDockerImageRemove(appSpecifications.repotag).catch((error) => {
-    const errorResponse = messageHelper.createErrorMessage(error.message || error, error.name, error.code);
-    log.error(errorResponse);
-    if (res) {
-      res.write(serviceHelper.ensureString(errorResponse));
-      if (res.flush) res.flush();
-    }
-  });
-
-  log.info(`Flux App ${appName} image operations done`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Flux App ${appName} image operations done` }));
-    if (res.flush) res.flush();
-  }
-
-  // Cleanup ports
-  await cleanupPorts(appSpecifications, appName, res, appName);
-
-  log.info(`Flux App ${appName} was successfuly removed`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Flux App ${appName} was successfuly removed` }));
-    if (res.flush) res.flush();
-  }
-}
 
 /**
  * Remove application completely from local node
@@ -1071,39 +1001,26 @@ async function softRemoveAppLocally(app, res, globalStateRef, stopAppMonitoring)
     const appName = isComponent ? app.split('_')[1] : app;
     const appComponent = app.split('_')[0];
 
-    let spec = await appsRepository.getInstalledApp(appName);
-    if (!spec) {
+    // eslint-disable-next-line global-require
+    const deploymentProvider = require('../appRuntime/deploymentProvider');
+    const deployment = await deploymentProvider.getInstalledDeployment(appName);
+    if (!deployment) {
       throw new Error('Flux App not found');
     }
 
-    const { InstantiatedSpec } = await getSpecBackend();
-    if (spec instanceof InstantiatedSpec) {
-      spec = spec.spec;
-    }
-    if (spec.isEncrypted) {
-      const provider = await legacyCryptoProvider.create(spec.name, spec.owner);
-      spec = (await spec.decrypt(provider)).spec;
+    const entries = isComponent
+      ? deployment.componentEntries().filter(([name]) => name === appComponent)
+      : deployment.componentEntries({ reverse: true });
+
+    if (isComponent && entries.length === 0) {
+      throw new Error(`Flux App component ${appComponent} not found in ${appName}`);
     }
 
-    let appId = dockerService.getAppIdentifier(app);
-
-    if (spec.version >= 4 && !isComponent) {
-      const componentsReversed = spec.componentEntries().map(([, c]) => c).reverse();
-      // eslint-disable-next-line no-restricted-syntax
-      for (const component of componentsReversed) {
-        appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
-        // eslint-disable-next-line no-await-in-loop
-        await softUninstallComponent(appName, appId, component.toCanonical(), res, stopAppMonitoring);
-      }
-    } else if (isComponent) {
-      const component = spec.getComponent(appComponent);
-      if (!component) {
-        throw new Error(`Flux App component ${appComponent} not found in ${appName}`);
-      }
-      appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
-      await softUninstallComponent(appName, appId, component.toCanonical(), res, stopAppMonitoring);
-    } else {
-      await softUninstallApplication(appName, appId, spec.serialize(), res, stopAppMonitoring);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const [, deployComp] of entries) {
+      const appId = dockerService.getAppIdentifier(deployComp.identifier);
+      // eslint-disable-next-line no-await-in-loop
+      await softUninstallComponent(appName, appId, deployComp, res, stopAppMonitoring);
     }
 
     if (!isComponent) {
@@ -1223,8 +1140,8 @@ module.exports = {
   hardUninstallComponent,
   hardUninstallApplication,
   softUninstallComponent,
-  softUninstallApplication,
   cleanupPorts,
+  cleanupDeploymentPorts,
   removeAppLocally,
   softRemoveAppLocally,
   removeAppLocallyApi,

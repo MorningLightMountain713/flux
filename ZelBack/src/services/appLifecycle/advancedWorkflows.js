@@ -391,9 +391,13 @@ async function getPreviousAppSpecifications(specifications, verificationTimestam
   if (!appSpecs) {
     throw new Error(`Previous specifications for ${specifications.name} update message does not exists! This should not happen.`);
   }
-  const spec = await decryptToCleartextClass(appSpecs);
-  if (!spec) throw new Error(`Could not deserialize previous specifications for ${specifications.name}`);
-  return spec.serialize();
+  const wireSpec = await deserializeSpec(appSpecs);
+  if (!wireSpec) throw new Error(`Could not deserialize previous specifications for ${specifications.name}`);
+
+  if (!wireSpec.isEncrypted) return wireSpec;
+
+  const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+  return wireSpec.decrypt(provider);
 }
 
 // Global state management - using globalState module instead of local variables
@@ -1044,60 +1048,6 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
 }
 
 /**
- * Soft uninstall a composed application (version >= 4) by removing all its components
- * @param {object} appSpecifications - Application specifications
- * @param {string} appName - Application name
- * @param {object} res - Response object for streaming
- * @returns {Promise<void>}
- */
-async function softUninstallComposedApp(appSpecifications, appName, res) {
-  // eslint-disable-next-line global-require
-  const appUninstaller = require('./appUninstaller');
-  const spec = await deserializeSpec(appSpecifications);
-  const compNames = spec ? spec.componentNames().reverse() : [];
-  // eslint-disable-next-line no-restricted-syntax
-  for (const compName of compNames) {
-    const identifier = `${compName}_${appSpecifications.name}`;
-    const appId = dockerService.getAppIdentifier(identifier);
-    // eslint-disable-next-line no-await-in-loop
-    await appUninstaller.softUninstallComponent(appName, appId, spec.getComponent(compName).toCanonical(), res, stopAppMonitoring);
-  }
-}
-
-/**
- * Soft uninstall a single component of a composed application
- * @param {object} appSpecifications - Application specifications
- * @param {string} appName - Application name
- * @param {string} appComponent - Component name
- * @param {string} appId - Application/Component ID
- * @param {object} res - Response object for streaming
- * @returns {Promise<void>}
- */
-async function softUninstallSingleComponent(appSpecifications, appName, appComponent, appId, res) {
-  // eslint-disable-next-line global-require
-  const appUninstaller = require('./appUninstaller');
-  const spec = await deserializeSpec(appSpecifications);
-  const comp = spec?.components?.[appComponent];
-  await appUninstaller.softUninstallComponent(appName, appId, comp ? comp.toCanonical() : null, res, stopAppMonitoring);
-}
-
-/**
- * Soft uninstall a simple (non-composed) application
- * @param {object} appSpecifications - Application specifications
- * @param {string} appName - Application name
- * @param {string} appId - Application ID
- * @param {object} res - Response object for streaming
- * @returns {Promise<void>}
- */
-async function softUninstallSimpleApp(appSpecifications, appName, appId, res) {
-  // Dynamic require to avoid circular dependency
-  // eslint-disable-next-line global-require
-  const appUninstaller = require('./appUninstaller');
-
-  await appUninstaller.softUninstallApplication(appName, appId, appSpecifications, res, stopAppMonitoring);
-}
-
-/**
  * Clean up database after app removal
  * @param {object} appsDatabase - Database connection
  * @param {string} appName - Application name
@@ -1155,36 +1105,31 @@ async function softRemoveAppLocally(app, res) {
   globalState.removalInProgress = true;
 
   try {
-    // Parse app name and component
-    const isComponent = app.includes('_'); // component is defined by appComponent.name_appSpecs.name
+    const isComponent = app.includes('_');
     const appName = isComponent ? app.split('_')[1] : app;
-    const appComponent = app.split('_')[0];
+    const targetComponent = isComponent ? app.split('_')[0] : null;
 
-    // Fetch app specifications from database
-    let appSpecifications = await appsRepository.getInstalledAppRaw(appName);
-    if (!appSpecifications) {
+    // eslint-disable-next-line global-require
+    const deploymentProvider = require('../appRuntime/deploymentProvider');
+    const deployment = await deploymentProvider.getInstalledDeployment(appName);
+    if (!deployment) {
       throw new Error('Flux App not found');
     }
 
-    const cleartextSpec = await decryptToCleartextClass(appSpecifications);
-    if (!cleartextSpec) throw new Error('Could not deserialize app specifications');
-    appSpecifications = cleartextSpec.serialize();
+    // eslint-disable-next-line global-require
+    const appUninstaller = require('./appUninstaller');
 
-    const appId = dockerService.getAppIdentifier(app);
+    const entries = isComponent
+      ? deployment.componentEntries().filter(([name]) => name === targetComponent)
+      : deployment.componentEntries({ reverse: true });
 
-    // Determine uninstall strategy based on app type
-    if (appSpecifications.version >= 4 && !isComponent) {
-      // Composed application - uninstall all components
-      await softUninstallComposedApp(appSpecifications, appName, res);
-    } else if (isComponent) {
-      // Single component of a composed app
-      await softUninstallSingleComponent(appSpecifications, appName, appComponent, appId, res);
-    } else {
-      // Simple non-composed application
-      await softUninstallSimpleApp(appSpecifications, appName, appId, res);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const [, deployComp] of entries) {
+      const appId = dockerService.getAppIdentifier(deployComp.identifier);
+      // eslint-disable-next-line no-await-in-loop
+      await appUninstaller.softUninstallComponent(appName, appId, deployComp, res, stopAppMonitoring);
     }
 
-    // Clean up database (only for full app removal, not individual components)
     if (!isComponent) {
       await cleanupAppDatabase(appsDatabase, appName, res);
     }
@@ -1426,36 +1371,24 @@ async function softRedeployComponent(appName, componentName, res) {
     globalState.softRedeployInProgress = true;
     log.info(`Starting soft redeploy of component ${componentName} from app ${appName}`);
 
-    const instantiated = await getStrictApplicationSpecifications(appName);
-    if (!instantiated) {
+    // eslint-disable-next-line global-require
+    const deploymentProvider = require('../appRuntime/deploymentProvider');
+    const deployment = await deploymentProvider.getInstalledDeployment(appName);
+    if (!deployment) {
       throw new Error(`Application ${appName} not found`);
     }
 
-    let spec;
-    if (isArcane && instantiated.isEncrypted()) {
-      spec = await decryptToCleartextClass(instantiated.serialize());
-    } else {
-      spec = instantiated.spec;
-    }
-    if (!spec) throw new Error(`Could not deserialize specifications for ${appName}`);
-    const appSpecPlain = spec.serialize();
-
-    if (spec.componentCount === 0) {
-      throw new Error(`Application ${appName} is not a composed application`);
-    }
-
-    const comp = spec.getComponent(componentName);
-    if (!comp) {
+    const deployComp = deployment.getComponent(componentName);
+    if (!deployComp) {
       throw new Error(`Component ${componentName} not found in application ${appName}`);
     }
 
-    const fullComponentName = `${componentName}_${appName}`;
-
     try {
-      log.warn(`Beginning Soft Redeployment of component ${fullComponentName}...`);
-      await appUninstaller.softUninstallComponent(fullComponentName, null, comp.toCanonical(), res, stopAppMonitoring);
+      log.warn(`Beginning Soft Redeployment of component ${deployComp.identifier}...`);
+      const appId = dockerService.getAppIdentifier(deployComp.identifier);
+      await appUninstaller.softUninstallComponent(appName, appId, deployComp, res, stopAppMonitoring);
 
-      const appRedeployResponse = messageHelper.createSuccessMessage(`Component ${fullComponentName} softly removed. Awaiting installation...`);
+      const appRedeployResponse = messageHelper.createSuccessMessage(`Component ${deployComp.identifier} softly removed. Awaiting installation...`);
       log.info(appRedeployResponse);
       if (res) {
         res.write(serviceHelper.ensureString(appRedeployResponse));
@@ -1464,19 +1397,21 @@ async function softRedeployComponent(appName, componentName, res) {
 
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
 
-      await appInstaller.checkAppRequirements(appSpecPlain);
+      const rawSpec = await appsRepository.getInstalledAppRaw(appName);
+      await appInstaller.checkAppRequirements(rawSpec);
 
-      log.warn(`Continuing Soft Redeployment of component ${fullComponentName}...`);
-      await softRegisterAppLocally(appSpecPlain, comp.toCanonical(), res);
+      log.warn(`Continuing Soft Redeployment of component ${deployComp.identifier}...`);
+      const rawComp = rawSpec.compose ? rawSpec.compose.find((c) => c.name === componentName) : null;
+      await softRegisterAppLocally(rawSpec, rawComp, res);
 
-      log.info(`Component ${fullComponentName} softly redeployed`);
+      log.info(`Component ${deployComp.identifier} softly redeployed`);
       globalState.softRedeployInProgress = false;
     } catch (error) {
       log.error(error);
-      log.warn(`REMOVAL REASON: Soft redeploy failure - ${appName} being removed after component ${fullComponentName} failed during soft redeploy: ${error.message} (softRedeployComponent)`);
+      log.warn(`REMOVAL REASON: Soft redeploy failure - ${appName} being removed after component ${deployComp.identifier} failed during soft redeploy: ${error.message} (softRedeployComponent)`);
       globalState.softRedeployInProgress = false;
       await appUninstaller.removeAppLocally(appName, res, true, true, true);
-      log.info(`Cleanup completed for ${appName} after component ${fullComponentName} soft redeploy failure`);
+      log.info(`Cleanup completed for ${appName} after component ${deployComp.identifier} soft redeploy failure`);
       throw error;
     }
   } catch (error) {
@@ -3050,9 +2985,16 @@ async function reinstallOldApplications() {
 
             if (appSpecifications.hdd === installedApp.hdd) {
               log.warn(`Beginning Soft Redeployment of ${appSpecifications.name}...`);
-              // soft redeployment
-              // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.softUninstallApplication(appSpecifications.name, null, appSpecifications, null, true);
+              // eslint-disable-next-line no-await-in-loop,global-require
+              const installedDeployment = await require('../appRuntime/deploymentProvider').getInstalledDeployment(appSpecifications.name);
+              if (installedDeployment) {
+                // eslint-disable-next-line no-restricted-syntax
+                for (const [, deployComp] of installedDeployment.componentEntries({ reverse: true })) {
+                  const compAppId = dockerService.getAppIdentifier(deployComp.identifier);
+                  // eslint-disable-next-line no-await-in-loop
+                  await appUninstaller.softUninstallComponent(appSpecifications.name, compAppId, deployComp, null, true);
+                }
+              }
               // eslint-disable-next-line no-await-in-loop
               await appInstaller.installApplicationSoft(appSpecifications, appSpecifications.name, false, null, appSpecifications);
             } else {
@@ -3130,32 +3072,34 @@ async function reinstallOldApplications() {
             }
 
             try {
+              // eslint-disable-next-line global-require
+              const installedDeployment = await require('../appRuntime/deploymentProvider').getInstalledDeployment(instantiated.name);
               const compNames = newSpec.componentNames().reverse();
               // eslint-disable-next-line no-restricted-syntax
               for (const compName of compNames) {
-                const identifier = `${compName}_${instantiated.name}`;
                 const newComp = newSpec.getComponent(compName);
                 const oldComp = oldSpec?.getComponent?.(compName);
                 const newCanonical = newComp.toCanonical();
                 const oldCanonical = oldComp?.toCanonical();
+                const deployComp = installedDeployment?.getComponent(compName);
 
                 if (oldCanonical && JSON.stringify(oldCanonical) === JSON.stringify(newCanonical)) {
-                  log.warn(`Component ${identifier} specs were not changed, skipping.`);
-                } else if (oldComp && newComp.persistentStorage?.sizeGb === oldComp.persistentStorage?.sizeGb) {
-                  log.warn(`Beginning Soft Redeployment of component ${identifier}...`);
-                  const appId = dockerService.getAppIdentifier(identifier);
+                  log.warn(`Component ${compName}_${instantiated.name} specs were not changed, skipping.`);
+                } else if (deployComp && oldComp && newComp.persistentStorage?.sizeGb === oldComp.persistentStorage?.sizeGb) {
+                  log.warn(`Beginning Soft Redeployment of component ${deployComp.identifier}...`);
+                  const appId = dockerService.getAppIdentifier(deployComp.identifier);
                   // eslint-disable-next-line no-await-in-loop
-                  await appUninstaller.softUninstallComponent(identifier, appId, newCanonical, null, stopAppMonitoring);
-                  log.warn(`Application component ${identifier} softly removed. Awaiting installation...`);
+                  await appUninstaller.softUninstallComponent(instantiated.name, appId, deployComp, null, stopAppMonitoring);
+                  log.warn(`Application component ${deployComp.identifier} softly removed. Awaiting installation...`);
                   // eslint-disable-next-line no-await-in-loop
                   await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-                } else {
-                  log.warn(`Beginning Hard Redeployment of component ${identifier}...`);
-                  log.warn(`REMOVAL REASON: Hard redeployment (component) - ${identifier} storage changed`);
-                  const appId = dockerService.getAppIdentifier(identifier);
+                } else if (deployComp) {
+                  log.warn(`Beginning Hard Redeployment of component ${deployComp.identifier}...`);
+                  log.warn(`REMOVAL REASON: Hard redeployment (component) - ${deployComp.identifier} storage changed`);
+                  const appId = dockerService.getAppIdentifier(deployComp.identifier);
                   // eslint-disable-next-line no-await-in-loop
-                  await appUninstaller.hardUninstallComponent(identifier, appId, newCanonical, null, stopAppMonitoring);
-                  log.warn(`Application component ${identifier} removed. Awaiting installation...`);
+                  await appUninstaller.hardUninstallComponent(instantiated.name, appId, newCanonical, null, stopAppMonitoring);
+                  log.warn(`Application component ${deployComp.identifier} removed. Awaiting installation...`);
                   // eslint-disable-next-line no-await-in-loop
                   await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
                 }

@@ -129,8 +129,7 @@ async function validateAppUpdate(appSpecification) {
   }
 
   const { UpdatePolicy } = await getSpec();
-  const oldSpec = await deserializeSpec(previousAppSpecs);
-  if (oldSpec) UpdatePolicy.assertCompatible(oldSpec, updateSpec);
+  UpdatePolicy.assertCompatible(previousAppSpecs, updateSpec);
 
   if (isEnterprise) {
     const wireForm = await toCanonicalSpec(appSpecification);

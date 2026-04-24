@@ -132,8 +132,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
       } else {
         const { UpdatePolicy } = await getSpec();
         const newSpec = await deserializeSpec(validationBlob);
-        const oldSpec = await deserializeSpec(previousAppSpecs);
-        if (newSpec && oldSpec) UpdatePolicy.assertCompatible(oldSpec, newSpec);
+        if (newSpec && previousAppSpecs) UpdatePolicy.assertCompatible(previousAppSpecs, newSpec);
       }
     }
 

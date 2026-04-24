@@ -11,8 +11,8 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 // Removed messageStore require to avoid circular dependency - will import locally where needed
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates, getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
-const { decryptToCleartextClass } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
+const { decryptToCleartextClass, deserializeSpec } = require('../utils/specCutover');
+const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { updateAppSpecifications } = require('../appDatabase/registryManager');
 const { getPreviousAppSpecifications } = require('../appLifecycle/advancedWorkflows');
@@ -266,18 +266,17 @@ async function verifyAppMessageUpdateSignature(type, version, appSpec, timestamp
   // so this works even when the app has expired from globalAppsInformation (e.g. during resync)
   const usersToExtend = config.fluxapps.usersToExtend || [];
   if (isValidSignature !== true && usersToExtend.length > 0 && previousAppSpec) {
-    const newClass = await decryptToCleartextClass(appSpec);
-    const prevClass = await decryptToCleartextClass(previousAppSpec);
-    const newSpecToCompare = newClass ? newClass.serialize() : appSpec;
-    const prevSpecToCompare = prevClass ? prevClass.serialize() : previousAppSpec;
-    // Check if signature matches any of the usersToExtend addresses
-    // eslint-disable-next-line no-restricted-syntax
-    for (const userToExtend of usersToExtend) {
-      const isValidUserToExtendSignature = signatureVerifier.verifySignature(messageToVerify, userToExtend, signature);
-      if (isValidUserToExtendSignature === true && isExpireOnlyUpdate(newSpecToCompare, prevSpecToCompare)) {
-        log.info(`App ${appSpec.name} expire extension signed by userToExtend address ${userToExtend}`);
-        isValidSignature = true;
-        break;
+    const newSpec = await deserializeSpec(appSpec);
+    if (newSpec) {
+      const { UpdatePolicy } = await getSpec();
+      // eslint-disable-next-line no-restricted-syntax
+      for (const userToExtend of usersToExtend) {
+        const isValidUserToExtendSignature = signatureVerifier.verifySignature(messageToVerify, userToExtend, signature);
+        if (isValidUserToExtendSignature === true && UpdatePolicy.isRenewalOnly(previousAppSpec, newSpec)) {
+          log.info(`App ${appSpec.name} expire extension signed by userToExtend address ${userToExtend}`);
+          isValidSignature = true;
+          break;
+        }
       }
     }
   }
