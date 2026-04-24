@@ -385,29 +385,21 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
       return false;
     }
 
-    // Lazy-load appQueryService to avoid circular dependency issues
     // eslint-disable-next-line global-require
     const appQueryService = require('../appQuery/appQueryService');
-    const installedAppsRes = await appQueryService.installedApps();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
-    }
+    // eslint-disable-next-line global-require
+    const deploymentProvider = require('../appRuntime/deploymentProvider');
+    const deployments = await deploymentProvider.listInstalledDeployments();
     const runningAppsRes = await appQueryService.listRunningApps();
     if (runningAppsRes.status !== 'success') {
       throw new Error('Unable to check running Apps');
     }
-    const appsInstalled = installedAppsRes.data;
-    const decryptedAppsInstalled = await appQueryService.decryptEnterpriseApps(appsInstalled);
     const runningApps = runningAppsRes.data;
     const installedAppComponentNames = [];
-    decryptedAppsInstalled.forEach((app) => {
-      if (app.version >= 4) {
-        app.compose.forEach((appAux) => {
-          installedAppComponentNames.push(`${appAux.name}_${app.name}`);
-        });
-      } else {
-        installedAppComponentNames.push(app.name);
-      }
+    deployments.forEach((deployment) => {
+      deployment.componentEntries().forEach(([, comp]) => {
+        installedAppComponentNames.push(comp.identifier);
+      });
     });
     // kadena and folding is old naming scheme having /zel.  all global application start with /flux
     const runningAppsNames = runningApps.map((app) => {

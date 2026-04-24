@@ -6,9 +6,7 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const syncthingService = require('../syncthingService');
-const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
-const { decryptToCleartextClass } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { appsFolder } = require('../utils/appConstants');
 const log = require('../../lib/log');
 const {
@@ -44,26 +42,18 @@ const globalAppsLocations = config.database.appsglobal.collections.appsLocations
  * @param {Array} appsInstalled - List of installed apps
  * @returns {Promise<Array>} List of apps with unmounted folders
  */
-async function checkAppFolderMounts(appsInstalled) {
+async function checkAppFolderMounts(deployments) {
   const unmountedApps = [];
 
-  const { DeploymentSpec } = await getSpecBackend();
   // eslint-disable-next-line no-restricted-syntax
-  for (const installedApp of appsInstalled) {
-    // eslint-disable-next-line no-await-in-loop
-    const spec = await decryptToCleartextClass(installedApp).catch(() => null);
-    if (!spec) {
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+  for (const deployment of deployments) {
     for (const [, deployComp] of deployment.componentEntries()) {
       const appId = dockerService.getAppIdentifier(deployComp.identifier);
       const appFolder = `${appsFolder}${appId}`;
       // eslint-disable-next-line no-await-in-loop
       const mountSafety = await verifyFolderMountSafety(appId, appFolder);
       if (!mountSafety.isSafe) {
-        unmountedApps.push({ appId, appName: installedApp.name, reason: mountSafety.reason });
+        unmountedApps.push({ appId, appName: deployment.appName, reason: mountSafety.reason });
       }
     }
   }
@@ -263,7 +253,7 @@ async function logSyncState(foldersConfiguration) {
  * @param {Function} removeAppLocallyFn - Remove app function
  * @returns {Promise<void>}
  */
-async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn, appDockerStopFn, appDockerRestartFn, appDeleteDataInMountPointFn, removeAppLocallyFn) {
+async function syncthingAppsCore(state, getGlobalStateFn, appDockerStopFn, appDockerRestartFn, appDeleteDataInMountPointFn, removeAppLocallyFn) {
   // Sync global state before checking
   getGlobalStateFn();
 
@@ -276,20 +266,11 @@ async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn, appDo
   let syncthingInitializedSuccessfully = false;
 
   try {
-    const { DeploymentSpec } = await getSpecBackend();
-    // Get list of all installed apps
-    const appsInstalled = await installedAppsFn();
-    if (appsInstalled.status === 'error') {
-      log.error('syncthingAppsCore - Failed to get installed apps');
-      return;
-    }
-
-    // Decrypt enterprise apps (version 8 with encrypted content)
-    appsInstalled.data = await decryptEnterpriseApps(appsInstalled.data);
+    const deployments = await deploymentProvider.listInstalledDeployments();
 
     // CRITICAL: Check if app folder mounts are ready before processing
     // This prevents syncthing operations when loop devices aren't mounted after reboot
-    const unmountedApps = await checkAppFolderMounts(appsInstalled.data);
+    const unmountedApps = await checkAppFolderMounts(deployments);
     if (unmountedApps.length > 0) {
       const unmountedList = unmountedApps.map((app) => app.appId).join(', ');
       log.warn(`syncthingAppsCore - Skipping processing: ${unmountedApps.length} app folders not mounted yet: ${unmountedList}`);
@@ -406,32 +387,23 @@ async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn, appDo
 
     // Process all installed apps
     // eslint-disable-next-line no-restricted-syntax
-    for (const installedApp of appsInstalled.data) {
-      // Skip if backup/restore in progress
-      const backupSkip = state.backupInProgress.some((item) => installedApp.name === item);
-      const restoreSkip = state.restoreInProgress.some((item) => installedApp.name === item);
+    for (const deployment of deployments) {
+      const backupSkip = state.backupInProgress.some((item) => deployment.appName === item);
+      const restoreSkip = state.restoreInProgress.some((item) => deployment.appName === item);
 
       if (backupSkip || restoreSkip) {
-        log.info(`syncthingAppsCore - Backup/restore in progress for ${installedApp.name}, syncthing disabled`);
+        log.info(`syncthingAppsCore - Backup/restore in progress for ${deployment.appName}, syncthing disabled`);
         // eslint-disable-next-line no-continue
         continue;
       }
 
-      // eslint-disable-next-line no-await-in-loop
-      const spec = await decryptToCleartextClass(installedApp).catch(() => null);
-      if (!spec) {
-        log.warn(`syncthingAppsCore - Failed to deserialize ${installedApp.name}, skipping`);
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
       for (const [, deployComp] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
         await processComponentSync({
           ...sharedParams,
           syncMode: deployComp.sync?.mode || null,
           identifier: deployComp.identifier,
-          installedAppName: installedApp.name,
+          installedAppName: deployment.appName,
         });
       }
     }
@@ -563,7 +535,7 @@ async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn, appDo
  * @param {Function} removeAppLocallyFn - Remove app function
  * @returns {Object} Control object with stop() method
  */
-function syncthingApps(state, installedAppsFn, getGlobalStateFn, appDockerStopFn, appDockerRestartFn, appDeleteDataInMountPointFn, removeAppLocallyFn) {
+function syncthingApps(state, getGlobalStateFn, appDockerStopFn, appDockerRestartFn, appDeleteDataInMountPointFn, removeAppLocallyFn) {
   let intervalId = null;
   let isRunning = false;
 
@@ -577,7 +549,6 @@ function syncthingApps(state, installedAppsFn, getGlobalStateFn, appDockerStopFn
     try {
       await syncthingAppsCore(
         state,
-        installedAppsFn,
         getGlobalStateFn,
         appDockerStopFn,
         appDockerRestartFn,

@@ -981,23 +981,13 @@ describe('appInstaller tests', () => {
   });
 
   describe('prune guard with encrypted enterprise apps', () => {
-    it('should call decryptEnterpriseApps on installed apps during registration', async () => {
-      const encryptedApp = {
-        version: 8,
-        name: 'enterpriseapp123',
-        compose: [],
-        enterprise: 'encryptedblob',
-      };
-      const decryptedApp = {
-        version: 8,
-        name: 'enterpriseapp123',
-        compose: [{ name: 'MyComponent', containerData: 'r:' }],
-        enterprise: 'encryptedblob',
-      };
-      const decryptEnterpriseAppsStub = sinon.stub().resolves([decryptedApp]);
+    it('should use deploymentProvider to check running components during registration', async () => {
+      const listInstalledDeploymentsStub = sinon.stub().resolves([{
+        appName: 'enterpriseapp123',
+        componentEntries: () => [['MyComponent', { identifier: 'MyComponent_enterpriseapp123' }]],
+      }]);
       const pruneContainersStub = sinon.stub().resolves();
 
-      // Use proxyquire without noCallThru so lazy requires are intercepted
       const appInstallerFresh = proxyquire.noCallThru().load('../../ZelBack/src/services/appLifecycle/appInstaller', {
         config: configStub,
         '../verificationHelper': verificationHelperStub,
@@ -1055,25 +1045,24 @@ describe('appInstaller tests', () => {
         '../appDatabase/registryManager': { availableApps: sinon.stub().resolves([]), getApplicationGlobalSpecifications: sinon.stub().resolves(null) },
         '../appRequirements/hwRequirements': hwRequirementsStub,
         '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({ status: 'success', data: [encryptedApp] }),
           listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
-          decryptEnterpriseApps: decryptEnterpriseAppsStub,
+        },
+        '../appRuntime/deploymentProvider': {
+          listInstalledDeployments: listInstalledDeploymentsStub,
         },
         '../utils/registryCredentialHelper': { addCredentialsToImageVerifier: sinon.stub().resolves() },
         util: { promisify: (fn) => fn },
       });
 
       const newAppSpec = { version: 2, name: 'newapp', description: 'test', repotag: 'test/app', owner: '1abc', ports: [30000], containerPorts: [8080], domains: [''], cpu: 0.5, ram: 500, hdd: 5 };
-      // registerAppLocally will proceed past the prune guard before eventually failing on network setup
       try {
         await appInstallerFresh.registerAppLocally(newAppSpec, false, null);
       } catch (e) {
         // Expected — we only care that the prune guard logic ran correctly
       }
 
-      expect(decryptEnterpriseAppsStub.calledOnce).to.be.true;
-      expect(decryptEnterpriseAppsStub.calledWith([encryptedApp])).to.be.true;
-      // Decrypted enterprise app has a stopped component (MyComponent_enterpriseapp123 not running)
+      expect(listInstalledDeploymentsStub.calledOnce).to.be.true;
+      // Enterprise app has a stopped component (MyComponent_enterpriseapp123 not running)
       // so pruneContainers should NOT be called
       expect(pruneContainersStub.called).to.be.false;
     });

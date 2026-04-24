@@ -408,15 +408,14 @@ async function startFluxFunctions() {
       }
     }, 2 * 60 * 1000);
     setTimeout(() => {
-      appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
+      appInspector.checkApplicationsCpuUSage(globalState.appsMonitored);
       setInterval(() => {
-        appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
+        appInspector.checkApplicationsCpuUSage(globalState.appsMonitored);
       }, 15 * 60 * 1000);
     }, 15 * 60 * 1000);
     setTimeout(() => {
       // appsService.checkForNonAllowedAppsOnLocalNetwork();
       availabilityChecker.checkMyAppsAvailability(
-        appQueryService.installedApps,
         dosState,
         portsNotWorking,
         portManager.failedNodesTestPortsCache,
@@ -457,7 +456,6 @@ async function startFluxFunctions() {
     setTimeout(() => {
       syncthingMonitor.syncthingApps(
         globalState,
-        appQueryService.installedApps,
         () => globalState,
         dockerService.appDockerStop,
         dockerService.appDockerRestart,
@@ -476,7 +474,7 @@ async function startFluxFunctions() {
         ); // stop and starts apps using syncthing g: when a new master is required or was changed.
       }, 30 * 1000);
       setTimeout(() => {
-        appInspector.monitorSharedDBApps(appQueryService.installedApps, appUninstaller.removeAppLocally, globalState); // Monitor SharedDB Apps.
+        appInspector.monitorSharedDBApps(appUninstaller.removeAppLocally, globalState); // Monitor SharedDB Apps.
       }, 60 * 1000);
     }, 3 * 60 * 1000);
     setTimeout(() => {
@@ -509,7 +507,6 @@ async function startFluxFunctions() {
     }, 5 * 60 * 1000); // Initial delay: 5 minutes (let daemon try to sync first)
     setTimeout(() => {
       appInspector.checkStorageSpaceForApps(
-        appQueryService.installedApps,
         appUninstaller.removeAppLocally,
         advancedWorkflows.softRedeploy,
         appsStorageViolations,
