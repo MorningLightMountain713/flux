@@ -982,7 +982,7 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
       const redeploySpec = await deserializeSpec(appSpecifications).catch(() => null);
       // eslint-disable-next-line no-restricted-syntax
       for (const [compName, comp] of redeploySpec?.componentEntries?.() || []) {
-        if (comp.persistentStorage?.hasSyncthing()) {
+        if (comp.hasSyncthing()) {
           const identifier = `${compName}_${appName}`;
           const appId = dockerService.getAppIdentifier(identifier);
           globalState.receiveOnlySyncthingAppsCache.set(appId, {
@@ -998,7 +998,7 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
 
       const redeploySpec = await deserializeSpec(appSpecifications).catch(() => null);
       const singleComp = redeploySpec?.firstComponent() ?? null;
-      if (singleComp?.persistentStorage?.hasSyncthing()) {
+      if (singleComp?.hasSyncthing()) {
         const identifier = isComponent ? `${specificationsToInstall.name}_${appName}` : appName;
         const appId = dockerService.getAppIdentifier(identifier);
         globalState.receiveOnlySyncthingAppsCache.set(appId, {
@@ -2281,7 +2281,7 @@ async function appendRestoreTask(req, res) {
             await IOUtils.removeFile(tarGzPath);
           }
           const restoreComp = restoreSpec?.components?.[component.component];
-          const syncthingAux = restoreComp?.persistentStorage?.hasSyncthing();
+          const syncthingAux = restoreComp?.hasSyncthing();
           if (syncthingAux) {
             // eslint-disable-next-line global-require
             const identifier = `${component.component}_${appname}`;

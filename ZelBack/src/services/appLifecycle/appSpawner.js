@@ -366,12 +366,8 @@ async function trySpawningGlobalApplication() {
       return;
     }
 
-    let syncthingApp = false;
-    if (appSpecifications.version <= 3) {
-      syncthingApp = appSpecifications.containerData.includes('g:') || appSpecifications.containerData.includes('r:') || appSpecifications.containerData.includes('s:');
-    } else {
-      syncthingApp = appSpecifications.compose.find((comp) => comp.containerData.includes('g:') || comp.containerData.includes('r:') || comp.containerData.includes('s:'));
-    }
+    const spec = await deserializeSpec(appSpecifications);
+    const syncthingApp = spec.hasSyncthing();
 
     const myIpWithoutPort = myIP.split(':')[0];
     const lastIndex = myIpWithoutPort.lastIndexOf('.');

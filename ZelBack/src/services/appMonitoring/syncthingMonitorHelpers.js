@@ -223,15 +223,6 @@ function getContainerFolderPath(containersData, index) {
 }
 
 /**
- * Check if container should be running
- * @param {string} containerDataFlags - Container flags
- * @returns {boolean} True if container should be running
- */
-function shouldBeRunning(containerDataFlags) {
-  return containerDataFlags.includes('r');
-}
-
-/**
  * Check if folder configuration needs update
  * @param {Object} existingFolder - Existing folder config
  * @param {Object} newFolder - New folder config
@@ -259,6 +250,5 @@ module.exports = {
   createSyncthingFolderConfig,
   ensureStfolderExists,
   getContainerFolderPath,
-  shouldBeRunning,
   folderNeedsUpdate,
 };
