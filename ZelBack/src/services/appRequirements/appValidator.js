@@ -12,7 +12,7 @@ const imageManager = require('../appSecurity/imageManager');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
 const { peerManager } = require('../utils/peerState');
 const { validateSubmissionSpec } = require('../utils/specLibs');
-const { decryptIfEnterprise, toCanonicalSpec } = require('../utils/specCutover');
+const { decryptToCleartextClass } = require('../utils/specCutover');
 
 /**
  * Verify app registration parameters via API
@@ -39,8 +39,9 @@ async function verifyAppRegistrationParameters(req, res) {
         appSpecification.version >= 8 && appSpecification.enterprise,
       );
 
-      const appSpecDecrypted = await decryptIfEnterprise(appSpecification);
-      const appSpecFormatted = await toCanonicalSpec(appSpecDecrypted);
+      const cleartextSpec = await decryptToCleartextClass(appSpecification);
+      if (!cleartextSpec) throw new Error('Could not deserialize app specifications');
+      const appSpecFormatted = cleartextSpec.serialize();
 
       await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
       await verifyImageRegistryAndArchitectures(appSpecFormatted);
@@ -102,8 +103,9 @@ async function validateAppUpdate(appSpecification) {
     appSpecification.version >= 8 && appSpecification.enterprise,
   );
 
-  const decryptedSpecs = await decryptIfEnterprise(appSpecification);
-  const appSpecFormatted = await toCanonicalSpec(decryptedSpecs);
+  const updateSpec = await decryptToCleartextClass(appSpecification);
+  if (!updateSpec) throw new Error('Could not deserialize app specifications');
+  const appSpecFormatted = updateSpec.serialize();
 
   await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
   await verifyImageRegistryAndArchitectures(appSpecFormatted);

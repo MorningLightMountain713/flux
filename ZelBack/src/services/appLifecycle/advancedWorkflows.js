@@ -28,7 +28,7 @@ const {
 const appsRepository = require('../appDatabase/appsRepository');
 const {
   toCanonicalSpec,
-  decryptIfEnterprise,
+  decryptToCleartextClass,
   deserializeSpec,
 } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -391,8 +391,9 @@ async function getPreviousAppSpecifications(specifications, verificationTimestam
   if (!appSpecs) {
     throw new Error(`Previous specifications for ${specifications.name} update message does not exists! This should not happen.`);
   }
-  const decryptedPrev = await decryptIfEnterprise(appSpecs);
-  return toCanonicalSpec(decryptedPrev);
+  const spec = await decryptToCleartextClass(appSpecs);
+  if (!spec) throw new Error(`Could not deserialize previous specifications for ${specifications.name}`);
+  return spec.serialize();
 }
 
 // Global state management - using globalState module instead of local variables
@@ -1165,9 +1166,9 @@ async function softRemoveAppLocally(app, res) {
       throw new Error('Flux App not found');
     }
 
-    // Decrypt and canonicalize specifications
-    appSpecifications = await decryptIfEnterprise(appSpecifications);
-    appSpecifications = await toCanonicalSpec(appSpecifications);
+    const cleartextSpec = await decryptToCleartextClass(appSpecifications);
+    if (!cleartextSpec) throw new Error('Could not deserialize app specifications');
+    appSpecifications = cleartextSpec.serialize();
 
     const appId = dockerService.getAppIdentifier(app);
 
@@ -1431,14 +1432,13 @@ async function softRedeployComponent(appName, componentName, res) {
     }
 
     let spec;
-    let appSpecPlain;
     if (isArcane && instantiated.isEncrypted()) {
-      appSpecPlain = await decryptIfEnterprise(instantiated.serialize());
-      spec = await deserializeSpec(appSpecPlain);
+      spec = await decryptToCleartextClass(instantiated.serialize());
     } else {
       spec = instantiated.spec;
-      appSpecPlain = instantiated.serialize();
     }
+    if (!spec) throw new Error(`Could not deserialize specifications for ${appName}`);
+    const appSpecPlain = spec.serialize();
 
     if (spec.componentCount === 0) {
       throw new Error(`Application ${appName} is not a composed application`);
@@ -1546,14 +1546,13 @@ async function hardRedeployComponent(appName, componentName, res) {
     }
 
     let spec;
-    let appSpecPlain;
     if (isArcane && instantiated.isEncrypted()) {
-      appSpecPlain = await decryptIfEnterprise(instantiated.serialize());
-      spec = await deserializeSpec(appSpecPlain);
+      spec = await decryptToCleartextClass(instantiated.serialize());
     } else {
       spec = instantiated.spec;
-      appSpecPlain = instantiated.serialize();
     }
+    if (!spec) throw new Error(`Could not deserialize specifications for ${appName}`);
+    const appSpecPlain = spec.serialize();
 
     if (spec.componentCount === 0) {
       throw new Error(`Application ${appName} is not a composed application`);
@@ -2676,8 +2675,9 @@ async function updateAppGlobaly(params) {
   const daemonHeight = syncStatus.data.height;
 
   const appSpecObj = serviceHelper.ensureObject(appSpecification);
-  const appSpecDecrypted = await decryptIfEnterprise(appSpecObj);
-  const appSpecFormatted = await toCanonicalSpec(appSpecDecrypted);
+  const cleartextSpec = await decryptToCleartextClass(appSpecObj);
+  if (!cleartextSpec) throw new Error('Could not deserialize app specifications');
+  const appSpecFormatted = cleartextSpec.serialize();
 
   // eslint-disable-next-line global-require
   const { validateSubmissionSpec } = require('../utils/specLibs');
@@ -2927,11 +2927,15 @@ async function reinstallOldApplications() {
       const instantiated = await getStrictApplicationSpecifications(installedApp.name);
 
       let appSpecifications;
-      if (instantiated && isArcane && instantiated.isEncrypted()) {
-        // eslint-disable-next-line no-await-in-loop
-        appSpecifications = await decryptIfEnterprise(instantiated.serialize());
-      } else if (instantiated) {
-        appSpecifications = instantiated.serialize();
+      if (instantiated) {
+        let spec;
+        if (isArcane && instantiated.isEncrypted()) {
+          // eslint-disable-next-line no-await-in-loop
+          spec = await decryptToCleartextClass(instantiated.serialize());
+        } else {
+          spec = instantiated.spec;
+        }
+        if (spec) appSpecifications = spec.serialize();
       }
 
       const randomNumber = Math.floor((Math.random() * config.fluxapps.redeploy.probability)); // 50%

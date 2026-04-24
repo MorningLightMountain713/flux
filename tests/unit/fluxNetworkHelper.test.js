@@ -1131,7 +1131,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       const specCutoverStub = {
-        decryptIfEnterprise: sinon.stub().callsFake((app) => Promise.resolve(app)),
+        decryptToCleartextClass: sinon.stub().callsFake((app) => Promise.resolve({ ...app, isEncrypted: false })),
       };
 
       const fluxNetworkHelperWithStubs = proxyquire('../../ZelBack/src/services/fluxNetworkHelper', {
@@ -1197,10 +1197,10 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       const specCutoverStub = {
-        decryptIfEnterprise: sinon.stub().resolves({
+        decryptToCleartextClass: sinon.stub().resolves({
           name: 'enterpriseApp',
           version: 8,
-          enterprise: 'encrypted_data',
+          isEncrypted: false,
           staticip: true,
         }),
       };
@@ -1221,7 +1221,7 @@ describe('fluxNetworkHelper tests', () => {
 
       await fluxNetworkHelperWithStubs.adjustExternalIP(newIp);
 
-      sinon.assert.calledOnce(specCutoverStub.decryptIfEnterprise);
+      sinon.assert.calledOnce(specCutoverStub.decryptToCleartextClass);
       sinon.assert.calledOnce(appUninstallerStub.removeAppLocally);
       sinon.assert.calledWith(appUninstallerStub.removeAppLocally, 'enterpriseApp');
     });
@@ -1264,7 +1264,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       const specCutoverStub = {
-        decryptIfEnterprise: sinon.stub().rejects(new Error('Decryption failed')),
+        decryptToCleartextClass: sinon.stub().resolves(null),
       };
 
       const fluxNetworkHelperWithStubs = proxyquire('../../ZelBack/src/services/fluxNetworkHelper', {
@@ -1325,7 +1325,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       const specCutoverStub = {
-        decryptIfEnterprise: sinon.stub().callsFake((app) => Promise.resolve(app)),
+        decryptToCleartextClass: sinon.stub().callsFake((app) => Promise.resolve({ ...app, isEncrypted: false })),
       };
 
       const fluxNetworkHelperWithStubs = proxyquire('../../ZelBack/src/services/fluxNetworkHelper', {

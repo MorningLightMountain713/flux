@@ -1102,26 +1102,18 @@ async function adjustExternalIP(ip) {
       // eslint-disable-next-line global-require
       const appController = require('./appManagement/appController');
       // eslint-disable-next-line global-require
-      const { decryptIfEnterprise } = require('./utils/specCutover');
+      const { decryptToCleartextClass } = require('./utils/specCutover');
       let apps = await appQueryService.installedApps();
       if (apps.status === 'success' && apps.data.length > 0) {
         apps = apps.data;
         let appsRemoved = 0;
         // eslint-disable-next-line no-restricted-syntax
         for (const app of apps) {
-          // Check if app requires static IP - if so, uninstall it since IP changed
-          // Only decrypt enterprise app specs if the app has enterprise field (v8+)
           if (app.version >= 7 && (app.staticip === true || app.enterprise)) {
-            let appSpecs = app;
-            try {
-              // eslint-disable-next-line no-await-in-loop
-              appSpecs = await decryptIfEnterprise(app);
-            } catch (decryptError) {
-              log.error(`Failed to decrypt enterprise specs for ${app.name}: ${decryptError.message}`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (appSpecs.staticip === true) {
+            // eslint-disable-next-line no-await-in-loop
+            const spec = await decryptToCleartextClass(app);
+            if (!spec) continue;
+            if (spec.staticip === true) {
               log.info(`Application ${app.name} requires static IP but node IP has changed, uninstalling app`);
               log.warn(`REMOVAL REASON: Static IP required - ${app.name} requires static IP but node IP changed from ${oldIP} to ${newIP}`);
               // eslint-disable-next-line no-await-in-loop

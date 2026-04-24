@@ -11,7 +11,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 // Removed messageStore require to avoid circular dependency - will import locally where needed
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates, getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
-const { decryptIfEnterprise, decryptToCleartextClass } = require('../utils/specCutover');
+const { decryptToCleartextClass } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { updateAppSpecifications } = require('../appDatabase/registryManager');
@@ -266,11 +266,10 @@ async function verifyAppMessageUpdateSignature(type, version, appSpec, timestamp
   // so this works even when the app has expired from globalAppsInformation (e.g. during resync)
   const usersToExtend = config.fluxapps.usersToExtend || [];
   if (isValidSignature !== true && usersToExtend.length > 0 && previousAppSpec) {
-    // For v8+ enterprise apps, decrypt both sides before comparing so the
-    // isExpireOnlyUpdate check sees canonical cleartext on both sides.
-    // decryptIfEnterprise is a no-op for non-enterprise or non-v8 specs.
-    const newSpecToCompare = await decryptIfEnterprise(appSpec);
-    const prevSpecToCompare = await decryptIfEnterprise(previousAppSpec);
+    const newClass = await decryptToCleartextClass(appSpec);
+    const prevClass = await decryptToCleartextClass(previousAppSpec);
+    const newSpecToCompare = newClass ? newClass.serialize() : appSpec;
+    const prevSpecToCompare = prevClass ? prevClass.serialize() : previousAppSpec;
     // Check if signature matches any of the usersToExtend addresses
     // eslint-disable-next-line no-restricted-syntax
     for (const userToExtend of usersToExtend) {

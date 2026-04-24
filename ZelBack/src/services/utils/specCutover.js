@@ -68,38 +68,6 @@ async function toCanonicalSpec(plainSpec) {
 }
 
 /**
- * Plain→plain adapter for legacy consumers: decrypt a v8 enterprise wire
- * blob to cleartext plain form. Non-encrypted wire forms pass through.
- *
- * Internals — this crosses the cleartext boundary:
- *   1. deserializeSpec → EncryptedSpecV8
- *   2. .decrypt(provider) → DecryptedCanonicalSpec (the flux-spec safety wrapper)
- *   3. .spec → cleartext FluxAppSpecV8 instance
- *   4. .serialize() → plain cleartext wire form
- *
- * The enterprise blob from the input is reattached so callers that
- * re-broadcast the wire form keep the ciphertext intact.
- *
- * Prefer the class-instance pattern in new code — this helper exists
- * only as a bridge for legacy consumers that still take plain shape.
- *
- * @param {object} plainSpec
- * @returns {Promise<object>}
- */
-async function decryptIfEnterprise(plainSpec) {
-  if (!plainSpec) return null;
-  const wireSpec = await deserializeSpec(plainSpec);
-  if (!wireSpec) return null;
-  if (!wireSpec.isEncrypted) return plainSpec;
-
-  const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
-  const decrypted = await wireSpec.decrypt(provider);
-  const cleartext = decrypted.spec.serialize();
-  cleartext.enterprise = plainSpec.enterprise;
-  return cleartext;
-}
-
-/**
  * Plain→class adapter for cleartext consumers: hydrate a plain-object
  * wire form and, if the wire form is encrypted, CROSS THE CLEARTEXT
  * BOUNDARY to yield a cleartext class instance.
@@ -111,10 +79,9 @@ async function decryptIfEnterprise(plainSpec) {
  *
  * Callers that do NOT need cleartext components (e.g. storing the wire
  * form, checking metadata like name/owner) should use `deserializeSpec`
- * directly and branch with `instanceof EncryptedSpecBase`. This helper
- * is specifically for the case "I need a cleartext class instance to
- * pass to a class-first helper (appPricePerMonth, DeploymentSpec,
- * etc.)".
+ * directly and branch on `.isEncrypted`. This helper is for the case
+ * "I need a cleartext class instance to pass to a class-first helper
+ * (appPricePerMonth, DeploymentSpec, etc.)".
  *
  * @param {object} plainSpec
  * @returns {Promise<import('@runonflux/flux-spec').FluxAppSpecBase>} cleartext class instance
@@ -122,14 +89,19 @@ async function decryptIfEnterprise(plainSpec) {
 async function decryptToCleartextClass(plainSpec) {
   const wireSpec = await deserializeSpec(plainSpec);
   if (!wireSpec || !wireSpec.isEncrypted) return wireSpec;
-  const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
-  const decrypted = await wireSpec.decrypt(provider);
-  return decrypted.spec;
+  try {
+    const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+    const decrypted = await wireSpec.decrypt(provider);
+    return decrypted.spec;
+  } catch (error) {
+    const name = wireSpec.name || 'unknown';
+    log.warn(`decryptToCleartextClass: could not decrypt ${name}: ${error.message}`);
+    return null;
+  }
 }
 
 module.exports = {
   deserializeSpec,
   toCanonicalSpec,
-  decryptIfEnterprise,
   decryptToCleartextClass,
 };

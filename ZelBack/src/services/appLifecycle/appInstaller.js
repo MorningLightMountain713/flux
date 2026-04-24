@@ -24,7 +24,7 @@ const pgpService = require('../pgpService');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
-const { decryptIfEnterprise, deserializeSpec } = require('../utils/specCutover');
+const { decryptToCleartextClass, deserializeSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
@@ -921,11 +921,10 @@ async function installAppLocally(req, res) {
         throw new Error(`Application Specifications of ${appname} not found`);
       }
 
-      // Normalize: any source above may hand us the encrypted v8 wire form.
-      // decryptIfEnterprise is a no-op when already decrypted or non-enterprise.
-      appSpecifications = await decryptIfEnterprise(appSpecifications);
+      const installSpec = await decryptToCleartextClass(appSpecifications);
+      if (!installSpec) throw new Error('Could not deserialize app specifications');
+      appSpecifications = installSpec.serialize();
 
-      // get current height
       const dbopen = dbHelper.databaseConnection();
       if (!appSpecifications.height && appSpecifications.height !== 0) {
         // precaution for old temporary apps. Set up for custom test specifications.
@@ -951,7 +950,7 @@ async function installAppLocally(req, res) {
       }
 
       // eslint-disable-next-line no-use-before-define
-      await checkAppRequirements(appSpecifications); // entire app
+      await checkAppRequirements(installSpec);
 
       res.setHeader('Content-Type', 'application/json');
       await registerAppLocally(appSpecifications, undefined, res); // can throw
@@ -1066,30 +1065,27 @@ async function testAppInstall(req, res) {
         throw new Error(`Application Specifications of ${appname} not found`);
       }
 
-      // Normalize: any source above may hand us the encrypted v8 wire form.
-      appSpecifications = await decryptIfEnterprise(appSpecifications);
+      const testSpec = await decryptToCleartextClass(appSpecifications);
+      if (!testSpec) throw new Error('Could not deserialize app specifications');
+      appSpecifications = testSpec.serialize();
 
-      // Test installation - similar to regular install but with test flag
-      // Skip all requirement checks for test installations (geolocation, static IP, hardware, nodes)
-      await checkAppRequirements(appSpecifications, true, true, true);
+      await checkAppRequirements(testSpec, true, true, true);
 
       res.setHeader('Content-Type', 'application/json');
 
-      // Check architecture compatibility for test installations
-      // Get local node architecture
       const localArch = await systemArchitecture();
 
-      // Collect supported architectures from all components
       const componentArchitectures = [];
-      for (const component of appSpecifications.compose) {
-        const repoVerification = await verifyRepository(component.repotag, {
-          repoauth: component.repoauth,
-          specVersion: appSpecifications.version,
-          appName: appSpecifications.name,
+      for (const [name, comp] of testSpec.componentEntries()) {
+        // eslint-disable-next-line no-await-in-loop
+        const repoVerification = await verifyRepository(comp.image, {
+          repoauth: comp.imageAuth || null,
+          specVersion: testSpec.version,
+          appName: testSpec.name,
           architecture: localArch,
         });
         componentArchitectures.push({
-          name: component.name,
+          name,
           architectures: repoVerification.supportedArchitectures,
         });
       }
