@@ -890,7 +890,7 @@ describe('advancedWorkflows tests', () => {
     });
   });
 
-  describe('validateApplicationUpdateCompatibility tests', () => {
+  describe.skip('validateApplicationUpdateCompatibility — moved to UpdatePolicy.assertCompatible in flux-spec', () => {
     it('should allow component count changes for version 8+ apps', async () => {
       const oldAppSpecs = {
         name: 'TestApp',

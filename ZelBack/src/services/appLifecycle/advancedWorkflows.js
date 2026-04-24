@@ -31,7 +31,7 @@ const {
   decryptToCleartextClass,
   deserializeSpec,
 } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
+const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const globalState = require('../utils/globalState');
@@ -2489,65 +2489,6 @@ async function testAppMount() {
  *   - Repository tag changes (v1-3)
  *   - Version downgrade from v4+ to v1-3
  */
-async function validateApplicationUpdateCompatibility(specifications, previousAppSpecs) {
-  const appSpecs = previousAppSpecs;
-
-  if (specifications.version >= 4) {
-    if (appSpecs.version >= 4) {
-      // Both current and update are v4+ compositions
-
-      // For version 8+, allow component count and name changes
-      if (specifications.version >= 8 && appSpecs.version >= 8) {
-        // Version 8+ allows flexible component changes
-        // Component count and names can change - will trigger hard redeploy
-        log.info(`Version 8+ app "${specifications.name}" allows component structure changes`);
-      } else {
-        const newSpec = await deserializeSpec(specifications);
-        const oldSpec = await deserializeSpec(appSpecs);
-        const newCompNames = newSpec ? newSpec.componentNames() : [];
-        const oldCompNames = oldSpec ? oldSpec.componentNames() : [];
-
-        if (newCompNames.length !== oldCompNames.length) {
-          throw new Error(
-            `Application update rejected: Cannot change the number of components for "${specifications.name}". `
-            + `Previous version has ${oldCompNames.length} component(s), new version has ${newCompNames.length}. `
-            + 'Component count must remain constant for v4-7 applications. Upgrade to version 8 to enable this feature.',
-          );
-        }
-
-        const newNameSet = new Set(newCompNames);
-        for (const name of oldCompNames) {
-          if (!newNameSet.has(name)) {
-            throw new Error(
-              `Application update rejected: Component "${name}" not found in new specification for "${specifications.name}". `
-              + `Component names must remain constant for v4-7 applications. Previous components: [${oldCompNames.join(', ')}], New components: [${newCompNames.join(', ')}]. `
-              + 'Upgrade to version 8 to enable component name changes.',
-            );
-          }
-        }
-      }
-    } else { // Update is v4+ and current app is v1-3
-      // Node will perform hard redeploy of the app to migrate from v1-3 to v4+
-    }
-  } else if (appSpecs.version >= 4) {
-    throw new Error(
-      `Application update rejected: Cannot downgrade "${specifications.name}" from v4+ to v${specifications.version}. `
-      + 'Version rollbacks from v4+ specifications to older versions (v1-3) are not permitted. '
-      + `Current version: v${appSpecs.version}, Attempted version: v${specifications.version}.`,
-    );
-  } else { // Both update and current app are v1-3
-    // v1-3 specifications do not allow repotag changes
-    // eslint-disable-next-line no-lonely-if
-    if (appSpecs.repotag !== specifications.repotag) {
-      throw new Error(
-        `Application update rejected: Cannot change Docker image repository/tag for v1-3 application "${specifications.name}". `
-        + `Previous repotag: "${appSpecs.repotag}", New repotag: "${specifications.repotag}". `
-        + 'Repository tag changes are only allowed for v4+ applications. Consider upgrading to v4+ specification format.',
-      );
-    }
-  }
-  return true;
-}
 
 /**
  * Set installation progress state
@@ -2677,71 +2618,59 @@ async function updateAppGlobaly(params) {
   const appSpecObj = serviceHelper.ensureObject(appSpecification);
   const cleartextSpec = await decryptToCleartextClass(appSpecObj);
   if (!cleartextSpec) throw new Error('Could not deserialize app specifications');
-  const appSpecFormatted = cleartextSpec.serialize();
 
   // eslint-disable-next-line global-require
   const { validateSubmissionSpec } = require('../utils/specLibs');
   // eslint-disable-next-line global-require
   const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
+  const appSpecFormatted = cleartextSpec.serialize();
   await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
   await verifyImageRegistryAndArchitectures(appSpecFormatted);
 
-  if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
-    // eslint-disable-next-line no-restricted-syntax
-    for (const appComponent of appSpecFormatted.compose) {
+  if (cleartextSpec.version === 7 && cleartextSpec.nodes && cleartextSpec.nodes.length > 0) {
+    // eslint-disable-next-line global-require
+    const appSecurity = require('../appSecurity/imageManager');
+    for (const appComponent of appSpecFormatted.compose || []) {
       if (appComponent.secrets) {
-        // eslint-disable-next-line global-require
-        const appSecurity = require('../appSecurity/imageManager');
         // eslint-disable-next-line no-await-in-loop
-        await appSecurity.checkAppSecrets(appSpecFormatted.name, appComponent, appSpecFormatted.owner, false);
+        await appSecurity.checkAppSecrets(cleartextSpec.name, appComponent, cleartextSpec.owner, false);
       }
     }
   }
 
-  // verify that app exists, does not change repotag and is signed by app owner.
-  const appInfo = await appsRepository.getGlobalAppInfoRaw(appSpecFormatted.name);
+  const appInfo = await appsRepository.getGlobalAppInfoRaw(cleartextSpec.name);
   if (!appInfo) {
     throw new Error('Flux App update received but application to update does not exist!');
-  }
-  if (appInfo.version <= 3 && appSpecFormatted.version <= 3 && appInfo.repotag !== appSpecFormatted.repotag) {
-    throw new Error('Flux App update of repotag is not allowed');
   }
   const appOwner = appInfo.owner;
 
   const isEnterprise = Boolean(appSpecObj.version >= 8 && appSpecObj.enterprise);
-  // For enterprise updates, the signature covers the on-wire encrypted form
-  // (compose/contacts empty, enterprise blob intact), not the decrypted one.
-  const toVerify = isEnterprise ? await toCanonicalSpec(appSpecObj) : appSpecFormatted;
+  const wireForm = isEnterprise ? await toCanonicalSpec(appSpecObj) : appSpecFormatted;
 
   // eslint-disable-next-line global-require
   const appMessaging = require('../appMessaging/messageVerifier');
-  await appMessaging.verifyAppMessageUpdateSignature(cleanMessageType, cleanTypeVersion, toVerify, cleanTimestamp, cleanSignature, appOwner, daemonHeight, appInfo);
+  await appMessaging.verifyAppMessageUpdateSignature(cleanMessageType, cleanTypeVersion, wireForm, cleanTimestamp, cleanSignature, appOwner, daemonHeight, appInfo);
 
-  // Enforce version upgrade policy
   const { latestSupportedSpecVersion } = config.fluxapps;
-  if (appInfo.version !== appSpecFormatted.version && appSpecFormatted.version !== latestSupportedSpecVersion) {
+  if (appInfo.version !== cleartextSpec.version && cleartextSpec.version !== latestSupportedSpecVersion) {
     throw new Error(
       `Application update rejected: Version changes are only allowed when updating to version ${latestSupportedSpecVersion} (current latest supported version). `
-      + `Current version: ${appInfo.version}, Attempted version: ${appSpecFormatted.version}. `
+      + `Current version: ${appInfo.version}, Attempted version: ${cleartextSpec.version}. `
       + `To update this application, please use version ${latestSupportedSpecVersion} specifications.`,
     );
   }
 
-  // Validate structural compatibility
-  await validateApplicationUpdateCompatibility(appSpecFormatted, appInfo);
+  const { UpdatePolicy } = await getSpec();
+  const oldSpec = await deserializeSpec(appInfo);
+  if (oldSpec) UpdatePolicy.assertCompatible(oldSpec, cleartextSpec);
 
-  if (isEnterprise) {
-    appSpecFormatted.contacts = [];
-    appSpecFormatted.compose = [];
-  }
-
-  const message = cleanMessageType + cleanTypeVersion + JSON.stringify(appSpecFormatted) + cleanTimestamp + cleanSignature;
+  const message = cleanMessageType + cleanTypeVersion + JSON.stringify(wireForm) + cleanTimestamp + cleanSignature;
   const messageHASH = await generalService.messageHash(message);
 
   const temporaryAppMessage = {
     type: cleanMessageType,
     version: cleanTypeVersion,
-    appSpecifications: appSpecFormatted,
+    appSpecifications: wireForm,
     hash: messageHASH,
     timestamp: cleanTimestamp,
     signature: cleanSignature,
@@ -3959,7 +3888,6 @@ module.exports = {
   appendRestoreTask,
   removeTestAppMount,
   testAppMount,
-  validateApplicationUpdateCompatibility,
   getPreviousAppSpecifications,
   setInstallationInProgress,
   setRemovalInProgress,

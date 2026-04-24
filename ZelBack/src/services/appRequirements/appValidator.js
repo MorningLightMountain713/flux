@@ -11,8 +11,8 @@ const messageVerifier = require('../appMessaging/messageVerifier');
 const imageManager = require('../appSecurity/imageManager');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
 const { peerManager } = require('../utils/peerState');
-const { validateSubmissionSpec } = require('../utils/specLibs');
-const { decryptToCleartextClass } = require('../utils/specCutover');
+const { validateSubmissionSpec, getSpec } = require('../utils/specLibs');
+const { decryptToCleartextClass, deserializeSpec, toCanonicalSpec } = require('../utils/specCutover');
 
 /**
  * Verify app registration parameters via API
@@ -46,27 +46,19 @@ async function verifyAppRegistrationParameters(req, res) {
       await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
       await verifyImageRegistryAndArchitectures(appSpecFormatted);
 
-      if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecFormatted.compose) {
+      if (cleartextSpec.version === 7 && cleartextSpec.nodes && cleartextSpec.nodes.length > 0) {
+        for (const appComponent of appSpecFormatted.compose || []) {
           if (appComponent.secrets) {
             // eslint-disable-next-line no-await-in-loop
-            await imageManager.checkAppSecrets(appSpecFormatted.name, appComponent, appSpecFormatted.owner, true);
+            await imageManager.checkAppSecrets(cleartextSpec.name, appComponent, cleartextSpec.owner, true);
           }
         }
       }
 
-      // check if name is not yet registered
       await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted);
 
-      if (isEnterprise) {
-        appSpecFormatted.contacts = [];
-        appSpecFormatted.compose = [];
-      }
-
-      // app is valid and can be registered
-      // respond with formatted specifications
-      const respondPrice = messageHelper.createDataMessage(appSpecFormatted);
+      const responseSpec = isEnterprise ? await toCanonicalSpec(appSpecification) : appSpecFormatted;
+      const respondPrice = messageHelper.createDataMessage(responseSpec);
       res.json(respondPrice);
     } catch (error) {
       log.warn(error);
@@ -110,41 +102,39 @@ async function validateAppUpdate(appSpecification) {
   await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
   await verifyImageRegistryAndArchitectures(appSpecFormatted);
 
-  if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
-    // eslint-disable-next-line no-restricted-syntax
-    for (const appComponent of appSpecFormatted.compose) {
+  if (updateSpec.version === 7 && updateSpec.nodes && updateSpec.nodes.length > 0) {
+    for (const appComponent of appSpecFormatted.compose || []) {
       if (appComponent.secrets) {
         // eslint-disable-next-line no-await-in-loop
-        await imageManager.checkAppSecrets(appSpecFormatted.name, appComponent, appSpecFormatted.owner, false);
+        await imageManager.checkAppSecrets(updateSpec.name, appComponent, updateSpec.owner, false);
       }
     }
   }
 
-  // Validate update compatibility with previous version
   const timestamp = Date.now();
-  // Dynamic require to avoid circular dependency
   // eslint-disable-next-line global-require
   const advancedWorkflows = require('../appLifecycle/advancedWorkflows');
   const previousAppSpecs = await advancedWorkflows.getPreviousAppSpecifications(appSpecFormatted, timestamp);
   if (!previousAppSpecs) {
-    throw new Error(`Flux App ${appSpecFormatted.name} does not exist and cannot be updated`);
+    throw new Error(`Flux App ${updateSpec.name} does not exist and cannot be updated`);
   }
 
-  // Enforce version upgrade policy: new updates must target the latest supported spec version
   const { latestSupportedSpecVersion } = config.fluxapps;
-  if (previousAppSpecs.version !== appSpecFormatted.version && appSpecFormatted.version !== latestSupportedSpecVersion) {
+  if (previousAppSpecs.version !== updateSpec.version && updateSpec.version !== latestSupportedSpecVersion) {
     throw new Error(
       `Application update rejected: Version changes are only allowed when updating to version ${latestSupportedSpecVersion} (current latest supported version). `
-      + `Current version: ${previousAppSpecs.version}, Attempted version: ${appSpecFormatted.version}. `
+      + `Current version: ${previousAppSpecs.version}, Attempted version: ${updateSpec.version}. `
       + `To update this application, please use version ${latestSupportedSpecVersion} specifications.`,
     );
   }
 
-  await advancedWorkflows.validateApplicationUpdateCompatibility(appSpecFormatted, previousAppSpecs);
+  const { UpdatePolicy } = await getSpec();
+  const oldSpec = await deserializeSpec(previousAppSpecs);
+  if (oldSpec) UpdatePolicy.assertCompatible(oldSpec, updateSpec);
 
   if (isEnterprise) {
-    appSpecFormatted.contacts = [];
-    appSpecFormatted.compose = [];
+    const wireForm = await toCanonicalSpec(appSpecification);
+    return wireForm;
   }
 
   return appSpecFormatted;

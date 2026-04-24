@@ -90,6 +90,7 @@ describe('messageStore tests', () => {
       },
       '../utils/specLibs': {
         validateSubmissionSpec: sinon.stub().resolves(true),
+        getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
         getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {} }),
       },
       '../utils/specCutover': cutoverStubs,
@@ -257,6 +258,7 @@ describe('messageStore tests', () => {
         },
         '../utils/specLibs': {
           validateSubmissionSpec: sinon.stub().resolves(true),
+          getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
           getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {} }),
         },
         '../utils/specCutover': localCutoverStubs,

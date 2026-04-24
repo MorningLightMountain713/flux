@@ -6,12 +6,9 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
-const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
+const { validateSubmissionSpec, getSpecBackend, getSpec } = require('../utils/specLibs');
 const { deserializeSpec } = require('../utils/specCutover');
-const {
-  getPreviousAppSpecifications,
-  validateApplicationUpdateCompatibility,
-} = require('../appLifecycle/advancedWorkflows');
+const { getPreviousAppSpecifications } = require('../appLifecycle/advancedWorkflows');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const globalState = require('../utils/globalState');
 const {
@@ -133,7 +130,10 @@ async function storeAppTemporaryMessage(message, options = {}) {
       if (appRegistration) {
         await registryManager.checkApplicationRegistrationNameConflicts(validationBlob, message.hash);
       } else {
-        await validateApplicationUpdateCompatibility(validationBlob, previousAppSpecs);
+        const { UpdatePolicy } = await getSpec();
+        const newSpec = await deserializeSpec(validationBlob);
+        const oldSpec = await deserializeSpec(previousAppSpecs);
+        if (newSpec && oldSpec) UpdatePolicy.assertCompatible(oldSpec, newSpec);
       }
     }
 
