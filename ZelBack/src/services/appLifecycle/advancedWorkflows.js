@@ -84,18 +84,7 @@ async function getInstalledAppsFromDb(options = {}) {
   }
 }
 
-/**
- * Checks if component structure changed between two specs (count or names).
- * Accepts class instances (FluxAppSpecBase).
- * @param {import('@runonflux/flux-spec').FluxAppSpecBase} newSpec
- * @param {import('@runonflux/flux-spec').FluxAppSpecBase} oldSpec
- * @returns {boolean}
- */
-function hasComponentStructureChange(newSpec, oldSpec) {
-  if (newSpec.componentCount !== oldSpec.componentCount) return true;
-  const oldNames = new Set(oldSpec.componentNames());
-  return !newSpec.componentNames().every((name) => oldNames.has(name));
-}
+
 
 async function getStrictApplicationSpecifications(appName) {
   try {
@@ -1188,7 +1177,7 @@ async function softRedeploy(appSpecs, res) {
         if (installedApp && installedApp.version >= 8) {
           const newSpec = await deserializeSpec(appSpecs);
           const oldSpec = await deserializeSpec(installedApp);
-          if (newSpec && oldSpec && hasComponentStructureChange(newSpec, oldSpec)) {
+          if (newSpec && oldSpec && !newSpec.hasSameComponents(oldSpec)) {
             const oldCount = oldSpec.componentCount;
             const newCount = newSpec.componentCount;
             log.warn(`Soft redeploy requested for ${appSpecs.name}, but component structure changed.`);
@@ -2548,53 +2537,58 @@ async function updateAppGlobaly(params) {
   const daemonHeight = syncStatus.data.height;
 
   const appSpecObj = serviceHelper.ensureObject(appSpecification);
-  const cleartextSpec = await decryptToCleartextClass(appSpecObj);
-  if (!cleartextSpec) throw new Error('Could not deserialize app specifications');
+  const wireSpec = await deserializeSpec(appSpecObj);
+  if (!wireSpec) throw new Error('Could not deserialize app specifications');
+
+  let spec = wireSpec;
+  if (wireSpec.isEncrypted) {
+    const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+    const decrypted = await wireSpec.decrypt(provider);
+    spec = decrypted;
+  }
 
   // eslint-disable-next-line global-require
   const { validateSubmissionSpec } = require('../utils/specLibs');
   // eslint-disable-next-line global-require
   const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
-  const appSpecFormatted = cleartextSpec.serialize();
-  await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
-  await verifyImageRegistryAndArchitectures(appSpecFormatted);
+  await validateSubmissionSpec(appSpecObj, { height: daemonHeight });
+  await verifyImageRegistryAndArchitectures(appSpecObj);
 
-  if (cleartextSpec.version === 7 && cleartextSpec.nodes && cleartextSpec.nodes.length > 0) {
+  if (spec.version === 7 && spec.components) {
     // eslint-disable-next-line global-require
     const appSecurity = require('../appSecurity/imageManager');
-    for (const appComponent of appSpecFormatted.compose || []) {
-      if (appComponent.secrets) {
+    for (const [, comp] of spec.componentEntries()) {
+      if (comp.secrets) {
         // eslint-disable-next-line no-await-in-loop
-        await appSecurity.checkAppSecrets(cleartextSpec.name, appComponent, cleartextSpec.owner, false);
+        await appSecurity.checkAppSecrets(spec.name, comp, spec.owner, false);
       }
     }
   }
 
-  const appInfo = await appsRepository.getGlobalAppInfoRaw(cleartextSpec.name);
+  const appInfo = await appsRepository.getGlobalAppInfoRaw(spec.name);
   if (!appInfo) {
     throw new Error('Flux App update received but application to update does not exist!');
   }
   const appOwner = appInfo.owner;
 
-  const isEnterprise = Boolean(appSpecObj.version >= 8 && appSpecObj.enterprise);
-  const wireForm = isEnterprise ? await toCanonicalSpec(appSpecObj) : appSpecFormatted;
+  const wireForm = await toCanonicalSpec(appSpecObj);
 
   // eslint-disable-next-line global-require
   const appMessaging = require('../appMessaging/messageVerifier');
   await appMessaging.verifyAppMessageUpdateSignature(cleanMessageType, cleanTypeVersion, wireForm, cleanTimestamp, cleanSignature, appOwner, daemonHeight, appInfo);
 
   const { latestSupportedSpecVersion } = config.fluxapps;
-  if (appInfo.version !== cleartextSpec.version && cleartextSpec.version !== latestSupportedSpecVersion) {
+  if (appInfo.version !== spec.version && spec.version !== latestSupportedSpecVersion) {
     throw new Error(
       `Application update rejected: Version changes are only allowed when updating to version ${latestSupportedSpecVersion} (current latest supported version). `
-      + `Current version: ${appInfo.version}, Attempted version: ${cleartextSpec.version}. `
+      + `Current version: ${appInfo.version}, Attempted version: ${spec.version}. `
       + `To update this application, please use version ${latestSupportedSpecVersion} specifications.`,
     );
   }
 
   const { UpdatePolicy } = await getSpec();
   const oldSpec = await deserializeSpec(appInfo);
-  if (oldSpec) UpdatePolicy.assertCompatible(oldSpec, cleartextSpec);
+  if (oldSpec) UpdatePolicy.assertCompatible(oldSpec, spec);
 
   const message = cleanMessageType + cleanTypeVersion + JSON.stringify(wireForm) + cleanTimestamp + cleanSignature;
   const messageHASH = await generalService.messageHash(message);
@@ -3038,7 +3032,7 @@ async function reinstallOldApplications() {
             const oldSpec = await deserializeSpec(installedApp);
             const structureChanged = Boolean(
               newSpec && oldSpec && instantiated.version >= 8 && installedApp.version >= 8
-              && hasComponentStructureChange(newSpec, oldSpec),
+              && !newSpec.hasSameComponents(oldSpec),
             );
 
             if (structureChanged) {
