@@ -13,6 +13,9 @@ const advancedWorkflows = require('./appLifecycle/advancedWorkflows');
 const registryCredentialHelper = require('./utils/registryCredentialHelper');
 const { ImageVerifier } = require('./utils/imageVerifier');
 const serviceHelper = require('./serviceHelper');
+const { deserializeSpec } = require('./utils/specCutover');
+const { getSpecBackend } = require('./utils/specLibs');
+const { appsFolder } = require('./utils/appConstants');
 const globalState = require('./utils/globalState');
 
 // Rate limiting configuration
@@ -208,19 +211,25 @@ async function checkAppForUpdates(appSpec) {
   const result = { needsUpdate: false, components: [], rateLimited: false };
 
   try {
-    // Handle v1-v3 apps (single container)
-    if (appSpec.version < 4) {
-      const containerName = dockerService.getAppIdentifier(appSpec.name);
+    const { DeploymentSpec } = await getSpecBackend();
+    const deployment = DeploymentSpec.fromSpec(appSpec, appsFolder);
+
+    for (const [name, deployComp] of deployment.componentEntries()) {
+      const containerName = dockerService.getAppIdentifier(deployComp.identifier);
+
+      // eslint-disable-next-line no-await-in-loop
       const localDigest = await getLocalImageDigest(containerName);
 
       if (!localDigest) {
-        log.debug(`Could not get local digest for ${appSpec.name}, skipping`);
-        return result;
+        log.debug(`Could not get local digest for ${appSpec.name}/${name}, skipping component`);
+        // eslint-disable-next-line no-continue
+        continue;
       }
 
+      // eslint-disable-next-line no-await-in-loop
       const remoteResult = await getRemoteManifestDigest(
-        appSpec.repotag,
-        appSpec.repoauth || null,
+        deployComp.image,
+        deployComp.imageAuth || null,
         appSpec.version,
         appSpec.name,
       );
@@ -231,69 +240,17 @@ async function checkAppForUpdates(appSpec) {
       }
 
       if (!remoteResult.digest) {
-        log.warn(`Could not get remote digest for ${appSpec.name}, skipping`);
-        return result;
-      }
-
-      if (localDigest !== remoteResult.digest) {
-        log.info(`Update available for ${appSpec.name}: ${localDigest} -> ${remoteResult.digest}`);
-        result.needsUpdate = true;
-        result.components.push({
-          name: appSpec.name,
-          repotag: appSpec.repotag,
-          localDigest,
-          remoteDigest: remoteResult.digest,
-        });
-      }
-
-      return result;
-    }
-
-    // Handle v4+ apps (compose with multiple components)
-    if (!appSpec.compose || !Array.isArray(appSpec.compose)) {
-      log.warn(`App ${appSpec.name} has no compose array, skipping`);
-      return result;
-    }
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const component of appSpec.compose) {
-      // Container naming: flux{componentName}_{appName}
-      const containerName = `${dockerService.getAppIdentifier(component.name)}_${appSpec.name}`;
-
-      // eslint-disable-next-line no-await-in-loop
-      const localDigest = await getLocalImageDigest(containerName);
-
-      if (!localDigest) {
-        log.debug(`Could not get local digest for ${appSpec.name}/${component.name}, skipping component`);
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-
-      // eslint-disable-next-line no-await-in-loop
-      const remoteResult = await getRemoteManifestDigest(
-        component.repotag,
-        component.repoauth || null,
-        appSpec.version,
-        appSpec.name,
-      );
-
-      if (remoteResult.error === 'rate_limited') {
-        result.rateLimited = true;
-        return result;
-      }
-
-      if (!remoteResult.digest) {
-        log.warn(`Could not get remote digest for ${appSpec.name}/${component.name}, skipping component`);
+        log.warn(`Could not get remote digest for ${appSpec.name}/${name}, skipping component`);
         // eslint-disable-next-line no-continue
         continue;
       }
 
       if (localDigest !== remoteResult.digest) {
-        log.info(`Update available for ${appSpec.name}/${component.name}: ${localDigest} -> ${remoteResult.digest}`);
+        log.info(`Update available for ${appSpec.name}/${name}: ${localDigest} -> ${remoteResult.digest}`);
         result.needsUpdate = true;
         result.components.push({
-          name: component.name,
-          repotag: component.repotag,
+          name,
+          repotag: deployComp.image,
           localDigest,
           remoteDigest: remoteResult.digest,
         });
@@ -358,15 +315,16 @@ async function checkForImageUpdates() {
       return;
     }
 
-    // Decrypt enterprise apps (version 8 with encrypted content)
     const apps = await appQueryService.decryptEnterpriseApps(installedAppsResponse.data);
     log.info(`Checking ${apps.length} installed apps for image updates`);
+    const { DeploymentSpec } = await getSpecBackend();
 
     let updatesTriggered = 0;
     let appsChecked = 0;
 
-    // eslint-disable-next-line no-restricted-syntax
-    for (const appSpec of apps) {
+    for (const appPlain of apps) {
+      const appSpec = await deserializeSpec(appPlain);
+      if (!appSpec) continue;
       // Re-check flags before each app
       if (isOperationInProgress()) {
         log.info('Aborting image update check: operation started');
