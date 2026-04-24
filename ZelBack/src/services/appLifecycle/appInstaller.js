@@ -24,6 +24,7 @@ const pgpService = require('../pgpService');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
+const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { decryptToCleartextClass, deserializeSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -39,7 +40,7 @@ const config = require('config');
 // Legacy apps that use old gateway IP assignment method
 const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated', 'isokosse', 'ChainBraryDApp', 'health', 'ethercalc'];
 
-// Helper functions and constants for installApplicationHard
+// Helper functions and constants for installComponent
 const util = require('util');
 const { exec } = require('child_process');
 
@@ -510,10 +511,34 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
       const deployment = await deploymentProvider.getInstalledDeployment(appName);
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
 
+      await checkApplicationImagesCompliance(appSpecifications);
+
+      const owner = appSpecifications.owner || null;
+      const burstEligible = owner
+        && cpuBurstHelper.isEnterpriseOwner(owner)
+        && await cpuBurstHelper.isCpuBurstSupported();
+      const specVersion = appSpecifications.version || null;
+      const onStatus = res ? (msg) => {
+        const payload = typeof msg === 'string' ? { status: msg } : msg;
+        res.write(serviceHelper.ensureString(payload));
+        if (res.flush) res.flush();
+      } : null;
+
+      const syslogCollector = deployment.componentEntries()
+        .find(([, c]) => c.toDockerEnv().some((e) => e.startsWith('LOG=COLLECT')));
+      const syslogTarget = syslogCollector ? syslogCollector[0] : null;
+
       // eslint-disable-next-line no-restricted-syntax
-      for (const [, deployComp] of deployment.componentEntries()) {
+      for (const [, component] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop, no-use-before-define
-        await installApplicationHard(deployComp, appName, deployment.componentCount() > 1, res, appSpecifications, test);
+        await installComponent(component, {
+          onStatus,
+          test,
+          createVolumes: true,
+          burstEligible,
+          syslogTarget,
+          specVersion,
+        });
       }
     } catch (error) {
       if (!test) {
@@ -621,26 +646,21 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
  * @param {object} res - Response object for streaming status updates
  * @returns {Promise<{passed: boolean, reason: string|null}>} Result with passed status and failure reason
  */
-async function checkOrbitAppHealth(appSpecifications, appName, isComponent, res) {
-  if (!appSpecifications.ports || !appSpecifications.ports.length) {
+async function checkOrbitAppHealth(component, onStatus) {
+  if (!component.hostPorts || !component.hostPorts.length) {
     return { passed: false, reason: 'No ports configured for Orbit component' };
   }
-  const hostPort = appSpecifications.ports[0];
+  const hostPort = component.hostPorts[0];
   const statusUrl = `http://127.0.0.1:${hostPort}/api/status`;
-  const pollInterval = 5000; // 5 seconds between polls
-  const maxAttempts = 24; // 2 minutes total (24 * 5s)
-  const initialWait = 5000; // 5 seconds before first poll
+  const pollInterval = 5000;
+  const maxAttempts = 24;
+  const initialWait = 5000;
 
-  const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
+  const id = component.identifier;
 
-  const checkingStatus = {
-    status: `Checking Orbit deployment status for ${identifier} on port ${hostPort}...`,
-  };
-  log.info(checkingStatus);
-  if (res) {
-    res.write(serviceHelper.ensureString(checkingStatus));
-    if (res.flush) res.flush();
-  }
+  const msg = `Checking Orbit deployment status for ${id} on port ${hostPort}...`;
+  log.info(msg);
+  if (onStatus) onStatus(msg);
 
   // Wait for Orbit to initialize before first poll
   await serviceHelper.delay(initialWait);
@@ -661,28 +681,20 @@ async function checkOrbitAppHealth(appSpecifications, appName, isComponent, res)
           status: `Orbit initial test passed for ${identifier}`,
         };
         log.info(successStatus);
-        if (res) {
-          res.write(serviceHelper.ensureString(successStatus));
-          if (res.flush) res.flush();
-        }
+        log.info(successStatus);
+        if (onStatus) onStatus(successStatus);
         return { passed: true, reason: null };
       }
 
-      // Log what Orbit is actually returning for debugging
       pollStatus = ` | response: ${JSON.stringify(response.data)}`;
     } catch (error) {
       pollStatus = ` | error: ${error.message}`;
-      log.info(`Orbit status poll attempt ${attempt}/${maxAttempts} for ${identifier}: ${error.message}`);
+      log.info(`Orbit status poll attempt ${attempt}/${maxAttempts} for ${id}: ${error.message}`);
     }
 
     const elapsed = attempt * 5;
-    const waitingStatus = {
-      status: `Waiting for Orbit initial test... (${elapsed}s/${maxAttempts * 5}s)${pollStatus}`,
-    };
-    if (res) {
-      res.write(serviceHelper.ensureString(waitingStatus));
-      if (res.flush) res.flush();
-    }
+    const waitMsg = `Waiting for Orbit initial test... (${elapsed}s/${maxAttempts * 5}s)${pollStatus}`;
+    if (onStatus) onStatus(waitMsg);
 
     // eslint-disable-next-line no-await-in-loop
     await serviceHelper.delay(pollInterval);
@@ -701,86 +713,115 @@ async function checkOrbitAppHealth(appSpecifications, appName, isComponent, res)
  * @param {boolean} test - Whether this is a test installation
  * @returns {Promise<void>} Installation result
  */
-async function installApplicationHard(appSpecifications, appName, isComponent, res, fullAppSpecs, test = false) {
-  const spec = await deserializeSpec(fullAppSpecs);
-  const compName = isComponent ? appSpecifications.name : spec?.componentNames()?.[0];
-  const comp = spec?.getComponent?.(compName);
+async function installComponent(component, options = {}) {
+  const onStatus = options.onStatus || null;
+  const test = options.test || false;
+  const createVolumes = options.createVolumes || false;
+  const burstEligible = options.burstEligible || false;
+  const extraEnv = options.extraEnv || [];
+  const syslogTarget = options.syslogTarget || null;
+  const specVersion = options.specVersion || null;
 
-  const { DeploymentSpec } = await getSpecBackend();
-  const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
-  const deployComp = deployment.getComponent(compName);
+  const id = component.identifier;
+  const appName = component.appName;
 
-  await setupApplicationPorts(comp, appName, isComponent, res, test);
-  await verifyAndPullImage(comp, appName, isComponent, res, spec, fullAppSpecs);
-
-  // eslint-disable-next-line global-require
-  const advancedWorkflows = require('./advancedWorkflows');
-  await advancedWorkflows.createAppVolume(deployComp, res, test);
-
-  const verifyingMount = {
-    status: isComponent ? `Verifying volume mount for component ${comp.name}...` : `Verifying volume mount for ${appName}...`,
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
   };
-  log.info(verifyingMount);
-  if (res) {
-    res.write(serviceHelper.ensureString(verifyingMount));
-    if (res.flush) res.flush();
+
+  status(`Allowing ${id} ports...`);
+  if (!test) {
+    const firewallActive = await fluxNetworkHelper.isFirewallActive();
+    const isUPNP = upnpService.isUPNP();
+    // eslint-disable-next-line no-restricted-syntax
+    for (const port of component.hostPorts) {
+      if (firewallActive) {
+        // eslint-disable-next-line no-await-in-loop
+        const portResponse = await fluxNetworkHelper.allowPort(port);
+        if (portResponse.status !== true) {
+          throw new Error(`Error: Port ${port} FAILed to open.`);
+        }
+      }
+      if (isUPNP) {
+        // eslint-disable-next-line no-await-in-loop
+        const mapped = await upnpService.mapUpnpPort(port, `Flux_App_${appName}`);
+        if (mapped !== true) {
+          throw new Error(`Error: Port ${port} FAILed to map.`);
+        }
+      }
+      status(`Port ${port} OK`);
+    }
   }
 
-  await verifyAppVolumeMount(appName, isComponent, comp.name);
-
-  const mountVerified = {
-    status: isComponent ? `Volume mount verified for component ${comp.name}` : `Volume mount verified for ${appName}`,
-  };
-  log.info(mountVerified);
-  if (res) {
-    res.write(serviceHelper.ensureString(mountVerified));
-    if (res.flush) res.flush();
+  const architecture = await systemArchitecture();
+  if (!supportedArchitectures.includes(architecture)) {
+    throw new Error(`Invalid architecture ${architecture} detected.`);
   }
 
-  const createApp = {
-    status: isComponent ? `Creating component ${comp.name} of Flux App ${appName}` : `Creating Flux App ${appName}`,
-  };
-  log.info(createApp);
-  if (res) {
-    res.write(serviceHelper.ensureString(createApp));
-    if (res.flush) res.flush();
+  const imgVerifier = new imageVerifier.ImageVerifier(
+    component.image,
+    { maxImageSize: config.fluxapps.maxImageSize, architecture, architectureSet: supportedArchitectures },
+  );
+
+  const pullConfig = { repoTag: component.image };
+
+  if (component.imageAuth && specVersion) {
+    const credentials = await registryCredentialHelper.getCredentials(
+      component.image,
+      component.imageAuth,
+      specVersion,
+      appName,
+    );
+    if (!credentials) {
+      throw new Error('Unable to get credentials');
+    }
+    imgVerifier.addCredentials(credentials);
+    pullConfig.authToken = `${credentials.username}:${credentials.password}`;
   }
 
-  await dockerService.appDockerCreate(deployComp, {
-    deployment,
-    owner: fullAppSpecs?.owner || null,
+  await imgVerifier.verifyImage();
+  imgVerifier.throwIfError();
+
+  if (!imgVerifier.supported) {
+    throw new Error(`Architecture ${architecture} not supported by ${component.image}`);
+  }
+
+  pullConfig.provider = imgVerifier.provider;
+  await dockerPullStreamPromise(pullConfig, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null);
+  status(`Pulling ${id} was successful`);
+
+  if (createVolumes) {
+    // eslint-disable-next-line global-require
+    const advancedWorkflows = require('./advancedWorkflows');
+    await advancedWorkflows.createAppVolume(component, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null, test);
+
+    status(`Verifying volume mount for ${id}...`);
+    await verifyAppVolumeMount(appName, id !== appName, component.name);
+    status(`Volume mount verified for ${id}`);
+  }
+
+  status(`Creating ${id}...`);
+  await dockerService.appDockerCreate(component, {
     test,
-    secrets: appSpecifications.secrets || null,
+    burstEligible,
+    extraEnv,
+    syslogTarget,
   });
 
-  const startStatus = {
-    status: isComponent ? `Starting component ${comp.name} of Flux App ${appName}...` : `Starting Flux App ${appName}...`,
-  };
-  log.info(startStatus);
-  if (res) {
-    res.write(serviceHelper.ensureString(startStatus));
-    if (res.flush) res.flush();
-  }
-
-  const syncMode = comp?.persistentStorage?.sync?.mode;
-  if (test || (syncMode !== 'receiveOnly' && syncMode !== 'activeStandby')) {
-    const identifier = isComponent ? `${comp.name}_${appName}` : appName;
-    const app = await dockerService.appDockerStart(identifier);
+  if (test || !component.hasActiveStandbySyncthing()) {
+    status(`Starting ${id}...`);
+    const app = await dockerService.appDockerStart(id);
     if (!app) {
-      throw new Error(`Failed to start ${identifier} container`);
+      throw new Error(`Failed to start ${id} container`);
     }
     if (!test) {
-      startAppMonitoring(identifier);
+      startAppMonitoring(id);
     }
-    const appResponse = messageHelper.createDataMessage(app);
-    log.info(appResponse);
-    if (res) {
-      res.write(serviceHelper.ensureString(appResponse));
-      if (res.flush) res.flush();
-    }
+    status(`${id} started`);
 
-    if (test && comp?.image?.startsWith('runonflux/orbit')) {
-      const orbitHealth = await checkOrbitAppHealth(appSpecifications, appName, isComponent, res);
+    if (test && component.image?.startsWith('runonflux/orbit')) {
+      const orbitHealth = await checkOrbitAppHealth(component, onStatus);
       if (!orbitHealth.passed) {
         throw new Error(`Orbit deployment failed: ${orbitHealth.reason}`);
       }
@@ -788,67 +829,6 @@ async function installApplicationHard(appSpecifications, appName, isComponent, r
   }
 }
 
-/**
- * To soft install app. Pulls image/s, creates components/app, assigns ports to components/app and starts all containers. Does not create data volumes.
- * @param {object} appSpecifications App specifications or component specifications.
- * @param {string} appName App name.
- * @param {boolean} isComponent True if a Docker Compose component.
- * @param {object} res Response.
- * @param {object} fullAppSpecs Full app specifications.
- * @returns {Promise<void>} Return statement is only used here to interrupt the function and nothing is returned.
- */
-async function installApplicationSoft(appSpecifications, appName, isComponent, res, fullAppSpecs) {
-  const spec = await deserializeSpec(fullAppSpecs);
-  const compName = isComponent ? appSpecifications.name : spec?.componentNames()?.[0];
-  const comp = spec?.getComponent?.(compName);
-
-  await setupApplicationPorts(comp, appName, isComponent, res);
-  await verifyAndPullImage(comp, appName, isComponent, res, spec, fullAppSpecs);
-
-  const createApp = {
-    status: isComponent ? `Creating component ${comp.name} of local Flux App ${appName}` : `Creating local Flux App ${appName}`,
-  };
-  log.info(createApp);
-  if (res) {
-    res.write(serviceHelper.ensureString(createApp));
-    if (res.flush) res.flush();
-  }
-
-  const { DeploymentSpec } = await getSpecBackend();
-  const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
-  const deployComp = deployment.getComponent(compName);
-
-  await dockerService.appDockerCreate(deployComp, {
-    deployment,
-    owner: fullAppSpecs?.owner || null,
-    secrets: appSpecifications.secrets || null,
-  });
-
-  const startStatus = {
-    status: isComponent ? `Starting component ${comp.name} of Flux App ${appName}...` : `Starting Flux App ${appName}...`,
-  };
-  log.info(startStatus);
-  if (res) {
-    res.write(serviceHelper.ensureString(startStatus));
-    if (res.flush) res.flush();
-  }
-
-  const syncMode = comp?.persistentStorage?.sync?.mode;
-  if (syncMode !== 'activeStandby') {
-    const identifier = isComponent ? `${comp.name}_${appName}` : appName;
-    const app = await dockerService.appDockerStart(identifier);
-    if (!app) {
-      throw new Error(`Failed to start ${identifier} container`);
-    }
-    startAppMonitoring(identifier);
-    const appResponse = messageHelper.createDataMessage(app);
-    log.info(appResponse);
-    if (res) {
-      res.write(serviceHelper.ensureString(appResponse));
-      if (res.flush) res.flush();
-    }
-  }
-}
 
 /**
  * Install application locally - Main API entry point
@@ -1117,8 +1097,7 @@ async function testAppInstall(req, res) {
 
 module.exports = {
   registerAppLocally,
-  installApplicationHard,
-  installApplicationSoft,
+  installComponent,
   installAppLocally,
   checkAppRequirements,
   testAppInstall,

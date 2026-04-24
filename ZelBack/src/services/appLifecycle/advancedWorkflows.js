@@ -960,42 +960,38 @@ async function softRegisterAppLocally(appSpecs, componentSpecs, res) {
       log.info(`Database entry created for ${appSpecifications.name} BEFORE Docker container creation (soft registration)`);
     }
 
-    const specificationsToInstall = isComponent ? appComponent : appSpecifications;
-
     // eslint-disable-next-line global-require
     const appInstaller = require('./appInstaller');
-    const softSpec = await deserializeSpec(appSpecifications);
-    if (softSpec && softSpec.componentCount > 1) {
-      // eslint-disable-next-line no-restricted-syntax
-      for (const [, comp] of softSpec.componentEntries()) {
-        const compCanonical = comp.toCanonical();
-        isComponent = true;
-        // eslint-disable-next-line no-await-in-loop
-        await appInstaller.installApplicationSoft(compCanonical, appName, isComponent, res, appSpecifications);
-      }
+    const deployment = await deploymentProvider.getInstalledDeployment(appName);
+    if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
 
-      const redeploySpec = await deserializeSpec(appSpecifications);
-      // eslint-disable-next-line no-restricted-syntax
-      for (const [compName, comp] of redeploySpec?.componentEntries?.() || []) {
-        if (comp.hasSyncthing()) {
-          const identifier = `${compName}_${appName}`;
-          const appId = dockerService.getAppIdentifier(identifier);
-          globalState.receiveOnlySyncthingAppsCache.set(appId, {
-            restarted: true,
-            numberOfExecutionsRequired: 4,
-            numberOfExecutions: 10,
-          });
-          log.info(`Restored syncthing cache for ${appId} during soft redeploy`);
-        }
-      }
-    } else {
-      await appInstaller.installApplicationSoft(specificationsToInstall, appName, isComponent, res, appSpecifications);
+    const owner = appSpecifications.owner || null;
+    const cpuBurstHelper = require('../utils/cpuBurstHelper');
+    const burstEligible = owner
+      && cpuBurstHelper.isEnterpriseOwner(owner)
+      && await cpuBurstHelper.isCpuBurstSupported();
+    const onStatus = res ? (msg) => {
+      const payload = typeof msg === 'string' ? { status: msg } : msg;
+      res.write(serviceHelper.ensureString(payload));
+      if (res.flush) res.flush();
+    } : null;
+    const syslogCollector = deployment.componentEntries()
+      .find(([, c]) => c.toDockerEnv().some((e) => e.startsWith('LOG=COLLECT')));
+    const syslogTarget = syslogCollector ? syslogCollector[0] : null;
 
-      const redeploySpec = await deserializeSpec(appSpecifications);
-      const singleComp = redeploySpec?.firstComponent() ?? null;
-      if (singleComp?.hasSyncthing()) {
-        const identifier = isComponent ? `${specificationsToInstall.name}_${appName}` : appName;
-        const appId = dockerService.getAppIdentifier(identifier);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const [, component] of deployment.componentEntries()) {
+      // eslint-disable-next-line no-await-in-loop
+      await appInstaller.installComponent(component, {
+        onStatus,
+        createVolumes: false,
+        burstEligible,
+        specVersion: appSpecifications.version || null,
+        syslogTarget,
+      });
+
+      if (component.hasSyncthing()) {
+        const appId = dockerService.getAppIdentifier(component.identifier);
         globalState.receiveOnlySyncthingAppsCache.set(appId, {
           restarted: true,
           numberOfExecutionsRequired: 4,
@@ -2987,15 +2983,28 @@ async function reinstallOldApplications() {
                 }
               }
               // eslint-disable-next-line no-await-in-loop
-              await appInstaller.installApplicationSoft(appSpecifications, appSpecifications.name, false, null, appSpecifications);
+              const deployment = await deploymentProvider.getInstalledDeployment(appSpecifications.name);
+              if (deployment) {
+                // eslint-disable-next-line no-restricted-syntax
+                for (const [, comp] of deployment.componentEntries()) {
+                  // eslint-disable-next-line no-await-in-loop
+                  await appInstaller.installComponent(comp, { createVolumes: false, specVersion: appSpecifications.version });
+                }
+              }
             } else {
               log.warn(`Beginning Hard Redeployment of ${appSpecifications.name}...`);
               log.warn(`REMOVAL REASON: Hard redeployment - ${appSpecifications.name} HDD changed from ${installedApp.hdd} to ${appSpecifications.hdd}`);
-              // hard redeployment
               // eslint-disable-next-line no-await-in-loop
               await appUninstaller.hardUninstallApplication(appSpecifications.name, null, appSpecifications, null, true);
               // eslint-disable-next-line no-await-in-loop
-              await appInstaller.installApplicationHard(appSpecifications, appSpecifications.name, false, null, appSpecifications);
+              const deployment = await deploymentProvider.getInstalledDeployment(appSpecifications.name);
+              if (deployment) {
+                // eslint-disable-next-line no-restricted-syntax
+                for (const [, comp] of deployment.componentEntries()) {
+                  // eslint-disable-next-line no-await-in-loop
+                  await appInstaller.installComponent(comp, { createVolumes: true, specVersion: appSpecifications.version });
+                }
+              }
             }
           } else {
             // composed application

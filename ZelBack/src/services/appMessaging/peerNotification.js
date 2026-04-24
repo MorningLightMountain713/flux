@@ -15,6 +15,7 @@ const appUninstaller = require('../appLifecycle/appUninstaller');
 const appInstaller = require('../appLifecycle/appInstaller');
 const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const { deserializeSpec } = require('../utils/specCutover');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appsRepository = require('../appDatabase/appsRepository');
 const { localAppsInformation } = require('../utils/appConstants');
 const log = require('../../lib/log');
@@ -33,33 +34,25 @@ let checkAndNotifyPeersOfRunningAppsFirstRun = true;
  */
 async function recreateMissingContainers(componentIdentifier) {
   const mainAppName = componentIdentifier.split('_')[1] || componentIdentifier;
+  const targetComponent = componentIdentifier.includes('_') ? componentIdentifier.split('_')[0] : null;
 
-  let appSpec = await appsRepository.getInstalledAppRaw(mainAppName);
-
-  if (!appSpec) {
+  const deployment = await deploymentProvider.getInstalledDeployment(mainAppName);
+  if (!deployment) {
     throw new Error(`App ${mainAppName} not found in local database`);
   }
 
-  appSpec = await decryptEnterpriseApps([appSpec]);
-  appSpec = appSpec[0];
+  const entries = targetComponent
+    ? deployment.componentEntries().filter(([name]) => name === targetComponent)
+    : deployment.componentEntries();
 
-  if (!appSpec.compose || appSpec.compose.length === 0) {
-    throw new Error(`App ${mainAppName} has no components to install`);
+  if (entries.length === 0) {
+    throw new Error(`Component ${targetComponent} not found in app ${mainAppName}`);
   }
 
-  const isComponent = componentIdentifier.includes('_');
-
-  if (isComponent) {
-    const componentName = componentIdentifier.split('_')[0];
-    const componentSpec = appSpec.compose.find((c) => c.name === componentName);
-    if (!componentSpec) {
-      throw new Error(`Component ${componentName} not found in app ${mainAppName}`);
-    }
-    await appInstaller.installApplicationHard(componentSpec, mainAppName, true, null, appSpec);
-  } else {
-    for (const componentSpec of appSpec.compose) {
-      await appInstaller.installApplicationHard(componentSpec, mainAppName, true, null, appSpec);
-    }
+  // eslint-disable-next-line no-restricted-syntax
+  for (const [, component] of entries) {
+    // eslint-disable-next-line no-await-in-loop
+    await appInstaller.installComponent(component, { createVolumes: true });
   }
 
   log.info(`Successfully recreated missing containers for ${componentIdentifier}`);

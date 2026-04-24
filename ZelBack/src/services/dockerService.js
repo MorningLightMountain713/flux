@@ -701,61 +701,30 @@ const getContainerIP = async (containerName) => {
  * @param {bool} isComponent
  * @returns {object}
  */
-async function appDockerCreate(deployComp, {
-  deployment, owner, test = false, secrets = null,
-}) {
+async function appDockerCreate(deployComp, options = {}) {
+  const test = options.test || false;
+  const burstEligible = options.burstEligible || false;
+  const extraEnv = options.extraEnv || [];
+  const syslogTarget = options.syslogTarget || null;
+
   const { appName } = deployComp;
   const identifier = deployComp.identifier;
 
-  // Test installs pin resources to a low fixed footprint regardless of what
-  // the spec declared — they only exist to validate image pullability and
-  // basic container bringup, not to honor declared resources.
   const effectiveCpu = test ? 0.2 : deployComp.cpu;
   const effectiveMemoryMb = test ? 300 : deployComp.memory;
 
   const portBindings = deployComp.toDockerPortBindings();
   const exposedPorts = deployComp.toDockerExposedPorts();
 
-  // Build env array from class, then layer FluxOS operational concerns.
   const envParams = deployComp.toDockerEnv();
-
-  // Legacy v7 secrets: PGP-encrypted env vars appended to the env array.
-  // Dies when v7 apps expire off the network.
-  if (secrets) {
-    const decodedEnvParams = await pgpService.decryptMessage(secrets);
-    const arraySecrets = JSON.parse(decodedEnvParams);
-    if (Array.isArray(arraySecrets)) {
-      arraySecrets.forEach((parameter) => {
-        if (typeof parameter !== 'string' || parameter.length > 5000000) {
-          throw new Error('Environment parameters from Secrets are invalid - type or length');
-        } else if (parameter !== 'privileged') {
-          envParams.push(parameter);
-        }
-      });
-    } else {
-      throw new Error('Environment parameters from Secrets are invalid - not an array');
-    }
-  }
+  envParams.push(...extraEnv);
 
   const adjustedCommands = (deployComp.cmd || []).filter((c) => c !== '--privileged');
 
-  // Syslog target discovery: scan deployment components for LOG=COLLECT.
   const isSender = envParams.some((env) => env.startsWith('LOG=SEND'));
   const isCollector = envParams.some((env) => env.startsWith('LOG=COLLECT'));
 
-  let syslogTarget = null;
   let syslogIP = null;
-
-  if (deployment) {
-    const collectorEntry = Object.entries(deployment.components)
-      .find(([, c]) => {
-        const compEnv = c.toDockerEnv();
-        return compEnv.some((e) => e.startsWith('LOG=COLLECT'));
-      });
-    if (collectorEntry) {
-      syslogTarget = collectorEntry[0];
-    }
-  }
 
   if (syslogTarget && isSender) {
     syslogIP = await getContainerIP(`flux${syslogTarget}_${appName}`);
@@ -802,13 +771,6 @@ async function appDockerCreate(deployComp, {
     };
   const autoAssignedIP = await getNextAvailableIPForApp(appName);
 
-  // CPU burst eligibility is decided once here, where the full app spec is in
-  // scope, and stamped onto the container as docker labels. Every subsequent
-  // start of this container (initial start, restart, recovery) reads the
-  // labels in appDockerStart and reapplies burst — no per-caller plumbing.
-  const burstEligible = owner
-    && cpuBurstHelper.isEnterpriseOwner(owner)
-    && await cpuBurstHelper.isCpuBurstSupported();
   const burstLabels = burstEligible
     ? {
       'flux.burst.eligible': 'true',
@@ -835,7 +797,7 @@ async function appDockerCreate(deployComp, {
     ? Math.round(300 * 1024 * 1024)
     : deployComp.toDockerMemorySwapBytes();
 
-  const options = {
+  const containerConfig = {
     Image: deployComp.image,
     name: getAppIdentifier(identifier),
     Hostname: deployComp.name,
@@ -890,17 +852,16 @@ async function appDockerCreate(deployComp, {
     const mountTarget = isArcane ? '/dat/var/lib/docker' : '/var/lib/docker';
     const hasQuotaPossibility = await deviceHelper.hasQuotaOptionForMountTarget(mountTarget);
     if (hasQuotaPossibility) {
-      options.HostConfig.StorageOpt = { size: `${config.fluxapps.hddFileSystemMinimum}G` };
+      containerConfig.HostConfig.StorageOpt = { size: `${config.fluxapps.hddFileSystemMinimum}G` };
     }
   }
 
-  // Flux Storage: fetch env/cmd payloads from remote URLs.
-  if (options.Env.length) {
-    const fluxStorageEnv = options.Env.find((env) => env.startsWith('F_S_ENV='));
+  if (containerConfig.Env.length) {
+    const fluxStorageEnv = containerConfig.Env.find((env) => env.startsWith('F_S_ENV='));
     if (fluxStorageEnv) {
-      const index = options.Env.indexOf(fluxStorageEnv);
+      const index = containerConfig.Env.indexOf(fluxStorageEnv);
       if (index > -1) {
-        options.Env.splice(index, 1);
+        containerConfig.Env.splice(index, 1);
       }
       const url = fluxStorageEnv.split('F_S_ENV=')[1];
       const envVars = await obtainPayloadFromStorage(url, appName);
@@ -909,7 +870,7 @@ async function appDockerCreate(deployComp, {
           if (typeof parameter !== 'string' || parameter.length > 5000000) {
             throw new Error(`Environment parameters from Flux Storage ${fluxStorageEnv} are invalid`);
           } else if (parameter !== '--privileged') {
-            options.Env.push(parameter);
+            containerConfig.Env.push(parameter);
           }
         });
       } else {
@@ -918,12 +879,12 @@ async function appDockerCreate(deployComp, {
     }
   }
 
-  if (options.Cmd.length) {
-    const fluxStorageCmd = options.Cmd.find((cmd) => cmd.startsWith('F_S_CMD='));
+  if (containerConfig.Cmd.length) {
+    const fluxStorageCmd = containerConfig.Cmd.find((cmd) => cmd.startsWith('F_S_CMD='));
     if (fluxStorageCmd) {
-      const index = options.Cmd.indexOf(fluxStorageCmd);
+      const index = containerConfig.Cmd.indexOf(fluxStorageCmd);
       if (index > -1) {
-        options.Cmd.splice(index, 1);
+        containerConfig.Cmd.splice(index, 1);
       }
       const url = fluxStorageCmd.split('F_S_CMD=')[1];
       const cmdVars = await obtainPayloadFromStorage(url, appName);
@@ -932,7 +893,7 @@ async function appDockerCreate(deployComp, {
           if (typeof parameter !== 'string' || parameter.length > 5000000) {
             throw new Error(`Commands parameters from Flux Storage ${fluxStorageCmd} are invalid`);
           } else if (parameter !== '--privileged') {
-            options.Cmd.push(parameter);
+            containerConfig.Cmd.push(parameter);
           }
         });
       } else {
@@ -941,7 +902,6 @@ async function appDockerCreate(deployComp, {
     }
   }
 
-  // Ensure all mount source paths exist before creating the container.
   try {
     // eslint-disable-next-line global-require
     const advancedWorkflows = require('./appLifecycle/advancedWorkflows');
@@ -951,7 +911,7 @@ async function appDockerCreate(deployComp, {
     throw error;
   }
 
-  const app = await docker.createContainer(options).catch((error) => {
+  const app = await docker.createContainer(containerConfig).catch((error) => {
     log.error(error);
     throw error;
   });
