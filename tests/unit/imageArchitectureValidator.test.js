@@ -2,56 +2,30 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-// Tests for imageArchitectureValidator.verifyImageRegistryAndArchitectures.
-//
-// Extracted from appValidator.verifyAppSpecifications during Stage 3.4
-// of the v9 migration. The function composes two imageManager probes
-// (verifyRepository + checkApplicationImagesCompliance) with the
-// network-wide architecture rules (enterprise = amd64 everywhere;
-// non-enterprise = common arch across components). Proxyquire stubs
-// imageManager cleanly since the dependency is now a real import.
-
 describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () => {
   let verifyImageRegistryAndArchitectures;
   let verifyRepositoryStub;
-  let checkApplicationImagesComplianceStub;
+  let isImageBlockedStub;
 
   function makeComponent(overrides = {}) {
     return {
-      name: 'component1',
-      description: 'Component 1',
-      repotag: 'nginx:latest',
-      repoauth: '',
-      ports: [],
-      domains: [],
-      environmentParameters: [],
-      commands: [],
-      containerPorts: [],
-      containerData: '/data',
-      cpu: 0.5,
-      ram: 500,
-      hdd: 5,
-      ...overrides,
+      name: overrides.name || 'component1',
+      image: overrides.image || overrides.repotag || 'nginx:latest',
+      imageAuth: overrides.imageAuth || overrides.repoauth || '',
     };
   }
 
   function makeSpec(overrides = {}) {
-    return {
-      name: 'testapp',
-      version: 8,
-      description: 'Test app',
-      owner: '1owner',
-      enterprise: false,
-      contacts: ['contact@example.com'],
-      geolocation: [],
-      expire: 88000,
-      nodes: [],
-      staticip: false,
-      datacenter: false,
-      compose: [makeComponent()],
-      instances: 3,
-      ...overrides,
+    const comps = (overrides.compose || [makeComponent()]).map((c) => makeComponent(c));
+    const spec = {
+      name: overrides.name || 'testapp',
+      version: overrides.version || 8,
+      owner: overrides.owner || '1owner',
+      enterprise: overrides.enterprise || false,
+      allImages: () => comps.map((c) => c.image),
+      componentEntries: () => comps.map((c) => [c.name, c]),
     };
+    return spec;
   }
 
   beforeEach(() => {
@@ -59,14 +33,14 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
       verified: true,
       supportedArchitectures: ['amd64', 'arm64'],
     });
-    checkApplicationImagesComplianceStub = sinon.stub().resolves(true);
+    isImageBlockedStub = sinon.stub().resolves({ blocked: false, reason: null });
 
     ({ verifyImageRegistryAndArchitectures } = proxyquire(
       '../../ZelBack/src/services/appSecurity/imageArchitectureValidator',
       {
         './imageManager': {
           verifyRepository: verifyRepositoryStub,
-          checkApplicationImagesCompliance: checkApplicationImagesComplianceStub,
+          isImageBlocked: isImageBlockedStub,
         },
       },
     ));
@@ -90,7 +64,7 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
       });
       const spec = makeSpec({
         enterprise: true,
-        compose: [makeComponent({ repotag: 'arm-only:latest' })],
+        compose: [{ name: 'c1', image: 'arm-only:latest' }],
       });
       try {
         await verifyImageRegistryAndArchitectures(spec);
@@ -102,24 +76,24 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
     });
   });
 
-  describe('enterprise v7 apps (short-circuit on repoauth)', () => {
-    it('returns early without registry probe when a component has repoauth set', async () => {
+  describe('enterprise v7 apps (short-circuit on imageAuth)', () => {
+    it('returns early without registry probe when a component has imageAuth set', async () => {
       const spec = makeSpec({
         version: 7,
         enterprise: true,
-        compose: [makeComponent({ repoauth: 'pgp-encrypted-blob' })],
+        compose: [{ name: 'c1', imageAuth: 'pgp-encrypted-blob' }],
       });
       await verifyImageRegistryAndArchitectures(spec);
       expect(verifyRepositoryStub.called).to.be.false;
     });
 
-    it('verifies every repotag when no component has repoauth set', async () => {
+    it('verifies every image when no component has imageAuth set', async () => {
       const spec = makeSpec({
         version: 7,
         enterprise: false,
         compose: [
-          makeComponent({ name: 'a', repotag: 'nginx:latest' }),
-          makeComponent({ name: 'b', repotag: 'redis:latest' }),
+          { name: 'a', image: 'nginx:latest' },
+          { name: 'b', image: 'redis:latest' },
         ],
       });
       await verifyImageRegistryAndArchitectures(spec);
@@ -133,7 +107,7 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
         verified: true, supportedArchitectures: ['amd64', 'arm64'],
       });
       await verifyImageRegistryAndArchitectures(makeSpec({
-        compose: [makeComponent({ name: 'a' }), makeComponent({ name: 'b' })],
+        compose: [{ name: 'a' }, { name: 'b' }],
       }));
     });
 
@@ -145,7 +119,7 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
         verified: true, supportedArchitectures: ['arm64'],
       });
       const spec = makeSpec({
-        compose: [makeComponent({ name: 'a' }), makeComponent({ name: 'b' })],
+        compose: [{ name: 'a' }, { name: 'b' }],
       });
       try {
         await verifyImageRegistryAndArchitectures(spec);
@@ -156,22 +130,9 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
     });
   });
 
-  describe('v1-v3 flat specs', () => {
-    it('uses the spec-level repotag (no compose array) and collects its architectures', async () => {
-      verifyRepositoryStub.resolves({
-        verified: true, supportedArchitectures: ['amd64'],
-      });
-      await verifyImageRegistryAndArchitectures({
-        name: 'flat',
-        version: 2,
-        repotag: 'legacy:v2',
-      });
-      expect(verifyRepositoryStub.calledOnce).to.be.true;
-      expect(verifyRepositoryStub.firstCall.args[0]).to.equal('legacy:v2');
-    });
-
-    it('propagates blocked-repo failures from checkApplicationImagesCompliance', async () => {
-      checkApplicationImagesComplianceStub.rejects(new Error('image is blacklisted'));
+  describe('blocked images', () => {
+    it('throws when isImageBlocked returns blocked', async () => {
+      isImageBlockedStub.resolves({ blocked: true, reason: 'image is blacklisted' });
       try {
         await verifyImageRegistryAndArchitectures(makeSpec());
         expect.fail('Should have thrown');

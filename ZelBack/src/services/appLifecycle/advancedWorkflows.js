@@ -1427,15 +1427,11 @@ async function updateAppGlobaly(params) {
   await validateSubmissionSpec(appSpecObj, { height: daemonHeight });
   await verifyImageRegistryAndArchitectures(appSpecObj);
 
-  if (spec.version === 7 && spec.components) {
-    // eslint-disable-next-line global-require
-    const appSecurity = require('../appSecurity/imageManager');
-    for (const [, comp] of spec.componentEntries()) {
-      if (comp.secrets) {
-        // eslint-disable-next-line no-await-in-loop
-        await appSecurity.checkAppSecrets(spec.name, comp, spec.owner, false);
-      }
-    }
+  // eslint-disable-next-line global-require
+  const { assertSecretsNotConflicting } = require('../appRequirements/appValidator');
+  for (const { componentName, secrets } of spec.getComponentSecrets()) {
+    // eslint-disable-next-line no-await-in-loop
+    await assertSecretsNotConflicting(spec.name, componentName, secrets, spec.owner);
   }
 
   const appInfo = await appsRepository.getGlobalAppInfoRaw(spec.name);

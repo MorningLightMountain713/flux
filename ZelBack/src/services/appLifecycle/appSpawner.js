@@ -307,8 +307,7 @@ async function trySpawningGlobalApplication() {
     const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
     const appPorts = deployment.allHostPorts();
 
-    // EARLY CHECK: Verify app doesn't use user-blocked ports before expensive Docker Hub operations
-    const appIsVetted = await imageManager.isAppVetted(appSpecifications);
+    const appIsVetted = await imageManager.isAppVetted({ owner: spec.owner, hash: appSpecifications.hash, images: deployment.allImages() });
     if (!appIsVetted) {
       // eslint-disable-next-line no-restricted-syntax
       for (let i = 0; i < appPorts.length; i += 1) {
@@ -327,13 +326,11 @@ async function trySpawningGlobalApplication() {
       log.info(`trySpawningGlobalApplication - App ${appSpecifications.name} is vetted. Bypassing user-blocked ports check.`);
     }
 
-    // verify app compliance
-    await imageManager.checkApplicationImagesCompliance(appSpecifications).catch((error) => {
-      if (error.message !== 'Unable to communicate with Flux Services! Try again later.') {
-        globalState.spawnErrorsLongerAppCache.set(appHash, '');
-      }
-      throw error;
-    });
+    const blockResult = await imageManager.isImageBlocked(spec.name, deployment.allImages(), { owner: spec.owner, hash: appSpecifications.hash });
+    if (blockResult.blocked) {
+      globalState.spawnErrorsLongerAppCache.set(appHash, '');
+      throw new Error(blockResult.reason);
+    }
 
     // verify requirements
     await hwRequirements.checkAppRequirements(spec);

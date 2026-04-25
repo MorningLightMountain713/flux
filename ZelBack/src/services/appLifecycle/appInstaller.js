@@ -15,7 +15,7 @@ const appUninstaller = require('./appUninstaller');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { storeAppRunningMessage, storeAppInstallingErrorMessage } = require('../appMessaging/messageStore');
 const { systemArchitecture } = require('../appSystem/systemIntegration');
-const { checkApplicationImagesCompliance, verifyRepository } = require('../appSecurity/imageManager');
+const { isImageBlocked, verifyRepository } = require('../appSecurity/imageManager');
 const { startAppMonitoring } = require('../appManagement/appInspector');
 const imageVerifier = require('../utils/imageVerifier');
 // pgpService is used in commented out code
@@ -217,72 +217,6 @@ async function setupApplicationPorts(comp, appName, isComponent, res, test = fal
         throw new Error(`Error: Port ${port} FAILed to map.`);
       }
     }
-  }
-}
-
-/**
- * Verify and pull Docker image for application/component
- * @param {object} appSpec - App or component specifications
- * @param {string} appName - Application name
- * @param {boolean} isComponent - Whether this is a component
- * @param {object} res - Response object for streaming
- * @param {object} fullAppSpecs - Full app specifications
- * @returns {Promise<void>}
- */
-async function verifyAndPullImage(comp, appName, isComponent, res, spec, fullAppSpecs) {
-  const architecture = await systemArchitecture();
-  if (!supportedArchitectures.includes(architecture)) {
-    throw new Error(`Invalid architecture ${architecture} detected.`);
-  }
-
-  await checkApplicationImagesCompliance(fullAppSpecs);
-
-  const imgVerifier = new imageVerifier.ImageVerifier(
-    comp.image,
-    { maxImageSize: config.fluxapps.maxImageSize, architecture, architectureSet: supportedArchitectures },
-  );
-
-  const pullConfig = { repoTag: comp.image };
-
-  let authToken = null;
-
-  if (comp.imageAuth) {
-    const credentials = await registryCredentialHelper.getCredentials(
-      comp.image,
-      comp.imageAuth,
-      spec.version,
-      appName,
-    );
-
-    if (!credentials) {
-      throw new Error('Unable to get credentials');
-    }
-
-    imgVerifier.addCredentials(credentials);
-
-    authToken = `${credentials.username}:${credentials.password}`;
-    pullConfig.authToken = authToken;
-  }
-
-  await imgVerifier.verifyImage();
-  imgVerifier.throwIfError();
-
-  if (!imgVerifier.supported) {
-    throw new Error(`Architecture ${architecture} not supported by ${comp.image}`);
-  }
-
-  pullConfig.provider = imgVerifier.provider;
-
-  // eslint-disable-next-line no-unused-vars
-  await dockerPullStreamPromise(pullConfig, res);
-
-  const pullStatus = {
-    status: isComponent ? `Pulling component ${comp.name} of Flux App ${appName}` : `Pulling global Flux App ${appName} was successful`,
-  };
-
-  if (res) {
-    res.write(serviceHelper.ensureString(pullStatus));
-    if (res.flush) res.flush();
   }
 }
 
@@ -500,7 +434,8 @@ async function installApplication(appSpec, options = {}) {
       const deployment = await deploymentProvider.getInstalledDeployment(appName);
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
 
-      await checkApplicationImagesCompliance(appSpec);
+      const blockResult = await isImageBlocked(appSpec.name, deployment.allImages(), { owner: appSpec.owner, hash: appSpec.hash });
+      if (blockResult.blocked) throw new Error(blockResult.reason);
 
       const owner = appSpec.owner || null;
       const burstEligible = owner

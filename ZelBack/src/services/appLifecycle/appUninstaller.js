@@ -15,7 +15,6 @@ const config = require('config');
 const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
-const { availableApps } = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -825,8 +824,9 @@ async function uninstallApplication(appName, options = {}) {
       }
       spec = await appsRepository.getGlobalAppInfo(resolvedAppName);
       if (!spec) {
-        const allApps = await availableApps();
-        const hardcoded = allApps.find((a) => a.name === resolvedAppName);
+        const globalApps = await appsRepository.listGlobalAppInfoRaw();
+        const localApps = await appsRepository.listInstalledAppsRaw();
+        const hardcoded = [...globalApps, ...localApps].find((a) => a.name === resolvedAppName);
         if (hardcoded) {
           const { FluxAppSpecBase } = await getSpec();
           await getSpecBackend();
@@ -1002,15 +1002,13 @@ async function removeAppLocallyApi(req, res) {
       return res.json(errMessage);
     }
 
-    // For vetted apps, only app owner or Flux Team can uninstall
-    // First, get app specifications to check if vetted
-    let appSpecsForVettedCheck = await appsRepository.getInstalledAppRaw(appname);
-    if (!appSpecsForVettedCheck) {
-      appSpecsForVettedCheck = await appsRepository.getGlobalAppInfoRaw(appname);
-    }
+    const instForVettedCheck = await appsRepository.getInstalledApp(appname)
+      || await appsRepository.getGlobalAppInfo(appname);
 
-    if (appSpecsForVettedCheck) {
-      const appIsVetted = await imageManager.isAppVetted(appSpecsForVettedCheck);
+    if (instForVettedCheck) {
+      const deployment = await deploymentProvider.getInstalledDeployment(appname);
+      const images = deployment ? deployment.allImages() : [];
+      const appIsVetted = await imageManager.isAppVetted({ owner: instForVettedCheck.owner, hash: instForVettedCheck.hash, images });
       if (appIsVetted) {
         // Check if user is specifically the app owner or Flux Team
         const isAppOwner = await verificationHelper.verifyPrivilege('appowner', req, appname);

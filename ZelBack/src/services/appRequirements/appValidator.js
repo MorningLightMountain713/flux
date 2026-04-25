@@ -6,7 +6,6 @@ const generalService = require('../generalService');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
-const registryManager = require('../appDatabase/registryManager');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const imageManager = require('../appSecurity/imageManager');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
@@ -52,7 +51,7 @@ async function verifyAppRegistrationParameters(req, res) {
         await assertSecretsNotConflicting(spec.name, componentName, secrets, spec.owner, { isRegistration: true });
       }
 
-      await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted);
+      await appsRepository.assertNoNameConflicts(spec.name);
 
       const responseSpec = isEnterprise ? await toCanonicalSpec(appSpecification) : appSpecFormatted;
       const respondPrice = messageHelper.createDataMessage(responseSpec);

@@ -24,10 +24,13 @@ const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const serviceHelper = require('../serviceHelper');
 const {
   globalAppsInformation,
   localAppsInformation,
   globalAppsMessages,
+  globalAppsInstallingErrorsLocations,
+  appsHashesCollection,
 } = require('../utils/appConstants');
 
 /**
@@ -70,6 +73,10 @@ async function hydrate(doc) {
     log.warn(`appsRepository.hydrate: ${err.message} (name=${doc.name}, version=${doc.version})`);
     return null;
   }
+}
+
+function chainDb() {
+  return dbHelper.databaseConnection().db(config.database.daemon.database);
 }
 
 function globalDb() {
@@ -418,6 +425,61 @@ async function listHistoricalV7Secrets() {
   return results;
 }
 
+async function assertNoNameConflicts(appName, options = {}) {
+  const { hash = null } = options;
+
+  const existingApp = await getGlobalAppInfo(appName);
+  if (existingApp) {
+    if (hash) {
+      const result = await dbHelper.findOneInDatabase(
+        chainDb(), appsHashesCollection,
+        { hash },
+        { projection: { _id: 0, txid: 1, hash: 1, height: 1 } },
+      );
+      if (!result) {
+        throw new Error(`Flux App ${appName} already registered. Flux App has to be registered under different name. Hash not found in collection.`);
+      }
+      if (existingApp.height <= result.height) {
+        if (existingApp.expiresAtHeight >= result.height) {
+          throw new Error(`Flux App ${appName} already registered. Flux App has to be registered under different name. Hash is not older than our current app.`);
+        } else {
+          log.warn(`Flux App ${appName} active specifications are outdated. Will be cleaned on next expiration`);
+        }
+      }
+    } else {
+      throw new Error(`Flux App ${appName} already registered. Flux App has to be registered under different name.`);
+    }
+  }
+
+  const globalApps = await listGlobalAppInfoRaw();
+  const localApps = await listInstalledAppsRaw();
+  const allApps = [...globalApps, ...localApps];
+  const appExists = allApps.find((a) => a.name.toLowerCase() === appName.toLowerCase());
+  if (appExists) {
+    throw new Error(`Flux App ${appName} already assigned to local application. Flux App has to be registered under different name.`);
+  }
+  if (appName.toLowerCase() === 'share') {
+    throw new Error(`Flux App ${appName} already assigned to Flux main application. Flux App has to be registered under different name.`);
+  }
+  return true;
+}
+
+async function updateAppSpecifications(appSpecs) {
+  try {
+    const existing = await getGlobalAppInfoRaw(appSpecs.name);
+    if (!existing || existing.height < appSpecs.height) {
+      await upsertGlobalAppInfo(appSpecs);
+    }
+    await dbHelper.removeDocumentsFromCollection(
+      globalDb(), globalAppsInstallingErrorsLocations, { name: appSpecs.name },
+    );
+  } catch (error) {
+    log.error(error);
+    await serviceHelper.delay(60 * 1000);
+    updateAppSpecifications(appSpecs);
+  }
+}
+
 module.exports = {
   getGlobalAppInfo,
   getGlobalAppInfoRaw,
@@ -434,4 +496,6 @@ module.exports = {
   upsertInstalledApp,
   getAppMessage,
   listAppMessagesByName,
+  assertNoNameConflicts,
+  updateAppSpecifications,
 };

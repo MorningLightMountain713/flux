@@ -14,7 +14,7 @@ const { getChainParamsPriceUpdates, getChainTeamSupportAddressUpdates } = requir
 const { resolveSpec, deserializeSpec } = require('../utils/specCutover');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
-const { updateAppSpecifications } = require('../appDatabase/registryManager');
+const { updateAppSpecifications } = appsRepository;
 const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
 const {
   globalAppsMessages,

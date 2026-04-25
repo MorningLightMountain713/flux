@@ -8,6 +8,12 @@ const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
+const messageVerifier = require('../appMessaging/messageVerifier');
+const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
+const { peerManager } = require('../utils/peerState');
+const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
+const { assertSecretsNotConflicting } = require('../appRequirements/appValidator');
+const appUninstaller = require('../appLifecycle/appUninstaller');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
 const { deserializeSpec } = require('../utils/specCutover');
@@ -912,10 +918,6 @@ async function expireGlobalApplications() {
       }
     }
 
-    // remove appsToRemoveNames apps from locally running
-    // Use dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const appUninstaller = require('../appLifecycle/appUninstaller');
     // eslint-disable-next-line no-restricted-syntax
     for (const appName of appsToRemoveNames) {
       log.warn(`Application ${appName} is expired, removing`);
@@ -1077,22 +1079,109 @@ async function reconstructAppMessagesHashCollectionAPI(req, res) {
  * @param {express.Response} res Response.
  * @returns {Promise<void>} Return statement is only used here to interrupt the function and nothing is returned.
  */
-async function registerAppGlobalyApi(req, res) {
-  // Dynamic requires below guard real module cycles (verified): each of
-  // these modules either statically requires registryManager or closes a
-  // cycle through a module that does. Restructuring to eliminate the
-  // cycles is Stage 3.5+ scope — see fluxos/FLUXOS_MIGRATION_PLAN.md.
-  // eslint-disable-next-line global-require
-  const imageManager = require('../appSecurity/imageManager');
-  // eslint-disable-next-line global-require
-  const messageVerifier = require('../appMessaging/messageVerifier');
-  // eslint-disable-next-line global-require
-  const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
-  // eslint-disable-next-line global-require
-  const { peerManager } = require('../utils/peerState');
-
+async function registerApplication(appSpecification, timestamp, signature, messageType, typeVersion) {
   const isArcane = Boolean(process.env.FLUXOS_PATH);
 
+  if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
+    throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application registration');
+  }
+  if (peerManager.inboundCount < config.fluxapps.minIncoming) {
+    throw new Error('Sorry, This Flux does not have enough incoming peers for safe application registration');
+  }
+  if (messageType !== 'zelappregister' && messageType !== 'fluxappregister') {
+    throw new Error('Invalid type of message');
+  }
+  if (typeVersion !== 1) {
+    throw new Error('Invalid version of message');
+  }
+
+  const timestampNow = Date.now();
+  if (timestamp < timestampNow - 1000 * 3600) {
+    throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
+  } else if (timestamp > timestampNow + 1000 * 60 * 5) {
+    throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
+  }
+
+  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  if (!syncStatus.data.synced) {
+    throw new Error('Daemon not yet synced.');
+  }
+  const daemonHeight = syncStatus.data.height;
+
+  const wireSpec = await deserializeSpec(appSpecification);
+  if (!wireSpec) throw new Error('Could not deserialize app specifications');
+
+  const spec = wireSpec.isEncrypted
+    ? await wireSpec.decrypt(await wireSpec.createProvider())
+    : wireSpec;
+
+  const submissionBlob = spec.serialize ? spec.serialize() : appSpecification;
+  await validateSubmissionSpec(submissionBlob, { height: daemonHeight });
+
+  await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner, hash: appSpecification.hash });
+
+  for (const { componentName, secrets } of spec.getComponentSecrets()) {
+    // eslint-disable-next-line no-await-in-loop
+    await assertSecretsNotConflicting(spec.name, componentName, secrets, spec.owner, { isRegistration: true });
+  }
+
+  await appsRepository.assertNoNameConflicts(spec.name);
+
+  const broadcastSpecBlob = wireSpec.isEncrypted
+    ? wireSpec.serialize()
+    : submissionBlob;
+
+  const signedEvent = await appEventVerifier.deserializeMessage({
+    type: messageType,
+    version: typeVersion,
+    appSpecifications: broadcastSpecBlob,
+    timestamp,
+    signature,
+  });
+  await appEventVerifier.authorize({
+    appEvent: signedEvent,
+    daemonHeight,
+    verifyHash: false,
+  });
+
+  const messageHASH = await appEventVerifier.computeOutboundHash({
+    type: messageType,
+    envelopeVersion: typeVersion,
+    specBlob: broadcastSpecBlob,
+    timestamp,
+    signature,
+  });
+
+  const temporaryAppMessage = {
+    type: messageType,
+    version: typeVersion,
+    appSpecifications: broadcastSpecBlob,
+    hash: messageHASH,
+    timestamp,
+    signature,
+    arcaneSender: isArcane,
+  };
+  await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
+  await serviceHelper.delay(1200);
+  await messageVerifier.requestAppMessage(messageHASH);
+  await serviceHelper.delay(1200);
+
+  let tempMessage = await messageVerifier.checkAppTemporaryMessageExistence(messageHASH);
+  for (let i = 0; i < 20; i += 1) {
+    if (!tempMessage) {
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(500);
+      // eslint-disable-next-line no-await-in-loop
+      tempMessage = await messageVerifier.checkAppTemporaryMessageExistence(messageHASH);
+    }
+  }
+  if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
+    return tempMessage.hash;
+  }
+  throw new Error('Unable to register application on the network. Try again later.');
+}
+
+async function registerAppGlobalyApi(req, res) {
   let body = '';
   req.on('data', (data) => {
     body += data;
@@ -1105,28 +1194,12 @@ async function registerAppGlobalyApi(req, res) {
         res.json(errMessage);
         return;
       }
-      // first check if this node is available for application registration
-      if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
-        throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application registration');
-      }
-      if (peerManager.inboundCount < config.fluxapps.minIncoming) {
-        throw new Error('Sorry, This Flux does not have enough incoming peers for safe application registration');
-      }
       const processedBody = serviceHelper.ensureObject(body);
-      // Note. Actually signature, timestamp is not needed. But we require it only to verify that user indeed has access to the private key of the owner zelid.
-      // name and port HAVE to be unique for application. Check if they don't exist in global database
-      // first let's check if all fields are present and have proper format except tiered and tiered specifications and those can be omitted
       let { appSpecification, timestamp, signature } = processedBody;
-      let messageType = processedBody.type; // determines how data is treated in the future
-      let typeVersion = processedBody.version; // further determines how data is treated in the future
+      let messageType = processedBody.type;
+      let typeVersion = processedBody.version;
       if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
         throw new Error('Incomplete message received. Check if appSpecification, type, version, timestamp and signature are provided.');
-      }
-      if (messageType !== 'zelappregister' && messageType !== 'fluxappregister') {
-        throw new Error('Invalid type of message');
-      }
-      if (typeVersion !== 1) {
-        throw new Error('Invalid version of message');
       }
       appSpecification = serviceHelper.ensureObject(appSpecification);
       timestamp = serviceHelper.ensureNumber(timestamp);
@@ -1134,117 +1207,9 @@ async function registerAppGlobalyApi(req, res) {
       messageType = serviceHelper.ensureString(messageType);
       typeVersion = serviceHelper.ensureNumber(typeVersion);
 
-      const timestampNow = Date.now();
-      if (timestamp < timestampNow - 1000 * 3600) {
-        throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
-      } else if (timestamp > timestampNow + 1000 * 60 * 5) {
-        throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
-      }
-
-      const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-      if (!syncStatus.data.synced) {
-        throw new Error('Daemon not yet synced.');
-      }
-      const daemonHeight = syncStatus.data.height;
-
-      // Parse the on-wire form. Encrypted wire forms land as
-      // EncryptedSpecV8; cleartext ones as the version's cleartext class.
-      const wireSpec = await deserializeSpec(appSpecification);
-      const { EncryptedSpecBase } = await getSpecBackend();
-      const isEnterprise = wireSpec instanceof EncryptedSpecBase;
-
-      // Explicitly cross the decrypt boundary when enterprise. The
-      // DecryptedCanonicalSpec.spec access is the audited unwrap site.
-      let decryptedSpec = wireSpec;
-      if (isEnterprise) {
-        const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
-        decryptedSpec = (await wireSpec.decrypt(provider)).spec;
-      }
-
-      const appSpecFormatted = decryptedSpec.serialize();
-
-      await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
-      // eslint-disable-next-line global-require
-      const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
-      await verifyImageRegistryAndArchitectures(appSpecFormatted);
-
-      // v7 legacy secrets check — iterates the plain decrypted compose. This
-      // block becomes unreachable once v9 activation rejects new v1-v7
-      // registrations at the submission boundary.
-      if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecFormatted.compose) {
-          if (appComponent.secrets) {
-            // eslint-disable-next-line no-await-in-loop
-            await imageManager.checkAppSecrets(appSpecFormatted.name, appComponent, appSpecFormatted.owner);
-          }
-        }
-      }
-
-      await checkApplicationRegistrationNameConflicts(appSpecFormatted);
-
-      // The signed form IS the broadcast form. For enterprise that's the
-      // encrypted-shape wire spec (empty compose/contacts + enterprise
-      // blob), produced verbatim from wireSpec.serialize(). For everyone
-      // else the decrypted canonical spec IS the signed form.
-      const broadcastSpecBlob = isEnterprise
-        ? wireSpec.serialize()
-        : appSpecFormatted;
-
-      const signedEvent = await appEventVerifier.deserializeMessage({
-        type: messageType,
-        version: typeVersion,
-        appSpecifications: broadcastSpecBlob,
-        timestamp,
-        signature,
-      });
-      await appEventVerifier.authorize({
-        appEvent: signedEvent,
-        daemonHeight,
-        verifyHash: false, // origination path — hash computed below
-      });
-
-      const messageHASH = await appEventVerifier.computeOutboundHash({
-        type: messageType,
-        envelopeVersion: typeVersion,
-        specBlob: broadcastSpecBlob,
-        timestamp,
-        signature,
-      });
-
-      // broadcast the same spec shape the hash was computed over
-      const temporaryAppMessage = {
-        type: messageType,
-        version: typeVersion,
-        appSpecifications: broadcastSpecBlob,
-        hash: messageHASH,
-        timestamp,
-        signature,
-        arcaneSender: isArcane,
-      };
-      await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
-      // above takes 2-3 seconds
-      await serviceHelper.delay(1200); // it takes receiving node at least 1 second to process the message. Add 1200 ms mas for processing
-      // this operations takes 2.5-3.5 seconds and is heavy, message gets verified again.
-      await messageVerifier.requestAppMessage(messageHASH); // this itself verifies that Peers received our message broadcast AND peers send us the message back. By peers sending the message back we finally store it to our temporary message storage and rebroadcast it again
-      // request app message is quite slow and from performance testing message will appear roughly 5 seconds after ask
-      await serviceHelper.delay(1200); // 1200 ms mas for processing - peer sends message back to us
-      // check temporary message storage
-      let tempMessage = await messageVerifier.checkAppTemporaryMessageExistence(messageHASH); // Cumulus measurement: after roughly 8 seconds here
-      for (let i = 0; i < 20; i += 1) { // ask for up to 20 times - 10 seconds. Must have been processed by that time or it failed. Cumulus measurement: Approx 5-6 seconds
-        if (!tempMessage) {
-          // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(500);
-          // eslint-disable-next-line no-await-in-loop
-          tempMessage = await messageVerifier.checkAppTemporaryMessageExistence(messageHASH);
-        }
-      }
-      if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
-        const responseHash = messageHelper.createDataMessage(tempMessage.hash);
-        res.json(responseHash); // all ok
-        return;
-      }
-      throw new Error('Unable to register application on the network. Try again later.');
+      const hash = await registerApplication(appSpecification, timestamp, signature, messageType, typeVersion);
+      const responseHash = messageHelper.createDataMessage(hash);
+      res.json(responseHash);
     } catch (error) {
       log.warn(error);
       const errorResponse = messageHelper.createErrorMessage(
