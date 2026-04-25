@@ -3,7 +3,6 @@ const os = require('os');
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const dockerService = require('../dockerService');
-const serviceHelper = require('../serviceHelper');
 const generalService = require('../generalService');
 const benchmarkService = require('../benchmarkService');
 const geolocationService = require('../geolocationService');
@@ -13,11 +12,9 @@ const registryManager = require('../appDatabase/registryManager');
 const appInspector = require('../appManagement/appInspector');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appInstaller = require('../appLifecycle/appInstaller');
-const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
-const { deserializeSpec } = require('../utils/specCutover');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appsRepository = require('../appDatabase/appsRepository');
-const { localAppsInformation } = require('../utils/appConstants');
+const { listRunningContainers } = require('../appQuery/appQueryService');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
 
@@ -27,11 +24,6 @@ const globalAppsLocations = config.database.appsglobal.collections.appsLocations
 // Module-level state variable
 let checkAndNotifyPeersOfRunningAppsFirstRun = true;
 
-/**
- * Recreate containers for app that exists in DB but has missing containers
- * @param {string} componentIdentifier - Component identifier (component_appname or appname)
- * @returns {Promise<void>}
- */
 async function recreateMissingContainers(componentIdentifier) {
   const mainAppName = componentIdentifier.split('_')[1] || componentIdentifier;
   const targetComponent = componentIdentifier.includes('_') ? componentIdentifier.split('_')[0] : null;
@@ -49,7 +41,6 @@ async function recreateMissingContainers(componentIdentifier) {
     throw new Error(`Component ${targetComponent} not found in app ${mainAppName}`);
   }
 
-  // eslint-disable-next-line no-restricted-syntax
   for (const [, component] of entries) {
     // eslint-disable-next-line no-await-in-loop
     await appInstaller.installComponent(component, { createVolumes: true });
@@ -58,15 +49,7 @@ async function recreateMissingContainers(componentIdentifier) {
   log.info(`Successfully recreated missing containers for ${componentIdentifier}`);
 }
 
-/**
- * Handle master/slave apps with missing containers.
- * Stopped containers are normal for master/slave apps. Missing containers need recovery.
- * @param {string} stoppedApp - Component identifier
- * @param {string} mainAppName - Main app name
- * @param {object} appsMonitored - Monitored apps object
- * @param {function} getGlobalState - Global state getter
- */
-async function handleMissingMasterSlaveContainer(stoppedApp, mainAppName, appsMonitored, getGlobalState) {
+async function handleMissingMasterSlaveContainer(stoppedApp, mainAppName) {
   const containerExists = await dockerService.getDockerContainerOnly(stoppedApp);
   if (containerExists) return;
 
@@ -74,9 +57,8 @@ async function handleMissingMasterSlaveContainer(stoppedApp, mainAppName, appsMo
   try {
     await recreateMissingContainers(stoppedApp);
     log.info(`Successfully recreated master/slave app container ${stoppedApp}`);
-    appInspector.startAppMonitoring(stoppedApp, appsMonitored);
+    appInspector.startAppMonitoring(stoppedApp, globalState.appsMonitored);
   } catch (recreateErr) {
-    // Check if container now exists — another process (e.g. masterSlaveApps) may have created it
     const containerExistsNow = await dockerService.getDockerContainerOnly(stoppedApp);
     if (containerExistsNow) {
       log.info(`Container for ${stoppedApp} was created by another process, skipping removal`);
@@ -84,40 +66,25 @@ async function handleMissingMasterSlaveContainer(stoppedApp, mainAppName, appsMo
     }
     log.error(`Failed to recreate master/slave app ${stoppedApp}: ${recreateErr.message}`);
     log.warn(`REMOVAL REASON: Master/slave container recreation failure - ${mainAppName} (peerNotification)`);
-    await appUninstaller.removeAppLocally(mainAppName, null, false, true, true, () => {},
-      getGlobalState, (name, deleteData) => appInspector.stopAppMonitoring(name, deleteData, appsMonitored));
+    await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
   }
 }
 
-/**
- * Check and notify peers of running applications
- * This function is called periodically to broadcast the status of running apps to the network
- * @param {function} installedApps - Function to get installed apps
- * @param {function} listRunningApps - Function to get running apps
- * @param {object} appsMonitored - Object tracking monitored apps
- * @param {boolean} removalInProgress - Whether app removal is in progress
- * @param {boolean} installationInProgress - Whether app installation is in progress
- * @param {boolean} softRedeployInProgress - Whether soft redeploy is in progress
- * @param {boolean} hardRedeployInProgress - Whether hard redeploy is in progress
- * @param {boolean} reinstallationOfOldAppsInProgress - Whether reinstallation is in progress
- * @param {function} getGlobalState - Function to get global state
- * @param {object} cacheManager - Cache manager instance with stoppedAppsCache
- */
-async function checkAndNotifyPeersOfRunningApps(
-  installedApps,
-  listRunningApps,
-  appsMonitored,
-  removalInProgress,
-  installationInProgress,
-  softRedeployInProgress,
-  hardRedeployInProgress,
-  reinstallationOfOldAppsInProgress,
-  getGlobalState,
-  cacheManager,
-) {
+function isOperationInProgress() {
+  return globalState.removalInProgress
+    || globalState.installationInProgress
+    || globalState.softRedeployInProgress
+    || globalState.hardRedeployInProgress
+    || globalState.reconciliationInProgress;
+}
+
+function containerNameToIdentifier(name) {
+  if (name.startsWith('/zel')) return name.slice(4);
+  return name.slice(5);
+}
+
+async function checkAndNotifyPeersOfRunningApps() {
   try {
-    // Sync global state before checking
-    getGlobalState();
     let isNodeConfirmed = false;
     isNodeConfirmed = await generalService.isNodeStatusConfirmed();
     if (!isNodeConfirmed) {
@@ -125,7 +92,6 @@ async function checkAndNotifyPeersOfRunningApps(
       return;
     }
 
-    // get my external IP and check that it is longer than 5 in length.
     const benchmarkResponse = await benchmarkService.getBenchmarks();
     let myIP = null;
     if (benchmarkResponse.status === 'success') {
@@ -138,91 +104,78 @@ async function checkAndNotifyPeersOfRunningApps(
     if (myIP === null) {
       throw new Error('Unable to detect Flux IP address');
     }
-    // get list of locally installed apps. Store them in database as running and send info to our peers.
-    // check if they are running?
-    const installedAppsRes = await installedApps();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
-    }
-    const runningAppsRes = await listRunningApps();
-    if (runningAppsRes.status !== 'success') {
-      throw new Error('Unable to check running Apps');
-    }
-    let appsInstalled = installedAppsRes.data;
-    appsInstalled = await decryptEnterpriseApps(appsInstalled);
-    const runningApps = runningAppsRes.data;
-    const installedAppComponentNames = [];
-    appsInstalled.forEach((app) => {
-      if (app.version >= 4) {
-        app.compose.forEach((appComponent) => {
-          installedAppComponentNames.push(`${appComponent.name}_${app.name}`);
-        });
-      } else {
-        installedAppComponentNames.push(app.name);
-      }
-    });
-    // kadena and folding is old naming scheme having /zel.  all global application start with /flux
-    const runningAppsNames = runningApps.map((app) => {
-      if (app.Names[0].startsWith('/zel')) {
-        return app.Names[0].slice(4);
-      }
-      return app.Names[0].slice(5);
-    });
-    // installed always is bigger array than running
-    const runningSet = new Set(runningAppsNames);
-    const stoppedApps = installedAppComponentNames.filter((installedApp) => !runningSet.has(installedApp));
-    const masterSlaveAppsInstalled = [];
 
-    // Get necessary references from global state
-    const globalState = getGlobalState();
+    const deployments = await deploymentProvider.listInstalledDeployments();
+    const installedSpecs = await appsRepository.listInstalledApps();
+    const runningContainers = await listRunningContainers();
+
+    // Build name → hash map from installed specs for broadcast messages
+    const specByName = new Map();
+    for (const inst of installedSpecs) {
+      specByName.set(inst.name, inst);
+    }
+
+    // Build component identifier list from deployments
+    const installedAppComponentNames = [];
+    const deploymentByName = new Map();
+    for (const deployment of deployments) {
+      deploymentByName.set(deployment.appName, deployment);
+      for (const [, deployComp] of deployment.componentEntries()) {
+        installedAppComponentNames.push(deployComp.identifier);
+      }
+    }
+
+    const runningAppsNames = runningContainers.map((app) => containerNameToIdentifier(app.Names[0]));
+    const runningSet = new Set(runningAppsNames);
+    const stoppedApps = installedAppComponentNames.filter((id) => !runningSet.has(id));
+    const masterSlaveAppNames = new Set();
+
     const backupInProgress = globalState.backupInProgress || [];
     const restoreInProgress = globalState.restoreInProgress || [];
-    const appsStopedCache = cacheManager.stoppedAppsCache;
+    const appsStopedCache = require('../utils/cacheManager').default.stoppedAppsCache;
 
-    // check if stoppedApp is a global application present in specifics. If so, try to start it.
-    if (!removalInProgress && !installationInProgress && !softRedeployInProgress && !hardRedeployInProgress && !reinstallationOfOldAppsInProgress) {
-      // eslint-disable-next-line no-restricted-syntax
-      for (const stoppedApp of stoppedApps) { // will uninstall app if some component is missing
+    if (!isOperationInProgress()) {
+      for (const stoppedApp of stoppedApps) {
         try {
-          // proceed ONLY if it's a global App
           const mainAppName = stoppedApp.split('_')[1] || stoppedApp;
           // eslint-disable-next-line no-await-in-loop
           const appDetails = await registryManager.getApplicationGlobalSpecifications(mainAppName);
-          const appInstalledPlain = appsInstalled.find((app) => app.name === mainAppName);
-          // eslint-disable-next-line no-await-in-loop
-          const appInstalledSpec = await deserializeSpec(appInstalledPlain);
-          const appHasSyncthing = appInstalledSpec && appInstalledSpec.hasSyncthing();
-          const appHasActiveStandby = appInstalledSpec && appInstalledSpec.hasActiveStandbySyncthing();
+          const deployment = deploymentByName.get(mainAppName);
+          if (!deployment) continue;
+
+          let appHasSyncthing = false;
+          let appHasActiveStandby = false;
+          for (const [, deployComp] of deployment.componentEntries()) {
+            if (deployComp.hasSyncthing()) appHasSyncthing = true;
+            if (deployComp.hasActiveStandbySyncthing()) appHasActiveStandby = true;
+          }
+
           if (appHasSyncthing) {
-            masterSlaveAppsInstalled.push(appInstalledPlain);
+            masterSlaveAppNames.add(mainAppName);
           }
           if (appHasActiveStandby && appDetails) {
-            const backupSkip = backupInProgress.some((backupItem) => stoppedApp === backupItem);
-            const restoreSkip = restoreInProgress.some((backupItem) => stoppedApp === backupItem);
+            const backupSkip = backupInProgress.some((item) => stoppedApp === item);
+            const restoreSkip = restoreInProgress.some((item) => stoppedApp === item);
             if (!backupSkip && !restoreSkip) {
               // eslint-disable-next-line no-await-in-loop
-              await handleMissingMasterSlaveContainer(stoppedApp, mainAppName, appsMonitored, getGlobalState);
+              await handleMissingMasterSlaveContainer(stoppedApp, mainAppName);
             }
           } else if (appDetails) {
             log.warn(`${stoppedApp} is stopped but should be running. Starting...`);
-            // it is a stopped global app. Try to run it.
-            // check if some removal is in progress and if it is don't start it!
-            const backupSkip = backupInProgress.some((backupItem) => stoppedApp === backupItem);
-            const restoreSkip = restoreInProgress.some((backupItem) => stoppedApp === backupItem);
+            const backupSkip = backupInProgress.some((item) => stoppedApp === item);
+            const restoreSkip = restoreInProgress.some((item) => stoppedApp === item);
             if (backupSkip || restoreSkip) {
               log.warn(`Application ${stoppedApp} backup/restore is in progress...`);
             }
-            if (!removalInProgress && !installationInProgress && !softRedeployInProgress && !hardRedeployInProgress && !reinstallationOfOldAppsInProgress && !restoreSkip && !backupSkip) {
+            if (!isOperationInProgress() && !restoreSkip && !backupSkip) {
               // eslint-disable-next-line no-await-in-loop
               const containerExists = await dockerService.getDockerContainerOnly(stoppedApp);
 
-              // Check if container exists before applying syncthing delay
               if (containerExists && appHasSyncthing) {
                 const db = dbHelper.databaseConnection();
                 const database = db.db(config.database.appsglobal.database);
                 const queryFind = { name: mainAppName, ip: myIP };
                 const projection = { _id: 0, runningSince: 1 };
-                // we already have the exact same data
                 // eslint-disable-next-line no-await-in-loop
                 const result = await dbHelper.findOneInDatabase(database, globalAppsLocations, queryFind, projection);
                 if (!result || !result.runningSince || Date.parse(result.runningSince) + 30 * 60 * 1000 > Date.now()) {
@@ -238,14 +191,12 @@ async function checkAndNotifyPeersOfRunningApps(
                   // eslint-disable-next-line no-await-in-loop
                   await recreateMissingContainers(stoppedApp);
                   log.info(`Successfully recreated ${stoppedApp}`);
-                  appInspector.startAppMonitoring(stoppedApp, appsMonitored);
+                  appInspector.startAppMonitoring(stoppedApp, globalState.appsMonitored);
                 } catch (recreateErr) {
                   log.error(`Failed to recreate containers for ${stoppedApp}: ${recreateErr.message}`);
                   log.warn(`REMOVAL REASON: Container recreation failure - ${mainAppName} failed to recreate with error: ${recreateErr.message} (peerNotification)`);
                   // eslint-disable-next-line no-await-in-loop
-                  await appUninstaller.removeAppLocally(mainAppName, null, false, true, true, () => {
-                    // Handle response
-                  }, getGlobalState, (name, deleteData) => appInspector.stopAppMonitoring(name, deleteData, appsMonitored));
+                  await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
                 }
               } else {
                 log.warn(`${stoppedApp} is stopped, starting`);
@@ -254,7 +205,7 @@ async function checkAndNotifyPeersOfRunningApps(
                 } else {
                   // eslint-disable-next-line no-await-in-loop
                   await dockerService.appDockerStart(stoppedApp);
-                  appInspector.startAppMonitoring(stoppedApp, appsMonitored);
+                  appInspector.startAppMonitoring(stoppedApp, globalState.appsMonitored);
                 }
               }
             } else {
@@ -263,59 +214,55 @@ async function checkAndNotifyPeersOfRunningApps(
           }
         } catch (err) {
           log.error(err);
-          if (!removalInProgress && !installationInProgress && !softRedeployInProgress && !hardRedeployInProgress && !reinstallationOfOldAppsInProgress) {
+          const mainAppName = stoppedApp.split('_')[1] || stoppedApp;
+          if (!isOperationInProgress()) {
             log.warn(`REMOVAL REASON: App start failure - ${mainAppName} failed to start with error: ${err.message} (peerNotification)`);
             // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.removeAppLocally(mainAppName, null, false, true, true, () => {
-              // Handle response
-            }, getGlobalState, (name, deleteData) => appInspector.stopAppMonitoring(name, deleteData, appsMonitored));
+            await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
           }
         }
       }
     } else {
       log.warn('Stopped application checks not running, some removal or installation is in progress');
     }
+
+    // Determine which apps are fully running (all components up)
     const installedAndRunning = [];
-    appsInstalled.forEach((app) => {
-      if (app.version >= 4) {
-        let appRunningWell = true;
-        app.compose.forEach((appComponent) => {
-          if (!runningAppsNames.includes(`${appComponent.name}_${app.name}`)) {
-            appRunningWell = false;
-          }
-        });
-        if (appRunningWell) {
-          installedAndRunning.push(app);
-        }
-      } else if (runningAppsNames.includes(app.name)) {
-        installedAndRunning.push(app);
+    for (const deployment of deployments) {
+      const entries = deployment.componentEntries();
+      const allRunning = entries.every(([, comp]) => runningAppsNames.includes(comp.identifier));
+      if (allRunning) {
+        const spec = specByName.get(deployment.appName);
+        if (spec) installedAndRunning.push(spec);
       }
-    });
-    installedAndRunning.push(...masterSlaveAppsInstalled);
-    const applicationsToBroadcast = [...new Set(installedAndRunning)];
+    }
+    // Include syncthing apps that are stopped (master/slave coordination)
+    for (const name of masterSlaveAppNames) {
+      const spec = specByName.get(name);
+      if (spec && !installedAndRunning.includes(spec)) {
+        installedAndRunning.push(spec);
+      }
+    }
+
     const apps = [];
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.appsglobal.database);
     try {
-      // eslint-disable-next-line no-restricted-syntax
-      for (const application of applicationsToBroadcast) {
-        const queryFind = { name: application.name, ip: myIP };
+      for (const inst of installedAndRunning) {
+        const queryFind = { name: inst.name, ip: myIP };
         const projection = { _id: 0, runningSince: 1 };
         let runningOnMyNodeSince = new Date().toISOString();
-        // we already have the exact same data
         // eslint-disable-next-line no-await-in-loop
         const result = await dbHelper.findOneInDatabase(database, globalAppsLocations, queryFind, projection);
         if (result && result.runningSince) {
           runningOnMyNodeSince = result.runningSince;
         }
-        log.info(`${application.name} is running/installed properly. Broadcasting status.`);
-        // eslint-disable-next-line no-await-in-loop
-        // we can distinguish pure local apps from global with hash and height
+        log.info(`${inst.name} is running/installed properly. Broadcasting status.`);
         const newAppRunningMessage = {
           type: 'fluxapprunning',
           version: 1,
-          name: application.name,
-          hash: application.hash, // hash of application specifics that are running
+          name: inst.name,
+          hash: inst.hash,
           ip: myIP,
           broadcastedAt: Date.now(),
           runningSince: runningOnMyNodeSince,
@@ -323,23 +270,20 @@ async function checkAndNotifyPeersOfRunningApps(
           staticIp: geolocationService.isStaticIP(),
         };
         const app = {
-          name: application.name,
-          hash: application.hash,
+          name: inst.name,
+          hash: inst.hash,
           runningSince: runningOnMyNodeSince,
         };
         apps.push(app);
-        // store it in local database first
         // eslint-disable-next-line no-await-in-loop
         await messageStore.storeAppRunningMessage(newAppRunningMessage);
         if (installedAndRunning.length === 1) {
           // eslint-disable-next-line no-await-in-loop
           await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppRunningMessage);
-          // broadcast messages about running apps to all peers
           log.info(`App Running Message broadcasted ${JSON.stringify(newAppRunningMessage)}`);
         }
       }
       if (installedAndRunning.length > 1) {
-        // send v2 unique message instead
         const newAppRunningMessageV2 = {
           type: 'fluxapprunning',
           version: 2,
@@ -349,16 +293,10 @@ async function checkAndNotifyPeersOfRunningApps(
           osUptime: os.uptime(),
           staticIp: geolocationService.isStaticIP(),
         };
-        // eslint-disable-next-line no-await-in-loop
         await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppRunningMessageV2);
-        // broadcast messages about running apps to all peers
         log.info(`App Running Message broadcasted ${JSON.stringify(newAppRunningMessageV2)}`);
       } else if (installedAndRunning.length === 0 && checkAndNotifyPeersOfRunningAppsFirstRun) {
         checkAndNotifyPeersOfRunningAppsFirstRun = false;
-        // we will broadcast a message that we are not running any app
-        // if multitoolbox option to reinstall fluxos or fix mongodb is executed all apps are removed from the node, once the node starts and it's confirmed
-        // should broadcast to the network what is running or not
-        // the nodes who receive the message will only rebroadcast if they had information about a app running on this node
         const newAppRunningMessageV2 = {
           type: 'fluxapprunning',
           version: 2,
@@ -368,16 +306,12 @@ async function checkAndNotifyPeersOfRunningApps(
           osUptime: os.uptime(),
           staticIp: geolocationService.isStaticIP(),
         };
-        // eslint-disable-next-line no-await-in-loop
         await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppRunningMessageV2);
-        // broadcast messages about running apps to all peers
         log.info(`No Apps Running Message broadcasted ${JSON.stringify(newAppRunningMessageV2)}`);
       }
     } catch (err) {
       log.error(err);
-      // removeAppLocally(stoppedApp);
     }
-    // Update the running apps cache with the current state
     const runningAppsCache = globalState.runningAppsCache;
     runningAppsCache.clear();
     apps.forEach((app) => {

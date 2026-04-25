@@ -7,6 +7,8 @@ const advancedWorkflows = require('../../ZelBack/src/services/appLifecycle/advan
 const appSpecHistory = require('../../ZelBack/src/services/appDatabase/appSpecHistory');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
+const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
+const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 
 describe('advancedWorkflows tests', () => {
@@ -231,7 +233,6 @@ describe('advancedWorkflows tests', () => {
 
   describe('redeployComponent (redeploy) tests', () => {
     let globalState;
-    let res;
 
     beforeEach(() => {
       // eslint-disable-next-line global-require
@@ -240,111 +241,66 @@ describe('advancedWorkflows tests', () => {
       globalState.installationInProgress = false;
       globalState.softRedeployInProgress = false;
       globalState.hardRedeployInProgress = false;
-
-      res = {
-        write: sinon.stub(),
-        flush: sinon.stub(),
-      };
+      globalState.reconciliationInProgress = false;
     });
 
     it('should return early if removal is in progress', async () => {
       globalState.removalInProgress = true;
-
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
-
-      expect(res.write.calledOnce).to.be.true;
-      const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another operation is in progress');
+      const messages = [];
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
+      expect(messages).to.have.lengthOf(1);
+      expect(messages[0]).to.include('Another operation is in progress');
     });
 
     it('should return early if installation is in progress', async () => {
       globalState.installationInProgress = true;
-
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
-
-      expect(res.write.calledOnce).to.be.true;
-      const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another operation is in progress');
+      const messages = [];
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
+      expect(messages).to.have.lengthOf(1);
+      expect(messages[0]).to.include('Another operation is in progress');
     });
 
     it('should return early if soft redeploy is in progress', async () => {
       globalState.softRedeployInProgress = true;
-
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
-
-      expect(res.write.calledOnce).to.be.true;
-      const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another operation is in progress');
+      const messages = [];
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
+      expect(messages).to.have.lengthOf(1);
+      expect(messages[0]).to.include('Another operation is in progress');
     });
 
     it('should return early if hard redeploy is in progress', async () => {
       globalState.hardRedeployInProgress = true;
-
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
-
-      expect(res.write.calledOnce).to.be.true;
-      const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another operation is in progress');
+      const messages = [];
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
+      expect(messages).to.have.lengthOf(1);
+      expect(messages[0]).to.include('Another operation is in progress');
     });
 
-    it('should throw error if application not found', async () => {
-      sinon.stub(dbHelper, 'databaseConnection').returns({
-        db: () => ({}),
-      });
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
+    it('should call uninstallApplication when application not found', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
+      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      try {
-        await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('Application myapp not found');
-        expect(globalState.softRedeployInProgress).to.be.false;
-      }
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+
+      expect(globalState.softRedeployInProgress).to.be.false;
+      expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
     });
 
-    it('should throw error if app not found', async () => {
-      sinon.stub(dbHelper, 'databaseConnection').returns({
-        db: () => ({}),
+    it('should call uninstallApplication when component not found in app', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({
+        getComponent: () => null,
       });
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
+      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      try {
-        await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('not found');
-        expect(globalState.softRedeployInProgress).to.be.false;
-      }
-    });
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
-    it('should throw error if component not found in app', async () => {
-      sinon.stub(dbHelper, 'databaseConnection').returns({
-        db: () => ({}),
-      });
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves({
-        name: 'myapp',
-        version: 4,
-        description: 'test',
-        owner: '1abc',
-        instances: 3,
-        compose: [
-          { name: 'backend', description: '', repotag: 'myapp/backend:1.0', ports: [30000], containerPorts: [8080], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
-        ],
-      });
-
-      try {
-        await advancedWorkflows.redeployComponent('myapp', 'frontend', { res });
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('Component frontend not found');
-        expect(globalState.softRedeployInProgress).to.be.false;
-      }
+      expect(globalState.softRedeployInProgress).to.be.false;
+      expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
     });
   });
 
   describe('redeployComponent (rebuild) tests', () => {
     let globalState;
-    let res;
 
     beforeEach(() => {
       // eslint-disable-next-line global-require
@@ -353,119 +309,70 @@ describe('advancedWorkflows tests', () => {
       globalState.installationInProgress = false;
       globalState.softRedeployInProgress = false;
       globalState.hardRedeployInProgress = false;
-
-      res = {
-        write: sinon.stub(),
-        flush: sinon.stub(),
-      };
+      globalState.reconciliationInProgress = false;
     });
 
     it('should return early if removal is in progress', async () => {
       globalState.removalInProgress = true;
-
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
-
-      expect(res.write.calledOnce).to.be.true;
-      const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another operation is in progress');
+      const messages = [];
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
+      expect(messages).to.have.lengthOf(1);
+      expect(messages[0]).to.include('Another operation is in progress');
     });
 
     it('should return early if installation is in progress', async () => {
       globalState.installationInProgress = true;
-
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
-
-      expect(res.write.calledOnce).to.be.true;
-      const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another operation is in progress');
+      const messages = [];
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
+      expect(messages).to.have.lengthOf(1);
+      expect(messages[0]).to.include('Another operation is in progress');
     });
 
     it('should return early if soft redeploy is in progress', async () => {
       globalState.softRedeployInProgress = true;
-
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
-
-      expect(res.write.calledOnce).to.be.true;
-      const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another operation is in progress');
+      const messages = [];
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
+      expect(messages).to.have.lengthOf(1);
+      expect(messages[0]).to.include('Another operation is in progress');
     });
 
     it('should return early if hard redeploy is in progress', async () => {
       globalState.hardRedeployInProgress = true;
-
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
-
-      expect(res.write.calledOnce).to.be.true;
-      const response = res.write.firstCall.args[0];
-      expect(response).to.include('Another operation is in progress');
+      const messages = [];
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
+      expect(messages).to.have.lengthOf(1);
+      expect(messages[0]).to.include('Another operation is in progress');
     });
 
-    it('should throw error if application not found', async () => {
-      sinon.stub(dbHelper, 'databaseConnection').returns({
-        db: () => ({}),
-      });
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
+    it('should call uninstallApplication when application not found', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
+      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      try {
-        await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('Application myapp not found');
-        expect(globalState.hardRedeployInProgress).to.be.false;
-      }
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
+
+      expect(globalState.hardRedeployInProgress).to.be.false;
+      expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
     });
 
-    it('should throw error if app not found', async () => {
-      sinon.stub(dbHelper, 'databaseConnection').returns({
-        db: () => ({}),
+    it('should call uninstallApplication when component not found in app', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({
+        getComponent: () => null,
       });
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
+      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      try {
-        await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('not found');
-        expect(globalState.hardRedeployInProgress).to.be.false;
-      }
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
+
+      expect(globalState.hardRedeployInProgress).to.be.false;
+      expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
     });
 
-    it('should throw error if component not found in app', async () => {
-      sinon.stub(dbHelper, 'databaseConnection').returns({
-        db: () => ({}),
-      });
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves({
-        name: 'myapp',
-        version: 4,
-        description: 'test',
-        owner: '1abc',
-        instances: 3,
-        compose: [
-          { name: 'backend', description: '', repotag: 'myapp/backend:1.0', ports: [30000], containerPorts: [8080], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 },
-        ],
-      });
+    it('should reset hardRedeployInProgress on error', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
+      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      try {
-        await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('Component frontend not found');
-        expect(globalState.hardRedeployInProgress).to.be.false;
-      }
-    });
+      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
-    it('should set hardRedeployInProgress to false on error', async () => {
-      sinon.stub(dbHelper, 'databaseConnection').returns({
-        db: () => ({}),
-      });
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
-
-      try {
-        await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, res });
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(globalState.hardRedeployInProgress).to.be.false;
-      }
+      expect(globalState.hardRedeployInProgress).to.be.false;
     });
   });
 
@@ -1161,284 +1068,6 @@ describe('advancedWorkflows tests', () => {
       );
 
       expect(result).to.be.true;
-    });
-  });
-
-  describe('softRedeploy component structure change handling tests', () => {
-    let findInDatabaseStub;
-    let databaseConnectionStub;
-
-    beforeEach(() => {
-      // Reset global state
-      // eslint-disable-next-line global-require
-      const globalState = require('../../ZelBack/src/services/utils/globalState');
-      globalState.removalInProgress = false;
-      globalState.installationInProgress = false;
-      globalState.softRedeployInProgress = false;
-      globalState.hardRedeployInProgress = false;
-
-      // Setup database connection stub
-      databaseConnectionStub = sinon.stub(dbHelper, 'databaseConnection').returns({
-        db: () => ({}),
-      });
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('should escalate to hard redeploy when component count changes for v8+ app', async () => {
-      const v8Comp = (name, tag, port) => ({ name, description: '', repotag: tag, ports: [port], containerPorts: [port], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 });
-      const v8Base = { description: 'test', owner: '1abc', instances: 3, contacts: [], geolocation: [], expire: 22000, nodes: [], staticip: false };
-      const installedApp = {
-        ...v8Base,
-        name: 'TestApp',
-        version: 8,
-        compose: [
-          v8Comp('frontend', 'repo/frontend:1.0', 30000),
-          v8Comp('backend', 'repo/backend:1.0', 30001),
-        ],
-      };
-
-      const newAppSpecs = {
-        ...v8Base,
-        name: 'TestApp',
-        version: 8,
-        compose: [
-          v8Comp('frontend', 'repo/frontend:1.0', 30000),
-          v8Comp('backend', 'repo/backend:1.0', 30001),
-          v8Comp('database', 'repo/database:1.0', 30002),
-        ],
-      };
-
-      findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase').resolves([installedApp]);
-
-      // Stub appUninstaller so hardRedeploy doesn't actually try to remove the app
-      // eslint-disable-next-line global-require
-      const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
-      sinon.stub(appUninstaller, 'removeAppLocally').resolves();
-
-      // Stub appInstaller so hardRedeploy doesn't actually try to install the app
-      // eslint-disable-next-line global-require
-
-      sinon.stub(appInstaller, 'checkAppRequirements').resolves();
-      sinon.stub(appInstaller, 'installApplication').resolves();
-
-      // Stub serviceHelper.delay so hardRedeploy doesn't wait
-      // eslint-disable-next-line global-require
-      const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-      sinon.stub(serviceHelper, 'delay').resolves();
-
-      // Create a mock response object
-      const res = {
-        write: sinon.stub(),
-        flush: sinon.stub(),
-        end: sinon.stub(),
-      };
-
-      await advancedWorkflows.softRedeploy(newAppSpecs, res);
-
-      // Should have called dbHelper.findInDatabase to check for structure changes
-      expect(findInDatabaseStub.called).to.be.true;
-
-      // Should have written escalation message to response
-      expect(res.write.called).to.be.true;
-      const messages = res.write.getCalls().map(call => call.args[0]);
-      const escalationMessage = messages.find(msg => msg.includes('Component structure changed'));
-      expect(escalationMessage).to.exist;
-      expect(escalationMessage).to.include('hard redeploy');
-    });
-
-    it('should escalate to hard redeploy when component names change for v8+ app', async () => {
-      const v8Comp = (name, tag, port) => ({ name, description: '', repotag: tag, ports: [port], containerPorts: [port], domains: [''], environmentParameters: [], commands: [], containerData: '', cpu: 0.5, ram: 500, hdd: 5 });
-      const v8Base = { description: 'test', owner: '1abc', instances: 3, contacts: [], geolocation: [], expire: 22000, nodes: [], staticip: false };
-      const installedApp = {
-        ...v8Base,
-        name: 'TestApp',
-        version: 8,
-        compose: [
-          v8Comp('frontend', 'repo/frontend:1.0', 30000),
-          v8Comp('backend', 'repo/backend:1.0', 30001),
-        ],
-      };
-
-      const newAppSpecs = {
-        ...v8Base,
-        name: 'TestApp',
-        version: 8,
-        compose: [
-          v8Comp('frontend', 'repo/frontend:1.0', 30000),
-          v8Comp('api', 'repo/api:1.0', 30001),
-        ],
-      };
-
-      findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase').resolves([installedApp]);
-
-      // Stub appUninstaller so hardRedeploy doesn't actually try to remove the app
-      // eslint-disable-next-line global-require
-      const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
-      sinon.stub(appUninstaller, 'removeAppLocally').resolves();
-
-      // Stub appInstaller so hardRedeploy doesn't actually try to install the app
-      // eslint-disable-next-line global-require
-
-      sinon.stub(appInstaller, 'checkAppRequirements').resolves();
-      sinon.stub(appInstaller, 'installApplication').resolves();
-
-      // Stub serviceHelper.delay so hardRedeploy doesn't wait
-      // eslint-disable-next-line global-require
-      const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-      sinon.stub(serviceHelper, 'delay').resolves();
-
-      const res = {
-        write: sinon.stub(),
-        flush: sinon.stub(),
-        end: sinon.stub(),
-      };
-
-      await advancedWorkflows.softRedeploy(newAppSpecs, res);
-
-      // Should have called dbHelper.findInDatabase to check for structure changes
-      expect(findInDatabaseStub.called).to.be.true;
-
-      // Should have written escalation message to response
-      expect(res.write.called).to.be.true;
-      const messages = res.write.getCalls().map(call => call.args[0]);
-      const escalationMessage = messages.find(msg => msg.includes('Component structure changed'));
-      expect(escalationMessage).to.exist;
-      expect(escalationMessage).to.include('hard redeploy');
-    });
-
-    it('should proceed with normal soft redeploy when no component structure changes', async () => {
-      const installedApp = {
-        name: 'TestApp',
-        version: 8,
-        compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0' },
-          { name: 'backend', repotag: 'repo/backend:1.0' },
-        ],
-      };
-
-      const newAppSpecs = {
-        name: 'TestApp',
-        version: 8,
-        compose: [
-          { name: 'frontend', repotag: 'repo/frontend:2.0' }, // Only tag changed
-          { name: 'backend', repotag: 'repo/backend:2.0' }, // Only tag changed
-        ],
-      };
-
-      // Stub dbHelper.findInDatabase to return the installed app
-      findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase').resolves([installedApp]);
-
-      // Mock other required dependencies for soft redeploy
-      sinon.stub(advancedWorkflows, 'softRemoveAppLocally').resolves();
-      sinon.stub(appInstaller, 'installApplication').resolves();
-      sinon.stub(appInstaller, 'checkAppRequirements').resolves();
-
-      const clock = sinon.useFakeTimers();
-
-      const res = {
-        write: sinon.stub(),
-        flush: sinon.stub(),
-        end: sinon.stub(),
-      };
-
-      const softRedeployPromise = advancedWorkflows.softRedeploy(newAppSpecs, res);
-      await clock.tickAsync(31 * 1000);
-      await softRedeployPromise;
-
-      expect(findInDatabaseStub.called).to.be.true;
-
-      // Should not have written escalation message to response
-      const messages = res.write.getCalls().map(call => call.args[0]);
-      const escalationMessage = messages.find(msg => msg.includes('Component structure changed'));
-      expect(escalationMessage).to.not.exist;
-    });
-
-    it('should not check component structure for v4-7 apps during soft redeploy', async () => {
-      const installedApp = {
-        name: 'TestApp',
-        version: 7,
-        compose: [
-          { name: 'frontend', repotag: 'repo/frontend:1.0' },
-          { name: 'backend', repotag: 'repo/backend:1.0' },
-        ],
-      };
-
-      const newAppSpecs = {
-        name: 'TestApp',
-        version: 7,
-        compose: [
-          { name: 'frontend', repotag: 'repo/frontend:2.0' },
-          { name: 'backend', repotag: 'repo/backend:2.0' },
-        ],
-      };
-
-      findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase').resolves([installedApp]);
-
-      // Mock other required dependencies
-      sinon.stub(advancedWorkflows, 'softRemoveAppLocally').resolves();
-      sinon.stub(appInstaller, 'installApplication').resolves();
-      sinon.stub(appInstaller, 'checkAppRequirements').resolves();
-
-      const clock = sinon.useFakeTimers();
-
-      const res = {
-        write: sinon.stub(),
-        flush: sinon.stub(),
-        end: sinon.stub(),
-      };
-
-      const softRedeployPromise = advancedWorkflows.softRedeploy(newAppSpecs, res);
-      await clock.tickAsync(31 * 1000);
-      await softRedeployPromise;
-
-      // For v4-7 apps, component structure checks are not applicable.
-      expect(findInDatabaseStub.called).to.be.false;
-    });
-
-    it('should not escalate to hard redeploy when enterprise compose is redacted in local DB', async () => {
-      const installedApp = {
-        name: 'TestApp',
-        version: 8,
-        enterprise: 'encryptedEnterprisePayload',
-        compose: [], // Redacted in local DB
-        hash: 'testhash',
-      };
-
-      const newAppSpecs = {
-        name: 'TestApp',
-        version: 8,
-        compose: [
-          { name: 'frontend', repotag: 'repo/frontend:2.0' },
-          { name: 'backend', repotag: 'repo/backend:2.0' },
-        ],
-      };
-
-      findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase').resolves([installedApp]);
-
-      sinon.stub(advancedWorkflows, 'softRemoveAppLocally').resolves();
-      sinon.stub(appInstaller, 'installApplication').resolves();
-      sinon.stub(appInstaller, 'checkAppRequirements').resolves();
-
-      const clock = sinon.useFakeTimers();
-
-      const res = {
-        write: sinon.stub(),
-        flush: sinon.stub(),
-        end: sinon.stub(),
-      };
-
-      const softRedeployPromise = advancedWorkflows.softRedeploy(newAppSpecs, res);
-      await clock.tickAsync(31 * 1000);
-      await softRedeployPromise;
-
-      expect(findInDatabaseStub.called).to.be.true;
-
-      const messages = res.write.getCalls().map(call => call.args[0]);
-      const escalationMessage = messages.find(msg => msg.includes('Component structure changed'));
-      expect(escalationMessage).to.not.exist;
     });
   });
 

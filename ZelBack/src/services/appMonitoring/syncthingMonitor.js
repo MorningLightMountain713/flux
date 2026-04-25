@@ -250,10 +250,9 @@ async function logSyncState(foldersConfiguration) {
  * @param {Function} appDockerStopFn - Stop docker function
  * @param {Function} appDockerRestartFn - Restart docker function
  * @param {Function} appDeleteDataInMountPointFn - Delete data function
- * @param {Function} removeAppLocallyFn - Remove app function
  * @returns {Promise<void>}
  */
-async function syncthingAppsCore(state, getGlobalStateFn, appDockerStopFn, appDockerRestartFn, appDeleteDataInMountPointFn, removeAppLocallyFn) {
+async function syncthingAppsCore(state, getGlobalStateFn, appDockerStopFn, appDockerRestartFn, appDeleteDataInMountPointFn) {
   // Sync global state before checking
   getGlobalStateFn();
 
@@ -485,7 +484,6 @@ async function syncthingAppsCore(state, getGlobalStateFn, appDockerStopFn, appDo
           folderHealthCache: state.folderHealthCache,
           appDockerStopFn,
           appDockerStartFn: dockerService.appDockerStart,
-          removeAppLocallyFn,
           state,
           receiveOnlySyncthingAppsCache: state.receiveOnlySyncthingAppsCache,
         });
@@ -532,10 +530,9 @@ async function syncthingAppsCore(state, getGlobalStateFn, appDockerStopFn, appDo
  * @param {Function} appDockerStopFn - Stop docker function
  * @param {Function} appDockerRestartFn - Restart docker function
  * @param {Function} appDeleteDataInMountPointFn - Delete data function
- * @param {Function} removeAppLocallyFn - Remove app function
  * @returns {Object} Control object with stop() method
  */
-function syncthingApps(state, getGlobalStateFn, appDockerStopFn, appDockerRestartFn, appDeleteDataInMountPointFn, removeAppLocallyFn) {
+function syncthingApps(state, getGlobalStateFn, appDockerStopFn, appDockerRestartFn, appDeleteDataInMountPointFn) {
   let intervalId = null;
   let isRunning = false;
 
@@ -553,7 +550,6 @@ function syncthingApps(state, getGlobalStateFn, appDockerStopFn, appDockerRestar
         appDockerStopFn,
         appDockerRestartFn,
         appDeleteDataInMountPointFn,
-        removeAppLocallyFn,
       );
     } catch (error) {
       log.error(`syncthingApps - Unexpected error in monitoring loop: ${error.message}`);

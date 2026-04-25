@@ -318,7 +318,7 @@ async function cleanupCrontabAndMounts() {
             const appName = extractAppNameFromAppId(appId);
             log.warn(`cleanupCrontabAndMounts - Removing app ${appName} due to crontab update failure`);
             // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.removeAppLocally(appName, null, true, false, true).catch((uninstallError) => {
+            await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((uninstallError) => {
               log.error(`cleanupCrontabAndMounts - Failed to uninstall ${appName}: ${uninstallError.message}`);
             });
             // Remove from mounts to verify since app is being uninstalled

@@ -158,7 +158,7 @@ describe('appInstaller tests', () => {
         dockerPullStream: sinon.stub().yields(null, 'pulled'),
       },
       './appUninstaller': {
-        removeAppLocally: sinon.stub().resolves(),
+        uninstallApplication: sinon.stub().resolves(),
       },
       './advancedWorkflows': {
         createAppVolume: sinon.stub().resolves(),
@@ -693,7 +693,7 @@ describe('appInstaller tests', () => {
           dockerPullStream: sinon.stub().yields(null, 'pulled'),
         },
         './appUninstaller': {
-          removeAppLocally: sinon.stub().resolves(),
+          uninstallApplication: sinon.stub().resolves(),
         },
         './advancedWorkflows': {
           createAppVolume: sinon.stub().resolves(),
@@ -905,7 +905,7 @@ describe('appInstaller tests', () => {
           dockerPullStream: sinon.stub().yields(null, 'pulled'),
         },
         './appUninstaller': {
-          removeAppLocally: sinon.stub().resolves(),
+          uninstallApplication: sinon.stub().resolves(),
         },
         './advancedWorkflows': {
           createAppVolume: sinon.stub().resolves(),
@@ -1017,7 +1017,7 @@ describe('appInstaller tests', () => {
           getAppIdentifier: sinon.stub().returns('testapp'),
           dockerPullStream: sinon.stub().yields(null, 'pulled'),
         },
-        './appUninstaller': { removeAppLocally: sinon.stub().resolves() },
+        './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
         './advancedWorkflows': { createAppVolume: sinon.stub().resolves() },
         '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves() },
         '../appMessaging/messageStore': { storeAppRunningMessage: sinon.stub().resolves(), storeAppInstallingErrorMessage: sinon.stub().resolves() },

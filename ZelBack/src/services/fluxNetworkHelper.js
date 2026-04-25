@@ -1017,7 +1017,7 @@ async function ipChangesOverLimit() {
           for (const app of apps) {
             log.warn(`REMOVAL REASON: Too many IP changes - ${app.name} being removed due to ${ipChangeData.count} IP changes in ${timeDifference}ms (DoS protection)`);
             // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.removeAppLocally(app.name, null, true, null, false).catch((error) => log.error(error)); // we will not send appremove messages because they will not be accepted by the other nodes
+            await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true }).catch((error) => log.error(error)); // we will not send appremove messages because they will not be accepted by the other nodes
             // eslint-disable-next-line no-await-in-loop
             await serviceHelper.delay(500);
           }
@@ -1117,7 +1117,7 @@ async function adjustExternalIP(ip) {
               log.info(`Application ${app.name} requires static IP but node IP has changed, uninstalling app`);
               log.warn(`REMOVAL REASON: Static IP required - ${app.name} requires static IP but node IP changed from ${oldIP} to ${newIP}`);
               // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.removeAppLocally(app.name, null, true, null, true).catch((error) => log.error(error));
+              await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
               appsRemoved += 1;
               // eslint-disable-next-line no-continue
               continue;
@@ -1131,7 +1131,7 @@ async function adjustExternalIP(ip) {
             log.info(`Aplication: ${app.name}, was found on the network already running under the same ip, uninstalling app`);
             log.warn(`REMOVAL REASON: Duplicate IP detected - ${app.name} already running on network with IP ${ip} (after IP change)`);
             // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.removeAppLocally(app.name, null, true, null, true).catch((error) => log.error(error));
+            await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
             appsRemoved += 1;
           } else {
             // once app specs v8 is done we check if app have specs that is using fluxnode service.

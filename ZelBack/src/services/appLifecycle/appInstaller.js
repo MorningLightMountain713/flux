@@ -608,7 +608,8 @@ async function installApplication(appSpec, options = {}) {
         res.write(serviceHelper.ensureString(removeStatus));
         if (res.flush) res.flush();
       }
-      await appUninstaller.removeAppLocally(appSpec.name, res, true, true, sendRemovalMessage);
+      const onStatus = res ? (msg) => { res.write(serviceHelper.ensureString(msg)); if (res.flush) res.flush(); } : undefined;
+      await appUninstaller.uninstallApplication(appSpec.name, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
       log.info(`Cleanup completed for ${appSpec.name} after installation failure`);
     }
 
@@ -616,7 +617,7 @@ async function installApplication(appSpec, options = {}) {
   } finally {
     if (test) {
       try {
-        await appUninstaller.removeAppLocally(appSpec.name, null, true, false, false);
+        await appUninstaller.uninstallApplication(appSpec.name, { forceKill: true, skipGuard: true });
         log.info(`Test cleanup completed for ${appSpec.name}`);
       } catch (cleanupError) {
         log.error(`Error during test cleanup for ${appSpec.name}: ${cleanupError.message}`);

@@ -764,11 +764,10 @@ async function checkApplicationsCpuUSage(appsMonitored) {
 
 /**
  * Monitor shared database applications and handle uninstall signals
- * @param {Function} removeAppLocally - Async function to remove app locally
  * @param {object} globalState - Global state object with installation/removal flags
  * @returns {Promise<void>}
  */
-async function monitorSharedDBApps(removeAppLocally, globalState) {
+async function monitorSharedDBApps(globalState) {
   try {
     if (globalState.installationInProgress || globalState.removalInProgress || globalState.softRedeployInProgress || globalState.hardRedeployInProgress) {
       return;
@@ -793,7 +792,9 @@ async function monitorSharedDBApps(removeAppLocally, globalState) {
               log.info(`monitorSharedDBApps: ${deployment.appName} operatorStatus is UNINSTALL, going to uninstall the app`);
               log.warn(`REMOVAL REASON: Operator uninstall request - ${deployment.appName} operator status set to UNINSTALL (sharedDB monitoring)`);
               // eslint-disable-next-line no-await-in-loop
-              await removeAppLocally(deployment.appName, null, true, false, true);
+              // eslint-disable-next-line global-require
+              const appUninstaller = require('../appLifecycle/appUninstaller');
+              await appUninstaller.uninstallApplication(deployment.appName, { forceKill: true, skipGuard: true, broadcastRemoval: true });
             } else {
               log.info(`monitorSharedDBApps: ${deployment.appName} operatorStatus is ${operatorStatus.data.status}`);
             }
@@ -807,17 +808,16 @@ async function monitorSharedDBApps(removeAppLocally, globalState) {
     log.error(`monitorSharedDBApps: ${error}`);
   } finally {
     await serviceHelper.delay(5 * 60 * 1000);
-    monitorSharedDBApps(removeAppLocally, globalState);
+    monitorSharedDBApps(globalState);
   }
 }
 
 /**
  * Check storage space usage of applications and enforce limits
- * @param {Function} removeAppLocally - Async function to remove app locally
  * @param {Array} appsStorageViolations - Array tracking storage violations
  * @returns {Promise<void>}
  */
-async function checkStorageSpaceForApps(removeAppLocally, appsStorageViolations) {
+async function checkStorageSpaceForApps(appsStorageViolations) {
   try {
     // eslint-disable-next-line global-require
     const config = require('config');
@@ -843,7 +843,9 @@ async function checkStorageSpaceForApps(removeAppLocally, appsStorageViolations)
           log.warn(`Application ${deployment.appName} is using ${totalSize} space which is more than allowed ${maxAllowedSize}. Removing...`);
           log.warn(`REMOVAL REASON: Storage violation - ${deployment.appName} using ${totalSize} bytes (max: ${maxAllowedSize}) - ${occurancies} violations (storage monitoring)`);
           // eslint-disable-next-line no-await-in-loop
-          await removeAppLocally(deployment.appName).catch((error) => {
+          // eslint-disable-next-line global-require
+          const appUninstaller = require('../appLifecycle/appUninstaller');
+          await appUninstaller.uninstallApplication(deployment.appName, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => {
             log.error(error);
           });
           const adjArray = appsStorageViolations.filter((appName) => (appName) !== deployment.appName);
@@ -863,12 +865,12 @@ async function checkStorageSpaceForApps(removeAppLocally, appsStorageViolations)
       }
     }
     setTimeout(() => {
-      checkStorageSpaceForApps(removeAppLocally, appsStorageViolations);
+      checkStorageSpaceForApps(appsStorageViolations);
     }, 30 * 60 * 1000);
   } catch (error) {
     log.error(error);
     setTimeout(() => {
-      checkStorageSpaceForApps(removeAppLocally, appsStorageViolations);
+      checkStorageSpaceForApps(appsStorageViolations);
     }, 30 * 60 * 1000);
   }
 }

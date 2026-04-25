@@ -14,12 +14,13 @@ const globalAppsLocations = config.database.appsglobal.collections.appsLocations
 /**
  * Method responsible to monitor node status and uninstall apps if node is not confirmed
  * @param {Function} installedAppsFn - Function to get installed apps
- * @param {Function} removeAppLocallyFn - Function to remove apps locally
  * @returns {Promise<void>}
  */
 // eslint-disable-next-line consistent-return
-async function monitorNodeStatus(installedAppsFn, removeAppLocallyFn) {
+async function monitorNodeStatus(installedAppsFn) {
   try {
+    // eslint-disable-next-line global-require
+    const appUninstaller = require('../appLifecycle/appUninstaller');
     let isNodeConfirmed = false;
     if (fluxNetworkHelper.getDosStateValue() >= 100) {
       const installedAppsRes = await installedAppsFn();
@@ -33,13 +34,13 @@ async function monitorNodeStatus(installedAppsFn, removeAppLocallyFn) {
         log.info(`monitorNodeStatus - Application ${installedApp.name} going to be removed from node as the node have DOS state over 100`);
         log.warn(`monitorNodeStatus - Removing application ${installedApp.name} locally`);
         // eslint-disable-next-line no-await-in-loop
-        await removeAppLocallyFn(installedApp.name, null, true, false, isNodeConfirmed);
+        await appUninstaller.uninstallApplication(installedApp.name, { forceKill: true, skipGuard: true, broadcastRemoval: !!isNodeConfirmed });
         log.warn(`monitorNodeStatus - Application ${installedApp.name} locally removed`);
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(60 * 1000); // wait for 1 min between each removal
       }
       await serviceHelper.delay(10 * 60 * 1000); // 10m delay before next check
-      return monitorNodeStatus(installedAppsFn, removeAppLocallyFn);
+      return monitorNodeStatus(installedAppsFn);
     }
     let error = false;
     isNodeConfirmed = await generalService.isNodeStatusConfirmed().catch(() => { error = true; });
@@ -55,13 +56,13 @@ async function monitorNodeStatus(installedAppsFn, removeAppLocallyFn) {
         log.info(`monitorNodeStatus - Application ${installedApp.name} going to be removed from node as the node is not confirmed on the network`);
         log.warn(`monitorNodeStatus - Removing application ${installedApp.name} locally`);
         // eslint-disable-next-line no-await-in-loop
-        await removeAppLocallyFn(installedApp.name, null, true, false, false);
+        await appUninstaller.uninstallApplication(installedApp.name, { forceKill: true, skipGuard: true });
         log.warn(`monitorNodeStatus - Application ${installedApp.name} locally removed`);
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(60 * 1000); // wait for 1 min between each removal
       }
       await serviceHelper.delay(20 * 60 * 1000); // 20m delay before next check
-      return monitorNodeStatus(installedAppsFn, removeAppLocallyFn);
+      return monitorNodeStatus(installedAppsFn);
     } if (isNodeConfirmed) {
       log.info('monitorNodeStatus - Node is Confirmed');
       // lets remove from locations when nodes are no longer confirmed
@@ -125,11 +126,11 @@ async function monitorNodeStatus(installedAppsFn, removeAppLocallyFn) {
       }
     }
     await serviceHelper.delay(20 * 60 * 1000); // 20m delay before next check
-    monitorNodeStatus(installedAppsFn, removeAppLocallyFn);
+    monitorNodeStatus(installedAppsFn);
   } catch (error) {
     log.error(error);
     await serviceHelper.delay(2 * 60 * 1000); // 2m delay before next check
-    monitorNodeStatus(installedAppsFn, removeAppLocallyFn);
+    monitorNodeStatus(installedAppsFn);
   }
 }
 

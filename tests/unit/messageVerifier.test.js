@@ -222,7 +222,7 @@ describe('messageVerifier tests', () => {
           isDaemonSynced: isDaemonSyncedStub,
           getBlock: sinon.stub().resolves({}),
         },
-        '../appLifecycle/advancedWorkflows': {
+        '../appDatabase/appSpecHistory': {
           getPreviousAppSpecifications: getPreviousAppSpecsStub,
         },
         '../appDatabase/registryManager': {

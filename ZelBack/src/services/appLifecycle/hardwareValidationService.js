@@ -227,13 +227,7 @@ async function removeNonCompliantApps(appsToRemove) {
       log.warn(`REMOVAL REASON: Hardware downgrade - ${appInfo.name} (${appInfo.reason})`);
       log.info(`hardwareValidationService - Removing ${appInfo.name}`);
 
-      await appUninstaller.removeAppLocally(
-        appInfo.name,
-        null,   // no res object
-        true,   // force=true (aggressive removal)
-        true,   // endResponse=true
-        true,   // sendMessage=true (broadcast to network)
-      );
+      await appUninstaller.uninstallApplication(appInfo.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
 
       results.removed.push(appInfo.name);
       log.info(`hardwareValidationService - Successfully removed ${appInfo.name}`);

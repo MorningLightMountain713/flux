@@ -779,62 +779,54 @@ async function softUninstallComponent(appName, appId, deployComp, res, stopAppMo
  * @param {boolean} sendMessage - Whether to send message to network
  * @returns {Promise<void>}
  */
-async function removeAppLocally(app, res, force = false, endResponse = true, sendMessage = false) {
+async function uninstallApplication(appName, options = {}) {
+  const {
+    forceKill = false,
+    skipGuard = false,
+    broadcastRemoval = false,
+    onStatus = null,
+  } = options;
+
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
+  };
+
   try {
-    // Log removal trigger with stack trace to identify caller
     const { stack } = new Error();
     const callerLine = stack.split('\n')[2]?.trim();
-    log.warn(`APP REMOVAL TRIGGERED: ${app} | force=${force} | sendMessage=${sendMessage} | caller: ${callerLine}`);
+    log.warn(`APP REMOVAL TRIGGERED: ${appName} | forceKill=${forceKill} | skipGuard=${skipGuard} | broadcastRemoval=${broadcastRemoval} | caller: ${callerLine}`);
 
-    if (!force) {
+    if (!skipGuard) {
       if (globalState.removalInProgress) {
-        const warnResponse = messageHelper.createWarningMessage('Another application is undergoing removal. Removal not possible.');
-        log.warn(warnResponse);
-        if (res) {
-          res.write(serviceHelper.ensureString(warnResponse));
-          if (res.flush) res.flush();
-          if (endResponse) {
-            res.end();
-          }
-        }
+        status('Another application is undergoing removal. Removal not possible.');
         return;
       }
       if (globalState.installationInProgress) {
-        const warnResponse = messageHelper.createWarningMessage('Another application is undergoing installation. Removal not possible.');
-        log.warn(warnResponse);
-        if (res) {
-          res.write(serviceHelper.ensureString(warnResponse));
-          if (res.flush) res.flush();
-          if (endResponse) {
-            res.end();
-          }
-        }
+        status('Another application is undergoing installation. Removal not possible.');
         return;
       }
     }
 
     globalState.removalInProgress = true;
 
-    if (!app) {
+    if (!appName) {
       throw new Error('No App specified');
     }
 
-    const isComponent = app.includes('_');
-    const appName = isComponent ? app.split('_')[1] : app;
-    const appComponent = app.split('_')[0];
+    const isComponent = appName.includes('_');
+    const resolvedAppName = isComponent ? appName.split('_')[1] : appName;
+    const appComponent = appName.split('_')[0];
 
-    // Fetch the stored spec as a class instance. Fallback chain:
-    // installed → global live → availableApps() (hardcoded/known apps) →
-    // latest permanent message.
-    let spec = await appsRepository.getInstalledApp(appName);
+    let spec = await appsRepository.getInstalledApp(resolvedAppName);
     if (!spec) {
-      if (!force) {
+      if (!skipGuard) {
         throw new Error('Flux App not found');
       }
-      spec = await appsRepository.getGlobalAppInfo(appName);
+      spec = await appsRepository.getGlobalAppInfo(resolvedAppName);
       if (!spec) {
         const allApps = await availableApps();
-        const hardcoded = allApps.find((a) => a.name === appName);
+        const hardcoded = allApps.find((a) => a.name === resolvedAppName);
         if (hardcoded) {
           const { FluxAppSpecBase } = await getSpec();
           await getSpecBackend();
@@ -844,8 +836,6 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
           }
         }
         if (!spec) {
-          // Permanent-message fallback: walk globalAppsMessages for the
-          // highest-height message naming this app.
           const dbopen = dbHelper.databaseConnection();
           const database = dbopen.db(config.database.appsglobal.database);
           const messages = await dbHelper.findInDatabase(
@@ -853,7 +843,7 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
           );
           const appMessages = messages.filter((message) => {
             const s = message.appSpecifications || message.zelAppSpecifications;
-            return s && s.name === appName;
+            return s && s.name === resolvedAppName;
           });
           let latest;
           appMessages.forEach((message) => {
@@ -871,9 +861,6 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
       throw new Error('Flux App not found');
     }
 
-    // appsRepository returns InstantiatedSpec; unwrap to inner spec since
-    // this function only needs the definition, not state metadata.
-    // Hardcoded/fallback paths may return a bare spec — handle both.
     const { InstantiatedSpec } = await getSpecBackend();
     if (spec instanceof InstantiatedSpec) {
       spec = spec.spec;
@@ -884,103 +871,75 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
       spec = (await spec.decrypt(provider)).spec;
     }
 
-    let appId = dockerService.getAppIdentifier(app); // get app or app component identifier
+    let appId = dockerService.getAppIdentifier(appName);
 
-    // Helpers below still read the plain-object v1-v8 shape (.repotag,
-    // .ports array, etc.). Serialize the class instance back at the
-    // boundary so they see the same shape they've always seen. Full
-    // class-instance flow through the helpers lands in 3.5c/d when
-    // advancedWorkflows migrates (it shares these helpers).
     if (spec.version >= 4 && !isComponent) {
-      // it is a composed application — iterate compose in reverse (same
-      // teardown order as historically). Object.values preserves the
-      // compose insertion order stored by the class.
       const componentsReversed = spec.componentEntries().map(([, c]) => c).reverse();
-      // eslint-disable-next-line no-restricted-syntax
       for (const component of componentsReversed) {
         appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
         // eslint-disable-next-line no-await-in-loop
-        await hardUninstallComponent(appName, appId, component.toCanonical(), res, stopAppMonitoring, force);
+        await hardUninstallComponent(resolvedAppName, appId, component.toCanonical(), null, stopAppMonitoring, forceKill);
       }
     } else if (isComponent) {
       const component = spec.getComponent(appComponent);
       if (!component) {
-        throw new Error(`Flux App component ${appComponent} not found in ${appName}`);
+        throw new Error(`Flux App component ${appComponent} not found in ${resolvedAppName}`);
       }
       appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
-      await hardUninstallComponent(appName, appId, component.toCanonical(), res, stopAppMonitoring, force);
+      await hardUninstallComponent(resolvedAppName, appId, component.toCanonical(), null, stopAppMonitoring, forceKill);
     } else {
-      // v1-v3 flat spec: the serialized form carries the flat fields
-      // (.repotag, .port, etc.) that hardUninstallApplication expects.
-      await hardUninstallApplication(appName, appId, spec.serialize(), res, stopAppMonitoring, force);
+      await hardUninstallApplication(resolvedAppName, appId, spec.serialize(), null, stopAppMonitoring, forceKill);
     }
 
-    if (sendMessage) {
+    if (broadcastRemoval) {
       const ip = await fluxNetworkHelper.getMyFluxIPandPort();
       if (ip) {
-        const broadcastedAt = Date.now();
         const appRemovedMessage = {
           type: 'fluxappremoved',
           version: 1,
-          appName,
+          appName: resolvedAppName,
           ip,
-          broadcastedAt,
+          broadcastedAt: Date.now(),
         };
         log.info('Broadcasting appremoved message to the network');
-        // broadcast messages about app removed to all peers
         await fluxCommunicationMessagesSender.broadcastMessageToAll(appRemovedMessage);
-        // Remove app from running apps cache
         const { runningAppsCache } = globalState;
-        if (runningAppsCache.has(appName)) {
-          runningAppsCache.delete(appName);
-          log.info(`Removed ${appName} from running apps cache`);
+        if (runningAppsCache.has(resolvedAppName)) {
+          runningAppsCache.delete(resolvedAppName);
+          log.info(`Removed ${resolvedAppName} from running apps cache`);
         }
       }
     }
 
     if (!isComponent) {
-      const dockerNetworkStatus = {
-        status: 'Cleaning up docker network...',
-      };
-      log.info(dockerNetworkStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(dockerNetworkStatus));
-        if (res.flush) res.flush();
-      }
+      status('Cleaning up docker network...');
 
       let networkRemoved = false;
       let networkError = null;
 
-      if (force) {
-        // For forced removals, give Docker a moment to clean up container endpoints
+      if (forceKill) {
         await serviceHelper.delay(2000);
-
-        // Use aggressive network removal that disconnects endpoints first
-        log.info(`Attempting force removal of network for ${appName}...`);
-        await dockerService.forceRemoveFluxAppDockerNetwork(appName).then(() => {
+        log.info(`Attempting force removal of network for ${resolvedAppName}...`);
+        await dockerService.forceRemoveFluxAppDockerNetwork(resolvedAppName).then(() => {
           networkRemoved = true;
-          log.info(`Network ${appName} force removed successfully`);
+          log.info(`Network ${resolvedAppName} force removed successfully`);
         }).catch((error) => {
           networkError = error;
           log.error(`Force network removal failed: ${error.message}`);
-
-          // Retry once more after additional delay
-          log.warn(`Retrying force network removal for ${appName} after delay...`);
+          log.warn(`Retrying force network removal for ${resolvedAppName} after delay...`);
         });
 
-        // Retry if first attempt failed
         if (!networkRemoved && networkError) {
           await serviceHelper.delay(3000);
-          await dockerService.forceRemoveFluxAppDockerNetwork(appName).then(() => {
+          await dockerService.forceRemoveFluxAppDockerNetwork(resolvedAppName).then(() => {
             networkRemoved = true;
-            log.info(`Network ${appName} removed on retry`);
+            log.info(`Network ${resolvedAppName} removed on retry`);
           }).catch((error) => {
             log.error(`Network removal retry failed: ${error.message}`);
           });
         }
       } else {
-        // Standard removal for non-forced uninstalls
-        await dockerService.removeFluxAppDockerNetwork(appName).then(() => {
+        await dockerService.removeFluxAppDockerNetwork(resolvedAppName).then(() => {
           networkRemoved = true;
         }).catch((error) => {
           networkError = error;
@@ -989,70 +948,23 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
       }
 
       if (networkRemoved) {
-        const dockerNetworkStatus2 = {
-          status: 'Docker network cleaned',
-        };
-        log.info(dockerNetworkStatus2);
-        if (res) {
-          res.write(serviceHelper.ensureString(dockerNetworkStatus2));
-          if (res.flush) res.flush();
-        }
+        status('Docker network cleaned');
       } else {
-        const dockerNetworkStatusWarning = {
-          status: `WARNING: Docker network for ${appName} may not have been fully removed`,
-        };
-        log.warn(dockerNetworkStatusWarning);
-        if (res) {
-          res.write(serviceHelper.ensureString(dockerNetworkStatusWarning));
-          if (res.flush) res.flush();
-        }
+        status(`WARNING: Docker network for ${resolvedAppName} may not have been fully removed`);
       }
-      const databaseStatus = {
-        status: 'Cleaning up database...',
-      };
-      log.info(databaseStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(databaseStatus));
-        if (res.flush) res.flush();
-      }
+
+      status('Cleaning up database...');
       const appsDatabase = dbHelper.databaseConnection().db(config.database.appslocal.database);
       await dbHelper.findOneAndDeleteInDatabase(
-        appsDatabase, localAppsInformation, { name: appName }, {},
+        appsDatabase, localAppsInformation, { name: resolvedAppName }, {},
       );
-      const databaseStatus2 = {
-        status: 'Database cleaned',
-      };
-      log.info(databaseStatus2);
-      if (res) {
-        res.write(serviceHelper.ensureString(databaseStatus2));
-        if (res.flush) res.flush();
-      }
+      status('Database cleaned');
     }
-    const appRemovalResponseDone = messageHelper.createSuccessMessage(`Removal step done. Result: Flux App ${appName} was successfuly removed`);
-    log.info(appRemovalResponseDone);
 
-    if (res) {
-      res.write(serviceHelper.ensureString(appRemovalResponseDone));
-      if (res.flush) res.flush();
-      if (endResponse) {
-        res.end();
-      }
-    }
+    status(`Removal step done. Result: Flux App ${resolvedAppName} was successfully removed`);
   } catch (error) {
-    log.error(`Error removing app ${app}: ${error.message}`);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-
-    if (res) {
-      res.write(serviceHelper.ensureString(errorResponse));
-      if (res.flush) res.flush();
-      if (endResponse) {
-        res.end();
-      }
-    }
+    log.error(`Error removing app ${appName}: ${error.message}`);
+    status(`Error: ${error.message}`);
   } finally {
     globalState.removalInProgress = false;
   }
@@ -1119,11 +1031,19 @@ async function removeAppLocallyApi(req, res) {
       return res.json(appResponse);
     }
 
-    // Set response headers for streaming
     res.setHeader('Content-Type', 'application/json');
 
-    await removeAppLocally(appname, res, force, true, true);
-    return undefined; // Explicitly return after async operation
+    await uninstallApplication(appname, {
+      forceKill: force,
+      skipGuard: force,
+      broadcastRemoval: true,
+      onStatus: (msg) => {
+        res.write(serviceHelper.ensureString(msg));
+        if (res.flush) res.flush();
+      },
+    });
+    res.end();
+    return undefined;
   } catch (error) {
     log.error(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -1136,12 +1056,12 @@ async function removeAppLocallyApi(req, res) {
 }
 
 module.exports = {
+  uninstallApplication,
   uninstallComponent,
   hardUninstallComponent,
   hardUninstallApplication,
   softUninstallComponent,
   cleanupPorts,
   cleanupDeploymentPorts,
-  removeAppLocally,
   removeAppLocallyApi,
 };

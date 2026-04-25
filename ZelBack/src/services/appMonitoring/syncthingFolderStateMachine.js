@@ -502,7 +502,7 @@ async function handleReceiveOnlyTransition(params) {
           try {
             // eslint-disable-next-line global-require
             const appUninstaller = require('../appLifecycle/appUninstaller');
-            await appUninstaller.removeAppLocally(appId, null, true, false, true);
+            await appUninstaller.uninstallApplication(appId, { forceKill: true, skipGuard: true, broadcastRemoval: true });
             log.info(`handleReceiveOnlyTransition - ${appId} removed from node successfully`);
           } catch (error) {
             log.error(`handleReceiveOnlyTransition - Failed to remove ${appId}: ${error.message}`);

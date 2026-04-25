@@ -36,13 +36,7 @@ async function removeAllApps(reason) {
       log.warn(`REMOVAL REASON: Daemon failure - removing ${app.name} (${reason})`);
       try {
         // we probably won't have peers - but broadcast anyway
-        await appUninstaller.removeAppLocally(
-          app.name,
-          null,   // no res object
-          true,   // force=true
-          true,   // endResponse=true
-          true,   // sendMessage=true (broadcast removal)
-        );
+        await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
 
         // 3-minute delay between removals to avoid system overload
         await serviceHelper.delay(REMOVAL_DELAY);

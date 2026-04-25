@@ -9,7 +9,6 @@ const imageVerifier = require('../utils/imageVerifier');
 const dbHelper = require('../dbHelper');
 const verificationHelper = require('../verificationHelper');
 const appsRepository = require('../appDatabase/appsRepository');
-const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const log = require('../../lib/log');
 const { supportedArchitectures, globalAppsMessages, globalAppsInformation } = require('../utils/appConstants');
 const fluxCaching = require('../utils/cacheManager').default;
@@ -615,42 +614,52 @@ async function checkDockerAccessibility(req, res) {
   });
 }
 
-/**
- * Check applications compliance and remove blacklisted apps
- * @param {Function} installedApps - Function to get installed apps
- * @param {Function} removeAppLocally - Function to remove app locally
- * @returns {Promise<void>}
- */
-async function checkApplicationsCompliance(installedApps, removeAppLocally) {
+async function checkApplicationsCompliance() {
+  // eslint-disable-next-line global-require
+  const deploymentProvider = require('../appRuntime/deploymentProvider');
+  // eslint-disable-next-line global-require
+  const appUninstaller = require('../appLifecycle/appUninstaller');
+
   try {
-    // get list of locally installed apps.
-    const installedAppsRes = await installedApps();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
+    const installedSpecs = await appsRepository.listInstalledApps();
+    const deployments = await deploymentProvider.listInstalledDeployments();
+    const deploymentByName = new Map();
+    for (const d of deployments) {
+      deploymentByName.set(d.appName, d);
     }
-    // Decrypt enterprise apps (version 8 with encrypted content)
-    installedAppsRes.data = await decryptEnterpriseApps(installedAppsRes.data);
-    const appsInstalled = installedAppsRes.data;
+
     const appsToRemoveNames = [];
-    // eslint-disable-next-line no-restricted-syntax
-    for (const app of appsInstalled) {
+    for (const inst of installedSpecs) {
+      const deployment = deploymentByName.get(inst.name);
+      // Build plain object for checkApplicationImagesBlocked (Cascade 2 will change its signature)
+      const images = [];
+      if (deployment) {
+        for (const [, comp] of deployment.componentEntries()) {
+          images.push({ name: comp.name, repotag: comp.image });
+        }
+      }
+      const appForCheck = {
+        name: inst.name,
+        hash: inst.hash,
+        owner: inst.owner,
+        version: inst.spec.version,
+        compose: images,
+      };
       // eslint-disable-next-line no-await-in-loop
-      const isAppBlocked = await checkApplicationImagesBlocked(app);
+      const isAppBlocked = await checkApplicationImagesBlocked(appForCheck);
       if (isAppBlocked) {
-        if (!appsToRemoveNames.includes(app.name)) {
-          appsToRemoveNames.push(app.name);
+        if (!appsToRemoveNames.includes(inst.name)) {
+          appsToRemoveNames.push(inst.name);
         }
       }
     }
-    // remove appsToRemoveNames apps from locally running
-    // eslint-disable-next-line no-restricted-syntax
     for (const appName of appsToRemoveNames) {
       log.warn(`Application ${appName} is blacklisted, removing`);
       log.warn(`REMOVAL REASON: Blacklisted image - ${appName} uses a blacklisted Docker image (imageManager)`);
       // eslint-disable-next-line no-await-in-loop
-      await removeAppLocally(appName, null, false, true, true);
+      await appUninstaller.uninstallApplication(appName, { broadcastRemoval: true });
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(3 * 60 * 1000); // wait for 3 mins so we don't have more removals at the same time
+      await serviceHelper.delay(3 * 60 * 1000);
     }
   } catch (error) {
     log.error(error);

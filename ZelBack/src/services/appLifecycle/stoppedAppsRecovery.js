@@ -232,7 +232,7 @@ async function startStoppedAppsOnBoot() {
           log.warn(`stoppedAppsRecovery - App ${appName} no longer has a valid location record for this node (${myIp}), removing locally`);
           try {
             // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.removeAppLocally(appName, null, true, true, false);
+            await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true });
             results.appsRemoved.push(appName);
             log.info(`stoppedAppsRecovery - App ${appName} removed locally (was reassigned to another node)`);
           } catch (removeError) {

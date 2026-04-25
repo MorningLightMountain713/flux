@@ -197,7 +197,7 @@ async function startFluxFunctions() {
         log.warn(`Application ${appName} is expired, removing`);
         log.warn(`REMOVAL REASON: App expired - ${appName} reached expiration date (serviceManager)`);
         // eslint-disable-next-line no-await-in-loop
-        await appUninstaller.removeAppLocally(appName, null, false, true, true);
+        await appUninstaller.uninstallApplication(appName, { broadcastRemoval: true });
         // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => { setTimeout(r, 60_000); });
       }
@@ -423,34 +423,12 @@ async function startFluxFunctions() {
       );
     }, 3 * 60 * 1000);
     setTimeout(() => {
-      nodeStatusMonitor.monitorNodeStatus(appQueryService.installedApps, appUninstaller.removeAppLocally);
+      nodeStatusMonitor.monitorNodeStatus(appQueryService.installedApps);
     }, 1.5 * 60 * 1000);
     setTimeout(() => {
-      peerNotification.checkAndNotifyPeersOfRunningApps(
-        appQueryService.installedApps,
-        appQueryService.listRunningApps,
-        globalState.appsMonitored,
-        globalState.removalInProgress,
-        globalState.installationInProgress,
-        globalState.softRedeployInProgress,
-        globalState.hardRedeployInProgress,
-        globalState.reinstallationOfOldAppsInProgress,
-        () => globalState,
-        cacheManager,
-      ); // first broadcast after 1m of starting fluxos
-      setInterval(() => { // every 60 mins messages stay on db for 65m
-        peerNotification.checkAndNotifyPeersOfRunningApps(
-          appQueryService.installedApps,
-          appQueryService.listRunningApps,
-          globalState.appsMonitored,
-          globalState.removalInProgress,
-          globalState.installationInProgress,
-          globalState.softRedeployInProgress,
-          globalState.hardRedeployInProgress,
-          globalState.reinstallationOfOldAppsInProgress,
-          () => globalState,
-          cacheManager,
-        );
+      peerNotification.checkAndNotifyPeersOfRunningApps();
+      setInterval(() => {
+        peerNotification.checkAndNotifyPeersOfRunningApps();
       }, 60 * 60 * 1000);
     }, 1 * 60 * 1000);
     setTimeout(() => {
@@ -460,7 +438,6 @@ async function startFluxFunctions() {
         dockerService.appDockerStop,
         dockerService.appDockerRestart,
         dockerOperations.appDeleteDataInMountPoint,
-        appUninstaller.removeAppLocally,
       ); // rechecks and possibly adjust syncthing configuration every 2 minutes
       setTimeout(() => {
         advancedWorkflows.masterSlaveApps(
@@ -474,7 +451,7 @@ async function startFluxFunctions() {
         ); // stop and starts apps using syncthing g: when a new master is required or was changed.
       }, 30 * 1000);
       setTimeout(() => {
-        appInspector.monitorSharedDBApps(appUninstaller.removeAppLocally, globalState); // Monitor SharedDB Apps.
+        appInspector.monitorSharedDBApps(globalState); // Monitor SharedDB Apps.
       }, 60 * 1000);
     }, 3 * 60 * 1000);
     setTimeout(() => {
@@ -490,7 +467,7 @@ async function startFluxFunctions() {
       appSpawner.trySpawningGlobalApplication();
     }, (Math.floor(Math.random() * (135 - 125 + 1)) + 125) * 60 * 1000); // start between 125 and 135m after fluxos starts;
     setInterval(() => {
-      imageManager.checkApplicationsCompliance(appQueryService.installedApps, appUninstaller.removeAppLocally);
+      imageManager.checkApplicationsCompliance();
     }, 60 * 60 * 1000); //  every hour
     setTimeout(() => {
       advancedWorkflows.forceAppRemovals(); // force cleanup of apps every 2h
@@ -507,7 +484,6 @@ async function startFluxFunctions() {
     }, 5 * 60 * 1000); // Initial delay: 5 minutes (let daemon try to sync first)
     setTimeout(() => {
       appInspector.checkStorageSpaceForApps(
-        appUninstaller.removeAppLocally,
         appsStorageViolations,
       );
     }, 20 * 60 * 1000);

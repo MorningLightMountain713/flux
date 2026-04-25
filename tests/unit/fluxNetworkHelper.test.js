@@ -1112,7 +1112,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       appUninstallerStub = {
-        removeAppLocally: sinon.stub().resolves(),
+        uninstallApplication: sinon.stub().resolves(),
       };
 
       appControllerStub = {
@@ -1150,8 +1150,8 @@ describe('fluxNetworkHelper tests', () => {
 
       await fluxNetworkHelperWithStubs.adjustExternalIP(newIp);
 
-      sinon.assert.calledOnce(appUninstallerStub.removeAppLocally);
-      sinon.assert.calledWith(appUninstallerStub.removeAppLocally, 'staticApp');
+      sinon.assert.calledOnce(appUninstallerStub.uninstallApplication);
+      sinon.assert.calledWith(appUninstallerStub.uninstallApplication, 'staticApp');
 
       sinon.assert.calledOnce(appControllerStub.appDockerRestart);
       sinon.assert.calledWith(appControllerStub.appDockerRestart, 'normalApp');
@@ -1178,7 +1178,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       appUninstallerStub = {
-        removeAppLocally: sinon.stub().resolves(),
+        uninstallApplication: sinon.stub().resolves(),
       };
 
       appControllerStub = {
@@ -1222,8 +1222,8 @@ describe('fluxNetworkHelper tests', () => {
       await fluxNetworkHelperWithStubs.adjustExternalIP(newIp);
 
       sinon.assert.calledOnce(specCutoverStub.decryptToCleartextClass);
-      sinon.assert.calledOnce(appUninstallerStub.removeAppLocally);
-      sinon.assert.calledWith(appUninstallerStub.removeAppLocally, 'enterpriseApp');
+      sinon.assert.calledOnce(appUninstallerStub.uninstallApplication);
+      sinon.assert.calledWith(appUninstallerStub.uninstallApplication, 'enterpriseApp');
     });
 
     it('should handle enterprise decryption failure gracefully', async () => {
@@ -1245,7 +1245,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       appUninstallerStub = {
-        removeAppLocally: sinon.stub().resolves(),
+        uninstallApplication: sinon.stub().resolves(),
       };
 
       appControllerStub = {
@@ -1283,7 +1283,7 @@ describe('fluxNetworkHelper tests', () => {
 
       await fluxNetworkHelperWithStubs.adjustExternalIP(newIp);
 
-      sinon.assert.notCalled(appUninstallerStub.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerStub.uninstallApplication);
       sinon.assert.notCalled(appControllerStub.appDockerRestart);
     });
 
@@ -1306,7 +1306,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       appUninstallerStub = {
-        removeAppLocally: sinon.stub().resolves(),
+        uninstallApplication: sinon.stub().resolves(),
       };
 
       appControllerStub = {
@@ -1344,7 +1344,7 @@ describe('fluxNetworkHelper tests', () => {
 
       await fluxNetworkHelperWithStubs.adjustExternalIP(newIp);
 
-      sinon.assert.notCalled(appUninstallerStub.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerStub.uninstallApplication);
       sinon.assert.calledOnce(appControllerStub.appDockerRestart);
     });
   });

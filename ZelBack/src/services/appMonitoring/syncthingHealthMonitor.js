@@ -118,7 +118,6 @@ function determineAction(issueSince, currentAction) {
  * @param {Map} params.folderHealthCache - Cache for health tracking
  * @param {Function} params.appDockerStopFn - Function to stop docker container
  * @param {Function} params.appDockerStartFn - Function to start docker container
- * @param {Function} params.removeAppLocallyFn - Function to remove app locally
  * @param {Object} params.state - Global state object
  * @param {Map} params.receiveOnlySyncthingAppsCache - Cache tracking app initialization state
  * @returns {Promise<Object>} Health monitoring results
@@ -129,7 +128,6 @@ async function monitorFolderHealth(params) {
     folderHealthCache,
     appDockerStopFn,
     appDockerStartFn,
-    removeAppLocallyFn,
     state,
     receiveOnlySyncthingAppsCache,
   } = params;
@@ -339,7 +337,9 @@ async function monitorFolderHealth(params) {
           // Broadcast fluxappremoved so peers drop this IP from appLocations;
           // otherwise the next spawner keeps selecting this node and hits the same unreachable peer.
           // eslint-disable-next-line no-await-in-loop
-          await removeAppLocallyFn(appName, null, true, false, true);
+          // eslint-disable-next-line global-require
+          const appUninstaller = require('../appLifecycle/appUninstaller');
+          await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true });
           healthStatus.lastAction = 'removed';
           results.actions.push({
             folderId,

@@ -387,7 +387,7 @@ async function redeployComponent(appName, componentName, options = {}) {
     log.error(error);
     log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployComponent)`);
     globalState[stateFlag] = false;
-    await appUninstaller.removeAppLocally(appName, null, true, true, true);
+    await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true });
   }
 }
 
@@ -475,7 +475,7 @@ async function redeployApplication(appName, options = {}) {
     log.error(error);
     log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployApplication)`);
     globalState[stateFlag] = false;
-    await appUninstaller.removeAppLocally(appName, null, true, true, broadcastRemoval);
+    await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval });
     log.info(`Cleanup completed for ${appName} after ${label} failure`);
   }
 }
@@ -1635,7 +1635,7 @@ async function checkAndRemoveApplicationInstance() {
               log.warn(`REMOVAL REASON: Too many instances - ${installedApp.name} running on ${runningAppList.length} instances (max: ${minInstances}) - This node is the newest instance`);
               log.warn(`Removing application ${installedApp.name} locally`);
               // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.removeAppLocally(installedApp.name, null, false, true, true);
+              await appUninstaller.uninstallApplication(installedApp.name, { broadcastRemoval: true });
               log.warn(`Application ${installedApp.name} locally removed`);
               // eslint-disable-next-line no-await-in-loop
               await serviceHelper.delay(config.fluxapps.removal.delay * 1000); // wait for 6 mins so we don't have more removals at the same time
@@ -1664,7 +1664,7 @@ async function removeEnterpriseFromNonArcane(installed) {
   const restored = await findAndRestoreNonEnterpriseSpecs(installed);
   if (!restored) return;
 
-  await appUninstaller.removeAppLocally(installed.name, null, true, true, true);
+  await appUninstaller.uninstallApplication(installed.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
   log.info(`Removed enterprise app ${installed.name} and notified peers`);
 }
 
@@ -1748,7 +1748,7 @@ async function reconcileApp(installed, registrySpec) {
   } catch (error) {
     log.error(error);
     log.warn(`REMOVAL REASON: Reconciliation failure - ${installed.name}: ${error.message}`);
-    await appUninstaller.removeAppLocally(installed.name, null, true, true, true);
+    await appUninstaller.uninstallApplication(installed.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
     log.info(`Cleanup completed for ${installed.name} after reconciliation failure`);
   } finally {
     globalState.reconciliationInProgress = false;
@@ -1892,14 +1892,14 @@ async function forceAppRemovals() {
           log.warn(`${dApp} does not exist in installed app. Forcing removal.`);
           log.warn(`REMOVAL REASON: Orphan app cleanup - ${dApp} running in Docker but not in installed apps database (forceAppRemovals)`);
           // eslint-disable-next-line no-await-in-loop
-          await appUninstaller.removeAppLocally(dApp, null, true, true, shouldBroadcast).catch((error) => log.error(error)); // remove entire app, only broadcast if in locations
+          await appUninstaller.uninstallApplication(dApp, { forceKill: true, skipGuard: true, broadcastRemoval: shouldBroadcast }).catch((error) => log.error(error)); // remove entire app, only broadcast if in locations
           // eslint-disable-next-line no-await-in-loop
           await serviceHelper.delay(3 * 60 * 1000); // 3 mins
         } else {
           log.warn(`${dApp} does not exist in installed apps and global application specifications are missing. Forcing removal.`);
           log.warn(`REMOVAL REASON: Orphan app cleanup - ${dApp} running in Docker but missing from both installed apps DB and global specs (forceAppRemovals)`);
           // eslint-disable-next-line no-await-in-loop
-          await appUninstaller.removeAppLocally(dApp, null, true, true, shouldBroadcast).catch((error) => log.error(error)); // remove entire app, only broadcast if in locations
+          await appUninstaller.uninstallApplication(dApp, { forceKill: true, skipGuard: true, broadcastRemoval: shouldBroadcast }).catch((error) => log.error(error)); // remove entire app, only broadcast if in locations
           // eslint-disable-next-line no-await-in-loop
           await serviceHelper.delay(3 * 60 * 1000); // 3 mins
         }
