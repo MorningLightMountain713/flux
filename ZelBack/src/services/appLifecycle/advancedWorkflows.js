@@ -29,7 +29,6 @@ const appsRepository = require('../appDatabase/appsRepository');
 const https = require('https');
 const {
   toCanonicalSpec,
-  decryptToCleartextClass,
 } = require('../utils/specCutover');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { listRunningContainers } = require('../appQuery/appQueryService');

@@ -6,7 +6,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const appConstants = require('../utils/appConstants');
-const { decryptToCleartextClass } = require('../utils/specCutover');
+const { resolveSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const log = require('../../lib/log');
 
@@ -69,7 +69,7 @@ async function appsResources(req, res) {
     for (const app of apps) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        const spec = await decryptToCleartextClass(app);
+        const spec = await resolveSpec(app);
         const deployment = DeploymentSpec.fromSpec(spec, appConstants.appsFolder);
         const { cpu, memory, storage } = deployment.totalResources();
         const componentCount = deployment.componentCount();

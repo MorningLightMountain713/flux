@@ -75,7 +75,7 @@ describe('appSpecHelpers tests', () => {
     beforeEach(() => {
       appSpecHelpers = proxyquire('../../ZelBack/src/services/utils/appSpecHelpers', {
         './specCutover': {
-          decryptToCleartextClass: sinon.stub().callsFake(async (doc) => mockClassSpec(doc)),
+          resolveSpec: sinon.stub().callsFake(async (doc) => mockClassSpec(doc)),
         },
       });
     });

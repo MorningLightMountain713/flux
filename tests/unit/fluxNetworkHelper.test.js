@@ -1131,7 +1131,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       const specCutoverStub = {
-        decryptToCleartextClass: sinon.stub().callsFake((app) => Promise.resolve({ ...app, isEncrypted: false })),
+        resolveSpec: sinon.stub().callsFake((app) => Promise.resolve({ ...app, isEncrypted: false })),
       };
 
       const fluxNetworkHelperWithStubs = proxyquire('../../ZelBack/src/services/fluxNetworkHelper', {
@@ -1197,7 +1197,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       const specCutoverStub = {
-        decryptToCleartextClass: sinon.stub().resolves({
+        resolveSpec: sinon.stub().resolves({
           name: 'enterpriseApp',
           version: 8,
           isEncrypted: false,
@@ -1221,7 +1221,7 @@ describe('fluxNetworkHelper tests', () => {
 
       await fluxNetworkHelperWithStubs.adjustExternalIP(newIp);
 
-      sinon.assert.calledOnce(specCutoverStub.decryptToCleartextClass);
+      sinon.assert.calledOnce(specCutoverStub.resolveSpec);
       sinon.assert.calledOnce(appUninstallerStub.uninstallApplication);
       sinon.assert.calledWith(appUninstallerStub.uninstallApplication, 'enterpriseApp');
     });
@@ -1264,7 +1264,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       const specCutoverStub = {
-        decryptToCleartextClass: sinon.stub().resolves(null),
+        resolveSpec: sinon.stub().resolves(null),
       };
 
       const fluxNetworkHelperWithStubs = proxyquire('../../ZelBack/src/services/fluxNetworkHelper', {
@@ -1325,7 +1325,7 @@ describe('fluxNetworkHelper tests', () => {
       };
 
       const specCutoverStub = {
-        decryptToCleartextClass: sinon.stub().callsFake((app) => Promise.resolve({ ...app, isEncrypted: false })),
+        resolveSpec: sinon.stub().callsFake((app) => Promise.resolve({ ...app, isEncrypted: false })),
       };
 
       const fluxNetworkHelperWithStubs = proxyquire('../../ZelBack/src/services/fluxNetworkHelper', {

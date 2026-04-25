@@ -11,7 +11,6 @@ describe('appQueryService tests', () => {
   let enterpriseHelperStub;
   let appSpecHelpersStub;
   let appsRepositoryStub;
-  let cacheManagerStub;
   let logStub;
   let configStub;
 
@@ -77,15 +76,6 @@ describe('appQueryService tests', () => {
       listInstalledAppsRaw: sinon.stub(),
     };
 
-    cacheManagerStub = {
-      default: {
-        enterpriseAppDecryptionCache: {
-          get: sinon.stub().returns(null), // By default, cache misses
-          set: sinon.stub(),
-        },
-      },
-    };
-
     logStub = {
       error: sinon.stub(),
       info: sinon.stub(),
@@ -102,7 +92,6 @@ describe('appQueryService tests', () => {
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../utils/enterpriseHelper': enterpriseHelperStub,
       '../utils/appSpecHelpers': appSpecHelpersStub,
-      '../utils/cacheManager': cacheManagerStub,
       '../../lib/log': logStub,
       '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
         config: configStub,

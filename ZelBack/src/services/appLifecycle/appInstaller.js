@@ -27,7 +27,7 @@ const globalState = require('../utils/globalState');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
-const { decryptToCleartextClass, deserializeSpec } = require('../utils/specCutover');
+const { resolveSpec, deserializeSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
@@ -877,7 +877,7 @@ async function installAppLocally(req, res) {
         throw new Error(`Application Specifications of ${appname} not found`);
       }
 
-      const installSpec = await decryptToCleartextClass(appSpec);
+      const installSpec = await resolveSpec(appSpec);
       if (!installSpec) throw new Error('Could not deserialize app specifications');
 
       const dbopen = dbHelper.databaseConnection();
@@ -1020,7 +1020,7 @@ async function testAppInstall(req, res) {
         throw new Error(`Application Specifications of ${appname} not found`);
       }
 
-      const testSpec = await decryptToCleartextClass(appSpec);
+      const testSpec = await resolveSpec(appSpec);
       if (!testSpec) throw new Error('Could not deserialize app specifications');
       appSpec = testSpec.serialize();
 

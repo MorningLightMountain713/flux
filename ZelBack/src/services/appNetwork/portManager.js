@@ -9,7 +9,7 @@ const upnpService = require('../upnpService');
 const serviceHelper = require('../serviceHelper');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
 const appsRepository = require('../appDatabase/appsRepository');
-const { decryptToCleartextClass } = require('../utils/specCutover');
+const { resolveSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const { localAppsInformation, globalAppsInformation, appsFolder } = require('../utils/appConstants');
 
@@ -18,7 +18,7 @@ const failedNodesTestPortsCache = new Map();
 
 async function buildDeployment(plainSpec) {
   const { DeploymentSpec } = await getSpecBackend();
-  const spec = await decryptToCleartextClass(plainSpec);
+  const spec = await resolveSpec(plainSpec);
   return DeploymentSpec.fromSpec(spec, appsFolder);
 }
 

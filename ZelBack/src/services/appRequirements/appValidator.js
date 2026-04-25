@@ -10,9 +10,10 @@ const registryManager = require('../appDatabase/registryManager');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const imageManager = require('../appSecurity/imageManager');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
+const appsRepository = require('../appDatabase/appsRepository');
 const { peerManager } = require('../utils/peerState');
 const { validateSubmissionSpec, getSpec } = require('../utils/specLibs');
-const { decryptToCleartextClass, deserializeSpec, toCanonicalSpec } = require('../utils/specCutover');
+const { resolveSpec, deserializeSpec, toCanonicalSpec } = require('../utils/specCutover');
 
 /**
  * Verify app registration parameters via API
@@ -39,20 +40,16 @@ async function verifyAppRegistrationParameters(req, res) {
         appSpecification.version >= 8 && appSpecification.enterprise,
       );
 
-      const cleartextSpec = await decryptToCleartextClass(appSpecification);
-      if (!cleartextSpec) throw new Error('Could not deserialize app specifications');
-      const appSpecFormatted = cleartextSpec.serialize();
+      const spec = await resolveSpec(appSpecification);
+      if (!spec) throw new Error('Could not deserialize app specifications');
+      const appSpecFormatted = spec.serialize();
 
       await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
       await verifyImageRegistryAndArchitectures(appSpecFormatted);
 
-      if (cleartextSpec.version === 7 && cleartextSpec.nodes && cleartextSpec.nodes.length > 0) {
-        for (const appComponent of appSpecFormatted.compose || []) {
-          if (appComponent.secrets) {
-            // eslint-disable-next-line no-await-in-loop
-            await imageManager.checkAppSecrets(cleartextSpec.name, appComponent, cleartextSpec.owner, true);
-          }
-        }
+      for (const { componentName, secrets } of spec.getComponentSecrets()) {
+        // eslint-disable-next-line no-await-in-loop
+        await assertSecretsNotConflicting(spec.name, componentName, secrets, spec.owner, { isRegistration: true });
       }
 
       await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted);
@@ -95,20 +92,16 @@ async function validateAppUpdate(appSpecification) {
     appSpecification.version >= 8 && appSpecification.enterprise,
   );
 
-  const updateSpec = await decryptToCleartextClass(appSpecification);
-  if (!updateSpec) throw new Error('Could not deserialize app specifications');
-  const appSpecFormatted = updateSpec.serialize();
+  const spec = await resolveSpec(appSpecification);
+  if (!spec) throw new Error('Could not deserialize app specifications');
+  const appSpecFormatted = spec.serialize();
 
   await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
   await verifyImageRegistryAndArchitectures(appSpecFormatted);
 
-  if (updateSpec.version === 7 && updateSpec.nodes && updateSpec.nodes.length > 0) {
-    for (const appComponent of appSpecFormatted.compose || []) {
-      if (appComponent.secrets) {
-        // eslint-disable-next-line no-await-in-loop
-        await imageManager.checkAppSecrets(updateSpec.name, appComponent, updateSpec.owner, false);
-      }
-    }
+  for (const { componentName, secrets } of spec.getComponentSecrets()) {
+    // eslint-disable-next-line no-await-in-loop
+    await assertSecretsNotConflicting(spec.name, componentName, secrets, spec.owner);
   }
 
   const timestamp = Date.now();
@@ -116,20 +109,20 @@ async function validateAppUpdate(appSpecification) {
   const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
   const previousAppSpecs = await getPreviousAppSpecifications(appSpecFormatted, timestamp);
   if (!previousAppSpecs) {
-    throw new Error(`Flux App ${updateSpec.name} does not exist and cannot be updated`);
+    throw new Error(`Flux App ${spec.name} does not exist and cannot be updated`);
   }
 
   const { latestSupportedSpecVersion } = config.fluxapps;
-  if (previousAppSpecs.version !== updateSpec.version && updateSpec.version !== latestSupportedSpecVersion) {
+  if (previousAppSpecs.version !== spec.version && spec.version !== latestSupportedSpecVersion) {
     throw new Error(
       `Application update rejected: Version changes are only allowed when updating to version ${latestSupportedSpecVersion} (current latest supported version). `
-      + `Current version: ${previousAppSpecs.version}, Attempted version: ${updateSpec.version}. `
+      + `Current version: ${previousAppSpecs.version}, Attempted version: ${spec.version}. `
       + `To update this application, please use version ${latestSupportedSpecVersion} specifications.`,
     );
   }
 
   const { UpdatePolicy } = await getSpec();
-  UpdatePolicy.assertCompatible(previousAppSpecs, updateSpec);
+  UpdatePolicy.assertCompatible(previousAppSpecs, spec);
 
   if (isEnterprise) {
     const wireForm = await toCanonicalSpec(appSpecification);
@@ -168,8 +161,56 @@ async function verifyAppUpdateApi(req, res) {
 }
 
 
+function normalizePGPSecret(pgpMessage) {
+  if (!pgpMessage) return '';
+  return pgpMessage.replace(/\s+/g, '').replace(/\\n/g, '').trim();
+}
+
+async function assertSecretsNotConflicting(appName, componentName, secrets, owner, options = {}) {
+  const { isRegistration = false } = options;
+  const normalized = normalizePGPSecret(secrets);
+  if (!normalized) return;
+
+  const liveSecrets = await appsRepository.listLiveV7Secrets();
+  let foundSameApp = false;
+  let foundDifferentApp = false;
+
+  for (const entry of liveSecrets) {
+    if (normalizePGPSecret(entry.secrets) === normalized) {
+      if (isRegistration) {
+        throw new Error(
+          `Provided component '${componentName}' secrets are not valid (duplicate in app: '${entry.appName}')`,
+        );
+      } else if (entry.appName !== appName) {
+        foundDifferentApp = true;
+      } else {
+        foundSameApp = true;
+      }
+    }
+  }
+
+  if (!isRegistration && foundDifferentApp && !foundSameApp) {
+    throw new Error('Provided component(s) secrets are not valid (conflict with another app).');
+  }
+
+  const historicalSecrets = await appsRepository.listHistoricalV7Secrets();
+  const seen = new Set();
+  for (const entry of historicalSecrets) {
+    const entryNormalized = normalizePGPSecret(entry.secrets);
+    if (seen.has(entryNormalized)) continue;
+    seen.add(entryNormalized);
+
+    if (entryNormalized === normalized && entry.owner !== owner) {
+      throw new Error(
+        `Provided component '${componentName}' secrets are not valid (owner mismatch: '${entry.owner}').`,
+      );
+    }
+  }
+}
+
 module.exports = {
   verifyAppRegistrationParameters,
   validateAppUpdate,
   verifyAppUpdateApi,
+  assertSecretsNotConflicting,
 };

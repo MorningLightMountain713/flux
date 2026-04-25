@@ -4,7 +4,7 @@ const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
-const { decryptToCleartextClass } = require('./specCutover');
+const { resolveSpec } = require('./specCutover');
 const { appPricePerMonth } = require('./appUtilities');
 const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const registryManager = require('../appDatabase/registryManager');
@@ -29,7 +29,7 @@ const myLongCache = cacheManager.appPriceBlockedRepoCache;
  */
 async function getAppFluxOnChainPrice(appSpecification) {
   try {
-    const spec = await decryptToCleartextClass(appSpecification);
+    const spec = await resolveSpec(appSpecification);
 
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
     if (!syncStatus.data.synced) {
@@ -60,7 +60,7 @@ async function getAppFluxOnChainPrice(appSpecification) {
       { projection: { _id: 0 } },
     );
     if (appInfoDoc) {
-      const prevSpec = await decryptToCleartextClass(appInfoDoc);
+      const prevSpec = await resolveSpec(appInfoDoc);
       let previousSpecsPrice = await appPricePerMonth(prevSpec, daemonHeight, appPrices);
 
       const previousBlockHeightMultiplier = appInfoDoc.height >= config.fluxapps.daemonPONFork ? 4 : 1;
@@ -166,7 +166,7 @@ async function checkFreeAppUpdate(spec, daemonHeight) {
   if (!instantiated || !spec.expire) return false;
 
   const prevSpec = instantiated.isEncrypted()
-    ? await decryptToCleartextClass(instantiated.serialize())
+    ? await resolveSpec(instantiated.serialize())
     : instantiated.spec;
 
   if (!prevSpec.expire) return false;
@@ -244,7 +244,7 @@ async function getAppFiatAndFluxPrice(req, res) {
         throw new Error('Daemon not yet synced.');
       }
       const daemonHeight = syncStatus.data.height;
-      const spec = await decryptToCleartextClass(appSpecification);
+      const spec = await resolveSpec(appSpecification);
 
       // verifications skipped. This endpoint is only for price evaluation
 
@@ -287,7 +287,7 @@ async function getAppFiatAndFluxPrice(req, res) {
         { projection: { _id: 0 } },
       );
       if (appInfoDoc) {
-        const prevSpec = await decryptToCleartextClass(appInfoDoc);
+        const prevSpec = await resolveSpec(appInfoDoc);
         let previousSpecsPrice = await appPricePerMonth(prevSpec, daemonHeight, appPrices);
 
         const previousBlockHeightMultiplier = appInfoDoc.height >= config.fluxapps.daemonPONFork ? 4 : 1;

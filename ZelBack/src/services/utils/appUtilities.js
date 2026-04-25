@@ -17,7 +17,7 @@ const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelf
  * Calculate app price per month.
  *
  * Expects a FluxAppSpecBase class instance — callers hydrate their plain
- * spec blob via `specCutover.decryptToCleartextClass()` before calling. The class owns
+ * spec blob via `specCutover.resolveSpec()` before calling. The class owns
  * aggregation via DeploymentSpec.totalResources() + allHostPorts(); this
  * function reduces to the version-specific pricing formula, nothing else.
  *

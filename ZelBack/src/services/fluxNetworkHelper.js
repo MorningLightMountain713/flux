@@ -1102,7 +1102,7 @@ async function adjustExternalIP(ip) {
       // eslint-disable-next-line global-require
       const appController = require('./appManagement/appController');
       // eslint-disable-next-line global-require
-      const { decryptToCleartextClass } = require('./utils/specCutover');
+      const { resolveSpec } = require('./utils/specCutover');
       let apps = await appQueryService.installedApps();
       if (apps.status === 'success' && apps.data.length > 0) {
         apps = apps.data;
@@ -1111,7 +1111,7 @@ async function adjustExternalIP(ip) {
         for (const app of apps) {
           if (app.version >= 7 && (app.staticip === true || app.enterprise)) {
             // eslint-disable-next-line no-await-in-loop
-            const spec = await decryptToCleartextClass(app);
+            const spec = await resolveSpec(app);
             if (!spec) continue;
             if (spec.staticip === true) {
               log.info(`Application ${app.name} requires static IP but node IP has changed, uninstalling app`);

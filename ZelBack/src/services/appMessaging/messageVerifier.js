@@ -11,7 +11,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 // Removed messageStore require to avoid circular dependency - will import locally where needed
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates, getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
-const { decryptToCleartextClass, deserializeSpec } = require('../utils/specCutover');
+const { resolveSpec, deserializeSpec } = require('../utils/specCutover');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { updateAppSpecifications } = require('../appDatabase/registryManager');
@@ -603,7 +603,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
           const priceSpecifications = intervals[intervals.length - 1]; // filter does not change order
           if (tempMessage.type === 'zelappregister' || tempMessage.type === 'fluxappregister') {
           // check if value is optimal or higher
-            const spec = await decryptToCleartextClass(specifications);
+            const spec = await resolveSpec(specifications);
             let appPrice = await appPricePerMonth(spec, height, appPrices);
             const expireIn = spec.expire || defaultExpire;
             // app prices are ceiled to highest 0.01
@@ -695,8 +695,8 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
             const previousSpecs = messageInfo.appSpecifications || messageInfo.zelAppSpecifications;
             // here comparison of height differences and specifications
             // price shall be price for standard registration plus minus already paid price according to old specifics. height remains height valid for 22000 blocks
-            const spec = await decryptToCleartextClass(specifications);
-            const prevSpec = await decryptToCleartextClass(previousSpecs);
+            const spec = await resolveSpec(specifications);
+            const prevSpec = await resolveSpec(previousSpecs);
             let appPrice = await appPricePerMonth(spec, height, appPrices);
             let previousSpecsPrice = await appPricePerMonth(prevSpec, messageInfo.height || height, appPrices);
             // Calculate default expire for current and previous apps based on their registration heights
