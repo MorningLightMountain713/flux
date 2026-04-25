@@ -172,19 +172,18 @@ async function getMasterIpFromFdm(appName, axiosOptions) {
  * @param {Object} installedApp - The installed app object from local database
  * @returns {Promise<Object|null>} App specifications to use for removal, or null if local specs are usable or no non-enterprise version found
  */
-async function findAndRestoreNonEnterpriseSpecs(installedApp) {
-  // If compose array has data, we can use the local specs directly
-  if (!installedApp.compose || installedApp.compose.length > 0) {
-    return installedApp;
+async function findAndRestoreNonEnterpriseSpecs(installed) {
+  if (!installed.isEncrypted()) {
+    return true;
   }
 
-  log.info(`Local DB has encrypted specs for ${installedApp.name}, searching for last non-enterprise version in permanent messages`);
+  log.info(`Local DB has encrypted specs for ${installed.name}, searching for last non-enterprise version in permanent messages`);
 
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
 
   const query = {
-    'appSpecifications.name': installedApp.name,
+    'appSpecifications.name': installed.name,
     type: { $in: ['fluxappregister', 'fluxappupdate'] },
   };
   const projection = {
@@ -194,17 +193,16 @@ async function findAndRestoreNonEnterpriseSpecs(installedApp) {
       hash: 1,
       height: 1,
     },
-    sort: { height: -1 }, // Sort descending (newest first)
+    sort: { height: -1 },
   };
 
   const permanentMessages = await dbHelper.findInDatabase(database, globalAppsMessages, query, projection);
 
   if (!permanentMessages || permanentMessages.length === 0) {
-    log.error(`No permanent messages found for ${installedApp.name}`);
-    return null;
+    log.error(`No permanent messages found for ${installed.name}`);
+    return false;
   }
 
-  // Find the first (most recent) message that is NOT enterprise
   let lastNonEnterpriseMessage = null;
   for (let i = 0; i < permanentMessages.length; i += 1) {
     const message = permanentMessages[i];
@@ -218,22 +216,17 @@ async function findAndRestoreNonEnterpriseSpecs(installedApp) {
   }
 
   if (!lastNonEnterpriseMessage) {
-    log.error(`No non-enterprise version found for ${installedApp.name} - cannot properly uninstall without port/container info. Skipping removal to avoid orphaned containers.`);
-    return null;
+    log.error(`No non-enterprise version found for ${installed.name} - cannot properly uninstall without port/container info. Skipping removal to avoid orphaned containers.`);
+    return false;
   }
 
-  log.info(`Found non-enterprise version for ${installedApp.name} at height ${lastNonEnterpriseMessage.height} - using for cleanup`);
+  log.info(`Found non-enterprise version for ${installed.name} at height ${lastNonEnterpriseMessage.height} - using for cleanup`);
 
-  // Temporarily restore non-enterprise specs to local DB for proper cleanup
   const specsForRemoval = lastNonEnterpriseMessage.appSpecifications;
-  const dbopen = dbHelper.databaseConnection();
-  const appsDatabase = dbopen.db(config.database.appslocal.database);
-  const appsQuery = { name: installedApp.name };
-  const options = { upsert: true };
-  await dbHelper.updateOneInDatabase(appsDatabase, localAppsInformation, appsQuery, { $set: specsForRemoval }, options);
-  log.info(`Temporarily restored non-enterprise specs to local DB for ${installedApp.name} to enable proper port cleanup`);
+  await appsRepository.upsertInstalledApp(installed.name, specsForRemoval);
+  log.info(`Temporarily restored non-enterprise specs to local DB for ${installed.name} to enable proper port cleanup`);
 
-  return specsForRemoval;
+  return true;
 }
 
 /**
@@ -243,7 +236,6 @@ async function findAndRestoreNonEnterpriseSpecs(installedApp) {
  */
 async function checkAndRemoveEnterpriseAppsOnNonArcane() {
   try {
-    // Skip if running on arcaneOS
     if (isArcane) {
       log.info('Running on arcaneOS - skipping enterprise app compatibility check');
       return;
@@ -251,61 +243,25 @@ async function checkAndRemoveEnterpriseAppsOnNonArcane() {
 
     log.info('Checking for enterprise apps on non-arcaneOS node...');
 
-    // Get installed apps from local database
-    const installedAppsRes = await getInstalledAppsFromDb();
-    if (installedAppsRes.status !== 'success') {
-      log.error('Failed to get installed apps for enterprise check');
-      return;
-    }
-
-    const installedApps = installedAppsRes.data;
+    const installedApps = await appsRepository.listInstalledApps();
     if (!installedApps || installedApps.length === 0) {
       log.info('No apps installed - enterprise check complete');
       return;
     }
 
-    // eslint-disable-next-line no-restricted-syntax
-    for (const installedApp of installedApps) {
+    for (const installed of installedApps) {
       try {
-        // Get current global app specifications
         // eslint-disable-next-line no-await-in-loop
-        const globalSpecs = await getStrictApplicationSpecifications(installedApp.name);
+        const registrySpec = await appsRepository.getGlobalAppInfo(installed.name);
+        if (!registrySpec) continue;
 
-        if (!globalSpecs) {
-          log.warn(`No global specifications found for ${installedApp.name}`);
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-
-        const isEnterprise = globalSpecs.version >= 8 && globalSpecs.isEncrypted();
-
-        if (isEnterprise) {
-          log.warn(`Found enterprise app ${installedApp.name} (v${globalSpecs.version}) on non-arcaneOS node`);
-
-          // Find and restore non-enterprise specs if needed
+        if (registrySpec.isEncrypted()) {
+          log.warn(`Found enterprise app ${installed.name} (v${registrySpec.version}) on non-arcaneOS node`);
           // eslint-disable-next-line no-await-in-loop
-          const specsForRemoval = await findAndRestoreNonEnterpriseSpecs(installedApp);
-
-          if (!specsForRemoval) {
-            log.error(`Cannot remove ${installedApp.name} - no non-enterprise specs available for proper cleanup`);
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-
-          // Remove the app from the node with force and broadcast to peers
-          log.warn(`REMOVAL REASON: Enterprise app v${globalSpecs.version} detected at startup on non-arcaneOS node - ${installedApp.name}`);
-
-          // eslint-disable-next-line global-require
-      
-
-          // eslint-disable-next-line no-await-in-loop
-          await appUninstaller.removeAppLocally(installedApp.name, null, true, true, true);
-
-          log.info(`Successfully removed enterprise app ${installedApp.name} and notified peers`);
+          await removeEnterpriseFromNonArcane(installed);
         }
       } catch (error) {
-        log.error(`Error processing app ${installedApp.name} for enterprise check:`, error);
-        // Continue with next app even if this one fails
+        log.error(`Error processing app ${installed.name} for enterprise check:`, error);
       }
     }
 
@@ -1693,436 +1649,145 @@ async function checkAndRemoveApplicationInstance() {
   }
 }
 
-/**
- * Check for outdated app versions and reinstall them with newer specifications
- * @returns {Promise<void>} Completion status
- */
-async function reinstallOldApplications() {
+function isOperationInProgress() {
+  return globalState.removalInProgress
+    || globalState.installationInProgress
+    || globalState.softRedeployInProgress
+    || globalState.hardRedeployInProgress
+    || globalState.reconciliationInProgress;
+}
+
+async function removeEnterpriseFromNonArcane(installed) {
+  log.warn(`Application ${installed.name} is enterprise but system is not arcaneOS`);
+  log.warn(`REMOVAL REASON: Enterprise app requires arcaneOS - ${installed.name}`);
+
+  const restored = await findAndRestoreNonEnterpriseSpecs(installed);
+  if (!restored) return;
+
+  await appUninstaller.removeAppLocally(installed.name, null, true, true, true);
+  log.info(`Removed enterprise app ${installed.name} and notified peers`);
+}
+
+async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec) {
+  const oldNames = new Set(Object.keys(oldDeployment.components));
+  const newNames = new Set(Object.keys(newDeployment.components));
+
+  const removed = [...oldNames].filter((n) => !newNames.has(n));
+  const added = [...newNames].filter((n) => !oldNames.has(n));
+  const kept = [...oldNames].filter((n) => newNames.has(n));
+
+  const soft = [];
+  const hard = [];
+  for (const name of kept) {
+    const oldComp = oldDeployment.getComponent(name);
+    const newComp = newDeployment.getComponent(name);
+    if (oldComp.equals(newComp)) {
+      log.info(`Component ${name} of ${appName} unchanged, skipping`);
+    } else if (oldComp.storage === newComp.storage) {
+      soft.push(name);
+    } else {
+      hard.push(name);
+    }
+  }
+
+  const toUninstall = [...removed, ...hard, ...soft];
+  if (toUninstall.length > 0) {
+    for (const name of toUninstall.reverse()) {
+      const deployComp = oldDeployment.getComponent(name);
+      if (!deployComp) continue;
+      const removeVolumes = removed.includes(name) || hard.includes(name);
+      if (removeVolumes) {
+        log.warn(`REMOVAL REASON: Reconciliation - ${deployComp.identifier} ${removed.includes(name) ? 'removed from spec' : 'storage changed'}`);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await appUninstaller.uninstallComponent(deployComp, { removeVolumes });
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+    }
+  }
+
+  const wireSpec = registrySpec.serialize();
+  await appsRepository.upsertInstalledApp(appName, wireSpec);
+  log.info(`Database updated for ${appName}`);
+
+  await appInstaller.checkAppRequirements(wireSpec);
+  const freshDeployment = await deploymentProvider.getInstalledDeployment(appName);
+  const toInstall = [...soft, ...hard, ...added];
+  if (freshDeployment && toInstall.length > 0) {
+    for (const name of toInstall) {
+      const deployComp = freshDeployment.getComponent(name);
+      if (!deployComp) continue;
+      const createVolumes = hard.includes(name) || added.includes(name);
+      log.info(`Installing ${deployComp.identifier} (${createVolumes ? 'with' : 'without'} volumes)...`);
+      // eslint-disable-next-line no-await-in-loop
+      await appInstaller.installComponent(deployComp, {
+        createVolumes,
+        specVersion: registrySpec.version,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+    }
+  }
+}
+
+async function reconcileApp(installed, registrySpec) {
+  const oldDeployment = await deploymentProvider.getInstalledDeployment(installed.name);
+  const newDeployment = await deploymentProvider.buildDeployment(registrySpec);
+  if (!oldDeployment || !newDeployment) return;
+
+  if (isOperationInProgress()) {
+    log.warn(`Skipping ${installed.name} — another operation in progress`);
+    return;
+  }
+
+  globalState.reconciliationInProgress = true;
+  try {
+    log.info(`Application ${installed.name} version is obsolete, reconciling...`);
+    await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec);
+    log.info(`Application ${installed.name} reconciliation complete`);
+  } catch (error) {
+    log.error(error);
+    log.warn(`REMOVAL REASON: Reconciliation failure - ${installed.name}: ${error.message}`);
+    await appUninstaller.removeAppLocally(installed.name, null, true, true, true);
+    log.info(`Cleanup completed for ${installed.name} after reconciliation failure`);
+  } finally {
+    globalState.reconciliationInProgress = false;
+  }
+}
+
+async function reconcileInstalledApps() {
   try {
     const synced = await generalService.checkSynced();
     if (synced !== true) {
-      log.info('Checking application status paused. Not yet synced');
+      log.info('Reconciliation paused. Not yet synced');
       return;
     }
-    // first get installed apps
-    const installedAppsRes = await getInstalledAppsFromDb({ decryptApps: true });
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
-    }
-    const appsInstalled = installedAppsRes.data;
-    // eslint-disable-next-line no-restricted-syntax
-    for (const installedApp of appsInstalled) {
-      // get current app specifications for the app name
-      // if match found. Check if hash found.
-      // if same, do nothing. if different remove and install.
 
-      // eslint-disable-next-line no-await-in-loop
-      const instantiated = await getStrictApplicationSpecifications(installedApp.name);
+    const installedApps = await appsRepository.listInstalledApps();
 
-      let appSpecifications;
-      if (instantiated) {
-        let spec;
-        if (isArcane && instantiated.isEncrypted()) {
-          // eslint-disable-next-line no-await-in-loop
-          spec = await decryptToCleartextClass(instantiated.serialize());
-        } else {
-          spec = instantiated.spec;
-        }
-        if (spec) appSpecifications = spec.serialize();
-      }
-
-      const randomNumber = Math.floor((Math.random() * config.fluxapps.redeploy.probability)); // 50%
-      if (instantiated && instantiated.hash !== installedApp.hash) {
+    for (const installed of installedApps) {
+      try {
         // eslint-disable-next-line no-await-in-loop
-        log.warn(`Application ${installedApp.name} version is obsolete.`);
-        if (randomNumber === 0) {
-          globalState.reinstallationOfOldAppsInProgress = true;
+        const registrySpec = await appsRepository.getGlobalAppInfo(installed.name);
+        if (!registrySpec) continue;
 
-          // Check if this is an enterprise app on non-arcane node FIRST
-          // CRITICAL: Must check BEFORE updating local database or attempting redeployment
-          // If we update the local DB with enterprise specs, we lose the container/port info needed for cleanup
-          if (instantiated.version >= 8
-              && instantiated.isEncrypted()
-              && !isArcane) {
-            log.warn(`Application ${instantiated.name} is enterprise version >= 8 but system is not running arcaneOS.`);
-            log.warn(`REMOVAL REASON: Enterprise app v${instantiated.version} requires arcaneOS - ${instantiated.name}`);
+        if (registrySpec.hash === installed.hash) continue;
 
-            // Find and restore non-enterprise specs if needed for proper cleanup
-            // eslint-disable-next-line no-await-in-loop
-            const specsForRemoval = await findAndRestoreNonEnterpriseSpecs(installedApp);
+        if (Math.floor(Math.random() * config.fluxapps.redeploy.probability) !== 0) continue;
 
-            if (!specsForRemoval) {
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-
-            // Remove the entire app with force and BROADCAST to peers
-            // This is a permanent removal (not a redeploy), so we need to broadcast
-            // eslint-disable-next-line global-require
-        
-            // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.removeAppLocally(installedApp.name, null, true, true, true);
-            log.info(`Successfully removed enterprise app ${installedApp.name} and notified peers`);
-
-            // Skip to next app
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-
-          // check if the app spec was changed
-          const auxAppSpecifications = JSON.parse(JSON.stringify(appSpecifications));
-          const auxInstalledApp = JSON.parse(JSON.stringify(installedApp));
-          delete auxAppSpecifications.description;
-          delete auxAppSpecifications.expire;
-          delete auxAppSpecifications.hash;
-          delete auxAppSpecifications.height;
-          delete auxAppSpecifications.instances;
-          delete auxAppSpecifications.owner;
-
-          delete auxInstalledApp.description;
-          delete auxInstalledApp.expire;
-          delete auxInstalledApp.hash;
-          delete auxInstalledApp.height;
-          delete auxInstalledApp.instances;
-          delete auxInstalledApp.owner;
-
-          if (JSON.stringify(auxAppSpecifications) === JSON.stringify(auxInstalledApp)) {
-            log.info(`Application ${installedApp.name} was updated without any change on the specifications, updating localAppsInformation db information.`);
-            // connect to mongodb
-            const dbopen = dbHelper.databaseConnection();
-            const appsDatabase = dbopen.db(config.database.appslocal.database);
-            const appsQuery = { name: appSpecifications.name };
-            const options = {
-              upsert: true,
-            };
-            // eslint-disable-next-line no-await-in-loop
-            await dbHelper.updateOneInDatabase(appsDatabase, localAppsInformation, appsQuery, { $set: appSpecifications }, options);
-            log.info(`Application ${installedApp.name} Database updated`);
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-          // Specs differ - log for debugging purposes
-          log.info(`Application ${installedApp.name} has actual specification changes, proceeding with redeployment.`);
-
-
-          // check if node is capable to run it according to specifications
-          if (appSpecifications.version >= 4 && installedApp.version <= 3) {
-            if (globalState.removalInProgress) {
-              log.warn(`Another application is undergoing removal. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (globalState.installationInProgress) {
-              log.warn(`Another application is undergoing installation. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (globalState.softRedeployInProgress) {
-              log.warn(`Another application is undergoing soft redeploy. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (globalState.hardRedeployInProgress) {
-              log.warn(`Another application is undergoing hard redeploy. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            log.warn('Updating from old application version, doing hard redeploy...');
-            log.warn(`REMOVAL REASON: App version upgrade - ${appSpecifications.name} upgrading from v${installedApp.version} to v${appSpecifications.version}`);
-            // eslint-disable-next-line global-require
-        
-
-            // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.removeAppLocally(appSpecifications.name, null, true, false);
-            // connect to mongodb
-            const dbopen = dbHelper.databaseConnection();
-            const appsDatabase = dbopen.db(config.database.appslocal.database);
-            const appsQuery = { name: appSpecifications.name };
-            const appsProjection = {};
-            log.warn('Cleaning up database...');
-            // eslint-disable-next-line no-await-in-loop
-            await dbHelper.findOneAndDeleteInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-            const databaseStatus2 = {
-              status: 'Database cleaned',
-            };
-            log.warn('Database cleaned');
-            log.warn(databaseStatus2);
-            log.warn(`Compositions of application ${appSpecifications.name} uninstalled. Continuing with installation...`);
-            // composition removal done. Remove from installed apps and being installation
-            // eslint-disable-next-line no-await-in-loop
-            await appInstaller.checkAppRequirements(appSpecifications); // entire app
-
-            // Register the app in database BEFORE creating Docker containers to prevent race condition
-            const isEnterprise = instantiated.version >= 8 && instantiated.isEncrypted();
-
-            const dbSpecs = JSON.parse(JSON.stringify(appSpecifications));
-
-            if (isEnterprise) {
-              dbSpecs.compose = [];
-              dbSpecs.contacts = [];
-            }
-
-            // eslint-disable-next-line no-await-in-loop
-            const insertResult = await dbHelper.insertOneToDatabase(appsDatabase, localAppsInformation, dbSpecs);
-            if (!insertResult) {
-              throw new Error(`CRITICAL: Failed to create database entry for ${instantiated.name} during version upgrade reinstallation. Database insert returned undefined - likely duplicate key error or database failure. Aborting reinstallation to prevent orphaned Docker containers.`);
-            }
-            log.info(`Database entry created for ${instantiated.name} BEFORE component Docker container creation (version upgrade path)`);
-
-            // eslint-disable-next-line no-await-in-loop
-            const deployment = await deploymentProvider.getInstalledDeployment(instantiated.name);
-            if (deployment) {
-              // eslint-disable-next-line no-restricted-syntax
-              for (const [, comp] of deployment.componentEntries()) {
-                log.warn(`Continuing Hard Redeployment of component ${comp.identifier}...`);
-                // eslint-disable-next-line no-await-in-loop
-                await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-                // eslint-disable-next-line no-await-in-loop
-                await appInstaller.installComponent(comp, { createVolumes: true, specVersion: appSpecifications.version });
-              }
-            }
-            log.warn(`Composed application ${instantiated.name} updated.`);
-            log.warn(`Restarting application ${instantiated.name}`);
-            // eslint-disable-next-line no-await-in-loop, no-use-before-define
-            await appDockerRestart(appSpecifications.name);
-          } else if (appSpecifications.version <= 3) {
-            if (globalState.removalInProgress) {
-              log.warn(`Another application is undergoing removal. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (globalState.installationInProgress) {
-              log.warn(`Another application is undergoing installation. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (globalState.softRedeployInProgress) {
-              log.warn(`Another application is undergoing soft redeploy. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (globalState.hardRedeployInProgress) {
-              log.warn(`Another application is undergoing hard redeploy. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-
-            // Dynamic require to avoid circular dependency
-            // eslint-disable-next-line global-require
-        
-
-
-            if (appSpecifications.hdd === installedApp.hdd) {
-              log.warn(`Beginning Soft Redeployment of ${appSpecifications.name}...`);
-              // eslint-disable-next-line no-await-in-loop
-              const installedDeployment = await deploymentProvider.getInstalledDeployment(appSpecifications.name);
-              if (installedDeployment) {
-                // eslint-disable-next-line no-restricted-syntax
-                for (const [, deployComp] of installedDeployment.componentEntries({ reverse: true })) {
-                  const compAppId = dockerService.getAppIdentifier(deployComp.identifier);
-                  // eslint-disable-next-line no-await-in-loop
-                  await appUninstaller.softUninstallComponent(appSpecifications.name, compAppId, deployComp, null, true);
-                }
-              }
-              // eslint-disable-next-line no-await-in-loop
-              const deployment = await deploymentProvider.getInstalledDeployment(appSpecifications.name);
-              if (deployment) {
-                // eslint-disable-next-line no-restricted-syntax
-                for (const [, comp] of deployment.componentEntries()) {
-                  // eslint-disable-next-line no-await-in-loop
-                  await appInstaller.installComponent(comp, { createVolumes: false, specVersion: appSpecifications.version });
-                }
-              }
-            } else {
-              log.warn(`Beginning Hard Redeployment of ${appSpecifications.name}...`);
-              log.warn(`REMOVAL REASON: Hard redeployment - ${appSpecifications.name} HDD changed from ${installedApp.hdd} to ${appSpecifications.hdd}`);
-              // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.hardUninstallApplication(appSpecifications.name, null, appSpecifications, null, true);
-              // eslint-disable-next-line no-await-in-loop
-              const deployment = await deploymentProvider.getInstalledDeployment(appSpecifications.name);
-              if (deployment) {
-                // eslint-disable-next-line no-restricted-syntax
-                for (const [, comp] of deployment.componentEntries()) {
-                  // eslint-disable-next-line no-await-in-loop
-                  await appInstaller.installComponent(comp, { createVolumes: true, specVersion: appSpecifications.version });
-                }
-              }
-            }
-          } else {
-            // composed application
-            log.warn(`Beginning Redeployment of ${appSpecifications.name}...`);
-            if (globalState.removalInProgress) {
-              log.warn(`Another application is undergoing removal. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (globalState.installationInProgress) {
-              log.warn(`Another application is undergoing installation. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (globalState.softRedeployInProgress) {
-              log.warn(`Another application is undergoing soft redeploy. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (globalState.hardRedeployInProgress) {
-              log.warn(`Another application is undergoing hard redeploy. Skipping ${installedApp.name} for this cycle.`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-
-            // Dynamic require to avoid circular dependency
-            // eslint-disable-next-line global-require
-        
-
-
-            const newSpec = !instantiated.isEncrypted() ? instantiated.spec : await deserializeSpec(appSpecifications);
-            // eslint-disable-next-line no-await-in-loop
-            const oldSpec = await deserializeSpec(installedApp);
-            const structureChanged = Boolean(
-              newSpec && oldSpec && instantiated.version >= 8 && installedApp.version >= 8
-              && !newSpec.hasSameComponents(oldSpec),
-            );
-
-            if (structureChanged) {
-              const oldCount = oldSpec.componentCount;
-              const newCount = newSpec.componentCount;
-              log.warn(`Application ${instantiated.name} (v${instantiated.version}) has component structure changes.`);
-              log.warn(`Component count: ${oldCount} -> ${newCount}`);
-              log.warn('Performing full hard redeploy to handle component changes...');
-              log.warn(`REMOVAL REASON: Component structure change (v8+) - ${instantiated.name} component count/names changed`);
-
-              // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.removeAppLocally(instantiated.name, null, false, false);
-              const appRedeployResponse = messageHelper.createSuccessMessage('Application removed. Awaiting installation...');
-              log.info(appRedeployResponse);
-
-              // eslint-disable-next-line no-await-in-loop
-              await serviceHelper.delay(config.fluxapps.redeploy.delay * 1000);
-
-              // eslint-disable-next-line no-await-in-loop
-              await appInstaller.checkAppRequirements(appSpecifications);
-
-              // eslint-disable-next-line no-await-in-loop
-              await appInstaller.installApplication(appSpecifications, { sendRemovalMessage: true });
-              log.info(`Application ${instantiated.name} redeployed with new component structure`);
-
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-
-            try {
-              const installedDeployment = await deploymentProvider.getInstalledDeployment(instantiated.name);
-              const compNames = newSpec.componentNames().reverse();
-              // eslint-disable-next-line no-restricted-syntax
-              for (const compName of compNames) {
-                const newComp = newSpec.getComponent(compName);
-                const oldComp = oldSpec?.getComponent?.(compName);
-                const newCanonical = newComp.toCanonical();
-                const oldCanonical = oldComp?.toCanonical();
-                const deployComp = installedDeployment?.getComponent(compName);
-
-                if (oldCanonical && JSON.stringify(oldCanonical) === JSON.stringify(newCanonical)) {
-                  log.warn(`Component ${compName}_${instantiated.name} specs were not changed, skipping.`);
-                } else if (deployComp && oldComp && newComp.persistentStorage?.sizeGb === oldComp.persistentStorage?.sizeGb) {
-                  log.warn(`Beginning Soft Redeployment of component ${deployComp.identifier}...`);
-                  const appId = dockerService.getAppIdentifier(deployComp.identifier);
-                  // eslint-disable-next-line no-await-in-loop
-                  await appUninstaller.softUninstallComponent(instantiated.name, appId, deployComp, null, stopAppMonitoring);
-                  log.warn(`Application component ${deployComp.identifier} softly removed. Awaiting installation...`);
-                  // eslint-disable-next-line no-await-in-loop
-                  await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-                } else if (deployComp) {
-                  log.warn(`Beginning Hard Redeployment of component ${deployComp.identifier}...`);
-                  log.warn(`REMOVAL REASON: Hard redeployment (component) - ${deployComp.identifier} storage changed`);
-                  const appId = dockerService.getAppIdentifier(deployComp.identifier);
-                  // eslint-disable-next-line no-await-in-loop
-                  await appUninstaller.hardUninstallComponent(instantiated.name, appId, newCanonical, null, stopAppMonitoring);
-                  log.warn(`Application component ${deployComp.identifier} removed. Awaiting installation...`);
-                  // eslint-disable-next-line no-await-in-loop
-                  await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-                }
-              }
-              // connect to mongodb
-              const dbopen = dbHelper.databaseConnection();
-              const appsDatabase = dbopen.db(config.database.appslocal.database);
-              const appsQuery = { name: appSpecifications.name };
-              const appsProjection = {};
-              log.warn('Cleaning up database...');
-              // eslint-disable-next-line no-await-in-loop
-              await dbHelper.findOneAndDeleteInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-              const databaseStatus2 = {
-                status: 'Database cleaned',
-              };
-              log.warn('Database cleaned');
-              log.warn(databaseStatus2);
-              log.warn(`Compositions of application ${appSpecifications.name} uninstalled. Continuing with installation...`);
-              // composition removal done. Remove from installed apps and being installation
-              // eslint-disable-next-line no-await-in-loop
-              await appInstaller.checkAppRequirements(appSpecifications); // entire app
-
-              // Register the app in database BEFORE creating Docker containers to prevent race condition
-              const isEnterprise = instantiated.version >= 8 && instantiated.isEncrypted();
-
-              const dbSpecs = JSON.parse(JSON.stringify(appSpecifications));
-
-              if (isEnterprise) {
-                dbSpecs.compose = [];
-                dbSpecs.contacts = [];
-              }
-
-              // eslint-disable-next-line no-await-in-loop
-              const insertResult = await dbHelper.insertOneToDatabase(appsDatabase, localAppsInformation, dbSpecs);
-              if (!insertResult) {
-                throw new Error(`CRITICAL: Failed to create database entry for ${instantiated.name} during composed app redeployment. Database insert returned undefined - likely duplicate key error or database failure. Aborting redeployment to prevent orphaned Docker containers.`);
-              }
-              log.info(`Database entry created for ${instantiated.name} BEFORE component Docker container creation (composed redeployment path)`);
-
-              // eslint-disable-next-line no-restricted-syntax
-              // eslint-disable-next-line no-await-in-loop
-              const deployment = await deploymentProvider.getInstalledDeployment(instantiated.name);
-              for (const compName of newSpec.componentNames()) {
-                const newComp = newSpec.getComponent(compName);
-                const oldComp = oldSpec?.components?.[compName];
-                const newCanonical = newComp.toCanonical();
-                const oldCanonical = oldComp?.toCanonical();
-                const deployComp = deployment?.getComponent(compName);
-
-                if (oldCanonical && JSON.stringify(oldCanonical) === JSON.stringify(newCanonical)) {
-                  log.warn(`Component ${compName}_${instantiated.name} specs were not changed, skipping.`);
-                } else if (deployComp && oldComp && newComp.persistentStorage?.sizeGb === oldComp.persistentStorage?.sizeGb) {
-                  log.warn(`Continuing Soft Redeployment of component ${deployComp.identifier}...`);
-                  // eslint-disable-next-line no-await-in-loop
-                  await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-                  // eslint-disable-next-line no-await-in-loop
-                  await appInstaller.installComponent(deployComp, { createVolumes: false, specVersion: appSpecifications.version });
-                } else if (deployComp) {
-                  log.warn(`Continuing Hard Redeployment of component ${deployComp.identifier}...`);
-                  // eslint-disable-next-line no-await-in-loop
-                  await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-                  // eslint-disable-next-line no-await-in-loop
-                  await appInstaller.installComponent(deployComp, { createVolumes: true, specVersion: appSpecifications.version });
-                }
-              }
-              log.warn(`Composed application ${instantiated.name} updated.`);
-              log.warn(`Restarting application ${instantiated.name}`);
-              // eslint-disable-next-line no-await-in-loop, no-use-before-define
-              await appDockerRestart(instantiated.name);
-            } catch (error) {
-              log.error(error);
-              log.warn(`REMOVAL REASON: Redeployment error - ${instantiated.name} failed during redeployment: ${error.message}`);
-              // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.removeAppLocally(instantiated.name, null, true, true, true); // remove entire app
-              log.info(`Cleanup completed for ${instantiated.name} after redeployment failure`);
-            }
-          }
+        if (registrySpec.isEncrypted() && !isArcane) {
+          // eslint-disable-next-line no-await-in-loop
+          await removeEnterpriseFromNonArcane(installed);
+          continue;
         }
+
+        // eslint-disable-next-line no-await-in-loop
+        await reconcileApp(installed, registrySpec);
+      } catch (error) {
+        log.error(`Reconciliation failed for ${installed.name}: ${error.message}`);
       }
     }
-    globalState.reinstallationOfOldAppsInProgress = false;
   } catch (error) {
-    globalState.reinstallationOfOldAppsInProgress = false;
     log.error(error);
   }
 }
@@ -2754,7 +2419,7 @@ module.exports = {
   installationInProgressReset,
   setInstallationInProgressTrue,
   checkAndRemoveApplicationInstance,
-  reinstallOldApplications,
+  reconcileInstalledApps,
   checkAndRemoveEnterpriseAppsOnNonArcane,
   forceAppRemovals,
   masterSlaveApps,

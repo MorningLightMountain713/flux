@@ -629,7 +629,7 @@ async function processBlock(blockHeight, isInsightExplorer) {
       }
       if (blockHeight % (updateFluxAppsPeriod * speedMultiplier) === 0) {
         if (blockDataVerbose.height >= config.fluxapps.epochstart) {
-          advancedWorkflows.reinstallOldApplications();
+          advancedWorkflows.reconcileInstalledApps();
           updateFluxAppsPeriod = Math.floor(Math.random() * 6 + 4);
         }
       }

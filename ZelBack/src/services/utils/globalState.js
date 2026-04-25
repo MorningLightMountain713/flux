@@ -6,6 +6,7 @@ let installationInProgress = false;
 let softRedeployInProgress = false;
 let hardRedeployInProgress = false;
 let reinstallationOfOldAppsInProgress = false;
+let reconciliationInProgress = false;
 let masterSlaveAppsRunning = false;
 let checkAndSyncAppHashesWasEverExecuted = false;
 let updateSyncthingRunning = false;
@@ -63,6 +64,9 @@ module.exports = {
 
   get reinstallationOfOldAppsInProgress() { return reinstallationOfOldAppsInProgress; },
   set reinstallationOfOldAppsInProgress(value) { reinstallationOfOldAppsInProgress = value; },
+
+  get reconciliationInProgress() { return reconciliationInProgress; },
+  set reconciliationInProgress(value) { reconciliationInProgress = value; },
 
   get masterSlaveAppsRunning() { return masterSlaveAppsRunning; },
   set masterSlaveAppsRunning(value) { masterSlaveAppsRunning = value; },

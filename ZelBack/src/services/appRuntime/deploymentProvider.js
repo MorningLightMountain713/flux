@@ -66,4 +66,5 @@ async function getInstalledDeployment(name) {
 module.exports = {
   listInstalledDeployments,
   getInstalledDeployment,
+  buildDeployment: toDeployment,
 };
