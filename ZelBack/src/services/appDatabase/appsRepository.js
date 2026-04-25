@@ -309,6 +309,29 @@ async function insertInstalledApp(specDoc) {
 }
 
 /**
+ * Replace (or insert) a spec in localAppsInformation by name.
+ *
+ * @param {string} name
+ * @param {Object} specDoc
+ * @returns {Promise<import('mongodb').UpdateResult>}
+ */
+async function upsertInstalledApp(name, specDoc) {
+  if (!name) {
+    throw new Error('appsRepository.upsertInstalledApp: name required');
+  }
+  if (!specDoc) {
+    throw new Error('appsRepository.upsertInstalledApp: specDoc required');
+  }
+  return dbHelper.replaceOneInDatabase(
+    localDb(),
+    localAppsInformation,
+    { name: nameRegex(name) },
+    specDoc,
+    { upsert: true },
+  );
+}
+
+/**
  * Look up a permanent app message by its hash. Messages are stored
  * with the spec nested under `appSpecifications`; hydrate that
  * nested shape for callers that want the class instance.
@@ -357,6 +380,7 @@ module.exports = {
   listInstalledAppsRaw,
   removeInstalledApp,
   insertInstalledApp,
+  upsertInstalledApp,
   getAppMessage,
   listAppMessagesByName,
 };

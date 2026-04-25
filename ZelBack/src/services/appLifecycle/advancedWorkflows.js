@@ -363,259 +363,38 @@ async function cleanupAppDatabase(appsDatabase, appName, res) {
  * @param {string} app App name.
  * @param {object} res Response.
  */
-async function softRemoveAppLocally(app, res) {
-  // Validate state
-  if (globalState.removalInProgress) {
-    throw new Error('Another application is undergoing removal');
-  }
-  if (globalState.installationInProgress) {
-    throw new Error('Another application is undergoing installation');
-  }
-  if (!app) {
-    throw new Error('No Flux App specified');
-  }
-
-  globalState.removalInProgress = true;
-
-  try {
-    const isComponent = app.includes('_');
-    const appName = isComponent ? app.split('_')[1] : app;
-    const targetComponent = isComponent ? app.split('_')[0] : null;
-
-    const deployment = await deploymentProvider.getInstalledDeployment(appName);
-    if (!deployment) {
-      throw new Error('Flux App not found');
-    }
-
-    // eslint-disable-next-line global-require
-
-
-    const entries = isComponent
-      ? deployment.componentEntries().filter(([name]) => name === targetComponent)
-      : deployment.componentEntries({ reverse: true });
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const [, deployComp] of entries) {
-      const appId = dockerService.getAppIdentifier(deployComp.identifier);
-      // eslint-disable-next-line no-await-in-loop
-      await appUninstaller.softUninstallComponent(appName, appId, deployComp, res, stopAppMonitoring);
-    }
-
-    if (!isComponent) {
-      await cleanupAppDatabase(appsDatabase, appName, res);
-    }
-  } finally {
-    globalState.removalInProgress = false;
-  }
-}
-
 /**
- * Soft redeploy - removes and reinstalls app locally (soft)
- * @param {object} appSpecs - App specifications
- * @param {object} res - Response object
- */
-async function softRedeploy(appSpecs, res) {
-  try {
-    if (globalState.removalInProgress) {
-      log.warn('Another application is undergoing removal');
-      const appRedeployResponse = messageHelper.createWarningMessage('Another application is undergoing removal');
-      if (res) {
-        res.write(serviceHelper.ensureString(appRedeployResponse));
-        if (res.flush) res.flush();
-      }
-      return;
-    }
-    if (globalState.installationInProgress) {
-      log.warn('Another application is undergoing installation');
-      const appRedeployResponse = messageHelper.createWarningMessage('Another application is undergoing installation');
-      if (res) {
-        res.write(serviceHelper.ensureString(appRedeployResponse));
-        if (res.flush) res.flush();
-      }
-      return;
-    }
-    if (globalState.softRedeployInProgress) {
-      log.warn('Another application is undergoing soft redeploy');
-      const appRedeployResponse = messageHelper.createWarningMessage('Another application is undergoing soft redeploy');
-      if (res) {
-        res.write(serviceHelper.ensureString(appRedeployResponse));
-        if (res.flush) res.flush();
-      }
-      return;
-    }
-    if (globalState.hardRedeployInProgress) {
-      log.warn('Another application is undergoing hard redeploy');
-      const appRedeployResponse = messageHelper.createWarningMessage('Another application is undergoing hard redeploy');
-      if (res) {
-        res.write(serviceHelper.ensureString(appRedeployResponse));
-        if (res.flush) res.flush();
-      }
-      return;
-    }
-
-    if (appSpecs.version >= 8) {
-      const installedAppsRes = await getInstalledAppsFromDb({ decryptApps: true });
-      if (installedAppsRes.status === 'success') {
-        const installedApp = installedAppsRes.data.find((app) => app.name === appSpecs.name);
-        if (installedApp && installedApp.version >= 8) {
-          const newSpec = await deserializeSpec(appSpecs);
-          const oldSpec = await deserializeSpec(installedApp);
-          if (newSpec && oldSpec && !newSpec.hasSameComponents(oldSpec)) {
-            const oldCount = oldSpec.componentCount;
-            const newCount = newSpec.componentCount;
-            log.warn(`Soft redeploy requested for ${appSpecs.name}, but component structure changed.`);
-            log.warn(`Component count: ${oldCount} -> ${newCount}`);
-            log.warn('Automatically escalating to hard redeploy for component structure safety.');
-            const escalationMessage = messageHelper.createWarningMessage(
-              `Component structure changed for v${appSpecs.version} app. Escalating to hard redeploy for safety.`,
-            );
-            if (res) {
-              res.write(serviceHelper.ensureString(escalationMessage));
-              if (res.flush) res.flush();
-            }
-            // eslint-disable-next-line no-use-before-define
-            await hardRedeploy(appSpecs, res);
-            return;
-          }
-        }
-      }
-    }
-
-    globalState.softRedeployInProgress = true;
-    log.info('Starting softRedeploy');
-    try {
-      await softRemoveAppLocally(appSpecs.name, res);
-    } catch (error) {
-      log.error(error);
-      globalState.softRedeployInProgress = false;
-      throw error;
-    }
-    const appRedeployResponse = messageHelper.createSuccessMessage('Application softly removed. Awaiting installation...');
-    log.info(appRedeployResponse);
-    if (res) {
-      res.write(serviceHelper.ensureString(appRedeployResponse));
-      if (res.flush) res.flush();
-    }
-    await serviceHelper.delay(config.fluxapps.redeploy.delay * 1000); // wait for delay mins
-    // verify requirements
-
-    await appInstaller.checkAppRequirements(appSpecs);
-    // register
-    await appInstaller.installApplication(appSpecs, { res, createVolumes: false });
-    log.info('Application softly redeployed');
-    globalState.softRedeployInProgress = false;
-  } catch (error) {
-    log.info('Error on softRedeploy');
-    log.error(error);
-    log.warn(`REMOVAL REASON: Soft redeploy failure - ${appSpecs.name} failed during soft redeploy: ${error.message} (softRedeploy)`);
-    globalState.softRedeployInProgress = false;
-    // eslint-disable-next-line global-require
-
-    await appUninstaller.removeAppLocally(appSpecs.name, res, true, true, true);
-    log.info(`Cleanup completed for ${appSpecs.name} after soft redeploy failure`);
-  }
-}
-
-/**
- * Hard redeploy - removes and reinstalls app locally (hard)
- * @param {object} appSpecs - App specifications
- * @param {object} res - Response object
- */
-async function hardRedeploy(appSpecs, res) {
-
-  try {
-    if (globalState.removalInProgress) {
-      log.warn('Another application is undergoing removal');
-      const appRedeployResponse = messageHelper.createWarningMessage('Another application is undergoing removal');
-      if (res) {
-        res.write(serviceHelper.ensureString(appRedeployResponse));
-        if (res.flush) res.flush();
-      }
-      return;
-    }
-    if (globalState.installationInProgress) {
-      log.warn('Another application is undergoing installation');
-      const appRedeployResponse = messageHelper.createWarningMessage('Another application is undergoing installation');
-      if (res) {
-        res.write(serviceHelper.ensureString(appRedeployResponse));
-        if (res.flush) res.flush();
-      }
-      return;
-    }
-    if (globalState.softRedeployInProgress) {
-      log.warn('Another application is undergoing soft redeploy');
-      const appRedeployResponse = messageHelper.createWarningMessage('Another application is undergoing soft redeploy');
-      if (res) {
-        res.write(serviceHelper.ensureString(appRedeployResponse));
-        if (res.flush) res.flush();
-      }
-      return;
-    }
-    if (globalState.hardRedeployInProgress) {
-      log.warn('Another application is undergoing hard redeploy');
-      const appRedeployResponse = messageHelper.createWarningMessage('Another application is undergoing hard redeploy');
-      if (res) {
-        res.write(serviceHelper.ensureString(appRedeployResponse));
-        if (res.flush) res.flush();
-      }
-      return;
-    }
-    globalState.hardRedeployInProgress = true;
-    log.warn(`REMOVAL REASON: Hard redeploy initiated - ${appSpecs.name} being removed as part of hard redeploy process (hardRedeploy)`);
-    await appUninstaller.removeAppLocally(appSpecs.name, res, false, false);
-    const appRedeployResponse = messageHelper.createSuccessMessage('Application removed. Awaiting installation...');
-    log.info(appRedeployResponse);
-    if (res) {
-      res.write(serviceHelper.ensureString(appRedeployResponse));
-      if (res.flush) res.flush();
-    }
-    await serviceHelper.delay(config.fluxapps.redeploy.delay * 1000); // wait for delay mins
-    // verify requirements
-
-    await appInstaller.checkAppRequirements(appSpecs);
-    // register
-    await appInstaller.installApplication(appSpecs, { res, sendRemovalMessage: true });
-    log.info('Application redeployed');
-    globalState.hardRedeployInProgress = false;
-  } catch (error) {
-    log.error(error);
-    log.warn(`REMOVAL REASON: Hard redeploy failure - ${appSpecs.name} failed during hard redeploy: ${error.message} (hardRedeploy)`);
-    globalState.hardRedeployInProgress = false;
-    await appUninstaller.removeAppLocally(appSpecs.name, res, true, true, true);
-    log.info(`Cleanup completed for ${appSpecs.name} after hard redeploy failure`);
-  }
-}
-
-/**
- * Soft redeploy a single component - removes and reinstalls component locally (soft)
- * @param {string} appName - Application name
- * @param {string} componentName - Component name
- * @param {object} res - Response object
+ * Redeploy a single component of an application.
+ *
+ * @param {string} appName
+ * @param {string} componentName
+ * @param {object} [options]
+ * @param {boolean} [options.createVolumes=false] - true = recreate volumes, false = keep
+ * @param {Function|null} [options.onStatus] - progress callback
  */
 async function redeployComponent(appName, componentName, options = {}) {
   const createVolumes = options.createVolumes || false;
-  const res = options.res || null;
+  const onStatus = options.onStatus || null;
 
   const stateFlag = createVolumes ? 'hardRedeployInProgress' : 'softRedeployInProgress';
   const label = createVolumes ? 'rebuild' : 'redeploy';
 
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
+  };
+
+  if (globalState.removalInProgress
+    || globalState.installationInProgress
+    || globalState.softRedeployInProgress
+    || globalState.hardRedeployInProgress) {
+    status('Another operation is in progress');
+    return;
+  }
+
+  globalState[stateFlag] = true;
+
   try {
-    if (globalState.removalInProgress
-      || globalState.installationInProgress
-      || globalState.softRedeployInProgress
-      || globalState.hardRedeployInProgress) {
-      const reason = 'Another operation is in progress';
-      log.warn(reason);
-      if (res) {
-        res.write(serviceHelper.ensureString(messageHelper.createWarningMessage(reason)));
-        if (res.flush) res.flush();
-      }
-      return;
-    }
-
-    globalState[stateFlag] = true;
-    log.info(`Starting ${label} of component ${componentName} from app ${appName}`);
-
     const deployment = await deploymentProvider.getInstalledDeployment(appName);
     if (!deployment) {
       throw new Error(`Application ${appName} not found`);
@@ -626,47 +405,122 @@ async function redeployComponent(appName, componentName, options = {}) {
       throw new Error(`Component ${componentName} not found in application ${appName}`);
     }
 
-    try {
-      log.warn(`Beginning ${label} of component ${deployComp.identifier}...`);
+    if (createVolumes) {
+      log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployComponent)`);
+    }
+    await appUninstaller.uninstallComponent(deployComp, {
+      removeVolumes: createVolumes,
+      onStatus,
+    });
+
+    status(`Component ${deployComp.identifier} removed. Awaiting installation...`);
+    await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+
+    const rawSpec = await appsRepository.getInstalledAppRaw(appName);
+    await appInstaller.checkAppRequirements(rawSpec);
+
+    status(`Installing ${deployComp.identifier}...`);
+    await appInstaller.installComponent(deployComp, {
+      createVolumes,
+      specVersion: rawSpec?.version || null,
+    });
+
+    status(`Component ${deployComp.identifier} ${label} complete`);
+    globalState[stateFlag] = false;
+  } catch (error) {
+    log.error(error);
+    log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployComponent)`);
+    globalState[stateFlag] = false;
+    await appUninstaller.removeAppLocally(appName, null, true, true, true);
+  }
+}
+
+/**
+ * Redeploy all components of an application.
+ *
+ * @param {string} appName
+ * @param {object} [options]
+ * @param {boolean} [options.createVolumes=false] - true = recreate volumes, false = keep
+ * @param {Function|null} [options.onStatus] - progress callback
+ * @param {boolean} [options.broadcastRemoval=false] - broadcast fluxappremoved on cleanup failure
+ */
+async function redeployApplication(appName, options = {}) {
+  const createVolumes = options.createVolumes || false;
+  const onStatus = options.onStatus || null;
+  const broadcastRemoval = options.broadcastRemoval || false;
+
+  const label = createVolumes ? 'rebuild' : 'redeploy';
+
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
+  };
+
+  if (globalState.removalInProgress
+    || globalState.installationInProgress
+    || globalState.softRedeployInProgress
+    || globalState.hardRedeployInProgress) {
+    status('Another operation is in progress');
+    return;
+  }
+
+  const stateFlag = createVolumes ? 'hardRedeployInProgress' : 'softRedeployInProgress';
+  globalState[stateFlag] = true;
+
+  try {
+    const deployment = await deploymentProvider.getInstalledDeployment(appName);
+    if (!deployment) {
+      throw new Error(`Application ${appName} not found`);
+    }
+
+    status(`Beginning ${label} of ${appName}...`);
+
+    for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
       if (createVolumes) {
-        log.warn(`REMOVAL REASON: Rebuild initiated - ${deployComp.identifier} (redeployComponent)`);
-        await appUninstaller.hardUninstallComponent(appName, dockerService.getAppIdentifier(deployComp.identifier), deployComp, res, stopAppMonitoring, false);
-      } else {
-        const appId = dockerService.getAppIdentifier(deployComp.identifier);
-        await appUninstaller.softUninstallComponent(appName, appId, deployComp, res, stopAppMonitoring);
+        log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployApplication)`);
       }
-
-      log.info(`Component ${deployComp.identifier} removed. Awaiting installation...`);
-      if (res) {
-        res.write(serviceHelper.ensureString(messageHelper.createSuccessMessage(`Component ${deployComp.identifier} removed. Awaiting installation...`)));
-        if (res.flush) res.flush();
-      }
-
+      // eslint-disable-next-line no-await-in-loop
+      await appUninstaller.uninstallComponent(deployComp, {
+        removeVolumes: createVolumes,
+        onStatus,
+      });
+      // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+    }
 
-      const rawSpec = await appsRepository.getInstalledAppRaw(appName);
-      await appInstaller.checkAppRequirements(rawSpec);
+    status(`Application ${appName} removed. Awaiting installation...`);
+    await serviceHelper.delay(config.fluxapps.redeploy.delay * 1000);
 
-      log.warn(`Continuing ${label} of component ${deployComp.identifier}...`);
+    const rawSpec = await appsRepository.getInstalledAppRaw(appName);
+    if (!rawSpec) {
+      throw new Error(`Application ${appName} not found in database after removal`);
+    }
+    await appInstaller.checkAppRequirements(rawSpec);
+
+    const freshDeployment = await deploymentProvider.getInstalledDeployment(appName);
+    if (!freshDeployment) {
+      throw new Error(`Application ${appName} deployment not found after requirement check`);
+    }
+
+    for (const [, deployComp] of freshDeployment.componentEntries()) {
+      status(`Installing ${deployComp.identifier}...`);
+      // eslint-disable-next-line no-await-in-loop
       await appInstaller.installComponent(deployComp, {
         createVolumes,
-        specVersion: rawSpec?.version || null,
+        specVersion: rawSpec.version || null,
       });
-
-      log.info(`Component ${deployComp.identifier} ${label} complete`);
-      globalState[stateFlag] = false;
-    } catch (error) {
-      log.error(error);
-      log.warn(`REMOVAL REASON: ${label} failure - ${appName} component ${deployComp.identifier}: ${error.message} (redeployComponent)`);
-      globalState[stateFlag] = false;
-      await appUninstaller.removeAppLocally(appName, res, true, true, true);
-      throw error;
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
     }
-  } catch (error) {
-    log.error(`Error on redeployComponent (${label})`);
-    log.error(error);
+
+    status(`Application ${appName} ${label} complete`);
     globalState[stateFlag] = false;
-    throw error;
+  } catch (error) {
+    log.error(error);
+    log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployApplication)`);
+    globalState[stateFlag] = false;
+    await appUninstaller.removeAppLocally(appName, null, true, true, broadcastRemoval);
+    log.info(`Cleanup completed for ${appName} after ${label} failure`);
   }
 }
 
@@ -717,7 +571,13 @@ async function redeployComponentAPI(req, res) {
 
     res.setHeader('Content-Type', 'application/json');
 
-    await redeployComponent(appname, component, { createVolumes: force, res });
+    await redeployComponent(appname, component, {
+      createVolumes: force,
+      onStatus: (msg) => {
+        res.write(serviceHelper.ensureString(msg));
+        if (res.flush) res.flush();
+      },
+    });
 
     const successMessage = messageHelper.createSuccessMessage(`Component ${component} of ${appname} redeployed successfully`);
     res.json(successMessage);
@@ -733,17 +593,14 @@ async function redeployComponentAPI(req, res) {
 }
 
 /**
- * Redeploy app via API
+ * Redeploy application via API
  * @param {object} req - Request object
  * @param {object} res - Response object
  */
-async function redeployAPI(req, res) {
+async function redeployApplicationAPI(req, res) {
   try {
     let { appname } = req.params;
     appname = appname || req.query.appname;
-    let { global } = req.params;
-    global = global || req.query.global || false;
-    global = serviceHelper.ensureBoolean(global);
 
     if (!appname) {
       throw new Error('No Flux App specified');
@@ -769,32 +626,29 @@ async function redeployAPI(req, res) {
       res.json(errMessage);
       return;
     }
-    if (global) {
-      // Dynamic require to avoid circular dependency
+
+    let isGlobal = req.params.global || req.query.global || false;
+    isGlobal = serviceHelper.ensureBoolean(isGlobal);
+
+    if (isGlobal) {
       // eslint-disable-next-line global-require
       const appController = require('../appManagement/appController');
-      appController.executeAppGlobalCommand(appname, 'redeploy', req.headers.zelidauth, force); // do not wait
-      const hardOrSoft = force ? 'hard' : 'soft';
-      const appResponse = messageHelper.createSuccessMessage(`${appname} queried for global ${hardOrSoft} redeploy`);
-      res.json(appResponse);
+      appController.executeAppGlobalCommand(appname, 'redeploy', req.headers.zelidauth, force);
+      const label = force ? 'hard' : 'soft';
+      res.json(messageHelper.createSuccessMessage(`${appname} queried for global ${label} redeploy`));
       return;
-    }
-
-    // Dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const registryManager = require('../appDatabase/registryManager');
-    const specifications = await registryManager.getApplicationSpecifications(appname);
-    if (!specifications) {
-      throw new Error('Application not found');
     }
 
     res.setHeader('Content-Type', 'application/json');
 
-    if (force) {
-      await hardRedeploy(specifications, res);
-    } else {
-      await softRedeploy(specifications, res);
-    }
+    await redeployApplication(appname, {
+      createVolumes: force,
+      onStatus: (msg) => {
+        res.write(serviceHelper.ensureString(msg));
+        if (res.flush) res.flush();
+      },
+      broadcastRemoval: true,
+    });
   } catch (error) {
     log.error(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -2879,11 +2733,9 @@ async function getPeerAppsInstallingErrorMessages() {
 }
 
 module.exports = {
-  softRemoveAppLocally,
-  hardRedeploy,
-  softRedeploy,
   redeployComponent,
-  redeployAPI,
+  redeployApplication,
+  redeployApplicationAPI,
   redeployComponentAPI,
   updateAppGlobaly,
   updateAppGlobalyApi,

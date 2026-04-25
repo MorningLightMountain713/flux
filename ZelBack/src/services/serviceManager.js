@@ -508,7 +508,6 @@ async function startFluxFunctions() {
     setTimeout(() => {
       appInspector.checkStorageSpaceForApps(
         appUninstaller.removeAppLocally,
-        advancedWorkflows.softRedeploy,
         appsStorageViolations,
       );
     }, 20 * 60 * 1000);

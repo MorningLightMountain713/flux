@@ -275,13 +275,7 @@ async function triggerAppUpdate(appName) {
     }
 
     log.info(`Triggering soft redeploy for ${appName}`);
-
-    const rawSpec = await appsRepository.getInstalledAppRaw(appName);
-    if (!rawSpec) {
-      log.warn(`Cannot trigger redeploy for ${appName}: not found in local DB`);
-      return false;
-    }
-    await advancedWorkflows.softRedeploy(rawSpec, null);
+    await advancedWorkflows.redeployApplication(appName, { createVolumes: false });
 
     return true;
   } catch (error) {

@@ -814,11 +814,10 @@ async function monitorSharedDBApps(removeAppLocally, globalState) {
 /**
  * Check storage space usage of applications and enforce limits
  * @param {Function} removeAppLocally - Async function to remove app locally
- * @param {Function} softRedeploy - Async function to soft redeploy app (can be null)
  * @param {Array} appsStorageViolations - Array tracking storage violations
  * @returns {Promise<void>}
  */
-async function checkStorageSpaceForApps(removeAppLocally, softRedeploy, appsStorageViolations) {
+async function checkStorageSpaceForApps(removeAppLocally, appsStorageViolations) {
   try {
     // eslint-disable-next-line global-require
     const config = require('config');
@@ -852,26 +851,24 @@ async function checkStorageSpaceForApps(removeAppLocally, softRedeploy, appsStor
           appsStorageViolations = adjArray;
         } else {
           log.warn(`Application ${deployment.appName} is using ${totalSize} space which is more than allowed ${maxAllowedSize}. Soft redeploying...`);
+          // eslint-disable-next-line no-await-in-loop, global-require
+          const { redeployApplication } = require('../../services/appLifecycle/advancedWorkflows');
           // eslint-disable-next-line no-await-in-loop
-          const rawSpec = await appsRepository.getInstalledAppRaw(deployment.appName);
-          if (rawSpec) {
-            // eslint-disable-next-line no-await-in-loop
-            await softRedeploy(rawSpec).catch((error) => {
-              log.error(error);
-            });
-          }
+          await redeployApplication(deployment.appName, { createVolumes: false }).catch((error) => {
+            log.error(error);
+          });
         }
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(2 * 60 * 1000);
       }
     }
     setTimeout(() => {
-      checkStorageSpaceForApps(removeAppLocally, softRedeploy, appsStorageViolations);
+      checkStorageSpaceForApps(removeAppLocally, appsStorageViolations);
     }, 30 * 60 * 1000);
   } catch (error) {
     log.error(error);
     setTimeout(() => {
-      checkStorageSpaceForApps(removeAppLocally, softRedeploy, appsStorageViolations);
+      checkStorageSpaceForApps(removeAppLocally, appsStorageViolations);
     }, 30 * 60 * 1000);
   }
 }

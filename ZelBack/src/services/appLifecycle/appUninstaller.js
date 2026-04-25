@@ -607,6 +607,95 @@ async function cleanupDeploymentPorts(deployComp, appName, res, entityName) {
   }
 }
 
+/**
+ * Uninstall a single component. Unified replacement for softUninstallComponent
+ * and hardUninstallComponent.
+ *
+ * @param {import('@runonflux/flux-spec-backend').DeploymentComponent} component
+ * @param {object} [options]
+ * @param {boolean} [options.removeVolumes=false] - tear down volumes, syncthing, crontab
+ * @param {boolean} [options.forceKill=false] - docker kill + force-remove instead of stop + remove
+ * @param {Function|null} [options.onStatus] - progress callback
+ */
+async function uninstallComponent(component, options = {}) {
+  const removeVolumes = options.removeVolumes || false;
+  const forceKill = options.forceKill || false;
+  const onStatus = options.onStatus || null;
+
+  const appName = component.appName;
+  const componentName = component.name;
+  const appId = dockerService.getAppIdentifier(component.identifier);
+  const label = componentName === appName ? appName : `component ${componentName} of ${appName}`;
+
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
+  };
+
+  status(`Stopping Flux App ${label}...`);
+  stopAppMonitoring(component.identifier, removeVolumes);
+
+  if (forceKill) {
+    await dockerService.appDockerKill(appId).catch((error) => {
+      log.warn(`Failed to kill container ${appId}: ${error.message}`);
+    });
+  } else {
+    await dockerService.appDockerStop(appId).catch((error) => {
+      log.warn(`Failed to stop container ${appId}: ${error.message}`);
+    });
+  }
+
+  status(`Flux App ${label} stopped`);
+
+  if (removeVolumes) {
+    await stopSyncthingAndCleanup(component.identifier, appId, null);
+  }
+
+  status(`Removing Flux App ${label} container...`);
+
+  let containerRemoved = false;
+  if (forceKill) {
+    await dockerService.appDockerForceRemove(appId).then(() => {
+      containerRemoved = true;
+    }).catch((error) => {
+      log.error(`Force remove failed for ${appId}: ${error.message}`);
+    });
+  } else {
+    await dockerService.appDockerRemove(appId).then(() => {
+      containerRemoved = true;
+    }).catch((error) => {
+      log.error(`Container remove failed for ${appId}: ${error.message}`);
+    });
+  }
+
+  if (containerRemoved) {
+    status(`Flux App ${label} container removed`);
+  } else {
+    log.warn(`WARNING: Container ${appId} may not have been fully removed`);
+  }
+
+  await cleanupDeploymentPorts(component, appName, null, label);
+
+  if (removeVolumes) {
+    await unmountVolume(appId, label, null);
+    await cleanupAppData(appId, label, null);
+    const volumepath = await cleanupCrontab(appId, null);
+    await cleanupVolumePath(volumepath, label, null);
+  }
+
+  if (containerRemoved) {
+    status(`Removing Flux App ${label} image...`);
+    await dockerService.appDockerImageRemove(component.image).catch((error) => {
+      log.error(`Image remove failed for ${component.image}: ${error.message}`);
+    });
+    status(`Flux App ${label} image operations done`);
+  } else {
+    log.warn(`Skipping image removal for ${appId} because container removal failed`);
+  }
+
+  status(`Flux App ${label} was successfully removed`);
+}
+
 // eslint-disable-next-line no-shadow
 async function softUninstallComponent(appName, appId, deployComp, res, stopAppMonitoring) {
   const label = deployComp.name === appName ? appName : `component ${deployComp.name} of ${appName}`;
@@ -970,93 +1059,6 @@ async function removeAppLocally(app, res, force = false, endResponse = true, sen
 }
 
 /**
- * Soft remove application locally (database and container only)
- * @param {string} app - Application name
- * @param {object} res - Response object for streaming
- // eslint-disable-next-line no-shadow
- * @param {object} globalStateRef - Global state reference
- * @param {function} stopAppMonitoring - Function to stop monitoring
- * @returns {Promise<void>}
- */
-// eslint-disable-next-line no-shadow
-async function softRemoveAppLocally(app, res, globalStateRef, stopAppMonitoring) {
-  // eslint-disable-next-line no-shadow
-  const globalState = globalStateRef;
-  if (globalState.removalInProgress) {
-    throw new Error('Another application is undergoing removal');
-  }
-  if (globalState.installationInProgress) {
-    throw new Error('Another application is undergoing installation');
-  }
-
-  globalState.removalInProgress = true;
-
-  try {
-    if (!app) {
-      throw new Error('No Flux App specified');
-    }
-
-    const isComponent = app.includes('_');
-    const appName = isComponent ? app.split('_')[1] : app;
-    const appComponent = app.split('_')[0];
-
-    const deployment = await deploymentProvider.getInstalledDeployment(appName);
-    if (!deployment) {
-      throw new Error('Flux App not found');
-    }
-
-    const entries = isComponent
-      ? deployment.componentEntries().filter(([name]) => name === appComponent)
-      : deployment.componentEntries({ reverse: true });
-
-    if (isComponent && entries.length === 0) {
-      throw new Error(`Flux App component ${appComponent} not found in ${appName}`);
-    }
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const [, deployComp] of entries) {
-      const appId = dockerService.getAppIdentifier(deployComp.identifier);
-      // eslint-disable-next-line no-await-in-loop
-      await softUninstallComponent(appName, appId, deployComp, res, stopAppMonitoring);
-    }
-
-    if (!isComponent) {
-      const databaseStatus = {
-        status: 'Cleaning up database...',
-      };
-      log.info(databaseStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(databaseStatus));
-        if (res.flush) res.flush();
-      }
-      const appsDatabase = dbHelper.databaseConnection().db(config.database.appslocal.database);
-      await dbHelper.findOneAndDeleteInDatabase(
-        appsDatabase, localAppsInformation, { name: appName }, {},
-      );
-      const databaseStatus2 = {
-        status: 'Database cleaned',
-      };
-      log.info(databaseStatus2);
-      if (res) {
-        res.write(serviceHelper.ensureString(databaseStatus2));
-        if (res.flush) res.flush();
-      }
-      const appRemovalResponseDone = messageHelper.createSuccessMessage(`Removal step done. Result: Flux App ${appName} was partially removed`);
-      log.info(appRemovalResponseDone);
-      if (res) {
-        res.write(serviceHelper.ensureString(appRemovalResponseDone));
-        if (res.flush) res.flush();
-      }
-    }
-  } catch (error) {
-    log.error(`Error soft removing app ${app}: ${error.message}`);
-    throw error;
-  } finally {
-    globalState.removalInProgress = false;
-  }
-}
-
-/**
  * API endpoint for removing application locally
  * @param {object} req - Request object
  * @param {object} res - Response object
@@ -1134,12 +1136,12 @@ async function removeAppLocallyApi(req, res) {
 }
 
 module.exports = {
+  uninstallComponent,
   hardUninstallComponent,
   hardUninstallApplication,
   softUninstallComponent,
   cleanupPorts,
   cleanupDeploymentPorts,
   removeAppLocally,
-  softRemoveAppLocally,
   removeAppLocallyApi,
 };

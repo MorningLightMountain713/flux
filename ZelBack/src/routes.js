@@ -1243,7 +1243,7 @@ module.exports = (app) => {
     registryManager.reindexGlobalAppsLocationAPI(req, res);
   });
   app.get('/apps/redeploy/:appname?/:force?/:global?', (req, res) => {
-    advancedWorkflows.redeployAPI(req, res);
+    advancedWorkflows.redeployApplicationAPI(req, res);
   });
   app.get('/apps/redeploycomponent/:appname?/:component?/:force?', (req, res) => {
     advancedWorkflows.redeployComponentAPI(req, res);

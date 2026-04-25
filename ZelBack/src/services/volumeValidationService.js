@@ -217,19 +217,9 @@ async function hardRedeployApp(appName) {
   try {
     log.info(`Attempting to hard redeploy app ${appName} due to incorrect volume mount`);
 
-    // Get app specifications first
-    const appSpecs = await getAppSpecifications(appName);
-    if (!appSpecs) {
-      log.error(`Cannot redeploy ${appName}: App specifications not found`);
-      return false;
-    }
-
-    // Import here to avoid circular dependency
     // eslint-disable-next-line global-require
-    const { hardRedeploy } = require('./appLifecycle/advancedWorkflows');
-
-    // Perform hard redeploy (removes and reinstalls with correct paths)
-    await hardRedeploy(appSpecs, null);
+    const { redeployApplication } = require('./appLifecycle/advancedWorkflows');
+    await redeployApplication(appName, { createVolumes: true });
 
     log.info(`Successfully redeployed app ${appName} with correct volume paths`);
     return true;
