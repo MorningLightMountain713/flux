@@ -6,50 +6,10 @@ const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
 const appConstants = require('../utils/appConstants');
-const { deserializeSpec } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
-const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
-const fluxCaching = require('../utils/cacheManager');
 const log = require('../../lib/log');
 
 // Database collections
 const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
-
-async function decryptEnterpriseApps(apps) {
-  const decryptedApps = [];
-  const cache = fluxCaching.default.enterpriseAppDecryptionCache;
-  // eslint-disable-next-line no-restricted-syntax
-  for (const spec of apps) {
-    // eslint-disable-next-line no-await-in-loop
-    const wireSpec = await deserializeSpec(spec);
-    if (!wireSpec) continue;
-    if (!wireSpec.isEncrypted) {
-      decryptedApps.push(spec);
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    try {
-      const cacheKey = spec.hash;
-      let decrypted = cache.get(cacheKey);
-      if (decrypted) {
-        log.info(`Using cached decrypted app for ${spec.name} (${cacheKey})`);
-      } else {
-        // eslint-disable-next-line no-await-in-loop
-        const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
-        const canonical = await wireSpec.decrypt(provider);
-        decrypted = canonical.spec.serialize();
-        decrypted.enterprise = spec.enterprise;
-        cache.set(cacheKey, decrypted);
-        log.info(`Cached decrypted app for ${spec.name} (${cacheKey})`);
-      }
-      decryptedApps.push(decrypted);
-    } catch (error) {
-      log.error(`Failed to decrypt enterprise app ${spec.name}: ${error.message}`);
-      decryptedApps.push(spec);
-    }
-  }
-  return decryptedApps;
-}
 
 /**
  * To list installed apps. Returns apps from local database.
@@ -287,7 +247,6 @@ async function getAppsMessagesCount(req, res) {
 
 module.exports = {
   installedApps,
-  decryptEnterpriseApps,
   listRunningContainers,
   listRunningApps,
   listAllApps,

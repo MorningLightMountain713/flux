@@ -486,317 +486,86 @@ describe('advancedWorkflows tests', () => {
     });
   });
 
-  // Note: masterSlaveApps is a recursive function that continuously runs in production.
+  // coordinateActiveStandbyApps is a recursive function that continuously runs in production.
   // These tests use a counter to prevent infinite recursion after the first iteration.
-  describe('masterSlaveApps tests', () => {
-    let globalState;
-    let serviceHelperStub;
+  describe('coordinateActiveStandbyApps tests', () => {
+    let globalStateRef;
     let serviceHelperDelayStub;
-    let fluxNetworkHelperStub;
-    let registryManagerStub;
-    let dockerServiceStub;
-    let syncthingServiceStub;
-    let syncthingServiceHealthStub;
-    let decryptEnterpriseAppsStub;
-    let recursionCounter;
+    let deploymentProviderStub;
+    let listRunningContainersStub;
 
     beforeEach(() => {
-      recursionCounter = 0;
-      globalState = require('../../ZelBack/src/services/utils/globalState');
-      globalState.masterSlaveAppsRunning = false;
-      globalState.installationInProgress = false;
-      globalState.removalInProgress = false;
-      globalState.softRedeployInProgress = false;
-      globalState.hardRedeployInProgress = false;
+      let recursionCounter = 0;
+      globalStateRef = require('../../ZelBack/src/services/utils/globalState');
+      globalStateRef.activeStandbyCoordinationRunning = false;
+      globalStateRef.installationInProgress = false;
+      globalStateRef.removalInProgress = false;
+      globalStateRef.softRedeployInProgress = false;
+      globalStateRef.hardRedeployInProgress = false;
+      globalStateRef.reconciliationInProgress = false;
 
-      // Setup stubs
       const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-      serviceHelperStub = sinon.stub(serviceHelper, 'axiosGet');
-
-      // Stub delay to prevent recursive calls - after first call, block recursion
       serviceHelperDelayStub = sinon.stub(serviceHelper, 'delay').callsFake(async () => {
         recursionCounter += 1;
         if (recursionCounter > 1) {
-          // Prevent recursion by returning a promise that never resolves
           return new Promise(() => {});
         }
         return Promise.resolve();
       });
 
-      const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
-      fluxNetworkHelperStub = sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort');
-
-      const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-      registryManagerStub = sinon.stub(registryManager, 'appLocation');
-
-      const dockerService = require('../../ZelBack/src/services/dockerService');
-      dockerServiceStub = sinon.stub(dockerService, 'getAppIdentifier');
-
       const syncthingService = require('../../ZelBack/src/services/syncthingService');
-      syncthingServiceStub = sinon.stub(syncthingService, 'getConfigFolders');
-      syncthingServiceHealthStub = sinon.stub(syncthingService, 'getHealth').resolves({
+      sinon.stub(syncthingService, 'getHealth').resolves({
         status: 'success',
         data: { status: 'OK' },
       });
 
-      // Stub decryptEnterpriseApps to return apps as-is
-      const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
-      decryptEnterpriseAppsStub = sinon.stub(appQueryService, 'decryptEnterpriseApps').callsFake((apps) => Promise.resolve(apps));
+      const dp = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
+      deploymentProviderStub = sinon.stub(dp, 'listInstalledDeployments').resolves([]);
 
-      // Stub database connection to prevent actual DB access
-      sinon.stub(dbHelper, 'databaseConnection').returns({
-        db: () => ({}),
-      });
+      const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
+      listRunningContainersStub = sinon.stub(appQueryService, 'listRunningContainers').resolves([]);
+
+      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
     });
 
     it('should skip execution if installation is in progress', async () => {
-      globalState.installationInProgress = true;
+      globalStateRef.installationInProgress = true;
 
-      const installedApps = sinon.stub().resolves({ status: 'success', data: [] });
-      const listRunningApps = sinon.stub().resolves({ status: 'success', data: [] });
-      const receiveOnlyCache = new Map();
-      const backupInProgress = [];
-      const restoreInProgress = [];
-      const https = require('https');
+      await advancedWorkflows.coordinateActiveStandbyApps();
 
-      await advancedWorkflows.masterSlaveApps(
-        globalState,
-        installedApps,
-        listRunningApps,
-        receiveOnlyCache,
-        backupInProgress,
-        restoreInProgress,
-        https,
-      );
-
-      expect(installedApps.called).to.be.false;
+      expect(deploymentProviderStub.called).to.be.false;
     });
 
     it('should skip execution if removal is in progress', async () => {
-      globalState.removalInProgress = true;
+      globalStateRef.removalInProgress = true;
 
-      const installedApps = sinon.stub().resolves({ status: 'success', data: [] });
-      const listRunningApps = sinon.stub().resolves({ status: 'success', data: [] });
-      const receiveOnlyCache = new Map();
-      const backupInProgress = [];
-      const restoreInProgress = [];
-      const https = require('https');
+      await advancedWorkflows.coordinateActiveStandbyApps();
 
-      await advancedWorkflows.masterSlaveApps(
-        globalState,
-        installedApps,
-        listRunningApps,
-        receiveOnlyCache,
-        backupInProgress,
-        restoreInProgress,
-        https,
-      );
-
-      expect(installedApps.called).to.be.false;
+      expect(deploymentProviderStub.called).to.be.false;
     });
 
     it('should skip apps in backup progress', async () => {
       const appName = 'testapp';
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: appName,
-            version: 3,
-            containerData: 'g:data',
-          },
-        ],
-      });
-      const listRunningApps = sinon.stub().resolves({ status: 'success', data: [] });
-      const receiveOnlyCache = new Map();
-      const backupInProgress = [appName];
-      const restoreInProgress = [];
-      const https = require('https');
+      const mockDeployment = {
+        appName,
+        componentEntries: () => [[appName, {
+          identifier: appName,
+          hasActiveStandbySyncthing: () => true,
+          hasSyncthing: () => true,
+        }]],
+      };
+      deploymentProviderStub.resolves([mockDeployment]);
+      globalStateRef.backupInProgress.push(appName);
 
-      // Mock FDM to return no errors
-      serviceHelperStub.resolves({ data: [] });
+      const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+      const axiosGetStub = sinon.stub(serviceHelper, 'axiosGet');
 
-      // Execute - should skip processing this app due to backup
-      await advancedWorkflows.masterSlaveApps(
-        globalState,
-        installedApps,
-        listRunningApps,
-        receiveOnlyCache,
-        backupInProgress,
-        restoreInProgress,
-        https,
-      );
+      await advancedWorkflows.coordinateActiveStandbyApps();
 
-      // Function should have been called to get installed apps
-      expect(installedApps.called).to.be.true;
-      // But FDM should not be queried since app is skipped
-      expect(serviceHelperStub.called).to.be.false;
-    });
-
-    it('should handle apps with g: containerData (master-slave mode)', async () => {
-      const appName = 'masterslaveapp';
-      dockerServiceStub.returns('zel_masterslaveapp');
-
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: appName,
-            version: 3,
-            description: 'test',
-            owner: '1abc',
-            repotag: 'repo/app:latest',
-            cpu: 0.5,
-            ram: 500,
-            hdd: 5,
-            ports: [30000],
-            containerPorts: [8080],
-            domains: [''],
-            containerData: 'g:syncdata',
-            instances: 3,
-          },
-        ],
-      });
-      const listRunningApps = sinon.stub().resolves({
-        status: 'success',
-        data: [],
-      });
-
-      const receiveOnlyCache = new Map();
-      receiveOnlyCache.set('zel_masterslaveapp', { restarted: true });
-
-      const backupInProgress = [];
-      const restoreInProgress = [];
-      const https = require('https');
-
-      // Mock FDM responses (no IP)
-      serviceHelperStub.resolves({ data: [] });
-
-      // Mock node IP
-      fluxNetworkHelperStub.resolves('192.168.1.5:16127');
-
-      // Mock running app list - this node is at index 0
-      registryManagerStub.resolves([
-        {
-          name: appName,
-          ip: '192.168.1.5:16127',
-          runningSince: null,
-        },
-        {
-          name: appName,
-          ip: '192.168.1.10:16127',
-          runningSince: null,
-        },
-      ]);
-
-      // Mock syncthing folder check
-      syncthingServiceStub.resolves({
-        status: 'success',
-        data: [
-          {
-            path: '/root/.flux/ZelApps/zel_masterslaveapp',
-            type: 'sendreceive',
-          },
-        ],
-      });
-
-      // This should attempt to start the app since this node is at index 0
-      await advancedWorkflows.masterSlaveApps(
-        globalState,
-        installedApps,
-        listRunningApps,
-        receiveOnlyCache,
-        backupInProgress,
-        restoreInProgress,
-        https,
-      );
-
-      // Verify FDM was queried
-      expect(serviceHelperStub.called).to.be.true;
-    });
-
-    it('should schedule non-index-0 nodes when no FDM IP and no history', async () => {
-      const appName = 'masterslaveapp';
-      dockerServiceStub.returns('zel_masterslaveapp');
-
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: appName,
-            version: 3,
-            description: 'test',
-            owner: '1abc',
-            repotag: 'repo/app:latest',
-            cpu: 0.5,
-            ram: 500,
-            hdd: 5,
-            ports: [30000],
-            containerPorts: [8080],
-            domains: [''],
-            containerData: 'g:syncdata',
-            instances: 3,
-          },
-        ],
-      });
-      const listRunningApps = sinon.stub().resolves({
-        status: 'success',
-        data: [],
-      });
-
-      const receiveOnlyCache = new Map();
-      receiveOnlyCache.set('zel_masterslaveapp', { restarted: true });
-
-      const backupInProgress = [];
-      const restoreInProgress = [];
-      const https = require('https');
-
-      // Mock FDM responses (no IP)
-      serviceHelperStub.resolves({ data: [] });
-
-      // Mock node IP - this node is at index 1 (second in list)
-      fluxNetworkHelperStub.resolves('192.168.1.10:16127');
-
-      // Mock running app list - sorted by IP
-      registryManagerStub.resolves([
-        {
-          name: appName,
-          ip: '192.168.1.5:16127',
-          runningSince: null,
-        },
-        {
-          name: appName,
-          ip: '192.168.1.10:16127', // This node
-          runningSince: null,
-        },
-      ]);
-
-      // Mock syncthing folder check
-      syncthingServiceStub.resolves({
-        status: 'success',
-        data: [
-          {
-            path: '/root/.flux/ZelApps/zel_masterslaveapp',
-            type: 'sendreceive',
-          },
-        ],
-      });
-
-      await advancedWorkflows.masterSlaveApps(
-        globalState,
-        installedApps,
-        listRunningApps,
-        receiveOnlyCache,
-        backupInProgress,
-        restoreInProgress,
-        https,
-      );
-
-      // Node at index 1 should schedule start for 3 minutes later, not start immediately
-      // This is verified by the function logic - it should NOT call appDockerRestart immediately
-      expect(serviceHelperStub.called).to.be.true;
-      expect(fluxNetworkHelperStub.called).to.be.true;
+      expect(deploymentProviderStub.called).to.be.true;
+      expect(axiosGetStub.called).to.be.false;
+      globalStateRef.backupInProgress.length = 0;
     });
   });
 

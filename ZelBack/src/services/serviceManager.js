@@ -221,7 +221,7 @@ async function startFluxFunctions() {
       });
     }, 50 * 1000); // Run at 50 seconds - BEFORE stopped apps recovery
 
-    // Start stopped apps on boot (excluding g: syncthing mode apps which are managed by masterSlaveApps)
+    // Start stopped apps on boot (excluding activeStandby syncthing apps which are managed by coordinateActiveStandbyApps)
     log.info('Scheduling stopped apps recovery check...');
     setTimeout(() => {
       stoppedAppsRecovery.startStoppedAppsOnBoot().catch((error) => {
@@ -440,15 +440,7 @@ async function startFluxFunctions() {
         dockerOperations.appDeleteDataInMountPoint,
       ); // rechecks and possibly adjust syncthing configuration every 2 minutes
       setTimeout(() => {
-        advancedWorkflows.masterSlaveApps(
-          globalState,
-          appQueryService.installedApps,
-          appQueryService.listRunningApps,
-          globalState.receiveOnlySyncthingAppsCache,
-          globalState.backupInProgress,
-          globalState.restoreInProgress,
-          https,
-        ); // stop and starts apps using syncthing g: when a new master is required or was changed.
+        advancedWorkflows.coordinateActiveStandbyApps();
       }, 30 * 1000);
       setTimeout(() => {
         appInspector.monitorSharedDBApps(globalState); // Monitor SharedDB Apps.

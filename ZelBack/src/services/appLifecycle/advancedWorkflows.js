@@ -26,14 +26,14 @@ const {
   appsFolder,
 } = require('../utils/appConstants');
 const appsRepository = require('../appDatabase/appsRepository');
+const https = require('https');
 const {
   toCanonicalSpec,
   decryptToCleartextClass,
-  deserializeSpec,
 } = require('../utils/specCutover');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const { listRunningContainers } = require('../appQuery/appQueryService');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
-const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
 const appUninstaller = require('./appUninstaller');
@@ -45,9 +45,9 @@ const isArcane = Boolean(process.env.FLUXOS_PATH);
 // Legacy apps that use old gateway IP assignment method
 const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated', 'isokosse', 'ChainBraryDApp', 'health', 'ethercalc'];
 
-// Master/slave app tracking
-const mastersRunningGSyncthingApps = new Map();
-const timeTostartNewMasterApp = new Map();
+// Active-standby app tracking
+const activePrimaryByIdentifier = new Map();
+const scheduledPrimaryStart = new Map();
 
 // Promisified functions
 const cmdAsync = util.promisify(nodecmd.run);
@@ -67,26 +67,6 @@ function getInstalledAppsForDocker() {
     return [];
   }
 }
-
-async function getInstalledAppsFromDb(options = {}) {
-  try {
-    const { decryptApps = false } = options;
-    const instantiatedSpecs = await appsRepository.listInstalledApps();
-    let apps = instantiatedSpecs.map((is) => is.serialize());
-    if (decryptApps) {
-      apps = await decryptEnterpriseApps(apps);
-    }
-    return messageHelper.createDataMessage(apps);
-  } catch (error) {
-    log.error(error);
-    return messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-  }
-}
-
 
 
 async function getStrictApplicationSpecifications(appName) {
@@ -1584,46 +1564,25 @@ async function checkAndRemoveApplicationInstance() {
       return;
     }
 
-    // get list of locally installed apps.
-    const installedAppsRes = await getInstalledAppsFromDb();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
-    }
-    const appsInstalled = installedAppsRes.data;
-    // lazy load to avoid circular dependency
-    // eslint-disable-next-line global-require
-
+    const installedSpecs = await appsRepository.listInstalledApps();
     // eslint-disable-next-line global-require
     const registryManager = require('../appDatabase/registryManager');
-    // eslint-disable-next-line no-restricted-syntax
-    for (const installedApp of appsInstalled) {
+    for (const inst of installedSpecs) {
       // eslint-disable-next-line no-await-in-loop
-      const runningAppList = await registryManager.appLocation(installedApp.name);
-      const minInstances = installedApp.instances || config.fluxapps.minimumInstances; // introduced in v3 of apps specs
+      const runningAppList = await registryManager.appLocation(inst.name);
+      const minInstances = inst.spec.instances || config.fluxapps.minimumInstances;
       if (runningAppList.length > minInstances) {
         // eslint-disable-next-line no-await-in-loop
-        const appDetails = await registryManager.getApplicationGlobalSpecifications(installedApp.name);
+        const appDetails = await registryManager.getApplicationGlobalSpecifications(inst.name);
         if (appDetails) {
-          log.info(`Application ${installedApp.name} is already spawned on ${runningAppList.length} instances. Checking if should be unninstalled from the FluxNode..`);
+          log.info(`Application ${inst.name} is already spawned on ${runningAppList.length} instances. Checking if should be uninstalled from the FluxNode..`);
           runningAppList.sort((a, b) => {
-            if (!a.runningSince && b.runningSince) {
-              return 1;
-            }
-            if (a.runningSince && !b.runningSince) {
-              return -1;
-            }
-            if (a.runningSince < b.runningSince) {
-              return 1;
-            }
-            if (a.runningSince > b.runningSince) {
-              return -1;
-            }
-            if (a.ip < b.ip) {
-              return 1;
-            }
-            if (a.ip > b.ip) {
-              return -1;
-            }
+            if (!a.runningSince && b.runningSince) return 1;
+            if (a.runningSince && !b.runningSince) return -1;
+            if (a.runningSince < b.runningSince) return 1;
+            if (a.runningSince > b.runningSince) return -1;
+            if (a.ip < b.ip) return 1;
+            if (a.ip > b.ip) return -1;
             return 0;
           });
           // eslint-disable-next-line no-await-in-loop
@@ -1631,14 +1590,14 @@ async function checkAndRemoveApplicationInstance() {
           if (myIP) {
             const index = runningAppList.findIndex((x) => x.ip === myIP);
             if (index === 0) {
-              log.info(`Application ${installedApp.name} going to be removed from node as it was the latest one running it to install it..`);
-              log.warn(`REMOVAL REASON: Too many instances - ${installedApp.name} running on ${runningAppList.length} instances (max: ${minInstances}) - This node is the newest instance`);
-              log.warn(`Removing application ${installedApp.name} locally`);
+              log.info(`Application ${inst.name} going to be removed from node as it was the latest one running it to install it..`);
+              log.warn(`REMOVAL REASON: Too many instances - ${inst.name} running on ${runningAppList.length} instances (max: ${minInstances}) - This node is the newest instance`);
+              log.warn(`Removing application ${inst.name} locally`);
               // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.uninstallApplication(installedApp.name, { broadcastRemoval: true });
-              log.warn(`Application ${installedApp.name} locally removed`);
+              await appUninstaller.uninstallApplication(inst.name, { broadcastRemoval: true });
+              log.warn(`Application ${inst.name} locally removed`);
               // eslint-disable-next-line no-await-in-loop
-              await serviceHelper.delay(config.fluxapps.removal.delay * 1000); // wait for 6 mins so we don't have more removals at the same time
+              await serviceHelper.delay(config.fluxapps.removal.delay * 1000);
             }
           }
         }
@@ -1910,78 +1869,38 @@ async function forceAppRemovals() {
   }
 }
 
-/**
- * Manages syncthing master/slave application coordination using FDM services
- * @param {object} globalState - Global state object containing masterSlaveAppsRunning, etc.
- * @param {Function} installedApps - Function to get installed apps
- * @param {Function} listRunningApps - Function to get running apps
- * @param {Map} receiveOnlySyncthingAppsCache - Cache for receive-only syncthing apps
- * @param {Array} backupInProgress - Array of apps with backup in progress
- * @param {Array} restoreInProgress - Array of apps with restore in progress
- * @param {object} https - HTTPS module
- * @returns {Promise<void>}
- */
-async function masterSlaveApps(globalStateParam, installedApps, listRunningApps, receiveOnlySyncthingAppsCache, backupInProgressParam, restoreInProgressParam, https) {
+async function coordinateActiveStandbyApps() {
   try {
-    // eslint-disable-next-line no-param-reassign
-    globalStateParam.masterSlaveAppsRunning = true;
-    // do not run if installationInProgress or removalInProgress or softRedeployInProgress or hardRedeployInProgress
-    if (globalStateParam.installationInProgress || globalStateParam.removalInProgress || globalStateParam.softRedeployInProgress || globalStateParam.hardRedeployInProgress) {
+    globalState.activeStandbyCoordinationRunning = true;
+    if (isOperationInProgress()) {
       return;
     }
 
-    // Check if syncthing is loaded and working before processing
     try {
       // eslint-disable-next-line global-require
       const syncthingService = require('../syncthingService');
       const syncthingHealth = await syncthingService.getHealth();
       if (syncthingHealth.status !== 'success' || !syncthingHealth.data || syncthingHealth.data.status !== 'OK') {
-        log.warn('masterSlaveApps: Syncthing is not available or not healthy, skipping this cycle');
+        log.warn('activeStandby: Syncthing is not available or not healthy, skipping this cycle');
         return;
       }
     } catch (syncthingError) {
-      log.warn(`masterSlaveApps: Failed to check syncthing health: ${syncthingError.message}, skipping this cycle`);
-      return;
-    }
-    // get list of all installed apps
-    const appsInstalled = await installedApps();
-    // eslint-disable-next-line no-await-in-loop
-    const runningAppsRes = await listRunningApps();
-    if (runningAppsRes.status !== 'success') {
-      throw new Error('Unable to check running Apps');
-    }
-    const runningApps = runningAppsRes.data;
-    if (appsInstalled.status === 'error') {
+      log.warn(`activeStandby: Failed to check syncthing health: ${syncthingError.message}, skipping this cycle`);
       return;
     }
 
-    // Decrypt enterprise apps (version 8 with encrypted content)
-    appsInstalled.data = await decryptEnterpriseApps(appsInstalled.data);
-    const runningAppsNames = runningApps.map((app) => {
-      if (app.Names[0].startsWith('/zel')) {
-        return app.Names[0].slice(4);
-      }
+    const deployments = await deploymentProvider.listInstalledDeployments();
+    const runningContainers = await listRunningContainers();
+
+    const runningAppsNames = runningContainers.map((app) => {
+      if (app.Names[0].startsWith('/zel')) return app.Names[0].slice(4);
       return app.Names[0].slice(5);
     });
-    const agent = new https.Agent({
-      rejectUnauthorized: false,
-    });
-    const axiosOptions = {
-      timeout: 10000,
-      httpsAgent: agent,
-    };
+    const agent = new https.Agent({ rejectUnauthorized: false });
+    const axiosOptions = { timeout: 10000, httpsAgent: agent };
 
     const validIdentifiers = new Set();
-    const { DeploymentSpec } = await getSpecBackend();
-    // eslint-disable-next-line no-restricted-syntax
-    for (const app of appsInstalled.data) {
-      // eslint-disable-next-line no-await-in-loop
-      const spec = await deserializeSpec(app);
-      if (!spec) {
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+    for (const deployment of deployments) {
       for (const [, deployComp] of deployment.componentEntries()) {
         if (deployComp.hasActiveStandbySyncthing()) {
           validIdentifiers.add(deployComp.identifier);
@@ -1989,59 +1908,54 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
       }
     }
 
-    // Remove stale entries from mastersRunningGSyncthingApps
-    // eslint-disable-next-line no-restricted-syntax
-    for (const identifier of mastersRunningGSyncthingApps.keys()) {
+    for (const identifier of activePrimaryByIdentifier.keys()) {
       if (!validIdentifiers.has(identifier)) {
-        mastersRunningGSyncthingApps.delete(identifier);
-        log.info(`masterSlaveApps: Cleaned up stale entry from mastersRunningGSyncthingApps: ${identifier}`);
+        activePrimaryByIdentifier.delete(identifier);
+        log.info(`activeStandby: Cleaned up stale entry from activePrimaryByIdentifier: ${identifier}`);
       }
     }
 
-    // Remove stale entries from timeTostartNewMasterApp
-    // eslint-disable-next-line no-restricted-syntax
-    for (const identifier of timeTostartNewMasterApp.keys()) {
+    for (const identifier of scheduledPrimaryStart.keys()) {
       if (!validIdentifiers.has(identifier)) {
-        timeTostartNewMasterApp.delete(identifier);
-        log.info(`masterSlaveApps: Cleaned up stale entry from timeTostartNewMasterApp: ${identifier}`);
+        scheduledPrimaryStart.delete(identifier);
+        log.info(`activeStandby: Cleaned up stale entry from scheduledPrimaryStart: ${identifier}`);
       }
     }
 
-    // eslint-disable-next-line no-restricted-syntax
-    for (const installedApp of appsInstalled.data) {
+    const backupInProgress = globalState.backupInProgress || [];
+    const restoreInProgress = globalState.restoreInProgress || [];
+    const receiveOnlySyncthingAppsCache = globalState.receiveOnlySyncthingAppsCache;
+
+    for (const deployment of deployments) {
+      const appName = deployment.appName;
       let fdmOk = true;
       let identifier;
       let needsToBeChecked = false;
       let appId;
-      const backupSkip = backupInProgressParam.some((backupItem) => installedApp.name === backupItem);
-      const restoreSkip = restoreInProgressParam.some((backupItem) => installedApp.name === backupItem);
+      const backupSkip = backupInProgress.some((item) => appName === item);
+      const restoreSkip = restoreInProgress.some((item) => appName === item);
       if (backupSkip || restoreSkip) {
-        log.info(`masterSlaveApps: Backup/Restore is running for ${installedApp.name}, syncthing masterSlave check is disabled for that app`);
+        log.info(`activeStandby: Backup/Restore is running for ${appName}, skipping`);
         // eslint-disable-next-line no-continue
         continue;
       }
-      // eslint-disable-next-line no-await-in-loop
-      const installedSpec = await deserializeSpec(installedApp);
-      if (installedSpec) {
-        const instDeploy = DeploymentSpec.fromSpec(installedSpec, appsFolder);
-        for (const [, deployComp] of instDeploy.componentEntries()) {
-          if (deployComp.hasActiveStandbySyncthing()) {
-            identifier = deployComp.identifier;
-            appId = dockerService.getAppIdentifier(identifier);
-            needsToBeChecked = true;
-            break;
-          }
+      for (const [, deployComp] of deployment.componentEntries()) {
+        if (deployComp.hasActiveStandbySyncthing()) {
+          identifier = deployComp.identifier;
+          appId = dockerService.getAppIdentifier(identifier);
+          needsToBeChecked = true;
+          break;
         }
       }
       if (needsToBeChecked) {
         // Get master IP from FDM using the new /appips endpoint
         // eslint-disable-next-line no-await-in-loop
-        const fdmResult = await getMasterIpFromFdm(installedApp.name, axiosOptions);
+        const fdmResult = await getMasterIpFromFdm(appName, axiosOptions);
         const { ip } = fdmResult;
         fdmOk = fdmResult.fdmOk;
 
         if (!fdmOk) {
-          log.warn(`masterSlaveApps: All FDM services failed for app:${installedApp.name}, skipping primary selection for this cycle`);
+          log.warn(`activeStandby: All FDM services failed for app:${appName}, skipping primary selection for this cycle`);
           // eslint-disable-next-line no-continue
           continue;
         }
@@ -2054,7 +1968,7 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
             // eslint-disable-next-line no-await-in-loop
             myIP = await fluxNetworkHelper.getMyFluxIPandPort();
           } catch (error) {
-            log.error(`masterSlaveApps: Failed to get my IP for app:${installedApp.name}, error: ${error.message}`);
+            log.error(`activeStandby: Failed to get my IP for app:${appName}, error: ${error.message}`);
             // eslint-disable-next-line no-continue
             continue;
           }
@@ -2064,12 +1978,12 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
             }
             // Validate ip is a string if it exists
             if (ip && typeof ip !== 'string') {
-              log.error(`masterSlaveApps: Invalid IP type from FDM for app:${installedApp.name}, got: ${typeof ip}`);
+              log.error(`activeStandby: Invalid IP type from FDM for app:${appName}, got: ${typeof ip}`);
               // eslint-disable-next-line no-continue
               continue;
             }
             if ((!ip)) {
-              log.info(`masterSlaveApps: app:${installedApp.name} has currently no primary set`);
+              log.info(`activeStandby: app:${appName} has currently no primary set`);
               if (!runningAppsNames.includes(identifier)) {
                 // Check if app is ready (syncthing data is synced) before allowing it to become primary
                 let isReady = receiveOnlySyncthingAppsCache.has(appId) && receiveOnlySyncthingAppsCache.get(appId).restarted;
@@ -2088,19 +2002,19 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
                       // eslint-disable-next-line no-restricted-syntax
                       for (const syncthingFolder of allSyncthingFolders.data) {
                         if (syncthingFolder.path === folder && syncthingFolder.type === 'sendreceive') {
-                          log.info(`masterSlaveApps: app:${installedApp.name} folder is already in sendreceive mode, treating as ready`);
+                          log.info(`activeStandby: app:${appName} folder is already in sendreceive mode, treating as ready`);
                           isReady = true;
                           break;
                         }
                       }
                     }
                   } catch (error) {
-                    log.error(`masterSlaveApps: Failed to check syncthing folder status for ${installedApp.name}: ${error.message}`);
+                    log.error(`activeStandby: Failed to check syncthing folder status for ${appName}: ${error.message}`);
                   }
                 }
 
                 if (!isReady) {
-                  log.info(`masterSlaveApps: app:${installedApp.name} is not ready yet (syncthing not synced), skipping primary selection for this cycle`);
+                  log.info(`activeStandby: app:${appName} is not ready yet (syncthing not synced), skipping primary selection for this cycle`);
                   // eslint-disable-next-line global-require
                   // eslint-disable-next-line no-continue
                   continue;
@@ -2109,7 +2023,7 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
                 // eslint-disable-next-line global-require
                 const registryManager = require('../appDatabase/registryManager');
                 // eslint-disable-next-line no-await-in-loop
-                const runningAppList = await registryManager.appLocation(installedApp.name);
+                const runningAppList = await registryManager.appLocation(appName);
                 runningAppList.sort((a, b) => {
                   if (!a.runningSince && b.runningSince) {
                     return -1;
@@ -2161,24 +2075,24 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
                       const response = await axios.get(`http://${ipToCheck}:${portToCheck}/apps/listrunningapps`, { timeout, cancelToken: source.token });
                       isResolved = true;
                       const appsRunning = response.data.data;
-                      if (appsRunning.find((app) => app.Names[0].includes(installedApp.name))) {
-                        log.info(`masterSlaveApps: app:${installedApp.name} is running on lower-index node (index ${i}) at ${ipToCheck}, will not start`);
+                      if (appsRunning.find((app) => app.Names[0].includes(appName))) {
+                        log.info(`activeStandby: app:${appName} is running on lower-index node (index ${i}) at ${ipToCheck}, will not start`);
                         return true;
                       }
                     } catch (error) {
                       isResolved = true;
-                      log.info(`masterSlaveApps: Failed to check lower-index node ${i} at ${ipToCheck} for app:${installedApp.name}, error: ${error.message}`);
+                      log.info(`activeStandby: Failed to check lower-index node ${i} at ${ipToCheck} for app:${appName}, error: ${error.message}`);
                       // Continue checking other nodes
                     }
                   }
                   return false;
                 };
 
-                if (index === 0 && !mastersRunningGSyncthingApps.has(identifier)) {
+                if (index === 0 && !activePrimaryByIdentifier.has(identifier)) {
                   // Index 0: Start immediately if no history
-                  appDockerRestartWithPermissionsFix(installedApp.name, appId);
-                  log.info(`masterSlaveApps: starting docker app:${installedApp.name} index: ${index}`);
-                } else if (!timeTostartNewMasterApp.has(identifier) && mastersRunningGSyncthingApps.has(identifier) && mastersRunningGSyncthingApps.get(identifier) !== myIP) {
+                  appDockerRestartWithPermissionsFix(appName, appId);
+                  log.info(`activeStandby: starting docker app:${appName} index: ${index}`);
+                } else if (!scheduledPrimaryStart.has(identifier) && activePrimaryByIdentifier.has(identifier) && activePrimaryByIdentifier.get(identifier) !== myIP) {
                   // There was a previous master (not me), and it's no longer on FDM
                   const { CancelToken } = axios;
                   const source = CancelToken.source();
@@ -2189,7 +2103,7 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
                       source.cancel('Operation canceled by the user.');
                     }
                   }, timeout * 2);
-                  const previousMasterIp = mastersRunningGSyncthingApps.get(identifier);
+                  const previousMasterIp = activePrimaryByIdentifier.get(identifier);
                   // Look up the correct port from runningAppList since FDM API returns IP without port
                   const previousMasterNode = runningAppList.find((x) => x.ip.split(':')[0] === previousMasterIp.split(':')[0]);
                   const ipToCheckAppRunning = previousMasterIp.split(':')[0];
@@ -2200,12 +2114,12 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
                     const response = await axios.get(`http://${ipToCheckAppRunning}:${portToCheckAppRunning}/apps/listrunningapps`, { timeout, cancelToken: source.token });
                     isResolved = true;
                     const appsRunning = response.data.data;
-                    if (appsRunning.find((app) => app.Names[0].includes(installedApp.name))) {
-                      log.info(`masterSlaveApps: app:${installedApp.name} is not on fdm but previous master is running it at: ${ipToCheckAppRunning}:${portToCheckAppRunning}`);
+                    if (appsRunning.find((app) => app.Names[0].includes(appName))) {
+                      log.info(`activeStandby: app:${appName} is not on fdm but previous master is running it at: ${ipToCheckAppRunning}:${portToCheckAppRunning}`);
                       previousMasterStillRunning = true;
                     }
                   } catch (error) {
-                    log.info(`masterSlaveApps: Failed to reach previous master at ${ipToCheckAppRunning}:${portToCheckAppRunning} for app:${installedApp.name}, will proceed with primary selection. Error: ${error.message}`);
+                    log.info(`activeStandby: Failed to reach previous master at ${ipToCheckAppRunning}:${portToCheckAppRunning} for app:${appName}, will proceed with primary selection. Error: ${error.message}`);
                     isResolved = true;
                   }
                   if (previousMasterStillRunning) {
@@ -2213,13 +2127,13 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
                   }
                   // Previous master is not running, determine next primary
                   if (index === 0) {
-                    appDockerRestartWithPermissionsFix(installedApp.name, appId);
-                    log.info(`masterSlaveApps: starting docker app:${installedApp.name} index: ${index}`);
+                    appDockerRestartWithPermissionsFix(appName, appId);
+                    log.info(`activeStandby: starting docker app:${appName} index: ${index}`);
                   } else {
-                    const previousMasterIndex = runningAppList.findIndex((x) => x.ip.split(':')[0] === mastersRunningGSyncthingApps.get(identifier).split(':')[0]);
+                    const previousMasterIndex = runningAppList.findIndex((x) => x.ip.split(':')[0] === activePrimaryByIdentifier.get(identifier).split(':')[0]);
                     let timetoStartApp = Date.now();
                     if (previousMasterIndex >= 0) {
-                      log.info(`masterSlaveApps: app:${installedApp.name} had primary running at index: ${previousMasterIndex}`);
+                      log.info(`activeStandby: app:${appName} had primary running at index: ${previousMasterIndex}`);
                       if (index > previousMasterIndex) {
                         timetoStartApp += (index - 1) * 3 * 60 * 1000;
                       } else {
@@ -2233,45 +2147,45 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
                       // eslint-disable-next-line no-await-in-loop
                       const lowerNodeRunning = await checkLowerIndexNodesRunning();
                       if (!lowerNodeRunning) {
-                        appDockerRestartWithPermissionsFix(installedApp.name, appId);
-                        log.info(`masterSlaveApps: starting docker app:${installedApp.name} index: ${index}`);
+                        appDockerRestartWithPermissionsFix(appName, appId);
+                        log.info(`activeStandby: starting docker app:${appName} index: ${index}`);
                       }
                     } else {
-                      log.info(`masterSlaveApps: will start docker app:${installedApp.name} at ${timetoStartApp.toString()}`);
-                      timeTostartNewMasterApp.set(identifier, timetoStartApp);
+                      log.info(`activeStandby: will start docker app:${appName} at ${timetoStartApp.toString()}`);
+                      scheduledPrimaryStart.set(identifier, timetoStartApp);
                     }
                   }
-                } else if (timeTostartNewMasterApp.has(identifier) && timeTostartNewMasterApp.get(identifier) <= Date.now()) {
+                } else if (scheduledPrimaryStart.has(identifier) && scheduledPrimaryStart.get(identifier) <= Date.now()) {
                   // Scheduled start time has arrived, check if lower-index nodes are running
                   // eslint-disable-next-line no-await-in-loop
                   const lowerNodeRunning = await checkLowerIndexNodesRunning();
                   if (!lowerNodeRunning) {
-                    appDockerRestartWithPermissionsFix(installedApp.name, appId);
-                    log.info(`masterSlaveApps: starting docker app:${installedApp.name} index: ${index} that was scheduled to start at ${timeTostartNewMasterApp.get(identifier).toString()}`);
-                    timeTostartNewMasterApp.delete(identifier);
+                    appDockerRestartWithPermissionsFix(appName, appId);
+                    log.info(`activeStandby: starting docker app:${appName} index: ${index} that was scheduled to start at ${scheduledPrimaryStart.get(identifier).toString()}`);
+                    scheduledPrimaryStart.delete(identifier);
                   } else {
-                    log.info(`masterSlaveApps: not starting app:${installedApp.name} index: ${index} - lower-index node is already running`);
-                    timeTostartNewMasterApp.delete(identifier);
+                    log.info(`activeStandby: not starting app:${appName} index: ${index} - lower-index node is already running`);
+                    scheduledPrimaryStart.delete(identifier);
                   }
-                } else if (index > 0 && !mastersRunningGSyncthingApps.has(identifier) && !timeTostartNewMasterApp.has(identifier)) {
+                } else if (index > 0 && !activePrimaryByIdentifier.has(identifier) && !scheduledPrimaryStart.has(identifier)) {
                   // Non-primary node with no history - schedule start based on index
                   const timetoStartApp = Date.now() + (index * 3 * 60 * 1000);
-                  log.info(`masterSlaveApps: scheduling app:${installedApp.name} index: ${index} to start at ${timetoStartApp.toString()}`);
-                  timeTostartNewMasterApp.set(identifier, timetoStartApp);
+                  log.info(`activeStandby: scheduling app:${appName} index: ${index} to start at ${timetoStartApp.toString()}`);
+                  scheduledPrimaryStart.set(identifier, timetoStartApp);
                 } else {
                   // All other cases: don't start
-                  log.info(`masterSlaveApps: not starting app:${installedApp.name} index: ${index} - conditions not met for primary selection`);
+                  log.info(`activeStandby: not starting app:${appName} index: ${index} - conditions not met for primary selection`);
                 }
               }
             } else {
-              mastersRunningGSyncthingApps.set(identifier, ip);
-              if (timeTostartNewMasterApp.has(identifier)) {
-                log.info(`masterSlaveApps: app:${installedApp.name} removed from timeTostartNewMasterApp cache, already started on another standby node`);
-                timeTostartNewMasterApp.delete(identifier);
+              activePrimaryByIdentifier.set(identifier, ip);
+              if (scheduledPrimaryStart.has(identifier)) {
+                log.info(`activeStandby: app:${appName} removed from scheduledPrimaryStart cache, already started on another standby node`);
+                scheduledPrimaryStart.delete(identifier);
               }
               if (myIP.split(':')[0] !== ip.split(':')[0] && runningAppsNames.includes(identifier)) {
-                appDockerStop(installedApp.name);
-                log.info(`masterSlaveApps: stopping docker app:${installedApp.name} it's running on ip:${ip} and myIP is: ${myIP}`);
+                appDockerStop(appName);
+                log.info(`activeStandby: stopping docker app:${appName} it's running on ip:${ip} and myIP is: ${myIP}`);
               } else if (myIP.split(':')[0] === ip.split(':')[0] && !runningAppsNames.includes(identifier)) {
                 // Check if app is ready (syncthing data is synced) before starting
                 let isReady = receiveOnlySyncthingAppsCache.has(appId) && receiveOnlySyncthingAppsCache.get(appId).restarted;
@@ -2289,22 +2203,22 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
                       // eslint-disable-next-line no-restricted-syntax
                       for (const syncthingFolder of allSyncthingFolders.data) {
                         if (syncthingFolder.path === folder && syncthingFolder.type === 'sendreceive') {
-                          log.info(`masterSlaveApps: app:${installedApp.name} folder is already in sendreceive mode, treating as ready`);
+                          log.info(`activeStandby: app:${appName} folder is already in sendreceive mode, treating as ready`);
                           isReady = true;
                           break;
                         }
                       }
                     }
                   } catch (error) {
-                    log.error(`masterSlaveApps: Failed to check syncthing folder status for ${installedApp.name}: ${error.message}`);
+                    log.error(`activeStandby: Failed to check syncthing folder status for ${appName}: ${error.message}`);
                   }
                 }
 
                 if (isReady) {
-                  appDockerRestartWithPermissionsFix(installedApp.name, appId);
-                  log.info(`masterSlaveApps: starting docker app:${installedApp.name}`);
+                  appDockerRestartWithPermissionsFix(appName, appId);
+                  log.info(`activeStandby: starting docker app:${appName}`);
                 } else {
-                  log.info(`masterSlaveApps: app:${installedApp.name} is registered as primary on FDM but not ready yet (syncthing not synced), skipping start for this cycle`);
+                  log.info(`activeStandby: app:${appName} is registered as primary on FDM but not ready yet (syncthing not synced), skipping start for this cycle`);
                 }
               }
             }
@@ -2313,12 +2227,11 @@ async function masterSlaveApps(globalStateParam, installedApps, listRunningApps,
       }
     }
   } catch (error) {
-    log.error(`masterSlaveApps: ${error}`);
+    log.error(`activeStandby: ${error}`);
   } finally {
-    // eslint-disable-next-line no-param-reassign
-    globalStateParam.masterSlaveAppsRunning = false;
+    globalState.activeStandbyCoordinationRunning = false;
     await serviceHelper.delay(30 * 1000);
-    masterSlaveApps(globalStateParam, installedApps, listRunningApps, receiveOnlySyncthingAppsCache, backupInProgressParam, restoreInProgressParam, https);
+    coordinateActiveStandbyApps();
   }
 }
 
@@ -2422,7 +2335,7 @@ module.exports = {
   reconcileInstalledApps,
   checkAndRemoveEnterpriseAppsOnNonArcane,
   forceAppRemovals,
-  masterSlaveApps,
+  coordinateActiveStandbyApps,
   getPeerAppsInstallingErrorMessages,
   appDockerStart,
 };

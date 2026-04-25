@@ -409,7 +409,7 @@ async function installApplication(appSpec, options = {}) {
     // installed always is bigger array than running
     const runningSet = new Set(runningAppsNames);
     const stoppedApps = installedAppComponentNames.filter((installedApp) => !runningSet.has(installedApp));
-    if (stoppedApps.length === 0 && !globalState.masterSlaveAppsRunning) {
+    if (stoppedApps.length === 0 && !globalState.activeStandbyCoordinationRunning) {
       await performDockerCleanup(res);
     }
 

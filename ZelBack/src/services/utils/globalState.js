@@ -7,7 +7,7 @@ let softRedeployInProgress = false;
 let hardRedeployInProgress = false;
 let reinstallationOfOldAppsInProgress = false;
 let reconciliationInProgress = false;
-let masterSlaveAppsRunning = false;
+let activeStandbyCoordinationRunning = false;
 let checkAndSyncAppHashesWasEverExecuted = false;
 let updateSyncthingRunning = false;
 let syncthingAppsFirstRun = true;
@@ -68,8 +68,8 @@ module.exports = {
   get reconciliationInProgress() { return reconciliationInProgress; },
   set reconciliationInProgress(value) { reconciliationInProgress = value; },
 
-  get masterSlaveAppsRunning() { return masterSlaveAppsRunning; },
-  set masterSlaveAppsRunning(value) { masterSlaveAppsRunning = value; },
+  get activeStandbyCoordinationRunning() { return activeStandbyCoordinationRunning; },
+  set activeStandbyCoordinationRunning(value) { activeStandbyCoordinationRunning = value; },
 
   get checkAndSyncAppHashesWasEverExecuted() { return checkAndSyncAppHashesWasEverExecuted; },
   set checkAndSyncAppHashesWasEverExecuted(value) { checkAndSyncAppHashesWasEverExecuted = value; },

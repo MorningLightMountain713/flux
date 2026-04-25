@@ -4,7 +4,7 @@
  * This module handles the recovery of Flux applications that are stopped on boot.
  * It checks for installed apps that have stopped containers and starts them,
  * but only if they do NOT use g: syncthing mode (master/slave mode).
- * Apps using g: syncthing mode are managed by the masterSlaveApps service.
+ * Apps using g: syncthing mode are managed by the coordinateActiveStandbyApps service.
  */
 
 const config = require('config');
@@ -17,8 +17,8 @@ const registryManager = require('../appDatabase/registryManager');
 const advancedWorkflows = require('./advancedWorkflows');
 const appUninstaller = require('./appUninstaller');
 const appsRepository = require('../appDatabase/appsRepository');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { localAppsInformation } = require('../utils/appConstants');
-const { deserializeSpec } = require('../utils/specCutover');
 
 const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
@@ -56,15 +56,6 @@ async function appHasValidLocationOnNode(appName, myIp) {
   }
 }
 
-async function getInstalledAppsFromDb() {
-  try {
-    const instantiatedSpecs = await appsRepository.listInstalledApps();
-    return instantiatedSpecs.map((is) => is.serialize());
-  } catch (error) {
-    log.error(`stoppedAppsRecovery - Error getting installed apps: ${error.message}`);
-    return [];
-  }
-}
 
 /**
  * Get all stopped Flux containers
@@ -149,15 +140,13 @@ async function startStoppedAppsOnBoot() {
   try {
     log.info('stoppedAppsRecovery - Starting stopped apps recovery check');
 
-    // Get all installed apps from database (just to get the list of app names)
-    const installedApps = await getInstalledAppsFromDb();
-    if (installedApps.length === 0) {
+    const installedSpecs = await appsRepository.listInstalledApps();
+    if (installedSpecs.length === 0) {
       log.info('stoppedAppsRecovery - No installed apps found');
       return results;
     }
 
-    // Create a set for quick lookup of installed app names
-    const installedAppNames = new Set(installedApps.map((app) => app.name));
+    const installedAppNames = new Set(installedSpecs.map((inst) => inst.name));
 
     // Get all stopped Flux containers
     const stoppedContainers = await getStoppedFluxContainers();
@@ -214,12 +203,18 @@ async function startStoppedAppsOnBoot() {
       }
 
       // eslint-disable-next-line no-await-in-loop
-      const spec = await deserializeSpec(appSpec);
-      if (spec && spec.hasActiveStandbySyncthing()) {
-        log.info(`stoppedAppsRecovery - App ${appName} uses activeStandby syncthing, skipping all its containers (managed by masterSlaveApps)`);
-        results.appsSkippedGMode.push(appName);
-        // eslint-disable-next-line no-continue
-        continue;
+      const deployment = await deploymentProvider.getInstalledDeployment(appName);
+      if (deployment) {
+        let hasActiveStandby = false;
+        for (const [, comp] of deployment.componentEntries()) {
+          if (comp.hasActiveStandbySyncthing()) { hasActiveStandby = true; break; }
+        }
+        if (hasActiveStandby) {
+          log.info(`stoppedAppsRecovery - App ${appName} uses activeStandby syncthing, skipping all its containers (managed by coordinateActiveStandbyApps)`);
+          results.appsSkippedGMode.push(appName);
+          // eslint-disable-next-line no-continue
+          continue;
+        }
       }
 
       // Check if the app still has a valid location record for this node
