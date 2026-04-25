@@ -72,7 +72,7 @@ async function validateSubmissionSpec(spec, { height } = {}) {
     throw new Error(`Flux apps specifications of version ${spec.version} not yet supported`);
   }
   try {
-    VersionClass.fromSubmission(spec);
+    return VersionClass.fromSubmission(spec);
   } catch (err) {
     if (err instanceof ValidationError && Array.isArray(err.errors) && err.errors.length > 0) {
       const first = err.errors[0];
@@ -81,7 +81,6 @@ async function validateSubmissionSpec(spec, { height } = {}) {
     }
     throw err;
   }
-  return true;
 }
 
 module.exports = {

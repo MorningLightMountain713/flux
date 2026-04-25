@@ -12,7 +12,7 @@ const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArc
 const appsRepository = require('../appDatabase/appsRepository');
 const { peerManager } = require('../utils/peerState');
 const { validateSubmissionSpec, getSpec } = require('../utils/specLibs');
-const { resolveSpec, deserializeSpec, toCanonicalSpec } = require('../utils/specCutover');
+const { toCanonicalSpec } = require('../utils/specCutover');
 
 /**
  * Verify app registration parameters via API
@@ -35,16 +35,14 @@ async function verifyAppRegistrationParameters(req, res) {
       }
       const daemonHeight = syncStatus.data.height;
 
-      const isEnterprise = Boolean(
-        appSpecification.version >= 8 && appSpecification.enterprise,
-      );
+      let spec = await validateSubmissionSpec(appSpecification, { height: daemonHeight });
+      const isEnterprise = spec.isEncrypted;
+      if (isEnterprise) {
+        const provider = await spec.createProvider();
+        spec = await spec.decrypt(provider);
+      }
 
-      const spec = await resolveSpec(appSpecification);
-      if (!spec) throw new Error('Could not deserialize app specifications');
-      const appSpecFormatted = spec.serialize();
-
-      await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
-      await verifyImageRegistryAndArchitectures(appSpecFormatted);
+      await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner });
 
       for (const { componentName, secrets } of spec.getComponentSecrets()) {
         // eslint-disable-next-line no-await-in-loop
@@ -53,9 +51,8 @@ async function verifyAppRegistrationParameters(req, res) {
 
       await appsRepository.assertNoNameConflicts(spec.name);
 
-      const responseSpec = isEnterprise ? await toCanonicalSpec(appSpecification) : appSpecFormatted;
-      const respondPrice = messageHelper.createDataMessage(responseSpec);
-      res.json(respondPrice);
+      const responseSpec = isEnterprise ? await toCanonicalSpec(appSpecification) : spec.serialize();
+      res.json(messageHelper.createDataMessage(responseSpec));
     } catch (error) {
       log.warn(error);
       const errorResponse = messageHelper.createErrorMessage(
@@ -87,16 +84,13 @@ async function validateAppUpdate(appSpecification) {
   }
   const daemonHeight = syncStatus.data.height;
 
-  const isEnterprise = Boolean(
-    appSpecification.version >= 8 && appSpecification.enterprise,
-  );
+  let spec = await validateSubmissionSpec(appSpecification, { height: daemonHeight });
+  if (spec.isEncrypted) {
+    const provider = await spec.createProvider();
+    spec = await spec.decrypt(provider);
+  }
 
-  const spec = await resolveSpec(appSpecification);
-  if (!spec) throw new Error('Could not deserialize app specifications');
-  const appSpecFormatted = spec.serialize();
-
-  await validateSubmissionSpec(appSpecFormatted, { height: daemonHeight });
-  await verifyImageRegistryAndArchitectures(appSpecFormatted);
+  await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner });
 
   for (const { componentName, secrets } of spec.getComponentSecrets()) {
     // eslint-disable-next-line no-await-in-loop
@@ -106,7 +100,7 @@ async function validateAppUpdate(appSpecification) {
   const timestamp = Date.now();
   // eslint-disable-next-line global-require
   const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
-  const previousAppSpecs = await getPreviousAppSpecifications(appSpecFormatted, timestamp);
+  const previousAppSpecs = await getPreviousAppSpecifications(spec, timestamp);
   if (!previousAppSpecs) {
     throw new Error(`Flux App ${spec.name} does not exist and cannot be updated`);
   }
@@ -123,12 +117,7 @@ async function validateAppUpdate(appSpecification) {
   const { UpdatePolicy } = await getSpec();
   UpdatePolicy.assertCompatible(previousAppSpecs, spec);
 
-  if (isEnterprise) {
-    const wireForm = await toCanonicalSpec(appSpecification);
-    return wireForm;
-  }
-
-  return appSpecFormatted;
+  return spec;
 }
 
 /**
@@ -144,9 +133,10 @@ async function verifyAppUpdateApi(req, res) {
   req.on('end', async () => {
     try {
       const appSpecification = serviceHelper.ensureObject(serviceHelper.ensureObject(body));
-      const appSpecFormatted = await validateAppUpdate(appSpecification);
-      const respondPrice = messageHelper.createDataMessage(appSpecFormatted);
-      res.json(respondPrice);
+      const spec = await validateAppUpdate(appSpecification);
+      const isEnterprise = Boolean(appSpecification.version >= 8 && appSpecification.enterprise);
+      const responseSpec = isEnterprise ? await toCanonicalSpec(appSpecification) : spec.serialize();
+      res.json(messageHelper.createDataMessage(responseSpec));
     } catch (error) {
       log.warn(error);
       const errorResponse = messageHelper.createErrorMessage(
