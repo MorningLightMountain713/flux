@@ -48,7 +48,7 @@ describe('stoppedAppsRecovery tests', () => {
     };
 
     advancedWorkflowsStub = {
-      appDockerStart: sinon.stub().resolves(),
+      startApplication: sinon.stub().resolves(),
     };
 
     appUninstallerStub = {
@@ -161,7 +161,7 @@ describe('stoppedAppsRecovery tests', () => {
 
       expect(results.appsStarted).to.deep.equal(['AppA']);
       expect(results.appsRemoved).to.deep.equal([]);
-      expect(advancedWorkflowsStub.appDockerStart.calledWith('AppA')).to.equal(true);
+      expect(advancedWorkflowsStub.startApplication.calledWith('AppA')).to.equal(true);
     });
 
     it('should remove app when location record has expired', async () => {
@@ -178,7 +178,7 @@ describe('stoppedAppsRecovery tests', () => {
       expect(results.appsRemoved).to.deep.equal(['AppA']);
       expect(results.appsStarted).to.deep.equal([]);
       expect(appUninstallerStub.uninstallApplication.calledOnce).to.equal(true);
-      expect(advancedWorkflowsStub.appDockerStart.called).to.equal(false);
+      expect(advancedWorkflowsStub.startApplication.called).to.equal(false);
     });
 
     it('should remove app when location record is missing', async () => {

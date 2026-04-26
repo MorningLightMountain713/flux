@@ -48,7 +48,7 @@ describe('daemonHealthMonitor tests', () => {
     };
 
     appUninstallerStub = {
-      removeAppLocally: sinon.stub().resolves(),
+      uninstallApplication: sinon.stub().resolves(),
     };
 
     // Use proxyquire to inject stubs
@@ -177,9 +177,9 @@ describe('daemonHealthMonitor tests', () => {
 
       expect(logStub.error.calledWith('CRITICAL: Daemon not synced for 2+ hours. Removing all applications.')).to.be.true;
       expect(registryManagerStub.getInstalledApps.called).to.be.true;
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(2);
-      expect(appUninstallerStub.removeAppLocally.firstCall.args[0]).to.equal('app1');
-      expect(appUninstallerStub.removeAppLocally.secondCall.args[0]).to.equal('app2');
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
+      expect(appUninstallerStub.uninstallApplication.firstCall.args[0]).to.equal('app1');
+      expect(appUninstallerStub.uninstallApplication.secondCall.args[0]).to.equal('app2');
     });
 
     it('should not remove apps multiple times', async () => {
@@ -197,11 +197,11 @@ describe('daemonHealthMonitor tests', () => {
 
       // Second call - should trigger app removal
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(1);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(1);
 
       // Third call - should not trigger removal again
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(1);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(1);
     });
 
     it('should log info when no apps are installed', async () => {
@@ -220,7 +220,7 @@ describe('daemonHealthMonitor tests', () => {
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       expect(logStub.info.calledWith('No apps installed, nothing to remove')).to.be.true;
-      expect(appUninstallerStub.removeAppLocally.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
     it('should handle null installed apps', async () => {
@@ -239,7 +239,7 @@ describe('daemonHealthMonitor tests', () => {
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       expect(logStub.info.calledWith('No apps installed, nothing to remove')).to.be.true;
-      expect(appUninstallerStub.removeAppLocally.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
     it('should continue removing apps even if one fails', async () => {
@@ -253,7 +253,7 @@ describe('daemonHealthMonitor tests', () => {
       registryManagerStub.getInstalledApps.resolves(mockApps);
 
       // Make the second app fail
-      appUninstallerStub.removeAppLocally
+      appUninstallerStub.uninstallApplication
         .onCall(0).resolves()
         .onCall(1).rejects(new Error('Removal failed'))
         .onCall(2).resolves();
@@ -268,7 +268,7 @@ describe('daemonHealthMonitor tests', () => {
       // Second call - should attempt all removals
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(3);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(3);
       expect(logStub.error.calledWith('Failed to remove app2: Removal failed')).to.be.true;
     });
 
@@ -317,7 +317,7 @@ describe('daemonHealthMonitor tests', () => {
       // Advance time by 2 hours and trigger removal
       clock.tick(2 * 60 * 60 * 1000);
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(1);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(1);
 
       // Daemon recovers
       daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: true } });
@@ -333,7 +333,7 @@ describe('daemonHealthMonitor tests', () => {
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Should attempt removal again since flag was reset
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(2);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
     });
   });
 });

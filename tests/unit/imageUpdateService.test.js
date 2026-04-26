@@ -24,7 +24,7 @@ const appsRepositoryStub = {
 };
 
 const advancedWorkflowsStub = {
-  softRedeploy: sinon.stub(),
+  redeployApplication: sinon.stub(),
 };
 
 const registryCredentialHelperStub = {
@@ -100,7 +100,7 @@ describe('imageUpdateService tests', () => {
     appsRepositoryStub.listInstalledAppsRaw.resolves([]);
     appsRepositoryStub.getInstalledAppRaw.reset();
 
-    advancedWorkflowsStub.softRedeploy.reset();
+    advancedWorkflowsStub.redeployApplication.reset();
 
     registryCredentialHelperStub.getCredentials.reset();
 
@@ -430,16 +430,14 @@ describe('imageUpdateService tests', () => {
   });
 
   describe('triggerAppUpdate tests', () => {
-    it('should call softRedeploy when no operation in progress', async () => {
-      const rawSpec = { name: 'TestApp', version: 3 };
-      appsRepositoryStub.getInstalledAppRaw.resolves(rawSpec);
-      advancedWorkflowsStub.softRedeploy.resolves();
+    it('should call redeployApplication when no operation in progress', async () => {
+      advancedWorkflowsStub.redeployApplication.resolves();
 
       const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(true);
-      sinon.assert.calledOnce(advancedWorkflowsStub.softRedeploy);
-      sinon.assert.calledWith(advancedWorkflowsStub.softRedeploy, rawSpec, null);
+      sinon.assert.calledOnce(advancedWorkflowsStub.redeployApplication);
+      sinon.assert.calledWith(advancedWorkflowsStub.redeployApplication, 'TestApp', { createVolumes: false });
     });
 
     it('should return false when removal is in progress', async () => {
@@ -448,7 +446,7 @@ describe('imageUpdateService tests', () => {
       const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(false);
-      sinon.assert.notCalled(advancedWorkflowsStub.softRedeploy);
+      sinon.assert.notCalled(advancedWorkflowsStub.redeployApplication);
     });
 
     it('should return false when installation is in progress', async () => {
@@ -457,7 +455,7 @@ describe('imageUpdateService tests', () => {
       const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(false);
-      sinon.assert.notCalled(advancedWorkflowsStub.softRedeploy);
+      sinon.assert.notCalled(advancedWorkflowsStub.redeployApplication);
     });
 
     it('should return false when soft redeploy is in progress', async () => {
@@ -466,7 +464,7 @@ describe('imageUpdateService tests', () => {
       const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(false);
-      sinon.assert.notCalled(advancedWorkflowsStub.softRedeploy);
+      sinon.assert.notCalled(advancedWorkflowsStub.redeployApplication);
     });
 
     it('should return false when hard redeploy is in progress', async () => {
@@ -475,12 +473,11 @@ describe('imageUpdateService tests', () => {
       const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(false);
-      sinon.assert.notCalled(advancedWorkflowsStub.softRedeploy);
+      sinon.assert.notCalled(advancedWorkflowsStub.redeployApplication);
     });
 
-    it('should return false and log error when softRedeploy throws', async () => {
-      appsRepositoryStub.getInstalledAppRaw.resolves({ name: 'TestApp', version: 3 });
-      advancedWorkflowsStub.softRedeploy.rejects(new Error('Redeploy failed'));
+    it('should return false and log error when redeployApplication throws', async () => {
+      advancedWorkflowsStub.redeployApplication.rejects(new Error('Redeploy failed'));
 
       const result = await imageUpdateService.triggerAppUpdate('TestApp');
 

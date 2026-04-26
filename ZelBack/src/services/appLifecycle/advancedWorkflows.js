@@ -25,11 +25,13 @@ const {
   appsFolder,
 } = require('../utils/appConstants');
 const appsRepository = require('../appDatabase/appsRepository');
+const registryManager = require('../appDatabase/registryManager');
 const https = require('https');
 const { deserializeSpec } = require('../utils/specCutover');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
-const { listRunningContainers } = require('../appQuery/appQueryService');
-const { stopAppMonitoring } = require('../appManagement/appInspector');
+const appQueryService = require('../appQuery/appQueryService');
+const { listRunningContainers } = appQueryService;
+const { startAppMonitoring, stopAppMonitoring } = require('../appManagement/appInspector');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
 const appUninstaller = require('./appUninstaller');
@@ -691,13 +693,8 @@ async function applyPermissionsFix(appId) {
  * @param {string} appname - App name
  * @returns {Promise<void>}
  */
-async function appDockerStart(appname) {
+async function startApplication(appname) {
   try {
-    // eslint-disable-next-line global-require
-    const { startAppMonitoring } = require('../appManagement/appInspector');
-    // eslint-disable-next-line global-require
-    const registryManager = require('../appDatabase/registryManager');
-
     const mainAppName = appname.split('_')[1] || appname;
     const isComponent = appname.includes('_');
     if (isComponent) {
@@ -728,11 +725,8 @@ async function appDockerStart(appname) {
  * @param {string} appname - App name
  * @returns {Promise<void>}
  */
-async function appDockerStop(appname) {
+async function stopApplication(appname) {
   try {
-    // eslint-disable-next-line global-require
-    const registryManager = require('../appDatabase/registryManager');
-
     const mainAppName = appname.split('_')[1] || appname;
     const isComponent = appname.includes('_');
     if (isComponent) {
@@ -764,14 +758,8 @@ async function appDockerStop(appname) {
  * @param {string} appname - App name
  * @returns {Promise<void>}
  */
-async function appDockerRestart(appname) {
-  // eslint-disable-next-line global-require
+async function restartApplication(appname) {
   try {
-    // eslint-disable-next-line global-require
-    const { startAppMonitoring } = require('../appManagement/appInspector');
-    // eslint-disable-next-line global-require
-    const registryManager = require('../appDatabase/registryManager');
-
     const mainAppName = appname.split('_')[1] || appname;
     const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
     if (!appSpecs) {
@@ -813,7 +801,7 @@ async function appDockerRestart(appname) {
  * @param {string} appId - Application ID for syncthing folder
  * @returns {Promise<void>}
  */
-async function appDockerRestartWithPermissionsFix(appname, appId) {
+async function promoteApplicationToPrimary(appname, appId) {
   try {
     log.info(`Starting app ${appname} with permissions fix workflow (new primary)`);
 
@@ -842,11 +830,11 @@ async function appDockerRestartWithPermissionsFix(appname, appId) {
 
     // Step 4: Start the container
     log.info(`Step 4: Starting container for ${appname}`);
-    await appDockerRestart(appname);
+    await restartApplication(appname);
 
     log.info(`Successfully completed permissions fix workflow for ${appname}`);
   } catch (error) {
-    log.error(`Error in appDockerRestartWithPermissionsFix for ${appname}: ${error.message}`);
+    log.error(`Error in promoteApplicationToPrimary for ${appname}: ${error.message}`);
     // Do not start the app if there was an error in the workflow
   }
 }
@@ -888,8 +876,6 @@ async function appendBackupTask(req, res) {
     if (authorized === true) {
       globalState.backupInProgress.push(appname);
       // Check if app using syncthing, stop syncthing for all component that using it
-      // eslint-disable-next-line global-require
-      const registryManager = require('../appDatabase/registryManager');
       const appDetails = await registryManager.getApplicationGlobalSpecifications(appname);
       const appSpec = await deserializeSpec(appDetails);
       const hasSyncthing = appSpec && appSpec.hasSyncthing();
@@ -899,7 +885,7 @@ async function appendBackupTask(req, res) {
       }
 
       await sendChunk(res, 'Stopping application...\n');
-      await appDockerStop(appname);
+      await stopApplication(appname);
       await serviceHelper.delay(5 * 1000);
       // eslint-disable-next-line global-require
       const IOUtils = require('../IOUtils');
@@ -932,12 +918,12 @@ async function appendBackupTask(req, res) {
       await serviceHelper.delay(5 * 1000);
       await sendChunk(res, 'Starting application...\n');
       if (!hasSyncthing) {
-        await appDockerStart(appname);
+        await startApplication(appname);
       } else {
         for (const [compName, comp] of appSpec.componentEntries()) {
           if (comp.persistentStorage?.sync?.mode !== 'activeStandby') {
             // eslint-disable-next-line no-await-in-loop
-            await appDockerStart(`${compName}_${appname}`);
+            await startApplication(`${compName}_${appname}`);
           }
         }
       }
@@ -1007,8 +993,6 @@ async function appendRestoreTask(req, res) {
     if (authorized === true) {
       const componentItem = restore.map((restoreItem) => restoreItem);
       globalState.restoreInProgress.push(appname);
-      // eslint-disable-next-line global-require
-      const registryManager = require('../appDatabase/registryManager');
       const appDetails = await registryManager.getApplicationGlobalSpecifications(appname);
       const restoreSpec = await deserializeSpec(appDetails);
       const restoreHasSyncthing = restoreSpec && restoreSpec.hasSyncthing();
@@ -1017,7 +1001,7 @@ async function appendRestoreTask(req, res) {
         await appVolumeService.removeSyncthingFolder(appname, res);
       }
       await sendChunk(res, 'Stopping application...\n');
-      await appDockerStop(appname);
+      await stopApplication(appname);
       await serviceHelper.delay(5 * 1000);
       // eslint-disable-next-line global-require
       const IOUtils = require('../IOUtils');
@@ -1093,7 +1077,7 @@ async function appendRestoreTask(req, res) {
       }
       await serviceHelper.delay(1 * 5 * 1000);
       await sendChunk(res, 'Starting application...\n');
-      await appDockerStart(appname);
+      await startApplication(appname);
       if (syncthing) {
         await sendChunk(res, 'Redeploying other instances...\n');
         // eslint-disable-next-line global-require
@@ -1556,8 +1540,6 @@ async function checkAndRemoveApplicationInstance() {
     }
 
     const installedSpecs = await appsRepository.listInstalledApps();
-    // eslint-disable-next-line global-require
-    const registryManager = require('../appDatabase/registryManager');
     for (const inst of installedSpecs) {
       // eslint-disable-next-line no-await-in-loop
       const runningAppList = await registryManager.appLocation(inst.name);
@@ -1771,14 +1753,6 @@ async function forceAppRemovals() {
       log.info('Skipping forceAppRemovals: Reinstallation of old apps is in progress');
       return;
     }
-
-    // Import services to match original business logic where everything was in the same file
-    // eslint-disable-next-line global-require
-    const appQueryService = require('../appQuery/appQueryService');
-    // eslint-disable-next-line global-require
-    const registryManager = require('../appDatabase/registryManager');
-    // eslint-disable-next-line global-require
-
 
     // Get current node's IP for checking app locations
     const myIP = await fluxNetworkHelper.getMyFluxIPandPort();
@@ -2003,9 +1977,6 @@ async function coordinateActiveStandbyApps() {
                   continue;
                 }
                 // eslint-disable-next-line no-await-in-loop
-                // eslint-disable-next-line global-require
-                const registryManager = require('../appDatabase/registryManager');
-                // eslint-disable-next-line no-await-in-loop
                 const runningAppList = await registryManager.appLocation(appName);
                 runningAppList.sort((a, b) => {
                   if (!a.runningSince && b.runningSince) {
@@ -2073,7 +2044,7 @@ async function coordinateActiveStandbyApps() {
 
                 if (index === 0 && !activePrimaryByIdentifier.has(identifier)) {
                   // Index 0: Start immediately if no history
-                  appDockerRestartWithPermissionsFix(appName, appId);
+                  promoteApplicationToPrimary(appName, appId);
                   log.info(`activeStandby: starting docker app:${appName} index: ${index}`);
                 } else if (!scheduledPrimaryStart.has(identifier) && activePrimaryByIdentifier.has(identifier) && activePrimaryByIdentifier.get(identifier) !== myIP) {
                   // There was a previous master (not me), and it's no longer on FDM
@@ -2110,7 +2081,7 @@ async function coordinateActiveStandbyApps() {
                   }
                   // Previous master is not running, determine next primary
                   if (index === 0) {
-                    appDockerRestartWithPermissionsFix(appName, appId);
+                    promoteApplicationToPrimary(appName, appId);
                     log.info(`activeStandby: starting docker app:${appName} index: ${index}`);
                   } else {
                     const previousMasterIndex = runningAppList.findIndex((x) => x.ip.split(':')[0] === activePrimaryByIdentifier.get(identifier).split(':')[0]);
@@ -2130,7 +2101,7 @@ async function coordinateActiveStandbyApps() {
                       // eslint-disable-next-line no-await-in-loop
                       const lowerNodeRunning = await checkLowerIndexNodesRunning();
                       if (!lowerNodeRunning) {
-                        appDockerRestartWithPermissionsFix(appName, appId);
+                        promoteApplicationToPrimary(appName, appId);
                         log.info(`activeStandby: starting docker app:${appName} index: ${index}`);
                       }
                     } else {
@@ -2143,7 +2114,7 @@ async function coordinateActiveStandbyApps() {
                   // eslint-disable-next-line no-await-in-loop
                   const lowerNodeRunning = await checkLowerIndexNodesRunning();
                   if (!lowerNodeRunning) {
-                    appDockerRestartWithPermissionsFix(appName, appId);
+                    promoteApplicationToPrimary(appName, appId);
                     log.info(`activeStandby: starting docker app:${appName} index: ${index} that was scheduled to start at ${scheduledPrimaryStart.get(identifier).toString()}`);
                     scheduledPrimaryStart.delete(identifier);
                   } else {
@@ -2167,7 +2138,7 @@ async function coordinateActiveStandbyApps() {
                 scheduledPrimaryStart.delete(identifier);
               }
               if (myIP.split(':')[0] !== ip.split(':')[0] && runningAppsNames.includes(identifier)) {
-                appDockerStop(appName);
+                stopApplication(appName);
                 log.info(`activeStandby: stopping docker app:${appName} it's running on ip:${ip} and myIP is: ${myIP}`);
               } else if (myIP.split(':')[0] === ip.split(':')[0] && !runningAppsNames.includes(identifier)) {
                 // Check if app is ready (syncthing data is synced) before starting
@@ -2198,7 +2169,7 @@ async function coordinateActiveStandbyApps() {
                 }
 
                 if (isReady) {
-                  appDockerRestartWithPermissionsFix(appName, appId);
+                  promoteApplicationToPrimary(appName, appId);
                   log.info(`activeStandby: starting docker app:${appName}`);
                 } else {
                   log.info(`activeStandby: app:${appName} is registered as primary on FDM but not ready yet (syncthing not synced), skipping start for this cycle`);
@@ -2320,5 +2291,7 @@ module.exports = {
   forceAppRemovals,
   coordinateActiveStandbyApps,
   getPeerAppsInstallingErrorMessages,
-  appDockerStart,
+  startApplication,
+  stopApplication,
+  restartApplication,
 };

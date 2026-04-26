@@ -9,7 +9,7 @@ describe('peerNotification tests', () => {
   let appInstallerStub;
   let appUninstallerStub;
   let appInspectorStub;
-  let dbHelperStub;
+  let deploymentProviderStub;
 
   beforeEach(() => {
     logStub = {
@@ -19,16 +19,15 @@ describe('peerNotification tests', () => {
     };
 
     dockerServiceStub = {
-      appDockerStart: sinon.stub().resolves(),
       getDockerContainerOnly: sinon.stub().resolves(null),
     };
 
     appInstallerStub = {
-      installApplicationHard: sinon.stub().resolves(),
+      installComponent: sinon.stub().resolves(),
     };
 
     appUninstallerStub = {
-      removeAppLocally: sinon.stub().resolves(),
+      uninstallApplication: sinon.stub().resolves(),
     };
 
     appInspectorStub = {
@@ -36,33 +35,12 @@ describe('peerNotification tests', () => {
       stopAppMonitoring: sinon.stub(),
     };
 
-    dbHelperStub = {
-      databaseConnection: sinon.stub().returns({
-        db: sinon.stub().returns({}),
-      }),
-      findOneInDatabase: sinon.stub().resolves(null),
-      findInDatabase: sinon.stub().resolves([]),
+    deploymentProviderStub = {
+      getInstalledDeployment: sinon.stub().resolves(null),
     };
 
     peerNotification = proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', {
-      config: {
-        database: {
-          appslocal: {
-            collections: { appsInformation: 'localAppsInformation' },
-            database: 'localapps',
-          },
-          appsglobal: {
-            database: 'globalapps',
-            collections: { appsLocations: 'appsLocations' },
-          },
-        },
-      },
-      '../dbHelper': dbHelperStub,
       '../dockerService': dockerServiceStub,
-      '../serviceHelper': {
-        delay: sinon.stub().resolves(),
-        ensureString: sinon.stub().returnsArg(0),
-      },
       '../generalService': {
         isNodeStatusConfirmed: sinon.stub().resolves(true),
         nodeTier: sinon.stub().resolves('cumulus'),
@@ -87,18 +65,21 @@ describe('peerNotification tests', () => {
       '../appDatabase/registryManager': {
         getApplicationGlobalSpecifications: sinon.stub().resolves(null),
       },
+      '../appDatabase/appsRepository': {
+        listInstalledApps: sinon.stub().resolves([]),
+        getAppLocation: sinon.stub().resolves(null),
+      },
       '../appManagement/appInspector': appInspectorStub,
       '../appLifecycle/appUninstaller': appUninstallerStub,
       '../appLifecycle/appInstaller': appInstallerStub,
+      '../appRuntime/deploymentProvider': deploymentProviderStub,
       '../appQuery/appQueryService': {
-        decryptEnterpriseApps: sinon.stub().callsFake(async (apps) => apps),
-      },
-      '../utils/appConstants': {
-        localAppsInformation: 'localAppsInformation',
+        listRunningContainers: sinon.stub().resolves([]),
       },
       '../utils/globalState': {
         backupInProgress: [],
         restoreInProgress: [],
+        appsMonitored: new Map(),
       },
       '../../lib/log': logStub,
     });
@@ -119,56 +100,54 @@ describe('peerNotification tests', () => {
       dockerServiceStub.getDockerContainerOnly.resolves({ Id: 'abc123' });
 
       await peerNotification.handleMissingMasterSlaveContainer(
-        'MyComponent_testapp', 'testapp', {}, () => ({}),
+        'MyComponent_testapp', 'testapp',
       );
 
-      expect(appInstallerStub.installApplicationHard.called).to.be.false;
-      expect(appUninstallerStub.removeAppLocally.called).to.be.false;
+      expect(appInstallerStub.installComponent.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
-    it('should recreate container when missing and app spec exists', async () => {
+    it('should recreate container when missing and deployment exists', async () => {
       dockerServiceStub.getDockerContainerOnly.resolves(null);
-      const appSpec = {
-        version: 8,
-        name: 'testapp',
-        compose: [{ name: 'MyComponent', containerData: 'g:', cpu: 1, ram: 500, hdd: 5 }],
-      };
-      dbHelperStub.findOneInDatabase.resolves(appSpec);
+      const mockComponent = { identifier: 'MyComponent_testapp', name: 'MyComponent' };
+      deploymentProviderStub.getInstalledDeployment.resolves({
+        componentEntries: () => [['MyComponent', mockComponent]],
+      });
 
       await peerNotification.handleMissingMasterSlaveContainer(
-        'MyComponent_testapp', 'testapp', {}, () => ({}),
+        'MyComponent_testapp', 'testapp',
       );
 
-      expect(appInstallerStub.installApplicationHard.calledOnce).to.be.true;
+      expect(appInstallerStub.installComponent.calledOnce).to.be.true;
+      expect(appInstallerStub.installComponent.firstCall.args[0]).to.equal(mockComponent);
       expect(appInspectorStub.startAppMonitoring.calledWith('MyComponent_testapp')).to.be.true;
-      expect(appUninstallerStub.removeAppLocally.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
     it('should remove app when recreation fails and container still missing', async () => {
       dockerServiceStub.getDockerContainerOnly.resolves(null);
-      dbHelperStub.findOneInDatabase.resolves(null); // causes recreateMissingContainers to throw
+      deploymentProviderStub.getInstalledDeployment.resolves(null);
 
       await peerNotification.handleMissingMasterSlaveContainer(
-        'MyComponent_testapp', 'testapp', {}, () => ({}),
+        'MyComponent_testapp', 'testapp',
       );
 
-      expect(appUninstallerStub.removeAppLocally.calledOnce).to.be.true;
-      expect(appUninstallerStub.removeAppLocally.firstCall.args[0]).to.equal('testapp');
+      expect(appUninstallerStub.uninstallApplication.calledOnce).to.be.true;
+      expect(appUninstallerStub.uninstallApplication.firstCall.args[0]).to.equal('testapp');
       expect(logStub.warn.calledWithMatch(/REMOVAL REASON/)).to.be.true;
     });
 
     it('should skip removal when recreation fails but container was created by another process', async () => {
-      // First call: missing. Second call (in catch): now exists
       dockerServiceStub.getDockerContainerOnly
         .onFirstCall().resolves(null)
         .onSecondCall().resolves({ Id: 'abc123' });
-      dbHelperStub.findOneInDatabase.resolves(null); // causes recreateMissingContainers to throw
+      deploymentProviderStub.getInstalledDeployment.resolves(null);
 
       await peerNotification.handleMissingMasterSlaveContainer(
-        'MyComponent_testapp', 'testapp', {}, () => ({}),
+        'MyComponent_testapp', 'testapp',
       );
 
-      expect(appUninstallerStub.removeAppLocally.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
       expect(logStub.info.calledWithMatch(/created by another process/)).to.be.true;
     });
   });

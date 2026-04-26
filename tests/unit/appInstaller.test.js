@@ -215,7 +215,6 @@ describe('appInstaller tests', () => {
         listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
         decryptEnterpriseApps: sinon.stub().callsFake(async (apps) => apps),
       },
-      '../utils/enterpriseHelper': enterpriseHelperStub,
       '../utils/appSpecHelpers': appSpecHelpersStub,
       '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
       '../appDatabase/appsRepository': {

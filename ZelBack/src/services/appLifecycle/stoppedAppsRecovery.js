@@ -234,7 +234,7 @@ async function startStoppedAppsOnBoot() {
 
       try {
         // eslint-disable-next-line no-await-in-loop
-        await advancedWorkflows.appDockerStart(appName);
+        await advancedWorkflows.startApplication(appName);
         results.appsStarted.push(appName);
         log.info(`stoppedAppsRecovery - Successfully started app ${appName}`);
 
