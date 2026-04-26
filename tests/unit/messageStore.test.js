@@ -31,6 +31,7 @@ describe('messageStore tests', () => {
   let messageVerifierStub;
   let logStub;
   let configStub;
+  let appsRepositoryStub;
 
   beforeEach(() => {
     // Stubs
@@ -59,6 +60,16 @@ describe('messageStore tests', () => {
       error: sinon.stub(),
       info: sinon.stub(),
       warn: sinon.stub(),
+    };
+
+    appsRepositoryStub = {
+      getAppLocation: sinon.stub().resolves(null),
+      upsertLocation: sinon.stub().resolves(),
+      listAppNamesOnIp: sinon.stub().resolves([]),
+      removeLocationsByIp: sinon.stub().resolves(),
+      removeInstallingLocation: sinon.stub().resolves(),
+      removeLocation: sinon.stub().resolves(),
+      updateLocationIp: sinon.stub().resolves(),
     };
 
     configStub = {
@@ -117,6 +128,7 @@ describe('messageStore tests', () => {
         globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
         appsHashesCollection: 'appsHashes',
       },
+      '../appDatabase/appsRepository': appsRepositoryStub,
     });
   });
 
@@ -383,16 +395,11 @@ describe('messageStore tests', () => {
         ip: '192.168.1.1',
       };
 
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneInDatabase.resolves(null);
-      dbHelperStub.updateOneInDatabase.resolves();
-      dbHelperStub.removeDocumentsFromCollection.resolves();
-
       const result = await messageStore.storeAppRunningMessage(message);
 
       expect(result).to.be.true;
-      expect(dbHelperStub.updateOneInDatabase.calledOnce).to.be.true;
+      expect(appsRepositoryStub.upsertLocation.calledOnce).to.be.true;
+      expect(appsRepositoryStub.removeInstallingLocation.calledOnce).to.be.true;
     });
 
     it('should store valid version 2 running message with multiple apps', async () => {
@@ -407,18 +414,10 @@ describe('messageStore tests', () => {
         ip: '192.168.1.1',
       };
 
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneInDatabase.resolves(null);
-      dbHelperStub.updateOneInDatabase.resolves();
-      dbHelperStub.removeDocumentsFromCollection.resolves();
-
       const result = await messageStore.storeAppRunningMessage(message);
 
       expect(result).to.be.true;
-      expect(dbHelperStub.updateOneInDatabase.callCount).to.equal(2);
-      // Should clean up installing records for each app
-      expect(dbHelperStub.removeDocumentsFromCollection.callCount).to.equal(2);
+      expect(appsRepositoryStub.upsertLocation.callCount).to.equal(2);
     });
 
     it('should handle version 2 message with empty apps array', async () => {
@@ -430,16 +429,12 @@ describe('messageStore tests', () => {
         ip: '192.168.1.1',
       };
 
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.resolves([{ name: 'app1' }]);
-      dbHelperStub.removeDocumentsFromCollection.resolves();
+      appsRepositoryStub.listAppNamesOnIp.resolves(['app1']);
 
       const result = await messageStore.storeAppRunningMessage(message);
 
       expect(result).to.be.true;
-      // Called twice: once for locations, once for installing locations
-      expect(dbHelperStub.removeDocumentsFromCollection.calledTwice).to.be.true;
+      expect(appsRepositoryStub.removeLocationsByIp.calledOnce).to.be.true;
     });
   });
 
@@ -523,14 +518,12 @@ describe('messageStore tests', () => {
         ip: '192.168.1.1',
       };
 
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneAndDeleteInDatabase.resolves();
-
       const result = await messageStore.storeAppRemovedMessage(message);
 
       expect(result).to.be.true;
-      expect(dbHelperStub.findOneAndDeleteInDatabase.calledOnce).to.be.true;
+      expect(appsRepositoryStub.removeLocation.calledOnce).to.be.true;
+      expect(appsRepositoryStub.removeLocation.firstCall.args[0]).to.equal('testapp');
+      expect(appsRepositoryStub.removeLocation.firstCall.args[1]).to.equal('192.168.1.1');
     });
   });
 
@@ -651,14 +644,12 @@ describe('messageStore tests', () => {
         broadcastedAt: Date.now(),
       };
 
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.updateInDatabase.resolves();
-
       const result = await messageStore.storeIPChangedMessage(message);
 
       expect(result).to.be.true;
-      expect(dbHelperStub.updateInDatabase.calledOnce).to.be.true;
+      expect(appsRepositoryStub.updateLocationIp.calledOnce).to.be.true;
+      expect(appsRepositoryStub.updateLocationIp.firstCall.args[0]).to.equal('192.168.1.1');
+      expect(appsRepositoryStub.updateLocationIp.firstCall.args[1]).to.equal('192.168.1.2');
     });
   });
 });

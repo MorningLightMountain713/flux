@@ -323,11 +323,9 @@ async function storeAppRunningMessage(message) {
   }
 
   // clean up installing records for all apps that are now running
-  const database = dbHelper.databaseConnection().db(config.database.appsglobal.database);
   for (const app of appsMessages) {
-    const queryFind = { name: app.name, ip: message.ip };
     // eslint-disable-next-line no-await-in-loop
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, queryFind);
+    await appsRepository.removeInstallingLocation(app.name, message.ip);
   }
 
   if (messageNotOk) {

@@ -552,6 +552,12 @@ async function removeLocationsByIp(ip) {
   );
 }
 
+async function removeInstallingLocation(appName, ip) {
+  return dbHelper.removeDocumentsFromCollection(
+    globalDb(), globalAppsInstallingLocations, { name: appName, ip },
+  );
+}
+
 async function updateLocationIp(oldIp, newIp, broadcastedAt) {
   return dbHelper.updateInDatabase(
     globalDb(), globalAppsLocations,
@@ -594,6 +600,7 @@ module.exports = {
   upsertLocation,
   removeLocation,
   removeLocationsByIp,
+  removeInstallingLocation,
   updateLocationIp,
   updateLocationExpiry,
 };

@@ -27,9 +27,14 @@ const constantsMock = {
   HEALTH_PEERS_BEHIND_THRESHOLD_MS: 15 * 60 * 1000, // 15 minutes
 };
 
+const appUninstallerMock = {
+  uninstallApplication: sinon.stub().resolves(),
+};
+
 // Load module with mocked dependencies
 const healthMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingHealthMonitor', {
   '../syncthingService': syncthingServiceMock,
+  '../appLifecycle/appUninstaller': appUninstallerMock,
   '../../lib/log': logMock,
   './syncthingMonitorConstants': constantsMock,
 });
@@ -270,7 +275,6 @@ describe('syncthingHealthMonitor tests', () => {
     let mockReceiveOnlySyncthingAppsCache;
     let appDockerStopFn;
     let appDockerStartFn;
-    let removeAppLocallyFn;
 
     beforeEach(() => {
       mockState = {
@@ -286,7 +290,7 @@ describe('syncthingHealthMonitor tests', () => {
       mockReceiveOnlySyncthingAppsCache = new Map();
       appDockerStopFn = sinon.stub().resolves();
       appDockerStartFn = sinon.stub().resolves();
-      removeAppLocallyFn = sinon.stub().resolves();
+      appUninstallerMock.uninstallApplication.reset();
     });
 
     it('should skip health check when installation in progress', async () => {
@@ -297,7 +301,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -314,7 +318,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -330,7 +334,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -347,7 +351,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -377,7 +381,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -409,7 +413,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -439,7 +443,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -456,7 +460,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -486,7 +490,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -516,7 +520,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -547,7 +551,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -578,7 +582,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -620,7 +624,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -652,7 +656,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -693,7 +697,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -736,7 +740,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -770,7 +774,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -812,7 +816,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -866,7 +870,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -899,7 +903,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -940,7 +944,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -1020,7 +1024,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -1055,7 +1059,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -1071,7 +1075,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -1109,7 +1113,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -1148,7 +1152,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -1188,7 +1192,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -1228,15 +1232,15 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
 
       expect(result.actions).to.have.length(1);
       expect(result.actions[0].action).to.equal('remove');
-      expect(removeAppLocallyFn.calledOnce).to.be.true;
-      expect(removeAppLocallyFn.calledWith('myapp', null, true, false, true)).to.be.true;
+      expect(appUninstallerMock.uninstallApplication.calledOnce).to.be.true;
+      expect(appUninstallerMock.uninstallApplication.firstCall.args[0]).to.equal('myapp');
     });
 
     it('should clean up cache for folders that no longer exist', async () => {
@@ -1277,7 +1281,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -1294,7 +1298,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
       });
@@ -1324,7 +1328,7 @@ describe('syncthingHealthMonitor tests', () => {
         folderHealthCache: mockFolderHealthCache,
         appDockerStopFn,
         appDockerStartFn,
-        removeAppLocallyFn,
+
         state: mockState,
         receiveOnlySyncthingAppsCache: null,
       });
