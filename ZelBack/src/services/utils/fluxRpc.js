@@ -194,6 +194,10 @@ class FluxRpc {
       ['getpublickey', null],
       ['decryptrsamessage', null],
       ['encryptmessage', null],
+      ['seal', null],
+      ['unseal', null],
+      ['v2transportpubkey', null],
+      ['v2transportopen', null],
     ]),
   };
 

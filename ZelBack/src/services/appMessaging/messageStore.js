@@ -14,7 +14,6 @@ const globalState = require('../utils/globalState');
 const {
   globalAppsMessages,
   globalAppsTempMessages,
-  globalAppsLocations,
   globalAppsInstallingLocations,
   globalAppsInstallingErrorsLocations,
   appsHashesCollection,
@@ -282,15 +281,14 @@ async function storeAppRunningMessage(message) {
     return false;
   }
 
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const appsRepository = require('../appDatabase/appsRepository');
 
   let messageNotOk = false;
   for (let i = 0; i < appsMessages.length; i += 1) {
     const app = appsMessages[i];
     const newAppRunningMessage = {
       name: app.name,
-      hash: app.hash, // hash of application specifics that are running
+      hash: app.hash,
       ip: message.ip,
       broadcastedAt: new Date(message.broadcastedAt),
       expireAt: new Date(validTill),
@@ -298,14 +296,9 @@ async function storeAppRunningMessage(message) {
       staticIp: message.staticIp,
     };
 
-    // indexes over name, hash, ip. Then name + ip and name + ip + broadcastedAt.
-    const queryFind = { name: newAppRunningMessage.name, ip: newAppRunningMessage.ip };
-    const projection = { _id: 0, runningSince: 1, broadcastedAt: 1 };
-    // we already have the exact same data
     // eslint-disable-next-line no-await-in-loop
-    const result = await dbHelper.findOneInDatabase(database, globalAppsLocations, queryFind, projection);
-    if (result && result.broadcastedAt && result.broadcastedAt >= newAppRunningMessage.broadcastedAt) {
-      // found a message that was already stored/probably from duplicated message processsed
+    const existing = await appsRepository.getAppLocation(app.name, message.ip);
+    if (existing && existing.broadcastedAt && existing.broadcastedAt >= newAppRunningMessage.broadcastedAt) {
       messageNotOk = true;
       break;
     }
@@ -313,33 +306,24 @@ async function storeAppRunningMessage(message) {
       newAppRunningMessage.runningSince = new Date(message.runningSince);
     } else if (app.runningSince) {
       newAppRunningMessage.runningSince = new Date(app.runningSince);
-    } else if (result && result.runningSince) {
-      newAppRunningMessage.runningSince = result.runningSince;
+    } else if (existing && existing.runningSince) {
+      newAppRunningMessage.runningSince = existing.runningSince;
     }
-    const queryUpdate = { name: newAppRunningMessage.name, ip: newAppRunningMessage.ip };
-    const update = { $set: newAppRunningMessage };
-    const options = {
-      upsert: true,
-    };
     // eslint-disable-next-line no-await-in-loop
-    await dbHelper.updateOneInDatabase(database, globalAppsLocations, queryUpdate, update, options);
+    await appsRepository.upsertLocation(newAppRunningMessage);
   }
 
   if (message.version === 2 && appsMessages.length === 0) {
-    const queryFind = { ip: message.ip };
-    const projection = { _id: 0, runningSince: 1 };
-    // we already have the exact same data
-    const result = await dbHelper.findInDatabase(database, globalAppsLocations, queryFind, projection);
-    if (result.length > 0) {
-      await dbHelper.removeDocumentsFromCollection(database, globalAppsLocations, queryFind);
-      // also clean up any installing records for this IP
-      await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, queryFind);
+    const existing = await appsRepository.listAppNamesOnIp(message.ip);
+    if (existing.length > 0) {
+      await appsRepository.removeLocationsByIp(message.ip);
     } else {
       return false;
     }
   }
 
   // clean up installing records for all apps that are now running
+  const database = dbHelper.databaseConnection().db(config.database.appsglobal.database);
   for (const app of appsMessages) {
     const queryFind = { name: app.name, ip: message.ip };
     // eslint-disable-next-line no-await-in-loop
@@ -455,11 +439,8 @@ async function storeAppRemovedMessage(message) {
     return false;
   }
 
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const query = { ip: message.ip, name: message.appName };
-  const projection = {};
-  await dbHelper.findOneAndDeleteInDatabase(database, globalAppsLocations, query, projection);
+  const appsRepository = require('../appDatabase/appsRepository');
+  await appsRepository.removeLocation(message.appName, message.ip);
 
   // all stored, rebroadcast
   return true;
@@ -582,11 +563,8 @@ async function storeIPChangedMessage(message) {
     return false;
   }
 
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const query = { ip: message.oldIP };
-  const update = { $set: { ip: message.newIP, broadcastedAt: new Date(message.broadcastedAt) } };
-  await dbHelper.updateInDatabase(database, globalAppsLocations, query, update);
+  const appsRepository = require('../appDatabase/appsRepository');
+  await appsRepository.updateLocationIp(message.oldIP, message.newIP, message.broadcastedAt);
 
   // all stored, rebroadcast
   return true;

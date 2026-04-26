@@ -17,7 +17,7 @@ const appUninstaller = require('../appLifecycle/appUninstaller');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
 const { deserializeSpec } = require('../utils/specCutover');
-const { encryptEnterpriseFromSession } = require('../utils/enterpriseHelper');
+const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 const {
   globalAppsInformation,
   localAppsInformation,
@@ -73,27 +73,10 @@ async function getAppHashes(_req, res) {
  * @returns {Promise<Array>} Array of app locations
  */
 async function appLocation(appname) {
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
-  let query = {};
   if (appname) {
-    query = { name: new RegExp(`^${appname}$`, 'i') }; // case insensitive
+    return appsRepository.listLocationsByApp(appname);
   }
-  const projection = {
-    projection: {
-      _id: 0,
-      name: 1,
-      hash: 1,
-      ip: 1,
-      broadcastedAt: 1,
-      expireAt: 1,
-      runningSince: 1,
-      osUptime: 1,
-      staticIp: 1,
-    },
-  };
-  const results = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-  return results;
+  return appsRepository.listLocations();
 }
 
 /**
@@ -518,14 +501,15 @@ async function getApplicationSpecificationAPI(req, res) {
       });
     }
 
-    // this seems a bit weird, but the client can ask for the specs encrypted or decrypted.
-    // If decrypted, they pass us another session key and we use that to encrypt.
-    specifications.enterprise = await encryptEnterpriseFromSession(
-      specifications,
-      daemonHeight,
-      encryptedEnterpriseKey,
+    const transportProvider = await legacyTransportProvider.create(
+      specifications.name, specifications.owner, encryptedEnterpriseKey,
     );
-
+    const plaintext = Buffer.from(JSON.stringify({
+      contacts: specifications.contacts,
+      compose: specifications.compose,
+    }), 'utf8');
+    const encrypted = await transportProvider.encrypt(plaintext);
+    specifications.enterprise = encrypted.ciphertext;
     specifications.contacts = [];
     specifications.compose = [];
 
@@ -768,14 +752,7 @@ async function getInstalledApps() {
  */
 async function getRunningApps() {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-
-    const query = {};
-    const projection = { projection: { _id: 0 } };
-
-    const runningApps = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-    return runningApps;
+    return await appsRepository.listLocations();
   } catch (error) {
     log.error(`Error getting running apps: ${error.message}`);
     return [];
@@ -788,24 +765,7 @@ async function getRunningApps() {
  * @returns {Promise<Array>} Array of apps running on the specified IP
  */
 async function getRunningAppIpList(ip) {
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
-  const query = { ip: new RegExp(`^${ip}`) };
-  const projection = {
-    projection: {
-      _id: 0,
-      name: 1,
-      hash: 1,
-      ip: 1,
-      broadcastedAt: 1,
-      expireAt: 1,
-      runningSince: 1,
-      osUptime: 1,
-      staticIp: 1,
-    },
-  };
-  const results = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-  return results;
+  return appsRepository.listLocationsByIp(ip);
 }
 
 /**

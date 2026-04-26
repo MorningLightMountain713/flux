@@ -470,6 +470,41 @@ if (require.main === module) {
   getInfo().then((res) => console.log(res));
 }
 
+/**
+ * Fetch the per-app X25519 transport public key with attestation.
+ *
+ * v2 encoding: params passed as object, not pre-stringified.
+ *
+ * @param {object} params
+ * @param {string} params.appName - App name
+ * @param {string} params.fluxID  - Owner address
+ * @returns {Promise<object>} { status, data: { status, publicKey, timestamp, attestation } }
+ */
+async function transportPublicKey(params) {
+  const rpccall = 'v2transportpubkey';
+  const rpcparameters = [params];
+  return executeCall(rpccall, rpcparameters);
+}
+
+/**
+ * Open an HPKE-sealed transport envelope via SAS.
+ *
+ * v2 encoding: params passed as object, not pre-stringified.
+ *
+ * @param {object} params
+ * @param {string} params.appName         - App name
+ * @param {string} params.fluxID          - Owner address
+ * @param {string} params.encapsulatedKey - Base64 32-byte X25519 encapsulated key
+ * @param {string} params.ciphertext      - Base64 HPKE ciphertext (≥16 bytes)
+ * @param {string} [params.aad]           - Base64 Additional Authenticated Data
+ * @returns {Promise<object>} { status, data: { status, message } }
+ */
+async function transportOpen(params) {
+  const rpccall = 'v2transportopen';
+  const rpcparameters = [params];
+  return executeCall(rpccall, rpcparameters);
+}
+
 module.exports = {
   // == Export for testing purposes ==
   executeCall,
@@ -500,4 +535,6 @@ module.exports = {
   encryptMessage,
   seal,
   unseal,
+  transportPublicKey,
+  transportOpen,
 };

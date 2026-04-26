@@ -30,6 +30,8 @@ const {
   localAppsInformation,
   globalAppsMessages,
   globalAppsInstallingErrorsLocations,
+  globalAppsInstallingLocations,
+  globalAppsLocations,
   appsHashesCollection,
 } = require('../utils/appConstants');
 
@@ -480,6 +482,92 @@ async function updateAppSpecifications(appSpecs) {
   }
 }
 
+// ── App Location (globalAppsLocations) ─────────────────────────────
+
+const locationProjection = {
+  projection: {
+    _id: 0, name: 1, hash: 1, ip: 1,
+    broadcastedAt: 1, expireAt: 1, runningSince: 1,
+    osUptime: 1, staticIp: 1,
+  },
+};
+
+async function getAppLocation(appName, ip) {
+  return dbHelper.findOneInDatabase(
+    globalDb(), globalAppsLocations,
+    { name: appName, ip },
+    locationProjection,
+  );
+}
+
+async function listLocations() {
+  return dbHelper.findInDatabase(
+    globalDb(), globalAppsLocations, {}, { projection: { _id: 0 } },
+  );
+}
+
+async function listLocationsByApp(appName) {
+  return dbHelper.findInDatabase(
+    globalDb(), globalAppsLocations,
+    { name: nameRegex(appName) },
+    locationProjection,
+  );
+}
+
+async function listLocationsByIp(ipPrefix) {
+  return dbHelper.findInDatabase(
+    globalDb(), globalAppsLocations,
+    { ip: new RegExp(`^${ipPrefix}`) },
+    locationProjection,
+  );
+}
+
+async function listAppNamesOnIp(ip) {
+  return dbHelper.findInDatabase(
+    globalDb(), globalAppsLocations,
+    { ip },
+    { projection: { _id: 0, name: 1 } },
+  );
+}
+
+async function upsertLocation(record) {
+  const query = { name: record.name, ip: record.ip };
+  return dbHelper.updateOneInDatabase(
+    globalDb(), globalAppsLocations, query, { $set: record }, { upsert: true },
+  );
+}
+
+async function removeLocation(appName, ip) {
+  return dbHelper.findOneAndDeleteInDatabase(
+    globalDb(), globalAppsLocations, { ip, name: appName }, {},
+  );
+}
+
+async function removeLocationsByIp(ip) {
+  await dbHelper.removeDocumentsFromCollection(
+    globalDb(), globalAppsLocations, { ip },
+  );
+  await dbHelper.removeDocumentsFromCollection(
+    globalDb(), globalAppsInstallingLocations, { ip },
+  );
+}
+
+async function updateLocationIp(oldIp, newIp, broadcastedAt) {
+  return dbHelper.updateInDatabase(
+    globalDb(), globalAppsLocations,
+    { ip: oldIp },
+    { $set: { ip: newIp, broadcastedAt: new Date(broadcastedAt) } },
+  );
+}
+
+async function updateLocationExpiry(ip, broadcastedAt, expireAt) {
+  return dbHelper.updateInDatabase(
+    globalDb(), globalAppsLocations,
+    { ip },
+    { $set: { broadcastedAt, expireAt } },
+  );
+}
+
 module.exports = {
   getGlobalAppInfo,
   getGlobalAppInfoRaw,
@@ -498,4 +586,14 @@ module.exports = {
   listAppMessagesByName,
   assertNoNameConflicts,
   updateAppSpecifications,
+  getAppLocation,
+  listLocations,
+  listLocationsByApp,
+  listLocationsByIp,
+  listAppNamesOnIp,
+  upsertLocation,
+  removeLocation,
+  removeLocationsByIp,
+  updateLocationIp,
+  updateLocationExpiry,
 };

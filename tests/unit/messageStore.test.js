@@ -19,7 +19,6 @@ function buildCutoverStubs() {
   });
   return {
     deserializeSpec: sinon.stub().callsFake(async (blob) => makeWireSpec(blob)),
-    toCanonicalSpec: sinon.stub().callsFake(async (blob) => blob),
     decryptIfEnterprise: sinon.stub().callsFake(async (blob) => blob),
     decryptStoredSpec: sinon.stub().callsFake(async (blob) => blob),
   };

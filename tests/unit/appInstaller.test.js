@@ -11,7 +11,7 @@ describe('appInstaller tests', () => {
   let configStub;
   let globalStateStub;
   let hwRequirementsStub;
-  let enterpriseHelperStub;
+
   let appSpecHelpersStub;
   let legacyCryptoProviderStub;
   let messageVerifierStub;
@@ -87,7 +87,6 @@ describe('appInstaller tests', () => {
       checkAppGeolocationRequirements: sinon.stub(),
     };
 
-    enterpriseHelperStub = {};
 
     appSpecHelpersStub = {};
 
@@ -555,7 +554,6 @@ describe('appInstaller tests', () => {
         '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
           config: configStub,
         }),
-        '../utils/enterpriseHelper': enterpriseHelperStub,
         '../utils/appSpecHelpers': appSpecHelpersStub,
         '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
         '../appDatabase/appsRepository': {
@@ -745,7 +743,6 @@ describe('appInstaller tests', () => {
         '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
           config: configStub,
         }),
-        '../utils/enterpriseHelper': enterpriseHelperStub,
         '../utils/appSpecHelpers': appSpecHelpersStub,
         '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
         '../appDatabase/appsRepository': {
@@ -1027,7 +1024,6 @@ describe('appInstaller tests', () => {
         '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
         '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
         '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
-        '../utils/enterpriseHelper': enterpriseHelperStub,
         '../utils/appSpecHelpers': appSpecHelpersStub,
         '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
         '../appDatabase/appsRepository': {

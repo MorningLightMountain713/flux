@@ -2,17 +2,11 @@ const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const log = require('../../lib/log');
-const generalService = require('../generalService');
-const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
-const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
-const messageVerifier = require('../appMessaging/messageVerifier');
-const imageManager = require('../appSecurity/imageManager');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
 const appsRepository = require('../appDatabase/appsRepository');
-const { peerManager } = require('../utils/peerState');
 const { validateSubmissionSpec, getSpec } = require('../utils/specLibs');
-const { toCanonicalSpec } = require('../utils/specCutover');
+const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 
 /**
  * Verify app registration parameters via API
@@ -35,11 +29,12 @@ async function verifyAppRegistrationParameters(req, res) {
       }
       const daemonHeight = syncStatus.data.height;
 
-      let spec = await validateSubmissionSpec(appSpecification, { height: daemonHeight });
-      const isEnterprise = spec.isEncrypted;
-      if (isEnterprise) {
-        const provider = await spec.createProvider();
-        spec = await spec.decrypt(provider);
+      const wireSpec = await validateSubmissionSpec(appSpecification, { height: daemonHeight });
+      let spec = wireSpec;
+      let transportProvider;
+      if (wireSpec.isEncrypted) {
+        transportProvider = await legacyTransportProvider.createFromEncryptedSpec(wireSpec);
+        spec = await wireSpec.decrypt(transportProvider);
       }
 
       await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner });
@@ -51,7 +46,9 @@ async function verifyAppRegistrationParameters(req, res) {
 
       await appsRepository.assertNoNameConflicts(spec.name);
 
-      const responseSpec = isEnterprise ? await toCanonicalSpec(appSpecification) : spec.serialize();
+      const responseSpec = transportProvider
+        ? (await spec.reencrypt(transportProvider)).serialize()
+        : spec.serialize();
       res.json(messageHelper.createDataMessage(responseSpec));
     } catch (error) {
       log.warn(error);
@@ -66,16 +63,13 @@ async function verifyAppRegistrationParameters(req, res) {
 }
 
 /**
- * Verify app update parameters via API
- * @param {object} req - Request object
- * @param {object} res - Response object
- * @returns {Promise<void>} Validation result
- */
-/**
  * Validate app update specifications against current state.
  * Business logic only — no HTTP concerns.
+ *
  * @param {object} appSpecification - The app specification to validate
- * @returns {Promise<object>} Formatted and validated app specifications
+ * @returns {Promise<{ spec: object, wireSpec: object }>} spec is the
+ *   decrypted/cleartext spec for validation consumers; wireSpec is the
+ *   original parsed spec (encrypted or cleartext) for response serialization.
  */
 async function validateAppUpdate(appSpecification) {
   const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
@@ -84,10 +78,11 @@ async function validateAppUpdate(appSpecification) {
   }
   const daemonHeight = syncStatus.data.height;
 
-  let spec = await validateSubmissionSpec(appSpecification, { height: daemonHeight });
-  if (spec.isEncrypted) {
-    const provider = await spec.createProvider();
-    spec = await spec.decrypt(provider);
+  const wireSpec = await validateSubmissionSpec(appSpecification, { height: daemonHeight });
+  let spec = wireSpec;
+  if (wireSpec.isEncrypted) {
+    const provider = await wireSpec.createProvider();
+    spec = await wireSpec.decrypt(provider);
   }
 
   await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner });
@@ -117,7 +112,7 @@ async function validateAppUpdate(appSpecification) {
   const { UpdatePolicy } = await getSpec();
   UpdatePolicy.assertCompatible(previousAppSpecs, spec);
 
-  return spec;
+  return { spec, wireSpec };
 }
 
 /**
@@ -133,9 +128,14 @@ async function verifyAppUpdateApi(req, res) {
   req.on('end', async () => {
     try {
       const appSpecification = serviceHelper.ensureObject(serviceHelper.ensureObject(body));
-      const spec = await validateAppUpdate(appSpecification);
-      const isEnterprise = Boolean(appSpecification.version >= 8 && appSpecification.enterprise);
-      const responseSpec = isEnterprise ? await toCanonicalSpec(appSpecification) : spec.serialize();
+      const { spec, wireSpec } = await validateAppUpdate(appSpecification);
+      let responseSpec;
+      if (wireSpec.isEncrypted) {
+        const transportProvider = await legacyTransportProvider.createFromEncryptedSpec(wireSpec);
+        responseSpec = (await spec.reencrypt(transportProvider)).serialize();
+      } else {
+        responseSpec = spec.serialize();
+      }
       res.json(messageHelper.createDataMessage(responseSpec));
     } catch (error) {
       log.warn(error);

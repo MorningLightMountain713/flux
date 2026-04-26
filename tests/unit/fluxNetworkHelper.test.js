@@ -1049,7 +1049,6 @@ describe('fluxNetworkHelper tests', () => {
     let registryManagerStub;
     let appUninstallerStub;
     let appControllerStub;
-    let enterpriseHelperStub;
     let geolocationServiceStub;
     let fluxCommunicationMessagesSenderStub;
 
@@ -1119,7 +1118,6 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-      enterpriseHelperStub = {};
 
       geolocationServiceStub = {
         setNodeGeolocation: sinon.stub(),
@@ -1139,7 +1137,6 @@ describe('fluxNetworkHelper tests', () => {
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/enterpriseHelper': enterpriseHelperStub,
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
@@ -1185,7 +1182,6 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-      enterpriseHelperStub = {};
 
       geolocationServiceStub = {
         setNodeGeolocation: sinon.stub(),
@@ -1210,7 +1206,6 @@ describe('fluxNetworkHelper tests', () => {
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/enterpriseHelper': enterpriseHelperStub,
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
@@ -1252,7 +1247,6 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-      enterpriseHelperStub = {};
 
       geolocationServiceStub = {
         setNodeGeolocation: sinon.stub(),
@@ -1272,7 +1266,6 @@ describe('fluxNetworkHelper tests', () => {
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/enterpriseHelper': enterpriseHelperStub,
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
@@ -1313,7 +1306,6 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-      enterpriseHelperStub = {};
 
       geolocationServiceStub = {
         setNodeGeolocation: sinon.stub(),
@@ -1333,7 +1325,6 @@ describe('fluxNetworkHelper tests', () => {
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/enterpriseHelper': enterpriseHelperStub,
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,

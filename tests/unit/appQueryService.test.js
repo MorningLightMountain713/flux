@@ -8,7 +8,7 @@ describe('appQueryService tests', () => {
   let messageHelperStub;
   let dockerServiceStub;
   let registryManagerStub;
-  let enterpriseHelperStub;
+
   let appSpecHelpersStub;
   let appsRepositoryStub;
   let logStub;
@@ -68,7 +68,6 @@ describe('appQueryService tests', () => {
       appInstallingLocation: sinon.stub(),
     };
 
-    enterpriseHelperStub = {};
 
     appSpecHelpersStub = {};
 
@@ -90,7 +89,6 @@ describe('appQueryService tests', () => {
       '../dockerService': dockerServiceStub,
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../utils/enterpriseHelper': enterpriseHelperStub,
       '../utils/appSpecHelpers': appSpecHelpersStub,
       '../../lib/log': logStub,
       '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {

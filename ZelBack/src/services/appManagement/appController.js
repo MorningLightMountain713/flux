@@ -18,32 +18,11 @@ const { appsFolder } = require('../utils/appConstants');
  */
 async function appLocation(appname) {
   // eslint-disable-next-line global-require
-  const dbHelper = require('../dbHelper');
-  // eslint-disable-next-line global-require
-  const config = require('config');
-  const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
-
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
-  let query = {};
+  const appsRepository = require('../appDatabase/appsRepository');
   if (appname) {
-    query = { name: new RegExp(`^${appname}$`, 'i') }; // case insensitive
+    return appsRepository.listLocationsByApp(appname);
   }
-  const projection = {
-    projection: {
-      _id: 0,
-      name: 1,
-      hash: 1,
-      ip: 1,
-      broadcastedAt: 1,
-      expireAt: 1,
-      runningSince: 1,
-      osUptime: 1,
-      staticIp: 1,
-    },
-  };
-  const results = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-  return results;
+  return appsRepository.listLocations();
 }
 
 /**

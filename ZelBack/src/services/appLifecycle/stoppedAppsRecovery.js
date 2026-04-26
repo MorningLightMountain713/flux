@@ -7,9 +7,7 @@
  * Apps using g: syncthing mode are managed by the coordinateActiveStandbyApps service.
  */
 
-const config = require('config');
 const log = require('../../lib/log');
-const dbHelper = require('../dbHelper');
 const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -18,9 +16,6 @@ const advancedWorkflows = require('./advancedWorkflows');
 const appUninstaller = require('./appUninstaller');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
-const { localAppsInformation } = require('../utils/appConstants');
-
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 /**
  * Check if an app still has a valid (non-expired) location record for this node's IP.
@@ -32,23 +27,16 @@ const globalAppsLocations = config.database.appsglobal.collections.appsLocations
  */
 async function appHasValidLocationOnNode(appName, myIp) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = { name: appName, ip: myIp };
-    const projection = { _id: 0, expireAt: 1 };
-    const records = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
+    const location = await appsRepository.getAppLocation(appName, myIp);
 
-    if (!records || records.length === 0) {
+    if (!location) {
       return false;
     }
 
     // Check expireAt directly - this field is kept in sync when broadcastedAt
     // is manipulated during sigterm handling (both locally and on peers)
-    const now = Date.now();
-    return records.some((record) => {
-      if (!record.expireAt) return false;
-      return new Date(record.expireAt).getTime() > now;
-    });
+    if (!location.expireAt) return false;
+    return new Date(location.expireAt).getTime() > Date.now();
   } catch (error) {
     log.error(`stoppedAppsRecovery - Error checking app location for ${appName}: ${error.message}`);
     // On error, assume valid to avoid incorrectly removing apps

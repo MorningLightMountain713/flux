@@ -11,12 +11,9 @@ const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSend
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const messageHelper = require('./messageHelper');
-const dbHelper = require('./dbHelper');
 const { peerManager, PEER_SOURCE } = require('./utils/peerState');
 const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
-
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 const { messageCache, wsPeerCache } = cacheManager;
 
@@ -265,12 +262,9 @@ async function handleNodeSigtermMessage(message, fromIP, port) {
       return;
     }
 
-    // Check if this IP has any apps running in our database
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = { ip };
-    const projection = { _id: 0, name: 1 };
-    const appsOnNode = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
+    // eslint-disable-next-line global-require
+    const appsRepository = require('./appDatabase/appsRepository');
+    const appsOnNode = await appsRepository.listAppNamesOnIp(ip);
 
     if (!appsOnNode || appsOnNode.length === 0) {
       log.info(`No apps found for node ${ip} in locations database, not rebroadcasting sigterm`);
@@ -279,12 +273,9 @@ async function handleNodeSigtermMessage(message, fromIP, port) {
 
     log.info(`Found ${appsOnNode.length} apps for node ${ip}, updating expiration and rebroadcasting sigterm`);
 
-    // Update broadcastedAt to make records expire 7 minutes after the sigterm broadcastedAt
-    // TTL index is 7500 seconds, so set broadcastedAt = sigtermBroadcastedAt - (7500 - 420) seconds
     const newBroadcastedAt = new Date(broadcastedAt - (7500 - 420) * 1000);
     const newExpireAt = new Date(broadcastedAt + (420 * 1000));
-    const update = { $set: { broadcastedAt: newBroadcastedAt, expireAt: newExpireAt } };
-    await dbHelper.updateInDatabase(database, globalAppsLocations, query, update);
+    await appsRepository.updateLocationExpiry(ip, newBroadcastedAt, newExpireAt);
 
     // Rebroadcast to other peers
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();

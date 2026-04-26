@@ -40,13 +40,7 @@ async function resolveSpec(plainSpec) {
   }
 }
 
-async function toCanonicalSpec(plainSpec) {
-  const spec = await deserializeSpec(plainSpec);
-  return spec.serialize();
-}
-
 module.exports = {
   deserializeSpec,
   resolveSpec,
-  toCanonicalSpec,
 };

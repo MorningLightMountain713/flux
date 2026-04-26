@@ -1,7 +1,5 @@
 // Peer Notification Service - Manages broadcasting of running apps to network peers
 const os = require('os');
-const config = require('config');
-const dbHelper = require('../dbHelper');
 const dockerService = require('../dockerService');
 const generalService = require('../generalService');
 const benchmarkService = require('../benchmarkService');
@@ -17,9 +15,6 @@ const appsRepository = require('../appDatabase/appsRepository');
 const { listRunningContainers } = require('../appQuery/appQueryService');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
-
-// Database collections
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 // Module-level state variable
 let checkAndNotifyPeersOfRunningAppsFirstRun = true;
@@ -172,12 +167,8 @@ async function checkAndNotifyPeersOfRunningApps() {
               const containerExists = await dockerService.getDockerContainerOnly(stoppedApp);
 
               if (containerExists && appHasSyncthing) {
-                const db = dbHelper.databaseConnection();
-                const database = db.db(config.database.appsglobal.database);
-                const queryFind = { name: mainAppName, ip: myIP };
-                const projection = { _id: 0, runningSince: 1 };
                 // eslint-disable-next-line no-await-in-loop
-                const result = await dbHelper.findOneInDatabase(database, globalAppsLocations, queryFind, projection);
+                const result = await appsRepository.getAppLocation(mainAppName, myIP);
                 if (!result || !result.runningSince || Date.parse(result.runningSince) + 30 * 60 * 1000 > Date.now()) {
                   log.info(`Application ${stoppedApp} uses r syncthing and container exists but is stopped. Haven't started yet because was installed less than 30m ago.`);
                   // eslint-disable-next-line no-continue
@@ -245,15 +236,11 @@ async function checkAndNotifyPeersOfRunningApps() {
     }
 
     const apps = [];
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
     try {
       for (const inst of installedAndRunning) {
-        const queryFind = { name: inst.name, ip: myIP };
-        const projection = { _id: 0, runningSince: 1 };
         let runningOnMyNodeSince = new Date().toISOString();
         // eslint-disable-next-line no-await-in-loop
-        const result = await dbHelper.findOneInDatabase(database, globalAppsLocations, queryFind, projection);
+        const result = await appsRepository.getAppLocation(inst.name, myIP);
         if (result && result.runningSince) {
           runningOnMyNodeSince = result.runningSince;
         }

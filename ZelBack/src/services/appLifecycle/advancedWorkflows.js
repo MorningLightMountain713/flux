@@ -22,14 +22,11 @@ const {
   globalAppsInformation,
   globalAppsInstallingErrorsLocations,
   globalAppsMessages,
-  globalAppsLocations,
   appsFolder,
 } = require('../utils/appConstants');
 const appsRepository = require('../appDatabase/appsRepository');
 const https = require('https');
-const {
-  toCanonicalSpec,
-} = require('../utils/specCutover');
+const { deserializeSpec } = require('../utils/specCutover');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { listRunningContainers } = require('../appQuery/appQueryService');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
@@ -1415,9 +1412,8 @@ async function updateAppGlobaly(params) {
 
   let spec = wireSpec;
   if (wireSpec.isEncrypted) {
-    const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
-    const decrypted = await wireSpec.decrypt(provider);
-    spec = decrypted;
+    const provider = await wireSpec.createProvider();
+    spec = await wireSpec.decrypt(provider);
   }
 
   // eslint-disable-next-line global-require
@@ -1440,7 +1436,7 @@ async function updateAppGlobaly(params) {
   }
   const appOwner = appInfo.owner;
 
-  const wireForm = await toCanonicalSpec(appSpecObj);
+  const wireForm = wireSpec.serialize();
 
   // eslint-disable-next-line global-require
   const appMessaging = require('../appMessaging/messageVerifier');
@@ -1811,23 +1807,16 @@ async function forceAppRemovals() {
     let dockerAppsTrueNameB = [...new Set(dockerAppsTrueNames)];
     dockerAppsTrueNameB = dockerAppsTrueNameB.filter((appName) => appName !== 'watchtower');
 
-    // Connect to database for checking app locations
-    const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.database.appsglobal.database);
-
     // eslint-disable-next-line no-restricted-syntax
     for (const dApp of dockerAppsTrueNameB) {
       // check if app is in installedApps
       const appInstalledExists = appsInstalled.find((app) => app.name === dApp);
       if (!appInstalledExists) {
-        // Check if this app is registered in locations for this node's IP
         let shouldBroadcast = false;
         try {
-          const locationQuery = { name: dApp, ip: myIP };
-          const locationProjection = { projection: { _id: 0 } };
           // eslint-disable-next-line no-await-in-loop
-          const appLocation = await dbHelper.findOneInDatabase(database, globalAppsLocations, locationQuery, locationProjection);
-          if (appLocation) {
+          const location = await appsRepository.getAppLocation(dApp, myIP);
+          if (location) {
             shouldBroadcast = true;
             log.info(`${dApp} found in locations for this IP (${myIP}), will broadcast removal`);
           } else {
@@ -1835,7 +1824,6 @@ async function forceAppRemovals() {
           }
         } catch (locationError) {
           log.error(`Error checking app location for ${dApp}: ${locationError.message}`);
-          // Default to not broadcasting on error to avoid false positives
         }
 
         // eslint-disable-next-line no-await-in-loop
