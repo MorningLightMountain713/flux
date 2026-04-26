@@ -11,6 +11,8 @@ describe('hardwareValidationService tests', () => {
   let appUninstallerStub;
   let serviceHelperStub;
   let generalServiceStub;
+  let deserializeSpecStub;
+  let deploymentSpecFromSpecStub;
 
   beforeEach(() => {
     // Log stub
@@ -43,7 +45,6 @@ describe('hardwareValidationService tests', () => {
     // Hardware requirements stub
     hwRequirementsStub = {
       getNodeSpecs: sinon.stub(),
-      totalAppHWRequirements: sinon.stub(),
     };
 
     // General service stub
@@ -53,13 +54,16 @@ describe('hardwareValidationService tests', () => {
 
     // App uninstaller stub
     appUninstallerStub = {
-      removeAppLocally: sinon.stub(),
+      uninstallApplication: sinon.stub().resolves(),
     };
 
     // Service helper stub
     serviceHelperStub = {
       delay: sinon.stub().resolves(),
     };
+
+    deserializeSpecStub = sinon.stub().callsFake(async (spec) => spec);
+    deploymentSpecFromSpecStub = sinon.stub();
 
     // Load module with stubs
     hardwareValidationService = proxyquire('../../ZelBack/src/services/appLifecycle/hardwareValidationService', {
@@ -70,6 +74,12 @@ describe('hardwareValidationService tests', () => {
       './appUninstaller': appUninstallerStub,
       '../serviceHelper': serviceHelperStub,
       '../generalService': generalServiceStub,
+      '../utils/specCutover': { deserializeSpec: deserializeSpecStub },
+      '../utils/specLibs': {
+        getSpecBackend: sinon.stub().resolves({
+          DeploymentSpec: { fromSpec: deploymentSpecFromSpecStub },
+        }),
+      },
     });
   });
 
@@ -121,8 +131,8 @@ describe('hardwareValidationService tests', () => {
       registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
 
       // Each app needs 1 CPU, 1GB RAM, 5GB HDD - both fit
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 1, ram: 1024, hdd: 5 });
-      appUninstallerStub.removeAppLocally.resolves();
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 5 }) });
+      appUninstallerStub.uninstallApplication.resolves();
 
       const result = await hardwareValidationService.performBootTimeHardwareValidation();
 
@@ -130,7 +140,7 @@ describe('hardwareValidationService tests', () => {
       expect(result.appsRemoved).to.have.length(0);
       expect(result.appsFailed).to.have.length(0);
       expect(logStub.info.calledWith('hardwareValidationService - All installed apps meet hardware requirements')).to.equal(true);
-      expect(appUninstallerStub.removeAppLocally.called).to.equal(false);
+      expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
     });
 
     it('should handle critical error gracefully', async () => {
@@ -162,7 +172,7 @@ describe('hardwareValidationService tests', () => {
       });
 
       registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 1, ram: 1024, hdd: 5 });
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 5 }) });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -183,7 +193,7 @@ describe('hardwareValidationService tests', () => {
 
       registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'bigApp' });
       // App needs 5 CPUs = 50 units > 30 available
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 5, ram: 1024, hdd: 5 });
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 5, memory: 1024, storage: 5 }) });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -206,7 +216,7 @@ describe('hardwareValidationService tests', () => {
 
       registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'bigApp' });
       // App needs 7GB RAM = 7168MB > 6192 available
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 1, ram: 7168, hdd: 5 });
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 7168, storage: 5 }) });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -229,7 +239,7 @@ describe('hardwareValidationService tests', () => {
 
       registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'bigApp' });
       // App needs 80GB + 5GB filesystem + 2GB swap = 87GB > 85GB available
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 1, ram: 1024, hdd: 80 });
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 80 }) });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -253,7 +263,7 @@ describe('hardwareValidationService tests', () => {
 
       registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
       // Each app needs 2 CPUs = 20 units, total = 40 units > 30 available
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 2, ram: 1024, hdd: 5 });
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 2, memory: 1024, storage: 5 }) });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -277,7 +287,7 @@ describe('hardwareValidationService tests', () => {
 
       registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
       // Each app needs 4GB = 4096MB, total = 8192MB > 6192 available
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 1, ram: 4096, hdd: 5 });
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 4096, storage: 5 }) });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -305,7 +315,7 @@ describe('hardwareValidationService tests', () => {
       // App1: 30 + 5 + 2 = 37GB, cumulative = 37GB (fits)
       // App2: 30 + 5 + 2 = 37GB, cumulative = 74GB (fits in 85GB)
       // Need bigger apps: 40GB each + 7GB overhead = 47GB each, total = 94GB > 85GB
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 1, ram: 1024, hdd: 40 });
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 40 }) });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -333,7 +343,7 @@ describe('hardwareValidationService tests', () => {
       // App1 (oldest): 15 units, cumulative = 15 (fits)
       // App2 (middle): 15 units, cumulative = 30 (fits)
       // App3 (newest): 15 units, cumulative = 45 (exceeds 30) - remove
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 1.5, ram: 1024, hdd: 5 });
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1.5, memory: 1024, storage: 5 }) });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -355,7 +365,7 @@ describe('hardwareValidationService tests', () => {
       });
 
       registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 1, ram: 1024, hdd: 5 });
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 5 }) });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -377,7 +387,7 @@ describe('hardwareValidationService tests', () => {
 
       registryManagerStub.getApplicationGlobalSpecifications.onFirstCall().resolves(null); // No spec for app1
       registryManagerStub.getApplicationGlobalSpecifications.onSecondCall().resolves({ name: 'app2' });
-      hwRequirementsStub.totalAppHWRequirements.returns({ cpu: 1, ram: 1024, hdd: 5 });
+      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 5 }) });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -411,7 +421,7 @@ describe('hardwareValidationService tests', () => {
         removed: [],
         failed: [],
       });
-      expect(appUninstallerStub.removeAppLocally.called).to.equal(false);
+      expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
     });
 
     it('should successfully remove a single app', async () => {
@@ -419,7 +429,7 @@ describe('hardwareValidationService tests', () => {
         { name: 'app1', reason: 'CPU requirements not met', height: 1000 },
       ];
 
-      appUninstallerStub.removeAppLocally.resolves();
+      appUninstallerStub.uninstallApplication.resolves();
 
       const result = await hardwareValidationService.removeNonCompliantApps(appsToRemove);
 
@@ -428,7 +438,7 @@ describe('hardwareValidationService tests', () => {
       expect(result.failed).to.have.length(0);
       expect(logStub.warn.calledWith(sinon.match(/REMOVAL REASON: Hardware downgrade - app1/))).to.equal(true);
       expect(logStub.info.calledWith(sinon.match(/Successfully removed app1/))).to.equal(true);
-      expect(appUninstallerStub.removeAppLocally.calledWith('app1', null, true, true, true)).to.equal(true);
+      expect(appUninstallerStub.uninstallApplication.firstCall.args[0]).to.equal('app1');
     });
 
     it('should successfully remove multiple apps', async () => {
@@ -438,7 +448,7 @@ describe('hardwareValidationService tests', () => {
         { name: 'app3', reason: 'Storage requirements not met', height: 3000 },
       ];
 
-      appUninstallerStub.removeAppLocally.resolves();
+      appUninstallerStub.uninstallApplication.resolves();
 
       const result = await hardwareValidationService.removeNonCompliantApps(appsToRemove);
 
@@ -447,7 +457,7 @@ describe('hardwareValidationService tests', () => {
       expect(result.removed).to.include('app2');
       expect(result.removed).to.include('app3');
       expect(result.failed).to.have.length(0);
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(3);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(3);
       expect(serviceHelperStub.delay.callCount).to.equal(3);
     });
 
@@ -456,7 +466,7 @@ describe('hardwareValidationService tests', () => {
         { name: 'app1', reason: 'CPU requirements not met', height: 1000 },
       ];
 
-      appUninstallerStub.removeAppLocally.rejects(new Error('Container not found'));
+      appUninstallerStub.uninstallApplication.rejects(new Error('Container not found'));
 
       const result = await hardwareValidationService.removeNonCompliantApps(appsToRemove);
 
@@ -474,9 +484,9 @@ describe('hardwareValidationService tests', () => {
         { name: 'app3', reason: 'Storage requirements not met', height: 3000 },
       ];
 
-      appUninstallerStub.removeAppLocally.onFirstCall().resolves();
-      appUninstallerStub.removeAppLocally.onSecondCall().rejects(new Error('Removal failed'));
-      appUninstallerStub.removeAppLocally.onThirdCall().resolves();
+      appUninstallerStub.uninstallApplication.onFirstCall().resolves();
+      appUninstallerStub.uninstallApplication.onSecondCall().rejects(new Error('Removal failed'));
+      appUninstallerStub.uninstallApplication.onThirdCall().resolves();
 
       const result = await hardwareValidationService.removeNonCompliantApps(appsToRemove);
 
@@ -493,7 +503,7 @@ describe('hardwareValidationService tests', () => {
         { name: 'app2', reason: 'RAM requirements not met', height: 2000 },
       ];
 
-      appUninstallerStub.removeAppLocally.resolves();
+      appUninstallerStub.uninstallApplication.resolves();
 
       await hardwareValidationService.removeNonCompliantApps(appsToRemove);
 
@@ -506,17 +516,14 @@ describe('hardwareValidationService tests', () => {
         { name: 'app1', reason: 'CPU requirements not met', height: 1000 },
       ];
 
-      appUninstallerStub.removeAppLocally.resolves();
+      appUninstallerStub.uninstallApplication.resolves();
 
       await hardwareValidationService.removeNonCompliantApps(appsToRemove);
 
-      expect(appUninstallerStub.removeAppLocally.calledOnce).to.equal(true);
-      const call = appUninstallerStub.removeAppLocally.getCall(0);
-      expect(call.args[0]).to.equal('app1'); // appName
-      expect(call.args[1]).to.equal(null); // res
-      expect(call.args[2]).to.equal(true); // force
-      expect(call.args[3]).to.equal(true); // endResponse
-      expect(call.args[4]).to.equal(true); // sendMessage
+      expect(appUninstallerStub.uninstallApplication.calledOnce).to.equal(true);
+      const call = appUninstallerStub.uninstallApplication.getCall(0);
+      expect(call.args[0]).to.equal('app1');
+      expect(call.args[1]).to.deep.equal({ forceKill: true, skipGuard: true, broadcastRemoval: true });
     });
   });
 });
