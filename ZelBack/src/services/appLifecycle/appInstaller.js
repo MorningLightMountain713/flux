@@ -441,6 +441,8 @@ async function installApplication(appSpec, options = {}) {
       const burstEligible = owner
         && cpuBurstHelper.isEnterpriseOwner(owner)
         && await cpuBurstHelper.isCpuBurstSupported();
+      const restartAlwaysOwners = config.fluxapps.restartAlwaysOwners || [];
+      const restartPolicy = (owner && restartAlwaysOwners.includes(owner)) ? 'always' : null;
       const specVersion = appSpec.version || null;
       const onStatus = res ? (msg) => {
         const payload = typeof msg === 'string' ? { status: msg } : msg;
@@ -460,6 +462,7 @@ async function installApplication(appSpec, options = {}) {
           test,
           createVolumes,
           burstEligible,
+          restartPolicy,
           syslogTarget,
           specVersion,
         });
@@ -643,6 +646,7 @@ async function installComponent(component, options = {}) {
   const test = options.test || false;
   const createVolumes = options.createVolumes || false;
   const burstEligible = options.burstEligible || false;
+  const restartPolicy = options.restartPolicy || null;
   const extraEnv = options.extraEnv || [];
   const syslogTarget = options.syslogTarget || null;
   const specVersion = options.specVersion || null;
@@ -728,6 +732,7 @@ async function installComponent(component, options = {}) {
   await dockerService.appDockerCreate(component, {
     test,
     burstEligible,
+    restartPolicy,
     extraEnv,
     syslogTarget,
   });

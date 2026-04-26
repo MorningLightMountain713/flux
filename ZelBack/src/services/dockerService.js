@@ -705,6 +705,7 @@ const getContainerIP = async (containerName) => {
 async function appDockerCreate(deployComp, options = {}) {
   const test = options.test || false;
   const burstEligible = options.burstEligible || false;
+  const restartPolicyOverride = options.restartPolicy || null;
   const extraEnv = options.extraEnv || [];
   const syslogTarget = options.syslogTarget || null;
 
@@ -785,12 +786,7 @@ async function appDockerCreate(deployComp, options = {}) {
     log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${effectiveCpu})`);
   }
 
-  // Restart policy: spec-driven (activeStandby → no), with FluxOS owner override.
-  let restartPolicy = deployComp.restartPolicyName();
-  const restartAlwaysOwners = config.fluxapps.restartAlwaysOwners || [];
-  if (owner && restartAlwaysOwners.includes(owner)) {
-    restartPolicy = 'always';
-  }
+  const restartPolicy = restartPolicyOverride || deployComp.restartPolicyName();
 
   const nanoCpus = test ? Math.round(0.2 * 1e9) : deployComp.toDockerNanoCpus();
   const memoryBytes = test ? Math.round(300 * 1024 * 1024) : deployComp.toDockerMemoryBytes();
