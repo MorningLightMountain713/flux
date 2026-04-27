@@ -29,7 +29,7 @@ async function verifyImageRegistryAndArchitectures(spec, options = {}) {
     });
   }
 
-  const isEnterpriseArcane = spec.version >= 8 && spec.enterprise;
+  const isEnterpriseArcane = spec.isEncrypted;
 
   if (isEnterpriseArcane) {
     const missing = componentArchitectures.filter(

@@ -219,6 +219,8 @@ describe('appInstaller tests', () => {
       '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
       '../appDatabase/appsRepository': {
         getInstalledApp: sinon.stub().resolves(null),
+        getInstalledAppRaw: sinon.stub().resolves(null),
+        existsInstalledApp: sinon.stub().resolves(false),
         getGlobalAppInfo: sinon.stub().resolves(null),
         getAppMessage: sinon.stub().resolves(null),
       },
@@ -273,7 +275,7 @@ describe('appInstaller tests', () => {
     });
   });
 
-  describe('installAppLocally', () => {
+  describe('installApplicationAPI', () => {
     it('should reject unauthorized users', async () => {
       const req = {
         params: { appname: 'testapp' },
@@ -286,7 +288,7 @@ describe('appInstaller tests', () => {
       verificationHelperStub.verifyPrivilege.resolves(false);
       messageHelperStub.errUnauthorizedMessage.returns({ status: 'error', data: { message: 'Unauthorized' } });
 
-      await appInstaller.installAppLocally(req, res);
+      await appInstaller.installApplicationAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       expect(verificationHelperStub.verifyPrivilege.calledWith('user', req)).to.be.true;
@@ -303,7 +305,7 @@ describe('appInstaller tests', () => {
 
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'No Flux App specified' } });
 
-      await appInstaller.installAppLocally(req, res);
+      await appInstaller.installApplicationAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       expect(logStub.error.called).to.be.true;
@@ -329,14 +331,14 @@ describe('appInstaller tests', () => {
 
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Application Specifications of nonexistent not found' } });
 
-      await appInstaller.installAppLocally(req, res);
+      await appInstaller.installApplicationAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       expect(logStub.error.called).to.be.true;
     });
   });
 
-  describe('testAppInstall', () => {
+  describe('testInstallApplicationAPI', () => {
     it('should reject unauthorized users', async () => {
       const req = {
         params: { appname: 'testapp' },
@@ -349,7 +351,7 @@ describe('appInstaller tests', () => {
       verificationHelperStub.verifyPrivilege.resolves(false);
       messageHelperStub.errUnauthorizedMessage.returns({ status: 'error', data: { message: 'Unauthorized' } });
 
-      await appInstaller.testAppInstall(req, res);
+      await appInstaller.testInstallApplicationAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       expect(verificationHelperStub.verifyPrivilege.calledWith('user', req)).to.be.true;
@@ -366,7 +368,7 @@ describe('appInstaller tests', () => {
 
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'No Flux App specified' } });
 
-      await appInstaller.testAppInstall(req, res);
+      await appInstaller.testInstallApplicationAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       expect(logStub.error.called).to.be.true;
@@ -392,9 +394,9 @@ describe('appInstaller tests', () => {
 
       messageHelperStub.createErrorMessage.returns({ status: 'error' });
 
-      await appInstaller.testAppInstall(req, res);
+      await appInstaller.testInstallApplicationAPI(req, res);
 
-      expect(logStub.info.calledWith('testAppInstall: testapp')).to.be.true;
+      expect(logStub.info.calledWith('testInstallApplicationAPI: testapp')).to.be.true;
     });
 
     it.skip('should decrypt enterprise app specs before test installation — needs real crypto provider', async () => {
@@ -446,7 +448,7 @@ describe('appInstaller tests', () => {
       messageHelperStub.createErrorMessage.returns({ status: 'error' });
 
       try {
-        await appInstaller.testAppInstall(req, res);
+        await appInstaller.testInstallApplicationAPI(req, res);
       } catch (e) {
         // Installation may fail downstream, but we're testing the decryption seam
       }
@@ -454,7 +456,7 @@ describe('appInstaller tests', () => {
       // Enterprise v8 specs with empty compose should route through the
       // specCutover decrypt seam. The spec handed to it carries the app
       // name and owner, which specCutover uses to build the provider.
-      expect(logStub.info.calledWith('testAppInstall: enterpriseapp')).to.be.true;
+      expect(logStub.info.calledWith('testInstallApplicationAPI: enterpriseapp')).to.be.true;
       expect(decryptedAppSpec.compose).to.have.length(1);
     });
 
@@ -558,6 +560,7 @@ describe('appInstaller tests', () => {
         '../appDatabase/appsRepository': {
           getInstalledApp: sinon.stub().resolves(null),
           getInstalledAppRaw: sinon.stub().resolves(null),
+          existsInstalledApp: sinon.stub().resolves(false),
           getGlobalAppInfo: sinon.stub().resolves(null),
           getAppMessage: sinon.stub().resolves(null),
           removeInstalledApp: sinon.stub().resolves(),
@@ -570,7 +573,7 @@ describe('appInstaller tests', () => {
 
       verificationHelperStub.verifyPrivilege.resolves(true);
 
-      await appInstallerForArchTest.testAppInstall(req, res);
+      await appInstallerForArchTest.testInstallApplicationAPI(req, res);
 
       // Verify verifyRepository was called
       expect(imageManagerStub.verifyRepository.calledWith('arm64v8/ubuntu:latest')).to.be.true;
@@ -747,6 +750,7 @@ describe('appInstaller tests', () => {
         '../appDatabase/appsRepository': {
           getInstalledApp: sinon.stub().resolves(null),
           getInstalledAppRaw: sinon.stub().resolves(null),
+          existsInstalledApp: sinon.stub().resolves(false),
           getGlobalAppInfo: sinon.stub().resolves(null),
           getAppMessage: sinon.stub().resolves(null),
           removeInstalledApp: sinon.stub().resolves(),
@@ -760,7 +764,7 @@ describe('appInstaller tests', () => {
       verificationHelperStub.verifyPrivilege.resolves(true);
 
       try {
-        await appInstallerForArchTest.testAppInstall(req, res);
+        await appInstallerForArchTest.testInstallApplicationAPI(req, res);
       } catch (e) {
         // Installation may fail at later stages, but we only care about architecture check passing
       }
@@ -783,7 +787,7 @@ describe('appInstaller tests', () => {
   });
 
   describe('installApplication tests', () => {
-    const appSpec = {
+    const appSpecPlain = {
       version: 2,
       name: 'testapp',
       description: 'testapp',
@@ -812,9 +816,17 @@ describe('appInstaller tests', () => {
       height: 0,
     };
 
+    let InstantiatedSpec;
+    let instantiated;
+
+    before(async () => {
+      ({ InstantiatedSpec } = await import('@runonflux/flux-spec-backend'));
+    });
+
     beforeEach(() => {
       globalStateStub.removalInProgress = false;
       globalStateStub.installationInProgress = false;
+      instantiated = InstantiatedSpec.deserialize(appSpecPlain);
     });
 
     afterEach(() => {
@@ -823,28 +835,26 @@ describe('appInstaller tests', () => {
     });
 
     it('should return error if removal is in progress', async () => {
-      const componentSpecs = false;
       const res = {
         write: sinon.stub(),
         end: sinon.stub(),
       };
       globalStateStub.removalInProgress = true;
 
-      const result = await appInstaller.installApplication(appSpec, { res });
+      const result = await appInstaller.installApplication(instantiated, { res });
 
       expect(logStub.error.called).to.be.true;
       expect(result).to.be.false;
     });
 
     it('should return error if another installation is in progress', async () => {
-      const componentSpecs = false;
       const res = {
         write: sinon.stub(),
         end: sinon.stub(),
       };
       globalStateStub.installationInProgress = true;
 
-      const result = await appInstaller.installApplication(appSpec, { res });
+      const result = await appInstaller.installApplication(instantiated, { res });
 
       expect(logStub.error.called).to.be.true;
       expect(result).to.be.false;
@@ -957,18 +967,20 @@ describe('appInstaller tests', () => {
           installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
           listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
         },
+        '../appDatabase/appsRepository': {
+          existsInstalledApp: sinon.stub().resolves(true),
+        },
         util: {
           promisify: (fn) => fn,
         },
       });
 
-      const componentSpecs = false;
       const res = {
         write: sinon.stub(),
         end: sinon.stub(),
       };
 
-      const result = await appInstallerWithDb.installApplication(appSpec, { res });
+      const result = await appInstallerWithDb.installApplication(instantiated, { res });
 
       expect(logStub.error.called).to.be.true;
       expect(res.write.called).to.be.true;
@@ -977,6 +989,11 @@ describe('appInstaller tests', () => {
   });
 
   describe('prune guard with encrypted enterprise apps', () => {
+    let InstantiatedSpec;
+    before(async () => {
+      ({ InstantiatedSpec } = await import('@runonflux/flux-spec-backend'));
+    });
+
     it('should use deploymentProvider to check running components during registration', async () => {
       const listInstalledDeploymentsStub = sinon.stub().resolves([{
         appName: 'enterpriseapp123',
@@ -1028,6 +1045,7 @@ describe('appInstaller tests', () => {
         '../appDatabase/appsRepository': {
           getInstalledApp: sinon.stub().resolves(null),
           getInstalledAppRaw: sinon.stub().resolves(null),
+          existsInstalledApp: sinon.stub().resolves(false),
           getGlobalAppInfo: sinon.stub().resolves(null),
           getAppMessage: sinon.stub().resolves(null),
           removeInstalledApp: sinon.stub().resolves(),
@@ -1049,9 +1067,9 @@ describe('appInstaller tests', () => {
         util: { promisify: (fn) => fn },
       });
 
-      const newAppSpec = { version: 2, name: 'newapp', description: 'test', repotag: 'test/app', owner: '1abc', ports: [30000], containerPorts: [8080], domains: [''], cpu: 0.5, ram: 500, hdd: 5 };
+      const newAppSpec = { version: 2, name: 'newapp', description: 'test', repotag: 'test/app', owner: '1abc', ports: [30000], containerPorts: [8080], domains: [''], cpu: 0.5, ram: 500, hdd: 5, containerData: '/data', hash: 'testhash', height: 0 };
       try {
-        await appInstallerFresh.installApplication(newAppSpec);
+        await appInstallerFresh.installApplication(InstantiatedSpec.deserialize(newAppSpec));
       } catch (e) {
         // Expected — we only care that the prune guard logic ran correctly
       }

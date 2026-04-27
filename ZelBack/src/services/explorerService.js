@@ -35,8 +35,8 @@ let appsTransactions = [];
 let isSynced = false;
 let cachedDaemonVersion = null; // Cache for daemon version
 
-// updateFluxAppsPeriod can be between every 4 to 9 blocks
-let updateFluxAppsPeriod = Math.floor(Math.random() * 6 + 4);
+const reconcilePeriod = 10;
+let reconcileOffset = null;
 
 const blockEmitter = new EventEmitter();
 
@@ -622,15 +622,14 @@ async function processBlock(blockHeight, isInsightExplorer) {
           await registryManager.expireGlobalApplications();
         }
       }
-      if (blockHeight % (config.fluxapps.removeFluxAppsPeriod * speedMultiplier) === 0) {
-        if (blockDataVerbose.height >= config.fluxapps.epochstart) {
-          advancedWorkflows.checkAndRemoveApplicationInstance();
+      if (blockDataVerbose.height >= config.fluxapps.epochstart) {
+        if (reconcileOffset === null) {
+          const socketAddress = await fluxNetworkhelper.getMyFluxIPandPort();
+          const ip = socketAddress ? socketAddress.split(':')[0] : '';
+          reconcileOffset = serviceHelper.randomDelayMs(reconcilePeriod, { initializer: ip }) % reconcilePeriod;
         }
-      }
-      if (blockHeight % (updateFluxAppsPeriod * speedMultiplier) === 0) {
-        if (blockDataVerbose.height >= config.fluxapps.epochstart) {
+        if ((blockHeight - reconcileOffset) % (reconcilePeriod * speedMultiplier) === 0) {
           advancedWorkflows.reconcileInstalledApps();
-          updateFluxAppsPeriod = Math.floor(Math.random() * 6 + 4);
         }
       }
       if (blockDataVerbose.height % (config.fluxapps.reconstructAppMessagesHashPeriod * speedMultiplier) === 0) {
@@ -1718,6 +1717,10 @@ function setBlockProccessingCanContinue(value) {
   blockProccessingCanContinue = value;
 }
 
+function resetReconcileOffset() {
+  reconcileOffset = null;
+}
+
 // testing purposes
 function setIsInInitiationOfBP(value) {
   isInInitiationOfBP = value;
@@ -1752,6 +1755,7 @@ module.exports = {
   processStandard,
   setBlockProccessingCanContinue,
   setIsInInitiationOfBP,
+  resetReconcileOffset,
   restoreDatabaseToBlockheightState,
 
   // temporary function

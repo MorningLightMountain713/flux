@@ -21,7 +21,6 @@ async function removeAllApps(reason) {
   try {
     allAppsRemoved = true;  // Set flag to prevent repeated attempts
 
-    // Get installed apps (follows pattern from checkAndRemoveEnterpriseAppsOnNonArcane)
     const installedApps = await registryManager.getInstalledApps();
 
     if (!installedApps || installedApps.length === 0) {

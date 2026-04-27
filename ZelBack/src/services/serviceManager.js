@@ -312,8 +312,7 @@ async function startFluxFunctions() {
       portManager.restoreAppsPortsSupport();
     }, 1 * 60 * 1000);
     setTimeout(() => {
-      // Check for enterprise apps on non-arcaneOS nodes and remove them
-      advancedWorkflows.checkAndRemoveEnterpriseAppsOnNonArcane();
+      advancedWorkflows.reconcileInstalledApps();
     }, 2 * 60 * 1000); // 2 minutes after startup
     setInterval(() => {
       portManager.restorePortsSupport(); // restore fluxos and apps ports/upnp

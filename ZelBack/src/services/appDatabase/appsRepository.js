@@ -270,6 +270,16 @@ async function getInstalledAppRaw(name, projection = {}) {
   );
 }
 
+async function existsInstalledApp(name) {
+  const doc = await dbHelper.findOneInDatabase(
+    localDb(),
+    localAppsInformation,
+    { name: nameRegex(name) },
+    { projection: { _id: 0, name: 1 } },
+  );
+  return !!doc;
+}
+
 /**
  * List installed apps as raw documents. Use when spec-shape fields
  * aren't read (e.g. `{ name, hash }` existence checks).
@@ -583,6 +593,7 @@ module.exports = {
   removeGlobalAppInfo,
   getInstalledApp,
   getInstalledAppRaw,
+  existsInstalledApp,
   listInstalledApps,
   listInstalledAppsRaw,
   removeInstalledApp,

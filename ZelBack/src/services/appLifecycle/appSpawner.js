@@ -303,7 +303,7 @@ async function trySpawningGlobalApplication() {
     }
 
     const spec = await deserializeSpec(appSpecifications);
-    const { DeploymentSpec } = await getSpecBackend();
+    const { DeploymentSpec, InstantiatedSpec } = await getSpecBackend();
     const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
     const appPorts = deployment.allHostPorts();
 
@@ -633,7 +633,7 @@ async function trySpawningGlobalApplication() {
     // install the app
     let registerOk = false;
     try {
-      registerOk = await appInstaller.installApplication(appSpecifications);
+      registerOk = await appInstaller.installApplication(InstantiatedSpec.deserialize(appSpecifications));
     } catch (error) {
       log.error(error);
       registerOk = false;

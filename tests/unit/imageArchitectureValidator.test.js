@@ -21,7 +21,7 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
       name: overrides.name || 'testapp',
       version: overrides.version || 8,
       owner: overrides.owner || '1owner',
-      enterprise: overrides.enterprise || false,
+      isEncrypted: overrides.isEncrypted || false,
       allImages: () => comps.map((c) => c.image),
       componentEntries: () => comps.map((c) => [c.name, c]),
     };
@@ -55,7 +55,7 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
       verifyRepositoryStub.resolves({
         verified: true, supportedArchitectures: ['amd64', 'arm64'],
       });
-      await verifyImageRegistryAndArchitectures(makeSpec({ enterprise: true }));
+      await verifyImageRegistryAndArchitectures(makeSpec({ isEncrypted: true }));
     });
 
     it('rejects when any component lacks amd64 support', async () => {
@@ -63,7 +63,7 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
         verified: true, supportedArchitectures: ['arm64'],
       });
       const spec = makeSpec({
-        enterprise: true,
+        isEncrypted: true,
         compose: [{ name: 'c1', image: 'arm-only:latest' }],
       });
       try {
@@ -80,7 +80,7 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
     it('returns early without registry probe when a component has imageAuth set', async () => {
       const spec = makeSpec({
         version: 7,
-        enterprise: true,
+        isEncrypted: true,
         compose: [{ name: 'c1', imageAuth: 'pgp-encrypted-blob' }],
       });
       await verifyImageRegistryAndArchitectures(spec);

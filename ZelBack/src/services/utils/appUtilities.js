@@ -218,10 +218,27 @@ function findCommonArchitectures(componentArchitectures) {
   );
 }
 
+function isNewer(a, b) {
+  if (a.runningSince && !b.runningSince) return true;
+  if (!a.runningSince && b.runningSince) return false;
+  if (a.runningSince !== b.runningSince) return a.runningSince > b.runningSince;
+  return a.ip > b.ip;
+}
+
+function isNewestInstance(locations, myIP) {
+  if (locations.length === 0) return false;
+  let newest = locations[0];
+  for (let i = 1; i < locations.length; i += 1) {
+    if (isNewer(locations[i], newest)) newest = locations[i];
+  }
+  return newest.ip === myIP;
+}
+
 module.exports = {
   appPricePerMonth,
   nodeFullGeolocation,
   getAppFolderSize,
   getContainerStorage,
   findCommonArchitectures,
+  isNewestInstance,
 };

@@ -1225,10 +1225,10 @@ module.exports = (app) => {
     appUninstaller.removeAppLocallyApi(req, res);
   });
   app.get('/apps/installapplocally/:appname?', (req, res) => {
-    appInstaller.installAppLocally(req, res);
+    appInstaller.installApplicationAPI(req, res);
   });
   app.get('/apps/testappinstall/:appname?', (req, res) => {
-    appInstaller.testAppInstall(req, res);
+    appInstaller.testInstallApplicationAPI(req, res);
   });
   app.get('/apps/createfluxnetwork', (req, res) => {
     systemIntegration.createFluxNetworkAPI(req, res);

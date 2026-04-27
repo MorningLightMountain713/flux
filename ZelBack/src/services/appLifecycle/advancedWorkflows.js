@@ -21,11 +21,11 @@ const {
   localAppsInformation,
   globalAppsInformation,
   globalAppsInstallingErrorsLocations,
-  globalAppsMessages,
   appsFolder,
 } = require('../utils/appConstants');
 const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
+const { isNewestInstance } = require('../utils/appUtilities');
 const https = require('https');
 const { deserializeSpec } = require('../utils/specCutover');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
@@ -150,104 +150,7 @@ async function getMasterIpFromFdm(appName, axiosOptions) {
  * @param {Object} installedApp - The installed app object from local database
  * @returns {Promise<Object|null>} App specifications to use for removal, or null if local specs are usable or no non-enterprise version found
  */
-async function findAndRestoreNonEnterpriseSpecs(installed) {
-  if (!installed.isEncrypted()) {
-    return true;
-  }
 
-  log.info(`Local DB has encrypted specs for ${installed.name}, searching for last non-enterprise version in permanent messages`);
-
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-
-  const query = {
-    'appSpecifications.name': installed.name,
-    type: { $in: ['fluxappregister', 'fluxappupdate'] },
-  };
-  const projection = {
-    projection: {
-      _id: 0,
-      appSpecifications: 1,
-      hash: 1,
-      height: 1,
-    },
-    sort: { height: -1 },
-  };
-
-  const permanentMessages = await dbHelper.findInDatabase(database, globalAppsMessages, query, projection);
-
-  if (!permanentMessages || permanentMessages.length === 0) {
-    log.error(`No permanent messages found for ${installed.name}`);
-    return false;
-  }
-
-  let lastNonEnterpriseMessage = null;
-  for (let i = 0; i < permanentMessages.length; i += 1) {
-    const message = permanentMessages[i];
-    const specs = message.appSpecifications;
-    const msgIsEnterprise = Boolean(specs.version >= 8 && specs.enterprise);
-
-    if (!msgIsEnterprise) {
-      lastNonEnterpriseMessage = message;
-      break;
-    }
-  }
-
-  if (!lastNonEnterpriseMessage) {
-    log.error(`No non-enterprise version found for ${installed.name} - cannot properly uninstall without port/container info. Skipping removal to avoid orphaned containers.`);
-    return false;
-  }
-
-  log.info(`Found non-enterprise version for ${installed.name} at height ${lastNonEnterpriseMessage.height} - using for cleanup`);
-
-  const specsForRemoval = lastNonEnterpriseMessage.appSpecifications;
-  await appsRepository.upsertInstalledApp(installed.name, specsForRemoval);
-  log.info(`Temporarily restored non-enterprise specs to local DB for ${installed.name} to enable proper port cleanup`);
-
-  return true;
-}
-
-/**
- * Check and remove enterprise apps (v8+) running on non-arcaneOS nodes.
- * This function runs once at startup to clean up incompatible apps.
- * @returns {Promise<void>} Completion status
- */
-async function checkAndRemoveEnterpriseAppsOnNonArcane() {
-  try {
-    if (isArcane) {
-      log.info('Running on arcaneOS - skipping enterprise app compatibility check');
-      return;
-    }
-
-    log.info('Checking for enterprise apps on non-arcaneOS node...');
-
-    const installedApps = await appsRepository.listInstalledApps();
-    if (!installedApps || installedApps.length === 0) {
-      log.info('No apps installed - enterprise check complete');
-      return;
-    }
-
-    for (const installed of installedApps) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const registrySpec = await appsRepository.getGlobalAppInfo(installed.name);
-        if (!registrySpec) continue;
-
-        if (registrySpec.isEncrypted()) {
-          log.warn(`Found enterprise app ${installed.name} (v${registrySpec.version}) on non-arcaneOS node`);
-          // eslint-disable-next-line no-await-in-loop
-          await removeEnterpriseFromNonArcane(installed);
-        }
-      } catch (error) {
-        log.error(`Error processing app ${installed.name} for enterprise check:`, error);
-      }
-    }
-
-    log.info('Enterprise app compatibility check completed');
-  } catch (error) {
-    log.error('Error in checkAndRemoveEnterpriseAppsOnNonArcane:', error);
-  }
-}
 // Global state management - using globalState module instead of local variables
 // These are now managed through the globalState module
 // eslint-disable-next-line no-unused-vars
@@ -1529,57 +1432,6 @@ async function updateAppGlobalyApi(req, res) {
  * To find and remove apps that are spawned more than maximum number of instances allowed locally.
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
-async function checkAndRemoveApplicationInstance() {
-  // To check if more than allowed instances of application are running
-  // check if synced
-  try {
-    const synced = await generalService.checkSynced();
-    if (synced !== true) {
-      log.info('Application duplication removal paused. Not yet synced');
-      return;
-    }
-
-    const installedSpecs = await appsRepository.listInstalledApps();
-    for (const inst of installedSpecs) {
-      // eslint-disable-next-line no-await-in-loop
-      const runningAppList = await registryManager.appLocation(inst.name);
-      const minInstances = inst.spec.instances || config.fluxapps.minimumInstances;
-      if (runningAppList.length > minInstances) {
-        // eslint-disable-next-line no-await-in-loop
-        const appDetails = await registryManager.getApplicationGlobalSpecifications(inst.name);
-        if (appDetails) {
-          log.info(`Application ${inst.name} is already spawned on ${runningAppList.length} instances. Checking if should be uninstalled from the FluxNode..`);
-          runningAppList.sort((a, b) => {
-            if (!a.runningSince && b.runningSince) return 1;
-            if (a.runningSince && !b.runningSince) return -1;
-            if (a.runningSince < b.runningSince) return 1;
-            if (a.runningSince > b.runningSince) return -1;
-            if (a.ip < b.ip) return 1;
-            if (a.ip > b.ip) return -1;
-            return 0;
-          });
-          // eslint-disable-next-line no-await-in-loop
-          const myIP = await fluxNetworkHelper.getMyFluxIPandPort();
-          if (myIP) {
-            const index = runningAppList.findIndex((x) => x.ip === myIP);
-            if (index === 0) {
-              log.info(`Application ${inst.name} going to be removed from node as it was the latest one running it to install it..`);
-              log.warn(`REMOVAL REASON: Too many instances - ${inst.name} running on ${runningAppList.length} instances (max: ${minInstances}) - This node is the newest instance`);
-              log.warn(`Removing application ${inst.name} locally`);
-              // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.uninstallApplication(inst.name, { broadcastRemoval: true });
-              log.warn(`Application ${inst.name} locally removed`);
-              // eslint-disable-next-line no-await-in-loop
-              await serviceHelper.delay(config.fluxapps.removal.delay * 1000);
-            }
-          }
-        }
-      }
-    }
-  } catch (error) {
-    log.error(error);
-  }
-}
 
 function isOperationInProgress() {
   return globalState.removalInProgress
@@ -1589,16 +1441,6 @@ function isOperationInProgress() {
     || globalState.reconciliationInProgress;
 }
 
-async function removeEnterpriseFromNonArcane(installed) {
-  log.warn(`Application ${installed.name} is enterprise but system is not arcaneOS`);
-  log.warn(`REMOVAL REASON: Enterprise app requires arcaneOS - ${installed.name}`);
-
-  const restored = await findAndRestoreNonEnterpriseSpecs(installed);
-  if (!restored) return;
-
-  await appUninstaller.uninstallApplication(installed.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
-  log.info(`Removed enterprise app ${installed.name} and notified peers`);
-}
 
 async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec) {
   const oldNames = new Set(Object.keys(oldDeployment.components));
@@ -1695,6 +1537,7 @@ async function reconcileInstalledApps() {
       return;
     }
 
+    const myIP = await fluxNetworkHelper.getMyFluxIPandPort();
     const installedApps = await appsRepository.listInstalledApps();
 
     for (const installed of installedApps) {
@@ -1703,13 +1546,24 @@ async function reconcileInstalledApps() {
         const registrySpec = await appsRepository.getGlobalAppInfo(installed.name);
         if (!registrySpec) continue;
 
+        // eslint-disable-next-line no-await-in-loop
+        const runningAppList = await registryManager.appLocation(installed.name);
+        const minInstances = installed.spec.instances || config.fluxapps.minimumInstances;
+        if (myIP && runningAppList.length > minInstances && isNewestInstance(runningAppList, myIP)) {
+          log.warn(`REMOVAL REASON: Too many instances - ${installed.name} running on ${runningAppList.length} instances (max: ${minInstances}) - This node is the newest instance`);
+          // eslint-disable-next-line no-await-in-loop
+          await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
+          // eslint-disable-next-line no-await-in-loop
+          await serviceHelper.delay(config.fluxapps.removal.delay * 1000);
+          continue;
+        }
+
         if (registrySpec.hash === installed.hash) continue;
 
-        if (Math.floor(Math.random() * config.fluxapps.redeploy.probability) !== 0) continue;
-
         if (registrySpec.isEncrypted() && !isArcane) {
+          log.warn(`REMOVAL REASON: Enterprise app requires arcaneOS - ${installed.name}`);
           // eslint-disable-next-line no-await-in-loop
-          await removeEnterpriseFromNonArcane(installed);
+          await appUninstaller.uninstallApplication(installed.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
           continue;
         }
 
@@ -2285,9 +2139,7 @@ module.exports = {
   setRemovalInProgressToTrue,
   installationInProgressReset,
   setInstallationInProgressTrue,
-  checkAndRemoveApplicationInstance,
   reconcileInstalledApps,
-  checkAndRemoveEnterpriseAppsOnNonArcane,
   forceAppRemovals,
   coordinateActiveStandbyApps,
   getPeerAppsInstallingErrorMessages,

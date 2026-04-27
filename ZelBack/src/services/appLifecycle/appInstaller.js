@@ -229,11 +229,12 @@ async function setupApplicationPorts(comp, appName, isComponent, res, test = fal
  * @param {boolean} sendRemovalMessage whether to broadcast removal message to network if installation fails.
  * @returns {Promise<boolean>} Returns true if installation was successful, false otherwise.
  */
-async function installApplication(appSpec, options = {}) {
+async function installApplication(instantiated, options = {}) {
   const res = options.res || null;
   const test = options.test || false;
   const createVolumes = options.createVolumes !== false;
   const sendRemovalMessage = options.sendRemovalMessage || false;
+  const appName = instantiated.name;
   try {
     if (globalState.removalInProgress) {
       const rStatus = messageHelper.createWarningMessage('Another application is undergoing removal. Installation not possible.');
@@ -269,7 +270,6 @@ async function installApplication(appSpec, options = {}) {
       throw new Error('Unable to detect Flux IP address');
     }
 
-    const appName = appSpec.name;
     const precheckForInstallation = {
       status: 'Running initial checks for Flux App...',
     };
@@ -307,8 +307,7 @@ async function installApplication(appSpec, options = {}) {
       res.write(serviceHelper.ensureString(checkDb));
       if (res.flush) res.flush();
     }
-    const appResult = await appsRepository.getInstalledAppRaw(appName, { name: 1 });
-    if (appResult) {
+    if (await appsRepository.existsInstalledApp(appName)) {
       globalState.installationInProgress = false;
       const rStatus = messageHelper.createErrorMessage(`Flux App ${appName} already installed`);
       log.error(rStatus);
@@ -400,50 +399,39 @@ async function installApplication(appSpec, options = {}) {
       if (res.flush) res.flush();
     }
 
-    const isEnterprise = Boolean(
-        appSpec.version >= 8 && appSpec.enterprise,
-      );
+      const dbSpecs = instantiated.serialize();
 
-      const dbSpecs = JSON.parse(JSON.stringify(appSpec));
-
-      if (isEnterprise) {
-        dbSpecs.compose = [];
-        dbSpecs.contacts = [];
-      }
-
-      const existingEntry = await appsRepository.getInstalledAppRaw(appSpec.name);
-      if (existingEntry) {
-        log.warn(`Found existing database entry for ${appSpec.name} during registration. Cleaning up stale entry.`);
-        await appsRepository.removeInstalledApp(appSpec.name);
-        log.info(`Stale database entry for ${appSpec.name} removed. Proceeding with fresh insert.`);
+      if (await appsRepository.existsInstalledApp(appName)) {
+        log.warn(`Found existing database entry for ${appName} during registration. Cleaning up stale entry.`);
+        await appsRepository.removeInstalledApp(appName);
+        log.info(`Stale database entry for ${appName} removed. Proceeding with fresh insert.`);
       }
 
       const insertResult = await appsRepository.insertInstalledApp(dbSpecs);
       if (!insertResult) {
-        throw new Error(`CRITICAL: Failed to create database entry for ${appSpec.name}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
+        throw new Error(`CRITICAL: Failed to create database entry for ${appName}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
       }
-      log.info(`Database entry created for ${appSpec.name} BEFORE Docker container creation`);
+      log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
 
     try {
-      const dbEntryExists = await appsRepository.getInstalledAppRaw(appSpec.name, { name: 1 });
-        if (!dbEntryExists) {
-          throw new Error(`Database entry validation failed for ${appSpec.name}. Entry was inserted but disappeared before Docker container creation. Possible race condition or database corruption detected.`);
+      if (!await appsRepository.existsInstalledApp(appName)) {
+          throw new Error(`Database entry validation failed for ${appName}. Entry was inserted but disappeared before Docker container creation. Possible race condition or database corruption detected.`);
         }
-        log.info(`Database entry validated for ${appSpec.name} before Docker container creation`);
+        log.info(`Database entry validated for ${appName} before Docker container creation`);
 
       const deployment = await deploymentProvider.getInstalledDeployment(appName);
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
 
-      const blockResult = await isImageBlocked(appSpec.name, deployment.allImages(), { owner: appSpec.owner, hash: appSpec.hash });
+      const blockResult = await isImageBlocked(appName, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
       if (blockResult.blocked) throw new Error(blockResult.reason);
 
-      const owner = appSpec.owner || null;
+      const owner = instantiated.owner;
       const burstEligible = owner
         && cpuBurstHelper.isEnterpriseOwner(owner)
         && await cpuBurstHelper.isCpuBurstSupported();
       const restartAlwaysOwners = config.fluxapps.restartAlwaysOwners || [];
       const restartPolicy = (owner && restartAlwaysOwners.includes(owner)) ? 'always' : null;
-      const specVersion = appSpec.version || null;
+      const specVersion = instantiated.version;
       const onStatus = res ? (msg) => {
         const payload = typeof msg === 'string' ? { status: msg } : msg;
         res.write(serviceHelper.ensureString(payload));
@@ -478,8 +466,8 @@ async function installApplication(appSpec, options = {}) {
         const newAppRunningMessage = {
           type: 'fluxappinstallingerror',
           version: 1,
-          name: appSpec.name,
-          hash: appSpec.hash, // hash of application specifics that are running
+          name: appName,
+          hash: instantiated.hash,
           error: serviceHelper.ensureString(errorResponse),
           ip: myIP,
           broadcastedAt,
@@ -501,8 +489,8 @@ async function installApplication(appSpec, options = {}) {
       const newAppRunningMessage = {
         type: 'fluxapprunning',
         version: 1,
-        name: appSpec.name,
-        hash: appSpec.hash, // hash of application specifics that are running
+        name: appName,
+        hash: instantiated.hash,
         ip: myIP,
         broadcastedAt,
         runningSince: new Date(broadcastedAt).toISOString(),
@@ -540,25 +528,25 @@ async function installApplication(appSpec, options = {}) {
     }
 
     if (!test) {
-      const removeStatus = messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appSpec.name} removal`);
+      const removeStatus = messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appName} removal`);
       log.info(removeStatus);
       if (res) {
         res.write(serviceHelper.ensureString(removeStatus));
         if (res.flush) res.flush();
       }
       const onStatus = res ? (msg) => { res.write(serviceHelper.ensureString(msg)); if (res.flush) res.flush(); } : undefined;
-      await appUninstaller.uninstallApplication(appSpec.name, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
-      log.info(`Cleanup completed for ${appSpec.name} after installation failure`);
+      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
+      log.info(`Cleanup completed for ${appName} after installation failure`);
     }
 
     return false;
   } finally {
     if (test) {
       try {
-        await appUninstaller.uninstallApplication(appSpec.name, { forceKill: true, skipGuard: true });
-        log.info(`Test cleanup completed for ${appSpec.name}`);
+        await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true });
+        log.info(`Test cleanup completed for ${appName}`);
       } catch (cleanupError) {
-        log.error(`Error during test cleanup for ${appSpec.name}: ${cleanupError.message}`);
+        log.error(`Error during test cleanup for ${appName}: ${cleanupError.message}`);
       }
     }
   }
@@ -764,9 +752,8 @@ async function installComponent(component, options = {}) {
  * @param {object} res - Response object
  * @returns {Promise<void>}
  */
-async function installAppLocally(req, res) {
+async function installApplicationAPI(req, res) {
   try {
-    // appname can be app name or app hash of specific app version
     let { appname } = req.params;
     appname = appname || req.query.appname;
 
@@ -774,22 +761,17 @@ async function installAppLocally(req, res) {
       throw new Error('No Flux App specified');
     }
     let blockAllowance = config.fluxapps.ownerAppAllowance;
-    // needs to be logged in
     const authorized = await verificationHelper.verifyPrivilege('user', req);
     if (authorized) {
       let appSpec;
-      // anyone can deploy temporary app
-      // favor temporary to launch test temporary apps
       const tempMessage = await checkAppTemporaryMessageExistence(appname);
       if (tempMessage) {
         // eslint-disable-next-line prefer-destructuring
         appSpec = tempMessage.appSpec;
-        // blockAllowance is used for future validation
         // eslint-disable-next-line no-unused-vars
         blockAllowance = config.fluxapps.temporaryAppAllowance;
       }
       if (!appSpec) {
-        // only owner can deploy permanent message or existing app
         const ownerAuthorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
         if (!ownerAuthorized) {
           const errMessage = messageHelper.errUnauthorizedMessage();
@@ -802,10 +784,8 @@ async function installAppLocally(req, res) {
         appSpec = allApps.find((app) => app.name === appname);
       }
       if (!appSpec) {
-        // eslint-disable-next-line no-use-before-define
         appSpec = await getApplicationGlobalSpecifications(appname);
       }
-      // search in permanent messages for the specific apphash to launch
       if (!appSpec) {
         const permMessage = await checkAppMessageExistence(appname);
         if (permMessage) {
@@ -820,35 +800,30 @@ async function installAppLocally(req, res) {
       const installSpec = await resolveSpec(appSpec);
       if (!installSpec) throw new Error('Could not deserialize app specifications');
 
-      const dbopen = dbHelper.databaseConnection();
       if (!appSpec.height && appSpec.height !== 0) {
-        // precaution for old temporary apps. Set up for custom test specifications.
+        const dbopen = dbHelper.databaseConnection();
         const database = dbopen.db(config.database.daemon.database);
         const query = { generalScannedHeight: { $gte: 0 } };
-        const projection = {
-          projection: {
-            _id: 0,
-            generalScannedHeight: 1,
-          },
-        };
+        const projection = { projection: { _id: 0, generalScannedHeight: 1 } };
         const result = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
         if (!result) {
           throw new Error('Scanning not initiated');
         }
         const explorerHeight = serviceHelper.ensureNumber(result.generalScannedHeight);
-        appSpec.height = explorerHeight - config.fluxapps.blocksLasting + blockAllowance; // allow running for this amount of blocks
+        appSpec.height = explorerHeight - config.fluxapps.blocksLasting + blockAllowance;
       }
 
-      const appExists = await appsRepository.getInstalledAppRaw(appSpec.name, { name: 1 });
-      if (appExists) { // double checked in installation process.
+      const { InstantiatedSpec } = await getSpecBackend();
+      const instantiated = InstantiatedSpec.deserialize(appSpec);
+
+      if (await appsRepository.existsInstalledApp(instantiated.name)) {
         throw new Error(`Application ${appname} is already installed`);
       }
 
-      // eslint-disable-next-line no-use-before-define
       await checkAppRequirements(installSpec);
 
       res.setHeader('Content-Type', 'application/json');
-      await installApplication(appSpec, { res });
+      await installApplication(instantiated, { res });
     } else {
       const errMessage = messageHelper.errUnauthorizedMessage();
       res.json(errMessage);
@@ -899,9 +874,8 @@ async function checkAppRequirements(appSpecs, skipGeolocation = false, skipStati
  * @param {object} res - Response object
  * @returns {Promise<void>}
  */
-async function testAppInstall(req, res) {
+async function testInstallApplicationAPI(req, res) {
   try {
-    // appname can be app name or app hash of specific app version
     let { appname } = req.params;
     appname = appname || req.query.appname;
 
@@ -909,27 +883,18 @@ async function testAppInstall(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    log.info(`testAppInstall: ${appname}`);
-    let blockAllowance = config.fluxapps.ownerAppAllowance;
+    log.info(`testInstallApplicationAPI: ${appname}`);
 
-    // needs to be logged in
     const authorized = await verificationHelper.verifyPrivilege('user', req);
     if (authorized) {
       let appSpec;
-
-      // anyone can deploy temporary app
-      // favor temporary to launch test temporary apps
       const tempMessage = await checkAppTemporaryMessageExistence(appname);
       if (tempMessage) {
         // eslint-disable-next-line prefer-destructuring
         appSpec = tempMessage.appSpec;
-        // blockAllowance is used for future validation
-        // eslint-disable-next-line no-unused-vars
-        blockAllowance = config.fluxapps.temporaryAppAllowance;
       }
 
       if (!appSpec) {
-        // only owner can deploy permanent message or existing app
         const ownerAuthorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
         if (!ownerAuthorized) {
           const errMessage = messageHelper.errUnauthorizedMessage();
@@ -942,12 +907,9 @@ async function testAppInstall(req, res) {
         const allApps = await availableApps();
         appSpec = allApps.find((app) => app.name === appname);
       }
-
       if (!appSpec) {
         appSpec = await getApplicationGlobalSpecifications(appname);
       }
-
-      // search in permanent messages for the specific apphash to launch
       if (!appSpec) {
         const permMessage = await checkAppMessageExistence(appname);
         if (permMessage) {
@@ -955,14 +917,12 @@ async function testAppInstall(req, res) {
           appSpec = permMessage.appSpec;
         }
       }
-
       if (!appSpec) {
         throw new Error(`Application Specifications of ${appname} not found`);
       }
 
       const testSpec = await resolveSpec(appSpec);
       if (!testSpec) throw new Error('Could not deserialize app specifications');
-      appSpec = testSpec.serialize();
 
       await checkAppRequirements(testSpec, true, true, true);
 
@@ -985,19 +945,15 @@ async function testAppInstall(req, res) {
         });
       }
 
-      // Calculate common architectures across all components
       const commonArchitectures = findCommonArchitectures(componentArchitectures);
 
-      // If local architecture is not in common architectures, skip Docker operations
       if (!commonArchitectures.includes(localArch)) {
-        // Write an initial status message
         const initMessage = {
           status: 'Checking architecture compatibility...',
         };
         res.write(serviceHelper.ensureString(initMessage));
         if (res.flush) res.flush();
 
-        // Write the skip message
         const successMessage = {
           status: `Test installation validation passed. Installation skipped due to architecture incompatibility: this node is ${localArch} but app requires [${commonArchitectures.join(', ')}]`,
         };
@@ -1006,7 +962,9 @@ async function testAppInstall(req, res) {
         return;
       }
 
-      await installApplication(appSpec, { res, test: true });
+      const { InstantiatedSpec } = await getSpecBackend();
+      const instantiated = InstantiatedSpec.deserialize(appSpec);
+      await installApplication(instantiated, { res, test: true });
     } else {
       const errMessage = messageHelper.errUnauthorizedMessage();
       res.json(errMessage);
@@ -1025,7 +983,7 @@ async function testAppInstall(req, res) {
 module.exports = {
   installApplication,
   installComponent,
-  installAppLocally,
+  installApplicationAPI,
   checkAppRequirements,
-  testAppInstall,
+  testInstallApplicationAPI,
 };
