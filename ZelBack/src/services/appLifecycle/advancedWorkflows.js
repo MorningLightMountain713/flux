@@ -29,6 +29,7 @@ const { isNewestInstance } = require('../utils/appUtilities');
 const https = require('https');
 const { deserializeSpec } = require('../utils/specCutover');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const appEventVerifier = require('../appMessaging/appEventVerifier');
 const appQueryService = require('../appQuery/appQueryService');
 const { listRunningContainers } = appQueryService;
 const { startAppMonitoring, stopAppMonitoring } = require('../appManagement/appInspector');
@@ -1321,13 +1322,17 @@ async function updateAppGlobaly(params) {
   if (!appInfo) {
     throw new Error('Flux App update received but application to update does not exist!');
   }
-  const appOwner = appInfo.owner;
 
   const wireForm = wireSpec.serialize();
-
-  // eslint-disable-next-line global-require
-  const appMessaging = require('../appMessaging/messageVerifier');
-  await appMessaging.verifyAppMessageUpdateSignature(cleanMessageType, cleanTypeVersion, wireForm, cleanTimestamp, cleanSignature, appOwner, daemonHeight, appInfo);
+  const appEvent = await appEventVerifier.deserializeMessage({
+    type: cleanMessageType,
+    version: cleanTypeVersion,
+    appSpecifications: wireForm,
+    timestamp: cleanTimestamp,
+    signature: cleanSignature,
+  });
+  const previousSpec = await appEventVerifier.instantiatePreviousSpec(appInfo);
+  await appEventVerifier.authorize({ appEvent, previousSpec, daemonHeight });
 
   const { latestSupportedSpecVersion } = config.fluxapps;
   if (appInfo.version !== spec.version && spec.version !== latestSupportedSpecVersion) {

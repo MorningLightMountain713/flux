@@ -158,10 +158,16 @@ describe('messageVerifier tests', () => {
     let updateAppSpecificationsStub;
     let updateOneInDatabaseStub;
     let verifierWithStubs;
+    let appEventVerifierStub;
 
     beforeEach(() => {
       getPreviousAppSpecsStub = sinon.stub();
       signatureVerifierStub = { verifySignature: sinon.stub().returns(true) };
+      appEventVerifierStub = {
+        deserializeMessage: sinon.stub().resolves({ spec: { owner: 'correctOwner' }, isUpdate: true }),
+        instantiatePreviousSpec: sinon.stub().resolves({ owner: 'correctOwner' }),
+        authorize: sinon.stub().resolves({ valid: true, signer: 'correctOwner' }),
+      };
       storeAppPermanentMessageStub = sinon.stub().resolves();
       updateOneInDatabaseStub = sinon.stub().resolves();
       isDaemonSyncedStub = sinon.stub().returns({ data: { height: 2000000, synced: true } });
@@ -263,14 +269,13 @@ describe('messageVerifier tests', () => {
         '../daemonService/daemonServiceControlRpcs': {
           validateAddress: sinon.stub().resolves({ data: { isvalid: true } }),
         },
+        './appEventVerifier': appEventVerifierStub,
       });
     });
 
     it('should refuse promotion when signature re-verification fails (ownership change race)', async () => {
-      // getPreviousAppSpecifications returns the NEW owner (after a prior ownership change was promoted)
       getPreviousAppSpecsStub.resolves({ owner: 'newOwner', version: 8 });
-      // Signature verification will fail — message was signed by old owner
-      signatureVerifierStub.verifySignature.returns(false);
+      appEventVerifierStub.authorize.rejects(new Error('Received signature does not correspond'));
 
       const result = await verifierWithStubs.checkAndRequestApp('hash123', 'txid123', 2000000, 200000000);
 
@@ -281,9 +286,7 @@ describe('messageVerifier tests', () => {
     });
 
     it('should promote when signature re-verification passes', async () => {
-      // getPreviousAppSpecifications returns the owner — signature matches
       getPreviousAppSpecsStub.resolves({ owner: 'correctOwner', version: 8 });
-      signatureVerifierStub.verifySignature.returns(true);
 
       await verifierWithStubs.checkAndRequestApp('hash123', 'txid123', 2000000, 200000000);
 
@@ -295,7 +298,6 @@ describe('messageVerifier tests', () => {
     it('should export verification functions', () => {
       expect(messageVerifier.checkAppMessageExistence).to.be.a('function');
       expect(messageVerifier.checkAppTemporaryMessageExistence).to.be.a('function');
-      expect(messageVerifier.verifyAppMessageSignature).to.be.a('function');
     });
   });
 });

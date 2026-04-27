@@ -387,30 +387,26 @@ async function listAppMessagesByName(name) {
 }
 
 async function listLiveV7Secrets() {
-  const docs = await dbHelper.findInDatabase(
-    globalDb(),
-    globalAppsInformation,
-    { version: 7, nodes: { $exists: true, $ne: [] } },
-    { projection: { _id: 0, name: 1, owner: 1, compose: 1 } },
-  );
+  const apps = await listGlobalAppInfo({
+    filter: { version: 7, nodes: { $exists: true, $ne: [] } },
+  });
   const results = [];
-  for (const doc of docs) {
-    if (!doc.compose) continue;
-    for (const comp of doc.compose) {
-      if (comp.secrets) {
-        results.push({
-          appName: doc.name,
-          owner: doc.owner,
-          componentName: comp.name,
-          secrets: comp.secrets,
-        });
-      }
+  for (const inst of apps) {
+    for (const { componentName, secrets } of inst.spec.getComponentSecrets()) {
+      results.push({
+        appName: inst.name,
+        owner: inst.owner,
+        componentName,
+        secrets,
+      });
     }
   }
   return results;
 }
 
 async function listHistoricalV7Secrets() {
+  await getSpec();
+  const { deserializeSpec } = await getSpecBackend();
   const docs = await dbHelper.findInDatabase(
     globalDb(),
     globalAppsMessages,
@@ -418,20 +414,25 @@ async function listHistoricalV7Secrets() {
       'appSpecifications.version': 7,
       'appSpecifications.nodes': { $exists: true, $ne: [] },
     },
-    { projection: { _id: 0, 'appSpecifications.owner': 1, 'appSpecifications.compose': 1 } },
+    { projection: { _id: 0, appSpecifications: 1 } },
   );
   const results = [];
   for (const doc of docs) {
-    const spec = doc.appSpecifications;
-    if (!spec || !spec.compose) continue;
-    for (const comp of spec.compose) {
-      if (comp.secrets) {
-        results.push({
-          owner: spec.owner,
-          componentName: comp.name,
-          secrets: comp.secrets,
-        });
-      }
+    const specBlob = doc.appSpecifications;
+    if (!specBlob) continue;
+    let spec;
+    try {
+      spec = deserializeSpec(specBlob);
+    } catch (err) {
+      log.warn(`listHistoricalV7Secrets: ${err.message} (name=${specBlob.name})`);
+      continue;
+    }
+    for (const { componentName, secrets } of spec.getComponentSecrets()) {
+      results.push({
+        owner: spec.owner,
+        componentName,
+        secrets,
+      });
     }
   }
   return results;

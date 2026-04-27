@@ -4,18 +4,18 @@ const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const generalService = require('../generalService');
-const signatureVerifier = require('../signatureVerifier');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 // Removed messageStore require to avoid circular dependency - will import locally where needed
 const { appPricePerMonth } = require('../utils/appUtilities');
-const { getChainParamsPriceUpdates, getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
-const { resolveSpec, deserializeSpec } = require('../utils/specCutover');
+const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
+const { resolveSpec } = require('../utils/specCutover');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { updateAppSpecifications } = appsRepository;
 const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
+const appEventVerifier = require('./appEventVerifier');
 const {
   globalAppsMessages,
   globalAppsTempMessages,
@@ -35,260 +35,6 @@ const globalState = require('../utils/globalState');
 // Import hashesNumberOfSearchs from appsService - this should be shared state
 // For now, we'll create a local instance, but ideally this should be moved to globalState
 const hashesNumberOfSearchs = new Map();
-
-/**
- * Verify app message signature
- * @param {string} type - Message type
- * @param {number} version - Message version
- * @param {object} appSpec - App specifications
- * @param {number} timestamp - Message timestamp
- * @param {string} signature - Message signature
- * @returns {Promise<boolean>} True if signature is valid
- */
-async function verifyAppMessageSignature(type, version, appSpec, timestamp, signature) {
-  if (!appSpec || typeof appSpec !== 'object' || Array.isArray(appSpec) || typeof timestamp !== 'number' || typeof signature !== 'string' || typeof version !== 'number' || typeof type !== 'string') {
-    throw new Error('Invalid Flux App message specifications');
-  }
-  // signature is already validated as string in the if check above, no need to ensureString
-  const messageToVerify = type + version + JSON.stringify(appSpec) + timestamp;
-  let isValidSignature = verificationHelper.verifyMessage(messageToVerify, appSpec.owner, signature); // only btc
-  if (timestamp > 1688947200000) {
-    isValidSignature = signatureVerifier.verifySignature(messageToVerify, appSpec.owner, signature); // btc, eth
-  }
-  if (isValidSignature !== true && appSpec.version <= 3) {
-    // as of specification changes, adjust our appSpecs order of owner and repotag
-    // in new scheme it is always version, name, description, owner, repotag... Old format was version, name, description, repotag, owner
-    const appSpecsCopy = JSON.parse(JSON.stringify(appSpec));
-    delete appSpecsCopy.version;
-    delete appSpecsCopy.name;
-    delete appSpecsCopy.description;
-    delete appSpecsCopy.repotag;
-    delete appSpecsCopy.owner;
-    const appSpecOld = {
-      version: appSpec.version,
-      name: appSpec.name,
-      description: appSpec.description,
-      repotag: appSpec.repotag,
-      owner: appSpec.owner,
-      ...appSpecsCopy,
-    };
-    const messageToVerifyB = type + version + JSON.stringify(appSpecOld) + timestamp;
-    isValidSignature = verificationHelper.verifyMessage(messageToVerifyB, appSpec.owner, signature); // only btc
-    if (timestamp > 1688947200000) {
-      isValidSignature = signatureVerifier.verifySignature(messageToVerifyB, appSpec.owner, signature); // btc, eth
-    }
-    // fix for repoauth / secrets order change for apps created after 1750273721000
-  } else if (isValidSignature !== true && appSpec.version === 7) {
-    const appSpecsClone = JSON.parse(JSON.stringify(appSpec));
-    appSpecsClone.compose.forEach((component) => {
-      // previously the order was secrets / repoauth. Now it's repoauth / secrets.
-      const comp = component;
-      const { secrets, repoauth } = comp;
-      delete comp.secrets;
-      delete comp.repoauth;
-      // try the old secrets / repoauth
-      comp.secrets = secrets;
-      comp.repoauth = repoauth;
-    });
-    const messageToVerifyC = type + version + JSON.stringify(appSpecsClone) + timestamp;
-    // we can just use the btc / eth verifier as v7 specs came out at 1688749251
-    isValidSignature = signatureVerifier.verifySignature(messageToVerifyC, appSpec.owner, signature);
-  }
-  if (isValidSignature !== true) {
-    log.debug(`${messageToVerify}, ${appSpec.owner}, ${signature}`);
-    const errorMessage = isValidSignature === false ? 'Received signature is invalid or Flux App specifications are not properly formatted' : isValidSignature;
-    throw new Error(errorMessage);
-  }
-  return true;
-}
-
-/**
- * Check if app update only changes the expire property
- * @param {object} newSpec - New app specifications
- * @param {object} existingSpec - Existing app specifications
- * @returns {boolean} True if only expire property is changed
- */
-/**
- * Deep equality check for two values, ignoring property order in objects
- * @param {*} a - First value
- * @param {*} b - Second value
- * @returns {boolean} True if deeply equal
- */
-function deepEqual(a, b) {
-  if (a === b) return true;
-  if (a === null || b === null) return a === b;
-  if (typeof a !== typeof b) return false;
-
-  if (Array.isArray(a)) {
-    if (!Array.isArray(b) || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i += 1) {
-      if (!deepEqual(a[i], b[i])) return false;
-    }
-    return true;
-  }
-
-  if (typeof a === 'object') {
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
-    if (keysA.length !== keysB.length) return false;
-    // eslint-disable-next-line no-restricted-syntax
-    for (const key of keysA) {
-      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
-      if (!deepEqual(a[key], b[key])) return false;
-    }
-    return true;
-  }
-
-  return false;
-}
-
-function isExpireOnlyUpdate(newSpec, existingSpec) {
-  if (!existingSpec || !newSpec) {
-    log.info('[isExpireOnlyUpdate] Missing spec - existingSpec:', !!existingSpec, 'newSpec:', !!newSpec);
-    return false;
-  }
-
-  // Create copies to compare without expire
-  const newCopy = JSON.parse(JSON.stringify(newSpec));
-  const existingCopy = JSON.parse(JSON.stringify(existingSpec));
-
-  // Remove expire from both (and height/hash which are added by system)
-  delete newCopy.expire;
-  delete existingCopy.expire;
-  delete newCopy.height;
-  delete existingCopy.height;
-  delete newCopy.hash;
-  delete existingCopy.hash;
-
-  // Use deep equality check that ignores property order
-  const isEqual = deepEqual(newCopy, existingCopy);
-  if (!isEqual) {
-    log.info('[isExpireOnlyUpdate] Specs differ after removing expire/height/hash');
-  } else {
-    log.info(`[isExpireOnlyUpdate] Specs match for app ${newSpec.name || existingSpec.name}`);
-  }
-
-  return isEqual;
-}
-
-/**
- * Verify app message update signature
- * @param {string} type - Message type
- * @param {number} version - Message version
- * @param {object} appSpec - App specifications
- * @param {number} timestamp - Message timestamp
- * @param {string} signature - Message signature
- * @param {string} appOwner - App owner address
- * @param {number} daemonHeight - Daemon height
- * @param {object} previousAppSpec - Previous app specification for usersToExtend expire-only comparison
- * @returns {Promise<boolean>} True if signature is valid
- */
-async function verifyAppMessageUpdateSignature(type, version, appSpec, timestamp, signature, appOwner, daemonHeight, previousAppSpec) {
-  if (!appSpec || typeof appSpec !== 'object' || Array.isArray(appSpec) || typeof timestamp !== 'number' || typeof signature !== 'string' || typeof version !== 'number' || typeof type !== 'string') {
-    throw new Error('Invalid Flux App message specifications');
-  }
-
-  // signature is already validated as string in the if check above, no need to ensureString
-  let marketplaceApp = false;
-  let fluxSupportTeamFluxID = null;
-  const messageToVerify = type + version + JSON.stringify(appSpec) + timestamp;
-  let isValidSignature = signatureVerifier.verifySignature(messageToVerify, appOwner, signature); // btc, eth
-  if (isValidSignature !== true) {
-    const teamSupportAddresses = getChainTeamSupportAddressUpdates();
-    if (teamSupportAddresses.length > 0) {
-      const intervals = teamSupportAddresses.filter((interval) => interval.height <= daemonHeight); // if an app message was sent on block before the team support address was activated, will be empty array
-      if (intervals && intervals.length) {
-        const addressInfo = intervals[intervals.length - 1]; // always defined
-        if (addressInfo && addressInfo.height && daemonHeight >= addressInfo.height) { // unneeded check for safety
-          fluxSupportTeamFluxID = addressInfo.address;
-          const numbersOnAppName = appSpec.name.match(/\d+/g);
-          if (numbersOnAppName && numbersOnAppName.length > 0) {
-            const dateBeforeReleaseMarketplace = Date.parse('2020-01-01');
-            // eslint-disable-next-line no-restricted-syntax
-            for (const possibleTimestamp of numbersOnAppName) {
-              if (Number(possibleTimestamp) > dateBeforeReleaseMarketplace) {
-                marketplaceApp = true;
-                break;
-              }
-            }
-            if (marketplaceApp) {
-              isValidSignature = signatureVerifier.verifySignature(messageToVerify, fluxSupportTeamFluxID, signature); // btc, eth
-            }
-          }
-        }
-      }
-    }
-  }
-
-  if (isValidSignature !== true && appSpec.version <= 3) {
-    // Handle old specification format
-    const appSpecsCopy = JSON.parse(JSON.stringify(appSpec));
-    delete appSpecsCopy.version;
-    delete appSpecsCopy.name;
-    delete appSpecsCopy.description;
-    delete appSpecsCopy.repotag;
-    delete appSpecsCopy.owner;
-
-    const appSpecOld = {
-      version: appSpec.version,
-      name: appSpec.name,
-      description: appSpec.description,
-      repotag: appSpec.repotag,
-      owner: appSpec.owner,
-      ...appSpecsCopy,
-    };
-
-    const messageToVerifyB = type + version + JSON.stringify(appSpecOld) + timestamp;
-    isValidSignature = signatureVerifier.verifySignature(messageToVerifyB, appOwner, signature); // btc, eth
-    if (isValidSignature !== true && marketplaceApp) {
-      isValidSignature = signatureVerifier.verifySignature(messageToVerifyB, fluxSupportTeamFluxID, signature); // btc, eth
-    }
-    // fix for repoauth / secrets order change for apps created after 1750273721000
-  } else if (isValidSignature !== true && appSpec.version === 7) {
-    const appSpecsClone = JSON.parse(JSON.stringify(appSpec));
-    appSpecsClone.compose.forEach((component) => {
-      // previously the order was secrets / repoauth. Now it's repoauth / secrets.
-      const comp = component;
-      const { secrets, repoauth } = comp;
-      delete comp.secrets;
-      delete comp.repoauth;
-      // try the old secrets / repoauth
-      comp.secrets = secrets;
-      comp.repoauth = repoauth;
-    });
-    const messageToVerifyC = type + version + JSON.stringify(appSpecsClone) + timestamp;
-    // we can just use the btc / eth verifier as v7 specs came out at 1688749251
-    isValidSignature = signatureVerifier.verifySignature(messageToVerifyC, appOwner, signature);
-  }
-
-  // Check if usersToExtend can sign this update (only for expire-only changes)
-  // Uses previousAppSpec (from permanent messages) for the expire-only comparison,
-  // so this works even when the app has expired from globalAppsInformation (e.g. during resync)
-  const usersToExtend = config.fluxapps.usersToExtend || [];
-  if (isValidSignature !== true && usersToExtend.length > 0 && previousAppSpec) {
-    const newSpec = await deserializeSpec(appSpec);
-    if (newSpec) {
-      const { UpdatePolicy } = await getSpec();
-      // eslint-disable-next-line no-restricted-syntax
-      for (const userToExtend of usersToExtend) {
-        const isValidUserToExtendSignature = signatureVerifier.verifySignature(messageToVerify, userToExtend, signature);
-        if (isValidUserToExtendSignature === true && UpdatePolicy.isRenewalOnly(previousAppSpec, newSpec)) {
-          log.info(`App ${appSpec.name} expire extension signed by userToExtend address ${userToExtend}`);
-          isValidSignature = true;
-          break;
-        }
-      }
-    }
-  }
-
-  if (isValidSignature !== true) {
-    log.debug(`${messageToVerify}, ${appOwner}, ${signature}`);
-    const errorMessage = isValidSignature === false ? 'Received signature does not correspond with Flux App owner or Flux App specifications are not properly formatted' : isValidSignature;
-    throw new Error(errorMessage);
-  }
-
-  return true;
-}
 
 /**
  * Request app message from network
@@ -554,15 +300,12 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
         if (isUpdate) {
           const previousAppSpecs = await getPreviousAppSpecifications(specifications, tempMessage.timestamp);
           if (previousAppSpecs) {
-            const messageVersion = serviceHelper.ensureNumber(tempMessage.version);
-            const messageTimestamp = serviceHelper.ensureNumber(tempMessage.timestamp);
             const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
             const daemonHeight = syncStatus.data.height;
             try {
-              await verifyAppMessageUpdateSignature(
-                tempMessage.type, messageVersion, specifications, messageTimestamp,
-                tempMessage.signature, previousAppSpecs.owner, daemonHeight, previousAppSpecs,
-              );
+              const appEvent = await appEventVerifier.deserializeMessage(tempMessage);
+              const previousSpec = await appEventVerifier.instantiatePreviousSpec(previousAppSpecs);
+              await appEventVerifier.authorize({ appEvent, previousSpec, daemonHeight });
             } catch (error) {
               log.warn(`Promotion re-verification failed for ${specifications.name} (${hash}): ${error.message}`);
               return false;
@@ -978,9 +721,6 @@ async function triggerAppHashesCheckAPI(req, res) {
 }
 
 module.exports = {
-  verifyAppMessageSignature,
-  verifyAppMessageUpdateSignature,
-  isExpireOnlyUpdate,
   requestAppMessage,
   requestAppsMessage,
   requestAppMessageAPI,
