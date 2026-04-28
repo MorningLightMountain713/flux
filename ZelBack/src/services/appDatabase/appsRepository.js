@@ -29,6 +29,7 @@ const {
   globalAppsInformation,
   localAppsInformation,
   globalAppsMessages,
+  globalAppsTempMessages,
   globalAppsInstallingErrorsLocations,
   globalAppsInstallingLocations,
   globalAppsLocations,
@@ -123,6 +124,16 @@ async function getGlobalAppInfoRaw(name, projection = {}) {
     { name: nameRegex(name) },
     { projection: finalProjection },
   );
+}
+
+async function existsGlobalApp(name) {
+  const doc = await dbHelper.findOneInDatabase(
+    globalDb(),
+    globalAppsInformation,
+    { name: nameRegex(name) },
+    { projection: { _id: 0, name: 1 } },
+  );
+  return !!doc;
 }
 
 /**
@@ -377,6 +388,17 @@ async function getAppMessage(hash) {
   return { message: doc, spec };
 }
 
+async function getTempMessageByName(name) {
+  const query = { 'appSpecifications.name': nameRegex(name) };
+  const options = { projection: { _id: 0 }, sort: { timestamp: -1 } };
+  return dbHelper.findOneInDatabase(
+    globalDb(),
+    globalAppsTempMessages,
+    query,
+    options,
+  );
+}
+
 async function listAppMessagesByName(name) {
   const projection = { projection: { _id: 0 } };
   const query1 = { 'appSpecifications.name': name };
@@ -588,6 +610,7 @@ async function updateLocationExpiry(ip, broadcastedAt, expireAt) {
 module.exports = {
   getGlobalAppInfo,
   getGlobalAppInfoRaw,
+  existsGlobalApp,
   listGlobalAppInfo,
   listGlobalAppInfoRaw,
   upsertGlobalAppInfo,
@@ -601,6 +624,7 @@ module.exports = {
   insertInstalledApp,
   upsertInstalledApp,
   getAppMessage,
+  getTempMessageByName,
   listAppMessagesByName,
   assertNoNameConflicts,
   updateAppSpecifications,

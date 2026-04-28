@@ -774,10 +774,8 @@ async function appendBackupTask(req, res) {
     const authorized = res ? await verificationHelper.verifyPrivilege('appownerabove', req, appname) : true;
     if (authorized === true) {
       globalState.backupInProgress.push(appname);
-      // Check if app using syncthing, stop syncthing for all component that using it
-      const appDetails = await registryManager.getApplicationGlobalSpecifications(appname);
-      const appSpec = await deserializeSpec(appDetails);
-      const hasSyncthing = appSpec && appSpec.hasSyncthing();
+      const backupDeployment = await deploymentProvider.getInstalledDeployment(appname);
+      const hasSyncthing = backupDeployment && backupDeployment.componentEntries().some(([, comp]) => comp.hasSyncthing());
       if (hasSyncthing) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
         await appVolumeService.removeSyncthingFolder(appname, res);
@@ -892,9 +890,8 @@ async function appendRestoreTask(req, res) {
     if (authorized === true) {
       const componentItem = restore.map((restoreItem) => restoreItem);
       globalState.restoreInProgress.push(appname);
-      const appDetails = await registryManager.getApplicationGlobalSpecifications(appname);
-      const restoreSpec = await deserializeSpec(appDetails);
-      const restoreHasSyncthing = restoreSpec && restoreSpec.hasSyncthing();
+      const restoreDeployment = await deploymentProvider.getInstalledDeployment(appname);
+      const restoreHasSyncthing = restoreDeployment && restoreDeployment.componentEntries().some(([, comp]) => comp.hasSyncthing());
       if (restoreHasSyncthing) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
         await appVolumeService.removeSyncthingFolder(appname, res);
@@ -1339,8 +1336,7 @@ async function updateAppGlobaly(params) {
   }
 
   const { UpdatePolicy } = await getSpec();
-  const oldSpec = await deserializeSpec(appInfo);
-  if (oldSpec) UpdatePolicy.assertCompatible(oldSpec, spec);
+  UpdatePolicy.assertCompatible(previousSpec.spec, spec);
 
   const message = cleanMessageType + cleanTypeVersion + JSON.stringify(wireForm) + cleanTimestamp + cleanSignature;
   const messageHASH = await generalService.messageHash(message);
@@ -1655,8 +1651,8 @@ async function forceAppRemovals() {
         }
 
         // eslint-disable-next-line no-await-in-loop
-        const appDetails = await registryManager.getApplicationGlobalSpecifications(dApp);
-        if (appDetails) {
+        const appExists = await appsRepository.existsGlobalApp(dApp);
+        if (appExists) {
           // it is global app
           // do removal
           log.warn(`${dApp} does not exist in installed app. Forcing removal.`);

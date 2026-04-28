@@ -6,16 +6,13 @@ describe('hardwareValidationService tests', () => {
   let hardwareValidationService;
   let logStub;
   let configStub;
-  let registryManagerStub;
+  let appsRepositoryStub;
   let hwRequirementsStub;
   let appUninstallerStub;
   let serviceHelperStub;
-  let generalServiceStub;
-  let deserializeSpecStub;
-  let deploymentSpecFromSpecStub;
+  let deploymentProviderStub;
 
   beforeEach(() => {
-    // Log stub
     logStub = {
       info: sinon.stub(),
       warn: sinon.stub(),
@@ -36,50 +33,34 @@ describe('hardwareValidationService tests', () => {
       },
     };
 
-    // Registry manager stub
-    registryManagerStub = {
-      getInstalledApps: sinon.stub(),
-      getApplicationGlobalSpecifications: sinon.stub(),
+    appsRepositoryStub = {
+      listInstalledAppsRaw: sinon.stub().resolves([]),
     };
 
-    // Hardware requirements stub
     hwRequirementsStub = {
       getNodeSpecs: sinon.stub(),
     };
 
-    // General service stub
-    generalServiceStub = {
-      nodeTier: sinon.stub().resolves('stratus'),
-    };
-
-    // App uninstaller stub
     appUninstallerStub = {
       uninstallApplication: sinon.stub().resolves(),
     };
 
-    // Service helper stub
     serviceHelperStub = {
       delay: sinon.stub().resolves(),
     };
 
-    deserializeSpecStub = sinon.stub().callsFake(async (spec) => spec);
-    deploymentSpecFromSpecStub = sinon.stub();
+    deploymentProviderStub = {
+      getInstalledDeployment: sinon.stub().resolves(null),
+    };
 
-    // Load module with stubs
     hardwareValidationService = proxyquire('../../ZelBack/src/services/appLifecycle/hardwareValidationService', {
       '../../lib/log': logStub,
       config: configStub,
-      '../appDatabase/registryManager': registryManagerStub,
       '../appRequirements/hwRequirements': hwRequirementsStub,
       './appUninstaller': appUninstallerStub,
       '../serviceHelper': serviceHelperStub,
-      '../generalService': generalServiceStub,
-      '../utils/specCutover': { deserializeSpec: deserializeSpecStub },
-      '../utils/specLibs': {
-        getSpecBackend: sinon.stub().resolves({
-          DeploymentSpec: { fromSpec: deploymentSpecFromSpecStub },
-        }),
-      },
+      '../appRuntime/deploymentProvider': deploymentProviderStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
     });
   });
 
@@ -87,9 +68,13 @@ describe('hardwareValidationService tests', () => {
     sinon.restore();
   });
 
+  function fakeDeployment(resources) {
+    return { totalResources: () => resources };
+  }
+
   describe('performBootTimeHardwareValidation', () => {
     it('should return empty results if no apps are installed', async () => {
-      registryManagerStub.getInstalledApps.resolves([]);
+      appsRepositoryStub.listInstalledAppsRaw.resolves([]);
 
       const result = await hardwareValidationService.performBootTimeHardwareValidation();
 
@@ -101,8 +86,8 @@ describe('hardwareValidationService tests', () => {
       expect(logStub.info.calledWith('hardwareValidationService - No installed apps found')).to.equal(true);
     });
 
-    it('should return empty results if getInstalledApps returns null', async () => {
-      registryManagerStub.getInstalledApps.resolves(null);
+    it('should return empty results if listInstalledAppsRaw returns null', async () => {
+      appsRepositoryStub.listInstalledAppsRaw.resolves(null);
 
       const result = await hardwareValidationService.performBootTimeHardwareValidation();
 
@@ -120,19 +105,14 @@ describe('hardwareValidationService tests', () => {
         { name: 'app2', height: 2000 },
       ];
 
-      // 4 CPU node with 3 CPU available after system resources
       hwRequirementsStub.getNodeSpecs.resolves({
         cpuCores: 4,
         ram: 8192,
         ssdStorage: 100,
       });
 
-      registryManagerStub.getInstalledApps.resolves(installedApps);
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
-
-      // Each app needs 1 CPU, 1GB RAM, 5GB HDD - both fit
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 5 }) });
-      appUninstallerStub.uninstallApplication.resolves();
+      appsRepositoryStub.listInstalledAppsRaw.resolves(installedApps);
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 5 }));
 
       const result = await hardwareValidationService.performBootTimeHardwareValidation();
 
@@ -144,7 +124,7 @@ describe('hardwareValidationService tests', () => {
     });
 
     it('should handle critical error gracefully', async () => {
-      registryManagerStub.getInstalledApps.rejects(new Error('Database connection failed'));
+      appsRepositoryStub.listInstalledAppsRaw.rejects(new Error('Database connection failed'));
 
       const result = await hardwareValidationService.performBootTimeHardwareValidation();
 
@@ -164,15 +144,13 @@ describe('hardwareValidationService tests', () => {
         { name: 'app2', height: 2000 },
       ];
 
-      // 4 CPU node (40 units), 8GB RAM, 100GB storage
       hwRequirementsStub.getNodeSpecs.resolves({
         cpuCores: 4,
         ram: 8192,
         ssdStorage: 100,
       });
 
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 5 }) });
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -184,16 +162,13 @@ describe('hardwareValidationService tests', () => {
         { name: 'bigApp', height: 1000 },
       ];
 
-      // 4 CPU node = 40 units, useable = 30 units (after 10 reserved)
       hwRequirementsStub.getNodeSpecs.resolves({
         cpuCores: 4,
         ram: 8192,
         ssdStorage: 100,
       });
 
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'bigApp' });
-      // App needs 5 CPUs = 50 units > 30 available
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 5, memory: 1024, storage: 5 }) });
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 5, memory: 1024, storage: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -207,16 +182,13 @@ describe('hardwareValidationService tests', () => {
         { name: 'bigApp', height: 1000 },
       ];
 
-      // 8GB RAM node, useable = 6192MB (after 2000 reserved)
       hwRequirementsStub.getNodeSpecs.resolves({
         cpuCores: 4,
         ram: 8192,
         ssdStorage: 100,
       });
 
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'bigApp' });
-      // App needs 7GB RAM = 7168MB > 6192 available
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 7168, storage: 5 }) });
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 7168, storage: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -230,16 +202,13 @@ describe('hardwareValidationService tests', () => {
         { name: 'bigApp', height: 1000 },
       ];
 
-      // 100GB storage, useable = 85GB (95% - 10GB reserved)
       hwRequirementsStub.getNodeSpecs.resolves({
         cpuCores: 4,
         ram: 8192,
         ssdStorage: 100,
       });
 
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'bigApp' });
-      // App needs 80GB + 5GB filesystem + 2GB swap = 87GB > 85GB available
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 80 }) });
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 80 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -249,131 +218,6 @@ describe('hardwareValidationService tests', () => {
     });
 
     it('should remove newer apps when cumulative CPU exceeds capacity', async () => {
-      const installedApps = [
-        { name: 'app1', height: 1000 }, // Older - keep
-        { name: 'app2', height: 2000 }, // Newer - remove
-      ];
-
-      // 4 CPU node = 40 units, useable = 30 units (after 10 reserved)
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
-      // Each app needs 2 CPUs = 20 units, total = 40 units > 30 available
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 2, memory: 1024, storage: 5 }) });
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
-
-      expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('app2'); // Newer app removed
-      expect(result[0].reason).to.include('Cumulative CPU limit exceeded');
-    });
-
-    it('should remove newer apps when cumulative RAM exceeds capacity', async () => {
-      const installedApps = [
-        { name: 'app1', height: 1000 }, // Older - keep
-        { name: 'app2', height: 2000 }, // Newer - remove
-      ];
-
-      // 8GB RAM node, useable = 6192MB (after 2000 reserved)
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
-      // Each app needs 4GB = 4096MB, total = 8192MB > 6192 available
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 4096, storage: 5 }) });
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
-
-      expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('app2');
-      expect(result[0].reason).to.include('Cumulative RAM limit exceeded');
-    });
-
-    it('should remove newer apps when cumulative storage exceeds capacity', async () => {
-      const installedApps = [
-        { name: 'app1', height: 1000 }, // Older - keep
-        { name: 'app2', height: 2000 }, // Newer - remove
-      ];
-
-      // 100GB storage, useable = 85GB (95% - 10GB reserved)
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
-      // Each app needs 30GB + 7GB overhead = 37GB, total = 74GB but first app 37GB leaves 48GB for second
-      // Actually this should fit... let me recalculate
-      // App1: 30 + 5 + 2 = 37GB, cumulative = 37GB (fits)
-      // App2: 30 + 5 + 2 = 37GB, cumulative = 74GB (fits in 85GB)
-      // Need bigger apps: 40GB each + 7GB overhead = 47GB each, total = 94GB > 85GB
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 40 }) });
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
-
-      expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('app2');
-      expect(result[0].reason).to.include('Cumulative storage limit exceeded');
-    });
-
-    it('should sort apps by height and keep oldest apps', async () => {
-      const installedApps = [
-        { name: 'newestApp', height: 3000 }, // Should be removed
-        { name: 'oldestApp', height: 1000 }, // Should be kept
-        { name: 'middleApp', height: 2000 }, // Should be removed
-      ];
-
-      // 4 CPU node = 40 units, useable = 30 units (after 10 reserved)
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
-      // Each app needs 1.5 CPUs = 15 units
-      // App1 (oldest): 15 units, cumulative = 15 (fits)
-      // App2 (middle): 15 units, cumulative = 30 (fits)
-      // App3 (newest): 15 units, cumulative = 45 (exceeds 30) - remove
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1.5, memory: 1024, storage: 5 }) });
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
-
-      expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('newestApp');
-      expect(result[0].height).to.equal(3000);
-    });
-
-    it('should handle apps with missing height field (treat as 0)', async () => {
-      const installedApps = [
-        { name: 'app1' }, // No height - treated as 0
-        { name: 'app2', height: 1000 },
-      ];
-
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ name: 'testApp' });
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 5 }) });
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
-
-      expect(result).to.have.length(0);
-      // Should process app1 first (height 0) then app2 (height 1000)
-    });
-
-    it('should skip app if spec is not found', async () => {
       const installedApps = [
         { name: 'app1', height: 1000 },
         { name: 'app2', height: 2000 },
@@ -385,14 +229,117 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      registryManagerStub.getApplicationGlobalSpecifications.onFirstCall().resolves(null); // No spec for app1
-      registryManagerStub.getApplicationGlobalSpecifications.onSecondCall().resolves({ name: 'app2' });
-      deploymentSpecFromSpecStub.returns({ totalResources: () => ({ cpu: 1, memory: 1024, storage: 5 }) });
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 2, memory: 1024, storage: 5 }));
+
+      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+
+      expect(result).to.have.length(1);
+      expect(result[0].name).to.equal('app2');
+      expect(result[0].reason).to.include('Cumulative CPU limit exceeded');
+    });
+
+    it('should remove newer apps when cumulative RAM exceeds capacity', async () => {
+      const installedApps = [
+        { name: 'app1', height: 1000 },
+        { name: 'app2', height: 2000 },
+      ];
+
+      hwRequirementsStub.getNodeSpecs.resolves({
+        cpuCores: 4,
+        ram: 8192,
+        ssdStorage: 100,
+      });
+
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 4096, storage: 5 }));
+
+      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+
+      expect(result).to.have.length(1);
+      expect(result[0].name).to.equal('app2');
+      expect(result[0].reason).to.include('Cumulative RAM limit exceeded');
+    });
+
+    it('should remove newer apps when cumulative storage exceeds capacity', async () => {
+      const installedApps = [
+        { name: 'app1', height: 1000 },
+        { name: 'app2', height: 2000 },
+      ];
+
+      hwRequirementsStub.getNodeSpecs.resolves({
+        cpuCores: 4,
+        ram: 8192,
+        ssdStorage: 100,
+      });
+
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 40 }));
+
+      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+
+      expect(result).to.have.length(1);
+      expect(result[0].name).to.equal('app2');
+      expect(result[0].reason).to.include('Cumulative storage limit exceeded');
+    });
+
+    it('should sort apps by height and keep oldest apps', async () => {
+      const installedApps = [
+        { name: 'newestApp', height: 3000 },
+        { name: 'oldestApp', height: 1000 },
+        { name: 'middleApp', height: 2000 },
+      ];
+
+      hwRequirementsStub.getNodeSpecs.resolves({
+        cpuCores: 4,
+        ram: 8192,
+        ssdStorage: 100,
+      });
+
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1.5, memory: 1024, storage: 5 }));
+
+      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+
+      expect(result).to.have.length(1);
+      expect(result[0].name).to.equal('newestApp');
+      expect(result[0].height).to.equal(3000);
+    });
+
+    it('should handle apps with missing height field (treat as 0)', async () => {
+      const installedApps = [
+        { name: 'app1' },
+        { name: 'app2', height: 1000 },
+      ];
+
+      hwRequirementsStub.getNodeSpecs.resolves({
+        cpuCores: 4,
+        ram: 8192,
+        ssdStorage: 100,
+      });
+
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
       expect(result).to.have.length(0);
-      expect(logStub.warn.calledWith('hardwareValidationService - No spec found for app1, skipping')).to.equal(true);
+    });
+
+    it('should skip app if deployment is not found', async () => {
+      const installedApps = [
+        { name: 'app1', height: 1000 },
+        { name: 'app2', height: 2000 },
+      ];
+
+      hwRequirementsStub.getNodeSpecs.resolves({
+        cpuCores: 4,
+        ram: 8192,
+        ssdStorage: 100,
+      });
+
+      deploymentProviderStub.getInstalledDeployment.onFirstCall().resolves(null);
+      deploymentProviderStub.getInstalledDeployment.onSecondCall().resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 5 }));
+
+      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+
+      expect(result).to.have.length(0);
+      expect(logStub.warn.calledWith('hardwareValidationService - No deployment found for app1, skipping')).to.equal(true);
     });
 
     it('should return empty array if storage is 0', async () => {
@@ -403,7 +350,7 @@ describe('hardwareValidationService tests', () => {
       hwRequirementsStub.getNodeSpecs.resolves({
         cpuCores: 4,
         ram: 8192,
-        ssdStorage: 0, // No storage detected
+        ssdStorage: 0,
       });
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
@@ -511,7 +458,7 @@ describe('hardwareValidationService tests', () => {
       expect(serviceHelperStub.delay.alwaysCalledWith(5000)).to.equal(true);
     });
 
-    it('should call removeAppLocally with correct parameters', async () => {
+    it('should call uninstallApplication with correct parameters', async () => {
       const appsToRemove = [
         { name: 'app1', reason: 'CPU requirements not met', height: 1000 },
       ];

@@ -374,29 +374,27 @@ describe('appInstaller tests', () => {
       expect(logStub.error.called).to.be.true;
     });
 
-    it('should log test install request', async () => {
+    it('should return error when no pending spec found', async () => {
       const req = {
         params: { appname: 'testapp' },
         query: {},
       };
       const res = {
         json: sinon.stub(),
-        setHeader: sinon.stub(),
       };
 
-      verificationHelperStub.verifyPrivilege.withArgs('user', req).resolves(true);
-      verificationHelperStub.verifyPrivilege.withArgs('adminandfluxteam', req).resolves(true);
+      verificationHelperStub.verifyPrivilege.resolves(true);
 
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
-      dbHelperStub.findInDatabase.resolves([]);
 
-      messageHelperStub.createErrorMessage.returns({ status: 'error' });
+      messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'No pending spec found' } });
 
       await appInstaller.testInstallApplicationAPI(req, res);
 
-      expect(logStub.info.calledWith('testInstallApplicationAPI: testapp')).to.be.true;
+      expect(res.json.calledOnce).to.be.true;
+      expect(logStub.error.called).to.be.true;
     });
 
     it.skip('should decrypt enterprise app specs before test installation — needs real crypto provider', async () => {
@@ -486,6 +484,16 @@ describe('appInstaller tests', () => {
         ],
       };
 
+      const mockSpec = {
+        name: appSpec.name, version: appSpec.version, owner: appSpec.owner,
+        componentEntries() { return appSpec.compose.map((c) => [c.name, { image: c.repotag, imageAuth: null }]); },
+      };
+      const mockPending = {
+        spec: mockSpec,
+        isEncrypted() { return false; },
+        promote(h) { return { name: mockSpec.name, version: mockSpec.version, owner: mockSpec.owner, spec: mockSpec, hash: 'test-hash', height: h, isEncrypted: () => false }; },
+      };
+
       const req = {
         params: { appname: 'arm64app' },
         query: {},
@@ -497,17 +505,16 @@ describe('appInstaller tests', () => {
         end: sinon.stub(),
       };
 
-      // Create new proxyquire instance with custom stubs for this test
       const imageManagerStub = {
         checkApplicationImagesCompliance: sinon.stub().resolves(),
         verifyRepository: sinon.stub().resolves({
           verified: true,
-          supportedArchitectures: ['arm64'], // ARM64 only
+          supportedArchitectures: ['arm64'],
         }),
       };
 
       const systemIntegrationStub = {
-        systemArchitecture: sinon.stub().resolves('amd64'), // Node is AMD64
+        systemArchitecture: sinon.stub().resolves('amd64'),
       };
 
       const appInstallerForArchTest = proxyquire('../../ZelBack/src/services/appLifecycle/appInstaller', {
@@ -520,76 +527,40 @@ describe('appInstaller tests', () => {
           ensureNumber: sinon.stub().returnsArg(0),
           delay: sinon.stub().resolves(),
         },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-          checkSynced: sinon.stub().resolves(true),
-        },
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: { ipaddress: '192.168.1.1' },
-          }),
-        },
-        '../daemonService/daemonServiceMiscRpcs': {
-          isDaemonSynced: sinon.stub().returns({
-            status: 'success',
-            data: { synced: true, height: 2094961 },
-          }),
-        },
-        '../fluxNetworkHelper': {
-          getNumberOfPeers: sinon.stub().returns(15),
-        },
-        '../dockerService': {
-          dockerListContainers: sinon.stub().resolves([]),
-        },
+        '../generalService': { nodeTier: sinon.stub().resolves('cumulus'), checkSynced: sinon.stub().resolves(true) },
+        '../benchmarkService': { getBenchmarks: sinon.stub().resolves({ status: 'success', data: { ipaddress: '192.168.1.1' } }) },
+        '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ status: 'success', data: { synced: true, height: 2094961 } }) },
+        '../fluxNetworkHelper': { getNumberOfPeers: sinon.stub().returns(15) },
+        '../dockerService': { dockerListContainers: sinon.stub().resolves([]) },
         '../appSystem/systemIntegration': systemIntegrationStub,
         '../appSecurity/imageManager': imageManagerStub,
         '../appRequirements/hwRequirements': hwRequirementsStub,
-        '../appMessaging/messageVerifier': messageVerifierStub,
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-          getApplicationGlobalSpecifications: sinon.stub().resolves(appSpec),
-        },
         '../utils/globalState': globalStateStub,
         '../../lib/log': logStub,
-        '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
-          config: configStub,
-        }),
+        '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', { config: configStub }),
         '../utils/appSpecHelpers': appSpecHelpersStub,
         '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
+        '../utils/specLibs': { getSpecBackend: sinon.stub().resolves({ PendingSpec: { fromTempMessage: sinon.stub().returns(mockPending) } }) },
         '../appDatabase/appsRepository': {
+          getTempMessageByName: sinon.stub().resolves({ appSpecifications: appSpec, hash: 'test-hash', timestamp: Date.now(), signature: 'test-sig' }),
           getInstalledApp: sinon.stub().resolves(null),
-          getInstalledAppRaw: sinon.stub().resolves(null),
           existsInstalledApp: sinon.stub().resolves(false),
-          getGlobalAppInfo: sinon.stub().resolves(null),
-          getAppMessage: sinon.stub().resolves(null),
-          removeInstalledApp: sinon.stub().resolves(),
-          insertInstalledApp: sinon.stub().resolves({ insertedId: 'ok' }),
         },
-        util: {
-          promisify: (fn) => fn,
-        },
+        util: { promisify: (fn) => fn },
       });
 
       verificationHelperStub.verifyPrivilege.resolves(true);
 
       await appInstallerForArchTest.testInstallApplicationAPI(req, res);
 
-      // Verify verifyRepository was called
       expect(imageManagerStub.verifyRepository.calledWith('arm64v8/ubuntu:latest')).to.be.true;
 
-      // Verify success message was returned using streaming response (2 writes: init + skip message)
-      expect(res.write.calledTwice).to.be.true;
+      const writeCalls = res.write.getCalls();
+      const allWritten = writeCalls.map((c) => c.args[0]).join('');
+      expect(allWritten).to.include('architecture incompatibility');
+      expect(allWritten).to.include('amd64');
+      expect(allWritten).to.include('arm64');
       expect(res.end.calledOnce).to.be.true;
-
-      // Verify the second written message contains architecture incompatibility info
-      const writeCall = res.write.getCall(1); // Second call
-      const writtenData = writeCall.args[0];
-      // ensureString converts object to JSON string, so check as string
-      expect(writtenData).to.be.a('string');
-      expect(writtenData).to.include('architecture incompatibility');
-      expect(writtenData).to.include('amd64');
-      expect(writtenData).to.include('arm64');
     });
 
     it('should proceed with installation when architecture is compatible', async () => {
@@ -618,6 +589,16 @@ describe('appInstaller tests', () => {
         ],
       };
 
+      const mockSpec = {
+        name: appSpec.name, version: appSpec.version, owner: appSpec.owner,
+        componentEntries() { return appSpec.compose.map((c) => [c.name, { image: c.repotag, imageAuth: null }]); },
+      };
+      const mockPending = {
+        spec: mockSpec,
+        isEncrypted() { return false; },
+        promote(h) { return { name: mockSpec.name, version: mockSpec.version, owner: mockSpec.owner, spec: mockSpec, hash: 'test-hash', height: h, isEncrypted: () => false }; },
+      };
+
       const req = {
         params: { appname: 'multiarchapp' },
         query: {},
@@ -629,20 +610,17 @@ describe('appInstaller tests', () => {
         end: sinon.stub(),
       };
 
-      // Create new proxyquire instance with custom stubs for this test
       const imageManagerStub = {
         checkApplicationImagesCompliance: sinon.stub().resolves(),
         verifyRepository: sinon.stub().resolves({
           verified: true,
-          supportedArchitectures: ['amd64', 'arm64'], // Supports both
+          supportedArchitectures: ['amd64', 'arm64'],
         }),
       };
 
       const systemIntegrationStub = {
-        systemArchitecture: sinon.stub().resolves('amd64'), // Node is AMD64
+        systemArchitecture: sinon.stub().resolves('amd64'),
       };
-
-      const installApplicationStub = sinon.stub().resolves();
 
       const appInstallerForArchTest = proxyquire('../../ZelBack/src/services/appLifecycle/appInstaller', {
         config: configStub,
@@ -654,111 +632,42 @@ describe('appInstaller tests', () => {
           ensureNumber: sinon.stub().returnsArg(0),
           delay: sinon.stub().resolves(),
         },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-          checkSynced: sinon.stub().resolves(true),
-        },
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: { ipaddress: '192.168.1.1' },
-          }),
-        },
-        '../daemonService/daemonServiceMiscRpcs': {
-          isDaemonSynced: sinon.stub().returns({
-            status: 'success',
-            data: { synced: true, height: 2094961 },
-          }),
-        },
-        '../fluxNetworkHelper': {
-          getNumberOfPeers: sinon.stub().returns(15),
-          isFirewallActive: sinon.stub().resolves(false),
-          allowPort: sinon.stub().resolves({ status: true }),
-          removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-        },
-        '../dockerService': {
-          dockerListContainers: sinon.stub().resolves([]),
-          pruneContainers: sinon.stub().resolves(),
-          pruneNetworks: sinon.stub().resolves(),
-          pruneVolumes: sinon.stub().resolves(),
-          pruneImages: sinon.stub().resolves(),
-          createFluxAppDockerNetwork: sinon.stub().resolves('network-created'),
-          getFluxDockerNetworkPhysicalInterfaceNames: sinon.stub().resolves([]),
-          appDockerCreate: sinon.stub().resolves(),
-          appDockerStart: sinon.stub().resolves('container-started'),
-          getAppIdentifier: sinon.stub().returns('multiarchapp'),
-          dockerPullStream: sinon.stub().yields(null, 'pulled'),
-        },
-        './appUninstaller': {
-          uninstallApplication: sinon.stub().resolves(),
-        },
-        './advancedWorkflows': {
-          createAppVolume: sinon.stub().resolves(),
-        },
-        '../fluxCommunicationMessagesSender': {
-          broadcastMessageToOutgoing: sinon.stub().resolves(),
-          broadcastMessageToIncoming: sinon.stub().resolves(),
-        },
-        '../appMessaging/messageStore': {
-          storeAppRunningMessage: sinon.stub().resolves(),
-          storeAppInstallingErrorMessage: sinon.stub().resolves(),
-        },
+        '../generalService': { nodeTier: sinon.stub().resolves('cumulus'), checkSynced: sinon.stub().resolves(true) },
+        '../benchmarkService': { getBenchmarks: sinon.stub().resolves({ status: 'success', data: { ipaddress: '192.168.1.1' } }) },
+        '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ status: 'success', data: { synced: true, height: 2094961 } }) },
+        '../fluxNetworkHelper': { getNumberOfPeers: sinon.stub().returns(15), isFirewallActive: sinon.stub().resolves(false), allowPort: sinon.stub().resolves({ status: true }), removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true) },
+        '../geolocationService': { isStaticIP: sinon.stub().returns(true) },
+        '../dockerService': { dockerListContainers: sinon.stub().resolves([]), pruneContainers: sinon.stub().resolves(), pruneNetworks: sinon.stub().resolves(), pruneVolumes: sinon.stub().resolves(), pruneImages: sinon.stub().resolves(), createFluxAppDockerNetwork: sinon.stub().resolves('network-created'), getFluxDockerNetworkPhysicalInterfaceNames: sinon.stub().resolves([]), appDockerCreate: sinon.stub().resolves(), appDockerStart: sinon.stub().resolves('container-started'), getAppIdentifier: sinon.stub().returns('multiarchapp'), dockerPullStream: sinon.stub().yields(null, 'pulled') },
+        './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
+        './advancedWorkflows': { createAppVolume: sinon.stub().resolves() },
+        '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves() },
+        '../appMessaging/messageStore': { storeAppRunningMessage: sinon.stub().resolves(), storeAppInstallingErrorMessage: sinon.stub().resolves() },
         '../appSystem/systemIntegration': systemIntegrationStub,
         '../appSecurity/imageManager': imageManagerStub,
-        '../appManagement/appInspector': {
-          startAppMonitoring: sinon.stub(),
-        },
-        '../utils/imageVerifier': {
-          ImageVerifier: sinon.stub().returns({
-            addCredentials: sinon.stub(),
-            verifyImage: sinon.stub().resolves(),
-            throwIfError: sinon.stub(),
-            supported: true,
-            provider: 'docker.io',
-          }),
-        },
-        '../pgpService': {
-          decryptMessage: sinon.stub().resolves('user:token'),
-        },
-        '../utils/registryCredentialHelper': {
-          addCredentialsToImageVerifier: sinon.stub().resolves(),
-        },
-        '../upnpService': {
-          isUPNP: sinon.stub().returns(false),
-          mapUpnpPort: sinon.stub().resolves(true),
-        },
+        '../appManagement/appInspector': { startAppMonitoring: sinon.stub() },
+        '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
+        '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
+        '../utils/registryCredentialHelper': { addCredentialsToImageVerifier: sinon.stub().resolves() },
+        '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
         '../appRequirements/hwRequirements': hwRequirementsStub,
-        '../appMessaging/messageVerifier': messageVerifierStub,
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-          getApplicationGlobalSpecifications: sinon.stub().resolves(appSpec),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-          listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
-        },
+        '../appQuery/appQueryService': { installedApps: sinon.stub().resolves({ status: 'success', data: [] }), listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }) },
         '../utils/globalState': globalStateStub,
         '../../lib/log': logStub,
-        '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
-          config: configStub,
-        }),
+        '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', { config: configStub }),
         '../utils/appSpecHelpers': appSpecHelpersStub,
         '../providers/FluxOSLegacyCryptoProvider': legacyCryptoProviderStub,
+        '../utils/specLibs': { getSpecBackend: sinon.stub().resolves({ PendingSpec: { fromTempMessage: sinon.stub().returns(mockPending) } }) },
         '../appDatabase/appsRepository': {
+          getTempMessageByName: sinon.stub().resolves({ appSpecifications: appSpec, hash: 'test-hash', timestamp: Date.now(), signature: 'test-sig' }),
           getInstalledApp: sinon.stub().resolves(null),
-          getInstalledAppRaw: sinon.stub().resolves(null),
           existsInstalledApp: sinon.stub().resolves(false),
           getGlobalAppInfo: sinon.stub().resolves(null),
-          getAppMessage: sinon.stub().resolves(null),
           removeInstalledApp: sinon.stub().resolves(),
           insertInstalledApp: sinon.stub().resolves({ insertedId: 'ok' }),
         },
-        util: {
-          promisify: (fn) => fn,
-        },
+        '../appRuntime/deploymentProvider': { listInstalledDeployments: sinon.stub().resolves([]), getInstalledDeployment: sinon.stub().resolves(null) },
+        '../appSecurity/imageBlockingService': { isImageBlocked: sinon.stub().resolves({ blocked: false }) },
+        util: { promisify: (fn) => fn },
       });
 
       verificationHelperStub.verifyPrivilege.resolves(true);
@@ -769,11 +678,8 @@ describe('appInstaller tests', () => {
         // Installation may fail at later stages, but we only care about architecture check passing
       }
 
-      // Verify verifyRepository was called
       expect(imageManagerStub.verifyRepository.calledWith('nginx:latest')).to.be.true;
 
-      // Verify we did NOT return early with skip message
-      // (If we had skipped, res.write would contain architecture incompatibility message)
       if (res.write.called) {
         const writeCalls = res.write.getCalls();
         for (const call of writeCalls) {
@@ -975,15 +881,9 @@ describe('appInstaller tests', () => {
         },
       });
 
-      const res = {
-        write: sinon.stub(),
-        end: sinon.stub(),
-      };
-
-      const result = await appInstallerWithDb.installApplication(instantiated, { res });
+      const result = await appInstallerWithDb.installApplication(instantiated);
 
       expect(logStub.error.called).to.be.true;
-      expect(res.write.called).to.be.true;
       expect(result).to.be.false;
     });
   });

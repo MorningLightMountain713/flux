@@ -11,7 +11,6 @@ const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const registryManager = require('../appDatabase/registryManager');
 const advancedWorkflows = require('./advancedWorkflows');
 const appUninstaller = require('./appUninstaller');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -173,17 +172,10 @@ async function startStoppedAppsOnBoot() {
         continue;
       }
 
-      // Get the app specification (with decryption for enterprise apps)
-      let appSpec;
-      try {
-        // Use getApplicationGlobalSpecifications which handles enterprise app decryption
-        // eslint-disable-next-line no-await-in-loop
-        appSpec = await registryManager.getApplicationGlobalSpecifications(appName);
-      } catch (specError) {
-        log.error(`stoppedAppsRecovery - Error fetching specs for app ${appName}: ${specError.message}`);
-      }
+      // eslint-disable-next-line no-await-in-loop
+      const appExists = await appsRepository.existsGlobalApp(appName);
 
-      if (!appSpec) {
+      if (!appExists) {
         log.warn(`stoppedAppsRecovery - No global spec found for app ${appName}, skipping all its containers`);
         results.appsSkippedNoSpec.push(appName);
         // eslint-disable-next-line no-continue

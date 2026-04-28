@@ -12,13 +12,11 @@
 
 const log = require('../../lib/log');
 const config = require('config');
-const registryManager = require('../appDatabase/registryManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const appUninstaller = require('./appUninstaller');
 const serviceHelper = require('../serviceHelper');
-const { deserializeSpec } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
-const { appsFolder } = require('../utils/appConstants');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appsRepository = require('../appDatabase/appsRepository');
 
 const REMOVAL_DELAY = 5000; // 5 seconds between removals
 
@@ -37,7 +35,7 @@ async function performBootTimeHardwareValidation() {
     log.info('hardwareValidationService - Starting boot-time hardware validation');
 
     // STEP 1: Get all installed apps
-    const installedApps = await registryManager.getInstalledApps();
+    const installedApps = await appsRepository.listInstalledAppsRaw();
 
     if (!installedApps || installedApps.length === 0) {
       log.info('hardwareValidationService - No installed apps found');
@@ -113,19 +111,14 @@ async function validateAppsCumulatively(installedApps) {
     // Process each app in order (oldest to newest)
     for (const app of sortedApps) {
       try {
-        // getApplicationGlobalSpecifications returns cleartext plain form
-        // (decrypts internally for encrypted wire). Hydrate to a class for
-        // DeploymentSpec.totalResources().
-        const appSpecPlain = await registryManager.getApplicationGlobalSpecifications(app.name);
+        // eslint-disable-next-line no-await-in-loop
+        const deployment = await deploymentProvider.getInstalledDeployment(app.name);
 
-        if (!appSpecPlain) {
-          log.warn(`hardwareValidationService - No spec found for ${app.name}, skipping`);
+        if (!deployment) {
+          log.warn(`hardwareValidationService - No deployment found for ${app.name}, skipping`);
           continue;
         }
 
-        const appSpec = await deserializeSpec(appSpecPlain);
-        const { DeploymentSpec } = await getSpecBackend();
-        const deployment = DeploymentSpec.fromSpec(appSpec, appsFolder);
         const { cpu, memory, storage } = deployment.totalResources();
         const appCpu = cpu * 10;
         const appRam = memory;

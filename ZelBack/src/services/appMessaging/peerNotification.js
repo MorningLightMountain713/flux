@@ -6,7 +6,6 @@ const benchmarkService = require('../benchmarkService');
 const geolocationService = require('../geolocationService');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const messageStore = require('./messageStore');
-const registryManager = require('../appDatabase/registryManager');
 const appInspector = require('../appManagement/appInspector');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appInstaller = require('../appLifecycle/appInstaller');
@@ -134,7 +133,7 @@ async function checkAndNotifyPeersOfRunningApps() {
         try {
           const mainAppName = stoppedApp.split('_')[1] || stoppedApp;
           // eslint-disable-next-line no-await-in-loop
-          const appDetails = await registryManager.getApplicationGlobalSpecifications(mainAppName);
+          const appExists = await appsRepository.existsGlobalApp(mainAppName);
           const deployment = deploymentByName.get(mainAppName);
           if (!deployment) continue;
 
@@ -148,14 +147,14 @@ async function checkAndNotifyPeersOfRunningApps() {
           if (appHasSyncthing) {
             masterSlaveAppNames.add(mainAppName);
           }
-          if (appHasActiveStandby && appDetails) {
+          if (appHasActiveStandby && appExists) {
             const backupSkip = backupInProgress.some((item) => stoppedApp === item);
             const restoreSkip = restoreInProgress.some((item) => stoppedApp === item);
             if (!backupSkip && !restoreSkip) {
               // eslint-disable-next-line no-await-in-loop
               await handleMissingMasterSlaveContainer(stoppedApp, mainAppName);
             }
-          } else if (appDetails) {
+          } else if (appExists) {
             log.warn(`${stoppedApp} is stopped but should be running. Starting...`);
             const backupSkip = backupInProgress.some((item) => stoppedApp === item);
             const restoreSkip = restoreInProgress.some((item) => stoppedApp === item);

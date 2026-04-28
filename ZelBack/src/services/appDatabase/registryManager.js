@@ -332,42 +332,6 @@ async function getAppInstallingLocation(req, res) {
 }
 
 /**
- * Get global app specifications for a specific app
- * @param {string} appName - Application name
- * @returns {Promise<object|null>} App specifications
- */
-/**
- * Get the stored global spec for an app as a plain-object canonical form.
- *
- * For encrypted v8 wire forms this CROSSES THE CLEARTEXT BOUNDARY:
- * decrypts via the legacy provider and returns cleartext plain. For
- * cleartext wire forms the stored wire form passes through.
- *
- * Returned plain form preserves `height` and `hash` storage metadata so
- * legacy callers that read those fields continue to work. The
- * `enterprise` blob is dropped from the output (decrypted specs are
- * cleartext by definition).
- *
- * @param {string} appName
- * @returns {Promise<object|null>}
- */
-async function getApplicationGlobalSpecifications(appName) {
-  const dbDoc = await appsRepository.getGlobalAppInfoRaw(appName);
-  if (!dbDoc) return null;
-
-  const wireSpec = await deserializeSpec(dbDoc);
-  if (!wireSpec || !wireSpec.isEncrypted) return dbDoc;
-
-  // Explicit cleartext crossing for encrypted wire forms.
-  const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
-  const decrypted = await wireSpec.decrypt(provider);
-  const plain = decrypted.spec.serialize();
-  plain.height = dbDoc.height;
-  plain.hash = dbDoc.hash;
-  return plain;
-}
-
-/**
  * Get local app specifications for a specific app
  * @param {string} appName - Application name
  * @returns {Promise<object|null>} App specifications
@@ -1303,7 +1267,6 @@ module.exports = {
   getAppInstallingLocation,
   getAppInstallingErrorsLocation,
   getAppsInstallingErrorsLocations,
-  getApplicationGlobalSpecifications,
   getApplicationLocalSpecifications,
   getApplicationSpecificationAPI,
   getApplicationOwner,

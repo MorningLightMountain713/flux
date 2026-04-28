@@ -10,7 +10,6 @@ describe('stoppedAppsRecovery tests', () => {
   let dockerServiceStub;
   let serviceHelperStub;
   let fluxNetworkHelperStub;
-  let registryManagerStub;
   let advancedWorkflowsStub;
   let appUninstallerStub;
 
@@ -24,6 +23,7 @@ describe('stoppedAppsRecovery tests', () => {
     appsRepositoryStub = {
       getAppLocation: sinon.stub(),
       listInstalledApps: sinon.stub().resolves([]),
+      existsGlobalApp: sinon.stub().resolves(true),
     };
 
     deploymentProviderStub = {
@@ -43,10 +43,6 @@ describe('stoppedAppsRecovery tests', () => {
       getMyFluxIPandPort: sinon.stub(),
     };
 
-    registryManagerStub = {
-      getApplicationGlobalSpecifications: sinon.stub(),
-    };
-
     advancedWorkflowsStub = {
       startApplication: sinon.stub().resolves(),
     };
@@ -63,7 +59,6 @@ describe('stoppedAppsRecovery tests', () => {
       '../dockerService': dockerServiceStub,
       '../serviceHelper': serviceHelperStub,
       '../fluxNetworkHelper': fluxNetworkHelperStub,
-      '../appDatabase/registryManager': registryManagerStub,
       './advancedWorkflows': advancedWorkflowsStub,
       './appUninstaller': appUninstallerStub,
     });
@@ -142,8 +137,6 @@ describe('stoppedAppsRecovery tests', () => {
       appsRepositoryStub.listInstalledApps.resolves(installedApps);
 
       dockerServiceStub.dockerListContainers.resolves(stoppedFluxContainers);
-
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ version: 3, containerData: '' });
 
       fluxNetworkHelperStub.getMyFluxIPandPort.resolves('10.0.0.1:16127');
     });
