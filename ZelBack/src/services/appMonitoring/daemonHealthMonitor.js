@@ -2,7 +2,7 @@ const serviceHelper = require('../serviceHelper');
 const globalState = require('../utils/globalState');
 const log = require('../../lib/log');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
-const registryManager = require('../appDatabase/registryManager');
+const appsRepository = require('../appDatabase/appsRepository');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 
 // Module-level state tracking
@@ -21,7 +21,7 @@ async function removeAllApps(reason) {
   try {
     allAppsRemoved = true;  // Set flag to prevent repeated attempts
 
-    const installedApps = await registryManager.getInstalledApps();
+    const installedApps = await appsRepository.listInstalledApps();
 
     if (!installedApps || installedApps.length === 0) {
       log.info('No apps installed, nothing to remove');

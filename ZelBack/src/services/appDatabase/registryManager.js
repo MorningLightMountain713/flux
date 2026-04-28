@@ -332,15 +332,6 @@ async function getAppInstallingLocation(req, res) {
 }
 
 /**
- * Get local app specifications for a specific app
- * @param {string} appName - Application name
- * @returns {Promise<object|null>} App specifications
- */
-async function getApplicationLocalSpecifications(appName) {
-  return appsRepository.getInstalledAppRaw(appName);
-}
-
-/**
  * Get application specification via API
  * @param {object} req - Request object
  * @param {object} res - Response object
@@ -626,19 +617,6 @@ async function getAllAppsInformation() {
     return allApps;
   } catch (error) {
     log.error(`Error getting all apps information: ${error.message}`);
-    return [];
-  }
-}
-
-/**
- * Get installed apps information
- * @returns {Promise<Array>} Array of installed apps
- */
-async function getInstalledApps() {
-  try {
-    return await appsRepository.listInstalledAppsRaw();
-  } catch (error) {
-    log.error(`Error getting installed apps: ${error.message}`);
     return [];
   }
 }
@@ -1267,7 +1245,6 @@ module.exports = {
   getAppInstallingLocation,
   getAppInstallingErrorsLocation,
   getAppsInstallingErrorsLocations,
-  getApplicationLocalSpecifications,
   getApplicationSpecificationAPI,
   getApplicationOwner,
   getApplicationOwnerAPI,
@@ -1279,7 +1256,6 @@ module.exports = {
   storeAppSpecificationInPermanentStorage,
   getAppSpecificationFromDb,
   getAllAppsInformation,
-  getInstalledApps,
   getRunningApps,
   getRunningAppIpList,
   registrationInformation,

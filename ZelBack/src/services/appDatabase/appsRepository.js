@@ -281,6 +281,10 @@ async function getInstalledAppRaw(name, projection = {}) {
   );
 }
 
+async function countInstalledApps() {
+  return dbHelper.countInDatabase(localDb(), localAppsInformation, {});
+}
+
 async function existsInstalledApp(name) {
   const doc = await dbHelper.findOneInDatabase(
     localDb(),
@@ -617,6 +621,7 @@ module.exports = {
   removeGlobalAppInfo,
   getInstalledApp,
   getInstalledAppRaw,
+  countInstalledApps,
   existsInstalledApp,
   listInstalledApps,
   listInstalledAppsRaw,

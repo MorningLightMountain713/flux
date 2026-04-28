@@ -3,7 +3,6 @@ const config = require('config');
 const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const appsRepository = require('../appDatabase/appsRepository');
-const registryManager = require('../appDatabase/registryManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const appConstants = require('../utils/appConstants');
 const { resolveSpec } = require('../utils/specCutover');
@@ -21,8 +20,7 @@ const appQueryService = require('./appQueryService');
  */
 async function fluxUsage(req, res) {
   try {
-    const apps = await registryManager.getInstalledApps();
-    const totalApps = apps.length;
+    const totalApps = await appsRepository.countInstalledApps();
     const runningApps = await appQueryService.listRunningApps();
     const totalRunning = runningApps.data ? runningApps.data.length : 0;
 
