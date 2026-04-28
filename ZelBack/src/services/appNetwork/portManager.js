@@ -74,7 +74,7 @@ async function assignedPortsGlobalApps(appNames) {
  * @returns {Promise<boolean>} True if ports are available
  * @throws {Error} If ports are already in use
  */
-async function ensureApplicationPortsNotUsed(appSpecFormatted, globalCheckedApps) {
+async function ensureApplicationPortsNotUsed(deployment, globalCheckedApps) {
   let currentAppsPorts = await assignedPortsInstalledApps();
 
   if (globalCheckedApps && globalCheckedApps.length) {
@@ -82,7 +82,6 @@ async function ensureApplicationPortsNotUsed(appSpecFormatted, globalCheckedApps
     currentAppsPorts = currentAppsPorts.concat(globalAppsPorts);
   }
 
-  const deployment = await buildDeployment(appSpecFormatted);
   for (const port of deployment.allHostPorts()) {
     const portAssigned = currentAppsPorts.find((app) => app.ports.includes(port));
     if (portAssigned && portAssigned.name !== deployment.appName) {

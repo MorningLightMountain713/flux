@@ -65,10 +65,14 @@ describe('appSpawner tests', () => {
       '../appQuery/appQueryService': {
         listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
       },
+      '../appDatabase/appsRepository': {
+        getGlobalAppInfo: sinon.stub().resolves(null),
+        existsInstalledApp: sinon.stub().resolves(false),
+        listInstalledAppsRaw: sinon.stub().resolves([]),
+      },
       '../appDatabase/registryManager': {
         appLocation: sinon.stub().resolves([]),
         appInstallingLocation: sinon.stub().resolves([]),
-        getApplicationGlobalSpecifications: sinon.stub().resolves(null),
         expireGlobalApplications: sinon.stub().resolves(),
         storeAppInstallingMessage: sinon.stub().resolves(),
         getRunningAppIpList: sinon.stub().resolves([]),

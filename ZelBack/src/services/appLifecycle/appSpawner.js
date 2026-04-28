@@ -18,7 +18,6 @@ const portManager = require('../appNetwork/portManager');
 const systemIntegration = require('../appSystem/systemIntegration');
 const globalState = require('../utils/globalState');
 const { FluxCacheManager } = require('../utils/cacheManager');
-const { deserializeSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const { appsFolder } = require('../utils/appConstants');
 // const advancedWorkflows = require('./advancedWorkflows'); // Moved to dynamic require to avoid circular dependency
@@ -286,35 +285,35 @@ async function trySpawningGlobalApplication() {
       return;
     }
 
-    // get app specifications
-    const appSpecifications = await registryManager.getApplicationGlobalSpecifications(appToRun);
-    if (!appSpecifications) {
+    const instantiated = await appsRepository.getGlobalAppInfo(appToRun);
+    if (!instantiated) {
       throw new Error(`trySpawningGlobalApplication - Specifications for application ${appToRun} were not found!`);
     }
 
-    // eslint-disable-next-line no-restricted-syntax
-    const apps = await appsRepository.listInstalledAppsRaw({ projection: { name: 1, version: 1, repotag: 1, compose: 1 } });
-    const appExists = apps.find((app) => app.name === appSpecifications.name);
-    if (appExists) { // double checked in installation process.
-      log.info(`trySpawningGlobalApplication - Application ${appSpecifications.name} is already installed`);
+    if (await appsRepository.existsInstalledApp(instantiated.name)) {
+      log.info(`trySpawningGlobalApplication - Application ${instantiated.name} is already installed`);
       await serviceHelper.delay(shortDelayTime);
       trySpawningGlobalApplication();
       return;
     }
 
-    const spec = await deserializeSpec(appSpecifications);
-    const { DeploymentSpec, InstantiatedSpec } = await getSpecBackend();
+    let spec = instantiated.spec;
+    if (instantiated.isEncrypted()) {
+      const provider = await spec.createProvider();
+      spec = (await spec.decrypt(provider)).spec;
+    }
+    const { DeploymentSpec } = await getSpecBackend();
     const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
     const appPorts = deployment.allHostPorts();
 
-    const appIsVetted = await imageManager.isAppVetted({ owner: spec.owner, hash: appSpecifications.hash, images: deployment.allImages() });
+    const appIsVetted = await imageManager.isAppVetted({ owner: instantiated.owner, hash: instantiated.hash, images: deployment.allImages() });
     if (!appIsVetted) {
       // eslint-disable-next-line no-restricted-syntax
       for (let i = 0; i < appPorts.length; i += 1) {
         const port = appPorts[i];
         const isUserBlocked = fluxNetworkHelper.isPortUserBlocked(port);
         if (isUserBlocked) {
-          log.info(`trySpawningGlobalApplication - App ${appSpecifications.name} uses user-blocked port ${port}. Adding to error cache.`);
+          log.info(`trySpawningGlobalApplication - App ${instantiated.name} uses user-blocked port ${port}. Adding to error cache.`);
           globalState.spawnErrorsLongerAppCache.set(appHash, '');
           // eslint-disable-next-line no-await-in-loop
           await serviceHelper.delay(shortDelayTime);
@@ -323,10 +322,10 @@ async function trySpawningGlobalApplication() {
         }
       }
     } else {
-      log.info(`trySpawningGlobalApplication - App ${appSpecifications.name} is vetted. Bypassing user-blocked ports check.`);
+      log.info(`trySpawningGlobalApplication - App ${instantiated.name} is vetted. Bypassing user-blocked ports check.`);
     }
 
-    const blockResult = await imageManager.isImageBlocked(spec.name, deployment.allImages(), { owner: spec.owner, hash: appSpecifications.hash });
+    const blockResult = await imageManager.isImageBlocked(instantiated.name, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
     if (blockResult.blocked) {
       globalState.spawnErrorsLongerAppCache.set(appHash, '');
       throw new Error(blockResult.reason);
@@ -340,11 +339,11 @@ async function trySpawningGlobalApplication() {
     const runningAppsOnThisIP = await registryManager.getRunningAppIpList(myIPAddress);
     const runningAppsNames = runningAppsOnThisIP.map((app) => app.name);
 
-    await portManager.ensureApplicationPortsNotUsed(appSpecifications, runningAppsNames);
+    await portManager.ensureApplicationPortsNotUsed(deployment, runningAppsNames);
 
     const portsPubliclyAvailable = await portManager.checkInstallingAppPortAvailable(appPorts);
     if (portsPubliclyAvailable === false) {
-      log.error(`trySpawningGlobalApplication - Some of application ports of ${appSpecifications.name} are not available publicly. Installation aborted.`);
+      log.error(`trySpawningGlobalApplication - Some of application ports of ${instantiated.name} are not available publicly. Installation aborted.`);
       await serviceHelper.delay(shortDelayTime);
       trySpawningGlobalApplication();
       return;
@@ -432,8 +431,6 @@ async function trySpawningGlobalApplication() {
     }
 
     if (!appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater) {
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(await deserializeSpec(appSpecifications), appsFolder);
       const appHWrequirements = deployment.totalResources();
       let delay = false;
       const isArcane = Boolean(process.env.FLUXOS_PATH);
@@ -448,7 +445,7 @@ async function trySpawningGlobalApplication() {
         globalState.appsToBeCheckedLater.push(appToCheck);
         globalState.trySpawningGlobalAppCache.delete(appHash);
         delay = true;
-      } else if (!appSpecifications.staticip && geolocationService.isStaticIP()) {
+      } else if (!spec.placement.staticIp && geolocationService.isStaticIP()) {
         const appToCheck = {
           timeToCheck: Date.now() + 0.45 * 60 * 60 * 1000,
           appName: appToRun,
@@ -459,7 +456,7 @@ async function trySpawningGlobalApplication() {
         globalState.appsToBeCheckedLater.push(appToCheck);
         globalState.trySpawningGlobalAppCache.delete(appHash);
         delay = true;
-      } else if (!appSpecifications.datacenter && geolocationService.isDataCenter()) {
+      } else if (!spec.placement.dataCenter && geolocationService.isDataCenter()) {
         const appToCheck = {
           timeToCheck: Date.now() + 0.45 * 60 * 60 * 1000,
           appName: appToRun,
@@ -527,18 +524,14 @@ async function trySpawningGlobalApplication() {
     // ToDo: Move this to global
     const architecture = await systemIntegration.systemArchitecture();
 
-    // TODO evaluate later to move to more broad check as image can be shared among multiple apps
-    const compositedSpecification = appSpecifications.compose || [appSpecifications]; // use compose array if v4+ OR if not defined its <= 3 do an array of appSpecs.
-
     // eslint-disable-next-line no-restricted-syntax
-    for (const componentToInstall of compositedSpecification) {
-      // check image is whitelisted and repotag is available for download
+    for (const [, component] of spec.componentEntries()) {
       // eslint-disable-next-line no-await-in-loop
-      await imageManager.verifyRepository(componentToInstall.repotag, {
-        repoauth: componentToInstall.repoauth,
-        specVersion: appSpecifications.version,
+      await imageManager.verifyRepository(component.image, {
+        repoauth: component.imageAuth,
+        specVersion: instantiated.version,
         architecture,
-        appName: appSpecifications.name,
+        appName: instantiated.name,
       }).catch((error) => {
         // imageManager already handles error classification and caching with intelligent TTLs (1h-7d)
         // Add to spawn cache with 1-hour TTL to allow retry sooner than default 12h
@@ -565,7 +558,7 @@ async function trySpawningGlobalApplication() {
     const newAppInstallingMessage = {
       type: 'fluxappinstalling',
       version: 1,
-      name: appSpecifications.name,
+      name: instantiated.name,
       ip: myIP,
       broadcastedAt,
     };
@@ -633,7 +626,7 @@ async function trySpawningGlobalApplication() {
     // install the app
     let registerOk = false;
     try {
-      registerOk = await appInstaller.installApplication(InstantiatedSpec.deserialize(appSpecifications));
+      registerOk = await appInstaller.installApplication(instantiated);
     } catch (error) {
       log.error(error);
       registerOk = false;
@@ -668,10 +661,9 @@ async function trySpawningGlobalApplication() {
       log.info(`trySpawningGlobalApplication - Application ${appToRun} is already spawned on ${runningAppList.length} instances, my instance is number ${index + 1}`);
       if (index + 1 > minInstances) {
         log.info(`trySpawningGlobalApplication - Application ${appToRun} is going to be removed as already passed the instances required.`);
-        log.warn(`REMOVAL REASON: Exceeded required instances - ${appSpecifications.name} already has sufficient instances, removing local installation (appSpawner)`);
+        log.warn(`REMOVAL REASON: Exceeded required instances - ${instantiated.name} already has sufficient instances, removing local installation (appSpawner)`);
         globalState.trySpawningGlobalAppCache.delete(appHash);
-        // Call appUninstaller.uninstallApplication directly (initialized via initialize())
-        appUninstaller.uninstallApplication(appSpecifications.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
+        appUninstaller.uninstallApplication(instantiated.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
       }
     }
 
