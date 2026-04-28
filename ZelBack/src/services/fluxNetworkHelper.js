@@ -1103,7 +1103,17 @@ async function adjustExternalIP(ip) {
       if (apps.length > 0) {
         let appsRemoved = 0;
         for (const inst of apps) {
-          if (inst.spec.staticip === true) {
+          let spec = inst.spec;
+          if (inst.isEncrypted()) {
+            try {
+              const provider = await spec.createProvider();
+              spec = (await spec.decrypt(provider)).spec;
+            } catch (err) {
+              log.warn(`Could not decrypt ${inst.name} for static IP check: ${err.message}`);
+              spec = null;
+            }
+          }
+          if (spec && spec.staticip === true) {
             log.info(`Application ${inst.name} requires static IP but node IP has changed, uninstalling app`);
             log.warn(`REMOVAL REASON: Static IP required - ${inst.name} requires static IP but node IP changed from ${oldIP} to ${newIP}`);
             // eslint-disable-next-line no-await-in-loop

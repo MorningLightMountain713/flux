@@ -1094,8 +1094,8 @@ describe('fluxNetworkHelper tests', () => {
 
       const appsRepositoryStub = {
         listInstalledApps: sinon.stub().resolves([
-          { name: 'staticApp', spec: { staticip: true } },
-          { name: 'normalApp', spec: { staticip: false } },
+          { name: 'staticApp', spec: { staticip: true }, isEncrypted: () => false },
+          { name: 'normalApp', spec: { staticip: false }, isEncrypted: () => false },
         ]),
         isAppRunningOnIp: sinon.stub().resolves(false),
       };
@@ -1144,7 +1144,7 @@ describe('fluxNetworkHelper tests', () => {
 
       const appsRepositoryStub = {
         listInstalledApps: sinon.stub().resolves([
-          { name: 'enterpriseApp', spec: { staticip: true } },
+          { name: 'enterpriseApp', spec: { staticip: true }, isEncrypted: () => false },
         ]),
         isAppRunningOnIp: sinon.stub().resolves(false),
       };
@@ -1188,7 +1188,7 @@ describe('fluxNetworkHelper tests', () => {
 
       const appsRepositoryStub = {
         listInstalledApps: sinon.stub().resolves([
-          { name: 'oldApp', spec: { staticip: false } },
+          { name: 'oldApp', spec: { staticip: false }, isEncrypted: () => false },
         ]),
         isAppRunningOnIp: sinon.stub().resolves(false),
       };
