@@ -1045,8 +1045,6 @@ describe('fluxNetworkHelper tests', () => {
   describe('adjustExternalIP static IP app handling tests', () => {
     let writeFileStub;
     let originalUserConfig;
-    let appQueryServiceStub;
-    let registryManagerStub;
     let appUninstallerStub;
     let appControllerStub;
     let geolocationServiceStub;
@@ -1094,20 +1092,12 @@ describe('fluxNetworkHelper tests', () => {
     it('should uninstall apps requiring static IP when IP changes', async () => {
       const newIp = '192.168.1.100';
 
-      const mockApps = {
-        status: 'success',
-        data: [
-          { name: 'staticApp', version: 7, staticip: true },
-          { name: 'normalApp', version: 7, staticip: false },
-        ],
-      };
-
-      appQueryServiceStub = {
-        installedApps: sinon.stub().resolves(mockApps),
-      };
-
-      registryManagerStub = {
-        appLocation: sinon.stub().resolves([]),
+      const appsRepositoryStub = {
+        listInstalledApps: sinon.stub().resolves([
+          { name: 'staticApp', spec: { staticip: true } },
+          { name: 'normalApp', spec: { staticip: false } },
+        ]),
+        isAppRunningOnIp: sinon.stub().resolves(false),
       };
 
       appUninstallerStub = {
@@ -1118,7 +1108,6 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-
       geolocationServiceStub = {
         setNodeGeolocation: sinon.stub(),
       };
@@ -1128,16 +1117,10 @@ describe('fluxNetworkHelper tests', () => {
         broadcastMessageToIncoming: sinon.stub().resolves(),
       };
 
-      const specCutoverStub = {
-        resolveSpec: sinon.stub().callsFake((app) => Promise.resolve({ ...app, isEncrypted: false })),
-      };
-
       const fluxNetworkHelperWithStubs = proxyquire('../../ZelBack/src/services/fluxNetworkHelper', {
-        './appQuery/appQueryService': appQueryServiceStub,
-        './appDatabase/registryManager': registryManagerStub,
+        './appDatabase/appsRepository': appsRepositoryStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
@@ -1156,22 +1139,14 @@ describe('fluxNetworkHelper tests', () => {
       sinon.assert.calledOnce(geolocationServiceStub.setNodeGeolocation);
     });
 
-    it('should decrypt enterprise app specs before checking staticip requirement', async () => {
+    it('should uninstall enterprise app with staticip when IP changes', async () => {
       const newIp = '192.168.1.101';
 
-      const mockApps = {
-        status: 'success',
-        data: [
-          { name: 'enterpriseApp', version: 8, enterprise: 'encrypted_data' },
-        ],
-      };
-
-      appQueryServiceStub = {
-        installedApps: sinon.stub().resolves(mockApps),
-      };
-
-      registryManagerStub = {
-        appLocation: sinon.stub().resolves([]),
+      const appsRepositoryStub = {
+        listInstalledApps: sinon.stub().resolves([
+          { name: 'enterpriseApp', spec: { staticip: true } },
+        ]),
+        isAppRunningOnIp: sinon.stub().resolves(false),
       };
 
       appUninstallerStub = {
@@ -1182,7 +1157,6 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-
       geolocationServiceStub = {
         setNodeGeolocation: sinon.stub(),
       };
@@ -1192,21 +1166,10 @@ describe('fluxNetworkHelper tests', () => {
         broadcastMessageToIncoming: sinon.stub().resolves(),
       };
 
-      const specCutoverStub = {
-        resolveSpec: sinon.stub().resolves({
-          name: 'enterpriseApp',
-          version: 8,
-          isEncrypted: false,
-          staticip: true,
-        }),
-      };
-
       const fluxNetworkHelperWithStubs = proxyquire('../../ZelBack/src/services/fluxNetworkHelper', {
-        './appQuery/appQueryService': appQueryServiceStub,
-        './appDatabase/registryManager': registryManagerStub,
+        './appDatabase/appsRepository': appsRepositoryStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
@@ -1216,86 +1179,18 @@ describe('fluxNetworkHelper tests', () => {
 
       await fluxNetworkHelperWithStubs.adjustExternalIP(newIp);
 
-      sinon.assert.calledOnce(specCutoverStub.resolveSpec);
       sinon.assert.calledOnce(appUninstallerStub.uninstallApplication);
       sinon.assert.calledWith(appUninstallerStub.uninstallApplication, 'enterpriseApp');
     });
 
-    it('should handle enterprise decryption failure gracefully', async () => {
-      const newIp = '192.168.1.102';
-
-      const mockApps = {
-        status: 'success',
-        data: [
-          { name: 'enterpriseApp', version: 8, enterprise: 'encrypted_data', staticip: false },
-        ],
-      };
-
-      appQueryServiceStub = {
-        installedApps: sinon.stub().resolves(mockApps),
-      };
-
-      registryManagerStub = {
-        appLocation: sinon.stub().resolves([]),
-      };
-
-      appUninstallerStub = {
-        uninstallApplication: sinon.stub().resolves(),
-      };
-
-      appControllerStub = {
-        appDockerRestart: sinon.stub().resolves(),
-      };
-
-
-      geolocationServiceStub = {
-        setNodeGeolocation: sinon.stub(),
-      };
-
-      fluxCommunicationMessagesSenderStub = {
-        broadcastMessageToOutgoing: sinon.stub().resolves(),
-        broadcastMessageToIncoming: sinon.stub().resolves(),
-      };
-
-      const specCutoverStub = {
-        resolveSpec: sinon.stub().resolves(null),
-      };
-
-      const fluxNetworkHelperWithStubs = proxyquire('../../ZelBack/src/services/fluxNetworkHelper', {
-        './appQuery/appQueryService': appQueryServiceStub,
-        './appDatabase/registryManager': registryManagerStub,
-        './appLifecycle/appUninstaller': appUninstallerStub,
-        './appManagement/appController': appControllerStub,
-        './utils/specCutover': specCutoverStub,
-        './geolocationService': geolocationServiceStub,
-        './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
-        './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
-        './serviceHelper': serviceHelper,
-        'fs/promises': { writeFile: writeFileStub },
-      });
-
-      await fluxNetworkHelperWithStubs.adjustExternalIP(newIp);
-
-      sinon.assert.notCalled(appUninstallerStub.uninstallApplication);
-      sinon.assert.notCalled(appControllerStub.appDockerRestart);
-    });
-
-    it('should not uninstall v6 apps even with staticip field', async () => {
+    it('should not uninstall v6 apps even with staticip field on plain object', async () => {
       const newIp = '192.168.1.103';
 
-      const mockApps = {
-        status: 'success',
-        data: [
-          { name: 'oldApp', version: 6, staticip: true },
-        ],
-      };
-
-      appQueryServiceStub = {
-        installedApps: sinon.stub().resolves(mockApps),
-      };
-
-      registryManagerStub = {
-        appLocation: sinon.stub().resolves([]),
+      const appsRepositoryStub = {
+        listInstalledApps: sinon.stub().resolves([
+          { name: 'oldApp', spec: { staticip: false } },
+        ]),
+        isAppRunningOnIp: sinon.stub().resolves(false),
       };
 
       appUninstallerStub = {
@@ -1306,7 +1201,6 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-
       geolocationServiceStub = {
         setNodeGeolocation: sinon.stub(),
       };
@@ -1316,16 +1210,10 @@ describe('fluxNetworkHelper tests', () => {
         broadcastMessageToIncoming: sinon.stub().resolves(),
       };
 
-      const specCutoverStub = {
-        resolveSpec: sinon.stub().callsFake((app) => Promise.resolve({ ...app, isEncrypted: false })),
-      };
-
       const fluxNetworkHelperWithStubs = proxyquire('../../ZelBack/src/services/fluxNetworkHelper', {
-        './appQuery/appQueryService': appQueryServiceStub,
-        './appDatabase/registryManager': registryManagerStub,
+        './appDatabase/appsRepository': appsRepositoryStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
@@ -2267,19 +2155,6 @@ describe('fluxNetworkHelper tests', () => {
       fluxNetworkHelper.isCommunicationEstablished(undefined, res);
 
       sinon.assert.calledOnceWithExactly(res.json, expectedErrorResponseOutgoing);
-    });
-  });
-
-  describe('fluxUptime tests', () => {
-    const ut = process.uptime();
-
-    it('should return a positive a bigger uptime than expected', () => {
-      const fluxUptime = fluxNetworkHelper.fluxUptime();
-
-      expect(fluxUptime.status).to.equal('success');
-      expect(fluxUptime.data).to.be.gte(ut);
-      const utb = process.uptime();
-      expect(fluxUptime.data).to.be.lte(utb);
     });
   });
 

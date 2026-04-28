@@ -537,6 +537,11 @@ async function getAppLocation(appName, ip) {
   );
 }
 
+async function isAppRunningOnIp(appName, ip) {
+  const locations = await listLocationsByApp(appName);
+  return locations.some((loc) => loc.ip.split(':')[0] === ip);
+}
+
 async function listLocations() {
   return dbHelper.findInDatabase(
     globalDb(), globalAppsLocations, {}, { projection: { _id: 0 } },
@@ -638,6 +643,7 @@ module.exports = {
   listLocationsByApp,
   listLocationsByIp,
   listAppNamesOnIp,
+  isAppRunningOnIp,
   upsertLocation,
   removeLocation,
   removeLocationsByIp,

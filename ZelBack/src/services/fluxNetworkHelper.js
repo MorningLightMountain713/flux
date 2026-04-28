@@ -1094,49 +1094,36 @@ async function adjustExternalIP(ip) {
         log.error(dosMessage);
       }
       // eslint-disable-next-line global-require
-      const appQueryService = require('./appQuery/appQueryService');
-      // eslint-disable-next-line global-require
-      const registryManager = require('./appDatabase/registryManager');
+      const appsRepository = require('./appDatabase/appsRepository');
       // eslint-disable-next-line global-require
       const appUninstaller = require('./appLifecycle/appUninstaller');
       // eslint-disable-next-line global-require
       const appController = require('./appManagement/appController');
-      // eslint-disable-next-line global-require
-      const { resolveSpec } = require('./utils/specCutover');
-      let apps = await appQueryService.installedApps();
-      if (apps.status === 'success' && apps.data.length > 0) {
-        apps = apps.data;
+      const apps = await appsRepository.listInstalledApps();
+      if (apps.length > 0) {
         let appsRemoved = 0;
-        // eslint-disable-next-line no-restricted-syntax
-        for (const app of apps) {
-          if (app.version >= 7 && (app.staticip === true || app.enterprise)) {
+        for (const inst of apps) {
+          if (inst.spec.staticip === true) {
+            log.info(`Application ${inst.name} requires static IP but node IP has changed, uninstalling app`);
+            log.warn(`REMOVAL REASON: Static IP required - ${inst.name} requires static IP but node IP changed from ${oldIP} to ${newIP}`);
             // eslint-disable-next-line no-await-in-loop
-            const spec = await resolveSpec(app);
-            if (!spec) continue;
-            if (spec.staticip === true) {
-              log.info(`Application ${app.name} requires static IP but node IP has changed, uninstalling app`);
-              log.warn(`REMOVAL REASON: Static IP required - ${app.name} requires static IP but node IP changed from ${oldIP} to ${newIP}`);
-              // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
-              appsRemoved += 1;
-              // eslint-disable-next-line no-continue
-              continue;
-            }
+            await appUninstaller.uninstallApplication(inst.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
+            appsRemoved += 1;
+            // eslint-disable-next-line no-continue
+            continue;
           }
 
           // eslint-disable-next-line no-await-in-loop
-          const runningAppList = await registryManager.appLocation(app.name);
-          const findMyIP = runningAppList.find((instance) => instance.ip.split(':')[0] === ip);
-          if (findMyIP) {
-            log.info(`Aplication: ${app.name}, was found on the network already running under the same ip, uninstalling app`);
-            log.warn(`REMOVAL REASON: Duplicate IP detected - ${app.name} already running on network with IP ${ip} (after IP change)`);
+          const duplicate = await appsRepository.isAppRunningOnIp(inst.name, ip);
+          if (duplicate) {
+            log.info(`Application ${inst.name} was found on the network already running under the same IP, uninstalling app`);
+            log.warn(`REMOVAL REASON: Duplicate IP detected - ${inst.name} already running on network with IP ${ip} (after IP change)`);
             // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
+            await appUninstaller.uninstallApplication(inst.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
             appsRemoved += 1;
           } else {
-            // once app specs v8 is done we check if app have specs that is using fluxnode service.
             // eslint-disable-next-line no-await-in-loop
-            await appController.appDockerRestart(app.name);
+            await appController.appDockerRestart(inst.name);
           }
         }
         if (apps.length > appsRemoved) {
