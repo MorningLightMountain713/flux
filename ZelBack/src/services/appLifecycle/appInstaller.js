@@ -27,14 +27,14 @@ const globalState = require('../utils/globalState');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
-const { resolveSpec, deserializeSpec } = require('../utils/specCutover');
+const { resolveSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
-const { appsFolder, localAppsInformation, scannedHeightCollection } = require('../utils/appConstants');
-const { checkAppTemporaryMessageExistence, checkAppMessageExistence } = require('../appMessaging/messageVerifier');
-const { availableApps, getApplicationGlobalSpecifications } = require('../appDatabase/registryManager');
+const { appsFolder, localAppsInformation } = require('../utils/appConstants');
+const { checkAppTemporaryMessageExistence } = require('../appMessaging/messageVerifier');
+const { getApplicationGlobalSpecifications } = require('../appDatabase/registryManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const config = require('config');
 
@@ -317,6 +317,13 @@ async function installApplication(instantiated, options = {}) {
       }
       return false;
     }
+
+    let spec = instantiated.spec;
+    if (instantiated.isEncrypted()) {
+      const provider = await spec.createProvider();
+      spec = (await spec.decrypt(provider)).spec;
+    }
+    await checkAppRequirements(spec);
 
     // eslint-disable-next-line global-require
     const appQueryService = require('../appQuery/appQueryService');
@@ -760,74 +767,21 @@ async function installApplicationAPI(req, res) {
     if (!appname) {
       throw new Error('No Flux App specified');
     }
-    let blockAllowance = config.fluxapps.ownerAppAllowance;
-    const authorized = await verificationHelper.verifyPrivilege('user', req);
-    if (authorized) {
-      let appSpec;
-      const tempMessage = await checkAppTemporaryMessageExistence(appname);
-      if (tempMessage) {
-        // eslint-disable-next-line prefer-destructuring
-        appSpec = tempMessage.appSpec;
-        // eslint-disable-next-line no-unused-vars
-        blockAllowance = config.fluxapps.temporaryAppAllowance;
-      }
-      if (!appSpec) {
-        const ownerAuthorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
-        if (!ownerAuthorized) {
-          const errMessage = messageHelper.errUnauthorizedMessage();
-          res.json(errMessage);
-          return;
-        }
-      }
-      if (!appSpec) {
-        const allApps = await availableApps();
-        appSpec = allApps.find((app) => app.name === appname);
-      }
-      if (!appSpec) {
-        appSpec = await getApplicationGlobalSpecifications(appname);
-      }
-      if (!appSpec) {
-        const permMessage = await checkAppMessageExistence(appname);
-        if (permMessage) {
-          // eslint-disable-next-line prefer-destructuring
-          appSpec = permMessage.appSpec;
-        }
-      }
-      if (!appSpec) {
-        throw new Error(`Application Specifications of ${appname} not found`);
-      }
 
-      const installSpec = await resolveSpec(appSpec);
-      if (!installSpec) throw new Error('Could not deserialize app specifications');
-
-      if (!appSpec.height && appSpec.height !== 0) {
-        const dbopen = dbHelper.databaseConnection();
-        const database = dbopen.db(config.database.daemon.database);
-        const query = { generalScannedHeight: { $gte: 0 } };
-        const projection = { projection: { _id: 0, generalScannedHeight: 1 } };
-        const result = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
-        if (!result) {
-          throw new Error('Scanning not initiated');
-        }
-        const explorerHeight = serviceHelper.ensureNumber(result.generalScannedHeight);
-        appSpec.height = explorerHeight - config.fluxapps.blocksLasting + blockAllowance;
-      }
-
-      const { InstantiatedSpec } = await getSpecBackend();
-      const instantiated = InstantiatedSpec.deserialize(appSpec);
-
-      if (await appsRepository.existsInstalledApp(instantiated.name)) {
-        throw new Error(`Application ${appname} is already installed`);
-      }
-
-      await checkAppRequirements(installSpec);
-
-      res.setHeader('Content-Type', 'application/json');
-      await installApplication(instantiated, { res });
-    } else {
+    const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
+    if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
       res.json(errMessage);
+      return;
     }
+
+    const instantiated = await appsRepository.getGlobalAppInfo(appname);
+    if (!instantiated) {
+      throw new Error(`Application Specifications of ${appname} not found`);
+    }
+
+    res.setHeader('Content-Type', 'application/json');
+    await installApplication(instantiated, { res });
   } catch (error) {
     log.error(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -874,6 +828,9 @@ async function checkAppRequirements(appSpecs, skipGeolocation = false, skipStati
  * @param {object} res - Response object
  * @returns {Promise<void>}
  */
+// TODO: testInstallApplicationAPI needs redesign — should only use temp
+// messages (PendingSpec), with a dedicated testInstallApplication domain
+// function. Currently preserves the legacy lookup chain.
 async function testInstallApplicationAPI(req, res) {
   try {
     let { appname } = req.params;
@@ -890,8 +847,7 @@ async function testInstallApplicationAPI(req, res) {
       let appSpec;
       const tempMessage = await checkAppTemporaryMessageExistence(appname);
       if (tempMessage) {
-        // eslint-disable-next-line prefer-destructuring
-        appSpec = tempMessage.appSpec;
+        appSpec = tempMessage.appSpecifications;
       }
 
       if (!appSpec) {
@@ -904,18 +860,7 @@ async function testInstallApplicationAPI(req, res) {
       }
 
       if (!appSpec) {
-        const allApps = await availableApps();
-        appSpec = allApps.find((app) => app.name === appname);
-      }
-      if (!appSpec) {
         appSpec = await getApplicationGlobalSpecifications(appname);
-      }
-      if (!appSpec) {
-        const permMessage = await checkAppMessageExistence(appname);
-        if (permMessage) {
-          // eslint-disable-next-line prefer-destructuring
-          appSpec = permMessage.appSpec;
-        }
       }
       if (!appSpec) {
         throw new Error(`Application Specifications of ${appname} not found`);

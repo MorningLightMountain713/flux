@@ -291,7 +291,7 @@ describe('appInstaller tests', () => {
       await appInstaller.installApplicationAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
-      expect(verificationHelperStub.verifyPrivilege.calledWith('user', req)).to.be.true;
+      expect(verificationHelperStub.verifyPrivilege.calledWith('adminandfluxteam', req)).to.be.true;
     });
 
     it('should handle missing appname parameter', async () => {
