@@ -193,20 +193,6 @@ async function removeCrontabEntry(appId, incorrectVolumePath) {
  * @param {string} appName - The app name
  * @returns {Promise<object|null>} - App specifications or null
  */
-async function getAppSpecifications(appName) {
-  try {
-    // Import here to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const registryManager = require('./appDatabase/registryManager');
-
-    const specifications = await registryManager.getApplicationSpecifications(appName);
-    return specifications;
-  } catch (error) {
-    log.error(`Error getting app specifications for ${appName}: ${error.message}`);
-    return null;
-  }
-}
-
 /**
  * Hard redeploy app with incorrect volume mount
  * This removes the app completely and reinstalls it with correct volume paths

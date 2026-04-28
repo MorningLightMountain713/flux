@@ -605,14 +605,12 @@ async function startApplication(appname) {
       await dockerService.appDockerStart(appname);
       startAppMonitoring(appname);
     } else {
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
         throw new Error('Application not found');
       }
-      const startSpec = await deserializeSpec(appSpecs);
-      if (!startSpec) throw new Error('Application not found');
       const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(startSpec, appsFolder);
+      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
       for (const [, deployComp] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerStart(deployComp.identifier);
@@ -637,14 +635,12 @@ async function stopApplication(appname) {
       await dockerService.appDockerStop(appname);
       stopAppMonitoring(appname, false);
     } else {
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
         throw new Error('Application not found');
       }
-      const stopSpec = await deserializeSpec(appSpecs);
-      if (!stopSpec) throw new Error('Application not found');
       const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(stopSpec, appsFolder);
+      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerStop(deployComp.identifier);
@@ -665,13 +661,12 @@ async function stopApplication(appname) {
 async function restartApplication(appname) {
   try {
     const mainAppName = appname.split('_')[1] || appname;
-    const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-    if (!appSpecs) {
+    const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+    if (!instantiated) {
       throw new Error('Application not found');
     }
-    const spec = await deserializeSpec(appSpecs);
     const { DeploymentSpec } = await getSpecBackend();
-    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+    const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
     const isComponent = appname.includes('_');
     if (isComponent) {
       const componentName = appname.split('_')[0];
@@ -682,7 +677,7 @@ async function restartApplication(appname) {
       await dockerService.appDockerRestart(appname);
       startAppMonitoring(appname);
     } else {
-      for (const [compName] of spec?.componentEntries?.() || []) {
+      for (const [compName] of deployment.componentEntries()) {
         const deployComp = deployment.getComponent(compName);
         if (deployComp?.mounts?.length) {
           // eslint-disable-next-line no-await-in-loop

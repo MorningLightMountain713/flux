@@ -3,11 +3,10 @@ const serviceHelper = require('../serviceHelper');
 // Removed verificationHelper to avoid circular dependency - will use dynamic require where needed
 const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
-const registryManager = require('../appDatabase/registryManager');
 const appInspector = require('./appInspector');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const log = require('../../lib/log');
-const { deserializeSpec } = require('../utils/specCutover');
+const appsRepository = require('../appDatabase/appsRepository');
 const { getSpecBackend } = require('../utils/specLibs');
 const { appsFolder } = require('../utils/appConstants');
 
@@ -17,8 +16,6 @@ const { appsFolder } = require('../utils/appConstants');
  * @returns {Promise<Array>} Application locations
  */
 async function appLocation(appname) {
-  // eslint-disable-next-line global-require
-  const appsRepository = require('../appDatabase/appsRepository');
   if (appname) {
     return appsRepository.listLocationsByApp(appname);
   }
@@ -113,13 +110,12 @@ async function appStart(req, res) {
     const isComponent = appname.includes('_');
     let appRes;
 
-    const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-    if (!appSpecs) {
+    const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+    if (!instantiated) {
       throw new Error('Application not found');
     }
-    const spec = await deserializeSpec(appSpecs);
     const { DeploymentSpec } = await getSpecBackend();
-    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+    const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
 
     if (isComponent) {
       const compName = appname.split('_')[0];
@@ -160,7 +156,7 @@ async function appStart(req, res) {
         await dockerService.appDockerStart(deployComp.identifier);
         appInspector.startAppMonitoring(deployComp.identifier);
       }
-      appRes = `Application ${spec.name} started`;
+      appRes = `Application ${instantiated.name} started`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -219,19 +215,18 @@ async function appStop(req, res) {
       appInspector.stopAppMonitoring(appname, false);
       appRes = await dockerService.appDockerStop(appname);
     } else {
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
         throw new Error('Application not found');
       }
-      const spec = await deserializeSpec(appSpecs);
       const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         appInspector.stopAppMonitoring(deployComp.identifier, false);
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerStop(deployComp.identifier);
       }
-      appRes = `Application ${spec.name} stopped`;
+      appRes = `Application ${instantiated.name} stopped`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -286,13 +281,12 @@ async function appRestart(req, res) {
     const isComponent = appname.includes('_');
     let appRes;
 
-    const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-    if (!appSpecs) {
+    const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+    if (!instantiated) {
       throw new Error('Application not found');
     }
-    const spec = await deserializeSpec(appSpecs);
     const { DeploymentSpec } = await getSpecBackend();
-    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+    const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
 
     if (isComponent) {
       const compName = appname.split('_')[0];
@@ -331,7 +325,7 @@ async function appRestart(req, res) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerRestart(deployComp.identifier);
       }
-      appRes = `Application ${spec.name} restarted`;
+      appRes = `Application ${instantiated.name} restarted`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -380,18 +374,17 @@ async function appKill(req, res) {
     if (isComponent) {
       appRes = await dockerService.appDockerKill(appname);
     } else {
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
         throw new Error('Application not found');
       }
-      const spec = await deserializeSpec(appSpecs);
       const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerKill(deployComp.identifier);
       }
-      appRes = `Application ${spec.name} killed`;
+      appRes = `Application ${instantiated.name} killed`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -449,18 +442,17 @@ async function appPause(req, res) {
     if (isComponent) {
       appRes = await dockerService.appDockerPause(appname);
     } else {
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
         throw new Error('Application not found');
       }
-      const spec = await deserializeSpec(appSpecs);
       const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerPause(deployComp.identifier);
       }
-      appRes = `Application ${spec.name} paused`;
+      appRes = `Application ${instantiated.name} paused`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -518,18 +510,17 @@ async function appUnpause(req, res) {
     if (isComponent) {
       appRes = await dockerService.appDockerUnpause(appname);
     } else {
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
         throw new Error('Application not found');
       }
-      const spec = await deserializeSpec(appSpecs);
       const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
       for (const [, deployComp] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerUnpause(deployComp.identifier);
       }
-      appRes = `Application ${spec.name} unpaused`;
+      appRes = `Application ${instantiated.name} unpaused`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -561,8 +552,6 @@ async function appDockerRestart(appname) {
       // Note: startAppMonitoring would need to be injected or called separately
       log.info(`Component ${appname} restarted successfully`);
     } else {
-      // ask for restarting entire composed application
-      // This would need getApplicationSpecifications from registryManager
       log.info(`Restarting entire application ${appname}`);
       await dockerService.appDockerRestart(appname);
     }

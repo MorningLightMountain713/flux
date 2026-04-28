@@ -377,60 +377,37 @@ async function getApplicationLocalSpecifications(appName) {
 }
 
 /**
- * Get app specifications (tries global first, then local)
- * @param {string} appName - Application name
- * @returns {Promise<object|null>} App specifications
- */
-async function getApplicationSpecifications(appName) {
-  // appSpecs: {
-  //   version: 2,
-  //   name: 'FoldingAtHomeB',
-  //   description: 'Folding @ Home is cool :)',
-  //   repotag: 'yurinnick/folding-at-home:latest',
-  //   owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-  //   ports: '[30001]', // []
-  //   containerPorts: '[7396]', // []
-  //   domains: '[""]', // []
-  //   enviromentParameters: '["USER=foldingUser", "TEAM=262156", "ENABLE_GPU=false", "ENABLE_SMP=true"]', // []
-  //   commands: '["--allow","0/0","--web-allow","0/0"]', // []
-  //   containerData: '/config',
-  //   cpu: 0.5,
-  //   ram: 500,
-  //   hdd: 5,
-  //   tiered: true,
-  //   cpubasic: 0.5,
-  //   rambasic: 500,
-  //   hddbasic: 5,
-  //   cpusuper: 1,
-  //   ramsuper: 1000,
-  //   hddsuper: 5,
-  //   cpubamf: 2,
-  //   rambamf: 2000,
-  //   hddbamf: 5,
-  //   hash: hash of message that has these paramenters,
-  //   height: height containing the message
-  // };
-  const globalSpec = await getApplicationGlobalSpecifications(appName);
-  if (globalSpec) return globalSpec;
-
-  // eslint-disable-next-line no-use-before-define
-  const allApps = await availableApps();
-  return allApps.find((app) => app.name.toLowerCase() === appName.toLowerCase()) || null;
-}
-
-/**
  * Get application specification via API
  * @param {object} req - Request object
  * @param {object} res - Response object
  */
+async function getApplicationSpecification(appname, encryptedEnterpriseKey) {
+  const instantiated = await appsRepository.getGlobalAppInfo(appname);
+  if (!instantiated) {
+    throw new Error(`Application: ${appname} not found`);
+  }
+
+  if (!encryptedEnterpriseKey || !instantiated.isEncrypted()) {
+    return instantiated.spec.serialize();
+  }
+
+  const backendProvider = await legacyCryptoProvider.create(
+    instantiated.name, instantiated.owner,
+  );
+  const decrypted = await instantiated.spec.decrypt(backendProvider);
+  const transportProvider = await legacyTransportProvider.create(
+    instantiated.name, instantiated.owner, encryptedEnterpriseKey,
+  );
+  const reencrypted = await decrypted.reencrypt(transportProvider);
+  return reencrypted.serialize();
+}
+
 async function getApplicationSpecificationAPI(req, res) {
   try {
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
     if (!syncStatus.data.synced) {
       throw new Error('Daemon not yet synced.');
     }
-
-    const { data: { height: daemonHeight } } = syncStatus;
 
     let { appname, decrypt } = req.params;
     appname = appname || req.query.appname;
@@ -439,82 +416,38 @@ async function getApplicationSpecificationAPI(req, res) {
       throw new Error('No Application Name specified');
     }
 
-    // query params take precedence over params (they were set explictly)
     decrypt = req.query.decrypt || decrypt;
 
-    const specifications = await getApplicationSpecifications(appname);
-    const mainAppName = appname.split('_')[1] || appname;
-
-    if (!specifications) {
-      throw new Error(`Application: ${appname} not found`);
-    }
-
-    const isEnterprise = Boolean(
-      specifications.version >= 8 && specifications.enterprise,
-    );
-
-    if (!decrypt) {
-      if (isEnterprise) {
-        specifications.compose = [];
-        specifications.contacts = [];
+    let encryptedEnterpriseKey;
+    if (decrypt) {
+      encryptedEnterpriseKey = req.headers['enterprise-key'];
+      if (!encryptedEnterpriseKey) {
+        throw new Error('Header with enterpriseKey is mandatory for enterprise Apps.');
       }
 
-      const specResponse = messageHelper.createDataMessage(specifications);
-      res.json(specResponse);
-      return null;
-    }
-
-    if (!isEnterprise) {
-      throw new Error('App spec decryption is only possible for version 8+ Apps.');
-    }
-
-    const encryptedEnterpriseKey = req.headers['enterprise-key'];
-    if (!encryptedEnterpriseKey) {
-      throw new Error('Header with enterpriseKey is mandatory for enterprise Apps.');
-    }
-
-    const ownerAuthorized = await verificationHelper.verifyPrivilege(
-      'appowner',
-      req,
-      mainAppName,
-    );
-
-    const fluxTeamAuthorized = ownerAuthorized === true
-      ? false
-      : await verificationHelper.verifyPrivilege(
-        'appownerabove',
+      const mainAppName = appname.split('_')[1] || appname;
+      const ownerAuthorized = await verificationHelper.verifyPrivilege(
+        'appowner',
         req,
         mainAppName,
       );
 
-    if (ownerAuthorized !== true && fluxTeamAuthorized !== true) {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-      return null;
+      const fluxTeamAuthorized = ownerAuthorized === true
+        ? false
+        : await verificationHelper.verifyPrivilege(
+          'appownerabove',
+          req,
+          mainAppName,
+        );
+
+      if (ownerAuthorized !== true && fluxTeamAuthorized !== true) {
+        res.json(messageHelper.errUnauthorizedMessage());
+        return null;
+      }
     }
 
-    if (fluxTeamAuthorized) {
-      specifications.compose.forEach((component) => {
-        const comp = component;
-        comp.environmentParameters = [];
-        comp.repoauth = '';
-      });
-    }
-
-    const transportProvider = await legacyTransportProvider.create(
-      specifications.name, specifications.owner, encryptedEnterpriseKey,
-    );
-    const plaintext = Buffer.from(JSON.stringify({
-      contacts: specifications.contacts,
-      compose: specifications.compose,
-    }), 'utf8');
-    const encrypted = await transportProvider.encrypt(plaintext);
-    specifications.enterprise = encrypted.ciphertext;
-    specifications.contacts = [];
-    specifications.compose = [];
-
-    const specResponse = messageHelper.createDataMessage(specifications);
-    res.json(specResponse);
+    const spec = await getApplicationSpecification(appname, encryptedEnterpriseKey);
+    res.json(messageHelper.createDataMessage(spec));
   } catch (error) {
     log.error(error);
 
@@ -1372,7 +1305,6 @@ module.exports = {
   getAppsInstallingErrorsLocations,
   getApplicationGlobalSpecifications,
   getApplicationLocalSpecifications,
-  getApplicationSpecifications,
   getApplicationSpecificationAPI,
   getApplicationOwner,
   getApplicationOwnerAPI,

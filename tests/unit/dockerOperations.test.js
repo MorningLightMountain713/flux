@@ -40,11 +40,24 @@ describe('dockerOperations tests', () => {
   });
 });
 
+function mockInstantiatedSpec(spec) {
+  if (!spec) return null;
+  return {
+    spec,
+    name: spec.name,
+    version: spec.version || 4,
+    hash: 'testhash',
+    height: 1000,
+    isEncrypted: () => false,
+    serialize: () => ({ ...spec }),
+  };
+}
+
 describe('advancedWorkflows application lifecycle tests', () => {
   let advancedWorkflows;
   let dockerServiceStub;
   let registryManagerStub;
-  let deserializeSpecStub;
+  let appsRepositoryStub;
   let getSpecBackendStub;
   let appInspectorStub;
   let appVolumeServiceStub;
@@ -58,12 +71,14 @@ describe('advancedWorkflows application lifecycle tests', () => {
     };
 
     registryManagerStub = {
-      getApplicationSpecifications: sinon.stub().resolves(null),
       getApplicationGlobalSpecifications: sinon.stub().resolves(null),
       appLocation: sinon.stub().resolves([]),
     };
 
-    deserializeSpecStub = sinon.stub().resolves(null);
+    appsRepositoryStub = {
+      listInstalledApps: sinon.stub().resolves([]),
+      getGlobalAppInfo: sinon.stub().resolves(null),
+    };
 
     getSpecBackendStub = sinon.stub().resolves({
       DeploymentSpec: { fromSpec: sinon.stub() },
@@ -87,7 +102,6 @@ describe('advancedWorkflows application lifecycle tests', () => {
     advancedWorkflows = proxyquire('../../ZelBack/src/services/appLifecycle/advancedWorkflows', {
       '../dockerService': dockerServiceStub,
       '../appDatabase/registryManager': registryManagerStub,
-      '../utils/specCutover': { deserializeSpec: deserializeSpecStub },
       '../utils/specLibs': { getSpec: sinon.stub(), getSpecBackend: getSpecBackendStub },
       '../appManagement/appInspector': appInspectorStub,
       './appVolumeService': appVolumeServiceStub,
@@ -100,7 +114,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       '../fluxNetworkHelper': { getMyFluxIPandPort: sinon.stub().resolves('127.0.0.1:16127') },
       '../generalService': { nodeTier: sinon.stub().resolves('cumulus') },
       '../upnpService': {},
-      '../appDatabase/appsRepository': { listInstalledApps: sinon.stub().resolves([]) },
+      '../appDatabase/appsRepository': appsRepositoryStub,
       '../appQuery/appQueryService': { listRunningContainers: sinon.stub().resolves([]), listAllApps: sinon.stub().resolves([]), installedApps: sinon.stub().resolves({ data: [] }) },
       '../appRuntime/deploymentProvider': { getInstalledDeployment: sinon.stub().resolves(null) },
       './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
@@ -123,11 +137,11 @@ describe('advancedWorkflows application lifecycle tests', () => {
     it('should not look up specs when stopping a single component', async () => {
       await advancedWorkflows.stopApplication('Web_MyApp');
 
-      sinon.assert.notCalled(registryManagerStub.getApplicationSpecifications);
+      sinon.assert.notCalled(appsRepositoryStub.getGlobalAppInfo);
     });
 
     it('should log error when app specs not found for whole app', async () => {
-      registryManagerStub.getApplicationSpecifications.resolves(null);
+      appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
       await advancedWorkflows.stopApplication('TestApp');
 
@@ -136,10 +150,8 @@ describe('advancedWorkflows application lifecycle tests', () => {
     });
 
     it('should stop all components via DeploymentSpec for whole app', async () => {
-      registryManagerStub.getApplicationSpecifications.resolves({ name: 'TestApp', version: 4 });
-
-      const fakeSpec = { components: { Web: {}, API: {} } };
-      deserializeSpecStub.resolves(fakeSpec);
+      const fakeSpec = { name: 'TestApp', version: 4, components: { Web: {}, API: {} } };
+      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec(fakeSpec));
 
       const mockDeployment = {
         componentEntries: sinon.stub().returns([
@@ -160,8 +172,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     });
 
     it('should pass reverse option to componentEntries', async () => {
-      registryManagerStub.getApplicationSpecifications.resolves({ name: 'TestApp' });
-      deserializeSpecStub.resolves({});
+      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
 
       const componentEntriesStub = sinon.stub().returns([]);
       getSpecBackendStub.resolves({
@@ -192,8 +203,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     });
 
     it('should start all components via DeploymentSpec for whole app', async () => {
-      registryManagerStub.getApplicationSpecifications.resolves({ name: 'TestApp' });
-      deserializeSpecStub.resolves({});
+      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
 
       const mockDeployment = {
         componentEntries: sinon.stub().returns([
@@ -214,7 +224,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     });
 
     it('should log error when app not found', async () => {
-      registryManagerStub.getApplicationSpecifications.resolves(null);
+      appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
       await advancedWorkflows.startApplication('TestApp');
 
@@ -225,9 +235,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
 
   describe('restartApplication', () => {
     it('should restart a single component and ensure mounts exist', async () => {
-      registryManagerStub.getApplicationSpecifications.resolves({ name: 'TestApp' });
-      const mockSpec = { componentEntries: () => [['Web', {}]] };
-      deserializeSpecStub.resolves(mockSpec);
+      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
 
       const mockDeployComp = { identifier: 'Web_TestApp', mounts: [{ Source: '/tmp' }] };
       getSpecBackendStub.resolves({
@@ -244,8 +252,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     });
 
     it('should skip ensureMountSourcesExist when component has no mounts', async () => {
-      registryManagerStub.getApplicationSpecifications.resolves({ name: 'TestApp' });
-      deserializeSpecStub.resolves({ componentEntries: () => [['Web', {}]] });
+      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
 
       const mockDeployComp = { identifier: 'Web_TestApp', mounts: [] };
       getSpecBackendStub.resolves({
@@ -259,17 +266,16 @@ describe('advancedWorkflows application lifecycle tests', () => {
     });
 
     it('should restart all components for whole app', async () => {
-      registryManagerStub.getApplicationSpecifications.resolves({ name: 'TestApp' });
-      const mockSpec = {
-        componentEntries: () => [['Web', {}], ['API', {}]],
-      };
-      deserializeSpecStub.resolves(mockSpec);
+      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
 
+      const webComp = { identifier: 'Web_TestApp', mounts: [] };
+      const apiComp = { identifier: 'API_TestApp', mounts: [] };
       const mockDeployment = {
+        componentEntries: sinon.stub().returns([['Web', webComp], ['API', apiComp]]),
         getComponent: sinon.stub(),
       };
-      mockDeployment.getComponent.withArgs('Web').returns({ identifier: 'Web_TestApp', mounts: [] });
-      mockDeployment.getComponent.withArgs('API').returns({ identifier: 'API_TestApp', mounts: [] });
+      mockDeployment.getComponent.withArgs('Web').returns(webComp);
+      mockDeployment.getComponent.withArgs('API').returns(apiComp);
       getSpecBackendStub.resolves({
         DeploymentSpec: { fromSpec: sinon.stub().returns(mockDeployment) },
       });
@@ -283,7 +289,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     });
 
     it('should log error when app not found', async () => {
-      registryManagerStub.getApplicationSpecifications.resolves(null);
+      appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
       await advancedWorkflows.restartApplication('TestApp');
 
@@ -292,8 +298,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     });
 
     it('should handle docker restart errors gracefully', async () => {
-      registryManagerStub.getApplicationSpecifications.resolves({ name: 'TestApp' });
-      deserializeSpecStub.resolves({ componentEntries: () => [['Web', {}]] });
+      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
       getSpecBackendStub.resolves({
         DeploymentSpec: {
           fromSpec: sinon.stub().returns({
