@@ -9,11 +9,12 @@
 const config = require('config');
 const log = require('../lib/log');
 const dockerService = require('./dockerService');
-const appQueryService = require('./appQuery/appQueryService');
 const advancedWorkflows = require('./appLifecycle/advancedWorkflows');
 const registryCredentialHelper = require('./utils/registryCredentialHelper');
 const { ImageVerifier } = require('./utils/imageVerifier');
 const serviceHelper = require('./serviceHelper');
+const deploymentProvider = require('./appRuntime/deploymentProvider');
+const appsRepository = require('./appDatabase/appsRepository');
 const globalState = require('./utils/globalState');
 const fluxEventBus = require('./utils/fluxEventBus');
 
@@ -206,25 +207,28 @@ async function getRemoteManifestDigest(repotag, repoauth, specVersion, appName) 
  * @param {object} appSpec Application specification
  * @returns {Promise<{needsUpdate: boolean, components: Array, rateLimited: boolean}>} Update status and components that need updates
  */
-async function checkAppForUpdates(appSpec) {
+async function checkAppForUpdates(deployment, specVersion) {
   const result = { needsUpdate: false, components: [], rateLimited: false };
 
   try {
-    // Handle v1-v3 apps (single container)
-    if (appSpec.version < 4) {
-      const containerName = dockerService.getAppIdentifier(appSpec.name);
+    for (const [name, deployComp] of deployment.componentEntries()) {
+      const containerName = dockerService.getAppIdentifier(deployComp.identifier);
+
+      // eslint-disable-next-line no-await-in-loop
       const localDigest = await getLocalImageDigest(containerName);
 
       if (!localDigest) {
-        log.debug(`Could not get local digest for ${appSpec.name}, skipping`);
-        return result;
+        log.debug(`Could not get local digest for ${deployment.appName}/${name}, skipping component`);
+        // eslint-disable-next-line no-continue
+        continue;
       }
 
+      // eslint-disable-next-line no-await-in-loop
       const remoteResult = await getRemoteManifestDigest(
-        appSpec.repotag,
-        appSpec.repoauth || null,
-        appSpec.version,
-        appSpec.name,
+        deployComp.image,
+        deployComp.imageAuth || null,
+        specVersion,
+        deployment.appName,
       );
 
       if (remoteResult.error === 'rate_limited') {
@@ -233,82 +237,29 @@ async function checkAppForUpdates(appSpec) {
       }
 
       if (!remoteResult.digest) {
-        log.warn(`Could not get remote digest for ${appSpec.name}, skipping`);
-        return result;
-      }
-
-      if (localDigest !== remoteResult.digest) {
-        log.info(`Update available for ${appSpec.name}: ${localDigest} -> ${remoteResult.digest}`);
-        result.needsUpdate = true;
-        result.components.push({
-          name: appSpec.name,
-          repotag: appSpec.repotag,
-          localDigest,
-          remoteDigest: remoteResult.digest,
-        });
-      }
-
-      return result;
-    }
-
-    // Handle v4+ apps (compose with multiple components)
-    if (!appSpec.compose || !Array.isArray(appSpec.compose)) {
-      log.warn(`App ${appSpec.name} has no compose array, skipping`);
-      return result;
-    }
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const component of appSpec.compose) {
-      // Container naming: flux{componentName}_{appName}
-      const containerName = `${dockerService.getAppIdentifier(component.name)}_${appSpec.name}`;
-
-      // eslint-disable-next-line no-await-in-loop
-      const localDigest = await getLocalImageDigest(containerName);
-
-      if (!localDigest) {
-        log.debug(`Could not get local digest for ${appSpec.name}/${component.name}, skipping component`);
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-
-      // eslint-disable-next-line no-await-in-loop
-      const remoteResult = await getRemoteManifestDigest(
-        component.repotag,
-        component.repoauth || null,
-        appSpec.version,
-        appSpec.name,
-      );
-
-      if (remoteResult.error === 'rate_limited') {
-        result.rateLimited = true;
-        return result;
-      }
-
-      if (!remoteResult.digest) {
-        log.warn(`Could not get remote digest for ${appSpec.name}/${component.name}, skipping component`);
+        log.warn(`Could not get remote digest for ${deployment.appName}/${name}, skipping component`);
         // eslint-disable-next-line no-continue
         continue;
       }
 
       if (localDigest !== remoteResult.digest) {
-        log.info(`Update available for ${appSpec.name}/${component.name}: ${localDigest} -> ${remoteResult.digest}`);
+        log.info(`Update available for ${deployment.appName}/${name}: ${localDigest} -> ${remoteResult.digest}`);
         result.needsUpdate = true;
         result.components.push({
-          name: component.name,
-          repotag: component.repotag,
+          name,
+          repotag: deployComp.image,
           localDigest,
           remoteDigest: remoteResult.digest,
         });
       }
 
-      // Add delay between component checks for rate limiting
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(DELAY_BETWEEN_COMPONENTS);
     }
 
     return result;
   } catch (error) {
-    log.warn(`Error checking updates for ${appSpec.name}: ${error.message}`);
+    log.warn(`Error checking updates for ${deployment.appName}: ${error.message}`);
     return result;
   }
 }
@@ -318,25 +269,23 @@ async function checkAppForUpdates(appSpec) {
  * @param {object} appSpec Application specification
  * @returns {Promise<boolean>} True if redeploy was triggered, false otherwise
  */
-async function triggerAppUpdate(appSpec) {
+async function triggerAppUpdate(appName) {
   try {
-    // Double-check globalState flags before triggering
     if (isOperationInProgress()) {
-      log.warn(`Skipping redeploy for ${appSpec.name}: another operation in progress`);
+      log.warn(`Skipping redeploy for ${appName}: another operation in progress`);
       return false;
     }
 
-    log.info(`Triggering soft redeploy for ${appSpec.name}`);
-    fluxEventBus.publish('imageUpdate:redeployTriggered', { appName: appSpec.name });
+    log.info(`Triggering soft redeploy for ${appName}`);
+    fluxEventBus.publish('imageUpdate:redeployTriggered', { appName });
 
-    // Call softRedeploy without response object (internal call)
-    await advancedWorkflows.softRedeploy(appSpec, null);
+    await advancedWorkflows.redeployApplication(appName, { createVolumes: false });
 
-    fluxEventBus.publish('imageUpdate:redeployComplete', { appName: appSpec.name });
+    fluxEventBus.publish('imageUpdate:redeployComplete', { appName });
 
     return true;
   } catch (error) {
-    log.error(`Error triggering redeploy for ${appSpec.name}: ${error.message}`);
+    log.error(`Error triggering redeploy for ${appName}: ${error.message}`);
     return false;
   }
 }
@@ -355,24 +304,16 @@ async function checkForImageUpdates() {
   }
 
   try {
-    // Get all installed apps
-    const installedAppsResponse = await appQueryService.installedApps();
+    const deployments = await deploymentProvider.listInstalledDeployments();
+    const installedRaw = await appsRepository.listInstalledAppsRaw({ projection: { name: 1, version: 1 } });
+    const versionByName = new Map(installedRaw.map((r) => [r.name, r.version]));
 
-    if (installedAppsResponse.status !== 'success' || !installedAppsResponse.data) {
-      log.warn('Could not get installed apps list');
-      return;
-    }
-
-    // Decrypt enterprise apps (version 8 with encrypted content)
-    const apps = await appQueryService.decryptEnterpriseApps(installedAppsResponse.data, { formatSpecs: false });
-    log.info(`Checking ${apps.length} installed apps for image updates`);
+    log.info(`Checking ${deployments.length} installed apps for image updates`);
 
     let updatesTriggered = 0;
     let appsChecked = 0;
 
-    // eslint-disable-next-line no-restricted-syntax
-    for (const appSpec of apps) {
-      // Re-check flags before each app
+    for (const deployment of deployments) {
       if (isOperationInProgress()) {
         log.info('Aborting image update check: operation started');
         break;
@@ -380,9 +321,10 @@ async function checkForImageUpdates() {
 
       try {
         appsChecked += 1;
+        const specVersion = versionByName.get(deployment.appName);
 
         // eslint-disable-next-line no-await-in-loop
-        const updateStatus = await checkAppForUpdates(appSpec);
+        const updateStatus = await checkAppForUpdates(deployment, specVersion);
 
         if (updateStatus.rateLimited) {
           log.warn('Rate limited by registry, aborting remaining checks this cycle');
@@ -391,7 +333,7 @@ async function checkForImageUpdates() {
 
         if (updateStatus.needsUpdate) {
           // eslint-disable-next-line no-await-in-loop
-          const redeployTriggered = await triggerAppUpdate(appSpec);
+          const redeployTriggered = await triggerAppUpdate(deployment.appName);
           if (redeployTriggered) {
             updatesTriggered += 1;
             // Wait longer after triggering a redeploy
