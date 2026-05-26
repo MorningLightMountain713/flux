@@ -11,7 +11,7 @@ describe('daemonHealthMonitor tests', () => {
   let globalStateStub;
   let logStub;
   let daemonServiceMiscRpcsStub;
-  let registryManagerStub;
+  let appsRepositoryStub;
   let appUninstallerStub;
   let clock;
 
@@ -43,12 +43,12 @@ describe('daemonHealthMonitor tests', () => {
       isDaemonSynced: sinon.stub(),
     };
 
-    registryManagerStub = {
-      getInstalledApps: sinon.stub(),
+    appsRepositoryStub = {
+      listInstalledApps: sinon.stub(),
     };
 
     appUninstallerStub = {
-      removeAppLocally: sinon.stub().resolves(),
+      uninstallApplication: sinon.stub().resolves(),
     };
 
     // Use proxyquire to inject stubs
@@ -57,7 +57,7 @@ describe('daemonHealthMonitor tests', () => {
       '../utils/globalState': globalStateStub,
       '../../lib/log': logStub,
       '../daemonService/daemonServiceMiscRpcs': daemonServiceMiscRpcsStub,
-      '../appDatabase/registryManager': registryManagerStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
       '../appLifecycle/appUninstaller': appUninstallerStub,
     });
   });
@@ -136,7 +136,7 @@ describe('daemonHealthMonitor tests', () => {
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       expect(logStub.warn.calledWith('Daemon detected as unsynced, starting health monitoring')).to.be.true;
-      expect(registryManagerStub.getInstalledApps.called).to.be.false;
+      expect(appsRepositoryStub.listInstalledApps.called).to.be.false;
     });
 
     it('should not remove apps when daemon unsynced for less than 2 hours', async () => {
@@ -152,7 +152,7 @@ describe('daemonHealthMonitor tests', () => {
       // Second call - still unsynced but not past threshold
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
-      expect(registryManagerStub.getInstalledApps.called).to.be.false;
+      expect(appsRepositoryStub.listInstalledApps.called).to.be.false;
       expect(logStub.error.called).to.be.false;
     });
 
@@ -163,7 +163,7 @@ describe('daemonHealthMonitor tests', () => {
         { name: 'app1' },
         { name: 'app2' },
       ];
-      registryManagerStub.getInstalledApps.resolves(mockApps);
+      appsRepositoryStub.listInstalledApps.resolves(mockApps);
 
       // First call - daemon becomes unsynced
       daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
@@ -176,17 +176,17 @@ describe('daemonHealthMonitor tests', () => {
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       expect(logStub.error.calledWith('CRITICAL: Daemon not synced for 2+ hours. Removing all applications.')).to.be.true;
-      expect(registryManagerStub.getInstalledApps.called).to.be.true;
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(2);
-      expect(appUninstallerStub.removeAppLocally.firstCall.args[0]).to.equal('app1');
-      expect(appUninstallerStub.removeAppLocally.secondCall.args[0]).to.equal('app2');
+      expect(appsRepositoryStub.listInstalledApps.called).to.be.true;
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
+      expect(appUninstallerStub.uninstallApplication.firstCall.args[0]).to.equal('app1');
+      expect(appUninstallerStub.uninstallApplication.secondCall.args[0]).to.equal('app2');
     });
 
     it('should not remove apps multiple times', async () => {
       clock = sinon.useFakeTimers();
 
       const mockApps = [{ name: 'app1' }];
-      registryManagerStub.getInstalledApps.resolves(mockApps);
+      appsRepositoryStub.listInstalledApps.resolves(mockApps);
 
       // First call - daemon becomes unsynced
       daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
@@ -197,17 +197,17 @@ describe('daemonHealthMonitor tests', () => {
 
       // Second call - should trigger app removal
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(1);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(1);
 
       // Third call - should not trigger removal again
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(1);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(1);
     });
 
     it('should log info when no apps are installed', async () => {
       clock = sinon.useFakeTimers();
 
-      registryManagerStub.getInstalledApps.resolves([]);
+      appsRepositoryStub.listInstalledApps.resolves([]);
 
       // First call - daemon becomes unsynced
       daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
@@ -220,13 +220,13 @@ describe('daemonHealthMonitor tests', () => {
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       expect(logStub.info.calledWith('No apps installed, nothing to remove')).to.be.true;
-      expect(appUninstallerStub.removeAppLocally.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
     it('should handle null installed apps', async () => {
       clock = sinon.useFakeTimers();
 
-      registryManagerStub.getInstalledApps.resolves(null);
+      appsRepositoryStub.listInstalledApps.resolves(null);
 
       // First call - daemon becomes unsynced
       daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
@@ -239,7 +239,7 @@ describe('daemonHealthMonitor tests', () => {
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       expect(logStub.info.calledWith('No apps installed, nothing to remove')).to.be.true;
-      expect(appUninstallerStub.removeAppLocally.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
     it('should continue removing apps even if one fails', async () => {
@@ -250,10 +250,10 @@ describe('daemonHealthMonitor tests', () => {
         { name: 'app2' },
         { name: 'app3' },
       ];
-      registryManagerStub.getInstalledApps.resolves(mockApps);
+      appsRepositoryStub.listInstalledApps.resolves(mockApps);
 
       // Make the second app fail
-      appUninstallerStub.removeAppLocally
+      appUninstallerStub.uninstallApplication
         .onCall(0).resolves()
         .onCall(1).rejects(new Error('Removal failed'))
         .onCall(2).resolves();
@@ -268,7 +268,7 @@ describe('daemonHealthMonitor tests', () => {
       // Second call - should attempt all removals
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(3);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(3);
       expect(logStub.error.calledWith('Failed to remove app2: Removal failed')).to.be.true;
     });
 
@@ -279,7 +279,7 @@ describe('daemonHealthMonitor tests', () => {
         { name: 'app1' },
         { name: 'app2' },
       ];
-      registryManagerStub.getInstalledApps.resolves(mockApps);
+      appsRepositoryStub.listInstalledApps.resolves(mockApps);
 
       // First call - daemon becomes unsynced
       daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
@@ -308,7 +308,7 @@ describe('daemonHealthMonitor tests', () => {
       clock = sinon.useFakeTimers();
 
       const mockApps = [{ name: 'app1' }];
-      registryManagerStub.getInstalledApps.resolves(mockApps);
+      appsRepositoryStub.listInstalledApps.resolves(mockApps);
 
       // First call - daemon becomes unsynced
       daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
@@ -317,7 +317,7 @@ describe('daemonHealthMonitor tests', () => {
       // Advance time by 2 hours and trigger removal
       clock.tick(2 * 60 * 60 * 1000);
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(1);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(1);
 
       // Daemon recovers
       daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: true } });
@@ -329,11 +329,11 @@ describe('daemonHealthMonitor tests', () => {
 
       // Advance time by 2 hours again
       clock.tick(2 * 60 * 60 * 1000);
-      registryManagerStub.getInstalledApps.resolves([{ name: 'app2' }]);
+      appsRepositoryStub.listInstalledApps.resolves([{ name: 'app2' }]);
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Should attempt removal again since flag was reset
-      expect(appUninstallerStub.removeAppLocally.callCount).to.equal(2);
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
     });
   });
 });

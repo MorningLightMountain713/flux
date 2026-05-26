@@ -14,13 +14,17 @@ const dockerServiceStub = {
   getAppIdentifier: sinon.stub(),
 };
 
-const appQueryServiceStub = {
-  installedApps: sinon.stub(),
-  decryptEnterpriseApps: sinon.stub(),
+const deploymentProviderStub = {
+  listInstalledDeployments: sinon.stub(),
+};
+
+const appsRepositoryStub = {
+  listInstalledAppsRaw: sinon.stub(),
+  getInstalledAppRaw: sinon.stub(),
 };
 
 const advancedWorkflowsStub = {
-  softRedeploy: sinon.stub(),
+  redeployApplication: sinon.stub(),
 };
 
 const registryCredentialHelperStub = {
@@ -72,7 +76,8 @@ class MockImageVerifier {
 const imageUpdateService = proxyquire('../../ZelBack/src/services/imageUpdateService', {
   '../lib/log': logStub,
   './dockerService': dockerServiceStub,
-  './appQuery/appQueryService': appQueryServiceStub,
+  './appRuntime/deploymentProvider': deploymentProviderStub,
+  './appDatabase/appsRepository': appsRepositoryStub,
   './appLifecycle/advancedWorkflows': advancedWorkflowsStub,
   './utils/registryCredentialHelper': registryCredentialHelperStub,
   './utils/imageVerifier': { ImageVerifier: MockImageVerifier },
@@ -89,12 +94,13 @@ describe('imageUpdateService tests', () => {
     dockerServiceStub.getDockerContainer.reset();
     dockerServiceStub.getAppIdentifier.reset();
 
-    appQueryServiceStub.installedApps.reset();
-    appQueryServiceStub.decryptEnterpriseApps.reset();
-    // Configure decryptEnterpriseApps to pass through apps unchanged by default
-    appQueryServiceStub.decryptEnterpriseApps.callsFake(async (apps) => apps);
+    deploymentProviderStub.listInstalledDeployments.reset();
+    deploymentProviderStub.listInstalledDeployments.resolves([]);
+    appsRepositoryStub.listInstalledAppsRaw.reset();
+    appsRepositoryStub.listInstalledAppsRaw.resolves([]);
+    appsRepositoryStub.getInstalledAppRaw.reset();
 
-    advancedWorkflowsStub.softRedeploy.reset();
+    advancedWorkflowsStub.redeployApplication.reset();
 
     registryCredentialHelperStub.getCredentials.reset();
 
@@ -327,15 +333,22 @@ describe('imageUpdateService tests', () => {
       dockerServiceStub.getAppIdentifier.callsFake((name) => `flux${name}`);
     });
 
-    it('should detect update needed for v1-v3 app', async () => {
-      const appSpec = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'nginx:latest',
-        repoauth: null,
+    function mockDeployment(appName, components) {
+      return {
+        appName,
+        componentEntries: () => components.map((c) => [c.name, {
+          identifier: c.identifier || c.name,
+          image: c.image,
+          imageAuth: c.imageAuth || '',
+        }]),
       };
+    }
 
-      // Mock local digest - use valid hex for sha256
+    it('should detect update needed for v1-v3 app', async () => {
+      const deployment = mockDeployment('TestApp', [
+        { name: 'TestApp', identifier: 'TestApp', image: 'nginx:latest' },
+      ]);
+
       const localDigest = 'sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd';
       const remoteDigest = 'sha256:fed987cba654fed987cba654fed987cba654fed987cba654fed987cba654fedc';
 
@@ -344,10 +357,9 @@ describe('imageUpdateService tests', () => {
         { Id: 'sha256:local123', RepoDigests: [`nginx@${localDigest}`] },
       ]);
 
-      // Mock remote digest (different from local)
       mockDigestToReturn = remoteDigest;
 
-      const result = await imageUpdateService.checkAppForUpdates(appSpec);
+      const result = await imageUpdateService.checkAppForUpdates(deployment, 3);
 
       expect(result.needsUpdate).to.equal(true);
       expect(result.components).to.have.lengthOf(1);
@@ -357,12 +369,9 @@ describe('imageUpdateService tests', () => {
     });
 
     it('should not detect update when digests match for v1-v3 app', async () => {
-      const appSpec = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'nginx:latest',
-        repoauth: null,
-      };
+      const deployment = mockDeployment('TestApp', [
+        { name: 'TestApp', identifier: 'TestApp', image: 'nginx:latest' },
+      ]);
 
       const sameDigest = 'sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd';
 
@@ -373,27 +382,22 @@ describe('imageUpdateService tests', () => {
 
       mockDigestToReturn = sameDigest;
 
-      const result = await imageUpdateService.checkAppForUpdates(appSpec);
+      const result = await imageUpdateService.checkAppForUpdates(deployment, 3);
 
       expect(result.needsUpdate).to.equal(false);
       expect(result.components).to.have.lengthOf(0);
     });
 
     it('should check all components for v4+ compose app', async () => {
-      const appSpec = {
-        name: 'ComposedApp',
-        version: 4,
-        compose: [
-          { name: 'web', repotag: 'nginx:latest', repoauth: null },
-          { name: 'api', repotag: 'node:18', repoauth: null },
-        ],
-      };
+      const deployment = mockDeployment('ComposedApp', [
+        { name: 'web', identifier: 'web_ComposedApp', image: 'nginx:latest' },
+        { name: 'api', identifier: 'api_ComposedApp', image: 'node:18' },
+      ]);
 
       const webLocalDigest = 'sha256:111111111111111111111111111111111111111111111111111111111111aaaa';
       const webRemoteDigest = 'sha256:222222222222222222222222222222222222222222222222222222222222bbbb';
       const apiDigest = 'sha256:333333333333333333333333333333333333333333333333333333333333cccc';
 
-      // Mock local digests - both containers exist
       dockerServiceStub.dockerContainerInspect
         .onFirstCall().resolves({ Image: 'sha256:webImage' })
         .onSecondCall().resolves({ Image: 'sha256:apiImage' });
@@ -403,103 +407,79 @@ describe('imageUpdateService tests', () => {
         { Id: 'sha256:apiImage', RepoDigests: [`node@${apiDigest}`] },
       ]);
 
-      // Mock remote digests - web has update (different), api stays same
       mockDigestToReturn = webRemoteDigest;
 
-      const result = await imageUpdateService.checkAppForUpdates(appSpec);
+      const result = await imageUpdateService.checkAppForUpdates(deployment, 4);
 
       expect(result.needsUpdate).to.equal(true);
       expect(result.components.length).to.be.at.least(1);
       expect(result.components[0].name).to.equal('web');
     });
 
-    it('should skip app with no compose array for v4+', async () => {
-      const appSpec = {
-        name: 'BrokenApp',
-        version: 4,
-        compose: null,
-      };
-
-      const result = await imageUpdateService.checkAppForUpdates(appSpec);
-
-      expect(result.needsUpdate).to.equal(false);
-      sinon.assert.calledOnce(logStub.warn);
-    });
-
     it('should skip component when local digest cannot be retrieved', async () => {
-      const appSpec = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'nginx:latest',
-        repoauth: null,
-      };
+      const deployment = mockDeployment('TestApp', [
+        { name: 'TestApp', identifier: 'TestApp', image: 'nginx:latest' },
+      ]);
 
       dockerServiceStub.dockerContainerInspect.rejects(new Error('Container not found'));
 
-      const result = await imageUpdateService.checkAppForUpdates(appSpec);
+      const result = await imageUpdateService.checkAppForUpdates(deployment, 3);
 
       expect(result.needsUpdate).to.equal(false);
     });
   });
 
   describe('triggerAppUpdate tests', () => {
-    it('should call softRedeploy when no operation in progress', async () => {
-      const appSpec = { name: 'TestApp', version: 3 };
+    it('should call redeployApplication when no operation in progress', async () => {
+      advancedWorkflowsStub.redeployApplication.resolves();
 
-      advancedWorkflowsStub.softRedeploy.resolves();
-
-      const result = await imageUpdateService.triggerAppUpdate(appSpec);
+      const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(true);
-      sinon.assert.calledOnce(advancedWorkflowsStub.softRedeploy);
-      sinon.assert.calledWith(advancedWorkflowsStub.softRedeploy, appSpec, null);
+      sinon.assert.calledOnce(advancedWorkflowsStub.redeployApplication);
+      sinon.assert.calledWith(advancedWorkflowsStub.redeployApplication, 'TestApp', { createVolumes: false });
     });
 
     it('should return false when removal is in progress', async () => {
       globalStateStub.removalInProgress = true;
-      const appSpec = { name: 'TestApp', version: 3 };
 
-      const result = await imageUpdateService.triggerAppUpdate(appSpec);
+      const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(false);
-      sinon.assert.notCalled(advancedWorkflowsStub.softRedeploy);
+      sinon.assert.notCalled(advancedWorkflowsStub.redeployApplication);
     });
 
     it('should return false when installation is in progress', async () => {
       globalStateStub.installationInProgress = true;
-      const appSpec = { name: 'TestApp', version: 3 };
 
-      const result = await imageUpdateService.triggerAppUpdate(appSpec);
+      const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(false);
-      sinon.assert.notCalled(advancedWorkflowsStub.softRedeploy);
+      sinon.assert.notCalled(advancedWorkflowsStub.redeployApplication);
     });
 
     it('should return false when soft redeploy is in progress', async () => {
       globalStateStub.softRedeployInProgress = true;
-      const appSpec = { name: 'TestApp', version: 3 };
 
-      const result = await imageUpdateService.triggerAppUpdate(appSpec);
+      const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(false);
-      sinon.assert.notCalled(advancedWorkflowsStub.softRedeploy);
+      sinon.assert.notCalled(advancedWorkflowsStub.redeployApplication);
     });
 
     it('should return false when hard redeploy is in progress', async () => {
       globalStateStub.hardRedeployInProgress = true;
-      const appSpec = { name: 'TestApp', version: 3 };
 
-      const result = await imageUpdateService.triggerAppUpdate(appSpec);
+      const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(false);
-      sinon.assert.notCalled(advancedWorkflowsStub.softRedeploy);
+      sinon.assert.notCalled(advancedWorkflowsStub.redeployApplication);
     });
 
-    it('should return false and log error when softRedeploy throws', async () => {
-      const appSpec = { name: 'TestApp', version: 3 };
-      advancedWorkflowsStub.softRedeploy.rejects(new Error('Redeploy failed'));
+    it('should return false and log error when redeployApplication throws', async () => {
+      advancedWorkflowsStub.redeployApplication.rejects(new Error('Redeploy failed'));
 
-      const result = await imageUpdateService.triggerAppUpdate(appSpec);
+      const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(false);
       sinon.assert.calledOnce(logStub.error);
@@ -512,18 +492,30 @@ describe('imageUpdateService tests', () => {
 
       await imageUpdateService.checkForImageUpdates();
 
-      sinon.assert.notCalled(appQueryServiceStub.installedApps);
+      sinon.assert.notCalled(deploymentProviderStub.listInstalledDeployments);
       sinon.assert.calledWith(logStub.info, 'Skipping image update check: another operation in progress');
     });
 
+    function mockDeployment(appName, components) {
+      return {
+        appName,
+        componentEntries: () => components.map((c) => [c.name, {
+          identifier: c.identifier || c.name,
+          image: c.image,
+          imageAuth: c.imageAuth || '',
+        }]),
+      };
+    }
+
     it('should process all installed apps', async () => {
-      appQueryServiceStub.installedApps.resolves({
-        status: 'success',
-        data: [
-          { name: 'App1', version: 3, repotag: 'nginx:latest' },
-          { name: 'App2', version: 3, repotag: 'redis:latest' },
-        ],
-      });
+      deploymentProviderStub.listInstalledDeployments.resolves([
+        mockDeployment('App1', [{ name: 'App1', image: 'nginx:latest' }]),
+        mockDeployment('App2', [{ name: 'App2', image: 'redis:latest' }]),
+      ]);
+      appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'App1', version: 3 },
+        { name: 'App2', version: 3 },
+      ]);
 
       dockerServiceStub.getAppIdentifier.callsFake((name) => `flux${name}`);
       dockerServiceStub.dockerContainerInspect.resolves({ Image: 'sha256:img' });
@@ -534,36 +526,26 @@ describe('imageUpdateService tests', () => {
 
       await imageUpdateService.checkForImageUpdates();
 
-      sinon.assert.calledOnce(appQueryServiceStub.installedApps);
+      sinon.assert.calledOnce(deploymentProviderStub.listInstalledDeployments);
       sinon.assert.calledWith(logStub.info, sinon.match(/Checking 2 installed apps/));
     });
 
-    it('should handle installedApps error gracefully', async () => {
-      appQueryServiceStub.installedApps.resolves({
-        status: 'error',
-        data: 'Database error',
-      });
-
-      await imageUpdateService.checkForImageUpdates();
-
-      sinon.assert.calledWith(logStub.warn, 'Could not get installed apps list');
-    });
-
     it('should abort when operation starts during check', async () => {
-      const apps = [
-        { name: 'App1', version: 3, repotag: 'nginx:latest' },
-        { name: 'App2', version: 3, repotag: 'redis:latest' },
-      ];
+      deploymentProviderStub.listInstalledDeployments.resolves([
+        mockDeployment('App1', [{ name: 'App1', image: 'nginx:latest' }]),
+        mockDeployment('App2', [{ name: 'App2', image: 'redis:latest' }]),
+      ]);
+      appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'App1', version: 3 },
+        { name: 'App2', version: 3 },
+      ]);
 
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: apps });
       dockerServiceStub.getAppIdentifier.callsFake((name) => `flux${name}`);
 
-      // First app check triggers state change
       let callCount = 0;
       dockerServiceStub.dockerContainerInspect.callsFake(() => {
         callCount += 1;
         if (callCount === 1) {
-          // After first app, set flag to simulate operation starting
           globalStateStub.removalInProgress = true;
         }
         return Promise.resolve({ Image: 'sha256:img' });
@@ -600,16 +582,13 @@ describe('imageUpdateService tests', () => {
     });
 
     it('should run initial check after delay', async () => {
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [] });
-
       imageUpdateService.startImageUpdateService();
 
       // Initial delay is random between 10-30 minutes, so advance by 30 minutes to ensure callback runs
       await clock.tickAsync(30 * 60 * 1000);
 
       sinon.assert.calledWith(logStub.info, 'Running initial image update check');
-      sinon.assert.calledOnce(appQueryServiceStub.installedApps);
-      sinon.assert.calledOnce(appQueryServiceStub.decryptEnterpriseApps);
+      sinon.assert.calledOnce(deploymentProviderStub.listInstalledDeployments);
     });
 
     it('should stop the service and clear interval', () => {

@@ -34,7 +34,25 @@ const dockerServiceMock = {
 };
 
 const appUninstallerMock = {
-  removeAppLocally: sinon.stub(),
+  uninstallApplication: sinon.stub(),
+};
+
+const appsRepositoryMock = {
+  listInstalledAppsRaw: sinon.stub(),
+};
+
+const deserializeSpecMock = sinon.stub();
+
+const specLibsMock = {
+  getSpecBackend: sinon.stub().resolves({
+    DeploymentSpec: {
+      fromSpec(spec) {
+        return {
+          componentEntries: () => Object.entries(spec._components || {}),
+        };
+      },
+    },
+  }),
 };
 
 const isPathMountedMock = sinon.stub();
@@ -54,6 +72,9 @@ const crontabAndMountsCleanup = proxyquire('../../ZelBack/src/services/appLifecy
   '../dbHelper': dbHelperMock,
   '../dockerService': dockerServiceMock,
   './appUninstaller': appUninstallerMock,
+  '../appDatabase/appsRepository': appsRepositoryMock,
+  '../utils/specCutover': { deserializeSpec: deserializeSpecMock },
+  '../utils/specLibs': specLibsMock,
   '../appMonitoring/syncthingFolderStateMachine': { isPathMounted: isPathMountedMock },
   'node:fs': fsMock,
 });
@@ -61,7 +82,6 @@ const crontabAndMountsCleanup = proxyquire('../../ZelBack/src/services/appLifecy
 describe('crontabAndMountsCleanup tests', () => {
   beforeEach(() => {
     // Reset all stubs before each test
-    sinon.reset();
     crontabMock.load.reset();
     cmdAsyncMock.reset();
     logMock.info.reset();
@@ -70,7 +90,18 @@ describe('crontabAndMountsCleanup tests', () => {
     dbHelperMock.databaseConnection.reset();
     dbHelperMock.findInDatabase.reset();
     dockerServiceMock.getAppIdentifier.reset();
-    appUninstallerMock.removeAppLocally.reset();
+    appUninstallerMock.uninstallApplication.reset();
+    appsRepositoryMock.listInstalledAppsRaw.reset();
+    deserializeSpecMock.reset();
+    specLibsMock.getSpecBackend.resolves({
+      DeploymentSpec: {
+        fromSpec(spec) {
+          return {
+            componentEntries: () => Object.entries(spec._components || {}),
+          };
+        },
+      },
+    });
     isPathMountedMock.reset();
     fsMock.promises.access.reset();
     fsMock.promises.stat.reset();
@@ -218,21 +249,18 @@ describe('crontabAndMountsCleanup tests', () => {
 
   describe('getInstalledAppIds', () => {
     it('should return empty set when no apps installed', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves([]);
+      appsRepositoryMock.listInstalledAppsRaw.resolves([]);
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
       expect(result).to.be.instanceOf(Set);
       expect(result.size).to.equal(0);
     });
 
-    it('should handle legacy apps (version <= 3)', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves([
-        { name: 'myapp', version: 3 },
-      ]);
+    it('should handle single-component apps', async () => {
+      const rawApp = { name: 'myapp', version: 3 };
+      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
+      const fakeSpec = { _components: { myapp: { identifier: 'myapp' } } };
+      deserializeSpecMock.withArgs(rawApp).resolves(fakeSpec);
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
@@ -240,20 +268,17 @@ describe('crontabAndMountsCleanup tests', () => {
       expect(result.size).to.equal(1);
     });
 
-    it('should handle newer apps with compose (version > 3)', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves([
-        {
-          name: 'wordpress123',
-          version: 4,
-          compose: [
-            { name: 'wp' },
-            { name: 'mysql' },
-            { name: 'operator' },
-          ],
+    it('should handle multi-component apps', async () => {
+      const rawApp = { name: 'wordpress123', version: 4 };
+      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
+      const fakeSpec = {
+        _components: {
+          wp: { identifier: 'wp_wordpress123' },
+          mysql: { identifier: 'mysql_wordpress123' },
+          operator: { identifier: 'operator_wordpress123' },
         },
-      ]);
+      };
+      deserializeSpecMock.withArgs(rawApp).resolves(fakeSpec);
       dockerServiceMock.getAppIdentifier.withArgs('wp_wordpress123').returns('fluxwp_wordpress123');
       dockerServiceMock.getAppIdentifier.withArgs('mysql_wordpress123').returns('fluxmysql_wordpress123');
       dockerServiceMock.getAppIdentifier.withArgs('operator_wordpress123').returns('fluxoperator_wordpress123');
@@ -265,8 +290,8 @@ describe('crontabAndMountsCleanup tests', () => {
       expect(result.size).to.equal(3);
     });
 
-    it('should handle database errors gracefully', async () => {
-      dbHelperMock.databaseConnection.throws(new Error('DB connection failed'));
+    it('should handle errors gracefully', async () => {
+      appsRepositoryMock.listInstalledAppsRaw.rejects(new Error('DB connection failed'));
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
       expect(result).to.be.instanceOf(Set);
@@ -274,10 +299,8 @@ describe('crontabAndMountsCleanup tests', () => {
       expect(logMock.error.called).to.be.true;
     });
 
-    it('should handle null response from database', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves(null);
+    it('should handle null response from repository', async () => {
+      appsRepositoryMock.listInstalledAppsRaw.resolves(null);
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
       expect(result.size).to.equal(0);
@@ -395,9 +418,7 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should return empty results when no crontab jobs', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves([]);
+      appsRepositoryMock.listInstalledAppsRaw.resolves([]);
       mockJobs = [];
 
       const result = await crontabAndMountsCleanup.cleanupCrontabAndMounts();
@@ -409,9 +430,7 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should remove jobs for uninstalled apps', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves([]); // No apps installed
+      appsRepositoryMock.listInstalledAppsRaw.resolves([]); // No apps installed
 
       const oldJob = {
         isValid: () => true,
@@ -428,9 +447,9 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should update jobs without wait logic', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves([{ name: 'myapp', version: 3 }]);
+      const rawApp = { name: 'myapp', version: 3 };
+      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
+      deserializeSpecMock.withArgs(rawApp).resolves({ _components: { myapp: { identifier: 'myapp' } } });
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const oldJob = {
@@ -454,9 +473,9 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should keep jobs that already have wait logic', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves([{ name: 'myapp', version: 3 }]);
+      const rawApp = { name: 'myapp', version: 3 };
+      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
+      deserializeSpecMock.withArgs(rawApp).resolves({ _components: { myapp: { identifier: 'myapp' } } });
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const goodJob = {
@@ -477,9 +496,9 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should uninstall app if crontab update fails', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves([{ name: 'myapp', version: 3 }]);
+      const rawApp = { name: 'myapp', version: 3 };
+      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
+      deserializeSpecMock.withArgs(rawApp).resolves({ _components: { myapp: { identifier: 'myapp' } } });
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const oldJob = {
@@ -491,19 +510,20 @@ describe('crontabAndMountsCleanup tests', () => {
 
       // Create returns invalid job
       mockCrontab.create.returns({ isValid: () => false });
-      appUninstallerMock.removeAppLocally.resolves();
+      appUninstallerMock.uninstallApplication.resolves();
 
       const result = await crontabAndMountsCleanup.cleanupCrontabAndMounts();
 
-      expect(appUninstallerMock.removeAppLocally.calledWith('myapp', null, true, false, true)).to.be.true;
+      expect(appUninstallerMock.uninstallApplication.calledOnce).to.be.true;
+      expect(appUninstallerMock.uninstallApplication.firstCall.args[0]).to.equal('myapp');
       expect(result.crontab.errors).to.have.lengthOf(1);
       expect(result.crontab.errors[0].action).to.equal('update');
     });
 
     it('should verify and create missing mounts', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves([{ name: 'myapp', version: 3 }]);
+      const rawApp = { name: 'myapp', version: 3 };
+      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
+      deserializeSpecMock.withArgs(rawApp).resolves({ _components: { myapp: { identifier: 'myapp' } } });
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const goodJob = {
@@ -528,12 +548,11 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should handle multiple apps correctly', async () => {
-      const mockDb = { db: sinon.stub().returns({}) };
-      dbHelperMock.databaseConnection.returns(mockDb);
-      dbHelperMock.findInDatabase.resolves([
-        { name: 'app1', version: 3 },
-        { name: 'app2', version: 3 },
-      ]);
+      const rawApp1 = { name: 'app1', version: 3 };
+      const rawApp2 = { name: 'app2', version: 3 };
+      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp1, rawApp2]);
+      deserializeSpecMock.withArgs(rawApp1).resolves({ _components: { app1: { identifier: 'app1' } } });
+      deserializeSpecMock.withArgs(rawApp2).resolves({ _components: { app2: { identifier: 'app2' } } });
       dockerServiceMock.getAppIdentifier.withArgs('app1').returns('fluxapp1');
       dockerServiceMock.getAppIdentifier.withArgs('app2').returns('fluxapp2');
 
