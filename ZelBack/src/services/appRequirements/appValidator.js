@@ -8,6 +8,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const registryManager = require('../appDatabase/registryManager');
 const messageVerifier = require('../appMessaging/messageVerifier');
+const appEventVerifier = require('../appMessaging/appEventVerifier');
 const imageManager = require('../appSecurity/imageManager');
 const { supportedArchitectures, enterpriseRequiredArchitectures } = require('../utils/appConstants');
 const { specificationFormatter, findCommonArchitectures } = require('../utils/appUtilities');
@@ -310,19 +311,35 @@ async function registerAppGlobalyApi(req, res) {
         appSpecification.version >= 8 && appSpecification.enterprise,
       );
 
-      const toVerify = isEnterprise
+      const broadcastSpecBlob = isEnterprise
         ? specificationFormatter(appSpecification)
         : appSpecFormatted;
 
-      await messageVerifier.verifyAppMessageSignature(messageType, typeVersion, toVerify, timestamp, signature);
+      const signedEvent = await appEventVerifier.deserializeMessage({
+        type: messageType,
+        version: typeVersion,
+        appSpecifications: broadcastSpecBlob,
+        timestamp,
+        signature,
+      });
+      await appEventVerifier.authorize({
+        appEvent: signedEvent,
+        daemonHeight,
+        verifyHash: false,
+      });
 
       if (isEnterprise) {
         appSpecFormatted.contacts = [];
         appSpecFormatted.compose = [];
       }
 
-      const message = messageType + typeVersion + JSON.stringify(appSpecFormatted) + timestamp + signature;
-      const messageHASH = await generalService.messageHash(message);
+      const messageHASH = await appEventVerifier.computeOutboundHash({
+        type: messageType,
+        envelopeVersion: typeVersion,
+        specBlob: broadcastSpecBlob,
+        timestamp,
+        signature,
+      });
 
       const temporaryAppMessage = {
         type: messageType,
@@ -337,13 +354,13 @@ async function registerAppGlobalyApi(req, res) {
       await serviceHelper.delay(1200);
       await messageVerifier.requestAppMessage(messageHASH);
       await serviceHelper.delay(1200);
-      let tempMessage = await messageVerifier.checkAppTemporaryMessageExistence(messageHASH);
+      let tempMessage = await appsRepository.getTempMessage(messageHASH);
       for (let i = 0; i < 20; i += 1) {
         if (!tempMessage) {
           // eslint-disable-next-line no-await-in-loop
           await serviceHelper.delay(500);
           // eslint-disable-next-line no-await-in-loop
-          tempMessage = await messageVerifier.checkAppTemporaryMessageExistence(messageHASH);
+          tempMessage = await appsRepository.getTempMessage(messageHASH);
         }
       }
       if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
