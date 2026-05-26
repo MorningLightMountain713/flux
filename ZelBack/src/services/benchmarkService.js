@@ -343,6 +343,18 @@ async function getPublicKey(message) {
   return executeAppCall('getpublickey', message);
 }
 
+async function seal(params) {
+  const rpccall = 'seal';
+  const rpcparameters = [JSON.stringify(params)];
+  return executeCall(rpccall, rpcparameters);
+}
+
+async function unseal(params) {
+  const rpccall = 'unseal';
+  const rpcparameters = [JSON.stringify(params)];
+  return executeCall(rpccall, rpcparameters);
+}
+
 // == Control ==
 /**
  * To request help message.
@@ -499,4 +511,6 @@ module.exports = {
   getPublicKey,
   decryptRSAMessage,
   encryptMessage,
+  seal,
+  unseal,
 };
