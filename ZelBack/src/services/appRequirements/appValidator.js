@@ -13,6 +13,7 @@ const { supportedArchitectures, enterpriseRequiredArchitectures } = require('../
 const { specificationFormatter, findCommonArchitectures } = require('../utils/appUtilities');
 const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
 const { validateSubmissionSpec } = require('../utils/specLibs');
+const appsRepository = require('../appDatabase/appsRepository');
 const portManager = require('../appNetwork/portManager');
 const { peerManager } = require('../utils/peerState');
 
@@ -363,10 +364,58 @@ async function registerAppGlobalyApi(req, res) {
   });
 }
 
+function normalizePGPSecret(pgpMessage) {
+  if (!pgpMessage) return '';
+  return pgpMessage.replace(/\s+/g, '').replace(/\\n/g, '').trim();
+}
+
+async function assertSecretsNotConflicting(appName, componentName, secrets, owner, options = {}) {
+  const { isRegistration = false } = options;
+  const normalized = normalizePGPSecret(secrets);
+  if (!normalized) return;
+
+  const liveSecrets = await appsRepository.listLiveV7Secrets();
+  let foundSameApp = false;
+  let foundDifferentApp = false;
+
+  for (const entry of liveSecrets) {
+    if (normalizePGPSecret(entry.secrets) === normalized) {
+      if (isRegistration) {
+        throw new Error(
+          `Provided component '${componentName}' secrets are not valid (duplicate in app: '${entry.appName}')`,
+        );
+      } else if (entry.appName !== appName) {
+        foundDifferentApp = true;
+      } else {
+        foundSameApp = true;
+      }
+    }
+  }
+
+  if (!isRegistration && foundDifferentApp && !foundSameApp) {
+    throw new Error('Provided component(s) secrets are not valid (conflict with another app).');
+  }
+
+  const historicalSecrets = await appsRepository.listHistoricalV7Secrets();
+  const seen = new Set();
+  for (const entry of historicalSecrets) {
+    const entryNormalized = normalizePGPSecret(entry.secrets);
+    if (seen.has(entryNormalized)) continue;
+    seen.add(entryNormalized);
+
+    if (entryNormalized === normalized && entry.owner !== owner) {
+      throw new Error(
+        `Provided component '${componentName}' secrets are not valid (owner mismatch: '${entry.owner}').`,
+      );
+    }
+  }
+}
+
 module.exports = {
   verifyAppSpecifications,
   verifyAppRegistrationParameters,
   validateAppUpdate,
   verifyAppUpdateApi,
   registerAppGlobalyApi,
+  assertSecretsNotConflicting,
 };
