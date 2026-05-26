@@ -630,7 +630,7 @@ describe('syncthingFolderStateMachine tests', () => {
       mockParams = {
         appId: 'test-app',
         syncFolder: null,
-        containerDataFlags: 'r',
+        syncMode: 'receiveOnly',
         syncthingAppsFirstRun: false,
         receiveOnlySyncthingAppsCache: new Map(),
         appLocation: sinon.stub().resolves([]),

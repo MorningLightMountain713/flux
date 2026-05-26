@@ -6,9 +6,75 @@ describe('messageStore tests', () => {
   let messageStore;
   let dbHelperStub;
   let serviceHelperStub;
-  let messageVerifierStub;
+  let appsRepositoryStub;
+  let appEventVerifierStub;
+  let deserializeSpecStub;
+  let validateSubmissionSpecStub;
   let logStub;
   let configStub;
+
+  function makeDeserializeSpecStub() {
+    return sinon.stub().callsFake((spec) => Promise.resolve({
+      serialize: () => spec,
+      isEncrypted: false,
+      name: spec.name,
+      owner: spec.owner,
+    }));
+  }
+
+  function buildProxyquireStubs(overrides = {}) {
+    return {
+      config: configStub,
+      '../dbHelper': dbHelperStub,
+      '../serviceHelper': serviceHelperStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
+      './appEventVerifier': appEventVerifierStub,
+      '../../lib/log': logStub,
+      '../daemonService/daemonServiceMiscRpcs': {
+        isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
+      },
+      '../appDatabase/registryManager': {
+        checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
+      },
+      '../appDatabase/appSpecHistory': {
+        getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1' }),
+      },
+      '../utils/specCutover': {
+        deserializeSpec: deserializeSpecStub,
+      },
+      '../utils/specLibs': {
+        validateSubmissionSpec: validateSubmissionSpecStub,
+        getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
+      },
+      '../providers/FluxOSLegacyCryptoProvider': {
+        create: sinon.stub().resolves({}),
+      },
+      '../utils/globalState': {
+        queuePendingUpdate: sinon.stub(),
+      },
+      '../utils/appSyncEvents': {
+        appSyncEvents: { emit: sinon.stub(), on: sinon.stub(), removeListener: sinon.stub() },
+        EVENTS: { HASH_RESPONSE_RECEIVED: 'hashResponseReceived' },
+      },
+      '../utils/appConstants': {
+        globalAppsMessages: 'appsMessages',
+        globalAppsTempMessages: 'appsTempMessages',
+        globalAppsLocations: 'appsLocations',
+        globalAppsInstallingLocations: 'appsInstallingLocations',
+        globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
+        globalAppsInstallingErrorsBroadcasts: 'appsInstallingErrorsBroadcasts',
+        globalAppStateEvents: 'appStateEvents',
+        appsHashesCollection: 'appsHashes',
+        GOSSIP_VALIDITY_MS: 5 * 60 * 1000,
+        RUNNING_EXPIRY_MS: 125 * 60 * 1000,
+        INSTALLING_EXPIRY_MS: 15 * 60 * 1000,
+        INSTALLING_ERRORS_EXPIRY_MS: 24 * 60 * 60 * 1000,
+        SIGTERM_EXPIRY_MS: 420 * 1000,
+        EVICTED_EXPIRY_MS: 125 * 60 * 1000,
+      },
+      ...overrides,
+    };
+  }
 
   beforeEach(() => {
     // Stubs
@@ -28,10 +94,19 @@ describe('messageStore tests', () => {
       ensureNumber: sinon.stub().returnsArg(0),
     };
 
-    messageVerifierStub = {
-      checkAppMessageExistence: sinon.stub(),
-      checkAppTemporaryMessageExistence: sinon.stub(),
+    appsRepositoryStub = {
+      getPermanentMessage: sinon.stub(),
+      getTempMessage: sinon.stub(),
     };
+
+    appEventVerifierStub = {
+      deserializeMessage: sinon.stub().resolves({}),
+      authorize: sinon.stub().resolves(),
+      instantiatePreviousSpec: sinon.stub().resolves(null),
+    };
+
+    deserializeSpecStub = makeDeserializeSpecStub();
+    validateSubmissionSpecStub = sinon.stub().resolves();
 
     logStub = {
       error: sinon.stub(),
@@ -60,48 +135,7 @@ describe('messageStore tests', () => {
     };
 
     // Proxy require
-    messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', {
-      config: configStub,
-      '../dbHelper': dbHelperStub,
-      '../serviceHelper': serviceHelperStub,
-      './messageVerifier': messageVerifierStub,
-      '../../lib/log': logStub,
-      '../daemonService/daemonServiceMiscRpcs': {
-        isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
-      },
-      '../appRequirements/appValidator': {
-        verifyAppSpecifications: sinon.stub().resolves(),
-      },
-      '../appDatabase/registryManager': {
-        checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
-      },
-      '../appLifecycle/advancedWorkflows': {
-        validateApplicationUpdateCompatibility: sinon.stub().resolves(),
-        getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1' }),
-      },
-      '../utils/enterpriseHelper': {
-        checkAndDecryptAppSpecs: sinon.stub().resolves({}),
-      },
-      '../utils/appConstants': {
-        globalAppsMessages: 'appsMessages',
-        globalAppsTempMessages: 'appsTempMessages',
-        globalAppsLocations: 'appsLocations',
-        globalAppsInstallingLocations: 'appsInstallingLocations',
-        globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
-        globalAppsInstallingErrorsBroadcasts: 'appsInstallingErrorsBroadcasts',
-        globalAppStateEvents: 'appStateEvents',
-        appsHashesCollection: 'appsHashes',
-        GOSSIP_VALIDITY_MS: 5 * 60 * 1000,
-        RUNNING_EXPIRY_MS: 125 * 60 * 1000,
-        INSTALLING_EXPIRY_MS: 15 * 60 * 1000,
-        INSTALLING_ERRORS_EXPIRY_MS: 24 * 60 * 60 * 1000,
-        SIGTERM_EXPIRY_MS: 420 * 1000,
-        EVICTED_EXPIRY_MS: 125 * 60 * 1000,
-      },
-      '../utils/appSpecHelpers': {
-        specificationFormatter: sinon.stub().returnsArg(0),
-      },
-    });
+    messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', buildProxyquireStubs());
   });
 
   afterEach(() => {
@@ -128,7 +162,7 @@ describe('messageStore tests', () => {
         signature: 'sig123',
       };
 
-      messageVerifierStub.checkAppMessageExistence.resolves({ hash: 'hash123' });
+      appsRepositoryStub.getPermanentMessage.resolves({ hash: 'hash123' });
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
@@ -149,8 +183,8 @@ describe('messageStore tests', () => {
         signature: 'sig123',
       };
 
-      messageVerifierStub.checkAppMessageExistence.resolves(null);
-      messageVerifierStub.checkAppTemporaryMessageExistence.resolves({ hash: 'hash123' });
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves({ hash: 'hash123' });
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
@@ -171,8 +205,8 @@ describe('messageStore tests', () => {
         signature: 'sig123',
       };
 
-      messageVerifierStub.checkAppMessageExistence.resolves(null);
-      messageVerifierStub.checkAppTemporaryMessageExistence.resolves(null);
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves(null);
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
@@ -195,8 +229,8 @@ describe('messageStore tests', () => {
       };
       const error = new Error('Database error');
 
-      messageVerifierStub.checkAppMessageExistence.resolves(null);
-      messageVerifierStub.checkAppTemporaryMessageExistence.resolves(null);
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves(null);
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
@@ -221,54 +255,16 @@ describe('messageStore tests', () => {
         signature: 'sig123',
       };
 
-      messageVerifierStub.checkAppMessageExistence.resolves(null);
-      messageVerifierStub.checkAppTemporaryMessageExistence.resolves(null);
-      messageVerifierStub.verifyAppHash = sinon.stub().resolves();
-      messageVerifierStub.verifyAppMessageUpdateSignature = sinon.stub().resolves();
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves(null);
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
       dbHelperStub.insertOneToDatabase.resolves();
 
-      messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', {
-        config: configStub,
-        '../dbHelper': dbHelperStub,
-        '../serviceHelper': serviceHelperStub,
-        './messageVerifier': messageVerifierStub,
-        '../../lib/log': logStub,
-        '../daemonService/daemonServiceMiscRpcs': {
-          isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
-        },
-        '../appRequirements/appValidator': {
-          verifyAppSpecifications: sinon.stub().resolves(),
-        },
-        '../appDatabase/registryManager': {
-          checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
-        },
-        '../appLifecycle/advancedWorkflows': {
-          validateApplicationUpdateCompatibility: sinon.stub().resolves(),
-          getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1', version: 5 }),
-        },
-        '../utils/enterpriseHelper': {
-          checkAndDecryptAppSpecs: sinon.stub().resolves({}),
-        },
-        '../utils/globalState': {
-          queuePendingUpdate: sinon.stub(),
-        },
-        '../utils/appConstants': {
-          globalAppsMessages: 'appsMessages',
-          globalAppsTempMessages: 'appsTempMessages',
-          globalAppsLocations: 'appsLocations',
-          globalAppsInstallingLocations: 'appsInstallingLocations',
-          globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
-          appsHashesCollection: 'appsHashes',
-        },
-        '../utils/appSpecHelpers': {
-          specificationFormatter: sinon.stub().returnsArg(0),
-        },
-      });
+      messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', buildProxyquireStubs());
 
-      // v5→v6 update should be accepted — version policy is enforced at API layer, not here
+      // v5->v6 update should be accepted -- version policy is enforced at API layer, not here
       const result = await messageStore.storeAppTemporaryMessage(message);
 
       expect(result).to.be.true;

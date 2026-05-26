@@ -34,6 +34,8 @@ describe('MongoStorageProvider', () => {
       databaseConnection: sinon.stub().returns(fakeClient),
       findInDatabase: sinon.stub().resolves([{ name: 'a' }, { name: 'b' }]),
       findOneInDatabase: sinon.stub().resolves({ name: 'one' }),
+      replaceOneInDatabase: sinon.stub().resolves({}),
+      removeDocumentsFromCollection: sinon.stub().resolves({}),
     };
 
     specLibsStub = {
@@ -119,12 +121,14 @@ describe('MongoStorageProvider', () => {
   });
 
   describe('put()', () => {
-    it('uses replaceOne with upsert (not $set) to prevent ghost fields', async () => {
+    it('uses replaceOneInDatabase with upsert to prevent ghost fields', async () => {
       const provider = await mongoStorageProvider.create();
       await provider.put('appSpecs', { name: 'foo' }, { name: 'foo', value: 42 });
 
-      expect(fakeCollection.replaceOne.calledOnce).to.be.true;
-      const [filter, doc, options] = fakeCollection.replaceOne.firstCall.args;
+      expect(dbHelperStub.replaceOneInDatabase.calledOnce).to.be.true;
+      const [db, collection, filter, doc, options] = dbHelperStub.replaceOneInDatabase.firstCall.args;
+      expect(db).to.equal(fakeDb);
+      expect(collection).to.equal('zelappsinformation');
       expect(filter).to.deep.equal({ name: 'foo' });
       expect(doc).to.deep.equal({ name: 'foo', value: 42 });
       expect(options).to.deep.equal({ upsert: true });
@@ -151,22 +155,25 @@ describe('MongoStorageProvider', () => {
   });
 
   describe('remove()', () => {
-    it('delegates to collection.deleteOne with the key', async () => {
+    it('delegates to dbHelper.removeDocumentsFromCollection with the key', async () => {
       const provider = await mongoStorageProvider.create();
       await provider.remove('appSpecs', { name: 'gone' });
 
-      expect(fakeCollection.deleteOne.calledOnceWith({ name: 'gone' })).to.be.true;
+      expect(dbHelperStub.removeDocumentsFromCollection.calledOnce).to.be.true;
+      const [db, collection, key] = dbHelperStub.removeDocumentsFromCollection.firstCall.args;
+      expect(db).to.equal(fakeDb);
+      expect(collection).to.equal('zelappsinformation');
+      expect(key).to.deep.equal({ name: 'gone' });
     });
   });
 
   describe('options', () => {
-    it('accepts an injected client override', async () => {
-      const injectedClient = { db: sinon.stub().returns(fakeDb) };
-      const provider = await mongoStorageProvider.create({ client: injectedClient });
+    it('always uses dbHelper.databaseConnection for the client', async () => {
+      const provider = await mongoStorageProvider.create();
       await provider.get('appSpecs', { name: 'x' });
 
-      expect(injectedClient.db.calledOnceWith('globalzelapps')).to.be.true;
-      expect(dbHelperStub.databaseConnection.called).to.be.false;
+      expect(fakeClient.db.calledWith('globalzelapps')).to.be.true;
+      expect(dbHelperStub.databaseConnection.called).to.be.true;
     });
 
     it('accepts a custom store map override', async () => {

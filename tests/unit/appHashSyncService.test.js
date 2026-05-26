@@ -10,6 +10,15 @@ function makeStreamResponse(data) {
   return { data: stream, headers: {} };
 }
 
+function makeDeserializeSpecStub() {
+  return sinon.stub().callsFake((spec) => Promise.resolve({
+    serialize: () => spec,
+    isEncrypted: false,
+    name: spec.name,
+    owner: spec.owner,
+  }));
+}
+
 describe('appHashSyncService tests', () => {
   let appHashSyncService;
   let dbHelperStub;
@@ -19,10 +28,13 @@ describe('appHashSyncService tests', () => {
   let logStub;
   let configStub;
   let messageVerifierStub;
+  let appEventVerifierStub;
   let messageStoreStub;
   let fluxBroadcastHelperStub;
   let peerManagerStub;
   let collectionStub;
+  let deserializeSpecStub;
+  let validateSubmissionSpecStub;
 
   function makePeer(ip, port, source = 'random') {
     return {
@@ -32,6 +44,38 @@ describe('appHashSyncService tests', () => {
       source,
       send: sinon.stub(),
       toPeerInfo: () => ({ ip, port }),
+    };
+  }
+
+  function buildProxyquireStubs(overrides = {}) {
+    return {
+      '../dbHelper': dbHelperStub,
+      '../messageHelper': messageHelperStub,
+      '../serviceHelper': serviceHelperStub,
+      '../verificationHelper': verificationHelperStub,
+      '../../lib/log': logStub,
+      './messageStore': messageStoreStub,
+      './messageVerifier': messageVerifierStub,
+      './appEventVerifier': appEventVerifierStub,
+      '../appRequirements/appValidator': { verifyAppSpecifications: sinon.stub().resolves() },
+      '../appDatabase/registryManager': { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
+      '../utils/appSpecHelpers': { specificationFormatter: sinon.stub().returnsArg(0) },
+      '../utils/specCutover': { deserializeSpec: deserializeSpecStub },
+      '../utils/specLibs': { validateSubmissionSpec: validateSubmissionSpecStub, getSpec: sinon.stub().resolves({}) },
+      '../providers/FluxOSLegacyCryptoProvider': { create: sinon.stub().resolves({}) },
+      '../utils/appUtilities': { appPricePerMonth: sinon.stub().returns(0.01) },
+      '../utils/chainUtilities': { getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01, cpu: 1, ram: 1, hdd: 1 }]) },
+      '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
+      '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
+      '../invalidMessages': { invalidMessages: [] },
+      '../utils/peerState': { peerManager: peerManagerStub },
+      '../nodeConfirmationService': { canSendMessages: sinon.stub().returns(true) },
+      '../utils/enterpriseHelper': { checkAndDecryptAppSpecs: sinon.stub().callsFake((spec) => Promise.resolve(spec)) },
+      '../utils/FluxPeerSocket': { CLOSE_CODES: { EPHEMERAL_DONE: 4020 } },
+      '../fluxCommunicationUtils': { deterministicFluxList: sinon.stub().resolves([]) },
+      '../fluxCommunication': { openEphemeralConnection: sinon.stub().resolves(null) },
+      '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('10.0.0.99:16127') },
+      ...overrides,
     };
   }
 
@@ -92,10 +136,16 @@ describe('appHashSyncService tests', () => {
       appHashHasMessage: sinon.stub().resolves(),
       appHashHasMessageNotFound: sinon.stub().resolves(),
       checkAndRequestMultipleApps: sinon.stub().resolves(),
-      verifyAppHash: sinon.stub().resolves(true),
-      verifyAppMessageSignature: sinon.stub().resolves(true),
-      verifyAppMessageUpdateSignature: sinon.stub().resolves(true),
     };
+
+    appEventVerifierStub = {
+      deserializeMessage: sinon.stub().resolves({}),
+      authorize: sinon.stub().resolves(),
+      instantiatePreviousSpec: sinon.stub().resolves(null),
+    };
+
+    deserializeSpecStub = makeDeserializeSpecStub();
+    validateSubmissionSpecStub = sinon.stub().resolves();
 
     messageStoreStub = {
       storeAppTemporaryMessage: sinon.stub().resolves(true),
@@ -123,30 +173,10 @@ describe('appHashSyncService tests', () => {
       ]),
     };
 
-    appHashSyncService = proxyquire('../../ZelBack/src/services/appMessaging/appHashSyncService', {
-      '../dbHelper': dbHelperStub,
-      '../messageHelper': messageHelperStub,
-      '../serviceHelper': serviceHelperStub,
-      '../verificationHelper': verificationHelperStub,
-      '../../lib/log': logStub,
-      './messageStore': messageStoreStub,
-      './messageVerifier': messageVerifierStub,
-      '../appRequirements/appValidator': { verifyAppSpecifications: sinon.stub().resolves() },
-      '../appDatabase/registryManager': { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
-      '../utils/appSpecHelpers': { specificationFormatter: sinon.stub().returnsArg(0) },
-      '../utils/appUtilities': { appPricePerMonth: sinon.stub().returns(0.01) },
-      '../utils/chainUtilities': { getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01, cpu: 1, ram: 1, hdd: 1 }]) },
-      '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
-      '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
-      '../invalidMessages': { invalidMessages: [] },
-      '../utils/peerState': { peerManager: peerManagerStub },
-      '../nodeConfirmationService': { canSendMessages: sinon.stub().returns(true) },
-      '../utils/enterpriseHelper': { checkAndDecryptAppSpecs: sinon.stub().callsFake((spec) => Promise.resolve(spec)) },
-      '../utils/FluxPeerSocket': { CLOSE_CODES: { EPHEMERAL_DONE: 4020 } },
-      '../fluxCommunicationUtils': { deterministicFluxList: sinon.stub().resolves([]) },
-      '../fluxCommunication': { openEphemeralConnection: sinon.stub().resolves(null) },
-      '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('10.0.0.99:16127') },
-    });
+    appHashSyncService = proxyquire(
+      '../../ZelBack/src/services/appMessaging/appHashSyncService',
+      buildProxyquireStubs(),
+    );
   });
 
   afterEach(() => {
@@ -213,35 +243,17 @@ describe('appHashSyncService tests', () => {
     });
 
     it('should exclude invalid messages when not forced', async () => {
-      const mod = proxyquire('../../ZelBack/src/services/appMessaging/appHashSyncService', {
-        config: configStub,
-        '../dbHelper': dbHelperStub,
-        '../messageHelper': messageHelperStub,
-        '../serviceHelper': serviceHelperStub,
-        '../verificationHelper': verificationHelperStub,
-        '../../lib/log': logStub,
-        './messageStore': messageStoreStub,
-        './messageVerifier': messageVerifierStub,
-        '../appRequirements/appValidator': { verifyAppSpecifications: sinon.stub().resolves() },
-        '../appDatabase/registryManager': { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
-        '../utils/appSpecHelpers': { specificationFormatter: sinon.stub().returnsArg(0) },
-        '../utils/appUtilities': { appPricePerMonth: sinon.stub().returns(0.01) },
-        '../utils/chainUtilities': { getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01, cpu: 1, ram: 1, hdd: 1 }]) },
-        '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
-        '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
-        '../invalidMessages': {
-          invalidMessages: [{ hash: 'invalid1', txid: 'tx1' }],
-        },
-        '../utils/peerState': {
-          peerManager: { getRandomPeer: () => null },
-        },
-        '../nodeConfirmationService': { canSendMessages: sinon.stub().returns(true) },
-        '../utils/enterpriseHelper': { checkAndDecryptAppSpecs: sinon.stub().callsFake((spec) => Promise.resolve(spec)) },
-        '../utils/FluxPeerSocket': { CLOSE_CODES: { EPHEMERAL_DONE: 4020 } },
-        '../fluxCommunicationUtils': { deterministicFluxList: sinon.stub().resolves([]) },
-        '../fluxCommunication': { openEphemeralConnection: sinon.stub().resolves(null) },
-        '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('10.0.0.99:16127') },
-      });
+      const mod = proxyquire(
+        '../../ZelBack/src/services/appMessaging/appHashSyncService',
+        buildProxyquireStubs({
+          '../invalidMessages': {
+            invalidMessages: [{ hash: 'invalid1', txid: 'tx1' }],
+          },
+          '../utils/peerState': {
+            peerManager: { getRandomPeer: () => null },
+          },
+        }),
+      );
 
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
@@ -367,7 +379,7 @@ describe('appHashSyncService tests', () => {
       });
       dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
 
-      // Bulk fetch: 3 peers × 2 calls each (explorer check + permanent messages)
+      // Bulk fetch: 3 peers x 2 calls each (explorer check + permanent messages)
       serviceHelperStub.axiosGet.callsFake((url) => {
         if (url.includes('permanentmessages')) return Promise.resolve(makeStreamResponse(bulkFetchResult));
         return Promise.resolve({ data: { status: 'success', data: true } });
@@ -739,8 +751,10 @@ describe('appHashSyncService tests', () => {
     let localModule;
     let localCollectionStub;
     let localDbHelperStub;
-    let localMessageVerifierStub;
-    let localCheckAndDecryptStub;
+    let localAppEventVerifierStub;
+    let localDeserializeSpecStub;
+    let localValidateSubmissionSpecStub;
+    let localLegacyCryptoProviderStub;
     let localLogStub;
 
     beforeEach(() => {
@@ -762,17 +776,15 @@ describe('appHashSyncService tests', () => {
         findOneInDatabase: sinon.stub(),
       };
 
-      localMessageVerifierStub = {
-        checkAndRequestApp: sinon.stub().resolves(true),
-        appHashHasMessage: sinon.stub().resolves(),
-        appHashHasMessageNotFound: sinon.stub().resolves(),
-        checkAndRequestMultipleApps: sinon.stub().resolves(),
-        verifyAppHash: sinon.stub().resolves(true),
-        verifyAppMessageSignature: sinon.stub().resolves(true),
-        verifyAppMessageUpdateSignature: sinon.stub().resolves(true),
+      localAppEventVerifierStub = {
+        deserializeMessage: sinon.stub().resolves({}),
+        authorize: sinon.stub().resolves(),
+        instantiatePreviousSpec: sinon.stub().resolves(null),
       };
 
-      localCheckAndDecryptStub = sinon.stub().callsFake((spec) => Promise.resolve(spec));
+      localDeserializeSpecStub = makeDeserializeSpecStub();
+      localValidateSubmissionSpecStub = sinon.stub().resolves();
+      localLegacyCryptoProviderStub = { create: sinon.stub().resolves({}) };
 
       localLogStub = {
         error: sinon.stub(),
@@ -787,17 +799,21 @@ describe('appHashSyncService tests', () => {
         '../verificationHelper': verificationHelperStub,
         '../../lib/log': localLogStub,
         './messageStore': messageStoreStub,
-        './messageVerifier': localMessageVerifierStub,
+        './messageVerifier': messageVerifierStub,
+        './appEventVerifier': localAppEventVerifierStub,
         '../appRequirements/appValidator': { verifyAppSpecifications: sinon.stub().resolves() },
         '../appDatabase/registryManager': { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
         '../utils/appSpecHelpers': { specificationFormatter: sinon.stub().returnsArg(0) },
+        '../utils/specCutover': { deserializeSpec: localDeserializeSpecStub },
+        '../utils/specLibs': { validateSubmissionSpec: localValidateSubmissionSpecStub, getSpec: sinon.stub().resolves({}) },
+        '../providers/FluxOSLegacyCryptoProvider': localLegacyCryptoProviderStub,
         '../utils/appUtilities': { appPricePerMonth: sinon.stub().returns(0.01) },
         '../utils/chainUtilities': { getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01, cpu: 1, ram: 1, hdd: 1 }]) },
         '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
         '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
         '../invalidMessages': { invalidMessages: [] },
         '../utils/peerState': { peerManager: peerManagerStub },
-        '../utils/enterpriseHelper': { checkAndDecryptAppSpecs: localCheckAndDecryptStub },
+        '../utils/enterpriseHelper': { checkAndDecryptAppSpecs: sinon.stub().callsFake((spec) => Promise.resolve(spec)) },
         '../nodeConfirmationService': { canSendMessages: sinon.stub().returns(true) },
         '../fluxCommunicationUtils': { deterministicFluxList: sinon.stub().resolves([]) },
         '../fluxCommunication': { openEphemeralConnection: sinon.stub().resolves(null) },
@@ -805,7 +821,7 @@ describe('appHashSyncService tests', () => {
       });
     });
 
-    it('should retry with previous owner when signature verification fails due to ownership change', async () => {
+    it('should verify messages through appEventVerifier and insert valid ones', async () => {
       // Two update messages for the same app where first changes ownership
       const bulkMessages = [
         {
@@ -842,7 +858,7 @@ describe('appHashSyncService tests', () => {
         return Promise.resolve({ data: { status: 'success', data: true } });
       });
 
-      // Previous spec for the app (before first update) — from DB
+      // Previous spec for the app (before first update) -- from DB
       localCollectionStub.find.returns({
         project: sinon.stub().returns({
           sort: sinon.stub().returns({
@@ -856,40 +872,29 @@ describe('appHashSyncService tests', () => {
         }),
       });
 
-      // First verify succeeds (owner matches prevSpec.owner=oldOwner)
-      // Second verify fails with newOwner (from updated prevSpecsMap), retries with oldOwner and succeeds
-      let verifyCallCount = 0;
-      localMessageVerifierStub.verifyAppMessageUpdateSignature.callsFake(
-        async (type, ver, spec, ts, sig, owner) => {
-          verifyCallCount += 1;
-          if (verifyCallCount === 1) return true; // first message: owner=oldOwner matches prevSpec
-          if (owner === 'newOwner') throw new Error('Invalid signature'); // second message first attempt
-          if (owner === 'oldOwner') return true; // second message retry with prevOwnerMap
-          return true;
-        },
-      );
-
       await localModule.syncMissingHashes();
 
-      // Verify retry happened (3 calls: 1st msg success + 2nd msg fail + 2nd msg retry)
-      expect(verifyCallCount).to.equal(3);
+      // appEventVerifier.deserializeMessage called for each message
+      expect(localAppEventVerifierStub.deserializeMessage.callCount).to.equal(2);
+      // appEventVerifier.authorize called for each message
+      expect(localAppEventVerifierStub.authorize.callCount).to.equal(2);
+      // appEventVerifier.instantiatePreviousSpec called for each update message
+      expect(localAppEventVerifierStub.instantiatePreviousSpec.callCount).to.equal(2);
       // Both messages should be inserted
       expect(localCollectionStub.insertMany.called).to.be.true;
       const inserted = localCollectionStub.insertMany.firstCall.args[0];
       expect(inserted.length).to.equal(2);
     });
 
-    it('should decrypt prevSpec for enterprise v8 updates before signature verification', async () => {
+    it('should skip messages when authorize fails', async () => {
       const bulkMessages = [
         {
-          type: 'fluxappupdate', version: 8, hash: 'hash1', timestamp: Date.now(),
-          signature: 'sig1',
-          appSpecifications: { name: 'enterpriseApp', version: 8, owner: 'owner1', enterprise: 'encBlob' },
-          valueSat: 1e8, txid: 'tx1', height: 2000,
+          type: 'fluxappregister', version: 4, hash: 'hash1', timestamp: Date.now(),
+          signature: 'sig1', appSpecifications: { name: 'testapp', version: 4, owner: 'owner1' },
+          valueSat: 1e8, txid: 'tx1', height: 1000,
         },
       ];
 
-      // Generate > 500 missing hashes to trigger bulk fetch path
       const manyMissing = Array(600).fill(null).map((_, i) => ({
         hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
       }));
@@ -909,48 +914,14 @@ describe('appHashSyncService tests', () => {
         return Promise.resolve({ data: { status: 'success', data: true } });
       });
 
-      // Previous spec is enterprise v8 with encrypted data
-      const prevSpec = {
-        name: 'enterpriseApp', version: 8, owner: 'owner1', enterprise: 'prevEncBlob',
-      };
-      localCollectionStub.find.returns({
-        project: sinon.stub().returns({
-          sort: sinon.stub().returns({
-            toArray: sinon.stub().resolves([
-              {
-                type: 'fluxappregister', hash: 'hash0', height: 1999,
-                appSpecifications: prevSpec,
-              },
-            ]),
-          }),
-        }),
-      });
-
-      const decryptedPrevSpec = {
-        name: 'enterpriseApp', version: 8, owner: 'owner1',
-        compose: [{ name: 'comp1', repotag: 'repo/tag' }],
-      };
-
-      // Track calls: first for current spec, second for prevSpec
-      let decryptCallCount = 0;
-      localCheckAndDecryptStub.callsFake((spec) => {
-        decryptCallCount += 1;
-        if (decryptCallCount === 1) return Promise.resolve(spec);
-        return Promise.resolve(decryptedPrevSpec);
-      });
-
-      localMessageVerifierStub.verifyAppMessageUpdateSignature.resolves(true);
+      // authorize throws -- message should be skipped
+      localAppEventVerifierStub.authorize.rejects(new Error('Invalid signature'));
 
       await localModule.syncMissingHashes();
 
-      // checkAndDecryptAppSpecs should have been called at least twice
-      // (once for current spec validation, once for prevSpec decryption)
-      expect(localCheckAndDecryptStub.callCount).to.be.greaterThanOrEqual(2);
-      // Verify that verifyAppMessageUpdateSignature received decrypted owner
-      const verifyCall = localMessageVerifierStub.verifyAppMessageUpdateSignature.firstCall;
-      expect(verifyCall).to.not.be.null;
-      // The owner param (6th arg) should be from the decrypted prevSpec
-      expect(verifyCall.args[5]).to.equal('owner1');
+      // No messages inserted since authorize failed
+      expect(localCollectionStub.insertMany.called).to.be.false;
+      expect(localLogStub.warn.calledWith(sinon.match('processMessages verify failed'))).to.be.true;
     });
   });
 

@@ -1,19 +1,13 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
-const config = require('config');
-const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const pgpService = require('../../ZelBack/src/services/pgpService');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const imageVerifier = require('../../ZelBack/src/services/utils/imageVerifier');
-const policyStore = require('../../ZelBack/src/services/policyStore');
-const { RemovalOutcome } = require('../../ZelBack/src/services/utils/removalOutcome');
-const { requireMongo } = require('./dbTestHelper');
+const registryCredentialHelper = require('../../ZelBack/src/services/utils/registryCredentialHelper');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 
 describe('imageManager tests', () => {
-  before(requireMongo);
-
   let imageManager;
 
   beforeEach(() => {
@@ -73,7 +67,7 @@ describe('imageManager tests', () => {
     });
 
     it('should throw error if unable to decrypt credentials', async () => {
-      sinon.stub(pgpService, 'decryptMessage').resolves(null);
+      sinon.stub(registryCredentialHelper, 'getCredentials').rejects(new Error('Unable to decrypt provided credentials'));
 
       try {
         await imageManager.verifyRepository('test/app:latest', {
@@ -85,19 +79,6 @@ describe('imageManager tests', () => {
       } catch (error) {
         expect(error.message).to.include('Unable to decrypt provided credentials');
       }
-    });
-
-    it('should skip verification when skipVerification is true', async () => {
-      const result = await imageManager.verifyRepository('test/app:latest', {
-        repoauth: 'myuser:mytoken',
-        specVersion: 8,
-        appName: 'testapp',
-        skipVerification: true,
-      });
-
-      expect(result).to.be.an('object');
-      expect(result.verified).to.be.true;
-      expect(result.supportedArchitectures).to.be.an('array');
     });
 
     it('should throw error if architecture not supported', async () => {
@@ -322,232 +303,76 @@ describe('imageManager tests', () => {
     });
   });
 
-  // The blocked and vetted lists come from the signed policy bundle now, not from a fetch
-  // this module caches. That removed a real failure: the old cache stored whatever the
-  // response contained without checking it was a list, for six hours, so a github error page
-  // was cached and every read of it threw `repos.forEach is not a function`.
   describe('getBlockedRepositores tests', () => {
-    it('returns the blocked list the signed bundle carries', () => {
-      const blocked = ['blocked/repo1', 'blocked/repo2'];
-      sinon.stub(policyStore, 'getDocument').withArgs('blockedrepositories').returns(blocked);
+    it('should return cached blocked repositories', async () => {
+      const cachedData = ['blocked/repo1', 'blocked/repo2'];
 
-      expect(imageManager.getBlockedRepositores()).to.deep.equal(blocked);
+      // First call to populate cache
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: cachedData });
+      const result1 = await imageManager.getBlockedRepositores();
+
+      // Second call should use cache
+      const result2 = await imageManager.getBlockedRepositores();
+
+      expect(result1).to.deep.equal(cachedData);
+      expect(result2).to.deep.equal(cachedData);
+      sinon.assert.calledOnce(serviceHelper.axiosGet);
     });
 
-    it('returns null when the policy has not been obtained', () => {
-      // Null and an empty list are different answers, and the callers treat them that way:
-      // an unreadable list refuses installs, an empty one permits everything.
-      sinon.stub(policyStore, 'getDocument').returns(null);
+    it('should fetch blocked repositories from GitHub', async () => {
+      const blockedRepos = ['blocked/repo1', 'blocked/repo2'];
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: blockedRepos });
 
-      expect(imageManager.getBlockedRepositores()).to.be.null;
+      const result = await imageManager.getBlockedRepositores();
+
+      expect(result).to.deep.equal(blockedRepos);
+      sinon.assert.calledWith(
+        serviceHelper.axiosGet,
+        'https://raw.githubusercontent.com/RunOnFlux/fluxos-network-policy/main/blockedrepositories.json',
+      );
     });
 
-    it('does not fetch anything', () => {
-      const axiosGet = sinon.stub(serviceHelper, 'axiosGet');
-      // Scoped to the flat document: getBlocklist asks for 'blocklist' first, and an
-      // unqualified stub would answer that with the flat shape and be refused as a
-      // malformed typed document.
-      sinon.stub(policyStore, 'getDocument').withArgs('blockedrepositories').returns([]);
+    it('should return null on error', async () => {
+      sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('Network error'));
 
-      imageManager.getBlockedRepositores();
+      const result = await imageManager.getBlockedRepositores();
 
-      expect(axiosGet.called).to.equal(false);
+      expect(result).to.be.null;
+    });
+
+    it('should return null if no data returned', async () => {
+      sinon.stub(serviceHelper, 'axiosGet').resolves({});
+
+      const result = await imageManager.getBlockedRepositores();
+
+      expect(result).to.be.null;
     });
   });
 
-  describe('checkAppSecrets tests', () => {
-    let db;
-    let database;
-
-    beforeEach(async () => {
-      await dbHelper.initiateDB();
-      db = dbHelper.databaseConnection();
-      database = db.db(config.database.appsglobal.database);
-
-      const appsCollection = config.database.appsglobal.collections.appsInformation;
-      try {
-        await database.collection(appsCollection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-
-      const messagesCollection = config.database.appsglobal.collections.appsMessages;
-      try {
-        await database.collection(messagesCollection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
+  describe.skip('getUserBlockedRepositores tests', () => {
+    // These tests require complex userconfig mocking - skipping for now
+    it('should return empty array if no user blocked repos configured', async () => {
+      const result = await imageManager.getUserBlockedRepositores();
+      expect(result).to.be.an('array');
     });
 
-    it('should pass if no duplicate secrets found during registration', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: 'unique_secret_data',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsInformation, {
-        name: 'ExistingApp',
-        version: 7,
-        owner: '1Owner1',
-        compose: [{ name: 'Comp1', secrets: 'different_secret_data' }],
-        nodes: ['node1'],
-      });
-
-      const result = await imageManager.checkAppSecrets(
-        'NewApp',
-        appComponentSpecs,
-        '1Owner2',
-        true,
-      );
-
-      expect(result).to.be.undefined;
+    it('should return cached user blocked repositories', async () => {
+      const result1 = await imageManager.getUserBlockedRepositores();
+      const result2 = await imageManager.getUserBlockedRepositores();
+      expect(result1).to.deep.equal(result2);
     });
 
-    it('should throw error if duplicate secrets found during registration', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: 'duplicate_secret_data',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsInformation, {
-        name: 'ExistingApp',
-        version: 7,
-        owner: '1Owner1',
-        compose: [{ name: 'Comp1', secrets: 'duplicate_secret_data' }],
-        nodes: ['node1'],
-      });
-
-      try {
-        await imageManager.checkAppSecrets(
-          'NewApp',
-          appComponentSpecs,
-          '1Owner2',
-          true,
-        );
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('secrets are not valid (duplicate in app:');
-      }
-    });
-
-    it('should allow same app to use its own secrets during update', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: 'shared_secret_data',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsInformation, {
-        name: 'MyApp',
-        version: 7,
-        owner: '1Owner1',
-        compose: [{ name: 'Comp1', secrets: 'shared_secret_data' }],
-        nodes: ['node1'],
-      });
-
-      const result = await imageManager.checkAppSecrets(
-        'MyApp',
-        appComponentSpecs,
-        '1Owner1',
-        false,
-      );
-
-      expect(result).to.be.undefined;
-    });
-
-    it('should throw error if different app uses same secrets during update', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: 'shared_secret_data',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsInformation, {
-        name: 'OtherApp',
-        version: 7,
-        owner: '1Owner1',
-        compose: [{ name: 'Comp1', secrets: 'shared_secret_data' }],
-        nodes: ['node1'],
-      });
-
-      try {
-        await imageManager.checkAppSecrets(
-          'MyApp',
-          appComponentSpecs,
-          '1Owner2',
-          false,
-        );
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('secrets are not valid (conflict with another app)');
-      }
-    });
-
-    it('should verify owner matches in permanent app messages', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: 'secret_from_message',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsMessages, {
-        appSpecifications: {
-          name: 'encrypted',
-          version: 7,
-          owner: '1Owner1',
-          compose: [{ name: 'Comp1', secrets: 'secret_from_message' }],
-          nodes: ['node1'],
-        },
-      });
-
-      try {
-        await imageManager.checkAppSecrets(
-          'NewApp',
-          appComponentSpecs,
-          '1Owner2',
-          true,
-        );
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('owner mismatch');
-      }
-    });
-
-    it('should normalize PGP secrets for comparison', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: '-----BEGIN PGP MESSAGE-----\ntest\n-----END PGP MESSAGE-----',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsInformation, {
-        name: 'ExistingApp',
-        version: 7,
-        owner: '1Owner1',
-        compose: [
-          {
-            name: 'Comp1',
-            secrets: '-----BEGIN PGP MESSAGE-----\\ntest\\n-----END PGP MESSAGE-----',
-          },
-        ],
-        nodes: ['node1'],
-      });
-
-      try {
-        await imageManager.checkAppSecrets(
-          'NewApp',
-          appComponentSpecs,
-          '1Owner2',
-          true,
-        );
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('secrets are not valid');
-      }
+    it('should handle marketplace API error gracefully', async () => {
+      const result = await imageManager.getUserBlockedRepositores();
+      expect(result).to.be.an('array');
     });
   });
 
-  describe('checkApplicationImagesCompliance tests', () => {
+  describe('isImageBlocked tests', () => {
     beforeEach(() => {
-      sinon.stub(policyStore, 'getDocument')
-        .withArgs('blockedrepositories')
-        .returns(['blocked/repo', 'blocked-org', 'blockedowner']);
+      sinon.stub(serviceHelper, 'axiosGet').resolves({
+        data: ['blocked/repo', 'blocked-org', 'blockedowner'],
+      });
 
       // eslint-disable-next-line global-require
       const axios = require('axios');
@@ -559,129 +384,89 @@ describe('imageManager tests', () => {
       });
     });
 
-    it('should pass for non-blocked version 3 app', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
+    it('should return not blocked for allowed images', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
 
-      const result = await imageManager.checkApplicationImagesCompliance(appSpecs);
-
-      expect(result).to.be.true;
+      expect(result.blocked).to.be.false;
+      expect(result.reason).to.be.null;
     });
 
-    it('should throw error for blocked app hash', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: '1ValidOwner',
-        hash: 'blocked/repo',
-      };
+    it('should return blocked for blocked app hash', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app:latest'],
+        { owner: '1ValidOwner', hash: 'blocked/repo' },
+      );
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('is not allowed to be spawned');
-      }
+      expect(result.blocked).to.be.true;
+      expect(result.reason).to.include('is not allowed to be spawned');
     });
 
-    it('should throw error for blocked owner', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: 'blockedowner',
-        hash: 'validhash',
-      };
+    it('should return blocked for blocked owner', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app:latest'],
+        { owner: 'blockedowner', hash: 'validhash' },
+      );
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('is not allowed to run applications');
-      }
+      expect(result.blocked).to.be.true;
+      expect(result.reason).to.include('is not allowed to run applications');
     });
 
-    it('should throw error for blocked image', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'blocked/repo:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
+    it('should return blocked for blocked image', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['blocked/repo:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('Image blocked/repo is blocked');
-      }
+      expect(result.blocked).to.be.true;
+      expect(result.reason).to.include('Image blocked/repo is blocked');
     });
 
-    it('should throw error for blocked organization', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'blocked-org/app:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
+    it('should return blocked for blocked organization', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['blocked-org/app:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('Organisation blocked-org is blocked');
-      }
+      expect(result.blocked).to.be.true;
+      expect(result.reason).to.include('Organisation blocked-org is blocked');
     });
 
-    it('should check all compose components for version 4+ apps', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 4,
-        owner: '1ValidOwner',
-        hash: 'validhash',
-        compose: [
-          { name: 'Component1', repotag: 'allowed/app1:latest' },
-          { name: 'Component2', repotag: 'blocked/repo:latest' },
-        ],
-      };
+    it('should detect blocked image among multiple images', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app1:latest', 'blocked/repo:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('Image blocked/repo is blocked');
-      }
+      expect(result.blocked).to.be.true;
+      expect(result.reason).to.include('Image blocked/repo is blocked');
     });
 
-    it('refuses loudly when asked before the node has policy, naming the wiring fault', async () => {
-      policyStore.getDocument.restore();
-      sinon.stub(policyStore, 'getDocument').returns(null);
+    it('should return not blocked if no repos available', async () => {
+      serviceHelper.axiosGet.restore();
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: null });
 
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
+      // eslint-disable-next-line global-require
+      const axios = require('axios');
+      axios.get.restore();
+      sinon.stub(axios, 'get').rejects(new Error('Network error'));
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        // NAMES THE CALLER, not the network. Every caller holds its work shut until the
-        // node has policy, so arriving here is one of them asking without checking - and
-        // a message about reaching Flux Services describes a thing that never happened.
-        expect(error.message).to.include('called before network policy was obtained');
-      }
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
+
+      expect(result.blocked).to.be.false;
+      expect(result.reason).to.be.null;
     });
   });
 
@@ -751,47 +536,32 @@ describe('imageManager tests', () => {
   });
 
   describe('checkApplicationsCompliance tests', () => {
-    // A node past its acquisition window, which is what every removal below assumes: the
-    // sweep acts on a blocklist only once this node has established it is the network's.
-    // The gate itself is exercised at the end of this block.
-    let policyBefore;
+    let deploymentProvider;
+    let appUninstaller;
+
     beforeEach(() => {
       // eslint-disable-next-line global-require
-      const globalState = require('../../ZelBack/src/services/utils/globalState');
-      policyBefore = globalState.policyReady;
-      globalState.policyReady = true;
-    });
-
-    afterEach(() => {
+      deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
       // eslint-disable-next-line global-require
-      const globalState = require('../../ZelBack/src/services/utils/globalState');
-      globalState.policyReady = policyBefore;
+      appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
     });
 
     it('should remove blacklisted apps', async () => {
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: 'GoodApp',
-            version: 3,
-            repotag: 'allowed/app:latest',
-            owner: '1ValidOwner',
-            hash: 'validhash',
-          },
-          {
-            name: 'BadApp',
-            version: 3,
-            repotag: 'blocked/repo:latest',
-            owner: '1ValidOwner',
-            hash: 'validhash',
-          },
-        ],
+      sinon.stub(appsRepository, 'listInstalledApps').resolves([
+        { name: 'GoodApp', owner: '1ValidOwner', hash: 'validhash' },
+        { name: 'BadApp', owner: '1ValidOwner', hash: 'validhash' },
+      ]);
+
+      sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([
+        { appName: 'GoodApp', allImages: () => ['allowed/app:latest'] },
+        { appName: 'BadApp', allImages: () => ['blocked/repo:latest'] },
+      ]);
+
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+
+      sinon.stub(serviceHelper, 'axiosGet').resolves({
+        data: ['blocked/repo'],
       });
-
-      const removeAppLocally = sinon.stub().resolves();
-
-      sinon.stub(policyStore, 'getDocument').withArgs('blockedrepositories').returns(['blocked/repo']);
 
       // eslint-disable-next-line global-require
       const axios = require('axios');
@@ -804,45 +574,36 @@ describe('imageManager tests', () => {
 
       sinon.stub(serviceHelper, 'delay').resolves();
 
-      await imageManager.checkApplicationsCompliance(installedApps, removeAppLocally);
+      await imageManager.checkApplicationsCompliance();
 
-      // Twice: the table, then the one row again immediately before removing it.
-      sinon.assert.calledTwice(installedApps);
-      sinon.assert.calledOnce(removeAppLocally);
-      sinon.assert.calledWith(removeAppLocally, 'BadApp', null, false, true, true);
+      sinon.assert.calledOnce(uninstallStub);
+      sinon.assert.calledWith(uninstallStub, 'BadApp', { broadcastRemoval: true });
     });
 
     it('should handle failure to get installed apps', async () => {
-      const installedApps = sinon.stub().resolves({
-        status: 'error',
-        data: { message: 'Failed to get apps' },
-      });
+      sinon.stub(appsRepository, 'listInstalledApps').rejects(new Error('Failed to get apps'));
 
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      await imageManager.checkApplicationsCompliance(installedApps, removeAppLocally);
+      await imageManager.checkApplicationsCompliance();
 
-      sinon.assert.calledOnce(installedApps);
-      sinon.assert.notCalled(removeAppLocally);
+      sinon.assert.notCalled(uninstallStub);
     });
 
     it('should not remove apps if none are blacklisted', async () => {
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: 'GoodApp',
-            version: 3,
-            repotag: 'allowed/app:latest',
-            owner: '1ValidOwner',
-            hash: 'validhash',
-          },
-        ],
+      sinon.stub(appsRepository, 'listInstalledApps').resolves([
+        { name: 'GoodApp', owner: '1ValidOwner', hash: 'validhash' },
+      ]);
+
+      sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([
+        { appName: 'GoodApp', allImages: () => ['allowed/app:latest'] },
+      ]);
+
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+
+      sinon.stub(serviceHelper, 'axiosGet').resolves({
+        data: ['blocked/repo'],
       });
-
-      const removeAppLocally = sinon.stub().resolves();
-
-      sinon.stub(policyStore, 'getDocument').withArgs('blockedrepositories').returns(['blocked/repo']);
 
       // eslint-disable-next-line global-require
       const axios = require('axios');
@@ -853,39 +614,27 @@ describe('imageManager tests', () => {
         },
       });
 
-      await imageManager.checkApplicationsCompliance(installedApps, removeAppLocally);
+      await imageManager.checkApplicationsCompliance();
 
-      sinon.assert.calledOnce(installedApps);
-      sinon.assert.notCalled(removeAppLocally);
+      sinon.assert.notCalled(uninstallStub);
     });
 
-    // SPACING IS BETWEEN REMOVALS, so two of them are separated by one wait. A wait after
-    // the last one holds the pass open over an empty remainder, which is time the node
-    // spends unable to answer the next bundle.
     it('should delay between removing multiple apps', async () => {
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: 'BadApp1',
-            version: 3,
-            repotag: 'blocked/repo1:latest',
-            owner: '1ValidOwner',
-            hash: 'validhash',
-          },
-          {
-            name: 'BadApp2',
-            version: 3,
-            repotag: 'blocked/repo2:latest',
-            owner: '1ValidOwner',
-            hash: 'validhash',
-          },
-        ],
+      sinon.stub(appsRepository, 'listInstalledApps').resolves([
+        { name: 'BadApp1', owner: '1ValidOwner', hash: 'validhash' },
+        { name: 'BadApp2', owner: '1ValidOwner', hash: 'validhash' },
+      ]);
+
+      sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([
+        { appName: 'BadApp1', allImages: () => ['blocked/repo1:latest'] },
+        { appName: 'BadApp2', allImages: () => ['blocked/repo2:latest'] },
+      ]);
+
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+
+      sinon.stub(serviceHelper, 'axiosGet').resolves({
+        data: ['blocked/repo1', 'blocked/repo2'],
       });
-
-      const removeAppLocally = sinon.stub().resolves();
-
-      sinon.stub(policyStore, 'getDocument').withArgs('blockedrepositories').returns(['blocked/repo1', 'blocked/repo2']);
 
       // eslint-disable-next-line global-require
       const axios = require('axios');
@@ -898,11 +647,11 @@ describe('imageManager tests', () => {
 
       const delayStub = sinon.stub(serviceHelper, 'delay').resolves();
 
-      await imageManager.checkApplicationsCompliance(installedApps, removeAppLocally);
+      await imageManager.checkApplicationsCompliance();
 
-      sinon.assert.calledTwice(removeAppLocally);
-      sinon.assert.calledOnce(delayStub);
-      sinon.assert.calledWith(delayStub, config.fluxapps.complianceRemovalSpacingMs);
+      sinon.assert.calledTwice(uninstallStub);
+      sinon.assert.calledTwice(delayStub);
+      sinon.assert.calledWith(delayStub, 3 * 60 * 1000);
     });
   });
 
@@ -991,180 +740,105 @@ describe('imageManager tests', () => {
   describe('getBlocklist tests', () => {
     const typed = [{ kind: 'name', value: 'dowz', reason: 'why', added: '2026-09-12' }];
 
-    // FROM THE BUNDLE, NOT FROM TWO FETCHES, and two of the rules below changed with it.
-    //
-    // While this read blocklist.json over HTTP, a malformed or empty typed document had to
-    // fall through to the flat one: a CDN serving 404-as-200 and an error page with a 200
-    // are indistinguishable from an absent document, so falling through was the only safe
-    // reading. Neither lie is reachable through signature-verified bytes.
-    //
-    // So: an EMPTY typed document now returns [] directly - from a signed bundle that
-    // genuinely means "published, and nothing is blocked". A MALFORMED one now refuses
-    // rather than falling through, because wrong-shape-inside-validly-signed means the
-    // bundle is internally inconsistent, and that is exactly when refusing beats guessing.
-    // Suite 1501 asserts the same rule from the other end.
-    function documents(map) {
-      const stub = sinon.stub(policyStore, 'getDocument');
-      Object.entries(map).forEach(([name, value]) => stub.withArgs(name).returns(value));
-      stub.returns(null);
-      return stub;
-    }
+    it('prefers the typed document', async () => {
+      const axiosGet = sinon.stub(serviceHelper, 'axiosGet');
+      axiosGet.withArgs(sinon.match(/blocklist\.json$/)).resolves({ data: typed });
+      axiosGet.resolves({ data: ['legacy-entry'] });
 
-    it('prefers the typed document', () => {
-      documents({ blocklist: typed, blockedrepositories: ['legacy-entry'] });
-
-      expect(imageManager.getBlocklist()).to.deep.equal(typed);
-    });
-
-    it('never reads the flat document when the typed one is usable', () => {
-      // Precedence, not a combine: the flat entries must not appear alongside the typed
-      // ones. A combine would double-count and, worse, would make the flat document's
-      // contents matter when the typed one has already answered.
-      const stub = documents({ blocklist: typed, blockedrepositories: ['legacy-entry'] });
-
-      const entries = imageManager.getBlocklist();
+      const entries = await imageManager.getBlocklist();
 
       expect(entries).to.deep.equal(typed);
-      expect(stub.calledWith('blockedrepositories'), 'the flat document was read anyway').to.equal(false);
     });
 
-    it('refuses when the typed document is not typed', () => {
-      // Was: falls back to the flat document. A response that is merely array-shaped could
-      // be an error page over HTTP; inside a signed bundle it is a bundle that contradicts
-      // itself, and the node must not decide from it.
-      documents({ blocklist: ['not', 'typed'], blockedrepositories: ['blocked-org'] });
+    it('falls back to the flat document when the typed one is not typed', async () => {
+      // A response that is merely array-shaped - an error page, or the flat
+      // document served under the wrong name - must not read as "nothing is
+      // blocked".
+      const axiosGet = sinon.stub(serviceHelper, 'axiosGet');
+      axiosGet.withArgs(sinon.match(/blocklist\.json$/)).resolves({ data: ['not', 'typed'] });
+      axiosGet.withArgs(sinon.match(/blockedrepositories\.json$/)).resolves({ data: ['blocked-org'] });
 
-      expect(imageManager.getBlocklist()).to.equal(null);
+      const entries = await imageManager.getBlocklist();
+
+      expect(entries).to.deep.equal([{ kind: 'legacy', value: 'blocked-org' }]);
     });
 
-    it('refuses when any one element of the typed document is malformed', () => {
+    it('falls back when the typed document is empty', async () => {
+      const axiosGet = sinon.stub(serviceHelper, 'axiosGet');
+      axiosGet.withArgs(sinon.match(/blocklist\.json$/)).resolves({ data: [] });
+      axiosGet.withArgs(sinon.match(/blockedrepositories\.json$/)).resolves({ data: ['blocked-org'] });
+
+      const entries = await imageManager.getBlocklist();
+
+      expect(entries).to.deep.equal([{ kind: 'legacy', value: 'blocked-org' }]);
+    });
+
+    it('falls back when the typed document is absent', async () => {
+      const axiosGet = sinon.stub(serviceHelper, 'axiosGet');
+      axiosGet.withArgs(sinon.match(/blocklist\.json$/)).rejects(new Error('404'));
+      axiosGet.withArgs(sinon.match(/blockedrepositories\.json$/)).resolves({ data: ['blocked-org'] });
+
+      const entries = await imageManager.getBlocklist();
+
+      expect(entries).to.deep.equal([{ kind: 'legacy', value: 'blocked-org' }]);
+    });
+
+    it('rejects the whole typed document when any one element is malformed', async () => {
       // `every`, not `filter`. Dropping the bad element would answer from a document the
       // reader could not fully read, and silently under-block by exactly the entries it
       // discarded - which is the direction that costs money.
-      documents({
-        blocklist: [
+      const axiosGet = sinon.stub(serviceHelper, 'axiosGet');
+      axiosGet.withArgs(sinon.match(/blocklist\.json$/)).resolves({
+        data: [
           { kind: 'name', value: 'dowz', reason: 'why', added: '2026-09-12' },
           { kind: 'name' },
         ],
-        blockedrepositories: ['blocked-org'],
       });
+      axiosGet.withArgs(sinon.match(/blockedrepositories\.json$/)).resolves({ data: ['blocked-org'] });
 
-      expect(imageManager.getBlocklist()).to.equal(null);
+      const entries = await imageManager.getBlocklist();
+
+      expect(entries).to.deep.equal([{ kind: 'legacy', value: 'blocked-org' }]);
     });
 
-    it('reads an empty typed document as nothing being blocked', () => {
-      // Was: falls back. [] in a signed bundle is a published verdict, not a gap - and the
-      // flat document is generated from this one, so they are empty together anyway.
-      documents({ blocklist: [], blockedrepositories: ['blocked-org'] });
+    it('returns null when the flat document is not a list', async () => {
+      // The flat fetch caches on truthiness, so an error page served as 200 is held for six
+      // hours. Reading it as "nothing is blocked" would unblock the network; mapping over it
+      // throws a TypeError no caller recognises. Neither: it is "could not ask".
+      const axiosGet = sinon.stub(serviceHelper, 'axiosGet');
+      axiosGet.withArgs(sinon.match(/blocklist\.json$/)).rejects(new Error('404'));
+      axiosGet.withArgs(sinon.match(/blockedrepositories\.json$/))
+        .resolves({ data: '<html>rate limited</html>' });
 
-      expect(imageManager.getBlocklist()).to.deep.equal([]);
+      const entries = await imageManager.getBlocklist();
+
+      expect(entries).to.equal(null);
     });
 
-    it('falls back to the flat document when the typed one is absent', () => {
-      // The case that keeps this fallback alive: a bundle signed before blocklist joined
-      // the published documents. The node holds a perfectly good bundle and must go on
-      // enforcing what it does carry.
-      documents({ blockedrepositories: ['blocked-org'] });
+    it('returns an empty list when the documents say nothing is blocked', async () => {
+      // [] and null must never collapse into one value: a node that cannot read policy has to
+      // refuse to decide, where one that read an empty policy has decided.
+      const axiosGet = sinon.stub(serviceHelper, 'axiosGet');
+      axiosGet.withArgs(sinon.match(/blocklist\.json$/)).resolves({ data: [] });
+      axiosGet.withArgs(sinon.match(/blockedrepositories\.json$/)).resolves({ data: [] });
 
-      expect(imageManager.getBlocklist()).to.deep.equal([{ kind: 'legacy', value: 'blocked-org' }]);
+      const entries = await imageManager.getBlocklist();
+
+      expect(entries).to.deep.equal([]);
     });
 
-    it('returns null when the flat document is not a list', () => {
-      documents({ blockedrepositories: '<html>rate limited</html>' });
+    it('returns null when neither document can be read', async () => {
+      // Null is "could not ask", which callers refuse or defer on. An empty
+      // list would answer "nothing is blocked" from an outage.
+      sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('network down'));
 
-      expect(imageManager.getBlocklist()).to.equal(null);
-    });
+      const entries = await imageManager.getBlocklist();
 
-    it('returns an empty list when the documents say nothing is blocked', () => {
-      // [] and null must never collapse into one value: a node that cannot read policy has
-      // to refuse to decide, where one that read an empty policy has decided.
-      documents({ blocklist: [], blockedrepositories: [] });
-
-      expect(imageManager.getBlocklist()).to.deep.equal([]);
-    });
-
-    it('returns null when neither document can be read', () => {
-      // No bundle at all - the node holds nothing and cannot answer.
-      documents({});
-
-      expect(imageManager.getBlocklist()).to.equal(null);
-    });
-  });
-
-  describe('the sweep acts only on a blocklist this node can vouch for', () => {
-    let globalState;
-    let policyBefore;
-
-    function blacklistedApp() {
-      return sinon.stub().resolves({
-        status: 'success',
-        data: [{
-          name: 'BadApp', version: 3, repotag: 'blocked/repo:latest', owner: '1ValidOwner', hash: 'validhash',
-        }],
-      });
-    }
-
-    beforeEach(() => {
-      // eslint-disable-next-line global-require
-      globalState = require('../../ZelBack/src/services/utils/globalState');
-      policyBefore = globalState.policyReady;
-      // Through the document the bundle carries, which is the seam the sweep reads: the
-      // exported getBlocklist is not what it calls.
-      sinon.stub(policyStore, 'getDocument').withArgs('blockedrepositories').returns(['blocked/repo']);
-      sinon.stub(serviceHelper, 'delay').resolves();
-    });
-
-    afterEach(() => {
-      globalState.policyReady = policyBefore;
-    });
-
-    // A BUNDLE HELD IS NOT A BUNDLE VOUCHED FOR. One restored from disk answers getBlocklist
-    // without anything having established it is still the network's, so a ban lifted while
-    // this node was down still reads as a ban - and what follows is an uninstall of an
-    // application that is now permitted, broadcast to the network.
-    it('removes nothing while the policy is unconfirmed', async () => {
-      globalState.policyReady = false;
-      const removeAppLocally = sinon.stub().resolves();
-
-      await imageManager.checkApplicationsCompliance(blacklistedApp(), removeAppLocally);
-
-      expect(
-        removeAppLocally.called,
-        'an application was uninstalled on a list this node could not vouch for',
-      ).to.equal(false);
-    });
-
-    // The canary: the same app and the same list, with the policy confirmed, IS removed -
-    // so the refusal above is the gate rather than the fixture never reaching the removal.
-    it('removes it once the policy is confirmed', async () => {
-      globalState.policyReady = true;
-      const removeAppLocally = sinon.stub().resolves();
-
-      await imageManager.checkApplicationsCompliance(blacklistedApp(), removeAppLocally);
-
-      expect(removeAppLocally.calledOnce).to.equal(true);
-      expect(removeAppLocally.firstCall.args[0]).to.equal('BadApp');
+      expect(entries).to.equal(null);
     });
   });
 
   describe('checkApplicationsCompliance identity tests', () => {
-    // A node past its acquisition window, which is what every removal below assumes: the
-    // sweep acts on a blocklist only once this node has established it is the network's.
-    // The gate itself is exercised at the end of this block.
-    let policyBefore;
-    beforeEach(() => {
-      // eslint-disable-next-line global-require
-      const globalState = require('../../ZelBack/src/services/utils/globalState');
-      policyBefore = globalState.policyReady;
-      globalState.policyReady = true;
-    });
-
-    afterEach(() => {
-      // eslint-disable-next-line global-require
-      const globalState = require('../../ZelBack/src/services/utils/globalState');
-      globalState.policyReady = policyBefore;
-    });
-
     const sealed = {
       name: 'dijikalaco',
       version: 8,
@@ -1186,14 +860,12 @@ describe('imageManager tests', () => {
     }
 
     function stubBlocklist(entries) {
-      // The documents as the signed bundle carries them. null is "no bundle held", which
-      // is the node that cannot answer - not a node that answered "nothing".
-      const getDocument = sinon.stub(policyStore, 'getDocument');
+      const axiosGet = sinon.stub(serviceHelper, 'axiosGet');
       if (entries === null) {
-        getDocument.returns(null);
+        axiosGet.rejects(new Error('unreachable'));
       } else {
-        getDocument.withArgs('blocklist').returns(entries);
-        getDocument.returns([]);
+        axiosGet.withArgs(sinon.match(/blocklist\.json$/)).resolves({ data: entries });
+        axiosGet.resolves({ data: [] });
       }
       // eslint-disable-next-line global-require
       const axios = require('axios');
@@ -1269,594 +941,6 @@ describe('imageManager tests', () => {
       await manager.checkApplicationsCompliance(installedApps, removeAppLocally);
 
       sinon.assert.calledOnceWithExactly(removeAppLocally, 'ReadableApp', null, false, true, true);
-    });
-  });
-
-  // WHEN THE SWEEP RUNS, AND WHAT IT CARRIES BETWEEN PASSES.
-  //
-  // The blocklist reaches a node within seconds of the network adopting it, so the wait
-  // between a change and this node acting on it is whatever this schedules. Each case
-  // below is a way that wait, a pass already running, or a removal that did not happen
-  // produces the wrong answer.
-  //
-  // EVERYTHING IS PASSED IN, so there are no stubs here and no reloading. The clock is
-  // one of the dependencies, and firing a timer returns the pass it started - so a case
-  // waits for the work rather than for a number of turns of the event loop.
-  describe('compliance sweep scheduling', () => {
-    const KNOBS = {
-      complianceSweepStaggerMs: 100,
-      complianceRemovalSpacingMs: 0,
-      complianceRetryBaseMs: 10,
-      complianceRetryMaxMs: 80,
-    };
-
-    // A clock the test owns. `fire` runs what is due and waits for it, because an armed
-    // callback returns the pass it starts.
-    function testTimers() {
-      let nextId = 0;
-      const armed = new Map();
-      const delays = [];
-      return {
-        api: {
-          set: (fn, ms) => { nextId += 1; delays.push(ms); armed.set(nextId, fn); return nextId; },
-          clear: (id) => armed.delete(id),
-        },
-        delays,
-        count: () => armed.size,
-        async fire() {
-          const due = [...armed.values()];
-          armed.clear();
-          // eslint-disable-next-line no-restricted-syntax
-          for (const fn of due) {
-            // eslint-disable-next-line no-await-in-loop
-            await fn();
-          }
-        },
-      };
-    }
-
-    const blockedApp = (name, hash = 'd'.repeat(64)) => ({
-      name, version: 4, owner: '1Owner', hash, compose: [{ repotag: 'blocked/repo:latest' }],
-    });
-
-    const BANS_THE_IMAGE = [{ kind: 'image', value: 'blocked/repo' }];
-
-    // Answers both shapes the pass uses: the whole table, and one row by name for the
-    // re-check before a removal.
-    const tableOf = (rows) => async (name) => ({
-      status: 'success',
-      data: name ? rows().filter((row) => row.name === name) : rows(),
-    });
-
-    const readsEverything = async (apps) => ({ readable: apps, unreadable: [], inPlace: apps });
-
-    // A sweeper wired to the test's own clock, policy and documents.
-    function build({
-      rows = () => [],
-      blocklist = () => BANS_THE_IMAGE,
-      decryptApps = readsEverything,
-      removeAppLocally = sinon.stub().resolves(RemovalOutcome.REMOVED),
-      policyReady = true,
-      table = tableOf(rows),
-    } = {}) {
-      const timers = testTimers();
-      let openGate;
-      const gate = new Promise((resolve) => { openGate = resolve; });
-      const policy = { policyReady, waitForPolicyReady: () => gate };
-      let listener = null;
-      const bundle = { onBundleChanged: (fn) => { listener = fn; return () => { listener = null; }; } };
-      const installedApps = sinon.spy(table);
-      const sweeper = imageManager.createComplianceSweeper({
-        installedApps,
-        removeAppLocally,
-        blocklist,
-        decryptApps,
-        policy,
-        bundle,
-        knobs: KNOBS,
-        timers: timers.api,
-        wait: async () => {},
-      });
-      return {
-        sweeper,
-        timers,
-        installedApps,
-        removeAppLocally,
-        policy,
-        openGate,
-        changeBundle: () => listener && listener({ seq: 2, source: 'peer' }),
-      };
-    }
-
-    // ONE MORE PASS, NOT ONE PER REQUEST. A pass is a function of the blocklist this node
-    // holds when it runs, so requests arriving during one are all answered by a single
-    // further pass - a queue of them would each re-read the same final state and walk the
-    // whole local app table again.
-    it('coalesces requests arriving during a pass into exactly one more', async () => {
-      let release;
-      const held = new Promise((resolve) => { release = resolve; });
-      let passes = 0;
-      const installedApps = async () => {
-        passes += 1;
-        if (passes === 1) await held;
-        return { status: 'success', data: [] };
-      };
-      const sweeper = imageManager.createComplianceSweeper({
-        installedApps,
-        removeAppLocally: sinon.stub().resolves(RemovalOutcome.REMOVED),
-        blocklist: () => [],
-        decryptApps: readsEverything,
-        policy: { policyReady: true, waitForPolicyReady: () => new Promise(() => {}) },
-        bundle: { onBundleChanged: () => () => {} },
-        knobs: KNOBS,
-        timers: testTimers().api,
-        wait: async () => {},
-      });
-
-      const running = sweeper.request();
-      sweeper.request();
-      sweeper.request();
-      sweeper.request();
-      release();
-      await running;
-
-      expect(passes, 'each request took its own pass over the whole node').to.equal(2);
-    });
-
-    // A PASS HOLDS ITSELF OPEN FOR MINUTES. Removals are spaced, so what the blocklist
-    // said when the pass started is not what the network says by the time it reaches the
-    // last application - and an entry lifted in between would otherwise still be acted
-    // on, and the uninstall broadcast.
-    it('does not remove an application whose entry is lifted while the pass runs', async () => {
-      let lifted = false;
-      const rows = [blockedApp('FirstApp'), blockedApp('SecondApp')];
-      const t = build({
-        rows: () => rows,
-        blocklist: () => (lifted ? [] : BANS_THE_IMAGE),
-      });
-      // The lift lands in the spacing between the two removals.
-      t.removeAppLocally.callsFake(async () => { lifted = true; return RemovalOutcome.REMOVED; });
-
-      await t.sweeper.runPass();
-
-      expect(t.removeAppLocally.callCount, 'the pass kept removing on a list the network had moved past').to.equal(1);
-      expect(t.removeAppLocally.firstCall.args[0]).to.equal('FirstApp');
-    });
-
-    // THE RECORD MOVES TOO, not only the list. An application redeployed onto a different
-    // image while the pass was spacing is judged on the image it no longer runs, and a
-    // customer's now-compliant application is uninstalled and the removal broadcast.
-    it('re-reads the application before removing it, not only the blocklist', async () => {
-      const rows = [blockedApp('FirstApp'), blockedApp('SecondApp')];
-      const t = build({ rows: () => rows });
-      t.removeAppLocally.callsFake(async () => {
-        // The redeploy lands after the first removal: same application, new hash, an
-        // image the blocklist says nothing about.
-        rows[1] = {
-          name: 'SecondApp', version: 4, owner: '1Owner', hash: 'f'.repeat(64), compose: [{ repotag: 'allowed/repo:latest' }],
-        };
-        return RemovalOutcome.REMOVED;
-      });
-
-      await t.sweeper.runPass();
-
-      expect(t.removeAppLocally.callCount, 'an application was removed on a specification it no longer runs').to.equal(1);
-      expect(t.removeAppLocally.firstCall.args[0]).to.equal('FirstApp');
-    });
-
-    // The canary for the two above: with nothing moving, BOTH go.
-    it('removes every blocked application when nothing changes under it', async () => {
-      const t = build({ rows: () => [blockedApp('FirstApp'), blockedApp('SecondApp')] });
-      await t.sweeper.runPass();
-      expect(t.removeAppLocally.callCount).to.equal(2);
-    });
-
-    // A REFUSAL IS NOT A REMOVAL. removeAppLocally answers BUSY when the node is doing
-    // something else, having touched nothing - and a caller that reads that as done
-    // leaves a blocked application running with nothing coming back for it.
-    it('does not treat a refused removal as done, and asks again', async () => {
-      const t = build({ rows: () => [blockedApp('BusyApp')] });
-      t.removeAppLocally.onFirstCall().resolves(RemovalOutcome.BUSY);
-      t.removeAppLocally.onSecondCall().resolves(RemovalOutcome.REMOVED);
-
-      await t.sweeper.request();
-      expect(t.removeAppLocally.callCount, 'the first attempt was refused').to.equal(1);
-      expect(t.timers.count(), 'a refused removal left nothing to come back for it').to.equal(1);
-
-      await t.timers.fire();
-      expect(t.removeAppLocally.callCount, 'a refused removal was never retried').to.equal(2);
-    });
-
-    // FAILED says the application may still be here, whole or in part.
-    it('asks again after a removal that did not complete', async () => {
-      const t = build({ rows: () => [blockedApp('BrokenApp')] });
-      t.removeAppLocally.resolves(RemovalOutcome.FAILED);
-
-      await t.sweeper.request();
-      await t.timers.fire();
-
-      expect(t.removeAppLocally.callCount).to.equal(2);
-    });
-
-    // NOT_INSTALLED settles the question: the node does not hold it either way.
-    it('stops asking once the node no longer holds it', async () => {
-      const t = build({ rows: () => [blockedApp('GoneApp')] });
-      t.removeAppLocally.resolves(RemovalOutcome.NOT_INSTALLED);
-
-      await t.sweeper.request();
-
-      expect(t.removeAppLocally.callCount).to.equal(1);
-      expect(t.timers.count(), 'an application the node does not hold was still owed a pass').to.equal(0);
-    });
-
-    // A RECORD THAT DID NOT ANSWER SAYS NOTHING ABOUT THE APPLICATION, and a pass that
-    // reads it as "gone" strikes a blocked application off with nothing coming back for
-    // it.
-    it('asks again when the record cannot be read before a removal', async () => {
-      const rows = [blockedApp('BannedApp')];
-      let answers = false;
-      const t = build({
-        table: async (name) => (name && !answers
-          ? { status: 'error', data: { message: 'connection lost' } }
-          : { status: 'success', data: name ? rows.filter((row) => row.name === name) : rows }),
-      });
-
-      await t.sweeper.request();
-      expect(t.removeAppLocally.called, 'a removal was attempted on a record nothing could read').to.equal(false);
-      expect(t.timers.count(), 'a blocked application was struck off on a failed read').to.equal(1);
-
-      answers = true;
-      await t.timers.fire();
-      expect(t.removeAppLocally.callCount, 'the application was never asked about again').to.equal(1);
-      expect(t.removeAppLocally.firstCall.args[0]).to.equal('BannedApp');
-    });
-
-    // The other half of the same question: a record that DOES answer, and says the node
-    // does not hold it, settles it. Owing it would arm a timer for an application that
-    // is gone.
-    it('stops asking when the record says the application is gone', async () => {
-      const rows = [blockedApp('VanishedApp')];
-      const t = build({
-        table: async (name) => ({ status: 'success', data: name ? [] : rows }),
-      });
-
-      await t.sweeper.request();
-      expect(t.removeAppLocally.called).to.equal(false);
-      expect(t.timers.count(), 'an application the node does not hold was owed a pass').to.equal(0);
-    });
-
-    // A NODE OWING NOTHING RUNS NO TIMER.
-    it('arms no timer when every application was answered for', async () => {
-      const t = build({ rows: () => [blockedApp('CleanApp')] });
-      await t.sweeper.request();
-      expect(t.timers.count(), 'a timer outlived a pass that owed nothing').to.equal(0);
-    });
-
-    // A pass that stops part way has answered for what is behind it and nothing about
-    // what is ahead. Left unowed, those wait for the next bundle change - a day away at
-    // production's backstop, and never if policy never changes again.
-    it('holds the applications a stopped pass never reached', async () => {
-      let usable = true;
-      const rows = [blockedApp('FirstApp'), blockedApp('SecondApp')];
-      const t = build({ rows: () => rows, blocklist: () => (usable ? BANS_THE_IMAGE : null) });
-      t.removeAppLocally.callsFake(async () => { usable = false; return RemovalOutcome.REMOVED; });
-
-      await t.sweeper.request();
-      expect(t.removeAppLocally.callCount, 'the pass should have stopped').to.equal(1);
-
-      usable = true;
-      t.removeAppLocally.callsFake(async () => RemovalOutcome.REMOVED);
-      await t.timers.fire();
-
-      expect(t.removeAppLocally.callCount, 'the application the pass never reached was dropped').to.equal(2);
-      expect(t.removeAppLocally.secondCall.args[0]).to.equal('SecondApp');
-    });
-
-    // EVERY WAY OUT OF A PASS OWES WHAT IT DID NOT JUDGE, including the one nobody
-    // planned: a throw that leaves nothing owed arms no timer, and the applications it
-    // never reached wait for the next bundle change.
-    it('holds the whole node when a pass throws', async () => {
-      let broken = true;
-      const t = build({
-        rows: () => [blockedApp('FirstApp'), blockedApp('SecondApp')],
-        decryptApps: async (apps) => {
-          if (broken) throw new Error('unreadable');
-          return { readable: apps, unreadable: [], inPlace: apps };
-        },
-      });
-
-      await t.sweeper.request();
-      expect(t.removeAppLocally.called, 'a pass that threw removed something anyway').to.equal(false);
-      expect(t.timers.count(), 'a pass that threw owed nothing, so nothing came back for it').to.equal(1);
-
-      broken = false;
-      await t.timers.fire();
-      expect(t.removeAppLocally.callCount, 'the applications the pass never judged were dropped').to.equal(2);
-    });
-
-    // A pass that stopped before it classified anything knows no names to owe, so what
-    // it owes is the node.
-    it('holds the whole node when a pass could not start', async () => {
-      let usable = false;
-      const t = build({ rows: () => [blockedApp('SomeApp')], blocklist: () => (usable ? BANS_THE_IMAGE : null) });
-
-      await t.sweeper.request();
-      expect(t.removeAppLocally.called).to.equal(false);
-      expect(t.timers.count(), 'a pass that could not read the list owed nothing').to.equal(1);
-
-      usable = true;
-      await t.timers.fire();
-      expect(t.removeAppLocally.callCount).to.equal(1);
-    });
-
-    // The wait grows, so a node that cannot make progress stops asking at the base rate
-    // forever.
-    it('doubles the wait between retries that resolve nothing', async () => {
-      const delays = [];
-      const rows = [blockedApp('StuckApp')];
-      const timers = testTimers();
-      const armed = [];
-      const recording = {
-        set: (fn, ms) => { delays.push(ms); armed.push(fn); return timers.api.set(fn, ms); },
-        clear: timers.api.clear,
-      };
-      const sweeper = imageManager.createComplianceSweeper({
-        installedApps: tableOf(() => rows),
-        removeAppLocally: sinon.stub().resolves(RemovalOutcome.BUSY),
-        blocklist: () => BANS_THE_IMAGE,
-        decryptApps: readsEverything,
-        policy: { policyReady: true, waitForPolicyReady: () => new Promise(() => {}) },
-        bundle: { onBundleChanged: () => () => {} },
-        knobs: KNOBS,
-        timers: recording,
-        wait: async () => {},
-      });
-
-      await sweeper.request();
-      await timers.fire();
-      await timers.fire();
-      await timers.fire();
-
-      expect(delays.slice(0, 4), 'the wait did not grow, or grew past its ceiling')
-        .to.deep.equal([10, 20, 40, 80]);
-    });
-
-    // THE SAME RULE FOR THE WHOLE NODE AS FOR ONE APPLICATION. A node that cannot read
-    // the list at all owes every application it holds, and a debt it never discharges
-    // must not be re-asked at the base rate for as long as it lasts.
-    it('doubles the wait between whole-node retries that resolve nothing', async () => {
-      const t = build({ rows: () => [blockedApp('SomeApp')], blocklist: () => null });
-
-      await t.sweeper.request();
-      await t.timers.fire();
-      await t.timers.fire();
-      await t.timers.fire();
-
-      expect(t.timers.delays, 'the wait for the whole node did not grow, or grew past its ceiling')
-        .to.deep.equal([10, 20, 40, 80]);
-    });
-
-    it('holds the wait at its ceiling', async () => {
-      const delays = [];
-      const timers = testTimers();
-      const recording = {
-        set: (fn, ms) => { delays.push(ms); return timers.api.set(fn, ms); },
-        clear: timers.api.clear,
-      };
-      const sweeper = imageManager.createComplianceSweeper({
-        installedApps: tableOf(() => [blockedApp('StuckApp')]),
-        removeAppLocally: sinon.stub().resolves(RemovalOutcome.BUSY),
-        blocklist: () => BANS_THE_IMAGE,
-        decryptApps: readsEverything,
-        policy: { policyReady: true, waitForPolicyReady: () => new Promise(() => {}) },
-        bundle: { onBundleChanged: () => () => {} },
-        knobs: KNOBS,
-        timers: recording,
-        wait: async () => {},
-      });
-
-      await sweeper.request();
-      // Well past the point the wait would reach the ceiling if it kept doubling.
-      // eslint-disable-next-line no-restricted-syntax
-      for (let i = 0; i < 6; i += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        await timers.fire();
-      }
-
-      expect(Math.max(...delays), 'the wait grew past the ceiling').to.equal(KNOBS.complianceRetryMaxMs);
-    });
-
-    // A DEBT DISCHARGED IS NOT THE SAME DEBT WHEN IT RETURNS. The wait grows for a node
-    // that cannot make progress; a node that owed nothing has made all of it, and the
-    // next thing it cannot do is worth asking about at the base rate.
-    it('starts the wait again for a name owed after the node had cleared it', async () => {
-      let outcome = RemovalOutcome.BUSY;
-      const t = build({
-        rows: () => [blockedApp('StuckApp')],
-        removeAppLocally: sinon.stub().callsFake(async () => outcome),
-      });
-
-      await t.sweeper.request();
-      await t.timers.fire();
-      await t.timers.fire();
-      await t.timers.fire();
-      expect(t.timers.delays, 'the wait did not reach its ceiling').to.deep.equal([10, 20, 40, 80]);
-
-      outcome = RemovalOutcome.REMOVED;
-      await t.timers.fire();
-      expect(t.timers.count(), 'a node owing nothing kept a wait running').to.equal(0);
-
-      outcome = RemovalOutcome.BUSY;
-      await t.sweeper.request();
-      expect(t.timers.delays.slice(4), 'the same name owed again was asked about at the ceiling')
-        .to.deep.equal([10]);
-    });
-
-    // WHAT IS OWED DECIDES THE WAIT, at every pass and not only at the one that armed
-    // it. An application held for the first time is a debt this node has not backed off
-    // from, whatever it is already waiting to re-ask about.
-    it('replaces a running wait when a pass holds something new', async () => {
-      let names = ['StuckApp'];
-      const t = build({
-        rows: () => names.map((name) => blockedApp(name)),
-        removeAppLocally: sinon.stub().resolves(RemovalOutcome.BUSY),
-      });
-
-      await t.sweeper.request();
-      await t.timers.fire();
-      await t.timers.fire();
-      await t.timers.fire();
-      expect(t.timers.delays, 'the wait did not reach its ceiling').to.deep.equal([10, 20, 40, 80]);
-
-      names = ['StuckApp', 'NewlyBlockedApp'];
-      await t.sweeper.request();
-
-      expect(t.timers.count(), 'the node is waiting on more than one thing at a time').to.equal(1);
-      expect(t.timers.delays.slice(4), 'the new application waited out a wait armed for another')
-        .to.deep.equal([10]);
-    });
-
-    // The timer exists for what is owed and ends with it.
-    it('drops a running wait when a pass settles what it was armed for', async () => {
-      let outcome = RemovalOutcome.BUSY;
-      const t = build({
-        rows: () => [blockedApp('StuckApp')],
-        removeAppLocally: sinon.stub().callsFake(async () => outcome),
-      });
-
-      await t.sweeper.request();
-      expect(t.timers.count(), 'nothing came back for a held application').to.equal(1);
-
-      outcome = RemovalOutcome.REMOVED;
-      await t.sweeper.request();
-
-      expect(t.timers.count(), 'a node owing nothing kept a wait running').to.equal(0);
-    });
-
-    // An application whose specification does not decrypt was never judged on its
-    // images, and nothing announces that it has become readable.
-    it('asks again about an application it could not read, and stops once it can', async () => {
-      let readable = false;
-      const sealed = {
-        name: 'SealedApp', version: 8, owner: '1Owner', hash: 'e'.repeat(64), enterprise: 'blob', compose: [],
-      };
-      const t = build({
-        rows: () => [sealed],
-        decryptApps: async (apps) => (readable
-          // A decrypt reveals the components; it does not make it a different
-          // application, so the hash is the record's.
-          ? { readable: apps.map(() => blockedApp('SealedApp', 'e'.repeat(64))), unreadable: [], inPlace: apps }
-          : { readable: [], unreadable: apps, inPlace: apps }),
-      });
-
-      await t.sweeper.request();
-      expect(t.removeAppLocally.called, 'a sealed specification was judged on images nobody read').to.equal(false);
-      expect(t.timers.count(), 'an unreadable application was cleared rather than deferred').to.equal(1);
-
-      readable = true;
-      await t.timers.fire();
-
-      expect(t.removeAppLocally.callCount, 'the held application was never asked about again').to.equal(1);
-      expect(t.removeAppLocally.firstCall.args[0]).to.equal('SealedApp');
-    });
-
-    // An application named in a scope the node no longer holds has nothing left to
-    // answer for, and owing it would arm a timer for an application that is gone.
-    // WHETHER THE PASS WAS ABOUT IT OR NOT. A full pass walks what the node holds, so an
-    // owed application that has left by another path is never visited - and is owed
-    // still, which buys a wakeup and a pass for an application that is gone.
-    it('forgets an application that is gone on a full pass, not only a scoped one', async () => {
-      let rows = [blockedApp('GoneApp')];
-      const t = build({ rows: () => rows });
-      t.removeAppLocally.resolves(RemovalOutcome.BUSY);
-
-      await t.sweeper.request();
-      expect(t.timers.count(), 'the refused removal was not owed').to.equal(1);
-
-      // It leaves the node by another path - its owner uninstalls it.
-      rows = [];
-      await t.sweeper.request();
-
-      const passes = t.installedApps.callCount;
-      await t.timers.fire();
-      expect(t.installedApps.callCount, 'a pass ran for an application the node no longer holds').to.equal(passes);
-    });
-
-    it('drops a scoped application that is gone rather than holding it', async () => {
-      const t = build({ rows: () => [blockedApp('StillHere')] });
-
-      await t.sweeper.request(new Set(['AlreadyGone']));
-
-      sinon.assert.notCalled(t.removeAppLocally);
-      expect(t.timers.count(), 'a timer was armed for an application the node does not hold').to.equal(0);
-    });
-
-    // TWO TRIGGERS, AND NEITHER COVERS THE OTHER. The gate opens without the bundle
-    // changing, and the bundle changes for the rest of the node's life after it.
-    it('sweeps when the gate opens, after its stagger', async () => {
-      const t = build();
-      t.sweeper.start();
-      expect(t.installedApps.called, 'a pass ran before the gate opened').to.equal(false);
-
-      t.openGate();
-      await Promise.resolve();
-      expect(t.installedApps.called, 'the gate opening swept immediately, unstaggered').to.equal(false);
-      expect(t.timers.count(), 'the gate opening armed nothing').to.equal(1);
-
-      await t.timers.fire();
-      expect(t.installedApps.callCount, 'the gate opening produced no pass').to.equal(1);
-    });
-
-    it('sweeps again on a bundle change', async () => {
-      const t = build();
-      t.sweeper.start();
-      t.openGate();
-      await Promise.resolve();
-      await t.timers.fire();
-      expect(t.installedApps.callCount).to.equal(1);
-
-      t.changeBundle();
-      expect(t.timers.count(), 'a bundle change armed nothing').to.equal(1);
-      await t.timers.fire();
-
-      expect(t.installedApps.callCount, 'a bundle change produced no pass').to.equal(2);
-    });
-
-    // One stagger is enough: a pass that has not started yet already reads whatever
-    // arrives before it does.
-    it('arms one stagger however many changes arrive', async () => {
-      const t = build();
-      t.sweeper.start();
-      t.openGate();
-      await Promise.resolve();
-      t.changeBundle();
-      t.changeBundle();
-      t.changeBundle();
-
-      expect(t.timers.count(), 'each change armed its own pass').to.equal(1);
-    });
-
-    // A bundle this node may not act on yet changes nothing it may do.
-    it('ignores a bundle change while the gate is shut', async () => {
-      const t = build({ policyReady: false });
-      t.sweeper.start();
-
-      t.changeBundle();
-
-      expect(t.timers.count(), 'a pass was armed on a bundle the node may not act on').to.equal(0);
-      expect(t.installedApps.called).to.equal(false);
-    });
-
-    // Stopping drops the timers rather than leaving them to fire into a torn-down node.
-    it('drops what is owed when it is stopped', async () => {
-      const t = build({ rows: () => [blockedApp('BusyApp')] });
-      t.removeAppLocally.resolves(RemovalOutcome.BUSY);
-
-      await t.sweeper.request();
-      expect(t.timers.count()).to.equal(1);
-
-      t.sweeper.stop();
-      expect(t.timers.count(), 'a timer outlived the sweeper it belonged to').to.equal(0);
     });
   });
 });

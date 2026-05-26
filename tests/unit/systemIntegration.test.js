@@ -1,3 +1,8 @@
+// Set NODE_CONFIG_DIR before any requires
+if (!process.env.NODE_CONFIG_DIR) {
+  process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
+}
+
 const { expect } = require('chai');
 const sinon = require('sinon');
 const os = require('os');
