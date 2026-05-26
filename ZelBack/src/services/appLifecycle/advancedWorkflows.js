@@ -40,6 +40,7 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
 const appUninstaller = require('./appUninstaller');
 const appInstaller = require('./appInstaller');
+const hwRequirements = require('../appRequirements/hwRequirements');
 const globalState = require('../utils/globalState');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
@@ -258,13 +259,14 @@ async function redeployComponent(appName, componentName, options = {}) {
     status(`Component ${deployComp.identifier} removed. Awaiting installation...`);
     await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
 
-    const rawSpec = await appsRepository.getInstalledAppRaw(appName);
-    await appInstaller.checkAppRequirements(rawSpec);
+    const instantiated = await appsRepository.getInstalledApp(appName);
+    const freshDeployment = await deploymentProvider.buildDeployment(instantiated);
+    await hwRequirements.checkNodeResources(freshDeployment);
 
     status(`Installing ${deployComp.identifier}...`);
     await appInstaller.installComponent(deployComp, {
       createVolumes,
-      specVersion: rawSpec?.version || null,
+      specVersion: instantiated.version,
     });
 
     status(`Component ${deployComp.identifier} ${label} complete`);
@@ -333,23 +335,22 @@ async function redeployApplication(appName, options = {}) {
     status(`Application ${appName} removed. Awaiting installation...`);
     await serviceHelper.delay(config.fluxapps.redeploy.delay * 1000);
 
-    const rawSpec = await appsRepository.getInstalledAppRaw(appName);
-    if (!rawSpec) {
+    const instantiated = await appsRepository.getInstalledApp(appName);
+    if (!instantiated) {
       throw new Error(`Application ${appName} not found in database after removal`);
     }
-    await appInstaller.checkAppRequirements(rawSpec);
-
-    const freshDeployment = await deploymentProvider.getInstalledDeployment(appName);
+    const freshDeployment = await deploymentProvider.buildDeployment(instantiated);
     if (!freshDeployment) {
       throw new Error(`Application ${appName} deployment not found after requirement check`);
     }
+    await hwRequirements.checkNodeResources(freshDeployment);
 
     for (const [, deployComp] of freshDeployment.componentEntries()) {
       status(`Installing ${deployComp.identifier}...`);
       // eslint-disable-next-line no-await-in-loop
       await appInstaller.installComponent(deployComp, {
         createVolumes,
-        specVersion: rawSpec.version || null,
+        specVersion: instantiated.version,
       });
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
@@ -1486,8 +1487,8 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   await appsRepository.upsertInstalledApp(appName, wireSpec);
   log.info(`Database updated for ${appName}`);
 
-  await appInstaller.checkAppRequirements(wireSpec);
-  const freshDeployment = await deploymentProvider.getInstalledDeployment(appName);
+  const freshDeployment = await deploymentProvider.buildDeployment(registrySpec);
+  await hwRequirements.checkNodeResources(freshDeployment);
   const toInstall = [...soft, ...hard, ...added];
   if (freshDeployment && toInstall.length > 0) {
     for (const name of toInstall) {
