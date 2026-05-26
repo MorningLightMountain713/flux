@@ -232,11 +232,11 @@ describe('syncthingFolderStateMachine tests', () => {
       mockParams = {
         appId: 'test-app',
         syncFolder: null,
-        syncMode: 'receiveOnly',
+        containerDataFlags: 'r',
         syncthingAppsFirstRun: false,
         receiveOnlySyncthingAppsCache: new Map(),
         appLocation: sinon.stub().resolves([]),
-        myIP: '10.0.0.1:16127',
+        localSocketAddr: '10.0.0.1:16127',
         appDockerStopFn: sinon.stub().resolves(),
         appDockerRestartFn: sinon.stub().resolves(),
         appDeleteDataInMountPointFn: sinon.stub().resolves(),
