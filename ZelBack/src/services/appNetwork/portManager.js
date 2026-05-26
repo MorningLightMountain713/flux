@@ -3,7 +3,6 @@ const crypto = require('node:crypto');
 const axios = require('axios');
 const dbHelper = require('../dbHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const networkStateService = require('../networkStateService');
 const verificationHelper = require('../verificationHelper');
 const log = require('../../lib/log');
@@ -11,8 +10,11 @@ const upnpService = require('../upnpService');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
-const { localAppsInformation, globalAppsInformation } = require('../utils/appConstants');
-const appUtilities = require('../utils/appUtilities');
+const appsRepository = require('../appDatabase/appsRepository');
+const { resolveSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
+const { localAppsInformation, globalAppsInformation, appsFolder } = require('../utils/appConstants');
+const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { Privilege, authOf } = require('../utils/privileges');
 const fluxCaching = require('../utils/cacheManager');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -37,88 +39,10 @@ const upnpMapFailures = new Map();
 
 const monotonicMs = () => Number(process.hrtime.bigint() / 1000000n);
 
-/**
- * Check if ports in array are unique
- * @param {number[]} portsArray - Array of port numbers
- * @returns {boolean} True if all ports are unique
- */
-function appPortsUnique(portsArray) {
-  return (new Set(portsArray)).size === portsArray.length;
-}
-
-/**
- * Ensure that the app ports are unique within the app specification
- * @param {object} appSpecFormatted - App specifications
- * @returns {boolean} True if ports are unique
- * @throws {Error} If ports are not unique
- */
-function ensureAppUniquePorts(appSpecFormatted) {
-  if (appSpecFormatted.version === 1) {
-    return true;
-  }
-
-  if (appSpecFormatted.version <= 3) {
-    const portsUnique = appPortsUnique(appSpecFormatted.ports);
-    if (!portsUnique) {
-      throw new Error(`Flux App ${appSpecFormatted.name} must have unique ports specified`);
-    }
-  } else {
-    // For version 4+ compose applications
-    const allPorts = [];
-    if (appSpecFormatted.compose) {
-      appSpecFormatted.compose.forEach((component) => {
-        if (component.ports) {
-          allPorts.push(...component.ports);
-        }
-      });
-    }
-
-    const portsUnique = appPortsUnique(allPorts);
-    if (!portsUnique) {
-      throw new Error(`Flux App ${appSpecFormatted.name} must have unique ports specified accross all composition`);
-    }
-  }
-
-  return true;
-}
-
-/**
- * The applications in a set of stored specifications, and the host ports each
- * one declares.
- *
- * Enterprise specifications are decrypted before anything is read out of them. A
- * version 8 specification seals `contacts` and `compose`, and every port an
- * application holds lives inside `compose` - so a reader that skips the decrypt
- * does not see an application it cannot read. It sees one holding no ports at
- * all, and a hole in the answer reads as "those ports are free".
- *
- * Through the cached path rather than checkAndDecryptAppSpecs directly. That
- * primitive holds no cache: it costs two globalAppsMessages queries and a benchd
- * RSA decrypt per enterprise application on every call, and these lists are
- * reached from an unauthenticated endpoint and from every spawn attempt. The
- * wrapper answers from enterpriseAppDecryptionCache (keyed on spec.hash, seven
- * days), shares one in-flight attempt between concurrent callers, and remembers
- * a failure briefly. formatSpecs is false because the formatter strips the hash
- * the cache keys on.
- *
- * The ports come from getAppPorts, which is the one place that derivation lives.
- * What to do about a specification that would not open is left to the caller,
- * and the two callers answer it differently - each says why.
- *
- * @param {Array<object>} specs - stored application specifications
- * @returns {Promise<{apps: Array<{name: string, ports: number[]}>, unreadable: Array<object>}>}
- */
-async function appsWithPorts(specs) {
-  // eslint-disable-next-line global-require
-  const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
-  const { readable, unreadable } = await decryptEnterpriseApps(specs, { formatSpecs: false });
-
-  const apps = readable.map((app) => ({
-    name: app.name,
-    ports: appUtilities.getAppPorts(app),
-  }));
-
-  return { apps, unreadable };
+async function buildDeployment(plainSpec) {
+  const { DeploymentSpec } = await getSpecBackend();
+  const spec = await resolveSpec(plainSpec);
+  return DeploymentSpec.fromSpec(spec, appsFolder);
 }
 
 /**
@@ -136,18 +60,17 @@ async function appsWithPorts(specs) {
  *   and the ports each holds
  */
 async function assignedPortsInstalledApps() {
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appslocal.database);
-  const query = {};
-  const projection = { projection: { _id: 0 } };
-  const results = await dbHelper.findInDatabase(database, localAppsInformation, query, projection);
-
-  const { apps, unreadable } = await appsWithPorts(results);
-
-  if (unreadable.length) {
-    throw new Error(`Cannot list ports in use: ${unreadable.length} of ${results.length} application specifications could not be read`);
+  const results = await appsRepository.listInstalledAppsRaw();
+  const apps = [];
+  for (const rawSpec of results) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const deployment = await buildDeployment(rawSpec);
+      apps.push({ name: deployment.appName, ports: deployment.allHostPorts() });
+    } catch (err) {
+      log.warn(`assignedPortsInstalledApps: skipping ${rawSpec.name}: ${err.message}`);
+    }
   }
-
   return apps;
 }
 
@@ -173,34 +96,34 @@ async function assignedPortsInstalledApps() {
  *   whose ports could be read, and the ports each holds
  */
 async function assignedPortsGlobalApps(appNames) {
-  if (!appNames || appNames.length === 0) {
-    return [];
+  if (!appNames || appNames.length === 0) return [];
+
+  const appsQuery = appNames.map((app) => ({ name: app }));
+  const results = await appsRepository.listGlobalAppInfoRaw({ filter: { $or: appsQuery } });
+  const apps = [];
+  for (const rawSpec of results) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const deployment = await buildDeployment(rawSpec);
+      const ports = deployment.allHostPorts();
+      if (ports.length > 0) {
+        apps.push({ name: deployment.appName, ports });
+      }
+    } catch (err) {
+      log.warn(`assignedPortsGlobalApps: skipping ${rawSpec.name}: ${err.message}`);
+    }
   }
-
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const query = { $or: appNames.map((name) => ({ name })) };
-  const projection = { projection: { _id: 0 } };
-  const results = await dbHelper.findInDatabase(database, globalAppsInformation, query, projection);
-
-  const { apps, unreadable } = await appsWithPorts(results);
-
-  if (unreadable.length) {
-    log.warn(`assignedPortsGlobalApps - ${unreadable.length} of ${results.length} specifications at this address could not be read; `
-      + 'the ports those applications hold are not in this answer');
-  }
-
   return apps;
 }
 
 /**
  * Ensure application ports are not already in use
- * @param {object} appSpecFormatted - App specifications
+ * @param {object} appSpecFormatted - Plain wire-form app spec
  * @param {string[]} globalCheckedApps - Global apps to check against
  * @returns {Promise<boolean>} True if ports are available
  * @throws {Error} If ports are already in use
  */
-async function ensureApplicationPortsNotUsed(appSpecFormatted, globalCheckedApps) {
+async function ensureApplicationPortsNotUsed(deployment, globalCheckedApps) {
   let currentAppsPorts = await assignedPortsInstalledApps();
 
   if (globalCheckedApps && globalCheckedApps.length) {
@@ -208,29 +131,10 @@ async function ensureApplicationPortsNotUsed(appSpecFormatted, globalCheckedApps
     currentAppsPorts = currentAppsPorts.concat(globalAppsPorts);
   }
 
-  if (appSpecFormatted.version === 1) {
-    const portAssigned = currentAppsPorts.find((app) => app.ports.includes(Number(appSpecFormatted.port)));
-    if (portAssigned && portAssigned.name !== appSpecFormatted.name) {
-      throw new Error(`Flux App ${appSpecFormatted.name} port ${appSpecFormatted.port} already used with different application. Installation aborted.`);
-    }
-  } else if (appSpecFormatted.version <= 3) {
-    // eslint-disable-next-line no-restricted-syntax
-    for (const port of appSpecFormatted.ports) {
-      const portAssigned = currentAppsPorts.find((app) => app.ports.includes(Number(port)));
-      if (portAssigned && portAssigned.name !== appSpecFormatted.name) {
-        throw new Error(`Flux App ${appSpecFormatted.name} port ${port} already used with different application. Installation aborted.`);
-      }
-    }
-  } else {
-    // eslint-disable-next-line no-restricted-syntax
-    for (const appComponent of appSpecFormatted.compose) {
-      // eslint-disable-next-line no-restricted-syntax
-      for (const port of appComponent.ports) {
-        const portAssigned = currentAppsPorts.find((app) => app.ports.includes(port));
-        if (portAssigned && portAssigned.name !== appSpecFormatted.name) {
-          throw new Error(`Flux App ${appSpecFormatted.name} port ${port} already used with different application. Installation aborted.`);
-        }
-      }
+  for (const port of deployment.allHostPorts()) {
+    const portAssigned = currentAppsPorts.find((app) => app.ports.includes(port));
+    if (portAssigned && portAssigned.name !== deployment.appName) {
+      throw new Error(`Flux App ${deployment.appName} port ${port} already used with different application. Installation aborted.`);
     }
   }
   return true;
@@ -1198,21 +1102,13 @@ async function callOtherNodeToKeepUpnpPortsOpen() {
     if (!signer) throw new Error('Unable to sign the UPnP request');
 
     const ports = [];
-    // eslint-disable-next-line no-restricted-syntax
+    const { DeploymentSpec } = await getSpecBackend();
     for (const app of apps) {
-      if (app.version === 1) {
-        ports.push(+app.port);
-      } else if (app.version <= 3) {
-        app.ports.forEach((port) => {
-          ports.push(+port);
-        });
-      } else {
-        app.compose.forEach((component) => {
-          component.ports.forEach((port) => {
-            ports.push(+port);
-          });
-        });
-      }
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await deserializeSpec(app);
+      if (!spec) continue;
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      ports.push(...deployment.allHostPorts());
     }
 
     // We don't add the api port, as the remote node will callback to our
@@ -1257,8 +1153,6 @@ async function callOtherNodeToKeepUpnpPortsOpen() {
 }
 
 module.exports = {
-  appPortsUnique,
-  ensureAppUniquePorts,
   assignedPortsInstalledApps,
   assignedPortsGlobalApps,
   ensureApplicationPortsNotUsed,

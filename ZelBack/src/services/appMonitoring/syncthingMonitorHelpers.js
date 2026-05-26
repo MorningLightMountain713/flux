@@ -10,7 +10,6 @@ const {
   SYNCTHING_RESCAN_INTERVAL_SECONDS,
   SYNCTHING_MAX_CONFLICTS,
 } = require('./syncthingMonitorConstants');
-
 const { normalizeSocketAddress, extractIp, extractPort, socketAddressesMatch } = require('../utils/socketAddressUtils');
 
 /**
@@ -62,7 +61,7 @@ async function getDeviceIDCached(name, cache) {
 /**
  * Sort and filter app locations
  * @param {Array} locations - App locations
- * @param {string} localSocketAddr - Current node socket address
+ * @param {string} localSocketAddr - Current node IP
  * @returns {Array} Sorted and filtered locations (excluding current node)
  */
 function sortAndFilterLocations(locations, localSocketAddr) {
@@ -99,7 +98,7 @@ function sortRunningAppList(runningAppList) {
 /**
  * Build device configuration from locations
  * @param {Array} locations - App locations
- * @param {string} localSocketAddr - Current node socket address
+ * @param {string} localSocketAddr - Current node IP
  * @param {string} myDeviceId - Current node device ID
  * @param {Map} deviceCache - Device ID cache
  * @param {Array} devicesConfiguration - Array to populate with devices
@@ -248,35 +247,6 @@ function getContainerFolderPath(containersData, index) {
 }
 
 /**
- * Extract container data flags
- * @param {string} container - Container string
- * @returns {string} Container data flags
- */
-function getContainerDataFlags(container) {
-  return container.split(':')[1] ? container.split(':')[0] : '';
-}
-
-/**
- * Check if container requires syncing
- * @param {string} containerDataFlags - Container flags
- * @returns {boolean} True if sync is required
- */
-function requiresSyncing(containerDataFlags) {
-  return containerDataFlags.includes('s')
-    || containerDataFlags.includes('r')
-    || containerDataFlags.includes('g');
-}
-
-/**
- * Check if container should be running
- * @param {string} containerDataFlags - Container flags
- * @returns {boolean} True if container should be running
- */
-function shouldBeRunning(containerDataFlags) {
-  return containerDataFlags.includes('r');
-}
-
-/**
  * Check if folder configuration needs update
  * @param {Object} existingFolder - Existing folder config
  * @param {Object} newFolder - New folder config
@@ -304,8 +274,5 @@ module.exports = {
   createSyncthingFolderConfig,
   ensureStfolderExists,
   getContainerFolderPath,
-  getContainerDataFlags,
-  requiresSyncing,
-  shouldBeRunning,
   folderNeedsUpdate,
 };
