@@ -8,7 +8,7 @@ const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const imageVerifier = require('../utils/imageVerifier');
 const dbHelper = require('../dbHelper');
 const verificationHelper = require('../verificationHelper');
-const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
+const appsRepository = require('../appDatabase/appsRepository');
 const log = require('../../lib/log');
 const { supportedArchitectures, globalAppsMessages, globalAppsInformation } = require('../utils/appConstants');
 const fluxCaching = require('../utils/cacheManager').default;
@@ -217,62 +217,32 @@ async function getVettedRepositories() {
   }
 }
 
-/**
- * Check if an application is vetted (bypasses user blocks)
- * @param {object} appSpecs - Application specifications
- * @returns {Promise<boolean>} True if app is vetted
- */
-async function isAppVetted(appSpecs) {
+function stripTag(imageRef) {
+  const lastColon = imageRef.lastIndexOf(':');
+  return lastColon > -1 ? imageRef.substring(0, lastColon) : imageRef;
+}
+
+function extractNamespace(repository) {
+  const lastSlash = repository.lastIndexOf('/');
+  return lastSlash > -1 ? repository.substring(0, lastSlash) : repository;
+}
+
+async function isAppVetted(options = {}) {
+  const { owner = null, hash = null, images = [] } = options;
+
   const vettedRepos = await getVettedRepositories();
-  if (!vettedRepos || vettedRepos.length === 0) {
-    return false;
-  }
+  if (!vettedRepos || vettedRepos.length === 0) return false;
 
-  const pureVettedRepos = [];
-  vettedRepos.forEach((repo) => {
-    pureVettedRepos.push(repo.substring(0, repo.lastIndexOf(':') > -1 ? repo.lastIndexOf(':') : repo.length));
-  });
+  const vetted = vettedRepos.map(stripTag);
 
-  // Check if app owner is vetted
-  if (pureVettedRepos.includes(appSpecs.owner)) {
-    return true;
-  }
+  if (owner && vetted.includes(owner)) return true;
+  if (hash && vetted.includes(hash)) return true;
 
-  // Check if app hash is vetted
-  if (pureVettedRepos.includes(appSpecs.hash)) {
-    return true;
-  }
-
-  // Check images and organizations
-  const images = [];
-  const organisations = [];
-
-  if (appSpecs.version <= 3) {
-    const repository = appSpecs.repotag.substring(0, appSpecs.repotag.lastIndexOf(':') > -1 ? appSpecs.repotag.lastIndexOf(':') : appSpecs.repotag.length);
-    images.push(repository);
-    const pureNamespace = repository.substring(0, repository.lastIndexOf('/') > -1 ? repository.lastIndexOf('/') : repository.length);
-    organisations.push(pureNamespace);
-  } else {
-    appSpecs.compose.forEach((component) => {
-      const repository = component.repotag.substring(0, component.repotag.lastIndexOf(':') > -1 ? component.repotag.lastIndexOf(':') : component.repotag.length);
-      images.push(repository);
-      const pureNamespace = repository.substring(0, repository.lastIndexOf('/') > -1 ? repository.lastIndexOf('/') : repository.length);
-      organisations.push(pureNamespace);
-    });
-  }
-
-  // Check if any image is vetted
-  for (const image of images) {
-    if (pureVettedRepos.includes(image) || pureVettedRepos.includes(image.toLowerCase())) {
-      return true;
-    }
-  }
-
-  // Check if any organisation is vetted
-  for (const org of organisations) {
-    if (pureVettedRepos.includes(org) || pureVettedRepos.includes(org.toLowerCase())) {
-      return true;
-    }
+  for (const imageRef of images) {
+    const repo = stripTag(imageRef);
+    if (vetted.includes(repo) || vetted.includes(repo.toLowerCase())) return true;
+    const ns = extractNamespace(repo);
+    if (vetted.includes(ns) || vetted.includes(ns.toLowerCase())) return true;
   }
 
   return false;
@@ -319,263 +289,56 @@ async function getUserBlockedRepositores() {
   }
 }
 
-/**
- * Check application secrets compliance
- * @param {string} appName - Application name
- * @param {object} appComponentSpecs - Component specifications
- * @param {string} appOwner - Application owner
- * @param {boolean} registration - Whether this is a registration (true) or update (false)
- * @returns {Promise<boolean>} True if secrets are valid
- */
-async function checkAppSecrets(appName, appComponentSpecs, appOwner, registration = false) {
-  log.info('checkAppSecrets - starting');
-  log.info(`checkAppSecrets - appOwner: ${appOwner}`);
+async function isImageBlocked(appName, images, options = {}) {
+  const { owner = null, hash = null } = options;
 
-  // Normalize PGP secrets for consistent comparison
-  const normalizePGP = (pgpMessage) => {
-    if (!pgpMessage) return '';
-    return pgpMessage.replace(/\s+/g, '').replace(/\\n/g, '').trim();
-  };
-
-  const appComponentSecrets = normalizePGP(appComponentSpecs.secrets);
-
-  // Database connection
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const projection = { projection: { _id: 0 } };
-
-  // Query global apps
-  const results = await dbHelper.findInDatabase(database, globalAppsInformation, {}, projection);
-
-  let foundSecretsWithSameAppName = false;
-  let foundSecretsWithDifferentAppName = false;
-  // eslint-disable-next-line no-restricted-syntax
-  for (const app of results) {
-    if (app.version >= 7 && app.nodes.length > 0) {
-      // eslint-disable-next-line no-restricted-syntax
-      for (const component of app.compose) {
-        const normalizedComponentSecret = normalizePGP(component.secrets);
-
-        if (normalizedComponentSecret === appComponentSecrets) {
-          if (registration) {
-            throw new Error(
-              `Provided component '${appComponentSpecs.name}' secrets are not valid (duplicate in app: '${app.name}')`,
-            );
-          } else if (app.name !== appName) {
-            foundSecretsWithDifferentAppName = true;
-          } else {
-            foundSecretsWithSameAppName = true;
-          }
-        }
-      }
-    }
-  }
-
-  if (!registration && foundSecretsWithDifferentAppName && !foundSecretsWithSameAppName) {
-    throw new Error('Provided component(s) secrets are not valid (conflict with another app).');
-  }
-
-  // Query permanent app messages
-  const appsQuery = {
-    $and: [
-      { 'appSpecifications.name': 'encrypted' },
-      { 'appSpecifications.version': 7 },
-      { 'appSpecifications.nodes': { $exists: true, $ne: [] } },
-    ],
-  };
-  log.info('checkAppSecrets - checking permanentAppMessages');
-
-  const permanentAppMessages = await dbHelper.findInDatabase(database, globalAppsMessages, appsQuery, projection);
-  log.info(`checkAppSecrets - permanentAppMessages found: ${permanentAppMessages.length}`);
-
-  const processedSecrets = new Set();
-  // eslint-disable-next-line no-restricted-syntax
-  for (const message of permanentAppMessages) {
-    // eslint-disable-next-line no-restricted-syntax
-    for (const component of message.appSpecifications.compose) {
-      const normalizedComponentSecret = normalizePGP(component.secrets);
-      // eslint-disable-next-line no-continue
-      if (processedSecrets.has(normalizedComponentSecret)) continue;
-      processedSecrets.add(normalizedComponentSecret);
-
-      if (normalizedComponentSecret === appComponentSecrets) {
-        log.info('checkAppSecrets - found same secret');
-        log.info(`checkAppSecrets - appOwner: ${appOwner}`);
-        log.info(`checkAppSecrets - message owner: ${message.appSpecifications.owner}`);
-
-        if (message.appSpecifications.owner !== appOwner) {
-          throw new Error(
-            `Provided component '${appComponentSpecs.name}' secrets are not valid (owner mismatch: '${message.appSpecifications.owner}').`,
-          );
-        }
-      }
-    }
-  }
-
-  log.info('checkAppSecrets - completed successfully');
-}
-
-/**
- * Check application images compliance against blocked repositories
- * @param {object} appSpecs - Application specifications
- * @returns {Promise<boolean>} True if images are compliant
- */
-async function checkApplicationImagesCompliance(appSpecs) {
   const repos = await getBlockedRepositores();
   const userBlockedRepos = await getUserBlockedRepositores();
 
-  if (!repos) {
-    throw new Error('Unable to communicate with Flux Services! Try again later.');
-  }
-
-  const pureImagesOrOrganisationsRepos = [];
-  repos.forEach((repo) => {
-    pureImagesOrOrganisationsRepos.push(repo.substring(0, repo.lastIndexOf(':') > -1 ? repo.lastIndexOf(':') : repo.length));
-  });
-
-  // userBlockedRepos handling will be done separately below
-
-  // Check if app hash is blocked
-  if (pureImagesOrOrganisationsRepos.includes(appSpecs.hash)) {
-    throw new Error(`${appSpecs.hash} is not allowed to be spawned`);
-  }
-
-  // Check if app owner is blocked
-  if (pureImagesOrOrganisationsRepos.includes(appSpecs.owner)) {
-    throw new Error(`${appSpecs.owner} is not allowed to run applications`);
-  }
-
-  const images = [];
-  const organisations = [];
-
-  if (appSpecs.version <= 3) {
-    const repository = appSpecs.repotag.substring(0, appSpecs.repotag.lastIndexOf(':') > -1 ? appSpecs.repotag.lastIndexOf(':') : appSpecs.repotag.length);
-    images.push(repository);
-    const pureNamespace = repository.substring(0, repository.lastIndexOf('/') > -1 ? repository.lastIndexOf('/') : repository.length);
-    organisations.push(pureNamespace);
-  } else {
-    appSpecs.compose.forEach((component) => {
-      const repository = component.repotag.substring(0, component.repotag.lastIndexOf(':') > -1 ? component.repotag.lastIndexOf(':') : component.repotag.length);
-      images.push(repository);
-      const pureNamespace = repository.substring(0, repository.lastIndexOf('/') > -1 ? repository.lastIndexOf('/') : repository.length);
-      organisations.push(pureNamespace);
-    });
-  }
-
-  images.forEach((image) => {
-    if (pureImagesOrOrganisationsRepos.includes(image)) {
-      throw new Error(`Image ${image} is blocked. Application ${appSpecs.name} cannot be spawned.`);
-    }
-  });
-  organisations.forEach((org) => {
-    if (pureImagesOrOrganisationsRepos.includes(org)) {
-      throw new Error(`Organisation ${org} is blocked. Application ${appSpecs.name} cannot be spawned.`);
-    }
-  });
-  // Check if app is vetted - vetted apps bypass user blocks
-  const appIsVetted = await isAppVetted(appSpecs);
-  if (appIsVetted) {
-    log.info(`Application ${appSpecs.name} is vetted. Bypassing user-blocked repositories check.`);
-  }
-
-  if (userBlockedRepos && !appIsVetted) {
-    log.info(`userBlockedRepos: ${JSON.stringify(userBlockedRepos)}`);
-    organisations.forEach((org) => {
-      if (userBlockedRepos.includes(org.toLowerCase())) {
-        throw new Error(`Organisation ${org} is user blocked. Application ${appSpecs.name} cannot be spawned.`);
-      }
-    });
-    images.forEach((image) => {
-      if (userBlockedRepos.includes(image.toLowerCase())) {
-        throw new Error(`Image ${image} is user blocked. Application ${appSpecs.name} cannot be spawned.`);
-      }
-    });
-  }
-
-  return true;
-}
-
-/**
- * Check if application images are blocked (non-throwing version)
- * @param {object} appSpecs - Application specifications
- * @returns {Promise<boolean>} True if blocked
- */
-async function checkApplicationImagesBlocked(appSpecs) {
-  const repos = await getBlockedRepositores();
-  const userBlockedRepos = await getUserBlockedRepositores();
-  let isBlocked = false;
   if (!repos && !userBlockedRepos) {
-    return isBlocked;
+    return { blocked: false, reason: null };
   }
-  const images = [];
-  const organisations = [];
-  if (appSpecs.version <= 3) {
-    const repository = appSpecs.repotag.substring(0, appSpecs.repotag.lastIndexOf(':') > -1 ? appSpecs.repotag.lastIndexOf(':') : appSpecs.repotag.length);
-    images.push(repository);
-    const pureNamespace = repository.substring(0, repository.lastIndexOf('/') > -1 ? repository.lastIndexOf('/') : repository.length);
-    organisations.push(pureNamespace);
-  } else {
-    appSpecs.compose.forEach((component) => {
-      const repository = component.repotag.substring(0, component.repotag.lastIndexOf(':') > -1 ? component.repotag.lastIndexOf(':') : component.repotag.length);
-      images.push(repository);
-      const pureNamespace = repository.substring(0, repository.lastIndexOf('/') > -1 ? repository.lastIndexOf('/') : repository.length);
-      organisations.push(pureNamespace);
-    });
+
+  const blocked = repos ? repos.map(stripTag) : [];
+
+  if (owner && blocked.includes(owner)) {
+    return { blocked: true, reason: `${owner} is not allowed to run applications` };
   }
-  if (repos) {
-    // Check if app hash or owner is directly in the blocked repositories list
-    if (repos.includes(appSpecs.hash)) {
-      return `${appSpecs.hash} is not allowed to be spawned`;
-    }
-    if (repos.includes(appSpecs.owner)) {
-      return `${appSpecs.owner} is not allowed to run applications`;
-    }
+  if (hash && blocked.includes(hash)) {
+    return { blocked: true, reason: `${hash} is not allowed to be spawned` };
+  }
 
-    const pureImagesOrOrganisationsRepos = [];
-    repos.forEach((repo) => {
-      pureImagesOrOrganisationsRepos.push(repo.substring(0, repo.lastIndexOf(':') > -1 ? repo.lastIndexOf(':') : repo.length));
-    });
-
-    // blacklist works also for zelid and app hash (check processed list too)
-    if (pureImagesOrOrganisationsRepos.includes(appSpecs.hash)) {
-      return `${appSpecs.hash} is not allowed to be spawned`;
+  for (const imageRef of images) {
+    const repo = stripTag(imageRef);
+    if (blocked.includes(repo)) {
+      return { blocked: true, reason: `Image ${repo} is blocked. Application ${appName} cannot be spawned.` };
     }
-    if (pureImagesOrOrganisationsRepos.includes(appSpecs.owner)) {
-      return `${appSpecs.owner} is not allowed to run applications`;
+    const ns = extractNamespace(repo);
+    if (blocked.includes(ns)) {
+      return { blocked: true, reason: `Organisation ${ns} is blocked. Application ${appName} cannot be spawned.` };
     }
+  }
 
-    images.forEach((image) => {
-      if (pureImagesOrOrganisationsRepos.includes(image)) {
-        isBlocked = `Image ${image} is blocked. Application ${appSpecs.name} cannot be spawned.`;
+  const vetted = await isAppVetted({ owner, hash, images });
+  if (vetted) {
+    log.info(`Application ${appName} is vetted. Bypassing user-blocked repositories check.`);
+    return { blocked: false, reason: null };
+  }
+
+  if (userBlockedRepos) {
+    for (const imageRef of images) {
+      const repo = stripTag(imageRef);
+      const ns = extractNamespace(repo);
+      if (userBlockedRepos.includes(ns.toLowerCase())) {
+        return { blocked: true, reason: `Organisation ${ns} is user blocked. Application ${appName} cannot be spawned.` };
       }
-    });
-    organisations.forEach((org) => {
-      if (pureImagesOrOrganisationsRepos.includes(org)) {
-        isBlocked = `Organisation ${org} is blocked. Application ${appSpecs.name} cannot be spawned.`;
+      if (userBlockedRepos.includes(repo.toLowerCase())) {
+        return { blocked: true, reason: `Image ${repo} is user blocked. Application ${appName} cannot be spawned.` };
       }
-    });
-  }
-
-  // Check if app is vetted - vetted apps bypass user blocks
-  const appIsVetted = await isAppVetted(appSpecs);
-
-  if (!isBlocked && userBlockedRepos && !appIsVetted) {
-    log.info(`userBlockedRepos: ${JSON.stringify(userBlockedRepos)}`);
-    organisations.forEach((org) => {
-      if (userBlockedRepos.includes(org.toLowerCase())) {
-        isBlocked = `Organisation ${org} is user blocked. Application ${appSpecs.name} cannot be spawned.`;
-      }
-    });
-    if (!isBlocked) {
-      images.forEach((image) => {
-        if (userBlockedRepos.includes(image.toLowerCase())) {
-          isBlocked = `Image ${image} is user blocked. Application ${appSpecs.name} cannot be spawned.`;
-        }
-      });
     }
   }
 
-  return isBlocked;
+  return { blocked: false, reason: null };
 }
 
 /**
@@ -619,42 +382,39 @@ async function checkDockerAccessibility(req, res) {
   });
 }
 
-/**
- * Check applications compliance and remove blacklisted apps
- * @param {Function} installedApps - Function to get installed apps
- * @param {Function} removeAppLocally - Function to remove app locally
- * @returns {Promise<void>}
- */
-async function checkApplicationsCompliance(installedApps, removeAppLocally) {
+async function checkApplicationsCompliance() {
+  // eslint-disable-next-line global-require
+  const deploymentProvider = require('../appRuntime/deploymentProvider');
+  // eslint-disable-next-line global-require
+  const appUninstaller = require('../appLifecycle/appUninstaller');
+
   try {
-    // get list of locally installed apps.
-    const installedAppsRes = await installedApps();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
+    const installedSpecs = await appsRepository.listInstalledApps();
+    const deployments = await deploymentProvider.listInstalledDeployments();
+    const deploymentByName = new Map();
+    for (const d of deployments) {
+      deploymentByName.set(d.appName, d);
     }
-    // Decrypt enterprise apps (version 8 with encrypted content)
-    installedAppsRes.data = await decryptEnterpriseApps(installedAppsRes.data);
-    const appsInstalled = installedAppsRes.data;
+
     const appsToRemoveNames = [];
-    // eslint-disable-next-line no-restricted-syntax
-    for (const app of appsInstalled) {
+    for (const inst of installedSpecs) {
+      const deployment = deploymentByName.get(inst.name);
+      const images = deployment ? deployment.allImages() : [];
       // eslint-disable-next-line no-await-in-loop
-      const isAppBlocked = await checkApplicationImagesBlocked(app);
-      if (isAppBlocked) {
-        if (!appsToRemoveNames.includes(app.name)) {
-          appsToRemoveNames.push(app.name);
+      const result = await isImageBlocked(inst.name, images, { owner: inst.owner, hash: inst.hash });
+      if (result.blocked) {
+        if (!appsToRemoveNames.includes(inst.name)) {
+          appsToRemoveNames.push(inst.name);
         }
       }
     }
-    // remove appsToRemoveNames apps from locally running
-    // eslint-disable-next-line no-restricted-syntax
     for (const appName of appsToRemoveNames) {
       log.warn(`Application ${appName} is blacklisted, removing`);
       log.warn(`REMOVAL REASON: Blacklisted image - ${appName} uses a blacklisted Docker image (imageManager)`);
       // eslint-disable-next-line no-await-in-loop
-      await removeAppLocally(appName, null, false, true, true);
+      await appUninstaller.uninstallApplication(appName, { broadcastRemoval: true });
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(3 * 60 * 1000); // wait for 3 mins so we don't have more removals at the same time
+      await serviceHelper.delay(3 * 60 * 1000);
     }
   } catch (error) {
     log.error(error);
@@ -667,9 +427,7 @@ module.exports = {
   getUserBlockedRepositores,
   getVettedRepositories,
   isAppVetted,
-  checkAppSecrets,
-  checkApplicationImagesCompliance,
-  checkApplicationImagesBlocked,
+  isImageBlocked,
   checkDockerAccessibility,
   checkApplicationsCompliance,
 };
