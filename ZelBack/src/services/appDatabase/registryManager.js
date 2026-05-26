@@ -1,14 +1,24 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
+const appsMaintenance = require('./appsMaintenance');
+const appsRepository = require('./appsRepository');
 const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const appEventVerifier = require('../appMessaging/appEventVerifier');
+const messageVerifier = require('../appMessaging/messageVerifier');
+const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
+const { peerManager } = require('../utils/peerState');
+const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
+const { assertSecretsNotConflicting } = require('../appRequirements/appValidator');
+const appUninstaller = require('../appLifecycle/appUninstaller');
+const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
+const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
+const { deserializeSpec } = require('../utils/specCutover');
+const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 const fluxEventBus = require('../utils/fluxEventBus');
-// Removed appsService to avoid circular dependency - will use dynamic require where needed
-const { checkAndDecryptAppSpecs, encryptEnterpriseFromSession } = require('../utils/enterpriseHelper');
-const { specificationFormatter, updateToLatestAppSpecifications } = require('../utils/appUtilities');
 const {
   SIGTERM_EXPIRY_MS,
   globalAppsInformation,
@@ -67,318 +77,10 @@ async function getAppHashes(_req, res) {
  * @returns {Promise<Array>} Array of app locations
  */
 async function appLocation(appname) {
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
-  let query = {};
   if (appname) {
-    query = { name: new RegExp(`^${appname}$`, 'i') }; // case insensitive
+    return appsRepository.listLocationsByApp(appname);
   }
-  const projection = {
-    projection: {
-      _id: 0,
-      name: 1,
-      hash: 1,
-      ip: 1,
-      broadcastedAt: 1,
-      expireAt: 1,
-      runningSince: 1,
-      osUptime: 1,
-      staticIp: 1,
-    },
-  };
-  const results = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-  return results;
-}
-
-// Derives running app locations from the event log. Will replace appLocation() once callers are switched.
-//
-// Performance: shutdown/v1 filtering happens at IP level BEFORE unwinding to individual apps.
-// Lookups use $filter + $first against small arrays (shutdowns ~10, ipChanges ~5) which is
-// O(IPs * arraySize) — fast because the arrays are small. The v2Timestamps lookup for v1
-// filtering is O(v1Count * v2IPs) which dominates at ~2.4M comparisons at steady state.
-//
-// MongoDB 7.2+ optimization: $getField supports dynamic field references, enabling
-// $arrayToObject maps with O(1) key lookup via $getField({ field: '$$var.ip', input: '$map' }).
-// This would reduce all lookups to O(n) total. Blocked by MongoDB 7.0 on CI (SERVER-74371).
-async function appLocationFromEvents(options = {}) {
-  const { appname, ip } = options;
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
-  const collection = database.collection(globalAppStateEvents);
-
-  const escapedName = appname ? appname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
-  const nameMatch = escapedName ? new RegExp(`^${escapedName}$`, 'i') : null;
-  const now = new Date();
-
-  const v1NameFilter = nameMatch ? [{ $match: { 'data.name': nameMatch } }] : [];
-  const removalNameFilter = nameMatch ? [{ $match: { 'data.appName': nameMatch } }] : [];
-
-  const initialMatch = {
-    $or: [
-      { type: { $in: ['apprunning', 'appremoved', 'ipchanged'] }, expireAt: { $gt: now } },
-      { type: { $in: ['sigterm', 'evicted'] } },
-    ],
-  };
-  if (ip) initialMatch.ip = ip;
-
-  const pipeline = [
-    { $match: initialMatch },
-    { $sort: { broadcastedAt: -1 } },
-    {
-      $facet: {
-        v2: [
-          { $match: { type: 'apprunning', 'data.apps': { $exists: true } } },
-          { $group: { _id: '$ip', doc: { $first: '$$ROOT' } } },
-          { $replaceRoot: { newRoot: '$doc' } },
-          {
-            $project: {
-              _id: 0,
-              ip: '$data.ip',
-              broadcastedAt: 1,
-              apps: '$data.apps',
-              osUptime: '$data.osUptime',
-              staticIp: '$data.staticIp',
-              runningSince: '$data.runningSince',
-            },
-          },
-        ],
-        v1: [
-          ...v1NameFilter,
-          { $match: { type: 'apprunning', 'data.name': { $exists: true } } },
-          {
-            $group: {
-              _id: { ip: '$ip', name: '$data.name' },
-              doc: { $first: '$$ROOT' },
-            },
-          },
-          { $replaceRoot: { newRoot: '$doc' } },
-          {
-            $project: {
-              _id: 0,
-              name: '$data.name',
-              hash: '$data.hash',
-              ip: '$data.ip',
-              broadcastedAt: 1,
-              runningSince: '$data.runningSince',
-              osUptime: '$data.osUptime',
-              staticIp: '$data.staticIp',
-            },
-          },
-        ],
-        v2Timestamps: [
-          { $match: { type: 'apprunning', 'data.apps': { $exists: true } } },
-          { $group: { _id: '$ip', latestV2: { $first: '$broadcastedAt' } } },
-        ],
-        removals: [
-          { $match: { type: 'appremoved' } },
-          ...removalNameFilter,
-          {
-            $group: {
-              _id: { ip: '$ip', name: '$data.appName' },
-              removedAt: { $first: '$broadcastedAt' },
-            },
-          },
-        ],
-        shutdowns: [
-          { $match: { type: { $in: ['sigterm', 'evicted'] } } },
-          { $addFields: { _eventAt: { $ifNull: ['$broadcastedAt', '$createdAt'] } } },
-          { $sort: { _eventAt: -1 } },
-          {
-            $group: {
-              _id: '$ip',
-              eventAt: { $first: '$_eventAt' },
-              expireAt: { $first: '$expireAt' },
-              type: { $first: '$type' },
-            },
-          },
-        ],
-        ipChanges: [
-          { $match: { type: 'ipchanged' } },
-          { $group: { _id: '$ip', newIP: { $first: '$data.newIP' }, changedAt: { $first: '$broadcastedAt' } } },
-        ],
-      },
-    },
-    // Filter v2 at IP level before unwinding — shutdown check against small array
-    {
-      $addFields: {
-        _v2Filtered: {
-          $filter: {
-            input: '$v2',
-            as: 'entry',
-            cond: {
-              $let: {
-                vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$$entry.ip'] } } } } },
-                in: {
-                  $or: [
-                    { $eq: ['$$sd', null] },
-                    { $gte: ['$$entry.broadcastedAt', '$$sd.eventAt'] },
-                    { $and: [{ $eq: ['$$sd.type', 'sigterm'] }, { $gt: [{ $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] }, now] }] },
-                  ],
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-    // Filter v1: newer than latest v2 for that IP and not shutdown
-    {
-      $addFields: {
-        _v1Filtered: {
-          $filter: {
-            input: '$v1',
-            as: 'entry',
-            cond: {
-              $and: [
-                {
-                  $let: {
-                    vars: { v2Ts: { $first: { $filter: { input: '$v2Timestamps', as: 't', cond: { $eq: ['$$t._id', '$$entry.ip'] } } } } },
-                    in: { $or: [{ $eq: ['$$v2Ts', null] }, { $gt: ['$$entry.broadcastedAt', '$$v2Ts.latestV2'] }] },
-                  },
-                },
-                {
-                  $let: {
-                    vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$$entry.ip'] } } } } },
-                    in: {
-                      $or: [
-                        { $eq: ['$$sd', null] },
-                        { $gte: ['$$entry.broadcastedAt', '$$sd.eventAt'] },
-                        { $and: [{ $eq: ['$$sd.type', 'sigterm'] }, { $gt: [{ $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] }, now] }] },
-                      ],
-                    },
-                  },
-                },
-              ],
-            },
-          },
-        },
-      },
-    },
-    // Unwind v2 apps and v1 into flat docs, apply per-app removal + IP change filters
-    {
-      $facet: {
-        fromV2: [
-          { $unwind: '$_v2Filtered' },
-          { $unwind: '$_v2Filtered.apps' },
-          ...(nameMatch ? [{ $match: { '_v2Filtered.apps.name': nameMatch } }] : []),
-          {
-            $project: {
-              _id: 0,
-              name: '$_v2Filtered.apps.name',
-              hash: '$_v2Filtered.apps.hash',
-              ip: '$_v2Filtered.ip',
-              broadcastedAt: '$_v2Filtered.broadcastedAt',
-              runningSince: { $ifNull: ['$_v2Filtered.apps.runningSince', '$_v2Filtered.runningSince'] },
-              osUptime: '$_v2Filtered.osUptime',
-              staticIp: '$_v2Filtered.staticIp',
-              removals: 1,
-              ipChanges: 1,
-            },
-          },
-          {
-            $addFields: {
-              _removedAt: {
-                $ifNull: [
-                  { $let: {
-                    vars: { r: { $first: { $filter: { input: '$removals', as: 'r', cond: { $and: [{ $eq: ['$$r._id.ip', '$ip'] }, { $eq: ['$$r._id.name', '$name'] }] } } } } },
-                    in: '$$r.removedAt',
-                  } },
-                  new Date(0),
-                ],
-              },
-            },
-          },
-          { $match: { $expr: { $gt: ['$broadcastedAt', '$_removedAt'] } } },
-          {
-            $addFields: {
-              _ipChange: { $first: { $filter: { input: '$ipChanges', as: 'c', cond: { $eq: ['$$c._id', '$ip'] } } } },
-            },
-          },
-          {
-            $addFields: {
-              ip: {
-                $cond: [
-                  { $and: [{ $ne: ['$_ipChange', null] }, { $gt: ['$_ipChange.changedAt', '$broadcastedAt'] }] },
-                  '$_ipChange.newIP',
-                  '$ip',
-                ],
-              },
-            },
-          },
-          { $project: { removals: 0, ipChanges: 0, _removedAt: 0, _ipChange: 0 } },
-        ],
-        fromV1: [
-          { $unwind: '$_v1Filtered' },
-          {
-            $project: {
-              _id: 0,
-              name: '$_v1Filtered.name',
-              hash: '$_v1Filtered.hash',
-              ip: '$_v1Filtered.ip',
-              broadcastedAt: '$_v1Filtered.broadcastedAt',
-              runningSince: '$_v1Filtered.runningSince',
-              osUptime: '$_v1Filtered.osUptime',
-              staticIp: '$_v1Filtered.staticIp',
-              removals: 1,
-              ipChanges: 1,
-            },
-          },
-          {
-            $addFields: {
-              _removedAt: {
-                $ifNull: [
-                  { $let: {
-                    vars: { r: { $first: { $filter: { input: '$removals', as: 'r', cond: { $and: [{ $eq: ['$$r._id.ip', '$ip'] }, { $eq: ['$$r._id.name', '$name'] }] } } } } },
-                    in: '$$r.removedAt',
-                  } },
-                  new Date(0),
-                ],
-              },
-            },
-          },
-          { $match: { $expr: { $gt: ['$broadcastedAt', '$_removedAt'] } } },
-          {
-            $addFields: {
-              _ipChange: { $first: { $filter: { input: '$ipChanges', as: 'c', cond: { $eq: ['$$c._id', '$ip'] } } } },
-            },
-          },
-          {
-            $addFields: {
-              ip: {
-                $cond: [
-                  { $and: [{ $ne: ['$_ipChange', null] }, { $gt: ['$_ipChange.changedAt', '$broadcastedAt'] }] },
-                  '$_ipChange.newIP',
-                  '$ip',
-                ],
-              },
-            },
-          },
-          { $project: { removals: 0, ipChanges: 0, _removedAt: 0, _ipChange: 0 } },
-        ],
-      },
-    },
-    // Combine and dedup by {name, ip}, taking latest broadcastedAt
-    { $project: { all: { $concatArrays: ['$fromV2', '$fromV1'] } } },
-    { $unwind: '$all' },
-    { $replaceRoot: { newRoot: '$all' } },
-    { $sort: { broadcastedAt: -1 } },
-    {
-      $group: {
-        _id: { name: '$name', ip: '$ip' },
-        name: { $first: '$name' },
-        hash: { $first: '$hash' },
-        ip: { $first: '$ip' },
-        broadcastedAt: { $first: '$broadcastedAt' },
-        runningSince: { $first: '$runningSince' },
-        osUptime: { $first: '$osUptime' },
-        staticIp: { $first: '$staticIp' },
-      },
-    },
-    { $project: { _id: 0 } },
-  ];
-
-  const results = await collection.aggregate(pipeline).toArray();
-  return results;
+  return appsRepository.listLocations();
 }
 
 /**
@@ -411,12 +113,6 @@ async function appInstallingLocation(appname) {
  * @param {string} appname - Application name (optional)
  * @returns {Promise<Array>} Array of app installing error locations
  */
-async function countAppInstallingErrors(hash) {
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
-  return dbHelper.countInDatabase(database, globalAppsInstallingErrorsLocations, { hash });
-}
-
 async function appInstallingErrorsLocation(appname) {
   const dbopen = dbHelper.databaseConnection();
   const database = dbopen.db(config.database.appsglobal.database);
@@ -432,6 +128,8 @@ async function appInstallingErrorsLocation(appname) {
       ip: 1,
       error: 1,
       broadcastedAt: 1,
+      cachedAt: 1,
+      expireAt: 1,
     },
   };
   const results = await dbHelper.findInDatabase(database, globalAppsInstallingErrorsLocations, query, projection);
@@ -551,17 +249,7 @@ async function storeAppInstallingMessage(message) {
  * @returns {string|null} Owner.
  */
 async function getApplicationOwner(appName) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const query = { name: new RegExp(`^${appName}$`, 'i') };
-  const projection = {
-    projection: {
-      _id: 0,
-      owner: 1,
-    },
-  };
-  const globalAppsInfoCollection = config.database.appsglobal.collections.appsInformation;
-  const appSpecs = await dbHelper.findOneInDatabase(database, globalAppsInfoCollection, query, projection);
+  const appSpecs = await appsRepository.getGlobalAppInfoRaw(appName, { owner: 1 });
   if (appSpecs) {
     return appSpecs.owner;
   }
@@ -648,129 +336,37 @@ async function getAppInstallingLocation(req, res) {
 }
 
 /**
- * Get global app specifications for a specific app
- * @param {string} appName - Application name
- * @returns {Promise<object|null>} App specifications
- */
-async function getApplicationGlobalSpecifications(appName) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-
-  const query = { name: new RegExp(`^${appName}$`, 'i') };
-  const projection = {
-    projection: {
-      _id: 0,
-    },
-  };
-  const dbAppSpec = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-
-  // Decrypt and format specifications if needed
-  let appSpec = await checkAndDecryptAppSpecs(dbAppSpec);
-  if (appSpec && appSpec.version >= 8 && appSpec.enterprise) {
-    const { height, hash } = appSpec;
-    appSpec = specificationFormatter(appSpec);
-    appSpec.height = height;
-    appSpec.hash = hash;
-  }
-  return appSpec;
-}
-
-/**
- * Get local app specifications for a specific app
- * @param {string} appName - Application name
- * @returns {Promise<object|null>} App specifications
- */
-async function getApplicationLocalSpecifications(appName) {
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appslocal.database);
-
-  const query = { name: new RegExp(`^${appName}$`, 'i') };
-  const projection = { projection: { _id: 0 } };
-
-  const appInfo = await dbHelper.findOneInDatabase(database, localAppsInformation, query, projection);
-  return appInfo;
-}
-
-/**
- * Get app specifications (tries global first, then local)
- * @param {string} appName - Application name
- * @returns {Promise<object|null>} App specifications
- */
-async function getApplicationSpecifications(appName) {
-  // appSpecs: {
-  //   version: 2,
-  //   name: 'FoldingAtHomeB',
-  //   description: 'Folding @ Home is cool :)',
-  //   repotag: 'yurinnick/folding-at-home:latest',
-  //   owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-  //   ports: '[30001]', // []
-  //   containerPorts: '[7396]', // []
-  //   domains: '[""]', // []
-  //   enviromentParameters: '["USER=foldingUser", "TEAM=262156", "ENABLE_GPU=false", "ENABLE_SMP=true"]', // []
-  //   commands: '["--allow","0/0","--web-allow","0/0"]', // []
-  //   containerData: '/config',
-  //   cpu: 0.5,
-  //   ram: 500,
-  //   hdd: 5,
-  //   tiered: true,
-  //   cpubasic: 0.5,
-  //   rambasic: 500,
-  //   hddbasic: 5,
-  //   cpusuper: 1,
-  //   ramsuper: 1000,
-  //   hddsuper: 5,
-  //   cpubamf: 2,
-  //   rambamf: 2000,
-  //   hddbamf: 5,
-  //   hash: hash of message that has these paramenters,
-  //   height: height containing the message
-  // };
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-
-  const query = { name: new RegExp(`^${appName}$`, 'i') };
-  const projection = {
-    projection: {
-      _id: 0,
-    },
-  };
-  let appInfo = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-  if (!appInfo) {
-    // eslint-disable-next-line no-use-before-define
-    const allApps = await availableApps();
-    appInfo = allApps.find((app) => app.name.toLowerCase() === appName.toLowerCase());
-  }
-
-  // This is abusing the spec formatter. It's not meant for this. This whole thing
-  // is kind of broken. The reason we have to use the spec formatter here is the
-  // frontend is passing properties as strings (then stringify the whole object)
-  // the frontend should parse the strings up front, and just pass an encrypted,
-  // stringified object.
-  //
-  // Will fix this in v9 specs. Move to model based specs with pre sorted keys.
-  appInfo = await checkAndDecryptAppSpecs(appInfo);
-  if (appInfo && appInfo.version >= 8 && appInfo.enterprise) {
-    const { height, hash } = appInfo;
-    appInfo = specificationFormatter(appInfo);
-    appInfo.height = height;
-    appInfo.hash = hash;
-  }
-  return appInfo;
-}
-
-/**
  * Get application specification via API
  * @param {object} req - Request object
  * @param {object} res - Response object
  */
+async function getApplicationSpecification(appname, encryptedEnterpriseKey) {
+  const instantiated = await appsRepository.getGlobalAppInfo(appname);
+  if (!instantiated) {
+    throw new Error(`Application: ${appname} not found`);
+  }
+
+  if (!encryptedEnterpriseKey || !instantiated.isEncrypted()) {
+    return instantiated.spec.serialize();
+  }
+
+  const backendProvider = await legacyCryptoProvider.create(
+    instantiated.name, instantiated.owner,
+  );
+  const decrypted = await instantiated.spec.decrypt(backendProvider);
+  const transportProvider = await legacyTransportProvider.create(
+    instantiated.name, instantiated.owner, encryptedEnterpriseKey,
+  );
+  const reencrypted = await decrypted.reencrypt(transportProvider);
+  return reencrypted.serialize();
+}
+
 async function getApplicationSpecificationAPI(req, res) {
   try {
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
     if (!syncStatus.data.synced) {
       throw new Error('Daemon not yet synced.');
     }
-
-    const { data: { height: daemonHeight } } = syncStatus;
 
     let { appname, decrypt } = req.params;
     appname = appname || req.query.appname;
@@ -779,81 +375,38 @@ async function getApplicationSpecificationAPI(req, res) {
       throw new Error('No Application Name specified');
     }
 
-    // query params take precedence over params (they were set explictly)
     decrypt = req.query.decrypt || decrypt;
 
-    const specifications = await getApplicationSpecifications(appname);
-    const mainAppName = appname.split('_')[1] || appname;
-
-    if (!specifications) {
-      throw new Error(`Application: ${appname} not found`);
-    }
-
-    const isEnterprise = Boolean(
-      specifications.version >= 8 && specifications.enterprise,
-    );
-
-    if (!decrypt) {
-      if (isEnterprise) {
-        specifications.compose = [];
-        specifications.contacts = [];
+    let encryptedEnterpriseKey;
+    if (decrypt) {
+      encryptedEnterpriseKey = req.headers['enterprise-key'];
+      if (!encryptedEnterpriseKey) {
+        throw new Error('Header with enterpriseKey is mandatory for enterprise Apps.');
       }
 
-      const specResponse = messageHelper.createDataMessage(specifications);
-      res.json(specResponse);
-      return null;
-    }
-
-    if (!isEnterprise) {
-      throw new Error('App spec decryption is only possible for version 8+ Apps.');
-    }
-
-    const encryptedEnterpriseKey = req.headers['enterprise-key'];
-    if (!encryptedEnterpriseKey) {
-      throw new Error('Header with enterpriseKey is mandatory for enterprise Apps.');
-    }
-
-    const ownerAuthorized = await verificationHelper.verifyPrivilege(
-      'appowner',
-      req,
-      mainAppName,
-    );
-
-    const fluxTeamAuthorized = ownerAuthorized === true
-      ? false
-      : await verificationHelper.verifyPrivilege(
-        'appownerabove',
+      const mainAppName = appname.split('_')[1] || appname;
+      const ownerAuthorized = await verificationHelper.verifyPrivilege(
+        'appowner',
         req,
         mainAppName,
       );
 
-    if (ownerAuthorized !== true && fluxTeamAuthorized !== true) {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-      return null;
+      const fluxTeamAuthorized = ownerAuthorized === true
+        ? false
+        : await verificationHelper.verifyPrivilege(
+          'appownerabove',
+          req,
+          mainAppName,
+        );
+
+      if (ownerAuthorized !== true && fluxTeamAuthorized !== true) {
+        res.json(messageHelper.errUnauthorizedMessage());
+        return null;
+      }
     }
 
-    if (fluxTeamAuthorized) {
-      specifications.compose.forEach((component) => {
-        const comp = component;
-        comp.environmentParameters = [];
-        comp.repoauth = '';
-      });
-    }
-
-    // this seems a bit weird, but the client can ask for the specs encrypted or decrypted.
-    // If decrypted, they pass us another session key and we use that to encrypt.
-    specifications.enterprise = await encryptEnterpriseFromSession(
-      specifications,
-      daemonHeight,
-      encryptedEnterpriseKey,
-    );
-
-    specifications.contacts = [];
-    specifications.compose = [];
-
-    const specResponse = messageHelper.createDataMessage(specifications);
-    res.json(specResponse);
+    const spec = await getApplicationSpecification(appname, encryptedEnterpriseKey);
+    res.json(messageHelper.createDataMessage(spec));
   } catch (error) {
     log.error(error);
 
@@ -898,84 +451,6 @@ async function getApplicationOwnerAPI(req, res) {
   }
 }
 
-/**
- * Update application specification to latest version via API
- * @param {object} req - Request object
- * @param {object} res - Response object
- * @returns {Promise<object|null>} Response with updated specifications
- */
-async function updateApplicationSpecificationAPI(req, res) {
-  try {
-    const { appname } = req.params;
-    if (!appname) {
-      throw new Error('appname parameter is mandatory');
-    }
-
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-    if (!syncStatus.data.synced) {
-      throw new Error('Daemon not yet synced.');
-    }
-
-    const { data: { height: daemonHeight } } = syncStatus;
-
-    const specifications = await getApplicationSpecifications(appname);
-    if (!specifications) {
-      throw new Error('Application not found');
-    }
-
-    const mainAppName = appname.split('_')[1] || appname;
-
-    const isEnterprise = Boolean(
-      specifications.version >= 8 && specifications.enterprise,
-    );
-
-    let encryptedEnterpriseKey = null;
-    if (isEnterprise) {
-      encryptedEnterpriseKey = req.headers['enterprise-key'];
-      if (!encryptedEnterpriseKey) {
-        throw new Error('Header with enterpriseKey is mandatory for enterprise Apps.');
-      }
-    }
-
-    const authorized = await verificationHelper.verifyPrivilege(
-      'appownerabove',
-      req,
-      mainAppName,
-    );
-
-    if (!authorized) {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-      return null;
-    }
-
-    const updatedSpecs = updateToLatestAppSpecifications(specifications);
-
-    if (isEnterprise) {
-      const enterprise = await encryptEnterpriseFromSession(
-        updatedSpecs,
-        daemonHeight,
-        encryptedEnterpriseKey,
-      );
-
-      updatedSpecs.enterprise = enterprise;
-      updatedSpecs.contacts = [];
-      updatedSpecs.compose = [];
-    }
-
-    const specResponse = messageHelper.createDataMessage(updatedSpecs);
-    res.json(specResponse);
-  } catch (error) {
-    log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    res.json(errorResponse);
-  }
-  return null;
-}
 
 /**
  * Get global apps specifications via API
@@ -984,9 +459,7 @@ async function updateApplicationSpecificationAPI(req, res) {
  */
 async function getGlobalAppsSpecifications(req, res) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = {};
+    const filter = {};
     let { hash } = req.params;
     hash = hash || req.query.hash;
     let { owner } = req.params;
@@ -994,16 +467,15 @@ async function getGlobalAppsSpecifications(req, res) {
     let { appname } = req.params;
     appname = appname || req.query.appname;
     if (hash) {
-      query.hash = hash;
+      filter.hash = hash;
     }
     if (owner) {
-      query.owner = owner;
+      filter.owner = owner;
     }
     if (appname) {
-      query.name = appname;
+      filter.name = appname;
     }
-    const projection = { projection: { _id: 0 } };
-    const results = await dbHelper.findInDatabase(database, globalAppsInformation, query, projection);
+    const results = await appsRepository.listGlobalAppInfoRaw({ filter });
     const resultsResponse = messageHelper.createDataMessage(results);
     res.json(resultsResponse);
   } catch (error) {
@@ -1024,20 +496,8 @@ async function getGlobalAppsSpecifications(req, res) {
  */
 async function availableApps(_req, res) {
   try {
-    // Get global apps
-    const globalDb = dbHelper.databaseConnection();
-    const globalDatabase = globalDb.db(config.database.appsglobal.database);
-    const globalQuery = {};
-    const globalProjection = { projection: { _id: 0 } };
-    const globalApps = await dbHelper.findInDatabase(globalDatabase, globalAppsInformation, globalQuery, globalProjection);
-
-    // Get local apps
-    const localDb = dbHelper.databaseConnection();
-    const localDatabase = localDb.db(config.database.appslocal.database);
-    const localQuery = {};
-    const localProjection = { projection: { _id: 0 } };
-    const localApps = await dbHelper.findInDatabase(localDatabase, localAppsInformation, localQuery, localProjection);
-
+    const globalApps = await appsRepository.listGlobalAppInfoRaw();
+    const localApps = await appsRepository.listInstalledAppsRaw();
     const allApps = [...globalApps, ...localApps];
 
     if (res) {
@@ -1063,25 +523,11 @@ async function availableApps(_req, res) {
  * @returns {Promise<boolean>} True if no conflicts found
  */
 async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash) {
-  // check if name is not yet registered
   const dbopen = dbHelper.databaseConnection();
+  const existingApp = await appsRepository.getGlobalAppInfo(appSpecFormatted.name);
 
-  const appsDatabase = dbopen.db(config.database.appsglobal.database);
-  const appsQuery = { name: new RegExp(`^${appSpecFormatted.name}$`, 'i') }; // case insensitive
-  const appsProjection = {
-    projection: {
-      _id: 0,
-      name: 1,
-      height: 1,
-      expire: 1,
-    },
-  };
-  const appResult = await dbHelper.findOneInDatabase(appsDatabase, globalAppsInformation, appsQuery, appsProjection);
-
-  if (appResult) {
-    // in this case, check if hash of the message is older than our current app
+  if (existingApp) {
     if (hash) {
-      // check if we have the hash of the app in our db
       const query = { hash };
       const projection = {
         projection: {
@@ -1096,26 +542,11 @@ async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash)
       if (!result) {
         throw new Error(`Flux App ${appSpecFormatted.name} already registered. Flux App has to be registered under different name. Hash not found in collection.`);
       }
-      if (appResult.height <= result.height) {
-        log.debug(appResult);
+      if (existingApp.height <= result.height) {
+        log.debug(existingApp.serialize());
         log.debug(result);
-        // Determine default expire based on whether app was registered after PON fork
-        const defaultExpire = appResult.height >= config.fluxapps.daemonPONFork ? 88000 : 22000;
-        const expireIn = appResult.expire || defaultExpire;
-        let currentExpiration = appResult.height + expireIn;
 
-        // If app was registered before fork block and expiration extends past fork block
-        // the chain moves 4x faster, so we need to adjust the expiration
-        if (appResult.height < config.fluxapps.daemonPONFork && currentExpiration > config.fluxapps.daemonPONFork) {
-          // Calculate blocks that were supposed to live after fork block
-          const blocksAfterFork = currentExpiration - config.fluxapps.daemonPONFork;
-          // Multiply by 4 to account for 4x faster chain
-          const adjustedBlocksAfterFork = blocksAfterFork * 4;
-          // New expiration = fork block + adjusted blocks
-          currentExpiration = config.fluxapps.daemonPONFork + adjustedBlocksAfterFork;
-        }
-
-        if (currentExpiration >= result.height) {
+        if (existingApp.expiresAtHeight >= result.height) {
           throw new Error(`Flux App ${appSpecFormatted.name} already registered. Flux App has to be registered under different name. Hash is not older than our current app.`);
         } else {
           log.warn(`Flux App ${appSpecFormatted.name} active specifications are outdated. Will be cleaned on next expiration`);
@@ -1143,27 +574,9 @@ async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash)
  * @returns {Promise<boolean>} Update result
  */
 async function updateAppSpecsForRescanReindex(appSpecs) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-
-  const query = { name: appSpecs.name };
-  const options = {
-    upsert: true,
-  };
-  const projection = {
-    projection: {
-      _id: 0,
-    },
-  };
-  const appInfo = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-  if (appInfo) {
-    if (appInfo.height < appSpecs.height) {
-      await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, options);
-      fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
-    }
-  } else {
-    await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, options);
-    fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
+  const existing = await appsRepository.getGlobalAppInfoRaw(appSpecs.name);
+  if (!existing || existing.height < appSpecs.height) {
+    await appsRepository.upsertGlobalAppInfo(appSpecs);
   }
   return true;
 }
@@ -1175,37 +588,11 @@ async function updateAppSpecsForRescanReindex(appSpecs) {
  */
 async function storeAppSpecificationInPermanentStorage(appSpec) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-
-    await dbHelper.insertOneToDatabase(database, globalAppsInformation, appSpec);
-
-    fluxEventBus.publish('app:specStored', { name: appSpec.name, hash: appSpec.hash });
+    await appsRepository.upsertGlobalAppInfo(appSpec);
     log.info(`App specification stored permanently for ${appSpec.name}`);
     return { status: 'success', message: 'App specification stored' };
   } catch (error) {
     log.error(`Error storing app specification: ${error.message}`);
-    throw error;
-  }
-}
-
-/**
- * Remove app specification from storage
- * @param {string} appName - Application name
- * @returns {Promise<object>} Removal result
- */
-async function removeAppSpecificationFromStorage(appName) {
-  try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-
-    const query = { name: new RegExp(`^${appName}$`, 'i') };
-    const result = await dbHelper.removeInDatabase(database, globalAppsInformation, query);
-
-    log.info(`App specification removed for ${appName}`);
-    return { status: 'success', deletedCount: result.deletedCount };
-  } catch (error) {
-    log.error(`Error removing app specification: ${error.message}`);
     throw error;
   }
 }
@@ -1217,14 +604,7 @@ async function removeAppSpecificationFromStorage(appName) {
  */
 async function getAppSpecificationFromDb(appName) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-
-    const query = { name: new RegExp(`^${appName}$`, 'i') };
-    const projection = { projection: { _id: 0 } };
-
-    const appSpec = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-    return appSpec;
+    return await appsRepository.getGlobalAppInfoRaw(appName);
   } catch (error) {
     log.error(`Error getting app specification from database: ${error.message}`);
     return null;
@@ -1246,39 +626,12 @@ async function getAllAppsInformation() {
 }
 
 /**
- * Get installed apps information
- * @returns {Promise<Array>} Array of installed apps
- */
-async function getInstalledApps() {
-  try {
-    const localDb = dbHelper.databaseConnection();
-    const localDatabase = localDb.db(config.database.appslocal.database);
-
-    const query = {};
-    const projection = { projection: { _id: 0 } };
-
-    const installedApps = await dbHelper.findInDatabase(localDatabase, localAppsInformation, query, projection);
-    return installedApps;
-  } catch (error) {
-    log.error(`Error getting installed apps: ${error.message}`);
-    return [];
-  }
-}
-
-/**
  * Get running apps information
  * @returns {Promise<Array>} Array of running apps
  */
 async function getRunningApps() {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-
-    const query = {};
-    const projection = { projection: { _id: 0 } };
-
-    const runningApps = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-    return runningApps;
+    return await appsRepository.listLocations();
   } catch (error) {
     log.error(`Error getting running apps: ${error.message}`);
     return [];
@@ -1291,24 +644,7 @@ async function getRunningApps() {
  * @returns {Promise<Array>} Array of apps running on the specified IP
  */
 async function getRunningAppIpList(ip) {
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
-  const query = { ip: new RegExp(`^${ip}`) };
-  const projection = {
-    projection: {
-      _id: 0,
-      name: 1,
-      hash: 1,
-      ip: 1,
-      broadcastedAt: 1,
-      expireAt: 1,
-      runningSince: 1,
-      osUptime: 1,
-      staticIp: 1,
-    },
-  };
-  const results = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-  return results;
+  return appsRepository.listLocationsByIp(ip);
 }
 
 /**
@@ -1340,18 +676,14 @@ function registrationInformation(_req, res) {
  */
 async function getAllGlobalApplications(proj = []) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = {};
-    const wantedProjection = {
-      _id: 0,
-    };
+    const projection = {};
     proj.forEach((field) => {
-      wantedProjection[field] = 1;
+      projection[field] = 1;
     });
-    const projection = { projection: wantedProjection, sort: { height: 1 } }; // ensure sort from oldest to newest
-    const results = await dbHelper.findInDatabase(database, globalAppsInformation, query, projection);
-    return results;
+    return await appsRepository.listGlobalAppInfoRaw({
+      projection: Object.keys(projection).length > 0 ? projection : undefined,
+      sort: { height: 1 },
+    });
   } catch (error) {
     log.error(error);
     return [];
@@ -1384,116 +716,53 @@ async function expireGlobalApplications() {
     if (explorerHeight < config.fluxapps.newMinBlocksAllowanceBlock) {
       minExpirationHeight = explorerHeight - config.fluxapps.minBlocksAllowance; // do a pre search in db as every app has to live for at least minBlocksAllowance
     }
-    // get global applications specification that have up to date data
-    // find applications that have specifications height lower than minExpirationHeight
-    const databaseApps = dbopen.db(config.database.appsglobal.database);
-    const queryApps = { height: { $lt: minExpirationHeight } };
-    const projectionApps = {
-      projection: {
-        _id: 0, name: 1, hash: 1, expire: 1, height: 1,
-      },
-    };
-    const results = await dbHelper.findInDatabase(databaseApps, globalAppsInformation, queryApps, projectionApps);
-    const appsToExpire = [];
-    results.forEach((appSpecs) => {
-      // Determine default expire based on whether app was registered after PON fork
-      const defaultExpire = appSpecs.height >= config.fluxapps.daemonPONFork
-        ? config.fluxapps.blocksLasting * 4
-        : config.fluxapps.blocksLasting;
-      const expireIn = appSpecs.expire || defaultExpire;
-      let actualExpirationHeight = appSpecs.height + expireIn;
-
-      // If app was registered before fork block and we are past fork block
-      // the chain moves 4x faster, so we need to adjust the expiration
-      if (appSpecs.height < config.fluxapps.daemonPONFork && explorerHeight >= config.fluxapps.daemonPONFork) {
-        const originalExpirationHeight = appSpecs.height + expireIn;
-        if (originalExpirationHeight > config.fluxapps.daemonPONFork) {
-          // Calculate blocks that were supposed to live after fork block
-          const blocksAfterFork = originalExpirationHeight - config.fluxapps.daemonPONFork;
-          // Multiply by 4 to account for 4x faster chain
-          const adjustedBlocksAfterFork = blocksAfterFork * 4;
-          // New expiration = fork block + adjusted blocks
-          actualExpirationHeight = config.fluxapps.daemonPONFork + adjustedBlocksAfterFork;
-        }
-      }
-
-      if (actualExpirationHeight < explorerHeight) { // registered/updated on height, expires in expireIn is lower than current height
-        appsToExpire.push(appSpecs);
-      }
+    const candidates = await appsRepository.listGlobalAppInfo({
+      filter: { height: { $lt: minExpirationHeight } },
     });
-    const appNamesToExpire = appsToExpire.map((res) => res.name);
+    const appsToExpire = candidates.filter(
+      (is) => is.expiresAtHeight < explorerHeight,
+    );
+    const appNamesToExpire = appsToExpire.map((is) => is.name);
     // remove appNamesToExpire apps from global database
     // eslint-disable-next-line no-restricted-syntax
+    const databaseApps = dbopen.db(config.database.appsglobal.database);
     for (const app of appsToExpire) {
       log.info(`Expiring application ${app.name}`);
-      const queryDeleteApp = { name: app.name };
       // eslint-disable-next-line no-await-in-loop
-      await dbHelper.findOneAndDeleteInDatabase(databaseApps, globalAppsInformation, queryDeleteApp, projectionApps);
-
-      const queryDeleteAppErrors = { name: app.name };
+      await appsRepository.removeGlobalAppInfo(app.name);
       // eslint-disable-next-line no-await-in-loop
-      await dbHelper.removeDocumentsFromCollection(databaseApps, globalAppsInstallingErrorsLocations, queryDeleteAppErrors);
-      // eslint-disable-next-line no-await-in-loop
-      await dbHelper.removeDocumentsFromCollection(databaseApps, globalAppsInstallingErrorsBroadcasts, { 'data.name': app.name });
+      await dbHelper.removeDocumentsFromCollection(databaseApps, globalAppsInstallingErrorsLocations, { name: app.name });
     }
 
-    // get list of locally installed apps.
-    // Use dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const appQueryService = require('../appQuery/appQueryService');
-    const installedAppsRes = await appQueryService.installedApps();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
-    }
-    const appsInstalled = installedAppsRes.data;
-    // remove any installed app which height is lower (or not present) but is not infinite app
-    const appsToRemove = [];
-    appsInstalled.forEach((app) => {
+    const installedDocs = await appsRepository.listInstalledAppsRaw({});
+    const { InstantiatedSpec } = await getSpecBackend();
+    const appsToRemoveNames = [];
+    for (const app of installedDocs) {
       if (appNamesToExpire.includes(app.name)) {
-        appsToRemove.push(app);
+        appsToRemoveNames.push(app.name);
       } else if (!app.height) {
-        appsToRemove.push(app);
+        appsToRemoveNames.push(app.name);
       } else if (app.height === 0) {
-        // do nothing, forever lasting local app
+        // forever lasting local app — skip
       } else {
-        // Determine default expire based on whether app was registered after PON fork
-        const defaultExpire = app.height >= config.fluxapps.daemonPONFork
-          ? config.fluxapps.blocksLasting * 4
-          : config.fluxapps.blocksLasting;
-        const expireIn = app.expire || defaultExpire;
-        let actualExpirationHeight = app.height + expireIn;
-
-        // If app was registered before fork block and we are past fork block
-        // the chain moves 4x faster, so we need to adjust the expiration
-        if (app.height < config.fluxapps.daemonPONFork && explorerHeight >= config.fluxapps.daemonPONFork) {
-          const originalExpirationHeight = app.height + expireIn;
-          if (originalExpirationHeight > config.fluxapps.daemonPONFork) {
-            // Calculate blocks that were supposed to live after fork block
-            const blocksAfterFork = originalExpirationHeight - config.fluxapps.daemonPONFork;
-            // Multiply by 4 to account for 4x faster chain
-            const adjustedBlocksAfterFork = blocksAfterFork * 4;
-            // New expiration = fork block + adjusted blocks
-            actualExpirationHeight = config.fluxapps.daemonPONFork + adjustedBlocksAfterFork;
+        try {
+          const is = InstantiatedSpec.deserialize(app);
+          if (is.expiresAtHeight < explorerHeight) {
+            appsToRemoveNames.push(app.name);
           }
-        }
-
-        if (actualExpirationHeight < explorerHeight) {
-          appsToRemove.push(app);
+        } catch (err) {
+          log.warn(`expireGlobalApplications: failed to hydrate local app ${app.name}: ${err.message}`);
+          appsToRemoveNames.push(app.name);
         }
       }
-    });
-    const appsToRemoveNames = appsToRemove.map((app) => app.name);
+    }
 
-    // remove appsToRemoveNames apps from locally running
-    // Use dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const appUninstaller = require('../appLifecycle/appUninstaller');
     // eslint-disable-next-line no-restricted-syntax
     for (const appName of appsToRemoveNames) {
       log.warn(`Application ${appName} is expired, removing`);
       log.warn(`REMOVAL REASON: App expired - ${appName} reached expiration date (registryManager)`);
       // eslint-disable-next-line no-await-in-loop
-      await appUninstaller.removeAppLocally(appName, null, true, false, true);
+      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true });
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(1 * 60 * 1000); // wait for 1 min
     }
@@ -1502,54 +771,15 @@ async function expireGlobalApplications() {
   }
 }
 
-/**
- * To update app specifications.
- * @param {object} appSpecs App specifications.
- */
-async function insertAppSpecifications(appSpecs) {
-  try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = { name: appSpecs.name };
-    const existing = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, { projection: { _id: 0, height: 1 } });
-    if (existing && existing.height >= appSpecs.height) return true;
-    await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, { upsert: true });
-    fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsLocations, { name: appSpecs.name });
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsBroadcasts, { 'data.name': appSpecs.name });
-    return true;
-  } catch (error) {
-    log.error(`insertAppSpecifications failed for ${appSpecs.name}: ${error.message}`);
-    return false;
-  }
-}
 
-async function updateAppSpecifications(appSpecs) {
-  try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = { name: appSpecs.name };
-    const projection = { projection: { _id: 0 } };
-    const appInfo = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-    if (!appInfo || appInfo.height >= appSpecs.height) return true;
-    await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, { upsert: false });
-    fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsLocations, { name: appSpecs.name });
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsBroadcasts, { 'data.name': appSpecs.name });
-    return true;
-  } catch (error) {
-    log.error(`updateAppSpecifications failed for ${appSpecs.name}: ${error.message}`);
-    return false;
-  }
-}
 
 /**
  * Rebuild the global apps information collection from messages collection.
  *
- * Wrapper around dbHelper.reindexGlobalAppsInformation. Rebuilds the
- * globalAppsInformation collection from appsMessages via aggregation,
- * then removes any locally installed apps that are no longer in the
- * global spec set (expired).
+ * Thin wrapper around appsMaintenance.reindexGlobalAppsInformation, which
+ * does the heavy lifting in a single mongo aggregation + chunked bulk
+ * inserts. That version filters expired apps inside the aggregation (full
+ * PON fork rate adjustment), so no separate expire pass is needed here.
  *
  * @returns {Promise<boolean>} True on success
  */
@@ -1579,30 +809,17 @@ async function reindexGlobalAppsInformation() {
       scannedHeightResult.generalScannedHeight,
     );
 
-    const appsToRemove = await dbHelper.reindexGlobalAppsInformation(
+    await appsMaintenance.reindexGlobalAppsInformation(
       appsGlobalDb,
       appsLocalDb,
       globalAppsMessages,
       globalAppsInformation,
+      globalAppsInstallingErrorsLocations,
       localAppsInformation,
       scannedHeight,
     );
 
     log.info('Reindexing of global application list finished.');
-
-    if (appsToRemove.length) {
-      // eslint-disable-next-line global-require
-      const appUninstaller = require('../appLifecycle/appUninstaller');
-      for (const appName of appsToRemove) {
-        log.warn(`Application ${appName} is expired, removing`);
-        log.warn(`REMOVAL REASON: App expired - ${appName} reached expiration date (reindex)`);
-        // eslint-disable-next-line no-await-in-loop
-        await appUninstaller.removeAppLocally(appName, null, true, false, true);
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.delay(60_000);
-      }
-    }
-
     return true;
   } catch (error) {
     log.error(error);
@@ -1621,61 +838,28 @@ async function reconstructAppMessagesHashCollection() {
     const db = dbHelper.databaseConnection();
     const databaseApps = db.db(config.database.appsglobal.database);
     const databaseDaemon = db.db(config.database.daemon.database);
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-    const currentHeight = syncStatus.data.height || 0;
     const query = {};
     const projection = { projection: { _id: 0 } };
 
     const permanentMessages = await dbHelper.findInDatabase(databaseApps, globalAppsMessages, query, projection);
     const appHashes = await dbHelper.findInDatabase(databaseDaemon, appsHashesCollection, query, projection);
-    const permHashSet = new Set(permanentMessages.map((m) => m.hash));
 
-    const ops = [];
     // eslint-disable-next-line no-restricted-syntax
     for (const appHash of appHashes) {
-      const filter = { hash: appHash.hash, txid: appHash.txid };
-      const hasPermanent = permHashSet.has(appHash.hash);
-      const retryFrom = appHash.retryFromHeight ?? appHash.height;
+      const options = {};
+      const queryUpdate = {
+        hash: appHash.hash,
+        txid: appHash.txid,
+      };
 
-      if (hasPermanent && (!appHash.message || appHash.messageNotFound)) {
-        ops.push({
-          updateOne: {
-            filter,
-            update: {
-              $set: {
-                message: true, messageNotFound: false, syncAttempts: 0, nextRetryHeight: retryFrom, retryFromHeight: retryFrom,
-              },
-            },
-          },
-        });
-      } else if (!hasPermanent && appHash.message) {
-        ops.push({
-          updateOne: {
-            filter,
-            update: {
-              $set: {
-                message: false, messageNotFound: false, syncAttempts: 0, nextRetryHeight: currentHeight, retryFromHeight: currentHeight,
-              },
-            },
-          },
-        });
-      }
+      const permanentMessageFound = permanentMessages.find((message) => message.hash === appHash.hash);
+
+      const update = { $set: { message: !!permanentMessageFound, messageNotFound: false } };
+      // eslint-disable-next-line no-await-in-loop
+      await dbHelper.updateOneInDatabase(databaseDaemon, appsHashesCollection, queryUpdate, update, options);
     }
 
-    let changed = 0;
-    if (ops.length > 0) {
-      const result = await databaseDaemon.collection(appsHashesCollection).bulkWrite(ops, { ordered: false });
-      changed += result.modifiedCount;
-    }
-
-    // Backfill retry fields on hashes that predate the new schema
-    const backfillResult = await databaseDaemon.collection(appsHashesCollection).updateMany(
-      { retryFromHeight: { $exists: false } },
-      [{ $set: { retryFromHeight: '$height', nextRetryHeight: { $ifNull: ['$nextRetryHeight', '$height'] }, syncAttempts: { $ifNull: ['$syncAttempts', 0] } } }],
-    );
-    changed += backfillResult.modifiedCount;
-
-    return { changed };
+    return 'Reconstruct success';
   } catch (error) {
     log.error(error);
     throw error;
@@ -1716,25 +900,109 @@ async function reconstructAppMessagesHashCollectionAPI(req, res) {
  * @param {express.Response} res Response.
  * @returns {Promise<void>} Return statement is only used here to interrupt the function and nothing is returned.
  */
-async function registerAppGlobalyApi(req, res) {
-  // Import dependencies needed for this function
-  // eslint-disable-next-line global-require
-  const generalService = require('../generalService');
-  // eslint-disable-next-line global-require
-  const appUtilities = require('../utils/appUtilities');
-  // eslint-disable-next-line global-require
-  const appValidator = require('../appRequirements/appValidator');
-  // eslint-disable-next-line global-require
-  const imageManager = require('../appSecurity/imageManager');
-  // eslint-disable-next-line global-require
-  const messageVerifier = require('../appMessaging/messageVerifier');
-  // eslint-disable-next-line global-require
-  const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
-  // eslint-disable-next-line global-require
-  const { peerManager } = require('../utils/peerState');
-
+async function registerApplication(appSpecification, timestamp, signature, messageType, typeVersion) {
   const isArcane = Boolean(process.env.FLUXOS_PATH);
 
+  if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
+    throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application registration');
+  }
+  if (peerManager.inboundCount < config.fluxapps.minIncoming) {
+    throw new Error('Sorry, This Flux does not have enough incoming peers for safe application registration');
+  }
+  if (messageType !== 'zelappregister' && messageType !== 'fluxappregister') {
+    throw new Error('Invalid type of message');
+  }
+  if (typeVersion !== 1) {
+    throw new Error('Invalid version of message');
+  }
+
+  const timestampNow = Date.now();
+  if (timestamp < timestampNow - 1000 * 3600) {
+    throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
+  } else if (timestamp > timestampNow + 1000 * 60 * 5) {
+    throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
+  }
+
+  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  if (!syncStatus.data.synced) {
+    throw new Error('Daemon not yet synced.');
+  }
+  const daemonHeight = syncStatus.data.height;
+
+  const wireSpec = await deserializeSpec(appSpecification);
+  if (!wireSpec) throw new Error('Could not deserialize app specifications');
+
+  const spec = wireSpec.isEncrypted
+    ? await wireSpec.decrypt(await wireSpec.createProvider())
+    : wireSpec;
+
+  const submissionBlob = spec.serialize ? spec.serialize() : appSpecification;
+  await validateSubmissionSpec(submissionBlob, { height: daemonHeight });
+
+  await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner, hash: appSpecification.hash });
+
+  for (const { componentName, secrets } of spec.getComponentSecrets()) {
+    // eslint-disable-next-line no-await-in-loop
+    await assertSecretsNotConflicting(spec.name, componentName, secrets, spec.owner, { isRegistration: true });
+  }
+
+  await appsRepository.assertNoNameConflicts(spec.name);
+
+  const broadcastSpecBlob = wireSpec.isEncrypted
+    ? wireSpec.serialize()
+    : submissionBlob;
+
+  const signedEvent = await appEventVerifier.deserializeMessage({
+    type: messageType,
+    version: typeVersion,
+    appSpecifications: broadcastSpecBlob,
+    timestamp,
+    signature,
+  });
+  await appEventVerifier.authorize({
+    appEvent: signedEvent,
+    daemonHeight,
+    verifyHash: false,
+  });
+
+  const messageHASH = await appEventVerifier.computeOutboundHash({
+    type: messageType,
+    envelopeVersion: typeVersion,
+    specBlob: broadcastSpecBlob,
+    timestamp,
+    signature,
+  });
+
+  const temporaryAppMessage = {
+    type: messageType,
+    version: typeVersion,
+    appSpecifications: broadcastSpecBlob,
+    hash: messageHASH,
+    timestamp,
+    signature,
+    arcaneSender: isArcane,
+  };
+  await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
+  await serviceHelper.delay(1200);
+  await messageVerifier.requestAppMessage(messageHASH);
+  await serviceHelper.delay(1200);
+
+  let tempMessage = await appsRepository.getTempMessage(messageHASH);
+  for (let i = 0; i < 20; i += 1) {
+    if (!tempMessage) {
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(500);
+      // eslint-disable-next-line no-await-in-loop
+      tempMessage = await appsRepository.getTempMessage(messageHASH);
+    }
+  }
+  if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
+    return tempMessage.hash;
+  }
+  throw new Error('Unable to register application on the network. Try again later.');
+}
+
+async function registerAppGlobalyApi(req, res) {
   let body = '';
   req.on('data', (data) => {
     body += data;
@@ -1747,28 +1015,12 @@ async function registerAppGlobalyApi(req, res) {
         res.json(errMessage);
         return;
       }
-      // first check if this node is available for application registration
-      if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
-        throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application registration');
-      }
-      if (peerManager.inboundCount < config.fluxapps.minIncoming) {
-        throw new Error('Sorry, This Flux does not have enough incoming peers for safe application registration');
-      }
       const processedBody = serviceHelper.ensureObject(body);
-      // Note. Actually signature, timestamp is not needed. But we require it only to verify that user indeed has access to the private key of the owner zelid.
-      // name and port HAVE to be unique for application. Check if they don't exist in global database
-      // first let's check if all fields are present and have proper format except tiered and tiered specifications and those can be omitted
       let { appSpecification, timestamp, signature } = processedBody;
-      let messageType = processedBody.type; // determines how data is treated in the future
-      let typeVersion = processedBody.version; // further determines how data is treated in the future
+      let messageType = processedBody.type;
+      let typeVersion = processedBody.version;
       if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
         throw new Error('Incomplete message received. Check if appSpecification, type, version, timestamp and signature are provided.');
-      }
-      if (messageType !== 'zelappregister' && messageType !== 'fluxappregister') {
-        throw new Error('Invalid type of message');
-      }
-      if (typeVersion !== 1) {
-        throw new Error('Invalid version of message');
       }
       appSpecification = serviceHelper.ensureObject(appSpecification);
       timestamp = serviceHelper.ensureNumber(timestamp);
@@ -1776,101 +1028,9 @@ async function registerAppGlobalyApi(req, res) {
       messageType = serviceHelper.ensureString(messageType);
       typeVersion = serviceHelper.ensureNumber(typeVersion);
 
-      const timestampNow = Date.now();
-      if (timestamp < timestampNow - 1000 * 3600) {
-        throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
-      } else if (timestamp > timestampNow + 1000 * 60 * 5) {
-        throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
-      }
-
-      const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-      if (!syncStatus.data.synced) {
-        throw new Error('Daemon not yet synced.');
-      }
-      const daemonHeight = syncStatus.data.height;
-
-      const appSpecDecrypted = await checkAndDecryptAppSpecs(
-        appSpecification,
-        {
-          daemonHeight,
-          owner: appSpecification.owner,
-        },
-      );
-
-      const appSpecFormatted = await appUtilities.specificationFormatter(appSpecDecrypted);
-
-      // parameters are now proper format and assigned. Check for their validity, if they are within limits, have propper ports, repotag exists, string lengths, specs are ok
-      await appValidator.verifyAppSpecifications(appSpecFormatted, daemonHeight, true);
-
-      if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecFormatted.compose) {
-          if (appComponent.secrets) {
-            // eslint-disable-next-line no-await-in-loop
-            await imageManager.checkAppSecrets(appSpecFormatted.name, appComponent, appSpecFormatted.owner);
-          }
-        }
-      }
-
-      // check if name is not yet registered
-      await checkApplicationRegistrationNameConflicts(appSpecFormatted);
-
-      const isEnterprise = Boolean(
-        appSpecification.version >= 8 && appSpecification.enterprise,
-      );
-
-      const toVerify = isEnterprise
-        ? await appUtilities.specificationFormatter(appSpecification)
-        : appSpecFormatted;
-
-      // check if zelid owner is correct ( done in message verification )
-      // if signature is not correct, then specifications are not correct type or bad message received. Respond with 'Received message is invalid';
-      await messageVerifier.verifyAppMessageSignature(messageType, typeVersion, toVerify, timestamp, signature);
-
-      if (isEnterprise) {
-        appSpecFormatted.contacts = [];
-        appSpecFormatted.compose = [];
-      }
-
-      // if all ok, then sha256 hash of entire message = message + timestamp + signature. We are hashing all to have always unique value.
-      // If hashing just specificiations, if application goes back to previous specifications, it may pose some issues if we have indeed correct state
-      // We respond with a hash that is supposed to go to transaction.
-      const message = messageType + typeVersion + JSON.stringify(appSpecFormatted) + timestamp + signature;
-      const messageHASH = await generalService.messageHash(message);
-
-      // now all is great. Store appSpecFormatted, timestamp, signature and hash in appsTemporaryMessages. with 1 hours expiration time. Broadcast this message to all outgoing connections.
-      const temporaryAppMessage = { // specification of temp message
-        type: messageType,
-        version: typeVersion,
-        appSpecifications: appSpecFormatted,
-        hash: messageHASH,
-        timestamp,
-        signature,
-        arcaneSender: isArcane,
-      };
-      await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
-      // above takes 2-3 seconds
-      await serviceHelper.delay(1200); // it takes receiving node at least 1 second to process the message. Add 1200 ms mas for processing
-      // this operations takes 2.5-3.5 seconds and is heavy, message gets verified again.
-      await messageVerifier.requestAppMessage(messageHASH); // this itself verifies that Peers received our message broadcast AND peers send us the message back. By peers sending the message back we finally store it to our temporary message storage and rebroadcast it again
-      // request app message is quite slow and from performance testing message will appear roughly 5 seconds after ask
-      await serviceHelper.delay(1200); // 1200 ms mas for processing - peer sends message back to us
-      // check temporary message storage
-      let tempMessage = await messageVerifier.checkAppTemporaryMessageExistence(messageHASH); // Cumulus measurement: after roughly 8 seconds here
-      for (let i = 0; i < 20; i += 1) { // ask for up to 20 times - 10 seconds. Must have been processed by that time or it failed. Cumulus measurement: Approx 5-6 seconds
-        if (!tempMessage) {
-          // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(500);
-          // eslint-disable-next-line no-await-in-loop
-          tempMessage = await messageVerifier.checkAppTemporaryMessageExistence(messageHASH);
-        }
-      }
-      if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
-        const responseHash = messageHelper.createDataMessage(tempMessage.hash);
-        res.json(responseHash); // all ok
-        return;
-      }
-      throw new Error('Unable to register application on the network. Try again later.');
+      const hash = await registerApplication(appSpecification, timestamp, signature, messageType, typeVersion);
+      const responseHash = messageHelper.createDataMessage(hash);
+      res.json(responseHash);
     } catch (error) {
       log.warn(error);
       const errorResponse = messageHelper.createErrorMessage(
@@ -1896,15 +1056,6 @@ async function reindexGlobalAppsLocation() {
         throw error;
       }
     });
-    await dbHelper.dropCollection(database, globalAppStateEvents).catch((error) => {
-      if (error.message !== 'ns not found') {
-        throw error;
-      }
-    });
-    await database.collection(globalAppStateEvents).createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 });
-    await database.collection(globalAppStateEvents).createIndex({ ip: 1, type: 1, dedupKey: 1 }, { unique: true });
-    await database.collection(globalAppStateEvents).createIndex({ broadcastedAt: 1 });
-    await database.collection(globalAppStateEvents).createIndex({ createdAt: 1 });
     await database.collection(globalAppsLocations).createIndex({ name: 1 }, { name: 'query for getting app location based on app specs name' });
     await database.collection(globalAppsLocations).createIndex({ hash: 1 }, { name: 'query for getting app location based on app hash' });
     await database.collection(globalAppsLocations).createIndex({ ip: 1 }, { name: 'query for getting app location based on ip' });
@@ -2154,38 +1305,195 @@ async function getPreviousAppSpecifications(specifications, verificationTimestam
   return specificationFormatter(appSpecs);
 }
 
+async function appLocationFromEvents(options = {}) {
+  const { appname, ip } = options;
+  const dbopen = dbHelper.databaseConnection();
+  const database = dbopen.db(config.database.appsglobal.database);
+  const collection = database.collection(globalAppStateEvents);
+
+  const escapedName = appname ? appname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
+  const nameMatch = escapedName ? new RegExp(`^${escapedName}$`, 'i') : null;
+  const now = new Date();
+
+  const v1NameFilter = nameMatch ? [{ $match: { 'data.name': nameMatch } }] : [];
+  const removalNameFilter = nameMatch ? [{ $match: { 'data.appName': nameMatch } }] : [];
+
+  const initialMatch = {
+    $or: [
+      { type: { $in: ['apprunning', 'appremoved', 'ipchanged'] }, expireAt: { $gt: now } },
+      { type: { $in: ['sigterm', 'evicted'] } },
+    ],
+  };
+  if (ip) initialMatch.ip = ip;
+
+  const pipeline = [
+    { $match: initialMatch },
+    { $sort: { broadcastedAt: -1 } },
+    {
+      $facet: {
+        v2: [
+          { $match: { type: 'apprunning', 'data.apps': { $exists: true } } },
+          { $group: { _id: '$ip', doc: { $first: '$$ROOT' } } },
+          { $replaceRoot: { newRoot: '$doc' } },
+          { $project: { _id: 0, ip: '$data.ip', broadcastedAt: 1, apps: '$data.apps', osUptime: '$data.osUptime', staticIp: '$data.staticIp', runningSince: '$data.runningSince' } },
+        ],
+        v1: [
+          ...v1NameFilter,
+          { $match: { type: 'apprunning', 'data.name': { $exists: true } } },
+          { $group: { _id: { ip: '$ip', name: '$data.name' }, doc: { $first: '$$ROOT' } } },
+          { $replaceRoot: { newRoot: '$doc' } },
+          { $project: { _id: 0, name: '$data.name', hash: '$data.hash', ip: '$data.ip', broadcastedAt: 1, runningSince: '$data.runningSince', osUptime: '$data.osUptime', staticIp: '$data.staticIp' } },
+        ],
+        v2Timestamps: [
+          { $match: { type: 'apprunning', 'data.apps': { $exists: true } } },
+          { $group: { _id: '$ip', latestV2: { $first: '$broadcastedAt' } } },
+        ],
+        removals: [
+          { $match: { type: 'appremoved' } },
+          ...removalNameFilter,
+          { $group: { _id: { ip: '$ip', name: '$data.appName' }, removedAt: { $first: '$broadcastedAt' } } },
+        ],
+        shutdowns: [
+          { $match: { type: { $in: ['sigterm', 'evicted'] } } },
+          { $addFields: { _eventAt: { $ifNull: ['$broadcastedAt', '$createdAt'] } } },
+          { $sort: { _eventAt: -1 } },
+          { $group: { _id: '$ip', eventAt: { $first: '$_eventAt' }, expireAt: { $first: '$expireAt' }, type: { $first: '$type' } } },
+        ],
+        ipChanges: [
+          { $match: { type: 'ipchanged' } },
+          { $group: { _id: '$ip', newIP: { $first: '$data.newIP' }, changedAt: { $first: '$broadcastedAt' } } },
+        ],
+      },
+    },
+    {
+      $addFields: {
+        _v2Filtered: {
+          $filter: {
+            input: '$v2', as: 'entry',
+            cond: {
+              $let: {
+                vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$$entry.ip'] } } } } },
+                in: { $or: [{ $eq: ['$$sd', null] }, { $gte: ['$$entry.broadcastedAt', '$$sd.eventAt'] }, { $and: [{ $eq: ['$$sd.type', 'sigterm'] }, { $gt: [{ $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] }, now] }] }] },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        _v1Filtered: {
+          $filter: {
+            input: '$v1', as: 'entry',
+            cond: {
+              $and: [
+                { $let: { vars: { v2Ts: { $first: { $filter: { input: '$v2Timestamps', as: 't', cond: { $eq: ['$$t._id', '$$entry.ip'] } } } } }, in: { $or: [{ $eq: ['$$v2Ts', null] }, { $gt: ['$$entry.broadcastedAt', '$$v2Ts.latestV2'] }] } } },
+                { $let: { vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$$entry.ip'] } } } } }, in: { $or: [{ $eq: ['$$sd', null] }, { $gte: ['$$entry.broadcastedAt', '$$sd.eventAt'] }, { $and: [{ $eq: ['$$sd.type', 'sigterm'] }, { $gt: [{ $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] }, now] }] }] } } },
+              ],
+            },
+          },
+        },
+      },
+    },
+    {
+      $facet: {
+        fromV2: [
+          { $unwind: '$_v2Filtered' }, { $unwind: '$_v2Filtered.apps' },
+          ...(nameMatch ? [{ $match: { '_v2Filtered.apps.name': nameMatch } }] : []),
+          { $project: { _id: 0, name: '$_v2Filtered.apps.name', hash: '$_v2Filtered.apps.hash', ip: '$_v2Filtered.ip', broadcastedAt: '$_v2Filtered.broadcastedAt', runningSince: { $ifNull: ['$_v2Filtered.apps.runningSince', '$_v2Filtered.runningSince'] }, osUptime: '$_v2Filtered.osUptime', staticIp: '$_v2Filtered.staticIp', removals: 1, ipChanges: 1 } },
+          { $addFields: { _removedAt: { $ifNull: [{ $let: { vars: { r: { $first: { $filter: { input: '$removals', as: 'r', cond: { $and: [{ $eq: ['$$r._id.ip', '$ip'] }, { $eq: ['$$r._id.name', '$name'] }] } } } } }, in: '$$r.removedAt' } }, new Date(0)] } } },
+          { $match: { $expr: { $gt: ['$broadcastedAt', '$_removedAt'] } } },
+          { $addFields: { _ipChange: { $first: { $filter: { input: '$ipChanges', as: 'c', cond: { $eq: ['$$c._id', '$ip'] } } } } } },
+          { $addFields: { ip: { $cond: [{ $and: [{ $ne: ['$_ipChange', null] }, { $gt: ['$_ipChange.changedAt', '$broadcastedAt'] }] }, '$_ipChange.newIP', '$ip'] } } },
+          { $project: { removals: 0, ipChanges: 0, _removedAt: 0, _ipChange: 0 } },
+        ],
+        fromV1: [
+          { $unwind: '$_v1Filtered' },
+          { $project: { _id: 0, name: '$_v1Filtered.name', hash: '$_v1Filtered.hash', ip: '$_v1Filtered.ip', broadcastedAt: '$_v1Filtered.broadcastedAt', runningSince: '$_v1Filtered.runningSince', osUptime: '$_v1Filtered.osUptime', staticIp: '$_v1Filtered.staticIp', removals: 1, ipChanges: 1 } },
+          { $addFields: { _removedAt: { $ifNull: [{ $let: { vars: { r: { $first: { $filter: { input: '$removals', as: 'r', cond: { $and: [{ $eq: ['$$r._id.ip', '$ip'] }, { $eq: ['$$r._id.name', '$name'] }] } } } } }, in: '$$r.removedAt' } }, new Date(0)] } } },
+          { $match: { $expr: { $gt: ['$broadcastedAt', '$_removedAt'] } } },
+          { $addFields: { _ipChange: { $first: { $filter: { input: '$ipChanges', as: 'c', cond: { $eq: ['$$c._id', '$ip'] } } } } } },
+          { $addFields: { ip: { $cond: [{ $and: [{ $ne: ['$_ipChange', null] }, { $gt: ['$_ipChange.changedAt', '$broadcastedAt'] }] }, '$_ipChange.newIP', '$ip'] } } },
+          { $project: { removals: 0, ipChanges: 0, _removedAt: 0, _ipChange: 0 } },
+        ],
+      },
+    },
+    { $project: { all: { $concatArrays: ['$fromV2', '$fromV1'] } } },
+    { $unwind: '$all' },
+    { $replaceRoot: { newRoot: '$all' } },
+    { $sort: { broadcastedAt: -1 } },
+    { $group: { _id: { name: '$name', ip: '$ip' }, name: { $first: '$name' }, hash: { $first: '$hash' }, ip: { $first: '$ip' }, broadcastedAt: { $first: '$broadcastedAt' }, runningSince: { $first: '$runningSince' }, osUptime: { $first: '$osUptime' }, staticIp: { $first: '$staticIp' } } },
+    { $project: { _id: 0 } },
+  ];
+
+  return collection.aggregate(pipeline).toArray();
+}
+
+async function countAppInstallingErrors(hash) {
+  const dbopen = dbHelper.databaseConnection();
+  const database = dbopen.db(config.database.appsglobal.database);
+  return dbHelper.countInDatabase(database, globalAppsInstallingErrorsLocations, { hash });
+}
+
+async function insertAppSpecifications(appSpecs) {
+  try {
+    const db = dbHelper.databaseConnection();
+    const database = db.db(config.database.appsglobal.database);
+    const query = { name: appSpecs.name };
+    const existing = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, { projection: { _id: 0, height: 1 } });
+    if (existing && existing.height >= appSpecs.height) return true;
+    await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, { upsert: true });
+    fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
+    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsLocations, { name: appSpecs.name });
+    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsBroadcasts, { 'data.name': appSpecs.name });
+    return true;
+  } catch (error) {
+    log.error(`insertAppSpecifications failed for ${appSpecs.name}: ${error.message}`);
+    return false;
+  }
+}
+
+async function updateAppSpecifications(appSpecs) {
+  try {
+    const db = dbHelper.databaseConnection();
+    const database = db.db(config.database.appsglobal.database);
+    const query = { name: appSpecs.name };
+    const projection = { projection: { _id: 0 } };
+    const appInfo = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
+    if (!appInfo || appInfo.height >= appSpecs.height) return true;
+    await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, { upsert: false });
+    fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
+    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsLocations, { name: appSpecs.name });
+    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsBroadcasts, { 'data.name': appSpecs.name });
+    return true;
+  } catch (error) {
+    log.error(`updateAppSpecifications failed for ${appSpecs.name}: ${error.message}`);
+    return false;
+  }
+}
+
 module.exports = {
   getAppHashes,
   getPreviousAppSpecifications,
   appLocation,
-  appLocationFromEvents,
   appInstallingLocation,
   appInstallingErrorsLocation,
-  countAppInstallingErrors,
   storeAppInstallingMessage,
   getAppsLocations,
   getAppsLocation,
   getAppInstallingLocation,
   getAppInstallingErrorsLocation,
   getAppsInstallingErrorsLocations,
-  getApplicationGlobalSpecifications,
-  getApplicationLocalSpecifications,
-  getApplicationSpecifications,
   getApplicationSpecificationAPI,
-  updateApplicationSpecificationAPI,
   getApplicationOwner,
   getApplicationOwnerAPI,
   getGlobalAppsSpecifications,
   availableApps,
   checkApplicationRegistrationNameConflicts,
-  insertAppSpecifications,
-  updateAppSpecifications,
   updateAppSpecsForRescanReindex,
   storeAppSpecificationInPermanentStorage,
-  removeAppSpecificationFromStorage,
   getAppSpecificationFromDb,
   getAllAppsInformation,
-  getInstalledApps,
   getRunningApps,
   getRunningAppIpList,
   registrationInformation,
@@ -2200,4 +1508,8 @@ module.exports = {
   reindexGlobalAppsLocationAPI,
   reindexGlobalAppsInformationAPI,
   rescanGlobalAppsInformationAPI,
+  appLocationFromEvents,
+  countAppInstallingErrors,
+  insertAppSpecifications,
+  updateAppSpecifications,
 };
