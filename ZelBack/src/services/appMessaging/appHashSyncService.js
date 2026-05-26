@@ -356,11 +356,6 @@ async function processMessages(messages, onProgress) {
           previousSpec,
           daemonHeight,
         });
-          const currentOwner = prevSpecs.owner;
-          if (currentOwner && appSpecFormatted.owner !== currentOwner) {
-            prevOwnerMap.set(appSpecFormatted.name, currentOwner);
-          }
-        }
 
         // Verified — add to batch and update map for subsequent messages
         permInserts.push(permMsg);
