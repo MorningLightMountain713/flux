@@ -5,7 +5,10 @@ const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
+const appsRepository = require('../appDatabase/appsRepository');
 const appConstants = require('../utils/appConstants');
+// decryptEnterpriseApps survives this migration: the reconciler depends on it
+// (throwOnError) until the decrypt path is re-routed through the domain provider
 const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
 const { specificationFormatter } = require('../utils/appSpecHelpers');
 const fluxCaching = require('../utils/cacheManager');
@@ -145,25 +148,18 @@ async function decryptEnterpriseApps(apps, options = {}) {
  */
 async function installedApps(req, res) {
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-
-    let appsQuery = {};
+    let filter = {};
     if (req && req.params && req.query) {
       let { appname } = req.params;
       appname = appname || req.query.appname;
       if (appname) {
-        appsQuery = { name: appname };
+        filter = { name: appname };
       }
     } else if (req && typeof req === 'string') {
-      appsQuery = { name: req };
+      filter = { name: req };
     }
 
-    const appsProjection = {
-      projection: { _id: 0 },
-    };
-
-    const apps = await dbHelper.findInDatabase(appsDatabase, appConstants.localAppsInformation, appsQuery, appsProjection);
+    const apps = await appsRepository.listInstalledAppsRaw({ filter });
     const dataResponse = messageHelper.createDataMessage(apps);
     return res ? res.json(dataResponse) : dataResponse;
   } catch (error) {
@@ -217,69 +213,48 @@ function publicContainerView(containers) {
  * sets put it back.
  *
  * Returns docker's container objects whole, for callers inside this process.
- * The public route answers from listRunningAppsApi, which projects them.
+ * The public route answers from listRunningApps, which projects them.
  *
- * @returns {object} Message carrying the container objects.
+ * @returns {Array<object>} docker container objects
  */
-async function listRunningApps() {
-  try {
-    let apps = await dockerService.dockerListContainers(false);
-    if (apps.length > 0) {
-      apps = apps.filter((app) => dockerService.isAppContainer(app));
-    }
-
-    // Include apps that are in backup or restore as "running" even if container is stopped
-    const globalState = require('../utils/globalState');
-    const backupInProgress = globalState.backupInProgress || [];
-    const restoreInProgress = globalState.restoreInProgress || [];
-    const appsInBackupRestore = [...backupInProgress, ...restoreInProgress];
-
-    if (appsInBackupRestore.length > 0) {
-      // Get all containers including stopped ones
-      const allContainers = await dockerService.dockerListContainers(true);
-      const fluxContainers = allContainers.filter((app) => dockerService.isAppContainer(app));
-
-      // Find stopped containers that are in backup/restore and add them to running list
-      fluxContainers.forEach((container) => {
-        const containerName = container.Names[0].slice(1); // Remove leading '/'
-        const appName = containerName.replace(/^(zel|flux)/, ''); // Remove zel/flux prefix
-        // backup/restore hold the bare MAIN app name; composed containers are
-        // component_app, so compare on the main name
-        const mainAppName = appName.split('_')[1] || appName;
-
-        // If this app is in backup/restore and not already in running list, add it
-        if (appsInBackupRestore.includes(mainAppName)) {
-          const alreadyIncluded = apps.some((app) => app.Names[0] === container.Names[0]);
-          if (!alreadyIncluded) {
-            // Keep original state - FDM treats any container in list as active
-            const containerCopy = { ...container };
-            apps.push(containerCopy);
-          }
-        }
-      });
-    }
-
-    const modifiedApps = [];
-    apps.forEach((app) => {
-      // eslint-disable-next-line no-param-reassign
-      delete app.HostConfig;
-      // eslint-disable-next-line no-param-reassign
-      delete app.NetworkSettings;
-      // eslint-disable-next-line no-param-reassign
-      delete app.Mounts;
-      modifiedApps.push(app);
-    });
-    const appsResponse = messageHelper.createDataMessage(modifiedApps);
-    return appsResponse;
-  } catch (error) {
-    log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    return errorResponse;
+async function listRunningContainers() {
+  let apps = await dockerService.dockerListContainers(false);
+  if (apps.length > 0) {
+    apps = apps.filter((app) => dockerService.isAppContainer(app));
   }
+
+  // Include apps that are in backup or restore as "running" even if container is stopped
+  const globalState = require('../utils/globalState');
+  const backupInProgress = globalState.backupInProgress || [];
+  const restoreInProgress = globalState.restoreInProgress || [];
+  const appsInBackupRestore = [...backupInProgress, ...restoreInProgress];
+
+  if (appsInBackupRestore.length > 0) {
+    // Get all containers including stopped ones
+    const allContainers = await dockerService.dockerListContainers(true);
+    const fluxContainers = allContainers.filter((app) => dockerService.isAppContainer(app));
+
+    // Find stopped containers that are in backup/restore and add them to running list
+    fluxContainers.forEach((container) => {
+      const containerName = container.Names[0].slice(1); // Remove leading '/'
+      const appName = containerName.replace(/^(zel|flux)/, ''); // Remove zel/flux prefix
+      // backup/restore hold the bare MAIN app name; composed containers are
+      // component_app, so compare on the main name
+      const mainAppName = appName.split('_')[1] || appName;
+
+      // If this app is in backup/restore and not already in running list, add it
+      if (appsInBackupRestore.includes(mainAppName)) {
+        const alreadyIncluded = apps.some((app) => app.Names[0] === container.Names[0]);
+        if (!alreadyIncluded) {
+          // Keep original state - FDM treats any container in list as active
+          const containerCopy = { ...container };
+          apps.push(containerCopy);
+        }
+      }
+    });
+  }
+
+  return apps;
 }
 
 /**
@@ -293,15 +268,31 @@ async function listRunningApps() {
  *
  * @param {object} req Request.
  * @param {object} res Response.
- * @returns {void}
+ * @returns {object|undefined} the message when called without a response
  */
-async function listRunningAppsApi(req, res) {
-  const response = await listRunningApps();
-  if (response.status === 'error') {
-    res.json(response);
-    return;
+async function listRunningApps(req, res) {
+  try {
+    const apps = await listRunningContainers();
+    if (res) {
+      return res.json(messageHelper.createDataMessage(publicContainerView(apps)));
+    }
+    const modifiedApps = apps.map((app) => {
+      const copy = { ...app };
+      delete copy.HostConfig;
+      delete copy.NetworkSettings;
+      delete copy.Mounts;
+      return copy;
+    });
+    return messageHelper.createDataMessage(modifiedApps);
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    return res ? res.json(errorResponse) : errorResponse;
   }
-  res.json(messageHelper.createDataMessage(publicContainerView(response.data)));
 }
 
 /**
@@ -705,11 +696,11 @@ async function promotedFolderHoldings(req, res) {
 }
 
 module.exports = {
-  installedApps,
   decryptEnterpriseApps,
   publicContainerView,
+  installedApps,
+  listRunningContainers,
   listRunningApps,
-  listRunningAppsApi,
   heldComponents,
   promotedFolders,
   promotedFolderHoldings,
