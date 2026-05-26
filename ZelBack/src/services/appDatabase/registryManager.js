@@ -8,11 +8,7 @@ const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
-const messageVerifier = require('../appMessaging/messageVerifier');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
-const { peerManager } = require('../utils/peerState');
-const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
-const { assertSecretsNotConflicting } = require('../appRequirements/appValidator');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
@@ -894,154 +890,6 @@ async function reconstructAppMessagesHashCollectionAPI(req, res) {
   }
 }
 
-/**
- * To register an application globally via API. Only accessible by authorized users.
- * @param {express.Request} req Request.
- * @param {express.Response} res Response.
- * @returns {Promise<void>} Return statement is only used here to interrupt the function and nothing is returned.
- */
-async function registerApplication(appSpecification, timestamp, signature, messageType, typeVersion) {
-  const isArcane = Boolean(process.env.FLUXOS_PATH);
-
-  if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
-    throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application registration');
-  }
-  if (peerManager.inboundCount < config.fluxapps.minIncoming) {
-    throw new Error('Sorry, This Flux does not have enough incoming peers for safe application registration');
-  }
-  if (messageType !== 'zelappregister' && messageType !== 'fluxappregister') {
-    throw new Error('Invalid type of message');
-  }
-  if (typeVersion !== 1) {
-    throw new Error('Invalid version of message');
-  }
-
-  const timestampNow = Date.now();
-  if (timestamp < timestampNow - 1000 * 3600) {
-    throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
-  } else if (timestamp > timestampNow + 1000 * 60 * 5) {
-    throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
-  }
-
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-  if (!syncStatus.data.synced) {
-    throw new Error('Daemon not yet synced.');
-  }
-  const daemonHeight = syncStatus.data.height;
-
-  const wireSpec = await deserializeSpec(appSpecification);
-  if (!wireSpec) throw new Error('Could not deserialize app specifications');
-
-  const spec = wireSpec.isEncrypted
-    ? await wireSpec.decrypt(await wireSpec.createProvider())
-    : wireSpec;
-
-  const submissionBlob = spec.serialize ? spec.serialize() : appSpecification;
-  await validateSubmissionSpec(submissionBlob, { height: daemonHeight });
-
-  await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner, hash: appSpecification.hash });
-
-  for (const { componentName, secrets } of spec.getComponentSecrets()) {
-    // eslint-disable-next-line no-await-in-loop
-    await assertSecretsNotConflicting(spec.name, componentName, secrets, spec.owner, { isRegistration: true });
-  }
-
-  await appsRepository.assertNoNameConflicts(spec.name);
-
-  const broadcastSpecBlob = wireSpec.isEncrypted
-    ? wireSpec.serialize()
-    : submissionBlob;
-
-  const signedEvent = await appEventVerifier.deserializeMessage({
-    type: messageType,
-    version: typeVersion,
-    appSpecifications: broadcastSpecBlob,
-    timestamp,
-    signature,
-  });
-  await appEventVerifier.authorize({
-    appEvent: signedEvent,
-    daemonHeight,
-    verifyHash: false,
-  });
-
-  const messageHASH = await appEventVerifier.computeOutboundHash({
-    type: messageType,
-    envelopeVersion: typeVersion,
-    specBlob: broadcastSpecBlob,
-    timestamp,
-    signature,
-  });
-
-  const temporaryAppMessage = {
-    type: messageType,
-    version: typeVersion,
-    appSpecifications: broadcastSpecBlob,
-    hash: messageHASH,
-    timestamp,
-    signature,
-    arcaneSender: isArcane,
-  };
-  await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
-  await serviceHelper.delay(1200);
-  await messageVerifier.requestAppMessage(messageHASH);
-  await serviceHelper.delay(1200);
-
-  let tempMessage = await appsRepository.getTempMessage(messageHASH);
-  for (let i = 0; i < 20; i += 1) {
-    if (!tempMessage) {
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(500);
-      // eslint-disable-next-line no-await-in-loop
-      tempMessage = await appsRepository.getTempMessage(messageHASH);
-    }
-  }
-  if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
-    return tempMessage.hash;
-  }
-  throw new Error('Unable to register application on the network. Try again later.');
-}
-
-async function registerAppGlobalyApi(req, res) {
-  let body = '';
-  req.on('data', (data) => {
-    body += data;
-  });
-  req.on('end', async () => {
-    try {
-      const authorized = await verificationHelper.verifyPrivilege('user', req);
-      if (!authorized) {
-        const errMessage = messageHelper.errUnauthorizedMessage();
-        res.json(errMessage);
-        return;
-      }
-      const processedBody = serviceHelper.ensureObject(body);
-      let { appSpecification, timestamp, signature } = processedBody;
-      let messageType = processedBody.type;
-      let typeVersion = processedBody.version;
-      if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
-        throw new Error('Incomplete message received. Check if appSpecification, type, version, timestamp and signature are provided.');
-      }
-      appSpecification = serviceHelper.ensureObject(appSpecification);
-      timestamp = serviceHelper.ensureNumber(timestamp);
-      signature = serviceHelper.ensureString(signature);
-      messageType = serviceHelper.ensureString(messageType);
-      typeVersion = serviceHelper.ensureNumber(typeVersion);
-
-      const hash = await registerApplication(appSpecification, timestamp, signature, messageType, typeVersion);
-      const responseHash = messageHelper.createDataMessage(hash);
-      res.json(responseHash);
-    } catch (error) {
-      log.warn(error);
-      const errorResponse = messageHelper.createErrorMessage(
-        error.message || error,
-        error.name,
-        error.code,
-      );
-      res.json(errorResponse);
-    }
-  });
-}
 
 /**
  * Drops and recreates global apps locations collection with indexes
@@ -1504,7 +1352,6 @@ module.exports = {
   rescanGlobalAppsInformation,
   reconstructAppMessagesHashCollection,
   reconstructAppMessagesHashCollectionAPI,
-  registerAppGlobalyApi,
   reindexGlobalAppsLocationAPI,
   reindexGlobalAppsInformationAPI,
   rescanGlobalAppsInformationAPI,
