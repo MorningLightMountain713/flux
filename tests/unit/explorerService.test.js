@@ -744,7 +744,7 @@ describe('explorerService tests', () => {
     let dbStubCollectionStats;
     let logInfoSpy;
     let expireGlobalApplicationsStub;
-    let checkAndRemoveApplicationInstanceStub;
+    let reconcileInstalledAppsStub;
     let restorePortsSupportStub;
     let daemonServiceBlockchainRpcsStub;
     let daemonServiceMiscRpcsStub;
@@ -755,7 +755,7 @@ describe('explorerService tests', () => {
       dbStubUpdate = sinon.stub(dbHelper, 'updateOneInDatabase');
       dbStubCollectionStats = sinon.stub(dbHelper, 'collectionStats');
       expireGlobalApplicationsStub = sinon.stub(registryManager, 'expireGlobalApplications');
-      checkAndRemoveApplicationInstanceStub = sinon.stub(advancedWorkflows, 'checkAndRemoveApplicationInstance');
+      reconcileInstalledAppsStub = sinon.stub(advancedWorkflows, 'reconcileInstalledApps');
       restorePortsSupportStub = sinon.stub(portManager, 'restorePortsSupport');
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
@@ -836,7 +836,7 @@ describe('explorerService tests', () => {
       await explorerService.processBlock(blockHeight, isInsightExplorer);
 
       sinon.assert.calledOnce(expireGlobalApplicationsStub);
-      sinon.assert.notCalled(checkAndRemoveApplicationInstanceStub);
+      sinon.assert.notCalled(reconcileInstalledAppsStub);
       sinon.assert.notCalled(restorePortsSupportStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
@@ -853,7 +853,7 @@ describe('explorerService tests', () => {
       const blockHeight = 900009;
       const isInsightExplorer = true;
       dbStubUpdate.returns(true);
-      checkAndRemoveApplicationInstanceStub.returns(true);
+      reconcileInstalledAppsStub.returns(true);
       // prevent infinite func loop while testing
       explorerService.setBlockProccessingCanContinue(false);
       dbStubCollectionStats.returns({
@@ -900,7 +900,7 @@ describe('explorerService tests', () => {
       await explorerService.processBlock(blockHeight, isInsightExplorer);
 
       sinon.assert.notCalled(expireGlobalApplicationsStub);
-      sinon.assert.calledOnce(checkAndRemoveApplicationInstanceStub);
+      sinon.assert.calledOnce(reconcileInstalledAppsStub);
       sinon.assert.notCalled(restorePortsSupportStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
@@ -916,7 +916,7 @@ describe('explorerService tests', () => {
       const blockHeight = 900025;
       const isInsightExplorer = true;
       dbStubUpdate.returns(true);
-      checkAndRemoveApplicationInstanceStub.returns(true);
+      reconcileInstalledAppsStub.returns(true);
       // prevent infinite func loop while testing
       explorerService.setBlockProccessingCanContinue(false);
       dbStubCollectionStats.returns({
@@ -963,7 +963,7 @@ describe('explorerService tests', () => {
       await explorerService.processBlock(blockHeight, isInsightExplorer);
 
       sinon.assert.notCalled(expireGlobalApplicationsStub);
-      sinon.assert.notCalled(checkAndRemoveApplicationInstanceStub);
+      sinon.assert.notCalled(reconcileInstalledAppsStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
         sinon.match.object,
@@ -1716,7 +1716,7 @@ describe('explorerService tests', () => {
         avgObjSize: 1111,
       });
       sinon.stub(registryManager, 'expireGlobalApplications').returns(true);
-      sinon.stub(advancedWorkflows, 'checkAndRemoveApplicationInstance').returns(true);
+      sinon.stub(advancedWorkflows, 'reconcileInstalledApps').returns(true);
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').returns({
         status: 'success',
         data: {
