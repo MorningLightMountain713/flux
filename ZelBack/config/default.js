@@ -82,8 +82,13 @@ module.exports = {
     chainparams: {
       database: `${dbPrefix}chainparams`,
       collections: {
-        chainMessages: 'chainmessages', // soft fork messages occuring on chain, Messages have immediate activation from its occurance blockheight (next blockheight mined are already new specs enforced)
-        // height, txid, message, version (version X_ determines the value of adjustment p_ specifies new price structure as per fluxapps.price array values)
+        chainMessages: 'chainmessages',
+        priceMessages: 'pricemessages',
+        rateMessages: 'ratemessages',
+        priceModifierMessages: 'pricemodifiermessages',
+        oracleKeyMessages: 'oraclekeymessages',
+        marketplacePricingMessages: 'marketplacepricingmessages',
+        policyGroupMessages: 'policygroupmessages',
       },
     },
     fluxshare: {
@@ -223,6 +228,7 @@ module.exports = {
     addressMultisig: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX',
     addressMultisigB: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX',
     addressDevelopment: 't1Mzja9iJcEYeW5B4m4s1tJG8M42odFZ16A',
+    oracleAddress: 't1KRvTTXmaYZmjpgEVbk7cAfu83uYJDoAn4',
     multisigAddressChange: 1670000,
     epochstart: 694000,
     publicepochstart: 705000,

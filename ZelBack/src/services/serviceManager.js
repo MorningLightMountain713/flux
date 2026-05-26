@@ -56,6 +56,10 @@ const appTamperingBlocklistService = require('./appTamperingBlocklistService');
 const nodeConfirmationService = require('./nodeConfirmationService');
 const appTamperingDetectionService = require('./appTamperingDetectionService');
 const imageUpdateService = require('./imageUpdateService');
+const appsMaintenance = require('./appDatabase/appsMaintenance');
+const appsRepository = require('./appDatabase/appsRepository');
+const { rebuildPriceOracleState } = require('./pricing/priceOracleState');
+const telemetryIdentityService = require('./telemetryIdentityService');
 const { version: fluxVersion } = require('../../../package.json');
 // const throughputLogger = require('./utils/throughputLogger');
 
@@ -251,7 +255,7 @@ async function startFluxFunctions() {
 
     // This fixes an issue where the appsMessage db has NaN for valueSat. Once db is repaired on all nodes,
     // we can remove this.
-    await dbHelper.repairNanInAppsMessagesDb();
+    await appsMaintenance.repairNanInAppsMessagesDb();
 
     // Check for apps with incorrect volume mounts (containing /flux/ path)
     log.info('Checking for apps with incorrect volume mounts...');
@@ -412,7 +416,7 @@ async function startFluxFunctions() {
     async function startDbDependentServices() {
       await globalState.waitForDbReady();
       log.info('DB ready - starting db-dependent services');
-      advancedWorkflows.checkAndRemoveEnterpriseAppsOnNonArcane();
+      advancedWorkflows.reconcileInstalledApps();
       await identityReady;
       try {
         await enterpriseNetwork.cleanupOwnershipViolations();
