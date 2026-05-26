@@ -11,7 +11,7 @@ const fluxNetworkHelper = require('./fluxNetworkHelper');
 const log = require('../lib/log');
 const { extractIp } = require('./utils/socketAddressUtils');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
-const appVolumeService = require('./appLifecycle/appVolumeService');
+
 
 const globalState = require('./utils/globalState');
 
@@ -937,12 +937,7 @@ async function appDockerCreate(deployComp, options = {}) {
   }
   containerConfig.Env.push(`FLUX_APP_NAME=${appName}`);
 
-  try {
-    await appVolumeService.ensureMountSourcesExist(deployComp);
-  } catch (error) {
-    log.error(`Failed to ensure mount paths exist for ${identifier}: ${error.message}`);
-    throw error;
-  }
+
 
   const app = await docker.createContainer(containerConfig).catch((error) => {
     log.error(error);
