@@ -1,0 +1,25 @@
+const priceOracleState = require('./priceOracleState');
+
+class FluxosSurcharger {
+  async surcharges(spec, _partial, ctx) {
+    const history = priceOracleState.getPriceModifierHistory();
+    if (!history) return [];
+    const params = history.resolveAt(ctx.height);
+    if (!params) return [];
+
+    const instances = typeof spec.instances === 'number' ? spec.instances : 1;
+    const entries = [];
+
+    if (params.instanceTier3Breakpoint && instances >= params.instanceTier3Breakpoint) {
+      entries.push({ type: 'percent', value: params.instanceTier3Multiplier, label: 'instance-tier-3', target: 'commodity' });
+    } else if (params.instanceTier2Breakpoint && instances >= params.instanceTier2Breakpoint) {
+      entries.push({ type: 'percent', value: params.instanceTier2Multiplier, label: 'instance-tier-2', target: 'commodity' });
+    } else if (params.instanceTier1Breakpoint && instances >= params.instanceTier1Breakpoint) {
+      entries.push({ type: 'percent', value: params.instanceTier1Multiplier, label: 'instance-tier-1', target: 'commodity' });
+    }
+
+    return entries;
+  }
+}
+
+module.exports = { FluxosSurcharger };
