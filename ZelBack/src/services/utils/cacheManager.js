@@ -177,11 +177,6 @@ class FluxCacheManager {
       max: 150,
       ttl: FluxCacheManager.oneHour,
     },
-    // appQueryService
-    enterpriseAppDecryptionCache: {
-      max: 100,
-      ttl: 7 * FluxCacheManager.oneDay,
-    },
     // Pending app updates queue - stores update messages that arrived before registration
     pendingAppUpdatesCache: {
       max: 200,
