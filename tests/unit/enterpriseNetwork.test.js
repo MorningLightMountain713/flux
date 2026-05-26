@@ -50,6 +50,9 @@ function loadModule(overrides = {}) {
     database: {
       appslocal: { database: 'localapps', collections: { appsInformation: 'zelappsinformation' } },
     },
+    fluxapps: {
+      spawnDelayMultiplier: 1,
+    },
   };
 
   bundleListeners.length = 0;
