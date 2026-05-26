@@ -19,6 +19,9 @@ function loadModule(overrides = {}) {
     database: {
       appslocal: { database: 'localapps', collections: { appsInformation: 'zelappsinformation' } },
     },
+    fluxapps: {
+      spawnDelayMultiplier: 1,
+    },
   };
 
   const stubs = {
