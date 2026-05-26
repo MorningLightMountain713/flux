@@ -8,6 +8,7 @@ const sinon = require('sinon');
 const path = require('path');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
+const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -1002,146 +1003,89 @@ describe('dockerService tests', () => {
     let dockerStub;
     const appName = 'fluxwebsite';
     // Use the same path that dockerService will compute at runtime
+    let volumeStub;
     const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
-    // eslint-disable-next-line no-unused-vars
     const appsFolder = `${fluxDirPath}/ZelApps/`;
-    const baseNodeApp = {
-      name: 'website',
-      commands: [
-        '--chain',
-        'kusama',
-      ],
-      containerData: '/chaindata',
-      cpu: 0.8,
-      description: 'This is my test app',
-      domains: [
-        'testing.runonflux.io',
-        'testing.runonflux.io',
-        'testing.runonflux.io',
-      ],
-      enviromentParameters: [],
-      hash: '99b685ffcf5fe244981fcd4dd52cf055b19bfb6ded91f96f9d8179cee09700cf',
-      hdd: 20,
-      height: 1052918,
-      owner: '196GJWyLxzAw3MirTT7Bqs2iGpUQio29GH',
-      ram: 1800,
-      repotag: 'runonflux/website',
-      tiered: false,
-      instances: 3,
-    };
 
-    // eslint-disable-next-line no-unused-vars
-    const baseExpectedConfig = {
-      Image: 'runonflux/website',
-      AttachStdin: true,
-      AttachStdout: true,
-      AttachStderr: true,
-      Cmd: ['--chain', 'kusama'],
-      Env: [],
-      Tty: false,
-    };
+    function makeDeployComp(overrides = {}) {
+      return {
+        name: 'website',
+        appName: 'fluxwebsite',
+        identifier: 'website_fluxwebsite',
+        image: 'runonflux/website',
+        cpu: 0.8,
+        memory: 1800,
+        cmd: ['--chain', 'kusama'],
+        mounts: [
+          { Source: `${appsFolder}website_fluxwebsite/appdata`, Target: '/chaindata', Type: 'bind' },
+        ],
+        toDockerPortBindings: () => ({ '30333/tcp': [{ HostPort: '31113' }], '9933/tcp': [{ HostPort: '31112' }] }),
+        toDockerExposedPorts: () => ({ '30333/tcp': {}, '9933/tcp': {} }),
+        toDockerEnv: () => [],
+        toDockerNanoCpus: () => 800000000,
+        toDockerMemoryBytes: () => 1887436800,
+        toDockerMemorySwapBytes: () => 1887436800 + (2 * 1024 * 1024 * 1024),
+        restartPolicyName: () => 'unless-stopped',
+        ...overrides,
+      };
+    }
+
     beforeEach(() => {
       dockerStub = sinon.stub(Dockerode.prototype, 'createContainer').returns(Promise.resolve('created'));
+      volumeStub = sinon.stub(appVolumeService, 'ensureMountSourcesExist').resolves();
     });
 
     afterEach(() => {
       dockerStub.restore();
+      volumeStub.restore();
     });
 
-    it('should create an app given proper parameters for specs version > 1', async () => {
-      const nodeApp = {
-        ...baseNodeApp,
-        containerPorts: [
-          '30333',
-          '9933',
-          '9944',
-        ],
-        ports: [
-          '31113',
-          '31112',
-          '31111',
-        ],
-        version: 3,
-      };
+    it('should create a container with correct image and resource limits', async () => {
+      const deployComp = makeDeployComp();
 
-      await dockerService.appDockerCreate(nodeApp, appName, true);
+      await dockerService.appDockerCreate(deployComp);
 
       sinon.assert.calledOnce(dockerStub);
       const actualConfig = dockerStub.firstCall.args[0];
 
-      // Check key properties instead of exact match
       expect(actualConfig.Image).to.equal('runonflux/website');
       expect(actualConfig.name).to.equal('fluxwebsite_fluxwebsite');
       expect(actualConfig.Hostname).to.equal('website');
       expect(actualConfig.HostConfig.NanoCPUs).to.equal(800000000);
       expect(actualConfig.HostConfig.Memory).to.equal(1887436800);
-      expect(actualConfig.HostConfig.Mounts).to.have.lengthOf(1);
-      expect(actualConfig.HostConfig.Mounts[0].Source).to.include('fluxwebsite_fluxwebsite/appdata');
-      expect(actualConfig.HostConfig.Mounts[0].Target).to.equal('/chaindata');
     });
 
-    it('should create an app given proper parameters for specs version > 1 and parameter component == false', async () => {
-      const nodeApp = {
-        ...baseNodeApp,
-        containerPorts: [
-          '30333',
-          '9933',
-          '9944',
-        ],
-        ports: [
-          '31113',
-          '31112',
-          '31111',
-        ],
-        version: 3,
-      };
+    it('should set up mounts from DeploymentComponent', async () => {
+      const deployComp = makeDeployComp();
 
-      await dockerService.appDockerCreate(nodeApp, appName, false);
+      await dockerService.appDockerCreate(deployComp);
 
-      sinon.assert.calledOnce(dockerStub);
       const actualConfig = dockerStub.firstCall.args[0];
-
-      // Check key properties instead of exact match
-      expect(actualConfig.Image).to.equal('runonflux/website');
-      expect(actualConfig.name).to.equal('fluxwebsite');
-      expect(actualConfig.Hostname).to.equal('website');
-      expect(actualConfig.HostConfig.NanoCPUs).to.equal(800000000);
-      expect(actualConfig.HostConfig.Memory).to.equal(1887436800);
       expect(actualConfig.HostConfig.Mounts).to.have.lengthOf(1);
-      expect(actualConfig.HostConfig.Mounts[0].Source).to.include('fluxwebsite/appdata');
+      expect(actualConfig.HostConfig.Mounts[0].Source).to.include('website_fluxwebsite/appdata');
       expect(actualConfig.HostConfig.Mounts[0].Target).to.equal('/chaindata');
     });
 
-    it('should create an app given proper parameters for specs version 1', async () => {
-      const nodeApp = {
-        ...baseNodeApp,
-        containerPort: '9933',
-        port: '31112',
-        version: 1,
-      };
+    it('should set up port bindings from DeploymentComponent', async () => {
+      const deployComp = makeDeployComp();
 
-      await dockerService.appDockerCreate(nodeApp, appName, true);
+      await dockerService.appDockerCreate(deployComp);
 
-      sinon.assert.calledOnce(dockerStub);
       const actualConfig = dockerStub.firstCall.args[0];
-
-      // Check key properties instead of exact match
-      expect(actualConfig.Image).to.equal('runonflux/website');
-      expect(actualConfig.name).to.equal('fluxwebsite_fluxwebsite');
-      expect(actualConfig.Hostname).to.equal('website');
-      expect(actualConfig.HostConfig.NanoCPUs).to.equal(800000000);
-      expect(actualConfig.HostConfig.Memory).to.equal(1887436800);
-      expect(actualConfig.HostConfig.Mounts).to.have.lengthOf(1);
-      expect(actualConfig.HostConfig.Mounts[0].Source).to.include('fluxwebsite_fluxwebsite/appdata');
-      expect(actualConfig.HostConfig.Mounts[0].Target).to.equal('/chaindata');
+      expect(actualConfig.HostConfig.PortBindings).to.deep.equal({
+        '30333/tcp': [{ HostPort: '31113' }],
+        '9933/tcp': [{ HostPort: '31112' }],
+      });
+      expect(actualConfig.ExposedPorts).to.deep.equal({
+        '30333/tcp': {},
+        '9933/tcp': {},
+      });
     });
 
-    it('should throw error if the config is incorrect', async () => {
-      const nodeApp = {
-        testing: 'testing',
-      };
+    it('should throw error if deployComp is malformed', async () => {
+      const badComp = { testing: 'testing' };
 
-      await expect(dockerService.appDockerCreate(nodeApp, appName, true)).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'forEach\')');
+      await expect(dockerService.appDockerCreate(badComp)).to.eventually.be.rejected;
     });
   });
 });

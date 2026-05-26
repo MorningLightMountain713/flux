@@ -221,26 +221,18 @@ describe('portManager tests', () => {
     });
 
     it('should pass if ports are not used', async () => {
-      const appSpec = {
-        name: 'NewApp',
-        version: 3,
-        ports: [30010, 30011],
-      };
+      const deployment = { appName: 'NewApp', allHostPorts: () => [30010, 30011] };
 
-      const result = await portManager.ensureApplicationPortsNotUsed(appSpec, []);
+      const result = await portManager.ensureApplicationPortsNotUsed(deployment, []);
 
       expect(result).to.be.true;
     });
 
     it('should throw error if port is already used by different app', async () => {
-      const appSpec = {
-        name: 'NewApp',
-        version: 3,
-        ports: [30001, 30011],
-      };
+      const deployment = { appName: 'NewApp', allHostPorts: () => [30001, 30011] };
 
       try {
-        await portManager.ensureApplicationPortsNotUsed(appSpec, []);
+        await portManager.ensureApplicationPortsNotUsed(deployment, []);
         expect.fail('Should have thrown an error');
       } catch (error) {
         expect(error.message).to.include('port 30001 already used');
@@ -248,44 +240,29 @@ describe('portManager tests', () => {
     });
 
     it('should allow same app to use its own ports', async () => {
-      const appSpec = {
-        name: 'ExistingApp',
-        version: 3,
-        ports: [30001, 30002],
-      };
+      const deployment = { appName: 'ExistingApp', allHostPorts: () => [30001, 30002] };
 
-      const result = await portManager.ensureApplicationPortsNotUsed(appSpec, []);
+      const result = await portManager.ensureApplicationPortsNotUsed(deployment, []);
 
       expect(result).to.be.true;
     });
 
-    it('should handle version 1 apps', async () => {
-      const appSpec = {
-        name: 'OldNewApp',
-        version: 1,
-        port: 30001,
-      };
+    it('should throw for conflicting ports from any version', async () => {
+      const deployment = { appName: 'OldNewApp', allHostPorts: () => [30001] };
 
       try {
-        await portManager.ensureApplicationPortsNotUsed(appSpec, []);
+        await portManager.ensureApplicationPortsNotUsed(deployment, []);
         expect.fail('Should have thrown an error');
       } catch (error) {
         expect(error.message).to.include('port 30001 already used');
       }
     });
 
-    it('should handle version 4+ compose apps', async () => {
-      const appSpec = {
-        name: 'NewComposedApp',
-        version: 4,
-        compose: [
-          { name: 'Component1', ports: [30001] },
-          { name: 'Component2', ports: [30020] },
-        ],
-      };
+    it('should check all ports from multi-component deployments', async () => {
+      const deployment = { appName: 'NewComposedApp', allHostPorts: () => [30001, 30020] };
 
       try {
-        await portManager.ensureApplicationPortsNotUsed(appSpec, []);
+        await portManager.ensureApplicationPortsNotUsed(deployment, []);
         expect.fail('Should have thrown an error');
       } catch (error) {
         expect(error.message).to.include('port 30001 already used');

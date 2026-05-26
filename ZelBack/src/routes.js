@@ -51,7 +51,6 @@ const backupRestoreService = require('./services/backupRestoreService');
 const IOUtils = require('./services/IOUtils');
 const arcaneAuthService = require('./services/arcaneAuthService');
 const appTamperingDetectionService = require('./services/appTamperingDetectionService');
-const fluxEventBus = require('./services/utils/fluxEventBus');
 
 function isLocal(req, res, next) {
   const remote = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || req.headers['x-forwarded-for'];
@@ -82,10 +81,10 @@ module.exports = (app) => {
     daemonServiceControlRpcs.getInfo(req, res);
   });
   app.get('/daemon/getfluxnodestatus', cache('60 seconds'), (req, res) => {
-    daemonServiceNodeRpcs.getFluxNodeStatusApi(req, res);
+    daemonServiceNodeRpcs.getFluxNodeStatus(req, res);
   });
   app.get('/daemon/getzelnodestatus', cache('60 seconds'), (req, res) => { // DEPRECATED
-    daemonServiceNodeRpcs.getFluxNodeStatusApi(req, res);
+    daemonServiceNodeRpcs.getFluxNodeStatus(req, res);
   });
   app.get('/daemon/listfluxnodes/:filter?', cache('30 seconds'), (req, res) => {
     daemonServiceNodeRpcs.listFluxNodes(req, res);
@@ -323,9 +322,6 @@ module.exports = (app) => {
   app.get('/flux/dosstate', cache('30 seconds'), (req, res) => {
     fluxNetworkHelper.getDOSState(req, res);
   });
-  app.post('/flux/dosstate', (req, res) => {
-    fluxNetworkHelper.setDOSStateApi(req, res);
-  });
   // New peer endpoints
   app.get('/flux/peers/:filter?', cache('30 seconds'), (req, res) => {
     fluxCommunication.getPeers(req, res);
@@ -404,9 +400,6 @@ module.exports = (app) => {
   });
   app.get('/apps/latestspecificationversion', cache('5 minutes'), (req, res) => {
     appQueryService.getlatestApplicationSpecificationAPI(req, res);
-  });
-  app.get('/apps/updatetolatestspecs/:appname', cache('30 seconds'), (req, res) => {
-    registryManager.updateApplicationSpecificationAPI(req, res);
   });
   app.get('/apps/appspecifications/:appname/:decrypt?', (req, res) => {
     registryManager.getApplicationSpecificationAPI(req, res);
@@ -1124,9 +1117,6 @@ module.exports = (app) => {
   app.get('/flux/removeincomingpeer/:ip?', (req, res) => {
     fluxCommunication.removeIncomingPeer(req, res);
   });
-  app.get('/flux/startdiscovery', (req, res) => {
-    fluxCommunication.startDiscoveryApi(req, res);
-  });
   app.get('/flux/allowport/:port?', (req, res) => {
     fluxNetworkHelper.allowPortApi(req, res);
   });
@@ -1239,10 +1229,10 @@ module.exports = (app) => {
     appUninstaller.removeAppLocallyApi(req, res);
   });
   app.get('/apps/installapplocally/:appname?', (req, res) => {
-    appInstaller.installAppLocally(req, res);
+    appInstaller.installApplicationAPI(req, res);
   });
   app.get('/apps/testappinstall/:appname?', (req, res) => {
-    appInstaller.testAppInstall(req, res);
+    appInstaller.testInstallApplicationAPI(req, res);
   });
   app.get('/apps/createfluxnetwork', (req, res) => {
     systemIntegration.createFluxNetworkAPI(req, res);
@@ -1257,7 +1247,7 @@ module.exports = (app) => {
     registryManager.reindexGlobalAppsLocationAPI(req, res);
   });
   app.get('/apps/redeploy/:appname?/:force?/:global?', (req, res) => {
-    advancedWorkflows.redeployAPI(req, res);
+    advancedWorkflows.redeployApplicationAPI(req, res);
   });
   app.get('/apps/redeploycomponent/:appname?/:component?/:force?', (req, res) => {
     advancedWorkflows.redeployComponentAPI(req, res);
@@ -1556,9 +1546,5 @@ module.exports = (app) => {
   });
   app.get('/explorer/issynced', cache('30 seconds'), (req, res) => {
     explorerService.isExplorerSynced(req, res);
-  });
-
-  app.get('/flux/eventstream', (req, res) => {
-    fluxEventBus.sseHandler(req, res);
   });
 };
