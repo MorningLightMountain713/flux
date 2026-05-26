@@ -25,7 +25,7 @@ const path = require('path');
 // eslint-disable-next-line import/no-unresolved
 const { ECRClient, GetAuthorizationTokenCommand } = require('@aws-sdk/client-ecr');
 // eslint-disable-next-line import/extensions, import/no-unresolved
-const { RepoAuthParser } = require('../src/utils/repoAuthParser');
+const { RepoAuthParser } = require('../../../../ZelBack/src/services/registryAuth/utils/repoAuthParser');
 
 // Load environment variables from .env.test if available
 try {
