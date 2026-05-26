@@ -57,19 +57,19 @@ function publishCandidacyChanges(stages) {
 const resourceQueryService = require('../appQuery/resourceQueryService');
 const messageStore = require('../appMessaging/messageStore');
 const registryManager = require('../appDatabase/registryManager');
+const appsRepository = require('../appDatabase/appsRepository');
 const imageManager = require('../appSecurity/imageManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const portManager = require('../appNetwork/portManager');
-const appUtilities = require('../utils/appUtilities');
-const mountParser = require('../utils/mountParser');
 const ipLocationStore = require('../appPlacement/ipLocationStore');
 const placementFeasibility = require('../appPlacement/placementFeasibility');
 const systemIntegration = require('../appSystem/systemIntegration');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
 const globalState = require('../utils/globalState');
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const { FluxCacheManager } = require('../utils/cacheManager');
 const appInstaller = require('./appInstaller');
-const { InstallOutcome } = require('../utils/installOutcome');
 const appUninstaller = require('./appUninstaller');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -81,21 +81,6 @@ const collisionWaitMs = config.fluxapps.installCollisionWaitMs;
 const { spawnReconfirmDelayMs } = config.fluxapps;
 
 let spawnLoopRunning = false;
-
-/**
- * Whether an application keeps a synced volume.
- *
- * Canonical classification: sync flags are only valid on the primary mount, so a
- * g:/r:/s: in an invalid position (or inside a word like 'logs:') is NOT a synced app.
- * @param {object} appSpecifications
- * @returns {boolean}
- */
-function isSyncedApp(appSpecifications) {
-  if (appSpecifications.version <= 3) {
-    return mountParser.isSyncedComponent(appSpecifications.containerData);
-  }
-  return appSpecifications.compose.some((comp) => mountParser.isSyncedComponent(comp.containerData));
-}
 
 function initialize() {
   appSyncEvents.on(SYNC_EVENTS.SPAWNER_READY, () => {
@@ -574,63 +559,47 @@ async function trySpawningGlobalApplication() {
       return delayTime;
     }
 
-    // get app specifications
-    const appSpecifications = await registryManager.getApplicationGlobalSpecifications(appToRun);
-    if (!appSpecifications) {
+    const instantiated = await appsRepository.getGlobalAppInfo(appToRun);
+    if (!instantiated) {
       throw new Error(`trySpawningGlobalApplication - Specifications for application ${appToRun} were not found!`);
     }
 
-    // eslint-disable-next-line no-restricted-syntax
-    const dbopen = dbHelper.databaseConnection();
-    // eslint-disable-next-line global-require
-    const { localAppsInformation } = require('../utils/appConstants');
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const appsQuery = {}; // all
-    const appsProjection = {
-      projection: {
-        _id: 0,
-        name: 1,
-        version: 1,
-        repotag: 1,
-        compose: 1,
-      },
-    };
-    const apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-    const appExists = apps.find((app) => app.name === appSpecifications.name);
-    if (appExists) { // double checked in installation process.
-      log.info(`trySpawningGlobalApplication - Application ${appSpecifications.name} is already installed`);
+    if (await appsRepository.existsInstalledApp(instantiated.name)) {
+      log.info(`trySpawningGlobalApplication - Application ${instantiated.name} is already installed`);
       return shortDelayTime;
     }
+
+    let spec = instantiated.spec;
+    if (instantiated.isEncrypted()) {
+      const provider = await spec.createProvider();
+      spec = (await spec.decrypt(provider)).spec;
+    }
+    const { DeploymentSpec } = await getSpecBackend();
+    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
 
     // A synced app runs on this node asking its partners who holds what. A node
     // whose calls to other nodes are redirected cannot ask: it reads every
     // partner as unknown and never promotes, so a new app it was chosen to seed
     // would wait on it for good. It keeps hosting everything else.
-    if (outboundPathService.isRedirected() && isSyncedApp(appSpecifications)) {
-      log.warn(`trySpawningGlobalApplication - ${appSpecifications.name} keeps a synced volume, and this node's calls to other nodes are redirected. Not taking it.`);
+    if (outboundPathService.isRedirected() && spec.hasSyncthing()) {
+      log.warn(`trySpawningGlobalApplication - ${instantiated.name} keeps a synced volume, and this node's calls to other nodes are redirected. Not taking it.`);
       fluxEventBus.publish('spawner:deferred', {
-        appName: appSpecifications.name,
+        appName: instantiated.name,
         reason: 'outbound_redirected',
         delayMs: shortDelayTime,
       });
       return shortDelayTime;
     }
-
     // Needed by the public availability check below.
-    const appPorts = appUtilities.getAppPorts(appSpecifications);
+    const appPorts = deployment.allHostPorts();
+    const appSpecifications = spec.serialize();
 
     // verify app compliance
-    //
-    // Cached as an app-level failure without qualification, because by here it can only be
-    // one. This pass ended above unless the blocklist read, so a compliance check that fails
-    // has read it and found this app in it - a fact about the app, and durable. Holding the
-    // policy would not have been enough to say that: the list can be unreadable on a node
-    // whose policy is confirmed and current, and the pass refusing on that is what leaves
-    // only the app's own failure to reach here.
-    await imageManager.checkApplicationImagesCompliance(appSpecifications).catch((error) => {
+    const blockResult = await imageManager.isImageBlocked(instantiated.name, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
+    if (blockResult.blocked) {
       globalState.spawnErrorsLongerAppCache.set(appHash, '');
-      throw error;
-    });
+      throw new Error(blockResult.reason);
+    }
 
     // Refused before taking on new work, and only here. An application this node
     // cannot read contributes nothing to the totals the check below subtracts
@@ -647,7 +616,7 @@ async function trySpawningGlobalApplication() {
     }
 
     // verify requirements
-    await hwRequirements.checkAppRequirements(appSpecifications);
+    await hwRequirements.checkAppRequirements(spec);
     // enterprise network nodes: reserve >4 vCores of burst headroom (automatic CPU burst)
     if (isEnterprise) {
       await hwRequirements.checkAppCpuBurstHeadroom(appSpecifications);
@@ -658,7 +627,7 @@ async function trySpawningGlobalApplication() {
     const appsRunningAtOurIp = await registryManager.getRunningAppIpList(localIp);
     const runningAppsNames = appsRunningAtOurIp.map((app) => app.name);
 
-    await portManager.ensureApplicationPortsNotUsed(appSpecifications, runningAppsNames);
+    await portManager.ensureApplicationPortsNotUsed(deployment, runningAppsNames);
 
     // The check above reads a sibling's ports from the specifications the
     // network broadcasts, so it sees only what has been reported as RUNNING. A
@@ -702,11 +671,11 @@ async function trySpawningGlobalApplication() {
     // Check if ports are publicly available - critical for proper Flux network operation
     const portVerdict = await portManager.checkInstallingAppPortAvailable(appPorts, appSpecifications.name);
     if (portVerdict.ok === false) {
-      log.error(`trySpawningGlobalApplication - Some of application ports of ${appSpecifications.name} are not available publicly. Installation aborted.`);
+      log.error(`trySpawningGlobalApplication - Some of application ports of ${instantiated.name} are not available publicly. Installation aborted.`);
       // The cause lives in portManager, which says which port and which peers;
       // this says the spawner deferred, and on which of its verdicts.
       fluxEventBus.publish('spawner:deferred', {
-        appName: appSpecifications.name,
+        appName: instantiated.name,
         reason: 'ports_not_available',
         portVerdict: portVerdict.reason,
         delayMs: shortDelayTime,
@@ -741,9 +710,7 @@ async function trySpawningGlobalApplication() {
       return shortDelayTime;
     }
 
-    // A mis-flagged mount is not a synced app, and the same-IP-range placement
-    // caution below must not apply to it.
-    const syncthingApp = isSyncedApp(appSpecifications);
+    const syncthingApp = spec.hasSyncthing();
 
     // An owner who names exactly as many nodes as instances has assigned the
     // placement, and the diversity share does not second-guess it. A longer
@@ -872,9 +839,9 @@ async function trySpawningGlobalApplication() {
 
     if (!isEnterprise && !appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater) {
       const tier = await generalService.nodeTier();
-      const appHWrequirements = hwRequirements.totalAppHWRequirements(appSpecifications, tier);
+      const appHWrequirements = deployment.totalResources();
       let delay = false;
-      if (!appSpecifications.staticip && geolocationService.isStaticIP()) {
+      if (!spec.placement.staticIp && geolocationService.isStaticIP()) {
         const deferral = config.fluxapps.spawnDeferrals.staticIpMs;
         const appToCheck = {
           timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
@@ -890,7 +857,7 @@ async function trySpawningGlobalApplication() {
         delay = true;
       // A datacenter node keeps its capacity for the apps that ask for it. datacenter is held
       // as a privilege on live submission only, so a spec replayed from chain can carry it.
-      } else if (!appSpecifications.datacenter && geolocationService.isDataCenter()) {
+      } else if (!spec.placement.dataCenter && geolocationService.isDataCenter()) {
         const deferral = config.fluxapps.spawnDeferrals.datacenterMs;
         const appToCheck = {
           timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
@@ -906,7 +873,7 @@ async function trySpawningGlobalApplication() {
         delay = true;
       } else if (appToRunAux.nodes.length > 0 && nodesNameThisNode(appToRunAux.nodes, localSocketAddr, myOutpoint)) {
         log.info(`trySpawningGlobalApplication - App ${appToRun} specs have this node as target ip`);
-      } else if (appToRunAux.nodes.length === 0 && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.ram < 6000 && appHWrequirements.hdd < 150) {
+      } else if (appToRunAux.nodes.length === 0 && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.largeMs;
         const appToCheck = {
           timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
@@ -920,7 +887,7 @@ async function trySpawningGlobalApplication() {
         globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_large', delayMs });
         delay = true;
-      } else if (appToRunAux.nodes.length === 0 && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.ram < 29000 && appHWrequirements.hdd < 370) {
+      } else if (appToRunAux.nodes.length === 0 && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memory < 29000 && appHWrequirements.storage < 370) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.mediumMs;
         const appToCheck = {
           timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
@@ -934,7 +901,7 @@ async function trySpawningGlobalApplication() {
         globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_medium', delayMs });
         delay = true;
-      } else if (appToRunAux.nodes.length === 0 && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.ram < 6000 && appHWrequirements.hdd < 150) {
+      } else if (appToRunAux.nodes.length === 0 && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.smallMs;
         const appToCheck = {
           timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
@@ -957,18 +924,13 @@ async function trySpawningGlobalApplication() {
     // ToDo: Move this to global
     const architecture = await systemIntegration.systemArchitecture();
 
-    // TODO evaluate later to move to more broad check as image can be shared among multiple apps
-    const compositedSpecification = appSpecifications.compose || [appSpecifications]; // use compose array if v4+ OR if not defined its <= 3 do an array of appSpecs.
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const componentToInstall of compositedSpecification) {
-      // check repotag is available for download
+    for (const [, component] of spec.componentEntries()) {
       // eslint-disable-next-line no-await-in-loop
-      await imageManager.verifyRepository(componentToInstall.repotag, {
-        repoauth: componentToInstall.repoauth,
-        specVersion: appSpecifications.version,
+      await imageManager.verifyRepository(component.image, {
+        repoauth: component.imageAuth,
+        specVersion: instantiated.version,
         architecture,
-        appName: appSpecifications.name,
+        appName: instantiated.name,
       }).catch((error) => {
         // imageManager already handles error classification and caching with intelligent TTLs (1h-7d)
         // Add to spawn cache with 1-hour TTL to allow retry sooner than default 12h
@@ -1054,7 +1016,7 @@ async function trySpawningGlobalApplication() {
     const newAppInstallingMessage = {
       type: 'fluxappinstalling',
       version: 1,
-      name: appSpecifications.name,
+      name: instantiated.name,
       ip: localSocketAddr,
       broadcastedAt,
     };
@@ -1139,11 +1101,7 @@ async function trySpawningGlobalApplication() {
     // into one false: the outcome says which.
     let installError = null;
     try {
-      // A placement this node does not hold yet, so a failed install retracts the
-      // claim rather than keeping it.
-      const outcome = await appInstaller.registerAppLocally(appSpecifications, null, null, false, true); // can throw
-      registerOk = outcome === InstallOutcome.INSTALLED;
-      if (!registerOk) installError = `installer ${outcome}`;
+      registerOk = await appInstaller.installApplication(instantiated);
     } catch (error) {
       log.error(error);
       installError = error.message ?? String(error);
@@ -1165,12 +1123,9 @@ async function trySpawningGlobalApplication() {
       log.info(`trySpawningGlobalApplication - Application ${appToRun} is already spawned on ${runningAppList.length} instances, my instance is number ${index + 1} (instances: ${describeRanking(runningAppList, 'runningSince')})`);
       if (index + 1 > minInstances) {
         log.info(`trySpawningGlobalApplication - Application ${appToRun} is going to be removed as already passed the instances required.`);
-        log.warn(`REMOVAL REASON: Exceeded required instances - ${appSpecifications.name} already has sufficient instances, removing local installation (appSpawner)`);
+        log.warn(`REMOVAL REASON: Exceeded required instances - ${instantiated.name} already has sufficient instances, removing local installation (appSpawner)`);
         globalState.trySpawningGlobalAppCache.delete(appHash);
-        // Call appUninstaller.removeAppLocally directly (initialized via initialize())
-        // This needs getGlobalState and stopAppMonitoring callbacks which we don't have here
-        // Since we're removing an app that shouldn't be running, we use basic parameters
-        appUninstaller.removeAppLocally(appSpecifications.name, null, true, null, true).catch((error) => log.error(error));
+        appUninstaller.uninstallApplication(instantiated.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
       }
     }
 
