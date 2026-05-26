@@ -712,11 +712,17 @@ async function expireGlobalApplications() {
     if (explorerHeight < config.fluxapps.newMinBlocksAllowanceBlock) {
       minExpirationHeight = explorerHeight - config.fluxapps.minBlocksAllowance; // do a pre search in db as every app has to live for at least minBlocksAllowance
     }
+    const nowSeconds = Math.floor(Date.now() / 1000);
     const candidates = await appsRepository.listGlobalAppInfo({
-      filter: { height: { $lt: minExpirationHeight } },
+      filter: {
+        $or: [
+          { height: { $lt: minExpirationHeight }, version: { $lt: 9 } },
+          { version: { $gte: 9 } },
+        ],
+      },
     });
     const appsToExpire = candidates.filter(
-      (is) => is.expiresAtHeight < explorerHeight,
+      (is) => is.isExpired(nowSeconds, explorerHeight),
     );
     const appNamesToExpire = appsToExpire.map((is) => is.name);
     // remove appNamesToExpire apps from global database
@@ -743,7 +749,7 @@ async function expireGlobalApplications() {
       } else {
         try {
           const is = InstantiatedSpec.deserialize(app);
-          if (is.expiresAtHeight < explorerHeight) {
+          if (is.isExpired(nowSeconds, explorerHeight)) {
             appsToRemoveNames.push(app.name);
           }
         } catch (err) {

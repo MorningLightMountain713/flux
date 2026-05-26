@@ -188,6 +188,30 @@ function expireHeightExpr(heightField, expireField) {
 }
 
 /**
+ * Mongo $expr that evaluates to true when an app is still alive.
+ * v1-v8: block-based via expireHeightExpr.
+ * v9+: time-based (registeredAt + ttl > nowSeconds).
+ *
+ * @param {string} versionField - e.g. '$maxHeightMsg.appSpecifications.version'
+ * @param {string} heightField - e.g. '$maxHeightMsg.height'
+ * @param {string} expireField - e.g. '$maxHeightMsg.appSpecifications.expire'
+ * @param {string} registeredAtField - e.g. '$maxHeightMsg.registeredAt'
+ * @param {string} ttlField - e.g. '$maxHeightMsg.appSpecifications.ttl'
+ * @param {number} scannedHeight - current block height
+ * @param {number} nowSeconds - current unix timestamp
+ * @returns {object} mongo $expr
+ */
+function isAliveExpr(versionField, heightField, expireField, registeredAtField, ttlField, scannedHeight, nowSeconds) {
+  return {
+    $cond: {
+      if: { $gte: [versionField, 9] },
+      then: { $gt: [{ $add: [registeredAtField, ttlField] }, nowSeconds] },
+      else: { $gt: [expireHeightExpr(heightField, expireField), scannedHeight] },
+    },
+  };
+}
+
+/**
  *
  * @param {mongodb.Db} appsGlobalDb
  * @param {string} appsMessagesCol mongo collection name
@@ -201,6 +225,8 @@ async function isReindexAppsInformationRequired(
   appsInformationCol,
   scannedHeight,
 ) {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
   const appsMessagesPipeline = [
     { $sort: { 'appSpecifications.name': 1, height: -1 } },
     {
@@ -211,15 +237,15 @@ async function isReindexAppsInformationRequired(
     },
     {
       $match: {
-        $expr: {
-          $gt: [
-            expireHeightExpr(
-              '$maxHeightMsg.height',
-              '$maxHeightMsg.appSpecifications.expire',
-            ),
-            scannedHeight,
-          ],
-        },
+        $expr: isAliveExpr(
+          '$maxHeightMsg.appSpecifications.version',
+          '$maxHeightMsg.height',
+          '$maxHeightMsg.appSpecifications.expire',
+          '$maxHeightMsg.registeredAt',
+          '$maxHeightMsg.appSpecifications.ttl',
+          scannedHeight,
+          nowSeconds,
+        ),
       },
     },
     {
@@ -229,13 +255,16 @@ async function isReindexAppsInformationRequired(
 
   const appsInformationPipeline = [
     {
-      $set: {
-        expireHeight: expireHeightExpr('$height', '$expire'),
-      },
-    },
-    {
       $match: {
-        expireHeight: { $gt: scannedHeight },
+        $expr: isAliveExpr(
+          '$version',
+          '$height',
+          '$expire',
+          '$registeredAt',
+          '$ttl',
+          scannedHeight,
+          nowSeconds,
+        ),
       },
     },
     {
@@ -421,6 +450,8 @@ async function reindexGlobalAppsInformation(
     { name: 'query for getting zelapp based on last hash' },
   );
 
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
   const pipeline = [
     { $sort: { 'appSpecifications.name': 1, height: -1 } },
     {
@@ -431,15 +462,15 @@ async function reindexGlobalAppsInformation(
     },
     {
       $match: {
-        $expr: {
-          $gt: [
-            expireHeightExpr(
-              '$maxHeightMsg.height',
-              '$maxHeightMsg.appSpecifications.expire',
-            ),
-            scannedHeight,
-          ],
-        },
+        $expr: isAliveExpr(
+          '$maxHeightMsg.appSpecifications.version',
+          '$maxHeightMsg.height',
+          '$maxHeightMsg.appSpecifications.expire',
+          '$maxHeightMsg.registeredAt',
+          '$maxHeightMsg.appSpecifications.ttl',
+          scannedHeight,
+          nowSeconds,
+        ),
       },
     },
     {
@@ -449,6 +480,7 @@ async function reindexGlobalAppsInformation(
           {
             hash: '$maxHeightMsg.hash',
             height: '$maxHeightMsg.height',
+            registeredAt: '$maxHeightMsg.registeredAt',
           },
         ],
       },
@@ -612,6 +644,7 @@ if (require.main === module) {
 
 module.exports = {
   expireHeightExpr,
+  isAliveExpr,
   reindexGlobalAppsInformation,
   repairNanInAppsMessagesDb,
   validateAppsInformation,
