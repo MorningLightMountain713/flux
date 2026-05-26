@@ -23,6 +23,19 @@ describe('appSpawner tests', () => {
         daemonPONFork: 2020000,
         blocksLasting: 22000,
         newMinBlocksAllowance: 100,
+        installCollisionWaitMs: 5000,
+        spawnReconfirmDelayMs: 10000,
+        nonEnterpriseSpawnDelayMs: 120000,
+        spawnDeferrals: {
+          targetedNodesMs: { standard: 300000, enterprise: 60000 },
+          staticIpMs: { standard: 300000, enterprise: 60000 },
+          datacenterMs: { standard: 300000, enterprise: 60000 },
+          capacityGap: {
+            largeMs: { standard: 300000, enterprise: 60000 },
+            mediumMs: { standard: 300000, enterprise: 60000 },
+            smallMs: { standard: 300000, enterprise: 60000 },
+          },
+        },
         ...overrides,
       },
     };
@@ -34,6 +47,7 @@ describe('appSpawner tests', () => {
       fluxNodeWasNotConfirmedOnLastCheck: false,
       fluxNodeWasAlreadyConfirmed: true,
       firstExecutionAfterItsSynced: false,
+      spawnerPaused: false,
       spawnErrorsLongerAppCache: new Map(),
       trySpawningGlobalAppCache: new Map(),
       appsToBeCheckedLater: [],
@@ -96,14 +110,49 @@ describe('appSpawner tests', () => {
       '../appDatabase/registryManager': {
         appLocation: sinon.stub().resolves([]),
         appInstallingLocation: sinon.stub().resolves([]),
-        getApplicationGlobalSpecifications: sinon.stub().resolves(opts.appSpec || null),
         expireGlobalApplications: sinon.stub().resolves(),
         storeAppInstallingMessage: sinon.stub().resolves(),
         getRunningAppIpList: sinon.stub().resolves([]),
         countAppInstallingErrors: sinon.stub().resolves(opts.errorCount ?? 0),
       },
+      '../appDatabase/appsRepository': {
+        getGlobalAppInfo: sinon.stub().resolves(opts.appSpec ? {
+          name: opts.appSpec.name,
+          version: opts.appSpec.version,
+          owner: opts.appSpec.owner || 'testOwner',
+          hash: opts.appSpec.hash,
+          spec: {
+            ...opts.appSpec,
+            placement: { staticIp: false, dataCenter: false },
+            componentEntries: () => (opts.appSpec.compose || []).map((c) => [c.name || 'default', c]),
+            serialize: () => opts.appSpec,
+            hasSyncthing: () => false,
+          },
+          isEncrypted: () => !!opts.appSpec.enterprise,
+          serialize: () => opts.appSpec,
+        } : null),
+        existsInstalledApp: sinon.stub().resolves(false),
+      },
+      '../utils/specLibs': {
+        getSpecBackend: sinon.stub().resolves({
+          DeploymentSpec: {
+            fromSpec: sinon.stub().returns({
+              allHostPorts: sinon.stub().returns([]),
+              allImages: sinon.stub().returns([]),
+              componentEntries: sinon.stub().returns([]),
+              totalResources: sinon.stub().returns({ cpu: 1, memory: 1000, storage: 10 }),
+            }),
+          },
+        }),
+      },
+      '../utils/socketAddressUtils': {
+        normalizeSocketAddress: sinon.stub().returnsArg(0),
+        extractIp: sinon.stub().callsFake((addr) => (addr ? addr.split(':')[0] : '')),
+        extractPort: sinon.stub().callsFake((addr) => (addr ? parseInt(addr.split(':')[1], 10) : 0)),
+        socketAddressesMatch: sinon.stub().callsFake((a, b) => a === b),
+      },
       '../appSecurity/imageManager': {
-        checkApplicationImagesCompliance: sinon.stub().resolves(),
+        isImageBlocked: sinon.stub().resolves({ blocked: false }),
         verifyRepository: sinon.stub().resolves(),
         isAppVetted: sinon.stub().resolves(false),
       },
@@ -116,9 +165,6 @@ describe('appSpawner tests', () => {
         ensureApplicationPortsNotUsed: sinon.stub().resolves(),
         checkInstallingAppPortAvailable: sinon.stub().resolves(true),
       },
-      '../utils/appUtilities': {
-        getAppPorts: sinon.stub().returns([]),
-      },
       '../appSystem/systemIntegration': {
         systemArchitecture: sinon.stub().resolves('amd64'),
         nodeFullGeolocation: sinon.stub().returns('US-NY'),
@@ -127,9 +173,6 @@ describe('appSpawner tests', () => {
       '../geolocationService': {
         isStaticIP: sinon.stub().returns(false),
         isDataCenter: sinon.stub().returns(false),
-      },
-      './advancedWorkflows': {
-        getPeerAppsInstallingErrorMessages: sinon.stub().resolves(),
       },
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),
@@ -152,10 +195,10 @@ describe('appSpawner tests', () => {
         publish: sinon.stub(),
       },
       './appInstaller': {
-        registerAppLocally: opts.installStub ?? sinon.stub().resolves(true),
+        installApplication: opts.installStub ?? sinon.stub().resolves(true),
       },
       './appUninstaller': {
-        removeAppLocally: sinon.stub().resolves(),
+        uninstallApplication: sinon.stub().resolves(),
       },
     });
   }
