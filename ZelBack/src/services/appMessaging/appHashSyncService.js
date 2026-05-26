@@ -6,9 +6,13 @@ const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
 const messageVerifier = require('./messageVerifier');
+const appEventVerifier = require('./appEventVerifier');
 const appValidator = require('../appRequirements/appValidator');
 const { specificationFormatter } = require('../utils/appSpecHelpers');
 const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
+const { deserializeSpec } = require('../utils/specCutover');
+const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
+const { validateSubmissionSpec, getSpec } = require('../utils/specLibs');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
@@ -298,47 +302,45 @@ async function processMessages(messages, onProgress) {
         const specifications = appMessage.appSpecifications || appMessage.zelAppSpecifications;
         if (!specifications) continue;
 
-        const appSpecFormatted = specificationFormatter(specifications);
-        const messageVersion = serviceHelper.ensureNumber(appMessage.version);
-        const messageTimestamp = serviceHelper.ensureNumber(appMessage.timestamp);
+        const wireSpec = await deserializeSpec(specifications);
+        const appSpecFormatted = wireSpec.serialize();
         const height = serviceHelper.ensureNumber(appMessage.height);
         const valueSat = serviceHelper.ensureNumber(appMessage.valueSat);
         const isRegistration = appMessage.type === 'fluxappregister' || appMessage.type === 'zelappregister';
 
-        await messageVerifier.verifyAppHash(appMessage);
-
-        if (appSpecFormatted.version >= 8 && appSpecFormatted.enterprise) {
+        let validationBlob;
+        if (wireSpec && wireSpec.isEncrypted) {
           try {
-            const decrypted = await checkAndDecryptAppSpecs(
-              appSpecFormatted,
-              { daemonHeight: height, owner: appSpecFormatted.owner },
-            );
-            const appSpecDecrypted = specificationFormatter(decrypted);
-            await appValidator.verifyAppSpecifications(appSpecDecrypted, height);
+            const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+            const decrypted = await wireSpec.decrypt(provider);
+            validationBlob = decrypted.spec.serialize();
           } catch (err) {
-            log.warn(`processMessages enterprise decrypt skipped for ${appSpecFormatted.name}: ${err.message}`);
+            log.warn(`processMessages enterprise decrypt skipped for ${wireSpec.name}: ${err.message}`);
           }
         } else {
-          await appValidator.verifyAppSpecifications(appSpecFormatted, height);
+          validationBlob = appSpecFormatted;
+        }
+
+        if (validationBlob) {
+          await validateSubmissionSpec(validationBlob, { height });
         }
 
         const permMsg = {
           type: appMessage.type,
-          version: messageVersion,
+          version: serviceHelper.ensureNumber(appMessage.version),
           appSpecifications: appSpecFormatted,
           hash: appMessage.hash,
-          timestamp: messageTimestamp,
+          timestamp: serviceHelper.ensureNumber(appMessage.timestamp),
           signature: appMessage.signature,
           txid: serviceHelper.ensureString(appMessage.txid),
           height,
           valueSat,
         };
 
-        if (isRegistration) {
-          await messageVerifier.verifyAppMessageSignature(
-            appMessage.type, messageVersion, appSpecFormatted, messageTimestamp, appMessage.signature,
-          );
-        } else {
+        const appEvent = await appEventVerifier.deserializeMessage(appMessage);
+
+        let previousSpec = null;
+        if (!isRegistration) {
           const prevSpecsList = prevSpecsMap.get(appSpecFormatted.name);
           const prevMsg = prevSpecsList ? findPrevSpec(prevSpecsList, height) : null;
           if (!prevMsg) {
@@ -346,37 +348,14 @@ async function processMessages(messages, onProgress) {
             continue;
           }
           const prevSpecs = prevMsg.appSpecifications || prevMsg.zelAppSpecifications;
-          let prevSpecsForVerification = prevSpecs;
-          if (prevSpecs.version >= 8 && prevSpecs.enterprise) {
-            try {
-              const decrypted = await checkAndDecryptAppSpecs(
-                prevSpecs, { daemonHeight: prevMsg.height, owner: prevSpecs.owner },
-              );
-              prevSpecsForVerification = specificationFormatter(decrypted);
-            } catch (err) {
-              log.warn(`processMessages prevSpec decrypt skipped for ${appSpecFormatted.name}: ${err.message}`);
-            }
-          }
-          try {
-            await messageVerifier.verifyAppMessageUpdateSignature(
-              appMessage.type, messageVersion, appSpecFormatted, messageTimestamp,
-              appMessage.signature, prevSpecsForVerification.owner, daemonHeight, prevSpecsForVerification,
-            );
-          } catch (sigError) {
-            // Before height 2000000, owner-change races were accepted by the
-            // network (re-verification not deployed until v8.10.0, well after
-            // the last known race at h=1880981).
-            if (height >= 2000000) throw sigError;
-            const oldOwner = prevOwnerMap.get(appSpecFormatted.name);
-            if (oldOwner && oldOwner !== prevSpecsForVerification.owner) {
-              await messageVerifier.verifyAppMessageUpdateSignature(
-                appMessage.type, messageVersion, appSpecFormatted, messageTimestamp,
-                appMessage.signature, oldOwner, daemonHeight, prevSpecsForVerification,
-              );
-            } else {
-              throw sigError;
-            }
-          }
+          previousSpec = await appEventVerifier.instantiatePreviousSpec(prevSpecs);
+        }
+
+        await appEventVerifier.authorize({
+          appEvent,
+          previousSpec,
+          daemonHeight,
+        });
           const currentOwner = prevSpecs.owner;
           if (currentOwner && appSpecFormatted.owner !== currentOwner) {
             prevOwnerMap.set(appSpecFormatted.name, currentOwner);
