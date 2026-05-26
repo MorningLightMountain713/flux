@@ -10,7 +10,6 @@ const dockerService = require('../../ZelBack/src/services/dockerService');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 const daemonServiceBenchmarkRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBenchmarkRpcs');
 const generalService = require('../../ZelBack/src/services/generalService');
-const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 
 describe('systemIntegration tests', () => {
   let req;
@@ -306,7 +305,10 @@ describe('systemIntegration tests', () => {
         txhash: 'abc123',
         txindex: 0,
       });
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(null);
+      sinon.stub(benchmarkService, 'getBenchmarks').resolves({
+        status: 'success',
+        data: { ipaddress: '123' }, // Too short
+      });
 
       try {
         await systemIntegration.checkAppNodesRequirements(appSpecs);
@@ -433,165 +435,6 @@ describe('systemIntegration tests', () => {
       } catch (error) {
         expect(error.message).to.include('Node Geolocation not set');
       }
-    });
-  });
-
-  describe('checkHWParameters tests', () => {
-    it('should pass for valid non-tiered app specs', () => {
-      const appSpecs = {
-        name: 'TestApp',
-        cpu: 1.5,
-        ram: 2000,
-        hdd: 50,
-        tiered: false,
-      };
-
-      const result = systemIntegration.checkHWParameters(appSpecs);
-
-      expect(result).to.be.true;
-    });
-
-    it('should throw error for invalid CPU', () => {
-      const appSpecs = {
-        name: 'TestApp',
-        cpu: 0.05, // Too small
-        ram: 2000,
-        hdd: 50,
-        tiered: false,
-      };
-
-      try {
-        systemIntegration.checkHWParameters(appSpecs);
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('CPU badly assigned');
-      }
-    });
-
-    it('should throw error for invalid RAM', () => {
-      const appSpecs = {
-        name: 'TestApp',
-        cpu: 1.0,
-        ram: 50, // Too small
-        hdd: 50,
-        tiered: false,
-      };
-
-      try {
-        systemIntegration.checkHWParameters(appSpecs);
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('RAM badly assigned');
-      }
-    });
-
-    it('should throw error for invalid HDD', () => {
-      const appSpecs = {
-        name: 'TestApp',
-        cpu: 1.0,
-        ram: 2000,
-        hdd: 0, // Too small
-        tiered: false,
-      };
-
-      try {
-        systemIntegration.checkHWParameters(appSpecs);
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('SSD badly assigned');
-      }
-    });
-
-    it('should validate tiered app specs', () => {
-      const appSpecs = {
-        name: 'TestApp',
-        cpu: 1.0,
-        ram: 2000,
-        hdd: 50,
-        tiered: true,
-        cpubasic: 0.5,
-        rambasic: 1000,
-        hddbasic: 25,
-        cpusuper: 1.5,
-        ramsuper: 3000,
-        hddsuper: 75,
-        cpubamf: 2.0,
-        rambamf: 4000,
-        hddbamf: 100,
-      };
-
-      const result = systemIntegration.checkHWParameters(appSpecs);
-
-      expect(result).to.be.true;
-    });
-  });
-
-  describe('checkComposeHWParameters tests', () => {
-    it('should pass for valid compose app', () => {
-      const appSpecs = {
-        name: 'ComposedApp',
-        compose: [
-          {
-            name: 'Component1', cpu: 1.0, ram: 1000, hdd: 25,
-          },
-          {
-            name: 'Component2', cpu: 1.5, ram: 2000, hdd: 50,
-          },
-        ],
-      };
-
-      const result = systemIntegration.checkComposeHWParameters(appSpecs);
-
-      expect(result).to.be.true;
-    });
-
-    it('should throw error if total CPU exceeds limit', () => {
-      const appSpecs = {
-        name: 'ComposedApp',
-        compose: [
-          {
-            name: 'Component1', cpu: 10.0, ram: 1000, hdd: 25,
-          },
-          {
-            name: 'Component2', cpu: 10.0, ram: 1000, hdd: 25,
-          },
-        ],
-      };
-
-      try {
-        systemIntegration.checkComposeHWParameters(appSpecs);
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('Too much CPU');
-      }
-    });
-
-    it('should handle tiered compose apps', () => {
-      const appSpecs = {
-        name: 'ComposedApp',
-        compose: [
-          {
-            name: 'Component1',
-            cpu: 1.0,
-            ram: 1000,
-            hdd: 25,
-            tiered: true,
-            cpubasic: 0.5,
-            rambasic: 500,
-            hddbasic: 10,
-            cpusuper: 1.5,
-            ramsuper: 1500,
-            hddsuper: 40,
-            cpubamf: 2.0,
-            rambamf: 2000,
-            hddbamf: 50,
-          },
-        ],
-      };
-
-      const result = systemIntegration.checkComposeHWParameters(appSpecs);
-
-      expect(result).to.be.true;
     });
   });
 

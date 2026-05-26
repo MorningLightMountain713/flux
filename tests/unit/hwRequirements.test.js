@@ -2,6 +2,28 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+function makeSpecLibsStub() {
+  return {
+    getSpecBackend: sinon.stub().resolves({
+      DeploymentSpec: {
+        fromSpec(spec) {
+          if (spec.compose) {
+            const totals = spec.compose.reduce((acc, c) => ({
+              cpu: acc.cpu + (c.cpu || 0),
+              memory: acc.memory + (c.ram || 0),
+              storage: acc.storage + (c.hdd || 0),
+            }), { cpu: 0, memory: 0, storage: 0 });
+            return { totalResources: () => totals };
+          }
+          return {
+            totalResources: () => ({ cpu: spec.cpu || 0, memory: spec.ram || 0, storage: spec.hdd || 0 }),
+          };
+        },
+      },
+    }),
+  };
+}
+
 describe('hwRequirements tests', () => {
   let hwRequirements;
   let serviceHelperStub;
@@ -73,106 +95,6 @@ describe('hwRequirements tests', () => {
     sinon.restore();
   });
 
-  describe('totalAppHWRequirements', () => {
-    it('should calculate total hardware requirements for simple app', () => {
-      const appSpecs = {
-        name: 'testapp',
-        version: 3,
-        cpu: 1,
-        ram: 1000,
-        hdd: 10,
-      };
-
-      const result = hwRequirements.totalAppHWRequirements(appSpecs, 'cumulus');
-
-      expect(result).to.have.property('cpu');
-      expect(result).to.have.property('ram');
-      expect(result).to.have.property('hdd');
-      expect(result.cpu).to.equal(1);
-      expect(result.ram).to.equal(1000);
-      expect(result.hdd).to.equal(10);
-    });
-
-    it('should calculate total hardware requirements for v4+ app with compose', () => {
-      const appSpecs = {
-        name: 'testapp',
-        version: 4,
-        compose: [
-          {
-            name: 'component1', cpu: 0.5, ram: 500, hdd: 5,
-          },
-          {
-            name: 'component2', cpu: 0.5, ram: 500, hdd: 5,
-          },
-        ],
-      };
-
-      const result = hwRequirements.totalAppHWRequirements(appSpecs, 'cumulus');
-
-      expect(result.cpu).to.equal(1);
-      expect(result.ram).to.equal(1000);
-      expect(result.hdd).to.equal(10);
-    });
-
-    it('should return hw requirements for an app, version 2', () => {
-      const appSpecs = {
-        cpu: 256000,
-        hdd: 100,
-        ram: 50,
-        version: 2,
-      };
-      const myNodeTier = 'stratus';
-
-      const result = hwRequirements.totalAppHWRequirements(appSpecs, myNodeTier);
-
-      expect(result).to.deep.equal({ cpu: 256000, ram: 50, hdd: 100 });
-    });
-
-    it('should return hw requirements for an app, version 3', () => {
-      const appSpecs = {
-        cpu: 256000,
-        hdd: 100,
-        ram: 50,
-        version: 3,
-      };
-      const myNodeTier = 'stratus';
-
-      const result = hwRequirements.totalAppHWRequirements(appSpecs, myNodeTier);
-
-      expect(result).to.deep.equal({ cpu: 256000, ram: 50, hdd: 100 });
-    });
-
-    it('should return hw requirements for an app, version 4', () => {
-      const appSpecs = {
-        version: 4,
-        compose: [
-          {
-            tiered: false,
-            cpu: 256000,
-            hdd: 100,
-            ram: 50,
-          },
-          {
-            tiered: true,
-            cpu: 256000,
-            hdd: 100,
-            ram: 50,
-          },
-          {
-            tiered: true,
-            cpu: 256000,
-            hdd: 100,
-            ram: 50,
-          },
-        ],
-      };
-      const myNodeTier = 'stratus';
-
-      const result = hwRequirements.totalAppHWRequirements(appSpecs, myNodeTier);
-
-      expect(result).to.deep.equal({ cpu: 768000, ram: 150, hdd: 300 });
-    });
-  });
 
   describe('checkAppStaticIpRequirements', () => {
     it('should pass when app does not require static IP', () => {
@@ -519,6 +441,7 @@ describe('hwRequirements tests', () => {
             data: { appsCpusLocked: 0, appsRamLocked: 0, appsHddLocked: 0 },
           }),
         },
+        '../utils/specLibs': makeSpecLibsStub(),
         '../../lib/log': logStub,
         os: {
           cpus: sinon.stub().returns(new Array(4)),
@@ -619,6 +542,7 @@ describe('hwRequirements tests', () => {
             },
           }),
         },
+        '../utils/specLibs': makeSpecLibsStub(),
         '../../lib/log': logStub,
         os: {
           cpus: sinon.stub().returns(new Array(4)),
@@ -719,6 +643,7 @@ describe('hwRequirements tests', () => {
             },
           }),
         },
+        '../utils/specLibs': makeSpecLibsStub(),
         '../../lib/log': logStub,
         os: {
           cpus: sinon.stub().returns(new Array(4)),
@@ -819,6 +744,7 @@ describe('hwRequirements tests', () => {
             },
           }),
         },
+        '../utils/specLibs': makeSpecLibsStub(),
         '../../lib/log': logStub,
         os: {
           cpus: sinon.stub().returns(new Array(4)),
@@ -908,6 +834,7 @@ describe('hwRequirements tests', () => {
             },
           }),
         },
+        '../utils/specLibs': makeSpecLibsStub(),
         '../../lib/log': logStub,
         os: {
           cpus: sinon.stub().returns(new Array(4)),
@@ -961,6 +888,7 @@ describe('hwRequirements tests', () => {
     function buildHw({ cpucores, appsCpusLocked, lockedCpuTenths = 10, appsResourcesStatus = 'success' }) {
       return proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
         '../serviceHelper': serviceHelperStub,
+        '../utils/specLibs': makeSpecLibsStub(),
         '../benchmarkService': {
           getBenchmarks: sinon.stub().resolves({
             status: 'success',
@@ -1074,7 +1002,6 @@ describe('hwRequirements tests', () => {
 
   describe('exported functions', () => {
     it('should export requirement checking functions', () => {
-      expect(hwRequirements.totalAppHWRequirements).to.be.a('function');
       expect(hwRequirements.checkAppHWRequirements).to.be.a('function');
       expect(hwRequirements.checkAppCpuBurstHeadroom).to.be.a('function');
       expect(hwRequirements.checkAppStaticIpRequirements).to.be.a('function');
