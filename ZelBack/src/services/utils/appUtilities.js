@@ -339,6 +339,7 @@ function getAppPorts(appSpecs) {
     .flatMap((component) => (component.ports || []).map(Number));
 }
 
+/**
  * Find common architectures across all app components
  * @param {Array<{name: string, architectures: string[]}>} componentArchitectures - Array of component architecture info
  * @returns {string[]} Array of architecture strings common to all components
