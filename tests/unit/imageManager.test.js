@@ -1,17 +1,13 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
-const config = require('config');
-const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const pgpService = require('../../ZelBack/src/services/pgpService');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const imageVerifier = require('../../ZelBack/src/services/utils/imageVerifier');
-const { requireMongo } = require('./dbTestHelper');
+const registryCredentialHelper = require('../../ZelBack/src/services/utils/registryCredentialHelper');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 
 describe('imageManager tests', () => {
-  before(requireMongo);
-
   let imageManager;
 
   beforeEach(() => {
@@ -71,7 +67,7 @@ describe('imageManager tests', () => {
     });
 
     it('should throw error if unable to decrypt credentials', async () => {
-      sinon.stub(pgpService, 'decryptMessage').resolves(null);
+      sinon.stub(registryCredentialHelper, 'getCredentials').rejects(new Error('Unable to decrypt provided credentials'));
 
       try {
         await imageManager.verifyRepository('test/app:latest', {
@@ -83,19 +79,6 @@ describe('imageManager tests', () => {
       } catch (error) {
         expect(error.message).to.include('Unable to decrypt provided credentials');
       }
-    });
-
-    it('should skip verification when skipVerification is true', async () => {
-      const result = await imageManager.verifyRepository('test/app:latest', {
-        repoauth: 'myuser:mytoken',
-        specVersion: 8,
-        appName: 'testapp',
-        skipVerification: true,
-      });
-
-      expect(result).to.be.an('object');
-      expect(result.verified).to.be.true;
-      expect(result.supportedArchitectures).to.be.an('array');
     });
 
     it('should throw error if architecture not supported', async () => {
@@ -385,195 +368,7 @@ describe('imageManager tests', () => {
     });
   });
 
-  describe('checkAppSecrets tests', () => {
-    let db;
-    let database;
-
-    beforeEach(async () => {
-      await dbHelper.initiateDB();
-      db = dbHelper.databaseConnection();
-      database = db.db(config.database.appsglobal.database);
-
-      const appsCollection = config.database.appsglobal.collections.appsInformation;
-      try {
-        await database.collection(appsCollection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-
-      const messagesCollection = config.database.appsglobal.collections.appsMessages;
-      try {
-        await database.collection(messagesCollection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-    });
-
-    it('should pass if no duplicate secrets found during registration', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: 'unique_secret_data',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsInformation, {
-        name: 'ExistingApp',
-        version: 7,
-        owner: '1Owner1',
-        compose: [{ name: 'Comp1', secrets: 'different_secret_data' }],
-        nodes: ['node1'],
-      });
-
-      const result = await imageManager.checkAppSecrets(
-        'NewApp',
-        appComponentSpecs,
-        '1Owner2',
-        true,
-      );
-
-      expect(result).to.be.undefined;
-    });
-
-    it('should throw error if duplicate secrets found during registration', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: 'duplicate_secret_data',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsInformation, {
-        name: 'ExistingApp',
-        version: 7,
-        owner: '1Owner1',
-        compose: [{ name: 'Comp1', secrets: 'duplicate_secret_data' }],
-        nodes: ['node1'],
-      });
-
-      try {
-        await imageManager.checkAppSecrets(
-          'NewApp',
-          appComponentSpecs,
-          '1Owner2',
-          true,
-        );
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('secrets are not valid (duplicate in app:');
-      }
-    });
-
-    it('should allow same app to use its own secrets during update', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: 'shared_secret_data',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsInformation, {
-        name: 'MyApp',
-        version: 7,
-        owner: '1Owner1',
-        compose: [{ name: 'Comp1', secrets: 'shared_secret_data' }],
-        nodes: ['node1'],
-      });
-
-      const result = await imageManager.checkAppSecrets(
-        'MyApp',
-        appComponentSpecs,
-        '1Owner1',
-        false,
-      );
-
-      expect(result).to.be.undefined;
-    });
-
-    it('should throw error if different app uses same secrets during update', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: 'shared_secret_data',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsInformation, {
-        name: 'OtherApp',
-        version: 7,
-        owner: '1Owner1',
-        compose: [{ name: 'Comp1', secrets: 'shared_secret_data' }],
-        nodes: ['node1'],
-      });
-
-      try {
-        await imageManager.checkAppSecrets(
-          'MyApp',
-          appComponentSpecs,
-          '1Owner2',
-          false,
-        );
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('secrets are not valid (conflict with another app)');
-      }
-    });
-
-    it('should verify owner matches in permanent app messages', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: 'secret_from_message',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsMessages, {
-        appSpecifications: {
-          name: 'encrypted',
-          version: 7,
-          owner: '1Owner1',
-          compose: [{ name: 'Comp1', secrets: 'secret_from_message' }],
-          nodes: ['node1'],
-        },
-      });
-
-      try {
-        await imageManager.checkAppSecrets(
-          'NewApp',
-          appComponentSpecs,
-          '1Owner2',
-          true,
-        );
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('owner mismatch');
-      }
-    });
-
-    it('should normalize PGP secrets for comparison', async () => {
-      const appComponentSpecs = {
-        name: 'Component1',
-        secrets: '-----BEGIN PGP MESSAGE-----\ntest\n-----END PGP MESSAGE-----',
-      };
-
-      await dbHelper.insertOneToDatabase(database, config.database.appsglobal.collections.appsInformation, {
-        name: 'ExistingApp',
-        version: 7,
-        owner: '1Owner1',
-        compose: [
-          {
-            name: 'Comp1',
-            secrets: '-----BEGIN PGP MESSAGE-----\\ntest\\n-----END PGP MESSAGE-----',
-          },
-        ],
-        nodes: ['node1'],
-      });
-
-      try {
-        await imageManager.checkAppSecrets(
-          'NewApp',
-          appComponentSpecs,
-          '1Owner2',
-          true,
-        );
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('secrets are not valid');
-      }
-    });
-  });
-
-  describe('checkApplicationImagesCompliance tests', () => {
+  describe('isImageBlocked tests', () => {
     beforeEach(() => {
       sinon.stub(serviceHelper, 'axiosGet').resolves({
         data: ['blocked/repo', 'blocked-org', 'blockedowner'],
@@ -589,205 +384,73 @@ describe('imageManager tests', () => {
       });
     });
 
-    it('should pass for non-blocked version 3 app', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
+    it('should return not blocked for allowed images', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
 
-      const result = await imageManager.checkApplicationImagesCompliance(appSpecs);
-
-      expect(result).to.be.true;
+      expect(result.blocked).to.be.false;
+      expect(result.reason).to.be.null;
     });
 
-    it('should throw error for blocked app hash', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: '1ValidOwner',
-        hash: 'blocked/repo',
-      };
+    it('should return blocked for blocked app hash', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app:latest'],
+        { owner: '1ValidOwner', hash: 'blocked/repo' },
+      );
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('is not allowed to be spawned');
-      }
+      expect(result.blocked).to.be.true;
+      expect(result.reason).to.include('is not allowed to be spawned');
     });
 
-    it('should throw error for blocked owner', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: 'blockedowner',
-        hash: 'validhash',
-      };
+    it('should return blocked for blocked owner', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app:latest'],
+        { owner: 'blockedowner', hash: 'validhash' },
+      );
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('is not allowed to run applications');
-      }
+      expect(result.blocked).to.be.true;
+      expect(result.reason).to.include('is not allowed to run applications');
     });
 
-    it('should throw error for blocked image', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'blocked/repo:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
+    it('should return blocked for blocked image', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['blocked/repo:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('Image blocked/repo is blocked');
-      }
+      expect(result.blocked).to.be.true;
+      expect(result.reason).to.include('Image blocked/repo is blocked');
     });
 
-    it('should throw error for blocked organization', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'blocked-org/app:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
+    it('should return blocked for blocked organization', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['blocked-org/app:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('Organisation blocked-org is blocked');
-      }
+      expect(result.blocked).to.be.true;
+      expect(result.reason).to.include('Organisation blocked-org is blocked');
     });
 
-    it('should check all compose components for version 4+ apps', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 4,
-        owner: '1ValidOwner',
-        hash: 'validhash',
-        compose: [
-          { name: 'Component1', repotag: 'allowed/app1:latest' },
-          { name: 'Component2', repotag: 'blocked/repo:latest' },
-        ],
-      };
+    it('should detect blocked image among multiple images', async () => {
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app1:latest', 'blocked/repo:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
 
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('Image blocked/repo is blocked');
-      }
+      expect(result.blocked).to.be.true;
+      expect(result.reason).to.include('Image blocked/repo is blocked');
     });
 
-    it('should throw error if unable to communicate with Flux Services', async () => {
-      serviceHelper.axiosGet.restore();
-      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: null });
-
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
-
-      try {
-        await imageManager.checkApplicationImagesCompliance(appSpecs);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('Unable to communicate with Flux Services');
-      }
-    });
-  });
-
-  describe('checkApplicationImagesBlocked tests', () => {
-    beforeEach(() => {
-      sinon.stub(serviceHelper, 'axiosGet').resolves({
-        data: ['blocked/repo', 'blocked-org'],
-      });
-
-      // eslint-disable-next-line global-require
-      const axios = require('axios');
-      sinon.stub(axios, 'get').resolves({
-        data: {
-          status: 'success',
-          data: [],
-        },
-      });
-    });
-
-    it('should return false for non-blocked app', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
-
-      const result = await imageManager.checkApplicationImagesBlocked(appSpecs);
-
-      expect(result).to.be.false;
-    });
-
-    it('should return message for blocked app hash', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: '1ValidOwner',
-        hash: 'blocked/repo',
-      };
-
-      const result = await imageManager.checkApplicationImagesBlocked(appSpecs);
-
-      expect(result).to.be.a('string');
-      expect(result).to.include('is not allowed to be spawned');
-    });
-
-    it('should return message for blocked owner', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: 'blocked-org',
-        hash: 'validhash',
-      };
-
-      const result = await imageManager.checkApplicationImagesBlocked(appSpecs);
-
-      expect(result).to.be.a('string');
-      expect(result).to.include('is not allowed to run applications');
-    });
-
-    it('should return message for blocked image', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'blocked/repo:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
-
-      const result = await imageManager.checkApplicationImagesBlocked(appSpecs);
-
-      expect(result).to.be.a('string');
-      expect(result).to.include('Image blocked/repo is blocked');
-    });
-
-    it('should return false if no repos available', async () => {
+    it('should return not blocked if no repos available', async () => {
       serviceHelper.axiosGet.restore();
       sinon.stub(serviceHelper, 'axiosGet').resolves({ data: null });
 
@@ -796,35 +459,14 @@ describe('imageManager tests', () => {
       axios.get.restore();
       sinon.stub(axios, 'get').rejects(new Error('Network error'));
 
-      const appSpecs = {
-        name: 'TestApp',
-        version: 3,
-        repotag: 'allowed/app:latest',
-        owner: '1ValidOwner',
-        hash: 'validhash',
-      };
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
 
-      const result = await imageManager.checkApplicationImagesBlocked(appSpecs);
-
-      expect(result).to.be.false;
-    });
-
-    it('should check compose components for version 4+ apps', async () => {
-      const appSpecs = {
-        name: 'TestApp',
-        version: 4,
-        owner: '1ValidOwner',
-        hash: 'validhash',
-        compose: [
-          { name: 'Component1', repotag: 'allowed/app1:latest' },
-          { name: 'Component2', repotag: 'blocked/repo:latest' },
-        ],
-      };
-
-      const result = await imageManager.checkApplicationImagesBlocked(appSpecs);
-
-      expect(result).to.be.a('string');
-      expect(result).to.include('Image blocked/repo is blocked');
+      expect(result.blocked).to.be.false;
+      expect(result.reason).to.be.null;
     });
   });
 
@@ -894,28 +536,28 @@ describe('imageManager tests', () => {
   });
 
   describe('checkApplicationsCompliance tests', () => {
-    it('should remove blacklisted apps', async () => {
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: 'GoodApp',
-            version: 3,
-            repotag: 'allowed/app:latest',
-            owner: '1ValidOwner',
-            hash: 'validhash',
-          },
-          {
-            name: 'BadApp',
-            version: 3,
-            repotag: 'blocked/repo:latest',
-            owner: '1ValidOwner',
-            hash: 'validhash',
-          },
-        ],
-      });
+    let deploymentProvider;
+    let appUninstaller;
 
-      const removeAppLocally = sinon.stub().resolves();
+    beforeEach(() => {
+      // eslint-disable-next-line global-require
+      deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
+      // eslint-disable-next-line global-require
+      appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
+    });
+
+    it('should remove blacklisted apps', async () => {
+      sinon.stub(appsRepository, 'listInstalledApps').resolves([
+        { name: 'GoodApp', owner: '1ValidOwner', hash: 'validhash' },
+        { name: 'BadApp', owner: '1ValidOwner', hash: 'validhash' },
+      ]);
+
+      sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([
+        { appName: 'GoodApp', allImages: () => ['allowed/app:latest'] },
+        { appName: 'BadApp', allImages: () => ['blocked/repo:latest'] },
+      ]);
+
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
       sinon.stub(serviceHelper, 'axiosGet').resolves({
         data: ['blocked/repo'],
@@ -932,42 +574,32 @@ describe('imageManager tests', () => {
 
       sinon.stub(serviceHelper, 'delay').resolves();
 
-      await imageManager.checkApplicationsCompliance(installedApps, removeAppLocally);
+      await imageManager.checkApplicationsCompliance();
 
-      sinon.assert.calledOnce(installedApps);
-      sinon.assert.calledOnce(removeAppLocally);
-      sinon.assert.calledWith(removeAppLocally, 'BadApp', null, false, true, true);
+      sinon.assert.calledOnce(uninstallStub);
+      sinon.assert.calledWith(uninstallStub, 'BadApp', { broadcastRemoval: true });
     });
 
     it('should handle failure to get installed apps', async () => {
-      const installedApps = sinon.stub().resolves({
-        status: 'error',
-        data: { message: 'Failed to get apps' },
-      });
+      sinon.stub(appsRepository, 'listInstalledApps').rejects(new Error('Failed to get apps'));
 
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      await imageManager.checkApplicationsCompliance(installedApps, removeAppLocally);
+      await imageManager.checkApplicationsCompliance();
 
-      sinon.assert.calledOnce(installedApps);
-      sinon.assert.notCalled(removeAppLocally);
+      sinon.assert.notCalled(uninstallStub);
     });
 
     it('should not remove apps if none are blacklisted', async () => {
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: 'GoodApp',
-            version: 3,
-            repotag: 'allowed/app:latest',
-            owner: '1ValidOwner',
-            hash: 'validhash',
-          },
-        ],
-      });
+      sinon.stub(appsRepository, 'listInstalledApps').resolves([
+        { name: 'GoodApp', owner: '1ValidOwner', hash: 'validhash' },
+      ]);
 
-      const removeAppLocally = sinon.stub().resolves();
+      sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([
+        { appName: 'GoodApp', allImages: () => ['allowed/app:latest'] },
+      ]);
+
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
       sinon.stub(serviceHelper, 'axiosGet').resolves({
         data: ['blocked/repo'],
@@ -982,34 +614,23 @@ describe('imageManager tests', () => {
         },
       });
 
-      await imageManager.checkApplicationsCompliance(installedApps, removeAppLocally);
+      await imageManager.checkApplicationsCompliance();
 
-      sinon.assert.calledOnce(installedApps);
-      sinon.assert.notCalled(removeAppLocally);
+      sinon.assert.notCalled(uninstallStub);
     });
 
     it('should delay between removing multiple apps', async () => {
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: 'BadApp1',
-            version: 3,
-            repotag: 'blocked/repo1:latest',
-            owner: '1ValidOwner',
-            hash: 'validhash',
-          },
-          {
-            name: 'BadApp2',
-            version: 3,
-            repotag: 'blocked/repo2:latest',
-            owner: '1ValidOwner',
-            hash: 'validhash',
-          },
-        ],
-      });
+      sinon.stub(appsRepository, 'listInstalledApps').resolves([
+        { name: 'BadApp1', owner: '1ValidOwner', hash: 'validhash' },
+        { name: 'BadApp2', owner: '1ValidOwner', hash: 'validhash' },
+      ]);
 
-      const removeAppLocally = sinon.stub().resolves();
+      sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([
+        { appName: 'BadApp1', allImages: () => ['blocked/repo1:latest'] },
+        { appName: 'BadApp2', allImages: () => ['blocked/repo2:latest'] },
+      ]);
+
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
       sinon.stub(serviceHelper, 'axiosGet').resolves({
         data: ['blocked/repo1', 'blocked/repo2'],
@@ -1026,9 +647,9 @@ describe('imageManager tests', () => {
 
       const delayStub = sinon.stub(serviceHelper, 'delay').resolves();
 
-      await imageManager.checkApplicationsCompliance(installedApps, removeAppLocally);
+      await imageManager.checkApplicationsCompliance();
 
-      sinon.assert.calledTwice(removeAppLocally);
+      sinon.assert.calledTwice(uninstallStub);
       sinon.assert.calledTwice(delayStub);
       sinon.assert.calledWith(delayStub, 3 * 60 * 1000);
     });

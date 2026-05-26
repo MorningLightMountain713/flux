@@ -1,10 +1,15 @@
+// Set NODE_CONFIG_DIR before any requires
+if (!process.env.NODE_CONFIG_DIR) {
+  process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
+}
+
 const { expect } = require('chai');
 const sinon = require('sinon');
 const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const appController = require('../../ZelBack/src/services/appManagement/appController');
 const dockerService = require('../../ZelBack/src/services/dockerService');
-const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 
@@ -31,6 +36,40 @@ describe('appController tests', () => {
   // eslint-disable-next-line no-unused-vars
   let database;
 
+  /**
+   * Build a mock InstantiatedSpec for appController tests.
+   * The spec must have .components (object) so the real DeploymentSpec.fromSpec works.
+   * @param {object} opts - { name, version, compose }
+   * compose entries: [{ name: 'Component1' }, ...]
+   */
+  function mockInstantiated(opts) {
+    const compose = opts.compose || [];
+    // Build components object keyed by component name, each with minimal fields
+    // that DeploymentSpec.fromSpec needs
+    const components = {};
+    for (const c of compose) {
+      components[c.name] = {
+        image: c.image || 'test/image:latest',
+        ports: {},
+        loadBalancing: {},
+        persistentStorage: null,
+        environment: {},
+        commands: [],
+        secrets: [],
+        containerData: '',
+      };
+    }
+    const spec = {
+      version: opts.version,
+      name: opts.name,
+      components,
+    };
+    return {
+      name: opts.name,
+      spec,
+    };
+  }
+
   beforeEach(async () => {
     await dbHelper.initiateDB();
     db = dbHelper.databaseConnection();
@@ -54,10 +93,11 @@ describe('appController tests', () => {
 
     it('should start app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'TestApp',
-        version: 3,
+      const instantiated = mockInstantiated({
+        name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'TestApp' },
@@ -112,6 +152,10 @@ describe('appController tests', () => {
 
     it('should handle component start for component names', async () => {
       verificationHelperStub.resolves(true);
+      const instantiated = mockInstantiated({
+        name: 'TestApp', version: 4, compose: [{ name: 'Component' }],
+      });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
 
       const req = {
         params: { appname: 'Component_TestApp' },
@@ -131,14 +175,11 @@ describe('appController tests', () => {
 
     it('should start all components for version 4+ apps', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'ComposedApp',
-        version: 4,
-        compose: [
-          { name: 'Component1' },
-          { name: 'Component2' },
-        ],
+      const instantiated = mockInstantiated({
+        name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -187,10 +228,13 @@ describe('appController tests', () => {
 
     it('should stop app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'TestApp',
-        version: 3,
+      // appStop only calls getGlobalAppInfo for non-component apps
+      // For a simple 'TestApp' (no underscore), it looks up the spec
+      const instantiated = mockInstantiated({
+        name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'TestApp' },
@@ -210,14 +254,11 @@ describe('appController tests', () => {
 
     it('should stop all components for version 4+ apps in reverse order', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'ComposedApp',
-        version: 4,
-        compose: [
-          { name: 'Component1' },
-          { name: 'Component2' },
-        ],
+      const instantiated = mockInstantiated({
+        name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -277,10 +318,11 @@ describe('appController tests', () => {
 
     it('should restart app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'TestApp',
-        version: 3,
+      const instantiated = mockInstantiated({
+        name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'TestApp' },
@@ -299,14 +341,11 @@ describe('appController tests', () => {
 
     it('should restart all components for version 4+ apps', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'ComposedApp',
-        version: 4,
-        compose: [
-          { name: 'Component1' },
-          { name: 'Component2' },
-        ],
+      const instantiated = mockInstantiated({
+        name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -445,10 +484,11 @@ describe('appController tests', () => {
 
     it('should kill app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'TestApp',
-        version: 3,
+      const instantiated = mockInstantiated({
+        name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'TestApp' },
@@ -467,14 +507,11 @@ describe('appController tests', () => {
 
     it('should kill all components for version 4+ apps in reverse order', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'ComposedApp',
-        version: 4,
-        compose: [
-          { name: 'Component1' },
-          { name: 'Component2' },
-        ],
+      const instantiated = mockInstantiated({
+        name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -493,7 +530,7 @@ describe('appController tests', () => {
 
     it('should return error if app not found', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves(null);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
 
       const req = {
         params: { appname: 'NonExistentApp' },
@@ -518,10 +555,11 @@ describe('appController tests', () => {
 
     it('should pause app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'TestApp',
-        version: 3,
+      const instantiated = mockInstantiated({
+        name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'TestApp' },
@@ -540,14 +578,11 @@ describe('appController tests', () => {
 
     it('should pause all components for version 4+ apps', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'ComposedApp',
-        version: 4,
-        compose: [
-          { name: 'Component1' },
-          { name: 'Component2' },
-        ],
+      const instantiated = mockInstantiated({
+        name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -572,10 +607,11 @@ describe('appController tests', () => {
 
     it('should unpause app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'TestApp',
-        version: 3,
+      const instantiated = mockInstantiated({
+        name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'TestApp' },
@@ -594,14 +630,11 @@ describe('appController tests', () => {
 
     it('should unpause all components for version 4+ apps', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'ComposedApp',
-        version: 4,
-        compose: [
-          { name: 'Component1' },
-          { name: 'Component2' },
-        ],
+      const instantiated = mockInstantiated({
+        name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
       });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -655,7 +688,7 @@ describe('appController tests', () => {
         { ip: '192.168.1.1:16127', name: 'TestApp' },
         { ip: '192.168.1.2:16127', name: 'TestApp' },
       ];
-      sinon.stub(dbHelper, 'findInDatabase').resolves(locations);
+      sinon.stub(appsRepository, 'listLocationsByApp').resolves(locations);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.3:16127');
     });
 
@@ -675,7 +708,7 @@ describe('appController tests', () => {
         { ip: '192.168.1.3:16127', name: 'TestApp' },
         { ip: '192.168.1.2:16127', name: 'TestApp' },
       ];
-      sinon.stub(dbHelper, 'findInDatabase').resolves(locations);
+      sinon.stub(appsRepository, 'listLocationsByApp').resolves(locations);
       // eslint-disable-next-line global-require, no-shadow
       const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.3:16127');

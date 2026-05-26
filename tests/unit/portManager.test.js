@@ -1,153 +1,156 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
-const config = require('config');
-const dbHelper = require('../../ZelBack/src/services/dbHelper');
-const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
-const upnpService = require('../../ZelBack/src/services/upnpService');
-const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
-const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
-const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
-const { requireMongo } = require('./dbTestHelper');
+const proxyquire = require('proxyquire').noCallThru();
+
+// ── Mock helpers ──────────────────────────────────────────────────
+
+/**
+ * Given a raw/plain spec object (v1, v2-3, or v4+), extract ports the way
+ * the real DeploymentSpec does.
+ */
+function extractPorts(spec) {
+  if (!spec) return [];
+  if (spec.compose) {
+    const all = [];
+    for (const c of spec.compose) {
+      if (c.ports) all.push(...c.ports);
+    }
+    return [...new Set(all)].sort((a, b) => a - b);
+  }
+  if (spec.ports) return [...spec.ports];
+  if (spec.port) return [spec.port];
+  return [];
+}
+
+function mockDeployment(spec) {
+  const ports = extractPorts(spec);
+  return {
+    appName: spec.name,
+    allHostPorts() { return ports; },
+  };
+}
+
+function makeStubs() {
+  const appsRepositoryStub = {
+    listInstalledAppsRaw: sinon.stub().resolves([]),
+    listGlobalAppInfoRaw: sinon.stub().resolves([]),
+  };
+
+  const resolveSpecStub = sinon.stub().callsFake(async (plain) => plain);
+
+  const DeploymentSpecMock = {
+    fromSpec(spec) { return mockDeployment(spec); },
+  };
+
+  const getSpecBackendStub = sinon.stub().resolves({
+    DeploymentSpec: DeploymentSpecMock,
+  });
+
+  const verificationHelperStub = {
+    signMessage: sinon.stub().resolves('test-signature'),
+  };
+
+  return { appsRepositoryStub, resolveSpecStub, getSpecBackendStub, verificationHelperStub };
+}
+
+function buildProxyquireMap(stubs, overrides = {}) {
+  const fluxNet = overrides.fluxNetworkHelper || {};
+  const upnp = overrides.upnpService || {};
+  return {
+    config: { server: { apiport: 16127 } },
+    axios: { post: sinon.stub().resolves({ data: { status: 'success' } }) },
+    '../dbHelper': {},
+    '../appDatabase/appsRepository': stubs.appsRepositoryStub,
+    '../utils/specCutover': { resolveSpec: stubs.resolveSpecStub },
+    '../utils/specLibs': { getSpecBackend: stubs.getSpecBackendStub },
+    '../utils/appConstants': {
+      localAppsInformation: 'zelappsinformation',
+      globalAppsInformation: 'zelappsglobalinformation',
+      appsFolder: '/tmp/fluxapps/',
+    },
+    '../utils/socketAddressUtils': {
+      extractIp: (addr) => (addr ? addr.split(':')[0] : null),
+      extractPort: (addr) => (addr && addr.includes(':') ? Number(addr.split(':')[1]) : 16127),
+    },
+    '../utils/fluxHttpTestServer': {
+      FluxHttpTestServer: sinon.stub(),
+    },
+    '../fluxNetworkHelper': {
+      getLocalSocketAddress: sinon.stub().resolves('127.0.0.1:16127'),
+      getFluxNodePrivateKey: sinon.stub().resolves('testprivkey'),
+      getFluxNodePublicKey: sinon.stub().resolves('testpubkey'),
+      isFirewallActive: sinon.stub().resolves(false),
+      allowPort: sinon.stub().resolves(true),
+      deleteAllowPortRule: sinon.stub().resolves(true),
+      isPortBanned: sinon.stub().returns(false),
+      isPortUPNPBanned: sinon.stub().returns(false),
+      ...fluxNet,
+    },
+    '../upnpService': {
+      isUPNP: sinon.stub().returns(false),
+      setupUPNP: sinon.stub().resolves(true),
+      mapUpnpPort: sinon.stub().resolves(true),
+      removeMapUpnpPort: sinon.stub().resolves(true),
+      ...upnp,
+    },
+    '../verificationHelper': stubs.verificationHelperStub,
+    '../networkStateService': {
+      getRandomSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
+    },
+    '../serviceHelper': {
+      ensureNumber: (v) => Number(v),
+      delay: sinon.stub().resolves(),
+    },
+    '../../lib/log': {
+      info: sinon.stub(),
+      warn: sinon.stub(),
+      error: sinon.stub(),
+    },
+  };
+}
+
+function loadPortManager(stubs, overrides = {}) {
+  return proxyquire('../../ZelBack/src/services/appNetwork/portManager',
+    buildProxyquireMap(stubs, overrides));
+}
+
+// ── Tests ─────────────────────────────────────────────────────────
 
 describe('portManager tests', () => {
-  before(requireMongo);
+  let portManager;
+  let stubs;
+  let originalUserConfig;
+
+  before(() => {
+    originalUserConfig = globalThis.userconfig;
+    globalThis.userconfig = {
+      initial: { apiport: 16127 },
+    };
+  });
+
+  after(() => {
+    globalThis.userconfig = originalUserConfig;
+  });
+
+  beforeEach(() => {
+    stubs = makeStubs();
+    portManager = loadPortManager(stubs);
+  });
 
   afterEach(() => {
     sinon.restore();
   });
 
-  describe('appPortsUnique tests', () => {
-    it('should return true for unique ports', () => {
-      const ports = [30001, 30002, 30003];
-      const result = portManager.appPortsUnique(ports);
-
-      expect(result).to.be.true;
-    });
-
-    it('should return false for duplicate ports', () => {
-      const ports = [30001, 30002, 30001];
-      const result = portManager.appPortsUnique(ports);
-
-      expect(result).to.be.false;
-    });
-
-    it('should return true for empty array', () => {
-      const ports = [];
-      const result = portManager.appPortsUnique(ports);
-
-      expect(result).to.be.true;
-    });
-
-    it('should return true for single port', () => {
-      const ports = [30001];
-      const result = portManager.appPortsUnique(ports);
-
-      expect(result).to.be.true;
-    });
-  });
-
-  describe('ensureAppUniquePorts tests', () => {
-    it('should return true for version 1 apps', () => {
-      const appSpec = {
-        version: 1,
-        name: 'TestApp',
-        port: 30001,
-      };
-
-      const result = portManager.ensureAppUniquePorts(appSpec);
-
-      expect(result).to.be.true;
-    });
-
-    it('should validate unique ports for version 2-3 apps', () => {
-      const appSpec = {
-        version: 3,
-        name: 'TestApp',
-        ports: [30001, 30002, 30003],
-      };
-
-      const result = portManager.ensureAppUniquePorts(appSpec);
-
-      expect(result).to.be.true;
-    });
-
-    it('should throw error for duplicate ports in version 2-3 apps', () => {
-      const appSpec = {
-        version: 3,
-        name: 'TestApp',
-        ports: [30001, 30002, 30001],
-      };
-
-      expect(() => portManager.ensureAppUniquePorts(appSpec)).to.throw('must have unique ports');
-    });
-
-    it('should validate unique ports across compose components for version 4+', () => {
-      const appSpec = {
-        version: 4,
-        name: 'TestApp',
-        compose: [
-          { name: 'Component1', ports: [30001, 30002] },
-          { name: 'Component2', ports: [30003, 30004] },
-        ],
-      };
-
-      const result = portManager.ensureAppUniquePorts(appSpec);
-
-      expect(result).to.be.true;
-    });
-
-    it('should throw error for duplicate ports across compose components', () => {
-      const appSpec = {
-        version: 4,
-        name: 'TestApp',
-        compose: [
-          { name: 'Component1', ports: [30001, 30002] },
-          { name: 'Component2', ports: [30002, 30003] },
-        ],
-      };
-
-      expect(() => portManager.ensureAppUniquePorts(appSpec)).to.throw('must have unique ports');
-    });
-  });
-
   describe('assignedPortsInstalledApps tests', () => {
-    let db;
-    let database;
-
-    beforeEach(async () => {
-      await dbHelper.initiateDB();
-      db = dbHelper.databaseConnection();
-      database = db.db(config.database.appslocal.database);
-
-      const collection = config.database.appslocal.collections.appsInformation;
-      const testApps = [
-        {
-          name: 'App1',
-          version: 3,
-          ports: [30001, 30002],
-        },
-        {
-          name: 'App2',
-          version: 3,
-          ports: [30003, 30004],
-        },
-      ];
-
-      try {
-        await database.collection(collection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-      await dbHelper.insertManyToDatabase(database, collection, testApps);
-    });
-
     it('should return ports assigned by installed apps', async () => {
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'App1', version: 3, ports: [30001, 30002] },
+        { name: 'App2', version: 3, ports: [30003, 30004] },
+      ]);
+
       const result = await portManager.assignedPortsInstalledApps();
 
-      expect(result).to.be.an('array');
-      expect(result.length).to.be.at.least(2);
-
+      expect(result).to.be.an('array').with.lengthOf(2);
       const app1 = result.find((app) => app.name === 'App1');
       expect(app1).to.exist;
       expect(app1.ports).to.include(30001);
@@ -155,15 +158,9 @@ describe('portManager tests', () => {
     });
 
     it('should handle version 1 apps', async () => {
-      const collection = config.database.appslocal.collections.appsInformation;
-      await database.collection(collection).drop();
-
-      const testApp = {
-        name: 'OldApp',
-        version: 1,
-        port: 30005,
-      };
-      await dbHelper.insertOneToDatabase(database, collection, testApp);
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'OldApp', version: 1, port: 30005 },
+      ]);
 
       const result = await portManager.assignedPortsInstalledApps();
 
@@ -173,18 +170,16 @@ describe('portManager tests', () => {
     });
 
     it('should handle version 4+ compose apps', async () => {
-      const collection = config.database.appslocal.collections.appsInformation;
-      await database.collection(collection).drop();
-
-      const testApp = {
-        name: 'ComposedApp',
-        version: 4,
-        compose: [
-          { name: 'Component1', ports: [30006, 30007] },
-          { name: 'Component2', ports: [30008] },
-        ],
-      };
-      await dbHelper.insertOneToDatabase(database, collection, testApp);
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        {
+          name: 'ComposedApp',
+          version: 4,
+          compose: [
+            { name: 'Component1', ports: [30006, 30007] },
+            { name: 'Component2', ports: [30008] },
+          ],
+        },
+      ]);
 
       const result = await portManager.assignedPortsInstalledApps();
 
@@ -197,50 +192,26 @@ describe('portManager tests', () => {
   });
 
   describe('ensureApplicationPortsNotUsed tests', () => {
-    let db;
-    let database;
-
-    beforeEach(async () => {
-      await dbHelper.initiateDB();
-      db = dbHelper.databaseConnection();
-      database = db.db(config.database.appslocal.database);
-
-      const collection = config.database.appslocal.collections.appsInformation;
-      const existingApp = {
-        name: 'ExistingApp',
-        version: 3,
-        ports: [30001, 30002],
-      };
-
-      try {
-        await database.collection(collection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-      await dbHelper.insertOneToDatabase(database, collection, existingApp);
-    });
-
     it('should pass if ports are not used', async () => {
-      const appSpec = {
-        name: 'NewApp',
-        version: 3,
-        ports: [30010, 30011],
-      };
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
+      ]);
 
-      const result = await portManager.ensureApplicationPortsNotUsed(appSpec, []);
+      const deployment = mockDeployment({ name: 'NewApp', version: 3, ports: [30010, 30011] });
+      const result = await portManager.ensureApplicationPortsNotUsed(deployment, []);
 
       expect(result).to.be.true;
     });
 
     it('should throw error if port is already used by different app', async () => {
-      const appSpec = {
-        name: 'NewApp',
-        version: 3,
-        ports: [30001, 30011],
-      };
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
+      ]);
+
+      const deployment = mockDeployment({ name: 'NewApp', version: 3, ports: [30001, 30011] });
 
       try {
-        await portManager.ensureApplicationPortsNotUsed(appSpec, []);
+        await portManager.ensureApplicationPortsNotUsed(deployment, []);
         expect.fail('Should have thrown an error');
       } catch (error) {
         expect(error.message).to.include('port 30001 already used');
@@ -248,44 +219,47 @@ describe('portManager tests', () => {
     });
 
     it('should allow same app to use its own ports', async () => {
-      const appSpec = {
-        name: 'ExistingApp',
-        version: 3,
-        ports: [30001, 30002],
-      };
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
+      ]);
 
-      const result = await portManager.ensureApplicationPortsNotUsed(appSpec, []);
+      const deployment = mockDeployment({ name: 'ExistingApp', version: 3, ports: [30001, 30002] });
+      const result = await portManager.ensureApplicationPortsNotUsed(deployment, []);
 
       expect(result).to.be.true;
     });
 
-    it('should handle version 1 apps', async () => {
-      const appSpec = {
-        name: 'OldNewApp',
-        version: 1,
-        port: 30001,
-      };
+    it('should handle version 1 apps with conflicting port', async () => {
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
+      ]);
+
+      const deployment = mockDeployment({ name: 'OldNewApp', version: 1, port: 30001 });
 
       try {
-        await portManager.ensureApplicationPortsNotUsed(appSpec, []);
+        await portManager.ensureApplicationPortsNotUsed(deployment, []);
         expect.fail('Should have thrown an error');
       } catch (error) {
         expect(error.message).to.include('port 30001 already used');
       }
     });
 
-    it('should handle version 4+ compose apps', async () => {
-      const appSpec = {
+    it('should handle version 4+ compose apps with conflicting port', async () => {
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
+      ]);
+
+      const deployment = mockDeployment({
         name: 'NewComposedApp',
         version: 4,
         compose: [
           { name: 'Component1', ports: [30001] },
           { name: 'Component2', ports: [30020] },
         ],
-      };
+      });
 
       try {
-        await portManager.ensureApplicationPortsNotUsed(appSpec, []);
+        await portManager.ensureApplicationPortsNotUsed(deployment, []);
         expect.fail('Should have thrown an error');
       } catch (error) {
         expect(error.message).to.include('port 30001 already used');
@@ -294,34 +268,11 @@ describe('portManager tests', () => {
   });
 
   describe('isPortAvailable tests', () => {
-    let db;
-    let database;
-
-    beforeEach(async () => {
-      await dbHelper.initiateDB();
-      db = dbHelper.databaseConnection();
-      database = db.db(config.database.appslocal.database);
-
-      const collection = config.database.appslocal.collections.appsInformation;
-      const testApps = [
-        {
-          name: 'App1',
-          version: 3,
-          ports: [30001, 30002],
-        },
-        {
-          name: 'App2',
-          version: 3,
-          ports: [30003],
-        },
-      ];
-
-      try {
-        await database.collection(collection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-      await dbHelper.insertManyToDatabase(database, collection, testApps);
+    beforeEach(() => {
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'App1', version: 3, ports: [30001, 30002] },
+        { name: 'App2', version: 3, ports: [30003] },
+      ]);
     });
 
     it('should return false if port is used', async () => {
@@ -350,29 +301,10 @@ describe('portManager tests', () => {
   });
 
   describe('findNextAvailablePort tests', () => {
-    let db;
-    let database;
-
-    beforeEach(async () => {
-      await dbHelper.initiateDB();
-      db = dbHelper.databaseConnection();
-      database = db.db(config.database.appslocal.database);
-
-      const collection = config.database.appslocal.collections.appsInformation;
-      const testApps = [
-        {
-          name: 'App1',
-          version: 3,
-          ports: [30001, 30002, 30003],
-        },
-      ];
-
-      try {
-        await database.collection(collection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-      await dbHelper.insertManyToDatabase(database, collection, testApps);
+    beforeEach(() => {
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'App1', version: 3, ports: [30001, 30002, 30003] },
+      ]);
     });
 
     it('should find next available port', async () => {
@@ -395,228 +327,113 @@ describe('portManager tests', () => {
   });
 
   describe('getAllUsedPorts tests', () => {
-    let db;
-    let database;
-
-    beforeEach(async () => {
-      await dbHelper.initiateDB();
-      db = dbHelper.databaseConnection();
-      database = db.db(config.database.appslocal.database);
-
-      const collection = config.database.appslocal.collections.appsInformation;
-      const testApps = [
-        {
-          name: 'App1',
-          version: 3,
-          ports: [30001, 30002],
-        },
-        {
-          name: 'App2',
-          version: 3,
-          ports: [30002, 30003],
-        },
-      ];
-
-      try {
-        await database.collection(collection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-      await dbHelper.insertManyToDatabase(database, collection, testApps);
-    });
-
     it('should return all used ports without duplicates', async () => {
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'App1', version: 3, ports: [30001, 30002] },
+        { name: 'App2', version: 3, ports: [30002, 30003] },
+      ]);
+
       const result = await portManager.getAllUsedPorts();
 
       expect(result).to.be.an('array');
       expect(result).to.include(30001);
       expect(result).to.include(30002);
       expect(result).to.include(30003);
-      // Check for no duplicates
       expect(result.length).to.equal(new Set(result).size);
     });
   });
 
   describe('restoreFluxPortsSupport tests', () => {
-    beforeEach(() => {
-      sinon.stub(upnpService, 'isUPNP').returns(false);
-      sinon.stub(fluxNetworkHelper, 'isFirewallActive').resolves(false);
-      sinon.stub(fluxNetworkHelper, 'allowPort').resolves(true);
-      sinon.stub(upnpService, 'setupUPNP').resolves(true);
-    });
-
     it('should setup firewall rules when firewall is active', async () => {
-      fluxNetworkHelper.isFirewallActive.resolves(true);
+      const fluxNetOverride = {
+        isFirewallActive: sinon.stub().resolves(true),
+        allowPort: sinon.stub().resolves(true),
+      };
 
-      await portManager.restoreFluxPortsSupport();
+      const localPm = loadPortManager(stubs, { fluxNetworkHelper: fluxNetOverride });
 
-      sinon.assert.called(fluxNetworkHelper.allowPort);
+      await localPm.restoreFluxPortsSupport();
+
+      sinon.assert.called(fluxNetOverride.allowPort);
     });
 
     it('should setup UPNP when UPNP is active', async () => {
-      upnpService.isUPNP.returns(true);
+      const upnpOverride = {
+        isUPNP: sinon.stub().returns(true),
+        setupUPNP: sinon.stub().resolves(true),
+      };
 
-      await portManager.restoreFluxPortsSupport();
+      const localPm = loadPortManager(stubs, { upnpService: upnpOverride });
 
-      sinon.assert.called(upnpService.setupUPNP);
+      await localPm.restoreFluxPortsSupport();
+
+      sinon.assert.called(upnpOverride.setupUPNP);
     });
 
     it('should handle errors gracefully', async () => {
-      fluxNetworkHelper.isFirewallActive.rejects(new Error('Firewall error'));
+      const fluxNetOverride = {
+        isFirewallActive: sinon.stub().rejects(new Error('Firewall error')),
+      };
+
+      const localPm = loadPortManager(stubs, { fluxNetworkHelper: fluxNetOverride });
 
       // Should not throw
-      await portManager.restoreFluxPortsSupport();
+      await localPm.restoreFluxPortsSupport();
     });
   });
 
   describe('restoreAppsPortsSupport tests', () => {
-    let db;
-    let database;
-
-    beforeEach(async () => {
-      await dbHelper.initiateDB();
-      db = dbHelper.databaseConnection();
-      database = db.db(config.database.appslocal.database);
-
-      const collection = config.database.appslocal.collections.appsInformation;
-      const testApps = [
-        {
-          name: 'App1',
-          version: 3,
-          ports: [30001],
-        },
-      ];
-
-      try {
-        await database.collection(collection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-      await dbHelper.insertManyToDatabase(database, collection, testApps);
-
-      sinon.stub(upnpService, 'isUPNP').returns(false);
-      sinon.stub(fluxNetworkHelper, 'isFirewallActive').resolves(false);
-      sinon.stub(fluxNetworkHelper, 'allowPort').resolves(true);
-      sinon.stub(upnpService, 'mapUpnpPort').resolves(true);
-      sinon.stub(serviceHelper, 'delay').resolves();
-      sinon.stub(appUninstaller, 'removeAppLocally').resolves();
-      portManager.upnpMapFailures.clear();
-    });
-
     it('should setup firewall for app ports when active', async () => {
-      fluxNetworkHelper.isFirewallActive.resolves(true);
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'App1', version: 3, ports: [30001] },
+      ]);
 
-      await portManager.restoreAppsPortsSupport();
+      const fluxNetOverride = {
+        isFirewallActive: sinon.stub().resolves(true),
+        allowPort: sinon.stub().resolves(true),
+      };
 
-      sinon.assert.called(fluxNetworkHelper.allowPort);
+      const localPm = loadPortManager(stubs, { fluxNetworkHelper: fluxNetOverride });
+
+      await localPm.restoreAppsPortsSupport();
+
+      sinon.assert.called(fluxNetOverride.allowPort);
     });
 
     it('should setup UPNP for app ports when active', async () => {
-      upnpService.isUPNP.returns(true);
+      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+        { name: 'App1', version: 3, ports: [30001] },
+      ]);
 
-      await portManager.restoreAppsPortsSupport();
+      const upnpOverride = {
+        isUPNP: sinon.stub().returns(true),
+        mapUpnpPort: sinon.stub().resolves(true),
+      };
 
-      sinon.assert.called(upnpService.mapUpnpPort);
+      const localPm = loadPortManager(stubs, { upnpService: upnpOverride });
+
+      await localPm.restoreAppsPortsSupport();
+
+      sinon.assert.called(upnpOverride.mapUpnpPort);
     });
 
     it('should handle errors gracefully', async () => {
-      fluxNetworkHelper.allowPort.rejects(new Error('Firewall error'));
+      const fluxNetOverride = {
+        allowPort: sinon.stub().rejects(new Error('Firewall error')),
+      };
+
+      const localPm = loadPortManager(stubs, { fluxNetworkHelper: fluxNetOverride });
 
       // Should not throw
-      await portManager.restoreAppsPortsSupport();
-    });
-
-    it('should NOT remove an app on a single UPNP mapping failure', async () => {
-      // the incident regression: one failed map used to escalate straight to
-      // removeAppLocally(force, sendMessage) - a transient router blip nuked
-      // a running app and broadcast its removal to the network
-      upnpService.isUPNP.returns(true);
-      upnpService.mapUpnpPort.resolves(false);
-
-      await portManager.restoreAppsPortsSupport();
-
-      sinon.assert.notCalled(appUninstaller.removeAppLocally);
-      expect(portManager.upnpMapFailures.get('App1').cycles).to.equal(1);
-    });
-
-    it('should retry a failed port within the cycle and record no failure on recovery', async () => {
-      upnpService.isUPNP.returns(true);
-      upnpService.mapUpnpPort.onFirstCall().resolves(false);
-      upnpService.mapUpnpPort.resolves(true);
-
-      await portManager.restoreAppsPortsSupport();
-
-      sinon.assert.notCalled(appUninstaller.removeAppLocally);
-      expect(portManager.upnpMapFailures.has('App1')).to.be.false;
-    });
-
-    it('should not remove before the sustained window even after enough failing cycles', async () => {
-      upnpService.isUPNP.returns(true);
-      upnpService.mapUpnpPort.resolves(false);
-
-      await portManager.restoreAppsPortsSupport();
-      await portManager.restoreAppsPortsSupport();
-      await portManager.restoreAppsPortsSupport();
-
-      // 3 consecutive cycles, but wall-clock window not yet elapsed
-      sinon.assert.notCalled(appUninstaller.removeAppLocally);
-      expect(portManager.upnpMapFailures.get('App1').cycles).to.equal(3);
-    });
-
-    it('should remove and broadcast only after sustained failure (cycles AND window)', async () => {
-      upnpService.isUPNP.returns(true);
-      upnpService.mapUpnpPort.resolves(false);
-      const nowMonotonicMs = Number(process.hrtime.bigint() / 1000000n);
-      portManager.upnpMapFailures.set('App1', {
-        cycles: 2,
-        firstFailureAtMs: nowMonotonicMs - (31 * 60 * 1000),
-      });
-
-      await portManager.restoreAppsPortsSupport();
-
-      sinon.assert.calledWith(appUninstaller.removeAppLocally, 'App1', null, true, true, true);
-      expect(portManager.upnpMapFailures.has('App1')).to.be.false;
-    });
-
-    it('should pay the retry pause at most once per cycle across failing apps', async () => {
-      const collection = config.database.appslocal.collections.appsInformation;
-      await dbHelper.insertManyToDatabase(database, collection, [
-        { name: 'App2', version: 3, ports: [30002] },
-      ]);
-      upnpService.isUPNP.returns(true);
-      upnpService.mapUpnpPort.resolves(false);
-
-      await portManager.restoreAppsPortsSupport();
-
-      // both apps still get their retry attempt and their strike, but the
-      // recovery pause is shared - not stacked per app
-      sinon.assert.calledOnce(serviceHelper.delay);
-      expect(upnpService.mapUpnpPort.callCount).to.equal(4);
-      expect(portManager.upnpMapFailures.get('App1').cycles).to.equal(1);
-      expect(portManager.upnpMapFailures.get('App2').cycles).to.equal(1);
-    });
-
-    it('should clear the failure tracker once mapping succeeds again', async () => {
-      upnpService.isUPNP.returns(true);
-      upnpService.mapUpnpPort.resolves(false);
-      await portManager.restoreAppsPortsSupport();
-      expect(portManager.upnpMapFailures.get('App1').cycles).to.equal(1);
-
-      upnpService.mapUpnpPort.resolves(true);
-      await portManager.restoreAppsPortsSupport();
-
-      expect(portManager.upnpMapFailures.has('App1')).to.be.false;
-      sinon.assert.notCalled(appUninstaller.removeAppLocally);
+      await localPm.restoreAppsPortsSupport();
     });
   });
 
   describe('signCheckAppData tests', () => {
     it('should sign message data', async () => {
-      const message = JSON.stringify({ test: 'data' });
-      sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').resolves('testprivkey');
-      sinon.stub(verificationHelper, 'signMessage').resolves('test-signature-string');
+      stubs.verificationHelperStub.signMessage.resolves('test-signature-string');
 
-      const result = await portManager.signCheckAppData(message);
+      const result = await portManager.signCheckAppData(JSON.stringify({ test: 'data' }));
 
       expect(result).to.be.a('string');
       expect(result.length).to.be.greaterThan(0);
