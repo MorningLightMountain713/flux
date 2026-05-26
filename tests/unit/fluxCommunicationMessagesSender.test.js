@@ -8,7 +8,7 @@ const { PassThrough } = require('stream');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
-const messageVerifier = require('../../ZelBack/src/services/appMessaging/messageVerifier');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
@@ -364,7 +364,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
           version: 1,
         },
       };
-      const checkAppMessageExistenceStub = sinon.stub(messageVerifier, 'checkAppMessageExistence').returns(message);
+      const getPermanentMessageStub = sinon.stub(appsRepository, 'getPermanentMessage').returns(message);
       sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
       const myMessageCacheSetStub = sinon.stub(FluxTTLCache.prototype, 'set').returns(undefined);
       const websocket = generateWebsocket();
@@ -372,7 +372,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       await fluxCommunicationMessagesSender.respondWithAppMessage(callMessage, websocket);
 
       sinon.assert.calledOnceWithExactly(myMessageCacheSetStub, callMessage.data.hash, message);
-      sinon.assert.calledOnceWithExactly(checkAppMessageExistenceStub, callMessage.data.hash);
+      sinon.assert.calledOnceWithExactly(getPermanentMessageStub, callMessage.data.hash);
     });
 
     it('should respond with app message that exists in temp storage but is not located in cache or perm storage', async () => {
@@ -387,8 +387,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
           version: 1,
         },
       };
-      const checkAppMessageExistenceStub = sinon.stub(messageVerifier, 'checkAppMessageExistence').returns(undefined);
-      const checkAppTemporaryMessageExistenceStub = sinon.stub(messageVerifier, 'checkAppTemporaryMessageExistence').returns(message);
+      const getPermanentMessageStub = sinon.stub(appsRepository, 'getPermanentMessage').returns(undefined);
+      const getTempMessageStub = sinon.stub(appsRepository, 'getTempMessage').returns(message);
       sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
       const myMessageCacheSetStub = sinon.stub(FluxTTLCache.prototype, 'set').returns(undefined);
       const websocket = generateWebsocket();
@@ -396,8 +396,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
       await fluxCommunicationMessagesSender.respondWithAppMessage(callMessage, websocket);
 
       sinon.assert.calledOnceWithExactly(myMessageCacheSetStub, callMessage.data.hash, message);
-      sinon.assert.calledOnceWithExactly(checkAppMessageExistenceStub, callMessage.data.hash);
-      sinon.assert.calledOnceWithExactly(checkAppTemporaryMessageExistenceStub, callMessage.data.hash);
+      sinon.assert.calledOnceWithExactly(getPermanentMessageStub, callMessage.data.hash);
+      sinon.assert.calledOnceWithExactly(getTempMessageStub, callMessage.data.hash);
     });
 
     it('should do nothing if the message does not exist', async () => {
@@ -413,8 +413,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const sendSignedMessageStub = sinon.stub(fluxCommunicationMessagesSender, 'sendSignedMessage').returns(undefined);
-      const checkAppMessageExistenceStub = sinon.stub(messageVerifier, 'checkAppMessageExistence').returns(undefined);
-      const checkAppTemporaryMessageExistenceStub = sinon.stub(messageVerifier, 'checkAppTemporaryMessageExistence').returns(undefined);
+      const getPermanentMessageStub = sinon.stub(appsRepository, 'getPermanentMessage').returns(undefined);
+      const getTempMessageStub = sinon.stub(appsRepository, 'getTempMessage').returns(undefined);
       sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
       const myMessageCacheSetStub = sinon.stub(FluxTTLCache.prototype, 'set').returns(undefined);
       const websocket = generateWebsocket();
@@ -422,8 +422,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
       await fluxCommunicationMessagesSender.respondWithAppMessage(callMessage, websocket);
 
       sinon.assert.notCalled(sendSignedMessageStub);
-      sinon.assert.calledOnceWithExactly(checkAppMessageExistenceStub, callMessage.data.hash);
-      sinon.assert.calledOnceWithExactly(checkAppTemporaryMessageExistenceStub, callMessage.data.hash);
+      sinon.assert.calledOnceWithExactly(getPermanentMessageStub, callMessage.data.hash);
+      sinon.assert.calledOnceWithExactly(getTempMessageStub, callMessage.data.hash);
       sinon.assert.calledOnceWithExactly(myMessageCacheSetStub, callMessage.data.hash, null);
     });
 
@@ -439,7 +439,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
           version: 1,
         },
       };
-      const checkAppMessageExistenceSpy = sinon.spy(messageVerifier, 'checkAppMessageExistence');
+      const getPermanentMessageSpy = sinon.spy(appsRepository, 'getPermanentMessage');
       const myMessageCacheGetStub = sinon.stub(FluxTTLCache.prototype, 'get').returns(message);
       const myMessageCacheSetStub = sinon.stub(FluxTTLCache.prototype, 'set').returns(undefined);
       sinon.stub(FluxTTLCache.prototype, 'has').returns(true);
@@ -448,7 +448,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       await fluxCommunicationMessagesSender.respondWithAppMessage(callMessage, websocket);
 
       sinon.assert.notCalled(myMessageCacheSetStub);
-      sinon.assert.notCalled(checkAppMessageExistenceSpy);
+      sinon.assert.notCalled(getPermanentMessageSpy);
       sinon.assert.calledOnceWithExactly(myMessageCacheGetStub, callMessage.data.hash);
     });
   });
