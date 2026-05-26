@@ -22,6 +22,8 @@ const { extractIp } = require('./utils/socketAddressUtils');
 const fluxEventBus = require('./utils/fluxEventBus');
 const globalState = require('./utils/globalState');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
+const { getSpecPolicy } = require('./utils/specLibs');
+const priceOracleState = require('./pricing/priceOracleState');
 
 const coinbaseFusionIndexCollection = config.database.daemon.collections.coinbaseFusionIndex; // fusion
 const utxoIndexCollection = config.database.daemon.collections.utxoIndex;
@@ -29,6 +31,12 @@ const appsHashesCollection = config.database.daemon.collections.appsHashes;
 const addressTransactionIndexCollection = config.database.daemon.collections.addressTransactionIndex;
 const scannedHeightCollection = config.database.daemon.collections.scannedHeight;
 const chainParamsMessagesCollection = config.database.chainparams.collections.chainMessages;
+const priceMessagesCollection = config.database.chainparams.collections.priceMessages;
+const rateMessagesCollection = config.database.chainparams.collections.rateMessages;
+const priceModifierMessagesCollection = config.database.chainparams.collections.priceModifierMessages;
+const oracleKeyMessagesCollection = config.database.chainparams.collections.oracleKeyMessages;
+const marketplacePricingMessagesCollection = config.database.chainparams.collections.marketplacePricingMessages;
+const policyGroupMessagesCollection = config.database.chainparams.collections.policyGroupMessages;
 
 let blockProccessingCanContinue = true;
 let someBlockIsProcessing = false;
@@ -269,37 +277,109 @@ function decodeMessage(asm) {
   return message;
 }
 
-/**
- * To process soft fork messages and reactin upon observing one
- * @param {string} txid TXID of soft fork message occurance
- * @param {number} heightBlockchain height of soft fork message occurance
- * @param {string} message Already decoded message.
- */
-async function processSoftFork(txid, height, message) {
-  // Process soft fork messages - errors are caught in calling functions
-  const splittedMess = message.split('_');
-  const version = splittedMess[0];
-  if (!version || splittedMess.length < 2) {
-    log.info('Ignoring non valid Soft Fork message.');
-    log.info(`${txid}_${height}_${message}`);
-    return;
-  }
-  const data = {
-    txid,
-    height,
-    message,
-    version,
-  };
-  log.info('New Soft Fork message received');
-  log.info(`${txid}_${height}_${message}`);
+function decodeMessageBytes(asm) {
+  const parts = asm.split('OP_RETURN ', 2);
+  if (!parts[1]) return null;
+  const hex = parts[1].split(' ')[0];
+  if (hex.length < 2 || hex.length % 2 !== 0) return null;
+  return Buffer.from(hex, 'hex');
+}
+
+function decodeLegacyAscii(bytes) {
+  const nullIdx = bytes.indexOf(0x00);
+  const slice = nullIdx >= 0 ? bytes.subarray(0, nullIdx) : bytes;
+  return Buffer.from(slice).toString('ascii');
+}
+
+async function storeToCollection(collectionName, doc) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.chainparams.database);
-  const query = { txid }; // unique
-  const update = { $set: data };
-  const options = {
-    upsert: true,
-  };
-  await dbHelper.updateOneInDatabase(database, chainParamsMessagesCollection, query, update, options);
+  const query = { txid: doc.txid };
+  const update = { $set: doc };
+  const options = { upsert: true };
+  await dbHelper.updateOneInDatabase(database, collectionName, query, update, options);
+}
+
+function isOracleSigner(tx) {
+  const oracleAddr = config.fluxapps.oracleAddress;
+  if (!oracleAddr) return false;
+  return tx.vin.some((vin) => vin.address === oracleAddr);
+}
+
+async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
+  const { dispatch } = await getSpecPolicy();
+  const { kind, message } = dispatch(bytes);
+
+  switch (kind) {
+    case 'legacy-price': {
+      if (!isSenderFoundation) return;
+      const ascii = decodeLegacyAscii(bytes);
+      const splittedMess = ascii.split('_');
+      const version = splittedMess[0];
+      if (!version || splittedMess.length < 2) {
+        log.info(`Ignoring invalid legacy soft fork message: ${txid}_${height}`);
+        return;
+      }
+      log.info(`Legacy soft fork message: ${txid}_${height}_${ascii}`);
+      const db = dbHelper.databaseConnection();
+      const database = db.db(config.database.chainparams.database);
+      const query = { txid };
+      const update = { $set: { txid, height, message: ascii, version } };
+      const options = { upsert: true };
+      await dbHelper.updateOneInDatabase(database, chainParamsMessagesCollection, query, update, options);
+      break;
+    }
+    case 'price':
+      if (!isSenderFoundation) return;
+      log.info(`PriceMessage at height ${height}: ${txid}`);
+      await storeToCollection(priceMessagesCollection, { txid, height, message });
+      if (priceOracleState.getPriceMessageHistory()) {
+        priceOracleState.getPriceMessageHistory().add(message, height);
+      }
+      break;
+    case 'rate':
+      if (!isOracleSigner(tx)) {
+        log.warn(`RateMessage rejected — wrong signer: ${txid} at height ${height}`);
+        return;
+      }
+      log.info(`RateMessage at height ${height}: ${txid}`);
+      await storeToCollection(rateMessagesCollection, { txid, height, message });
+      if (priceOracleState.getRateMessageHistory()) {
+        priceOracleState.getRateMessageHistory().add(message, height);
+      }
+      break;
+    case 'price-modifier':
+      if (!isSenderFoundation) return;
+      log.info(`PriceModifierMessage at height ${height}: ${txid}`);
+      await storeToCollection(priceModifierMessagesCollection, { txid, height, message });
+      if (priceOracleState.getPriceModifierHistory()) {
+        priceOracleState.getPriceModifierHistory().add(message, height);
+      }
+      break;
+    case 'oracle-key':
+      if (!isSenderFoundation) return;
+      log.info(`OracleKeyMessage at height ${height}: ${txid}`);
+      await storeToCollection(oracleKeyMessagesCollection, { txid, height, message });
+      if (priceOracleState.getOracleKeyHistory()) {
+        priceOracleState.getOracleKeyHistory().add(message, height);
+      }
+      break;
+    case 'marketplace-pricing':
+      if (!isSenderFoundation) return;
+      log.info(`MarketplacePricingMessage at height ${height}: ${txid}`);
+      await storeToCollection(marketplacePricingMessagesCollection, { txid, height, message });
+      if (priceOracleState.getMarketplacePricingHistory()) {
+        priceOracleState.getMarketplacePricingHistory().add(message, height);
+      }
+      break;
+    case 'policy-group':
+      if (!isSenderFoundation) return;
+      log.info(`PolicyGroupMessage at height ${height}: ${txid}`);
+      await storeToCollection(policyGroupMessagesCollection, { txid, height, message });
+      break;
+    default:
+      break;
+  }
 }
 
 /**
@@ -386,11 +466,14 @@ async function processInsight(blockDataVerbose, database) {
       const isSoftFork = isSenderFoundation && isReceiverFounation && message;
       if (isSoftFork) {
         try {
-          // eslint-disable-next-line no-await-in-loop
-          await processSoftFork(tx.txid, blockDataVerbose.height, message);
+          const asmField = tx.vout.find((v) => v.scriptPubKey && v.scriptPubKey.asm);
+          const rawBytes = asmField ? decodeMessageBytes(asmField.scriptPubKey.asm) : null;
+          if (rawBytes) {
+            // eslint-disable-next-line no-await-in-loop
+            await processSoftFork(tx.txid, blockDataVerbose.height, rawBytes, isSenderFoundation, tx);
+          }
         } catch (error) {
           log.error('Error processing soft fork message:', error);
-          // Continue processing other transactions even if soft fork processing fails
         }
       }
     }
@@ -560,10 +643,13 @@ async function processStandard(blockDataVerbose, database) {
       const isSoftFork = isSenderFoundation && isReceiverFounation && message;
       if (isSoftFork) {
         try {
-          await processSoftFork(tx.txid, blockDataVerbose.height, message);
+          const asmField = tx.vout.find((v) => v.scriptPubKey && v.scriptPubKey.asm);
+          const rawBytes = asmField ? decodeMessageBytes(asmField.scriptPubKey.asm) : null;
+          if (rawBytes) {
+            await processSoftFork(tx.txid, blockDataVerbose.height, rawBytes, isSenderFoundation, tx);
+          }
         } catch (error) {
           log.error('Error processing soft fork message:', error);
-          // Continue processing other transactions even if soft fork processing fails
         }
       }
     }
@@ -879,9 +965,13 @@ async function bootstrapSoftForks(currentDaemonHeight) {
       }
 
       if (senderFoundation && receiverFoundation && message) {
-        // eslint-disable-next-line no-await-in-loop
-        await processSoftFork(tx.txid, tx.height, message);
-        totalForks += 1;
+        const asmField = tx.vout.find((v) => v.scriptPubKey && v.scriptPubKey.asm);
+        const rawBytes = asmField ? decodeMessageBytes(asmField.scriptPubKey.asm) : null;
+        if (rawBytes) {
+          // eslint-disable-next-line no-await-in-loop
+          await processSoftFork(tx.txid, tx.height, rawBytes, senderFoundation, tx);
+          totalForks += 1;
+        }
       }
     }
   }
