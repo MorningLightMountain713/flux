@@ -22,7 +22,7 @@ const dockerServiceMock = {
 };
 
 const fluxNetworkHelperMock = {
-  getMyFluxIPandPort: sinon.stub(),
+  getLocalSocketAddress: sinon.stub(),
 };
 
 const syncthingServiceMock = {
@@ -134,7 +134,7 @@ describe('syncthingMonitor tests', () => {
     syncthingServiceMock.getFolderIdErrors.reset();
     syncthingServiceMock.getConfigRestartRequired.reset();
     syncthingServiceMock.systemRestart.reset();
-    fluxNetworkHelperMock.getMyFluxIPandPort.reset();
+    fluxNetworkHelperMock.getLocalSocketAddress.reset();
     dockerServiceMock.dockerContainerInspect.reset();
     dockerServiceMock.appDockerStart.reset();
     syncthingHealthMonitorMock.monitorFolderHealth.reset();
@@ -170,7 +170,7 @@ describe('syncthingMonitor tests', () => {
     it('should return control object with stop and isActive methods', () => {
       mockInstalledAppsFn.resolves({ status: 'success', data: [] });
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
-      fluxNetworkHelperMock.getMyFluxIPandPort.resolves('10.0.0.1:16127');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -189,7 +189,7 @@ describe('syncthingMonitor tests', () => {
     it('should stop monitoring when stop is called', () => {
       mockInstalledAppsFn.resolves({ status: 'success', data: [] });
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
-      fluxNetworkHelperMock.getMyFluxIPandPort.resolves('10.0.0.1:16127');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -357,7 +357,7 @@ describe('syncthingMonitor tests', () => {
       deploymentProviderMock.listInstalledDeployments.onSecondCall().resolves([]);
 
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
-      fluxNetworkHelperMock.getMyFluxIPandPort.resolves('10.0.0.1:16127');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -391,7 +391,7 @@ describe('syncthingMonitor tests', () => {
 
     it('should run at regular intervals', async () => {
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
-      fluxNetworkHelperMock.getMyFluxIPandPort.resolves('10.0.0.1:16127');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
