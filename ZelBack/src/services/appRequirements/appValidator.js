@@ -11,9 +11,9 @@ const messageVerifier = require('../appMessaging/messageVerifier');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const imageManager = require('../appSecurity/imageManager');
 const { supportedArchitectures, enterpriseRequiredArchitectures } = require('../utils/appConstants');
-const { specificationFormatter, findCommonArchitectures } = require('../utils/appUtilities');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
+const { findCommonArchitectures } = require('../utils/appUtilities');
 const { validateSubmissionSpec } = require('../utils/specLibs');
+const { deserializeSpec, resolveSpec } = require('../utils/specCutover');
 const appsRepository = require('../appDatabase/appsRepository');
 const portManager = require('../appNetwork/portManager');
 const { peerManager } = require('../utils/peerState');
@@ -104,37 +104,13 @@ async function verifyAppRegistrationParameters(req, res) {
       }
       const daemonHeight = syncStatus.data.height;
 
-      const isEnterprise = Boolean(
-        appSpecification.version >= 8 && appSpecification.enterprise,
-      );
-
-      const appSpecDecrypted = await checkAndDecryptAppSpecs(
-        appSpecification,
-        {
-          daemonHeight,
-          owner: appSpecification.owner,
-        },
-      );
-
-      const appSpecFormatted = specificationFormatter(appSpecDecrypted);
+      const wireSpec = await deserializeSpec(appSpecification);
+      const spec = wireSpec.isEncrypted ? await resolveSpec(appSpecification) : wireSpec;
+      const appSpecFormatted = spec.serialize();
 
       await verifyAppSpecifications(appSpecFormatted, daemonHeight, true);
 
-      if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
-        for (const appComponent of appSpecFormatted.compose) {
-          if (appComponent.secrets) {
-            // eslint-disable-next-line no-await-in-loop
-            await imageManager.checkAppSecrets(appSpecFormatted.name, appComponent, appSpecFormatted.owner, true);
-          }
-        }
-      }
-
       await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted);
-
-      if (isEnterprise) {
-        appSpecFormatted.contacts = [];
-        appSpecFormatted.compose = [];
-      }
 
       const respondPrice = messageHelper.createDataMessage(appSpecFormatted);
       res.json(respondPrice);
@@ -157,29 +133,15 @@ async function validateAppUpdate(appSpecification) {
   }
   const daemonHeight = syncStatus.data.height;
 
-  const isEnterprise = Boolean(
-    appSpecification.version >= 8 && appSpecification.enterprise,
-  );
-
-  const decryptedSpecs = await checkAndDecryptAppSpecs(appSpecification, { daemonHeight });
-
-  const appSpecFormatted = specificationFormatter(decryptedSpecs);
+  const wireSpec = await deserializeSpec(appSpecification);
+  const spec = wireSpec.isEncrypted ? await resolveSpec(appSpecification) : wireSpec;
+  const appSpecFormatted = spec.serialize();
 
   await verifyAppSpecifications(appSpecFormatted, daemonHeight, true);
 
-  if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
-    for (const appComponent of appSpecFormatted.compose) {
-      if (appComponent.secrets) {
-        // eslint-disable-next-line no-await-in-loop
-        await imageManager.checkAppSecrets(appSpecFormatted.name, appComponent, appSpecFormatted.owner, false);
-      }
-    }
-  }
-
   const timestamp = Date.now();
-  // eslint-disable-next-line global-require
-  const advancedWorkflows = require('../appLifecycle/advancedWorkflows');
-  const previousAppSpecs = await advancedWorkflows.getPreviousAppSpecifications(appSpecFormatted, timestamp);
+  const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
+  const previousAppSpecs = await getPreviousAppSpecifications(appSpecFormatted, timestamp);
   if (!previousAppSpecs) {
     throw new Error(`Flux App ${appSpecFormatted.name} does not exist and cannot be updated`);
   }
@@ -191,13 +153,6 @@ async function validateAppUpdate(appSpecification) {
       + `Current version: ${previousAppSpecs.version}, Attempted version: ${appSpecFormatted.version}. `
       + `To update this application, please use version ${latestSupportedSpecVersion} specifications.`,
     );
-  }
-
-  await advancedWorkflows.validateApplicationUpdateCompatibility(appSpecFormatted, previousAppSpecs);
-
-  if (isEnterprise) {
-    appSpecFormatted.contacts = [];
-    appSpecFormatted.compose = [];
   }
 
   return appSpecFormatted;
@@ -284,35 +239,16 @@ async function registerAppGlobalyApi(req, res) {
 
       const daemonHeight = syncStatus.data.height;
 
-      const appSpecDecrypted = await checkAndDecryptAppSpecs(
-        appSpecification,
-        {
-          daemonHeight,
-          owner: appSpecification.owner,
-        },
-      );
-
-      const appSpecFormatted = specificationFormatter(appSpecDecrypted);
+      const wireSpec = await deserializeSpec(appSpecification);
+      const spec = wireSpec.isEncrypted ? await resolveSpec(appSpecification) : wireSpec;
+      const appSpecFormatted = spec.serialize();
 
       await verifyAppSpecifications(appSpecFormatted, daemonHeight, true);
 
-      if (appSpecFormatted.version === 7 && appSpecFormatted.nodes.length > 0) {
-        for (const appComponent of appSpecFormatted.compose) {
-          if (appComponent.secrets) {
-            // eslint-disable-next-line no-await-in-loop
-            await imageManager.checkAppSecrets(appSpecFormatted.name, appComponent, appSpecFormatted.owner, true);
-          }
-        }
-      }
-
       await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted);
 
-      const isEnterprise = Boolean(
-        appSpecification.version >= 8 && appSpecification.enterprise,
-      );
-
-      const broadcastSpecBlob = isEnterprise
-        ? specificationFormatter(appSpecification)
+      const broadcastSpecBlob = wireSpec.isEncrypted
+        ? wireSpec.serialize()
         : appSpecFormatted;
 
       const signedEvent = await appEventVerifier.deserializeMessage({
