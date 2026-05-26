@@ -160,7 +160,7 @@ async function cleanupOwnershipViolations() {
     // Let exceptions propagate so the scheduler can retry on the next tick;
     // a half-applied cleanup is fine to resume — subsequent runs re-query the db.
     // eslint-disable-next-line no-await-in-loop
-    await appUninstaller.removeAppLocally(app.name, null, true, true, true);
+    await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
   }
 }
 
