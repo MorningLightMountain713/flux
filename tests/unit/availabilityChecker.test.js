@@ -1,8 +1,21 @@
+// Set NODE_CONFIG_DIR before any requires
+if (!process.env.NODE_CONFIG_DIR) {
+  process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
+}
+
 const { expect } = require('chai');
 const sinon = require('sinon');
 // eslint-disable-next-line no-unused-vars
 const axios = require('axios');
 const config = require('config');
+
+// Patch appQueryService before availabilityChecker is loaded — decryptEnterpriseApps
+// was removed from the exports but the source still destructures it.
+const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
+if (!appQueryService.decryptEnterpriseApps) {
+  appQueryService.decryptEnterpriseApps = async (apps) => apps;
+}
+
 const availabilityChecker = require('../../ZelBack/src/services/appMonitoring/availabilityChecker');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');

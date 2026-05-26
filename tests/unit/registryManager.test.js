@@ -242,54 +242,6 @@ describe('registryManager tests', () => {
     });
   });
 
-  describe('getApplicationSpecifications tests', () => {
-    beforeEach(async () => {
-      const collection = config.database.appsglobal.collections.appsInformation;
-      const testApp = {
-        name: 'SpecTestApp',
-        version: 3,
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-        repotag: 'test/app:latest',
-        ports: [30001, 30002],
-        containerPorts: [8080],
-        cpu: 1,
-        ram: 1000,
-        hdd: 10,
-        hash: 'testhash',
-        height: 100,
-      };
-
-      try {
-        await database.collection(collection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-      await dbHelper.insertOneToDatabase(database, collection, testApp);
-    });
-
-    it('should return application specifications', async () => {
-      const result = await registryManager.getApplicationSpecifications('SpecTestApp');
-
-      expect(result).to.be.an('object');
-      expect(result.name).to.equal('SpecTestApp');
-      expect(result.version).to.equal(3);
-      expect(result.owner).to.equal('1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC');
-    });
-
-    it('should return null for non-existent app', async () => {
-      const result = await registryManager.getApplicationSpecifications('NonExistent');
-
-      expect(result).to.be.undefined;
-    });
-
-    it('should be case insensitive', async () => {
-      const result = await registryManager.getApplicationSpecifications('spectestapp');
-
-      expect(result).to.be.an('object');
-      expect(result.name).to.equal('SpecTestApp');
-    });
-  });
-
   describe('getApplicationSpecificationAPI tests', () => {
     beforeEach(() => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
@@ -339,9 +291,21 @@ describe('registryManager tests', () => {
       const collection = config.database.appsglobal.collections.appsInformation;
       const existingApp = {
         name: 'ExistingApp',
+        version: 3,
+        description: 'Test app',
         owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
+        repotag: 'test/image:latest',
+        ports: ['30001'],
+        containerPorts: ['8080'],
+        domains: [''],
+        containerData: '',
+        cpu: 0.5,
+        ram: 500,
+        hdd: 5,
+        instances: 3,
         height: 100,
         expire: 22000,
+        hash: 'testhash123',
       };
 
       try {
@@ -412,7 +376,7 @@ describe('registryManager tests', () => {
       };
       await registryManager.updateAppSpecifications(updatedSpecs);
 
-      const result = await registryManager.getApplicationSpecifications('UpdateTestApp');
+      const result = await registryManager.getAppSpecificationFromDb('UpdateTestApp');
       expect(result.name).to.equal('UpdateTestApp');
       expect(result.height).to.equal(200);
       expect(result.hash).to.equal('newhash');
@@ -437,7 +401,7 @@ describe('registryManager tests', () => {
 
       await registryManager.updateAppSpecifications(lowerHeightSpecs);
 
-      const result = await registryManager.getApplicationSpecifications('HeightTestApp');
+      const result = await registryManager.getAppSpecificationFromDb('HeightTestApp');
       expect(result.height).to.equal(300);
       expect(result.hash).to.equal('hash1');
     });
@@ -471,7 +435,7 @@ describe('registryManager tests', () => {
       };
       await registryManager.updateAppSpecifications(v4Spec);
 
-      const result = await registryManager.getApplicationSpecifications('GhostFieldTestApp');
+      const result = await registryManager.getAppSpecificationFromDb('GhostFieldTestApp');
       expect(result.version).to.equal(4);
       expect(result.compose).to.exist;
       // Ghost flat fields from v3 should NOT exist
@@ -543,23 +507,6 @@ describe('registryManager tests', () => {
       if (result.length > 1) {
         expect(result[0].height).to.be.at.most(result[1].height);
       }
-    });
-  });
-
-  describe('getInstalledApps tests', () => {
-    it('should return installed apps from local database', async () => {
-      const result = await registryManager.getInstalledApps();
-
-      expect(result).to.be.an('array');
-    });
-
-    it('should handle errors and return empty array', async () => {
-      sinon.stub(dbHelper, 'findInDatabase').rejects(new Error('Database error'));
-
-      const result = await registryManager.getInstalledApps();
-
-      expect(result).to.be.an('array');
-      expect(result).to.be.empty;
     });
   });
 

@@ -4,8 +4,7 @@ const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const resourceQueryService = require('../../ZelBack/src/services/appQuery/resourceQueryService');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
-const generalService = require('../../ZelBack/src/services/generalService');
-const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const { requireMongo } = require('./dbTestHelper');
@@ -24,13 +23,7 @@ describe('resourceQueryService tests', () => {
         json: sinon.stub(),
       };
 
-      const installedApps = [
-        { name: 'App1', version: 3 },
-        { name: 'App2', version: 4 },
-        { name: 'App3', version: 3 },
-      ];
-
-      sinon.stub(registryManager, 'getInstalledApps').resolves(installedApps);
+      sinon.stub(appsRepository, 'countInstalledApps').resolves(3);
       sinon.stub(appQueryService, 'listRunningApps').resolves({
         status: 'success',
         data: [
@@ -56,7 +49,7 @@ describe('resourceQueryService tests', () => {
     });
 
     it('should work without response object', async () => {
-      sinon.stub(registryManager, 'getInstalledApps').resolves([]);
+      sinon.stub(appsRepository, 'countInstalledApps').resolves(0);
       sinon.stub(appQueryService, 'listRunningApps').resolves({
         status: 'success',
         data: [],
@@ -80,7 +73,7 @@ describe('resourceQueryService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(registryManager, 'getInstalledApps').rejects(new Error('Database error'));
+      sinon.stub(appsRepository, 'countInstalledApps').rejects(new Error('Database error'));
       sinon.stub(messageHelper, 'createErrorMessage').returns({ status: 'error' });
 
       await resourceQueryService.fluxUsage(req, res);
@@ -95,7 +88,7 @@ describe('resourceQueryService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(registryManager, 'getInstalledApps').resolves([{ name: 'App1' }]);
+      sinon.stub(appsRepository, 'countInstalledApps').resolves(1);
       sinon.stub(appQueryService, 'listRunningApps').resolves({
         status: 'error',
       });
@@ -122,8 +115,6 @@ describe('resourceQueryService tests', () => {
       await dbHelper.initiateDB();
       db = dbHelper.databaseConnection();
       database = db.db(config.database.appslocal.database);
-
-      sinon.stub(generalService, 'nodeTier').resolves('stratus');
     });
 
     it('should calculate resources for version 3 non-tiered apps', async () => {
@@ -137,18 +128,34 @@ describe('resourceQueryService tests', () => {
         {
           name: 'App1',
           version: 3,
+          description: 'Test app 1',
+          owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
+          repotag: 'test/app1:latest',
+          ports: ['30001'],
+          containerPorts: ['8080'],
+          domains: [''],
+          containerData: '',
           tiered: false,
           cpu: 2,
           ram: 4000,
           hdd: 50,
+          instances: 3,
         },
         {
           name: 'App2',
           version: 3,
+          description: 'Test app 2',
+          owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
+          repotag: 'test/app2:latest',
+          ports: ['30002'],
+          containerPorts: ['8081'],
+          domains: [''],
+          containerData: '',
           tiered: false,
           cpu: 1,
           ram: 2000,
           hdd: 25,
+          instances: 3,
         },
       ];
 
@@ -170,7 +177,7 @@ describe('resourceQueryService tests', () => {
       expect(response.data.appsHddLocked).to.be.greaterThan(75); // Base HDD + filesystem overhead
     });
 
-    it('should calculate resources for version 3 tiered apps', async () => {
+    it('should calculate resources for version 3 tiered apps using base values', async () => {
       const req = {};
       const res = {
         json: sinon.stub(),
@@ -181,13 +188,27 @@ describe('resourceQueryService tests', () => {
         {
           name: 'App1',
           version: 3,
+          description: 'Test tiered app',
+          owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
+          repotag: 'test/app1:latest',
+          ports: ['30001'],
+          containerPorts: ['8080'],
+          domains: [''],
+          containerData: '',
           tiered: true,
           cpu: 1,
           ram: 2000,
           hdd: 25,
-          cpustratus: 4,
-          ramstratus: 8000,
-          hddstratus: 100,
+          cpubasic: 0.5,
+          cpusuper: 2,
+          cpubamf: 4,
+          rambasic: 1000,
+          ramsuper: 4000,
+          rambamf: 8000,
+          hddbasic: 10,
+          hddsuper: 50,
+          hddbamf: 100,
+          instances: 3,
         },
       ];
 
@@ -204,9 +225,10 @@ describe('resourceQueryService tests', () => {
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
-      expect(response.data.appsCpusLocked).to.equal(4);
-      expect(response.data.appsRamLocked).to.equal(8000);
-      expect(response.data.appsHddLocked).to.be.greaterThan(100);
+      // DeploymentSpec uses the base cpu/ram/hdd values, not the tiered variants
+      expect(response.data.appsCpusLocked).to.equal(1);
+      expect(response.data.appsRamLocked).to.equal(2000);
+      expect(response.data.appsHddLocked).to.be.greaterThan(25);
     });
 
     it('should calculate resources for version 4+ compose apps', async () => {
@@ -220,12 +242,17 @@ describe('resourceQueryService tests', () => {
         {
           name: 'App1',
           version: 4,
+          description: 'Test compose app',
+          owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
+          instances: 3,
           compose: [
             {
-              name: 'Component1', cpu: 1, ram: 2000, hdd: 20,
+              name: 'Component1', repotag: 'test/c1:latest', cpu: 1, ram: 2000, hdd: 20,
+              ports: ['30001'], containerPorts: ['8080'], domains: [''], containerData: '',
             },
             {
-              name: 'Component2', cpu: 2, ram: 4000, hdd: 30,
+              name: 'Component2', repotag: 'test/c2:latest', cpu: 2, ram: 4000, hdd: 30,
+              ports: ['30002'], containerPorts: ['8081'], domains: [''], containerData: '',
             },
           ],
         },
@@ -249,7 +276,7 @@ describe('resourceQueryService tests', () => {
       expect(response.data.appsHddLocked).to.be.greaterThan(50);
     });
 
-    it('should calculate resources for tiered compose apps', async () => {
+    it('should calculate resources for tiered compose apps using base values', async () => {
       const req = {};
       const res = {
         json: sinon.stub(),
@@ -260,23 +287,42 @@ describe('resourceQueryService tests', () => {
         {
           name: 'App1',
           version: 4,
+          description: 'Test tiered compose app',
+          owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
+          instances: 3,
           compose: [
             {
               name: 'Component1',
+              repotag: 'test/c1:latest',
               tiered: true,
               cpu: 1,
               ram: 2000,
               hdd: 20,
-              cpustratus: 2,
-              ramstratus: 4000,
-              hddstratus: 40,
+              cpubasic: 0.5,
+              cpusuper: 1.5,
+              cpubamf: 2,
+              rambasic: 1000,
+              ramsuper: 3000,
+              rambamf: 4000,
+              hddbasic: 10,
+              hddsuper: 30,
+              hddbamf: 40,
+              ports: ['30001'],
+              containerPorts: ['8080'],
+              domains: [''],
+              containerData: '',
             },
             {
               name: 'Component2',
+              repotag: 'test/c2:latest',
               tiered: false,
               cpu: 1,
               ram: 2000,
               hdd: 20,
+              ports: ['30002'],
+              containerPorts: ['8081'],
+              domains: [''],
+              containerData: '',
             },
           ],
         },
@@ -295,9 +341,10 @@ describe('resourceQueryService tests', () => {
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
-      expect(response.data.appsCpusLocked).to.equal(3);
-      expect(response.data.appsRamLocked).to.equal(6000);
-      expect(response.data.appsHddLocked).to.be.greaterThan(60);
+      // DeploymentSpec uses the base cpu/ram/hdd values, not the tiered variants
+      expect(response.data.appsCpusLocked).to.equal(2);
+      expect(response.data.appsRamLocked).to.equal(4000);
+      expect(response.data.appsHddLocked).to.be.greaterThan(40);
     });
 
     it('should work without response object', async () => {
@@ -341,44 +388,6 @@ describe('resourceQueryService tests', () => {
       expect(response.data.appsCpusLocked).to.equal(0);
     });
 
-    it('should handle tier error gracefully', async () => {
-      const req = {};
-      const res = {
-        json: sinon.stub(),
-      };
-
-      generalService.nodeTier.restore();
-      sinon.stub(generalService, 'nodeTier').rejects(new Error('Tier error'));
-
-      const collection = config.database.appslocal.collections.appsInformation;
-      const testApps = [
-        {
-          name: 'App1',
-          version: 3,
-          tiered: true,
-          cpu: 1,
-          ram: 2000,
-          hdd: 25,
-        },
-      ];
-
-      try {
-        await database.collection(collection).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-      await dbHelper.insertManyToDatabase(database, collection, testApps);
-
-      sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
-
-      await resourceQueryService.appsResources(req, res);
-
-      sinon.assert.calledOnce(res.json);
-      const response = res.json.firstCall.args[0];
-      // Should use fallback values
-      expect(response.data.appsCpusLocked).to.equal(1);
-    });
-
     it('should handle database errors', async () => {
       const req = {};
       const res = {
@@ -405,12 +414,17 @@ describe('resourceQueryService tests', () => {
         {
           name: 'App1',
           version: 4,
+          description: 'Test overhead app',
+          owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
+          instances: 3,
           compose: [
             {
-              name: 'Component1', cpu: 1, ram: 2000, hdd: 10,
+              name: 'Component1', repotag: 'test/c1:latest', cpu: 1, ram: 2000, hdd: 10,
+              ports: ['30001'], containerPorts: ['8080'], domains: [''], containerData: '',
             },
             {
-              name: 'Component2', cpu: 1, ram: 2000, hdd: 10,
+              name: 'Component2', repotag: 'test/c2:latest', cpu: 1, ram: 2000, hdd: 10,
+              ports: ['30002'], containerPorts: ['8081'], domains: [''], containerData: '',
             },
           ],
         },

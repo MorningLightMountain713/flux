@@ -291,7 +291,7 @@ describe('enterpriseNetwork', () => {
       expect(names).to.deep.equal(['drop1', 'drop2']);
       // sendMessage flag must be true so peers get fluxappremoved
       const firstCall = uninstallApplication.firstCall.args;
-      expect(firstCall[4]).to.equal(true);
+      expect(firstCall[1].broadcastRemoval).to.equal(true);
     });
 
     it('non-enterprise-network node: uninstalls apps whose owner IS in enterpriseAppOwners', async () => {
@@ -309,7 +309,7 @@ describe('enterpriseNetwork', () => {
 
       expect(uninstallApplication.callCount).to.equal(1);
       expect(uninstallApplication.firstCall.args[0]).to.equal('enterprise-app');
-      expect(uninstallApplication.firstCall.args[4]).to.equal(true);
+      expect(uninstallApplication.firstCall.args[1].broadcastRemoval).to.equal(true);
     });
 
     it('is a no-op when there are no offenders', async () => {
