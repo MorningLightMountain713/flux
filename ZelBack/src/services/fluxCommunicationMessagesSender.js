@@ -42,7 +42,7 @@ async function respondWithAppMessage(msgObj, peer) {
   try {
     // check if we have it database of permanent appMessages
     // eslint-disable-next-line global-require
-    const messageVerifier = require('./appMessaging/messageVerifier');
+    const appsRepository = require('./appDatabase/appsRepository');
     const appsMessages = [];
     if (!msgObj.data) {
       throw new Error('Invalid Flux App Request message');
@@ -89,7 +89,7 @@ async function respondWithAppMessage(msgObj, peer) {
       }
       let temporaryAppMessage = null;
       // eslint-disable-next-line no-await-in-loop
-      const appMessage = await messageVerifier.checkAppMessageExistence(hash) || await messageVerifier.checkAppTemporaryMessageExistence(hash);
+      const appMessage = await appsRepository.getPermanentMessage(hash) || await appsRepository.getTempMessage(hash);
       if (appMessage) {
         temporaryAppMessage = { // specification of temp message
           type: appMessage.type,
