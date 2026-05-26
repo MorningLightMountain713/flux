@@ -14,12 +14,12 @@ const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const registryManager = require('../appDatabase/registryManager');
 const appReconciler = require('../appMonitoring/appReconciler');
+const appsRepository = require('../appDatabase/appsRepository');
+const advancedWorkflows = require('./advancedWorkflows');
 const appUninstaller = require('./appUninstaller');
 const appNetworkLinker = require('./appNetworkLinker');
 const appSlice = require('./appSlice');
-const nodeStatusMonitor = require('../appMonitoring/nodeStatusMonitor');
 const appPlacements = require('../appManagement/appPlacements');
-const { TIMED_OUT } = require('../utils/withinDeadline');
 const portManager = require('../appNetwork/portManager');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -277,9 +277,9 @@ async function reconcileAppsOnBoot() {
       // Get the app specification (with decryption for enterprise apps)
       let appSpec;
       try {
-        // Use getApplicationGlobalSpecifications which handles enterprise app decryption
         // eslint-disable-next-line no-await-in-loop
-        appSpec = await registryManager.getApplicationGlobalSpecifications(appName);
+        const inst = await appsRepository.getGlobalAppInfo(appName);
+        appSpec = inst ? inst.spec.serialize() : null;
       } catch (specError) {
         log.error(`appStartupManager - Error fetching specs for app ${appName}: ${specError.message}`);
       }
@@ -328,12 +328,16 @@ async function reconcileAppsOnBoot() {
           continue;
         }
         if (!hasValidLocation) {
-          // placed elsewhere while this node was down: removed, never started
-          log.warn(`appStartupManager - App ${appName}: no valid location record for this node (${localSocketAddr}), removing locally`);
-          // eslint-disable-next-line no-await-in-loop
-          const removed = await removeAppBootMayNotStart(appName);
-          if (removed) results.appsRemoved.push(appName);
-          else results.appsFailed.push({ app: appName, error: 'not removed; held stopped until it is' });
+          log.warn(`appStartupManager - App ${appName} no longer has a valid location record for this node (${localSocketAddr}), removing locally`);
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true });
+            results.appsRemoved.push(appName);
+            log.info(`appStartupManager - App ${appName} removed locally (was reassigned to another node)`);
+          } catch (removeError) {
+            log.error(`appStartupManager - Failed to remove app ${appName}: ${removeError.message}`);
+            results.appsFailed.push({ app: appName, error: removeError.message });
+          }
           // eslint-disable-next-line no-await-in-loop
           await serviceHelper.delay(2000);
           // eslint-disable-next-line no-continue
@@ -389,9 +393,7 @@ async function removeAllApps(reason) {
       log.warn(`REMOVAL REASON: ${reason} - removing ${app.name}`);
       // One removal that never returns must not hold boot, or every app after it.
       // eslint-disable-next-line no-await-in-loop
-      const outcome = await nodeStatusMonitor.removeWithinDeadline(appUninstaller.removeAppLocally, app.name, true);
-      if (outcome === TIMED_OUT) log.error(`appStartupManager - ${app.name} was not removed within ${config.fluxapps.appRemovalDeadlineMs / 1000}s, moving on`);
-      else if (outcome === nodeStatusMonitor.STILL_REMOVING) log.warn(`appStartupManager - ${app.name} is still being removed, moving on`);
+      await appUninstaller.uninstallApplication(app.name, { forceKill: true, broadcastRemoval: true });
     }
   }
 }

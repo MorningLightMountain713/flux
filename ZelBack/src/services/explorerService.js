@@ -828,25 +828,11 @@ async function processBlock(blockHeight, isInsightExplorer) {
         if (blockWorkDue('expireGlobalApplications', blockHeight, 2 * speedMultiplier)) {
           await registryManager.expireGlobalApplications();
         }
-        const giveUpPeriod = config.fluxapps.removeFluxAppsPeriod * speedMultiplier;
-        if (blockWorkDue('checkAndRemoveApplicationInstance', blockHeight, giveUpPeriod)) {
-          // Judged at the times of the blocks the pass and the one before it
-          // fell due on, which every node reads the same however late it runs.
-          const dueHeight = Math.floor(blockHeight / giveUpPeriod) * giveUpPeriod;
-          try {
-            const [time, previousTime] = await Promise.all([
-              blockTimeAt(blockDataVerbose, dueHeight),
-              blockTimeAt(blockDataVerbose, dueHeight - giveUpPeriod),
-            ]);
-            advancedWorkflows.checkAndRemoveApplicationInstance({
-              height: blockHeight, period: giveUpPeriod, time, previousTime,
-            });
-          } catch (error) {
-            log.error(`Give-up-an-app pass for ${dueHeight} not run: its block times could not be read: ${error?.message ?? error}`);
-          }
+        if (blockWorkDue('checkAndRemoveApplicationInstance', blockHeight, config.fluxapps.removeFluxAppsPeriod * speedMultiplier)) {
+          advancedWorkflows.reconcileInstalledApps();
         }
         if (blockWorkDue('reinstallOldApplications', blockHeight, updateFluxAppsPeriod * speedMultiplier)) {
-          advancedWorkflows.reinstallOldApplications();
+          advancedWorkflows.reconcileInstalledApps();
           updateFluxAppsPeriod = Math.floor(Math.random() * 6 + 4);
         }
       }

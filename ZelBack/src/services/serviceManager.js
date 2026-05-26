@@ -758,8 +758,10 @@ async function startFluxFunctions() {
         fluxNetworkHelper.isArcane,
       );
     }, bootDelay(3 * 60 * 1000));
-    nodeStatusMonitor.initialize(appQueryService.installedApps, appUninstaller.removeAppLocally);
-    nodeStatusMonitor.start(appQueryService.installedApps, appUninstaller.removeAppLocally);
+    nodeStatusMonitor.initialize(appQueryService.installedApps);
+    setTimeout(() => {
+      nodeStatusMonitor.monitorNodeStatus(appQueryService.installedApps);
+    }, bootDelay(1.5 * 60 * 1000));
     // Start the syncthing/masterSlave deciders once boot container state has settled
     // (the same AsyncGate the reconciler starts on), not after a fixed delay. Each
     // decider self-gates per cycle on its own prerequisites (mounts, syncthing health,
@@ -774,22 +776,11 @@ async function startFluxFunctions() {
         appQueryService.installedApps,
         () => globalState,
       ); // rechecks syncthing configuration each cycle
-      // masterSlave self-gates on syncthingAppsFirstRun (the syncthing monitor's
-      // first-run mount-safety must complete before any g: election), so it starts
-      // concurrently rather than after a timed offset.
-      // The election reads the busy lists and the receive-only cache off
-      // globalState itself at each decision; they are not parameters. The
-      // getters return snapshots and the election runs for the life of the
-      // process, so anything captured at this call is frozen at boot and goes
-      // quietly stale.
-      advancedWorkflows.startMasterSlaveApps(
-        globalState,
-        appQueryService.installedApps,
-        appQueryService.listRunningApps,
-        https,
-      ); // stops and starts g: syncthing apps when a new master is required or changed.
       setTimeout(() => {
-        appInspector.monitorSharedDBApps(appQueryService.installedApps, appUninstaller.removeAppLocally, globalState); // Monitor SharedDB Apps.
+        advancedWorkflows.coordinateActiveStandbyApps();
+      }, 30 * 1000);
+      setTimeout(() => {
+        appInspector.monitorSharedDBApps(globalState);
       }, 60 * 1000);
     });
     // Hash sync and spawner startup are now managed by the AppSyncOrchestrator (event-driven)
@@ -801,7 +792,6 @@ async function startFluxFunctions() {
         advancedWorkflows.forceAppRemovals();
       }, forceRemovalIntervalMs);
     }, bootDelay(30 * 60 * 1000));
-    // Daemon health monitoring
     setTimeout(() => {
       daemonHealthMonitor.checkDaemonHealthAndCleanup();
       setInterval(() => {
@@ -814,9 +804,6 @@ async function startFluxFunctions() {
     // needs the gate.
     setTimeout(() => {
       globalState.waitForPolicyReady().then(() => appInspector.checkStorageSpaceForApps(
-        appQueryService.installedApps,
-        appUninstaller.removeAppLocally,
-        advancedWorkflows.softRedeploy,
         appsStorageViolations,
       )).catch((error) => log.error(`Storage space check error: ${error.message}`));
     }, bootDelay(20 * 60 * 1000));

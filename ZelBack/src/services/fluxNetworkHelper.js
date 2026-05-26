@@ -1852,7 +1852,7 @@ async function applyIpChangeLimit(recentIpChanges) {
     for (const app of apps) {
       log.warn(`REMOVAL REASON: Too many IP changes - ${app.name} being removed due to ${recentIpChanges.length} IP changes in ${IP_CHANGE_WINDOW_MS}ms (DoS protection)`);
       // eslint-disable-next-line no-await-in-loop
-      await appUninstaller.removeAppLocally(app.name, null, true, null, false).catch((error) => log.error(error)); // we will not send appremove messages because they will not be accepted by the other nodes
+      await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true }).catch((error) => log.error(error)); // we will not send appremove messages because they will not be accepted by the other nodes
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(500);
     }
@@ -1946,9 +1946,10 @@ async function appsStayingThroughIpMove(previousSocket, currentSocket) {
   let complete = true;
   // Gone, or never there: either way not installed here now.
   const removed = async (appName) => {
-    const outcome = await appUninstaller.removeAppLocally(appName, null, true, null, true)
+    const outcome = await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true })
+      .then(() => RemovalOutcome.REMOVED)
       .catch((error) => { log.error(error); return RemovalOutcome.FAILED; });
-    return outcome === RemovalOutcome.REMOVED || outcome === RemovalOutcome.NOT_INSTALLED;
+    return outcome === RemovalOutcome.REMOVED;
   };
   const apps = await appQueryService.installedApps();
   if (apps.status !== 'success') return { staying, complete: false };
