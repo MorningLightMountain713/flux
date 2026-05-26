@@ -109,7 +109,7 @@ async function handleMissingMasterSlaveContainer(stoppedApp, mainAppName) {
     if (appTamperingDetectionService.isNetworkMissingError(recreateErr.message)) {
       await appTamperingDetectionService.recordEvent(mainAppName, 'network_pruned', `Docker network missing during recreation: ${recreateErr.message}`);
     }
-    await appUninstaller.removeAppLocally(mainAppName, null, false, true, true);
+    await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
   }
 }
 
