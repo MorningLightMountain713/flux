@@ -1,12 +1,12 @@
 const util = require('util');
 const systemcrontab = require('crontab');
-const config = require('config');
 const log = require('../../lib/log');
-const dbHelper = require('../dbHelper');
-const { localAppsInformation } = require('../utils/appConstants');
+const appsRepository = require('../appDatabase/appsRepository');
+const { resolveSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
 const dockerService = require('../dockerService');
 const volumeService = require('../utils/volumeService');
-const enterpriseHelper = require('../utils/enterpriseHelper');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 
 const crontabLoad = util.promisify(systemcrontab.load);
@@ -24,51 +24,36 @@ const crontabLoad = util.promisify(systemcrontab.load);
 async function getInstalledAppIds() {
   const installedAppIds = new Set();
 
-  const dbopen = dbHelper.databaseConnection();
-  const appsDatabase = dbopen.db(config.database.appslocal.database);
-
-  const appsProjection = {
-    projection: { _id: 0 },
-  };
-
-  const apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, {}, appsProjection);
+  // A DB read failure MUST throw: "cannot enumerate" surfaces as unknown to
+  // callers, never as "nothing installed" (which would reap live app mounts).
+  const apps = await appsRepository.listInstalledAppsRaw();
 
   if (!apps || !Array.isArray(apps)) {
     return installedAppIds;
   }
 
+  const { DeploymentSpec } = await getSpecBackend();
+
   // eslint-disable-next-line no-restricted-syntax
   for (const app of apps) {
-    if (app.version <= 3) {
-      // Legacy app - single app ID
-      installedAppIds.add(dockerService.getAppIdentifier(app.name));
+    // resolveSpec decrypts enterprise apps (components live in the encrypted
+    // blob, compose emptied on disk); null => decryption unavailable.
+    // eslint-disable-next-line no-await-in-loop
+    const spec = await resolveSpec(app);
+    if (spec) {
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      // eslint-disable-next-line no-restricted-syntax
+      for (const [, deployComp] of deployment.componentEntries()) {
+        installedAppIds.add(dockerService.getAppIdentifier(deployComp.identifier));
+      }
       // eslint-disable-next-line no-continue
       continue;
     }
-
-    let { compose } = app;
-    if ((!compose || compose.length === 0) && app.enterprise) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const decrypted = await enterpriseHelper.checkAndDecryptAppSpecs(app);
-        compose = decrypted ? decrypted.compose : null;
-      } catch (error) {
-        log.warn(`getInstalledAppIds - could not decrypt enterprise app ${app.name} (${error.message}); deriving its components from volume images on disk`);
-        compose = null;
-      }
-      if (!compose || compose.length === 0) {
-        // eslint-disable-next-line no-await-in-loop
-        const diskAppIds = await volumeService.getComponentAppIdsFromVolumeFiles(app.name);
-        diskAppIds.forEach((appId) => installedAppIds.add(appId));
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-    }
-
-    if (compose && Array.isArray(compose)) {
-      compose.forEach((component) => {
-        installedAppIds.add(dockerService.getAppIdentifier(`${component.name}_${app.name}`));
-      });
+    if (app.enterprise) {
+      // decryption unavailable - derive component ids from FLUXFSVOL images on disk
+      // eslint-disable-next-line no-await-in-loop
+      const diskAppIds = await volumeService.getComponentAppIdsFromVolumeFiles(app.name);
+      diskAppIds.forEach((appId) => installedAppIds.add(appId));
     }
   }
 
