@@ -20,9 +20,6 @@ function loadModule(overrides = {}) {
     database: {
       appslocal: { database: 'localapps', collections: { appsInformation: 'zelappsinformation' } },
     },
-    fluxapps: {
-      spawnDelayMultiplier: 1,
-    },
   };
 
   const stubs = {
@@ -39,7 +36,7 @@ function loadModule(overrides = {}) {
     },
     '../../lib/log': logStub,
     '../appLifecycle/appUninstaller': overrides.appUninstaller || {
-      removeAppLocally: sinon.stub().resolves(),
+      uninstallApplication: sinon.stub().resolves(),
     },
   };
 
@@ -273,7 +270,7 @@ describe('enterpriseNetwork', () => {
     }
 
     it('enterprise-network node: uninstalls apps whose owner is not in enterpriseAppOwners', async () => {
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
         fluxNetworkHelper: { getFluxNodePublicKey: sinon.stub().resolves('pubA') },
         dbHelper: installedAppsStub([
@@ -281,48 +278,48 @@ describe('enterpriseNetwork', () => {
           { name: 'drop1', owner: 'stranger' },
           { name: 'drop2', owner: null },
         ]),
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication },
       });
 
       await m.cleanupOwnershipViolations();
 
-      expect(removeAppLocally.callCount).to.equal(2);
-      const names = removeAppLocally.getCalls().map((c) => c.args[0]).sort();
+      expect(uninstallApplication.callCount).to.equal(2);
+      const names = uninstallApplication.getCalls().map((c) => c.args[0]).sort();
       expect(names).to.deep.equal(['drop1', 'drop2']);
       // sendMessage flag must be true so peers get fluxappremoved
-      const firstCall = removeAppLocally.firstCall.args;
+      const firstCall = uninstallApplication.firstCall.args;
       expect(firstCall[4]).to.equal(true);
     });
 
     it('non-enterprise-network node: uninstalls apps whose owner IS in enterpriseAppOwners', async () => {
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
         fluxNetworkHelper: { getFluxNodePublicKey: sinon.stub().resolves('pubOther') },
         dbHelper: installedAppsStub([
           { name: 'enterprise-app', owner: 'ownerA' },
           { name: 'normal-app', owner: 'stranger' },
         ]),
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication },
       });
 
       await m.cleanupOwnershipViolations();
 
-      expect(removeAppLocally.callCount).to.equal(1);
-      expect(removeAppLocally.firstCall.args[0]).to.equal('enterprise-app');
-      expect(removeAppLocally.firstCall.args[4]).to.equal(true);
+      expect(uninstallApplication.callCount).to.equal(1);
+      expect(uninstallApplication.firstCall.args[0]).to.equal('enterprise-app');
+      expect(uninstallApplication.firstCall.args[4]).to.equal(true);
     });
 
     it('is a no-op when there are no offenders', async () => {
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m, log } = loadModule({
         fluxNetworkHelper: { getFluxNodePublicKey: sinon.stub().resolves('pubA') },
         dbHelper: installedAppsStub([{ name: 'ok', owner: 'ownerA' }]),
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication },
       });
 
       await m.cleanupOwnershipViolations();
 
-      expect(removeAppLocally.called).to.equal(false);
+      expect(uninstallApplication.called).to.equal(false);
       expect(log.info.calledWith(sinon.match(/no ownership violations/))).to.equal(true);
     });
 
@@ -339,11 +336,11 @@ describe('enterpriseNetwork', () => {
     });
 
     it('propagates an uninstall failure so the scheduler can retry', async () => {
-      const removeAppLocally = sinon.stub().rejects(new Error('boom'));
+      const uninstallApplication = sinon.stub().rejects(new Error('boom'));
       const { module: m } = loadModule({
         fluxNetworkHelper: { getFluxNodePublicKey: sinon.stub().resolves('pubA') },
         dbHelper: installedAppsStub([{ name: 'bad', owner: 'stranger' }]),
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication },
       });
       try {
         await m.cleanupOwnershipViolations();

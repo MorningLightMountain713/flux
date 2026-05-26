@@ -10,6 +10,7 @@ describe('appStartupManager tests', () => {
   let dockerServiceStub;
   let fluxNetworkHelperStub;
   let registryManagerStub;
+  let appsRepositoryStub;
   let advancedWorkflowsStub;
   let appUninstallerStub;
   let globalStateStub;
@@ -36,8 +37,10 @@ describe('appStartupManager tests', () => {
       isNodeDos: sinon.stub().returns(false),
     };
 
-    registryManagerStub = {
-      getApplicationGlobalSpecifications: sinon.stub(),
+    registryManagerStub = {};
+
+    appsRepositoryStub = {
+      getGlobalAppInfo: sinon.stub(),
     };
 
     advancedWorkflowsStub = {
@@ -45,7 +48,7 @@ describe('appStartupManager tests', () => {
     };
 
     appUninstallerStub = {
-      removeAppLocally: sinon.stub().resolves(),
+      uninstallApplication: sinon.stub().resolves(),
     };
 
     const mockDb = { db: sinon.stub().returns('mockDatabase') };
@@ -80,6 +83,7 @@ describe('appStartupManager tests', () => {
       '../serviceHelper': { delay: sinon.stub().resolves() },
       '../fluxNetworkHelper': fluxNetworkHelperStub,
       '../appDatabase/registryManager': registryManagerStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
       './advancedWorkflows': advancedWorkflowsStub,
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
@@ -202,7 +206,7 @@ describe('appStartupManager tests', () => {
       dockerServiceStub.dockerListContainers.resolves(stoppedFluxContainers);
 
       // Default: no g: syncthing mode
-      registryManagerStub.getApplicationGlobalSpecifications.resolves({ version: 3, containerData: '' });
+      appsRepositoryStub.getGlobalAppInfo.resolves({ spec: { serialize: () => ({ version: 3, containerData: '' }) } });
 
       // Default: node IP available
       fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
@@ -240,7 +244,7 @@ describe('appStartupManager tests', () => {
 
       expect(results.appsRemoved).to.deep.equal(['AppA']);
       expect(results.appsStarted).to.deep.equal([]);
-      expect(appUninstallerStub.removeAppLocally.calledWith('AppA', null, true, true, false)).to.equal(true);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppA', { forceKill: true, skipGuard: true })).to.equal(true);
       expect(advancedWorkflowsStub.appDockerStart.called).to.equal(false);
     });
 
@@ -257,7 +261,7 @@ describe('appStartupManager tests', () => {
 
       expect(results.appsRemoved).to.deep.equal(['AppA']);
       expect(results.appsStarted).to.deep.equal([]);
-      expect(appUninstallerStub.removeAppLocally.called).to.equal(true);
+      expect(appUninstallerStub.uninstallApplication.called).to.equal(true);
     });
 
     it('should skip location check and start app when IP is not available', async () => {
@@ -307,7 +311,7 @@ describe('appStartupManager tests', () => {
       // Expired location
       dbHelperStub.findInDatabase.onSecondCall().resolves([]);
 
-      appUninstallerStub.removeAppLocally.rejects(new Error('Remove failed'));
+      appUninstallerStub.uninstallApplication.rejects(new Error('Remove failed'));
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -343,12 +347,12 @@ describe('appStartupManager tests', () => {
       ]);
 
       // SyncApp uses g: syncthing mode
-      registryManagerStub.getApplicationGlobalSpecifications.withArgs('SyncApp').resolves({
+      appsRepositoryStub.getGlobalAppInfo.withArgs('SyncApp').resolves({
         version: 3,
         containerData: 'g:/data',
       });
       // NormalApp does not
-      registryManagerStub.getApplicationGlobalSpecifications.withArgs('NormalApp').resolves({
+      appsRepositoryStub.getGlobalAppInfo.withArgs('NormalApp').resolves({
         version: 3,
         containerData: '',
       });
@@ -373,7 +377,7 @@ describe('appStartupManager tests', () => {
       ]);
       dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'MixedApp' }]);
 
-      registryManagerStub.getApplicationGlobalSpecifications.withArgs('MixedApp').resolves({
+      appsRepositoryStub.getGlobalAppInfo.withArgs('MixedApp').resolves({
         version: 8,
         name: 'MixedApp',
         compose: [
@@ -404,7 +408,7 @@ describe('appStartupManager tests', () => {
       ]);
       dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'AllGApp' }]);
 
-      registryManagerStub.getApplicationGlobalSpecifications.withArgs('AllGApp').resolves({
+      appsRepositoryStub.getGlobalAppInfo.withArgs('AllGApp').resolves({
         version: 8,
         name: 'AllGApp',
         compose: [
@@ -497,7 +501,7 @@ describe('appStartupManager tests', () => {
       await appStartupManager.manageAppsOnBoot(bootContext);
 
       expect(globalStateStub.waitForDbReady.calledOnce).to.be.true;
-      expect(appUninstallerStub.removeAppLocally.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
     it('should remove all apps when clean shutdown and downtime > SIGTERM_EXPIRY', async () => {
@@ -511,9 +515,9 @@ describe('appStartupManager tests', () => {
 
       await appStartupManager.manageAppsOnBoot(bootContext);
 
-      expect(appUninstallerStub.removeAppLocally.calledTwice).to.be.true;
-      expect(appUninstallerStub.removeAppLocally.firstCall.args[0]).to.equal('app1');
-      expect(appUninstallerStub.removeAppLocally.secondCall.args[0]).to.equal('app2');
+      expect(appUninstallerStub.uninstallApplication.calledTwice).to.be.true;
+      expect(appUninstallerStub.uninstallApplication.firstCall.args[0]).to.equal('app1');
+      expect(appUninstallerStub.uninstallApplication.secondCall.args[0]).to.equal('app2');
     });
 
     it('should remove all apps when downtime > RUNNING_EXPIRY regardless of shutdown reason', async () => {
@@ -527,7 +531,7 @@ describe('appStartupManager tests', () => {
 
       await appStartupManager.manageAppsOnBoot(bootContext);
 
-      expect(appUninstallerStub.removeAppLocally.calledOnce).to.be.true;
+      expect(appUninstallerStub.uninstallApplication.calledOnce).to.be.true;
       expect(logStub.info.calledWithMatch(/Locations expired/)).to.be.true;
     });
 
@@ -574,7 +578,7 @@ describe('appStartupManager tests', () => {
 
       await appStartupManager.manageAppsOnBoot(bootContext);
 
-      expect(appUninstallerStub.removeAppLocally.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
       expect(globalStateStub.waitForDbReady.calledOnce).to.be.true;
     });
 
@@ -587,7 +591,7 @@ describe('appStartupManager tests', () => {
 
       await appStartupManager.manageAppsOnBoot(bootContext);
 
-      expect(appUninstallerStub.removeAppLocally.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
       expect(globalStateStub.waitForDbReady.calledOnce).to.be.true;
       expect(logStub.info.calledWithMatch(/First boot/)).to.be.true;
     });
