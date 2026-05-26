@@ -728,9 +728,10 @@ async function expireGlobalApplications() {
       throw new Error('Scanning not initiated');
     }
     const explorerHeight = serviceHelper.ensureNumber(result.generalScannedHeight);
+    const nowSeconds = Math.floor(Date.now() / 1000);
     const candidates = await appsRepository.listGlobalAppInfo();
     const appsToExpire = candidates.filter(
-      (is) => is.expiresAtHeight < explorerHeight,
+      (is) => is.isExpired(nowSeconds, explorerHeight),
     );
     const appNamesToExpire = appsToExpire.map((is) => is.name);
     // remove appNamesToExpire apps from global database
@@ -757,7 +758,7 @@ async function expireGlobalApplications() {
       } else {
         try {
           const is = InstantiatedSpec.deserialize(app);
-          if (is.expiresAtHeight < explorerHeight) {
+          if (is.isExpired(nowSeconds, explorerHeight)) {
             appsToRemoveNames.push(app.name);
           }
         } catch (err) {
