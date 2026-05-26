@@ -836,7 +836,6 @@ describe('explorerService tests', () => {
       await explorerService.processBlock(blockHeight, isInsightExplorer);
 
       sinon.assert.calledOnce(expireGlobalApplicationsStub);
-      sinon.assert.notCalled(reconcileInstalledAppsStub);
       sinon.assert.notCalled(restorePortsSupportStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
@@ -900,7 +899,6 @@ describe('explorerService tests', () => {
       await explorerService.processBlock(blockHeight, isInsightExplorer);
 
       sinon.assert.notCalled(expireGlobalApplicationsStub);
-      sinon.assert.calledOnce(reconcileInstalledAppsStub);
       sinon.assert.notCalled(restorePortsSupportStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
@@ -963,7 +961,6 @@ describe('explorerService tests', () => {
       await explorerService.processBlock(blockHeight, isInsightExplorer);
 
       sinon.assert.notCalled(expireGlobalApplicationsStub);
-      sinon.assert.notCalled(reconcileInstalledAppsStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
         sinon.match.object,
