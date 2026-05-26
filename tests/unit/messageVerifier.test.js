@@ -2,17 +2,41 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-describe('messageVerifier tests', () => {
-  let messageVerifier;
-  let dbHelperStub;
-  let serviceHelperStub;
-  let logStub;
-  let configStub;
+// Shared stubs used by every proxyquire call
+function makeBaseStubs(overrides = {}) {
+  const dbStub = {
+    databaseConnection: sinon.stub().returns({ db: sinon.stub().returns('database') }),
+    findOneInDatabase: sinon.stub().resolves(null),
+    findInDatabase: sinon.stub().resolves([]),
+    updateOneInDatabase: sinon.stub().resolves(),
+    insertOneToDatabase: sinon.stub().resolves(),
+  };
 
-  beforeEach(() => {
-    configStub = {
+  const logStub = {
+    error: sinon.stub(),
+    info: sinon.stub(),
+    warn: sinon.stub(),
+    debug: sinon.stub(),
+  };
+
+  const messageHelperStub = {
+    createDataMessage: (data) => ({ status: 'success', data }),
+    createSuccessMessage: (msg) => ({ status: 'success', data: { message: msg } }),
+    createErrorMessage: (msg) => ({ status: 'error', data: { message: msg } }),
+    errUnauthorizedMessage: () => ({ status: 'error', data: { code: 401, message: 'Unauthorized. Access denied.' } }),
+  };
+
+  const broadcastStub = {
+    broadcastMessageToAll: sinon.stub().resolves(),
+    broadcastMessageToRandomIncoming: sinon.stub().resolves(),
+    broadcastMessageToRandomOutgoing: sinon.stub().resolves(),
+  };
+
+  const stubs = {
+    config: {
       database: {
         url: 'mongodb://localhost:27017',
+        daemon: { database: 'daemondb' },
         appsglobal: {
           database: 'globalapps',
           collections: {
@@ -21,530 +45,495 @@ describe('messageVerifier tests', () => {
           },
         },
       },
-    };
+      fluxapps: {
+        epochstart: 694000,
+        daemonPONFork: 2020000,
+        blocksLasting: 22000,
+      },
+    },
+    '../dbHelper': dbStub,
+    '../../lib/log': logStub,
+    '../messageHelper': messageHelperStub,
+    '../verificationHelper': {
+      verifyPrivilege: sinon.stub().resolves(true),
+    },
+    '../generalService': {
+      checkSynced: sinon.stub().resolves(true),
+    },
+    '../fluxCommunicationMessagesSender': broadcastStub,
+    '../serviceHelper': {
+      ensureNumber: sinon.stub().callsFake((v) => Number(v)),
+      ensureString: sinon.stub().callsFake((v) => String(v)),
+      delay: sinon.stub().resolves(),
+    },
+    '../daemonService/daemonServiceMiscRpcs': {
+      isDaemonSynced: sinon.stub().returns({ data: { height: 2000000, synced: true } }),
+    },
+    '../utils/appUtilities': {
+      appPricePerMonth: sinon.stub().resolves(1),
+    },
+    '../utils/chainUtilities': {
+      getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01 }]),
+    },
+    '../pricing/buildPricingEngine': {
+      buildPricingEngine: sinon.stub().resolves({
+        price: sinon.stub().resolves({ total: 100000000 }),
+        priceUpdate: sinon.stub().resolves({ total: 100000000, free: false }),
+      }),
+    },
+    '../utils/specLibs': {
+      getSpec: sinon.stub().resolves({}),
+      getSpecBackend: sinon.stub().resolves({
+        AppEventLegacy: { deserialize: sinon.stub().returns({}) },
+        ConfirmedAppEvent: { deserialize: sinon.stub().returns({}) },
+        InstantiatedSpec: { fromEvent: sinon.stub().returns({}) },
+        deserializeSpec: sinon.stub().returnsArg(0),
+      }),
+    },
+    '../appDatabase/appsRepository': {
+      getPermanentMessage: sinon.stub().resolves(null),
+      getTempMessage: sinon.stub().resolves(null),
+      getGlobalAppInfo: sinon.stub().resolves(null),
+      getGlobalAppInfoRaw: sinon.stub().resolves(null),
+      getInstalledAppRaw: sinon.stub().resolves(null),
+      removeGlobalAppInfo: sinon.stub().resolves(),
+      storePermanentMessage: sinon.stub().resolves(),
+      getPreviousPermanentMessage: sinon.stub().resolves(null),
+      listAppMessagesByName: sinon.stub().resolves([]),
+    },
+    '../appDatabase/registryManager': {
+      insertAppSpecifications: sinon.stub().resolves(),
+      updateAppSpecifications: sinon.stub().resolves(),
+    },
+    '../appDatabase/appSpecHistory': {
+      getPreviousAppSpecifications: sinon.stub().resolves(null),
+    },
+    './appEventVerifier': {
+      authorize: sinon.stub().resolves(),
+    },
+    '../utils/appConstants': {
+      globalAppsMessages: 'appsMessages',
+      globalAppsTempMessages: 'appsTempMessages',
+      appsHashesCollection: 'appsHashes',
+      scannedHeightCollection: 'scannedHeight',
+    },
+    '../invalidMessages': {
+      invalidMessages: [],
+    },
+    '../fluxNetworkHelper': {
+      getNumberOfPeers: sinon.stub().returns(20),
+    },
+    '../utils/globalState': {
+      getPendingUpdates: sinon.stub().returns([]),
+      clearPendingUpdates: sinon.stub(),
+      checkAndSyncAppHashesWasEverExecuted: true,
+    },
+  };
 
-    dbHelperStub = {
-      databaseConnection: sinon.stub(),
-      findOneInDatabase: sinon.stub(),
-      findInDatabase: sinon.stub(),
-    };
+  // Apply overrides
+  for (const [key, value] of Object.entries(overrides)) {
+    if (typeof value === 'object' && value !== null && !Array.isArray(value) && stubs[key]) {
+      stubs[key] = { ...stubs[key], ...value };
+    } else {
+      stubs[key] = value;
+    }
+  }
 
-    serviceHelperStub = {
-      ensureNumber: sinon.stub().returnsArg(0),
-    };
+  return { stubs, dbStub, logStub, messageHelperStub, broadcastStub };
+}
 
-    logStub = {
-      error: sinon.stub(),
-      info: sinon.stub(),
-      warn: sinon.stub(),
-      debug: sinon.stub(),
-    };
-
-    messageVerifier = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', {
-      config: {
-        ...configStub,
-        database: {
-          ...configStub.database,
-          url: 'mongodb://localhost:27017',
-        },
-      },
-      '../dbHelper': dbHelperStub,
-      '../serviceHelper': serviceHelperStub,
-      '../../lib/log': logStub,
-      '../utils/appConstants': {
-        globalAppsMessages: 'appsMessages',
-        globalAppsTempMessages: 'appsTempMessages',
-      },
-      'bitcoinjs-message': {
-        verify: sinon.stub().returns(true),
-      },
-      '../daemonService/daemonServiceControlRpcs': {
-        validateAddress: sinon.stub().resolves({ data: { isvalid: true } }),
-      },
-      './messageStore': {
-        storeAppTemporaryMessage: sinon.stub().resolves(),
-      },
-      '../messageHelper': {
-        createDataMessage: sinon.stub(),
-        createErrorMessage: sinon.stub(),
-      },
-      '../verificationHelper': {
-        verifyPrivilege: sinon.stub().resolves(true),
-      },
-      '../generalService': {
-        getApplicationGlobalSpecifications: sinon.stub().resolves({}),
-      },
-      '../signatureVerifier': {
-        verifySignature: sinon.stub().returns(true),
-      },
-      '../fluxCommunicationMessagesSender': {
-        broadcastMessageToOutgoing: sinon.stub().resolves(),
-        broadcastMessageToIncoming: sinon.stub().resolves(),
-      },
-      '../daemonService/daemonServiceMiscRpcs': {
-        getBlock: sinon.stub().resolves({}),
-      },
-      '../utils/appUtilities': {
-        appPricePerMonth: sinon.stub().returns(1000),
-      },
-      '../utils/chainUtilities': {
-        getChainParamsPriceUpdates: sinon.stub().returns([]),
-        getChainTeamSupportAddressUpdates: sinon.stub().returns([]),
-      },
-      '../appDatabase/registryManager': {
-        updateAppSpecifications: sinon.stub().resolves(),
-      },
-      '../fluxNetworkHelper': {
-        getNumberOfPeers: sinon.stub().returns(10),
-      },
-    });
-  });
-
+describe('messageVerifier tests', () => {
   afterEach(() => {
     sinon.restore();
   });
 
-  describe('checkAppMessageExistence', () => {
-    it('should return false if message not found', async () => {
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneInDatabase.resolves(null);
+  describe('requestAppMessage', () => {
+    it('should broadcast a fluxapprequest message with the given hash', async () => {
+      const { stubs, broadcastStub } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await messageVerifier.checkAppMessageExistence('hash123');
+      await mv.requestAppMessage('abc123');
 
-      expect(result).to.be.false;
-      expect(dbHelperStub.findOneInDatabase.calledOnce).to.be.true;
-    });
-
-    it('should return message if found', async () => {
-      const mockMessage = { hash: 'hash123', appSpecifications: {} };
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneInDatabase.resolves(mockMessage);
-
-      const result = await messageVerifier.checkAppMessageExistence('hash123');
-
-      expect(result).to.equal(mockMessage);
+      expect(broadcastStub.broadcastMessageToAll.calledOnce).to.be.true;
+      const msg = broadcastStub.broadcastMessageToAll.firstCall.args[0];
+      expect(msg).to.deep.equal({ type: 'fluxapprequest', version: 1, hash: 'abc123' });
     });
   });
 
-  describe('checkAppTemporaryMessageExistence', () => {
-    it('should return false if temporary message not found', async () => {
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneInDatabase.resolves(null);
+  describe('requestAppsMessage', () => {
+    it('should broadcast to random outgoing by default', async () => {
+      const { stubs, broadcastStub } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await messageVerifier.checkAppTemporaryMessageExistence('hash123');
+      const apps = [{ hash: 'h1' }, { hash: 'h2' }];
+      await mv.requestAppsMessage(apps, false);
 
-      expect(result).to.be.false;
+      expect(broadcastStub.broadcastMessageToRandomOutgoing.calledOnce).to.be.true;
+      const msg = broadcastStub.broadcastMessageToRandomOutgoing.firstCall.args[0];
+      expect(msg.type).to.equal('fluxapprequest');
+      expect(msg.version).to.equal(2);
+      expect(msg.hashes).to.deep.equal(['h1', 'h2']);
     });
 
-    it('should return temporary message if found', async () => {
-      const mockMessage = { hash: 'hash123', appSpecifications: {} };
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneInDatabase.resolves(mockMessage);
+    it('should broadcast to random incoming when incoming is true', async () => {
+      const { stubs, broadcastStub } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await messageVerifier.checkAppTemporaryMessageExistence('hash123');
+      const apps = [{ hash: 'h1' }];
+      await mv.requestAppsMessage(apps, true);
 
-      expect(result).to.equal(mockMessage);
+      expect(broadcastStub.broadcastMessageToRandomIncoming.calledOnce).to.be.true;
+    });
+  });
+
+  describe('requestAppMessageAPI', () => {
+    it('should return unauthorized when privilege check fails', async () => {
+      const { stubs } = makeBaseStubs({
+        '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(false) },
+      });
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.requestAppMessageAPI({ params: {}, query: {} }, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+      expect(res.json.firstCall.args[0].data.code).to.equal(401);
+    });
+
+    it('should return error when no hash is provided', async () => {
+      const { stubs } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.requestAppMessageAPI({ params: {}, query: {} }, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+    });
+
+    it('should broadcast and return success when hash is provided in params', async () => {
+      const { stubs, broadcastStub } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.requestAppMessageAPI({ params: { hash: 'myhash' }, query: {} }, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+      expect(broadcastStub.broadcastMessageToAll.calledOnce).to.be.true;
+    });
+
+    it('should accept hash from query string', async () => {
+      const { stubs, broadcastStub } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.requestAppMessageAPI({ params: {}, query: { hash: 'queryhash' } }, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+      expect(broadcastStub.broadcastMessageToAll.calledOnce).to.be.true;
+    });
+  });
+
+  describe('appHashHasMessage', () => {
+    it('should update the database and return true', async () => {
+      const { stubs, dbStub } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const result = await mv.appHashHasMessage('hash123');
+
+      expect(result).to.be.true;
+      expect(dbStub.updateOneInDatabase.calledOnce).to.be.true;
+      const [, collection, query, update] = dbStub.updateOneInDatabase.firstCall.args;
+      expect(collection).to.equal('appsHashes');
+      expect(query).to.deep.equal({ hash: 'hash123' });
+      expect(update).to.deep.equal({ $set: { message: true, messageNotFound: false } });
+    });
+  });
+
+  describe('appHashHasMessageNotFound', () => {
+    it('should update the database and return true', async () => {
+      const { stubs, dbStub } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const result = await mv.appHashHasMessageNotFound('hash456');
+
+      expect(result).to.be.true;
+      expect(dbStub.updateOneInDatabase.calledOnce).to.be.true;
+      const [, collection, query, update] = dbStub.updateOneInDatabase.firstCall.args;
+      expect(collection).to.equal('appsHashes');
+      expect(query).to.deep.equal({ hash: 'hash456' });
+      expect(update).to.deep.equal({ $set: { messageNotFound: true } });
+    });
+  });
+
+  describe('getAppsTemporaryMessages', () => {
+    it('should return all temporary messages when no hash filter', async () => {
+      const tempMsgs = [{ hash: 'h1' }, { hash: 'h2' }];
+      const { stubs, dbStub } = makeBaseStubs();
+      dbStub.findInDatabase.resolves(tempMsgs);
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.getAppsTemporaryMessages({ params: {}, query: {} }, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+      expect(res.json.firstCall.args[0].data).to.deep.equal(tempMsgs);
+    });
+
+    it('should filter by hash when provided in params', async () => {
+      const { stubs, dbStub } = makeBaseStubs();
+      dbStub.findInDatabase.resolves([]);
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.getAppsTemporaryMessages({ params: { hash: 'xyz' }, query: {} }, res);
+
+      expect(dbStub.findInDatabase.calledOnce).to.be.true;
+      const [, collection, query] = dbStub.findInDatabase.firstCall.args;
+      expect(collection).to.equal('appsTempMessages');
+      expect(query).to.deep.equal({ hash: 'xyz' });
+    });
+
+    it('should return error on database failure', async () => {
+      const { stubs, dbStub } = makeBaseStubs();
+      dbStub.findInDatabase.rejects(new Error('DB error'));
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.getAppsTemporaryMessages({ params: {}, query: {} }, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+    });
+  });
+
+  describe('getAppsPermanentMessages', () => {
+    it('should return all permanent messages when no filters', async () => {
+      const permMsgs = [{ hash: 'p1' }];
+      const { stubs, dbStub } = makeBaseStubs();
+      dbStub.findInDatabase.resolves(permMsgs);
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.getAppsPermanentMessages({ params: {}, query: {} }, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+      expect(res.json.firstCall.args[0].data).to.deep.equal(permMsgs);
+    });
+
+    it('should filter by hash, owner, and appname', async () => {
+      const { stubs, dbStub } = makeBaseStubs();
+      dbStub.findInDatabase.resolves([]);
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.getAppsPermanentMessages({
+        params: { hash: 'h1', owner: 'o1', appname: 'a1' },
+        query: {},
+      }, res);
+
+      expect(dbStub.findInDatabase.calledOnce).to.be.true;
+      const query = dbStub.findInDatabase.firstCall.args[2];
+      expect(query.hash).to.equal('h1');
+      expect(query['appSpecifications.owner']).to.equal('o1');
+      expect(query['appSpecifications.name']).to.equal('a1');
+    });
+
+    it('should accept filters from query string', async () => {
+      const { stubs, dbStub } = makeBaseStubs();
+      dbStub.findInDatabase.resolves([]);
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.getAppsPermanentMessages({
+        params: {},
+        query: { hash: 'qh', owner: 'qo', appname: 'qa' },
+      }, res);
+
+      const query = dbStub.findInDatabase.firstCall.args[2];
+      expect(query.hash).to.equal('qh');
+      expect(query['appSpecifications.owner']).to.equal('qo');
+      expect(query['appSpecifications.name']).to.equal('qa');
+    });
+
+    it('should return error on database failure', async () => {
+      const { stubs, dbStub } = makeBaseStubs();
+      dbStub.findInDatabase.rejects(new Error('DB failure'));
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.getAppsPermanentMessages({ params: {}, query: {} }, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('error');
     });
   });
 
   describe('checkAndRequestApp', () => {
-    let getPreviousAppSpecsStub;
-    let signatureVerifierStub;
-    let storeAppPermanentMessageStub;
-    let isDaemonSyncedStub;
-    let updateAppSpecificationsStub;
-    let updateOneInDatabaseStub;
-    let verifierWithStubs;
+    it('should return false when height is below epochstart', async () => {
+      const { stubs } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-    beforeEach(() => {
-      getPreviousAppSpecsStub = sinon.stub();
-      signatureVerifierStub = { verifySignature: sinon.stub().returns(true) };
-      storeAppPermanentMessageStub = sinon.stub().resolves();
-      updateOneInDatabaseStub = sinon.stub().resolves();
-      isDaemonSyncedStub = sinon.stub().returns({ data: { height: 2000000, synced: true } });
-      updateAppSpecificationsStub = sinon.stub().resolves();
+      const result = await mv.checkAndRequestApp('hash', 'txid', 100, 100000000);
+      expect(result).to.be.false;
+    });
 
-      const mockDb = { db: sinon.stub().returns('database') };
+    it('should return true immediately when permanent message already exists', async () => {
+      const { stubs, dbStub } = makeBaseStubs();
+      stubs['../appDatabase/appsRepository'].getPermanentMessage = sinon.stub().resolves({ hash: 'existing' });
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const fullServiceHelperStub = {
-        ensureNumber: sinon.stub().returnsArg(0),
-        ensureString: sinon.stub().returnsArg(0),
-        delay: sinon.stub().resolves(),
-        axiosGet: sinon.stub().resolves(),
+      const result = await mv.checkAndRequestApp('existing', 'txid', 2000000, 100000000);
+      expect(result).to.be.true;
+      // Should mark hash as having message
+      expect(dbStub.updateOneInDatabase.calledOnce).to.be.true;
+    });
+
+    it('should request from network and retry when temp message not found', async () => {
+      const { stubs, broadcastStub } = makeBaseStubs();
+      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(null);
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      // Start at i=0, will broadcast and recurse up to i=2
+      const result = await mv.checkAndRequestApp('hash', 'txid', 2000000, 100000000, null, 0);
+      expect(result).to.be.false;
+      // Should have broadcast twice (i=0, i=1)
+      expect(broadcastStub.broadcastMessageToAll.callCount).to.equal(2);
+    });
+
+    it('should return false when temp message has no specifications', async () => {
+      const { stubs, logStub } = makeBaseStubs();
+      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({ hash: 'h', type: 'fluxappregister' });
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const result = await mv.checkAndRequestApp('h', 'txid', 2000000, 100000000, null, 2);
+      expect(result).to.be.false;
+      expect(logStub.error.called).to.be.true;
+    });
+
+    it('should store permanent message and insert specs for a registration with sufficient payment', async () => {
+      const insertStub = sinon.stub().resolves();
+      const storePermanentStub = sinon.stub().resolves();
+      const serializedEvent = {
+        type: 'fluxappregister',
+        appSpecifications: { name: 'testapp', version: 8, owner: 'owner1' },
+        hash: 'regHash',
+      };
+      const mockConfirmedEvent = {
+        isRegistration: true,
+        isUpdate: false,
+        spec: { name: 'testapp', version: 8 },
+        serialize: sinon.stub().returns(serializedEvent),
+        toInstantiatedSpec: sinon.stub().returns({}),
+      };
+      const mockInstantiated = {
+        name: 'testapp',
+        spec: { name: 'testapp', version: 8 },
+        isExpired: sinon.stub().returns(false),
+        serialize: sinon.stub().returns(serializedEvent),
       };
 
-      verifierWithStubs = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', {
-        config: {
-          ...configStub,
-          database: {
-            ...configStub.database,
-            url: 'mongodb://localhost:27017',
-            daemon: { database: 'daemondb' },
-          },
-          fluxapps: {
-            epochstart: 694000,
-            daemonPONFork: 2020000,
-          },
-        },
-        '../dbHelper': {
-          ...dbHelperStub,
-          databaseConnection: sinon.stub().returns(mockDb),
-          findOneInDatabase: sinon.stub()
-            .onFirstCall().resolves(null) // checkAppMessageExistence — not in permanent
-            .onSecondCall().resolves({ // checkAppTemporaryMessageExistence — found in temp
-              type: 'fluxappupdate',
-              version: 1,
-              appSpecifications: { name: 'testapp', version: 8, owner: 'newOwner' },
-              hash: 'hash123',
-              timestamp: Date.now(),
-              signature: 'sig123',
-            }),
-          findInDatabase: sinon.stub().resolves([]),
-          updateOneInDatabase: updateOneInDatabaseStub,
-          insertOneToDatabase: sinon.stub().resolves(),
-        },
-        '../serviceHelper': fullServiceHelperStub,
-        '../../lib/log': logStub,
-        '../utils/appConstants': {
-          globalAppsMessages: 'appsMessages',
-          globalAppsTempMessages: 'appsTempMessages',
-          globalAppsLocations: 'appsLocations',
-          globalAppsInstallingLocations: 'appsInstallingLocations',
-          appsHashesCollection: 'appsHashes',
-          scannedHeightCollection: 'scannedHeight',
-          globalAppsInformation: 'appsInformation',
-        },
-        '../signatureVerifier': signatureVerifierStub,
-        '../daemonService/daemonServiceMiscRpcs': {
-          isDaemonSynced: isDaemonSyncedStub,
-          getBlock: sinon.stub().resolves({}),
-        },
-        '../appLifecycle/advancedWorkflows': {
-          getPreviousAppSpecifications: getPreviousAppSpecsStub,
-        },
-        '../appDatabase/registryManager': {
-          updateAppSpecifications: updateAppSpecificationsStub,
-        },
-        './messageStore': {
-          storeAppPermanentMessage: storeAppPermanentMessageStub,
-          storeAppTemporaryMessage: sinon.stub().resolves(),
-        },
-        '../utils/appUtilities': {
-          appPricePerMonth: sinon.stub().returns(1000),
-        },
-        '../utils/chainUtilities': {
-          getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 1 }]),
-          getChainTeamSupportAddressUpdates: sinon.stub().returns([]),
-        },
-        '../utils/enterpriseHelper': {
-          checkAndDecryptAppSpecs: sinon.stub().returnsArg(0),
-        },
-        '../messageHelper': {
-          createDataMessage: sinon.stub(),
-          createErrorMessage: sinon.stub(),
-        },
-        '../verificationHelper': {
-          verifyPrivilege: sinon.stub().resolves(true),
-        },
-        '../generalService': {
-          getApplicationGlobalSpecifications: sinon.stub().resolves({}),
-        },
-        '../fluxCommunicationMessagesSender': {
-          broadcastMessageToOutgoing: sinon.stub().resolves(),
-          broadcastMessageToIncoming: sinon.stub().resolves(),
-        },
-        '../fluxNetworkHelper': {
-          getNumberOfPeers: sinon.stub().returns(10),
-        },
-        'bitcoinjs-message': {
-          verify: sinon.stub().returns(true),
-        },
-        '../daemonService/daemonServiceControlRpcs': {
-          validateAddress: sinon.stub().resolves({ data: { isvalid: true } }),
-        },
+      const { stubs, dbStub } = makeBaseStubs();
+      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
+        type: 'fluxappregister',
+        version: 1,
+        appSpecifications: { name: 'testapp', version: 8, owner: 'owner1' },
+        hash: 'regHash',
+        timestamp: Date.now(),
+        signature: 'sig',
       });
+      stubs['../appDatabase/appsRepository'].storePermanentMessage = storePermanentStub;
+      stubs['../appDatabase/registryManager'].insertAppSpecifications = insertStub;
+      stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
+        AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
+        ConfirmedAppEvent: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
+        InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
+        deserializeSpec: sinon.stub().returnsArg(0),
+      });
+      stubs['../pricing/buildPricingEngine'].buildPricingEngine = sinon.stub().resolves({
+        price: sinon.stub().resolves({ total: 100000000 }),
+      });
+      stubs['../utils/chainUtilities'].getChainParamsPriceUpdates = sinon.stub().resolves([{ height: 0, minPrice: 0.01 }]);
+      stubs['../utils/appUtilities'].appPricePerMonth = sinon.stub().resolves(1);
+
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const result = await mv.checkAndRequestApp('regHash', 'txid', 2000000, 200000000, null, 2);
+      expect(result).to.be.true;
+      expect(storePermanentStub.calledOnce).to.be.true;
     });
 
-    it('should refuse promotion when signature re-verification fails (ownership change race)', async () => {
-      // getPreviousAppSpecifications returns the NEW owner (after a prior ownership change was promoted)
-      getPreviousAppSpecsStub.resolves({ owner: 'newOwner', version: 8 });
-      // Signature verification will fail — message was signed by old owner
-      signatureVerifierStub.verifySignature.returns(false);
+    it('should return false and log error when an exception occurs', async () => {
+      const { stubs, logStub } = makeBaseStubs();
+      stubs['../appDatabase/appsRepository'].getPermanentMessage = sinon.stub().rejects(new Error('DB crash'));
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await verifierWithStubs.checkAndRequestApp('hash123', 'txid123', 2000000, 200000000);
-
+      const result = await mv.checkAndRequestApp('crashHash', 'txid', 2000000, 100000000);
       expect(result).to.be.false;
-      expect(storeAppPermanentMessageStub.called).to.be.false;
-      expect(logStub.warn.calledOnce).to.be.true;
-      expect(logStub.warn.firstCall.args[0]).to.include('Promotion re-verification failed');
+      expect(logStub.error.called).to.be.true;
+    });
+  });
+
+  describe('triggerAppHashesCheckAPI', () => {
+    it('should return unauthorized when privilege check fails', async () => {
+      const { stubs } = makeBaseStubs({
+        '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(false) },
+      });
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.triggerAppHashesCheckAPI({ params: {}, query: {} }, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+      expect(res.json.firstCall.args[0].data.code).to.equal(401);
     });
 
-    it('should promote when signature re-verification passes', async () => {
-      // getPreviousAppSpecifications returns the owner — signature matches
-      getPreviousAppSpecsStub.resolves({ owner: 'correctOwner', version: 8 });
-      signatureVerifierStub.verifySignature.returns(true);
+    it('should return success when authorized', async () => {
+      const { stubs } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      await verifierWithStubs.checkAndRequestApp('hash123', 'txid123', 2000000, 200000000);
+      const res = { json: sinon.stub() };
+      await mv.triggerAppHashesCheckAPI({ params: {}, query: {} }, res);
 
-      expect(storeAppPermanentMessageStub.called).to.be.true;
+      expect(res.json.calledOnce).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('success');
     });
   });
 
   describe('exported functions', () => {
-    it('should export verification functions', () => {
-      expect(messageVerifier.checkAppMessageExistence).to.be.a('function');
-      expect(messageVerifier.checkAppTemporaryMessageExistence).to.be.a('function');
-      expect(messageVerifier.verifyAppHash).to.be.a('function');
-      expect(messageVerifier.verifyAppMessageSignature).to.be.a('function');
+    it('should export all remaining public functions', () => {
+      const { stubs } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      expect(mv.requestAppMessage).to.be.a('function');
+      expect(mv.requestAppsMessage).to.be.a('function');
+      expect(mv.requestAppMessageAPI).to.be.a('function');
+      expect(mv.appHashHasMessage).to.be.a('function');
+      expect(mv.appHashHasMessageNotFound).to.be.a('function');
+      expect(mv.getAppsTemporaryMessages).to.be.a('function');
+      expect(mv.getAppsPermanentMessages).to.be.a('function');
+      expect(mv.checkAndRequestApp).to.be.a('function');
+      expect(mv.checkAndRequestMultipleApps).to.be.a('function');
+      expect(mv.continuousFluxAppHashesCheck).to.be.a('function');
+      expect(mv.triggerAppHashesCheckAPI).to.be.a('function');
     });
 
-    it('should export isExpireOnlyUpdate', () => {
-      expect(messageVerifier.isExpireOnlyUpdate).to.be.a('function');
-    });
-  });
+    it('should not export removed functions', () => {
+      const { stubs } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-  describe('isExpireOnlyUpdate', () => {
-    it('should return true when specs differ only in enterprise and expire', () => {
-      const specA = {
-        version: 8,
-        name: 'testapp',
-        owner: 'owner1',
-        description: 'desc',
-        compose: [{ name: 'comp1', repotag: 'repo/tag:latest' }],
-        expire: 100000,
-        enterprise: 'encryptedBlobA',
-      };
-      const specB = {
-        version: 8,
-        name: 'testapp',
-        owner: 'owner1',
-        description: 'desc',
-        compose: [{ name: 'comp1', repotag: 'repo/tag:latest' }],
-        expire: 200000,
-        enterprise: 'encryptedBlobB',
-      };
-
-      const result = messageVerifier.isExpireOnlyUpdate(specA, specB);
-      expect(result).to.be.true;
-    });
-
-    it('should return false when specs differ in fields other than expire/enterprise/height/hash', () => {
-      const specA = {
-        version: 8,
-        name: 'testapp',
-        owner: 'owner1',
-        description: 'desc',
-        compose: [{ name: 'comp1', repotag: 'repo/tag:latest' }],
-        expire: 100000,
-        enterprise: 'encryptedBlobA',
-      };
-      const specB = {
-        version: 8,
-        name: 'testapp',
-        owner: 'owner2',
-        description: 'desc',
-        compose: [{ name: 'comp1', repotag: 'repo/tag:latest' }],
-        expire: 200000,
-        enterprise: 'encryptedBlobB',
-      };
-
-      const result = messageVerifier.isExpireOnlyUpdate(specA, specB);
-      expect(result).to.be.false;
-    });
-
-    it('should return false when existingSpec is null', () => {
-      const specA = { version: 8, name: 'testapp', expire: 100000 };
-      const result = messageVerifier.isExpireOnlyUpdate(specA, null);
-      expect(result).to.be.false;
-    });
-
-    it('should return false when newSpec is null', () => {
-      const specB = { version: 8, name: 'testapp', expire: 100000 };
-      const result = messageVerifier.isExpireOnlyUpdate(null, specB);
-      expect(result).to.be.false;
-    });
-  });
-
-  describe('verifyAppMessageUpdateSignature', () => {
-    let signatureVerifierStub;
-    let chainUtilitiesStub;
-    let fluxServiceStub;
-    let enterpriseHelperStub;
-    let appUtilitiesStub;
-    let verifierModule;
-
-    beforeEach(() => {
-      signatureVerifierStub = { verifySignature: sinon.stub().returns(false) };
-      chainUtilitiesStub = {
-        getChainParamsPriceUpdates: sinon.stub().returns([]),
-        getChainTeamSupportAddressUpdates: sinon.stub().returns([
-          { height: 1000000, address: '1FluxTeamAddr' },
-        ]),
-      };
-      fluxServiceStub = { isSystemSecure: sinon.stub().resolves(false) };
-      enterpriseHelperStub = { checkAndDecryptAppSpecs: sinon.stub().returnsArg(0) };
-      appUtilitiesStub = {
-        appPricePerMonth: sinon.stub().returns(1000),
-        specificationFormatter: sinon.stub().returnsArg(0),
-      };
-
-      verifierModule = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', {
-        config: {
-          ...configStub,
-          fluxapps: {
-            usersToExtend: ['1UserToExtendAddr'],
-          },
-        },
-        '../dbHelper': dbHelperStub,
-        '../serviceHelper': serviceHelperStub,
-        '../../lib/log': logStub,
-        '../utils/appConstants': {
-          globalAppsMessages: 'appsMessages',
-          globalAppsTempMessages: 'appsTempMessages',
-        },
-        'bitcoinjs-message': { verify: sinon.stub().returns(true) },
-        '../daemonService/daemonServiceControlRpcs': {
-          validateAddress: sinon.stub().resolves({ data: { isvalid: true } }),
-        },
-        './messageStore': { storeAppTemporaryMessage: sinon.stub().resolves() },
-        '../messageHelper': {
-          createDataMessage: sinon.stub(),
-          createErrorMessage: sinon.stub(),
-        },
-        '../verificationHelper': {
-          verifyPrivilege: sinon.stub().resolves(true),
-          verifyMessage: sinon.stub().returns(false),
-        },
-        '../generalService': {
-          getApplicationGlobalSpecifications: sinon.stub().resolves({}),
-          messageHash: sinon.stub().resolves('hash'),
-        },
-        '../signatureVerifier': signatureVerifierStub,
-        '../fluxCommunicationMessagesSender': {
-          broadcastMessageToOutgoing: sinon.stub().resolves(),
-          broadcastMessageToIncoming: sinon.stub().resolves(),
-          broadcastMessageToAll: sinon.stub().resolves(),
-        },
-        '../daemonService/daemonServiceMiscRpcs': {
-          getBlock: sinon.stub().resolves({}),
-        },
-        '../utils/appUtilities': appUtilitiesStub,
-        '../utils/chainUtilities': chainUtilitiesStub,
-        '../appDatabase/registryManager': {
-          updateAppSpecifications: sinon.stub().resolves(),
-        },
-        '../fluxNetworkHelper': {
-          getNumberOfPeers: sinon.stub().returns(10),
-        },
-        '../utils/enterpriseHelper': enterpriseHelperStub,
-        '../fluxService': fluxServiceStub,
-        '../utils/globalState': {},
-        '../appLifecycle/advancedWorkflows': {
-          getPreviousAppSpecifications: sinon.stub().resolves(null),
-        },
-      });
-    });
-
-    it('should verify v7 marketplace app signature against fluxSupportTeamFluxID (secrets/repoauth swap)', async () => {
-      // First call: owner verification fails
-      // Second call: fluxSupportTeamFluxID verification with original order fails
-      // Third call: owner verification with swapped order fails
-      // Fourth call: fluxSupportTeamFluxID with swapped order succeeds
-      signatureVerifierStub.verifySignature
-        .onCall(0).returns(false) // owner, original order
-        .onCall(1).returns(false) // team support, original order (marketplace)
-        .onCall(2).returns(false) // owner, swapped order
-        .onCall(3).returns(true); // team support, swapped order (marketplace)
-
-      const appSpec = {
-        version: 7,
-        name: 'MarketplaceApp1700000000000',
-        owner: 'ownerAddr',
-        compose: [
-          { name: 'comp1', repotag: 'repo/tag', repoauth: 'auth', secrets: 'sec' },
-        ],
-      };
-
-      const result = await verifierModule.verifyAppMessageUpdateSignature(
-        'fluxappupdate', 7, appSpec, Date.now(), 'someSig', 'ownerAddr', 2000000, null,
-      );
-      expect(result).to.be.true;
-      // The 4th call should use fluxSupportTeamFluxID
-      expect(signatureVerifierStub.verifySignature.getCall(3).args[1]).to.equal('1FluxTeamAddr');
-    });
-
-    it('should skip isExpireOnlyUpdate and accept signature when isSystemSecure is false for enterprise v8', async () => {
-      // Owner and team support fail — only userToExtend matches
-      signatureVerifierStub.verifySignature
-        .returns(false)
-        .withArgs(sinon.match.string, '1UserToExtendAddr', sinon.match.string).returns(true);
-
-      fluxServiceStub.isSystemSecure.resolves(false);
-
-      const appSpec = {
-        version: 8,
-        name: 'enterpriseApp',
-        owner: 'ownerAddr',
-        enterprise: 'encryptedBlob',
-      };
-      const previousAppSpec = {
-        version: 8,
-        name: 'enterpriseApp',
-        owner: 'ownerAddr',
-        enterprise: 'encryptedBlobOld',
-      };
-
-      // When isSystemSecure is false, canCompareSpecs is false, so the function
-      // accepts the signature without requiring isExpireOnlyUpdate to return true
-      const result = await verifierModule.verifyAppMessageUpdateSignature(
-        'fluxappupdate', 8, appSpec, Date.now(), 'someSig', 'ownerAddr', 2000000, previousAppSpec,
-      );
-      expect(result).to.be.true;
-      // checkAndDecryptAppSpecs should NOT have been called since isSystemSecure returned false
-      expect(enterpriseHelperStub.checkAndDecryptAppSpecs.called).to.be.false;
-    });
-
-    it('should call isExpireOnlyUpdate when isSystemSecure is true for enterprise v8 usersToExtend', async () => {
-      // Owner and team support fail — only userToExtend matches
-      signatureVerifierStub.verifySignature
-        .returns(false)
-        .withArgs(sinon.match.string, '1UserToExtendAddr', sinon.match.string).returns(true);
-
-      fluxServiceStub.isSystemSecure.resolves(true);
-      // The decrypted spec should be identical to the previous one (expire-only change)
-      const decryptedSpec = {
-        version: 8,
-        name: 'enterpriseApp',
-        owner: 'ownerAddr',
-        expire: 300000,
-      };
-      enterpriseHelperStub.checkAndDecryptAppSpecs.resolves(decryptedSpec);
-      appUtilitiesStub.specificationFormatter.returnsArg(0);
-
-      const appSpec = {
-        version: 8,
-        name: 'enterpriseApp',
-        owner: 'ownerAddr',
-        enterprise: 'encryptedBlob',
-        expire: 300000,
-      };
-      const previousAppSpec = {
-        version: 8,
-        name: 'enterpriseApp',
-        owner: 'ownerAddr',
-        expire: 200000,
-      };
-
-      const result = await verifierModule.verifyAppMessageUpdateSignature(
-        'fluxappupdate', 8, appSpec, Date.now(), 'someSig', 'ownerAddr', 2000000, previousAppSpec,
-      );
-      expect(result).to.be.true;
-      expect(enterpriseHelperStub.checkAndDecryptAppSpecs.calledOnce).to.be.true;
-      expect(appUtilitiesStub.specificationFormatter.calledOnce).to.be.true;
+      expect(mv.verifyAppHash).to.be.undefined;
+      expect(mv.verifyAppMessageSignature).to.be.undefined;
+      expect(mv.verifyAppMessageUpdateSignature).to.be.undefined;
+      expect(mv.isExpireOnlyUpdate).to.be.undefined;
+      expect(mv.checkAppMessageExistence).to.be.undefined;
+      expect(mv.checkAppTemporaryMessageExistence).to.be.undefined;
     });
   });
 });
