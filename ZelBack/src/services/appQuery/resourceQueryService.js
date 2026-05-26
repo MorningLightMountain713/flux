@@ -2,11 +2,11 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
-const serviceHelper = require('../serviceHelper');
-const generalService = require('../generalService');
-const registryManager = require('../appDatabase/registryManager');
+const appsRepository = require('../appDatabase/appsRepository');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const appConstants = require('../utils/appConstants');
+const { resolveSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
 const log = require('../../lib/log');
 
 // Import appQueryService to avoid circular dependency (will be cleaned up later)
@@ -20,8 +20,7 @@ const appQueryService = require('./appQueryService');
  */
 async function fluxUsage(req, res) {
   try {
-    const apps = await registryManager.getInstalledApps();
-    const totalApps = apps.length;
+    const totalApps = await appsRepository.countInstalledApps();
     const runningApps = await appQueryService.listRunningApps();
     const totalRunning = runningApps.data ? runningApps.data.length : 0;
 
@@ -57,47 +56,28 @@ async function fluxUsage(req, res) {
 async function appsResources(req, res) {
   log.info('Checking appsResources');
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const appsQuery = {};
-    const appsProjection = { projection: { _id: 0 } };
-    const appsResult = await dbHelper.findInDatabase(appsDatabase, appConstants.localAppsInformation, appsQuery, appsProjection);
+    const appsResult = await appsRepository.listInstalledAppsRaw();
     let appsCpusLocked = 0;
     let appsRamLocked = 0;
     let appsHddLocked = 0;
-    const tier = await generalService.nodeTier().catch((error) => log.error(error));
-    const hddTier = `hdd${tier}`;
-    const ramTier = `ram${tier}`;
-    const cpuTier = `cpu${tier}`;
 
-    // Ensure appsResult is an array
+    const { DeploymentSpec } = await getSpecBackend();
     const apps = Array.isArray(appsResult) ? appsResult : [];
-    apps.forEach((app) => {
-      if (app.version >= 4) {
-        app.compose.forEach((component) => {
-          if (component.tiered && tier) {
-            appsCpusLocked += serviceHelper.ensureNumber(component[cpuTier] || component.cpu) || 0;
-            appsRamLocked += serviceHelper.ensureNumber(component[ramTier] || component.ram) || 0;
-            appsHddLocked += serviceHelper.ensureNumber(component[hddTier] || component.hdd) || 0;
-          } else {
-            appsCpusLocked += serviceHelper.ensureNumber(component.cpu) || 0;
-            appsRamLocked += serviceHelper.ensureNumber(component.ram) || 0;
-            appsHddLocked += serviceHelper.ensureNumber(component.hdd) || 0;
-          }
-          appsHddLocked += config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap; // 5gb per component + 2gb swap
-        });
-      } else if (app.tiered && tier) {
-        appsCpusLocked += serviceHelper.ensureNumber(app[cpuTier] || app.cpu) || 0;
-        appsRamLocked += serviceHelper.ensureNumber(app[ramTier] || app.ram) || 0;
-        appsHddLocked += serviceHelper.ensureNumber(app[hddTier] || app.hdd) || 0;
-        appsHddLocked += config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap; // 5gb per component + 2gb swap
-      } else {
-        appsCpusLocked += serviceHelper.ensureNumber(app.cpu) || 0;
-        appsRamLocked += serviceHelper.ensureNumber(app.ram) || 0;
-        appsHddLocked += serviceHelper.ensureNumber(app.hdd) || 0;
-        appsHddLocked += config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap; // 5gb per component + 2gb swap
+    // eslint-disable-next-line no-restricted-syntax
+    for (const app of apps) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const spec = await resolveSpec(app);
+        const deployment = DeploymentSpec.fromSpec(spec, appConstants.appsFolder);
+        const { cpu, memory, storage } = deployment.totalResources();
+        const componentCount = deployment.componentCount();
+        appsCpusLocked += cpu;
+        appsRamLocked += memory;
+        appsHddLocked += storage + (config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap) * componentCount;
+      } catch (err) {
+        log.error(`Failed to compute resources for ${app.name}: ${err.message}`);
       }
-    });
+    }
     const appsUsage = {
       appsCpusLocked,
       appsRamLocked,
