@@ -4,380 +4,30 @@ const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const generalService = require('../generalService');
-const signatureVerifier = require('../signatureVerifier');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
-// Removed messageStore require to avoid circular dependency - will import locally where needed
-const { appPricePerMonth, specificationFormatter } = require('../utils/appUtilities');
-const { getChainParamsPriceUpdates, getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { insertAppSpecifications, updateAppSpecifications, getPreviousAppSpecifications } = require('../appDatabase/registryManager');
+const { appPricePerMonth } = require('../utils/appUtilities');
+const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
+const { buildPricingEngine } = require('../pricing/buildPricingEngine');
+const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const appsRepository = require('../appDatabase/appsRepository');
+const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
+const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
+const appEventVerifier = require('./appEventVerifier');
 const {
   globalAppsMessages,
   globalAppsTempMessages,
-  // eslint-disable-next-line no-unused-vars
-  globalAppsLocations,
-  // eslint-disable-next-line no-unused-vars
-  globalAppsInstallingLocations,
   appsHashesCollection,
-  globalAppsInformation,
-  localAppsInformation,
+  scannedHeightCollection,
 } = require('../utils/appConstants');
+const { invalidMessages } = require('../invalidMessages');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const globalState = require('../utils/globalState');
 
-/**
- * Verify app hash against message content
- * @param {object} message - Message object to verify
- * @returns {Promise<boolean>} True if hash is valid
- */
-async function verifyAppHash(message) {
-  /* message object
-   * @param type string
-   * @param version number
-   * @param appSpecifications object
-   * @param hash string
-   * @param timestamp number
-   * @param signature string
-   */
-  const specifications = message.appSpecifications;
-  let messToHash = message.type + message.version + JSON.stringify(specifications) + message.timestamp + message.signature;
-  let messageHASH = await generalService.messageHash(messToHash);
-
-  if (messageHASH === message.hash) return true;
-
-  const appSpecsCopy = JSON.parse(JSON.stringify(specifications));
-
-  if (specifications.version <= 3) {
-    // as of specification changes, adjust our appSpecs order of owner and repotag
-    // in new scheme it is always version, name, description, owner, repotag... Old format was version, name, description, repotag, owner
-    delete appSpecsCopy.version;
-    delete appSpecsCopy.name;
-    delete appSpecsCopy.description;
-    delete appSpecsCopy.repotag;
-    delete appSpecsCopy.owner;
-
-    const appSpecOld = {
-      version: specifications.version,
-      name: specifications.name,
-      description: specifications.description,
-      repotag: specifications.repotag,
-      owner: specifications.owner,
-      ...appSpecsCopy,
-    };
-    messToHash = message.type + message.version + JSON.stringify(appSpecOld) + message.timestamp + message.signature;
-    messageHASH = await generalService.messageHash(messToHash);
-  } else if (specifications.version === 7) {
-    // fix for repoauth / secrets order change for apps created after 1750273721000
-    appSpecsCopy.compose.forEach((component) => {
-      // previously the order was secrets / repoauth. Now it's repoauth / secrets.
-      const comp = component;
-      const { secrets, repoauth } = comp;
-
-      delete comp.secrets;
-      delete comp.repoauth;
-
-      // try the old secrets / repoauth
-      comp.secrets = secrets;
-      comp.repoauth = repoauth;
-    });
-
-    messToHash = message.type + message.version + JSON.stringify(appSpecsCopy) + message.timestamp + message.signature;
-    messageHASH = await generalService.messageHash(messToHash);
-  }
-
-  if (messageHASH !== message.hash) {
-    log.error(`Hashes dont match - expected - ${message.hash} - calculated - ${messageHASH} for the message ${JSON.stringify(message)}`);
-    throw new Error('Invalid Flux App hash received');
-  }
-
-  // ToDo: fix this function. Should just return true / false and the upper layer deals with it,
-  // none of this needs to be async, crypto.createHash is synchronous
-  return true;
-}
-
-/**
- * Verify app message signature
- * @param {string} type - Message type
- * @param {number} version - Message version
- * @param {object} appSpec - App specifications
- * @param {number} timestamp - Message timestamp
- * @param {string} signature - Message signature
- * @returns {Promise<boolean>} True if signature is valid
- */
-async function verifyAppMessageSignature(type, version, appSpec, timestamp, signature) {
-  if (!appSpec || typeof appSpec !== 'object' || Array.isArray(appSpec) || typeof timestamp !== 'number' || typeof signature !== 'string' || typeof version !== 'number' || typeof type !== 'string') {
-    throw new Error('Invalid Flux App message specifications');
-  }
-  // signature is already validated as string in the if check above, no need to ensureString
-  const messageToVerify = type + version + JSON.stringify(appSpec) + timestamp;
-  let isValidSignature = verificationHelper.verifyMessage(messageToVerify, appSpec.owner, signature); // only btc
-  if (timestamp > 1688947200000) {
-    isValidSignature = signatureVerifier.verifySignature(messageToVerify, appSpec.owner, signature); // btc, eth
-  }
-  if (isValidSignature !== true && appSpec.version <= 3) {
-    // as of specification changes, adjust our appSpecs order of owner and repotag
-    // in new scheme it is always version, name, description, owner, repotag... Old format was version, name, description, repotag, owner
-    const appSpecsCopy = JSON.parse(JSON.stringify(appSpec));
-    delete appSpecsCopy.version;
-    delete appSpecsCopy.name;
-    delete appSpecsCopy.description;
-    delete appSpecsCopy.repotag;
-    delete appSpecsCopy.owner;
-    const appSpecOld = {
-      version: appSpec.version,
-      name: appSpec.name,
-      description: appSpec.description,
-      repotag: appSpec.repotag,
-      owner: appSpec.owner,
-      ...appSpecsCopy,
-    };
-    const messageToVerifyB = type + version + JSON.stringify(appSpecOld) + timestamp;
-    isValidSignature = verificationHelper.verifyMessage(messageToVerifyB, appSpec.owner, signature); // only btc
-    if (timestamp > 1688947200000) {
-      isValidSignature = signatureVerifier.verifySignature(messageToVerifyB, appSpec.owner, signature); // btc, eth
-    }
-    // fix for repoauth / secrets order change for apps created after 1750273721000
-  } else if (isValidSignature !== true && appSpec.version === 7) {
-    const appSpecsClone = JSON.parse(JSON.stringify(appSpec));
-    appSpecsClone.compose.forEach((component) => {
-      // previously the order was secrets / repoauth. Now it's repoauth / secrets.
-      const comp = component;
-      const { secrets, repoauth } = comp;
-      delete comp.secrets;
-      delete comp.repoauth;
-      // try the old secrets / repoauth
-      comp.secrets = secrets;
-      comp.repoauth = repoauth;
-    });
-    const messageToVerifyC = type + version + JSON.stringify(appSpecsClone) + timestamp;
-    // we can just use the btc / eth verifier as v7 specs came out at 1688749251
-    isValidSignature = signatureVerifier.verifySignature(messageToVerifyC, appSpec.owner, signature);
-  }
-  if (isValidSignature !== true) {
-    log.debug(`${messageToVerify}, ${appSpec.owner}, ${signature}`);
-    const errorMessage = isValidSignature === false ? 'Received signature is invalid or Flux App specifications are not properly formatted' : isValidSignature;
-    throw new Error(errorMessage);
-  }
-  return true;
-}
-
-/**
- * Check if app update only changes the expire property
- * @param {object} newSpec - New app specifications
- * @param {object} existingSpec - Existing app specifications
- * @returns {boolean} True if only expire property is changed
- */
-/**
- * Deep equality check for two values, ignoring property order in objects
- * @param {*} a - First value
- * @param {*} b - Second value
- * @returns {boolean} True if deeply equal
- */
-function deepEqual(a, b) {
-  if (a === b) return true;
-  if (a === null || b === null) return a === b;
-  if (typeof a !== typeof b) return false;
-
-  if (Array.isArray(a)) {
-    if (!Array.isArray(b) || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i += 1) {
-      if (!deepEqual(a[i], b[i])) return false;
-    }
-    return true;
-  }
-
-  if (typeof a === 'object') {
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
-    if (keysA.length !== keysB.length) return false;
-    // eslint-disable-next-line no-restricted-syntax
-    for (const key of keysA) {
-      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
-      if (!deepEqual(a[key], b[key])) return false;
-    }
-    return true;
-  }
-
-  return false;
-}
-
-function isExpireOnlyUpdate(newSpec, existingSpec) {
-  if (!existingSpec || !newSpec) {
-    log.info('[isExpireOnlyUpdate] Missing spec - existingSpec:', !!existingSpec, 'newSpec:', !!newSpec);
-    return false;
-  }
-
-  // Create copies to compare without expire
-  const newCopy = JSON.parse(JSON.stringify(newSpec));
-  const existingCopy = JSON.parse(JSON.stringify(existingSpec));
-
-  // Remove expire from both (and height/hash which are added by system)
-  // Remove enterprise — after decryption its content is represented in compose/contacts,
-  // and the encrypted blob differs between updates due to re-encryption
-  delete newCopy.expire;
-  delete existingCopy.expire;
-  delete newCopy.height;
-  delete existingCopy.height;
-  delete newCopy.hash;
-  delete existingCopy.hash;
-  delete newCopy.enterprise;
-  delete existingCopy.enterprise;
-
-  // Use deep equality check that ignores property order
-  const isEqual = deepEqual(newCopy, existingCopy);
-  if (!isEqual) {
-    log.info('[isExpireOnlyUpdate] Specs differ after removing expire/height/hash');
-  } else {
-    log.info(`[isExpireOnlyUpdate] Specs match for app ${newSpec.name || existingSpec.name}`);
-  }
-
-  return isEqual;
-}
-
-/**
- * Verify app message update signature
- * @param {string} type - Message type
- * @param {number} version - Message version
- * @param {object} appSpec - App specifications
- * @param {number} timestamp - Message timestamp
- * @param {string} signature - Message signature
- * @param {string} appOwner - App owner address
- * @param {number} daemonHeight - Daemon height
- * @param {object} previousAppSpec - Previous app specification for usersToExtend expire-only comparison
- * @returns {Promise<boolean>} True if signature is valid
- */
-async function verifyAppMessageUpdateSignature(type, version, appSpec, timestamp, signature, appOwner, daemonHeight, previousAppSpec) {
-  if (!appSpec || typeof appSpec !== 'object' || Array.isArray(appSpec) || typeof timestamp !== 'number' || typeof signature !== 'string' || typeof version !== 'number' || typeof type !== 'string') {
-    throw new Error('Invalid Flux App message specifications');
-  }
-
-  // signature is already validated as string in the if check above, no need to ensureString
-  let marketplaceApp = false;
-  let fluxSupportTeamFluxID = null;
-  const messageToVerify = type + version + JSON.stringify(appSpec) + timestamp;
-  let isValidSignature = signatureVerifier.verifySignature(messageToVerify, appOwner, signature); // btc, eth
-  if (isValidSignature !== true) {
-    const teamSupportAddresses = getChainTeamSupportAddressUpdates();
-    if (teamSupportAddresses.length > 0) {
-      const intervals = teamSupportAddresses.filter((interval) => interval.height <= daemonHeight); // if an app message was sent on block before the team support address was activated, will be empty array
-      if (intervals && intervals.length) {
-        const addressInfo = intervals[intervals.length - 1]; // always defined
-        if (addressInfo && addressInfo.height && daemonHeight >= addressInfo.height) { // unneeded check for safety
-          fluxSupportTeamFluxID = addressInfo.address;
-          const numbersOnAppName = appSpec.name.match(/\d+/g);
-          if (numbersOnAppName && numbersOnAppName.length > 0) {
-            const dateBeforeReleaseMarketplace = Date.parse('2020-01-01');
-            // eslint-disable-next-line no-restricted-syntax
-            for (const possibleTimestamp of numbersOnAppName) {
-              if (Number(possibleTimestamp) > dateBeforeReleaseMarketplace) {
-                marketplaceApp = true;
-                break;
-              }
-            }
-            if (marketplaceApp) {
-              isValidSignature = signatureVerifier.verifySignature(messageToVerify, fluxSupportTeamFluxID, signature); // btc, eth
-            }
-          }
-        }
-      }
-    }
-  }
-
-  if (isValidSignature !== true && appSpec.version <= 3) {
-    // Handle old specification format
-    const appSpecsCopy = JSON.parse(JSON.stringify(appSpec));
-    delete appSpecsCopy.version;
-    delete appSpecsCopy.name;
-    delete appSpecsCopy.description;
-    delete appSpecsCopy.repotag;
-    delete appSpecsCopy.owner;
-
-    const appSpecOld = {
-      version: appSpec.version,
-      name: appSpec.name,
-      description: appSpec.description,
-      repotag: appSpec.repotag,
-      owner: appSpec.owner,
-      ...appSpecsCopy,
-    };
-
-    const messageToVerifyB = type + version + JSON.stringify(appSpecOld) + timestamp;
-    isValidSignature = signatureVerifier.verifySignature(messageToVerifyB, appOwner, signature); // btc, eth
-    if (isValidSignature !== true && marketplaceApp) {
-      isValidSignature = signatureVerifier.verifySignature(messageToVerifyB, fluxSupportTeamFluxID, signature); // btc, eth
-    }
-    // fix for repoauth / secrets order change for apps created after 1750273721000
-  } else if (isValidSignature !== true && appSpec.version === 7) {
-    const appSpecsClone = JSON.parse(JSON.stringify(appSpec));
-    appSpecsClone.compose.forEach((component) => {
-      // previously the order was secrets / repoauth. Now it's repoauth / secrets.
-      const comp = component;
-      const { secrets, repoauth } = comp;
-      delete comp.secrets;
-      delete comp.repoauth;
-      // try the old secrets / repoauth
-      comp.secrets = secrets;
-      comp.repoauth = repoauth;
-    });
-    const messageToVerifyC = type + version + JSON.stringify(appSpecsClone) + timestamp;
-    // we can just use the btc / eth verifier as v7 specs came out at 1688749251
-    isValidSignature = signatureVerifier.verifySignature(messageToVerifyC, appOwner, signature);
-    if (isValidSignature !== true && marketplaceApp) {
-      isValidSignature = signatureVerifier.verifySignature(messageToVerifyC, fluxSupportTeamFluxID, signature);
-    }
-  }
-
-  // Check if usersToExtend can sign this update (only for expire-only changes)
-  // Uses previousAppSpec (from permanent messages) for the expire-only comparison,
-  // so this works even when the app has expired from globalAppsInformation (e.g. during resync)
-  // Callers are responsible for decrypting previousAppSpec before passing it in
-  // (getPreviousAppSpecifications and processMessages both do this)
-  const usersToExtend = config.fluxapps.usersToExtend || [];
-  if (isValidSignature !== true && usersToExtend.length > 0 && previousAppSpec) {
-    let canCompareSpecs = true;
-    let newSpecToCompare = appSpec;
-    const prevSpecToCompare = previousAppSpec;
-    if (appSpec.version >= 8 && appSpec.enterprise) {
-      // eslint-disable-next-line global-require
-      const fluxService = require('../fluxService');
-      if (await fluxService.isSystemSecure()) {
-        const decrypted = await checkAndDecryptAppSpecs(appSpec, { daemonHeight, owner: previousAppSpec.owner || appOwner });
-        newSpecToCompare = specificationFormatter(decrypted);
-      } else {
-        canCompareSpecs = false;
-      }
-    }
-    // Consensus note: non-secure nodes can't decrypt enterprise specs, so
-    // canCompareSpecs=false and the isExpireOnlyUpdate check is skipped —
-    // they accept any usersToExtend-signed update. Secure (Arcane) nodes
-    // enforce expire-only. This means secure and non-secure nodes can reach
-    // different validity verdicts for the same message. Interim tradeoff:
-    // master's alternative is worse (throws on decrypt failure, permanently
-    // marks the hash as messageNotFound, creating data holes). Will be
-    // resolved by Arcane attestations — Arcane nodes sign a verification
-    // attestation that any node can validate using the attestation pubkey,
-    // eliminating the need for per-node decryption.
-    // eslint-disable-next-line no-restricted-syntax
-    for (const userToExtend of usersToExtend) {
-      const isValidUserToExtendSignature = signatureVerifier.verifySignature(messageToVerify, userToExtend, signature);
-      if (isValidUserToExtendSignature === true && (!canCompareSpecs || isExpireOnlyUpdate(newSpecToCompare, prevSpecToCompare))) {
-        log.info(`App ${appSpec.name} expire extension signed by userToExtend address ${userToExtend}`);
-        isValidSignature = true;
-        break;
-      }
-    }
-  }
-
-  if (isValidSignature !== true) {
-    log.debug(`${messageToVerify}, ${appOwner}, ${signature}`);
-    const errorMessage = isValidSignature === false ? 'Received signature does not correspond with Flux App owner or Flux App specifications are not properly formatted' : isValidSignature;
-    throw new Error(errorMessage);
-  }
-
-  return true;
-}
+// Import hashesNumberOfSearchs from appsService - this should be shared state
+// For now, we'll create a local instance, but ideally this should be moved to globalState
+const hashesNumberOfSearchs = new Map();
 
 /**
  * Request app message from network
@@ -449,62 +99,6 @@ async function requestAppMessageAPI(req, res) {
   }
 }
 
-/**
- * Check if app message exists in permanent storage
- * @param {string} hash - Message hash to check
- * @returns {Promise<object|boolean>} Message object if found, false otherwise
- */
-async function checkAppMessageExistence(hash) {
-  const dbopen = dbHelper.databaseConnection();
-  const appsDatabase = dbopen.db(config.database.appsglobal.database);
-  const appsQuery = { hash };
-  const appsProjection = {};
-  // a permanent global zelappmessage looks like this:
-  // const permanentAppMessage = {
-  //   type: messageType,
-  //   version: typeVersion,
-  //   appSpecifications: appSpecFormatted,
-  //   hash: messageHASH,
-  //   timestamp,
-  //   signature,
-  //   txid,
-  //   height,
-  //   valueSat,
-  // };
-  const appResult = await dbHelper.findOneInDatabase(appsDatabase, globalAppsMessages, appsQuery, appsProjection);
-  if (appResult) {
-    return appResult;
-  }
-  return false;
-}
-
-/**
- * Check if app temporary message exists
- * @param {string} hash - Message hash to check
- * @returns {Promise<object|boolean>} Message object if found, false otherwise
- */
-async function checkAppTemporaryMessageExistence(hash) {
-  const dbopen = dbHelper.databaseConnection();
-  const appsDatabase = dbopen.db(config.database.appsglobal.database);
-  const appsQuery = { hash };
-  const appsProjection = {};
-  // a temporary zelappmessage looks like this:
-  // const newMessage = {
-  //   appSpecifications: message.appSpecifications,
-  //   type: message.type,
-  //   version: message.version,
-  //   hash: message.hash,
-  //   timestamp: message.timestamp,
-  //   signature: message.signature,
-  //   createdAt: new Date(message.timestamp),
-  //   expireAt: new Date(validTill),
-  // };
-  const tempResult = await dbHelper.findOneInDatabase(appsDatabase, globalAppsTempMessages, appsQuery, appsProjection);
-  if (tempResult) {
-    return tempResult;
-  }
-  return false;
-}
 
 /**
  * Check if app hash has message
@@ -607,279 +201,247 @@ async function getAppsPermanentMessages(req, res) {
   }
 }
 
+// ── Helpers for checkAndRequestApp ──────────────────────────────────
+
+function getDaemonHeight() {
+  return daemonServiceMiscRpcs.isDaemonSynced().data.height;
+}
+
+function getDefaultExpire(height) {
+  return height >= config.fluxapps.daemonPONFork
+    ? config.fluxapps.blocksLasting * 4
+    : config.fluxapps.blocksLasting;
+}
+
+async function constructConfirmedEvent(tempMessage, txid, height, valueSat, blockTime) {
+  const { AppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
+  const specs = tempMessage.appSpecifications;
+
+  if (tempMessage.version === 2) {
+    return ConfirmedAppEvent.deserialize({
+      type: tempMessage.type,
+      version: tempMessage.version,
+      appSpecifications: specs,
+      contentHash: tempMessage.contentHash,
+      hash: tempMessage.hash,
+      timestamp: tempMessage.timestamp,
+      extend: tempMessage.extend ?? true,
+      signature: tempMessage.signature,
+      txid: serviceHelper.ensureString(txid),
+      height: serviceHelper.ensureNumber(height),
+      valueSat: serviceHelper.ensureNumber(valueSat),
+      registeredAt: serviceHelper.ensureNumber(blockTime),
+      arcaneAttestation: tempMessage.arcaneAttestation || null,
+    });
+  }
+
+  return AppEventLegacy.deserialize({
+    type: tempMessage.type,
+    version: tempMessage.version,
+    appSpecifications: specs,
+    hash: tempMessage.hash,
+    timestamp: tempMessage.timestamp,
+    signature: tempMessage.signature,
+    txid: serviceHelper.ensureString(txid),
+    height: serviceHelper.ensureNumber(height),
+    valueSat: serviceHelper.ensureNumber(valueSat),
+  });
+}
+
+async function computeRegistrationFee(spec, height) {
+  if (spec.version >= 9) {
+    const engine = await buildPricingEngine(height);
+    const breakdown = await engine.price(spec, { height, duration: spec.ttl || 0 });
+    return BigInt(breakdown.total);
+  }
+  const appPrices = await getChainParamsPriceUpdates();
+  let appPrice = await appPricePerMonth(spec, height, appPrices);
+  const defaultExpire = getDefaultExpire(height);
+  const expireIn = spec.expire || defaultExpire;
+  appPrice *= expireIn / defaultExpire;
+  appPrice = Math.ceil(appPrice * 100) / 100;
+  const intervals = appPrices.filter((p) => p.height < height);
+  const priceSpec = intervals[intervals.length - 1];
+  if (appPrice < priceSpec.minPrice) appPrice = priceSpec.minPrice;
+  return BigInt(Math.round(appPrice * 1e8));
+}
+
+async function computeUpdateFee(spec, prevSpec, height, prevHeight) {
+  if (spec.version >= 9) {
+    const engine = await buildPricingEngine(height);
+    const result = await engine.priceUpdate(prevSpec, spec, {
+      height,
+      duration: spec.ttl || 0,
+      now: Date.now(),
+      recentEvents: [],
+    });
+    return (result && result.free) ? 0n : BigInt(result.total);
+  }
+  const appPrices = await getChainParamsPriceUpdates();
+  let appPrice = await appPricePerMonth(spec, height, appPrices);
+  let previousSpecsPrice = await appPricePerMonth(prevSpec, prevHeight, appPrices);
+  const defaultExpireCurrent = getDefaultExpire(height);
+  const defaultExpirePrevious = getDefaultExpire(prevHeight);
+  const currentExpireIn = spec.expire || defaultExpireCurrent;
+  const previousExpireIn = prevSpec.expire || defaultExpirePrevious;
+  appPrice *= currentExpireIn / defaultExpireCurrent;
+  appPrice = Math.ceil(appPrice * 100) / 100;
+  previousSpecsPrice *= previousExpireIn / defaultExpirePrevious;
+  previousSpecsPrice = Math.ceil(previousSpecsPrice * 100) / 100;
+  const heightDifference = height - prevHeight;
+  const perc = (previousExpireIn - heightDifference) / previousExpireIn;
+  let actualPriceToPay = appPrice * 0.9;
+  if (perc > 0) {
+    actualPriceToPay = (appPrice - (perc * previousSpecsPrice)) * 0.9;
+  }
+  actualPriceToPay = Number(Math.ceil(actualPriceToPay * 100) / 100);
+  const intervals = appPrices.filter((p) => p.height < height);
+  const priceSpec = intervals[intervals.length - 1];
+  if (actualPriceToPay < priceSpec.minPrice) {
+    actualPriceToPay = priceSpec.minPrice;
+  }
+  return BigInt(Math.round(actualPriceToPay * 1e8));
+}
+
+async function handleExpiredApp(name) {
+  log.warn(`App ${name} has expired. Cleaning up stale data.`);
+  const existingGlobal = await appsRepository.getGlobalAppInfoRaw(name, { name: 1 });
+  if (existingGlobal) {
+    log.warn(`Removing expired app ${name} from global apps database`);
+    await appsRepository.removeGlobalAppInfo(name);
+  }
+  const existingLocal = await appsRepository.getInstalledAppRaw(name, { name: 1 });
+  if (existingLocal) {
+    log.warn(`REMOVAL REASON: App expired - ${name} update received after expiration (messageVerifier)`);
+    // eslint-disable-next-line global-require
+    const appUninstaller = require('../appLifecycle/appUninstaller');
+    await appUninstaller.uninstallApplication(name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
+  }
+}
+
+async function processPendingUpdates(appName) {
+  const pendingUpdates = globalState.getPendingUpdates(appName);
+  if (pendingUpdates.length === 0) return;
+  log.info(`Processing ${pendingUpdates.length} pending updates for ${appName}`);
+  // eslint-disable-next-line global-require
+  const messageStore = require('./messageStore');
+  for (let idx = 0; idx < pendingUpdates.length; idx += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await messageStore.storeAppTemporaryMessage(pendingUpdates[idx].message);
+      log.info(`Processed pending update ${idx + 1}/${pendingUpdates.length} for ${appName}`);
+    } catch (error) {
+      log.warn(`Pending update for ${appName} failed: ${error.message}. Clearing ${pendingUpdates.length - idx} remaining updates.`);
+      globalState.clearPendingUpdates(appName);
+      break;
+    }
+  }
+}
+
+// ── Core promotion function ─────────────────────────────────────────
+
 /**
- * Check if app message exists and request it if not found
+ * Promote a temp message to permanent when the chain confirms it.
+ * Called by explorerService when it encounters an OP_RETURN with an app hash.
+ *
  * @param {string} hash - Message hash
- * @param {string} txid - Transaction ID
+ * @param {string} txid - Confirming transaction ID
  * @param {number} height - Block height
- * @param {number} valueSat - Transaction value in satoshis
- * @param {number} i - Retry counter
- * @returns {Promise<boolean>} True if message found or stored, false otherwise
+ * @param {number} valueSat - Satoshis paid in the transaction
+ * @param {number} blockTime - Unix timestamp of the confirming block
+ * @param {number} i - Retry counter (internal)
+ * @returns {Promise<boolean>}
  */
-async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
+async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null, i = 0) {
   try {
-    if (height < config.fluxapps.epochstart) { // do not request testing apps
-      return false;
+    if (height < config.fluxapps.epochstart) return false;
+
+    const existing = await appsRepository.getPermanentMessage(hash);
+    if (existing) {
+      await appHashHasMessage(hash);
+      return true;
     }
 
-    const appMessageExists = await checkAppMessageExistence(hash);
-    if (appMessageExists === false) { // otherwise do nothing
-      // we surely do not have that message in permanent storage.
-      // check temporary message storage
-      // if we have it in temporary storage, get the temporary message
-      const tempMessage = await checkAppTemporaryMessageExistence(hash);
-      if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
-        const specifications = tempMessage.appSpecifications;
-        if (!specifications) {
-          log.error(`Temp message ${hash} has no specifications! Full message: ${JSON.stringify(tempMessage)}`);
-          return false;
-        }
-        // Re-verify signature against current permanent state before promoting.
-        // This prevents a race condition where two updates are both verified against
-        // the same permanent state at temp arrival time, but the first one changes
-        // the owner before the second is promoted.
-        const isUpdate = tempMessage.type === 'fluxappupdate' || tempMessage.type === 'zelappupdate';
-        if (isUpdate) {
-          const previousAppSpecs = await getPreviousAppSpecifications(specifications, tempMessage.timestamp);
-          if (previousAppSpecs) {
-            const messageVersion = serviceHelper.ensureNumber(tempMessage.version);
-            const messageTimestamp = serviceHelper.ensureNumber(tempMessage.timestamp);
-            const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-            const daemonHeight = syncStatus.data.height;
-            try {
-              await verifyAppMessageUpdateSignature(
-                tempMessage.type, messageVersion, specifications, messageTimestamp,
-                tempMessage.signature, previousAppSpecs.owner, daemonHeight, previousAppSpecs,
-              );
-            } catch (error) {
-              // Before height 2000000, owner-change races were accepted by the
-              // network (re-verification was not deployed until v8.10.0, well
-              // after the last known race at h=1880981). Retry with previous
-              // owner to replay history as it was.
-              if (height < 2000000) {
-                const db = dbHelper.databaseConnection();
-                const appsDb = db.db(config.database.appsglobal.database);
-                const prevOwnerDoc = await dbHelper.findOneInDatabase(
-                  appsDb, globalAppsMessages,
-                  { 'appSpecifications.name': specifications.name, 'appSpecifications.owner': { $ne: previousAppSpecs.owner } },
-                  { projection: { _id: 0, 'appSpecifications.owner': 1 }, sort: { height: -1 } },
-                );
-                const prevOwner = prevOwnerDoc?.appSpecifications?.owner;
-                if (prevOwner) {
-                  try {
-                    await verifyAppMessageUpdateSignature(
-                      tempMessage.type, messageVersion, specifications, messageTimestamp,
-                      tempMessage.signature, prevOwner, daemonHeight, previousAppSpecs,
-                    );
-                  } catch {
-                    log.warn(`Promotion re-verification failed for ${specifications.name} (${hash}): ${error.message}`);
-                    return false;
-                  }
-                } else {
-                  log.warn(`Promotion re-verification failed for ${specifications.name} (${hash}): ${error.message}`);
-                  return false;
-                }
-              } else {
-                log.warn(`Promotion re-verification failed for ${specifications.name} (${hash}): ${error.message}`);
-                return false;
-              }
-            }
-          }
-        }
-
-        const permanentAppMessage = {
-          type: tempMessage.type,
-          version: tempMessage.version,
-          appSpecifications: specifications,
-          hash: tempMessage.hash,
-          timestamp: tempMessage.timestamp,
-          signature: tempMessage.signature,
-          txid: serviceHelper.ensureString(txid),
-          height: serviceHelper.ensureNumber(height),
-          valueSat: serviceHelper.ensureNumber(valueSat),
-        };
-        // Import locally to avoid circular dependency
-        // eslint-disable-next-line global-require
-        const messageStore = require('./messageStore');
-        await messageStore.storeAppPermanentMessage(permanentAppMessage);
-        // await update zelapphashes that we already have it stored
-        await appHashHasMessage(hash);
-
-        const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-        const daemonHeight = syncStatus.data.height;
-        // Determine default expire based on whether app was registered after PON fork
-        const defaultExpire = height >= config.fluxapps.daemonPONFork ? 88000 : 22000;
-        const expire = specifications.expire || defaultExpire;
-        let actualExpirationHeight = height + expire;
-
-        // If app was registered before fork block and we are past fork block
-        // the chain moves 4x faster, so we need to adjust the expiration
-        if (height < config.fluxapps.daemonPONFork && daemonHeight >= config.fluxapps.daemonPONFork) {
-          const originalExpirationHeight = height + expire;
-          if (originalExpirationHeight > config.fluxapps.daemonPONFork) {
-            // Calculate blocks that were supposed to live after fork block
-            const blocksAfterFork = originalExpirationHeight - config.fluxapps.daemonPONFork;
-            // Multiply by 4 to account for 4x faster chain
-            const adjustedBlocksAfterFork = blocksAfterFork * 4;
-            // New expiration = fork block + adjusted blocks
-            actualExpirationHeight = config.fluxapps.daemonPONFork + adjustedBlocksAfterFork;
-          }
-        }
-
-        if (actualExpirationHeight > daemonHeight) {
-          // we only do this validations if the app can still be currently running to insert it or update it in globalappspecifications
-          const appPrices = await getChainParamsPriceUpdates();
-          const intervals = appPrices.filter((interval) => interval.height < height);
-          const priceSpecifications = intervals[intervals.length - 1]; // filter does not change order
-          if (tempMessage.type === 'zelappregister' || tempMessage.type === 'fluxappregister') {
-          // check if value is optimal or higher
-            let appPrice = await appPricePerMonth(specifications, height, appPrices);
-            // Use defaultExpire from outer scope which accounts for PON fork
-            const expireIn = specifications.expire || defaultExpire;
-            // app prices are ceiled to highest 0.01
-            const multiplier = expireIn / defaultExpire;
-            appPrice *= multiplier;
-            appPrice = Math.ceil(appPrice * 100) / 100;
-            if (appPrice < priceSpecifications.minPrice) {
-              appPrice = priceSpecifications.minPrice;
-            }
-            if (valueSat >= appPrice * 1e8) {
-              const updateForSpecifications = permanentAppMessage.appSpecifications;
-              updateForSpecifications.hash = permanentAppMessage.hash;
-              updateForSpecifications.height = permanentAppMessage.height;
-              // object of appSpecifications extended for hash and height
-              const inserted = await insertAppSpecifications(updateForSpecifications);
-              const appName = specifications.name;
-              if (!inserted) {
-                globalState.clearPendingUpdates(appName);
-                return true;
-              }
-              const pendingUpdates = globalState.getPendingUpdates(appName);
-              if (pendingUpdates.length > 0) {
-                log.info(`Processing ${pendingUpdates.length} pending updates for ${appName}`);
-                // Process updates in order (sorted by height)
-                for (let idx = 0; idx < pendingUpdates.length; idx += 1) {
-                  const pendingUpdate = pendingUpdates[idx];
-                  try {
-                    // eslint-disable-next-line no-await-in-loop
-                    await messageStore.storeAppTemporaryMessage(pendingUpdate.message);
-                    log.info(`Processed pending update ${idx + 1}/${pendingUpdates.length} for ${appName}`);
-                  } catch (error) {
-                    // If an update fails, stop processing and clear remaining updates
-                    log.warn(`Pending update for ${appName} failed: ${error.message}. Clearing ${pendingUpdates.length - idx} remaining updates.`);
-                    globalState.clearPendingUpdates(appName);
-                    break;
-                  }
-                }
-              }
-            // every time we ask for a missing app message that is a appregister call after expireGlobalApplications to make sure we don't have on
-            } else {
-              log.warn(`Apps message ${permanentAppMessage.hash} is underpaid ${valueSat} < ${appPrice * 1e8} - priceSpecs ${JSON.stringify(priceSpecifications)} - specs ${JSON.stringify(specifications)}`);
-            }
-          } else if (tempMessage.type === 'zelappupdate' || tempMessage.type === 'fluxappupdate') {
-            const db = dbHelper.databaseConnection();
-            const database = db.db(config.database.appsglobal.database);
-            const messageInfo = await dbHelper.findOneInDatabase(
-              database,
-              globalAppsMessages,
-              {
-                'appSpecifications.name': specifications.name,
-                timestamp: { $lte: tempMessage.timestamp },
-              },
-              { projection: { _id: 0 }, sort: { height: -1 } },
-            );
-            if (!messageInfo) {
-              log.error(`Last permanent message for ${specifications.name} not found`);
-              return true;
-            }
-            const previousSpecs = messageInfo.appSpecifications;
-            // here comparison of height differences and specifications
-            // price shall be price for standard registration plus minus already paid price according to old specifics. height remains height valid for 22000 blocks
-            let appPrice = await appPricePerMonth(specifications, height, appPrices);
-            let previousSpecsPrice = await appPricePerMonth(previousSpecs, messageInfo.height || height, appPrices);
-            // Calculate default expire for current and previous apps based on their registration heights
-            const defaultExpireCurrent = height >= config.fluxapps.daemonPONFork
-              ? config.fluxapps.blocksLasting * 4
-              : config.fluxapps.blocksLasting;
-            const defaultExpirePrevious = (messageInfo.height || height) >= config.fluxapps.daemonPONFork
-              ? config.fluxapps.blocksLasting * 4
-              : config.fluxapps.blocksLasting;
-            const currentExpireIn = specifications.expire || defaultExpireCurrent;
-            const previousExpireIn = previousSpecs.expire || defaultExpirePrevious;
-            // app prices are ceiled to highest 0.01
-            const multiplierCurrent = currentExpireIn / defaultExpireCurrent;
-            appPrice *= multiplierCurrent;
-            appPrice = Math.ceil(appPrice * 100) / 100;
-            const multiplierPrevious = previousExpireIn / defaultExpirePrevious;
-            previousSpecsPrice *= multiplierPrevious;
-            previousSpecsPrice = Math.ceil(previousSpecsPrice * 100) / 100;
-            // what is the height difference
-            const heightDifference = permanentAppMessage.height - messageInfo.height;
-            // currentExpireIn is always higher than heightDifference
-            const perc = (previousExpireIn - heightDifference) / previousExpireIn; // how much of previous specs was not used yet
-            let actualPriceToPay = appPrice * 0.9;
-            if (perc > 0) {
-              actualPriceToPay = (appPrice - (perc * previousSpecsPrice)) * 0.9; // discount for missing heights. Allow 90%
-            }
-            actualPriceToPay = Number(Math.ceil(actualPriceToPay * 100) / 100);
-            if (actualPriceToPay < priceSpecifications.minPrice) {
-              actualPriceToPay = priceSpecifications.minPrice;
-            }
-            if (valueSat >= actualPriceToPay * 1e8) {
-              const updateForSpecifications = permanentAppMessage.appSpecifications;
-              updateForSpecifications.hash = permanentAppMessage.hash;
-              updateForSpecifications.height = permanentAppMessage.height;
-              // object of appSpecifications extended for hash and height
-              await updateAppSpecifications(updateForSpecifications);
-            } else {
-              log.warn(`Apps message ${permanentAppMessage.hash} is underpaid ${valueSat} < ${appPrice * 1e8}`);
-            }
-          }
-          return true;
-        } else {
-          // App has expired (actualExpirationHeight <= daemonHeight)
-          // Clean up stale data from both global and local databases
-          // This handles the case where an update message was received after the app expired
-          log.warn(`App ${specifications.name} has expired (expiration height ${actualExpirationHeight} <= daemon height ${daemonHeight}). Cleaning up stale data.`);
-
-          const db = dbHelper.databaseConnection();
-
-          // Remove from global apps information if it exists with stale data
-          const databaseGlobal = db.db(config.database.appsglobal.database);
-          const queryDeleteApp = { name: specifications.name };
-          const projectionApps = { projection: { _id: 0, name: 1 } };
-          const existingGlobalApp = await dbHelper.findOneInDatabase(databaseGlobal, globalAppsInformation, queryDeleteApp, projectionApps);
-          if (existingGlobalApp) {
-            log.warn(`Removing expired app ${specifications.name} from global apps database`);
-            await dbHelper.findOneAndDeleteInDatabase(databaseGlobal, globalAppsInformation, queryDeleteApp, projectionApps);
-          }
-
-          // Check if app is installed locally and remove it
-          const databaseLocal = db.db(config.database.appslocal.database);
-          const existingLocalApp = await dbHelper.findOneInDatabase(databaseLocal, localAppsInformation, queryDeleteApp, projectionApps);
-          if (existingLocalApp) {
-            log.warn(`REMOVAL REASON: App expired - ${specifications.name} update received after expiration (messageVerifier)`);
-            // Use dynamic require to avoid circular dependency
-            // eslint-disable-next-line global-require
-            const appUninstaller = require('../appLifecycle/appUninstaller');
-            // force=true to bypass removalInProgress checks, endResponse=false since no res, sendMessage=true to notify peers
-            await appUninstaller.removeAppLocally(specifications.name, null, true, false, true);
-          }
-
-          return true;
-        }
-      }
-
+    const tempMessage = await appsRepository.getTempMessage(hash);
+    if (!tempMessage || typeof tempMessage !== 'object' || Array.isArray(tempMessage)) {
       if (i < 2) {
         await requestAppMessage(hash);
         await serviceHelper.delay(60 * 1000);
-        return checkAndRequestApp(hash, txid, height, valueSat, i + 1);
-        // additional requesting of missing app messages is done on rescans
+        return checkAndRequestApp(hash, txid, height, valueSat, blockTime, i + 1);
       }
       return false;
     }
-    // update apphashes that we already have it stored
+
+    const specifications = tempMessage.appSpecifications;
+    if (!specifications) {
+      log.error(`Temp message ${hash} has no specifications`);
+      return false;
+    }
+
+    // Construct the confirmed event from temp message + chain data.
+    // This deserializes the spec into its class instance (v1-v9).
+    const confirmedEvent = await constructConfirmedEvent(tempMessage, txid, height, valueSat, blockTime);
+
+    // Re-verify signature for updates against current permanent state.
+    // Prevents race: two updates verified against same state at temp time,
+    // but the first one changed the owner before the second is promoted.
+    if (confirmedEvent.isUpdate) {
+      const previousAppSpecs = await getPreviousAppSpecifications(specifications, tempMessage.timestamp);
+      if (previousAppSpecs) {
+        const previousInstantiated = await appsRepository.getGlobalAppInfo(specifications.name);
+        await appEventVerifier.authorize({
+          appEvent: confirmedEvent,
+          previousSpec: previousInstantiated ? previousInstantiated.spec : null,
+          daemonHeight: getDaemonHeight(),
+        });
+      }
+    }
+
+    // Store the permanent message
+    await appsRepository.storePermanentMessage(confirmedEvent.serialize());
     await appHashHasMessage(hash);
+
+    // Project to InstantiatedSpec — the domain type for live app state
+    const { InstantiatedSpec } = await getSpecBackend();
+    const instantiated = InstantiatedSpec.fromEvent(confirmedEvent.toInstantiatedSpec());
+
+    // Expiry check
+    const daemonHeight = getDaemonHeight();
+    if (instantiated.isExpired(blockTime, daemonHeight)) {
+      await handleExpiredApp(instantiated.name);
+      return true;
+    }
+
+    // Pricing — the spec is already a class instance on confirmedEvent.spec
+    const spec = instantiated.spec;
+    if (confirmedEvent.isRegistration) {
+      const requiredSats = await computeRegistrationFee(spec, height);
+      if (BigInt(valueSat) >= requiredSats) {
+        await insertAppSpecifications(instantiated.serialize());
+        await processPendingUpdates(instantiated.name);
+      } else {
+        log.warn(`App ${hash} registration underpaid: ${valueSat} < ${requiredSats}`);
+      }
+    } else {
+      const prevMessage = await appsRepository.getPreviousPermanentMessage(
+        spec.name, tempMessage.timestamp,
+      );
+      if (!prevMessage) {
+        log.error(`Last permanent message for ${spec.name} not found`);
+        return true;
+      }
+      const prevSpecs = prevMessage.appSpecifications;
+      await getSpec();
+      const { deserializeSpec } = await getSpecBackend();
+      const prevSpec = deserializeSpec(prevSpecs);
+      const requiredSats = await computeUpdateFee(spec, prevSpec, height, prevMessage.height);
+      if (BigInt(valueSat) >= requiredSats) {
+        await updateAppSpecifications(instantiated.serialize());
+      } else {
+        log.warn(`App ${hash} update underpaid: ${valueSat} < ${requiredSats}`);
+      }
+    }
+
     return true;
   } catch (error) {
     log.error(`Error checking and requesting app ${hash}:`, error);
@@ -898,7 +460,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, i = 0) {
 async function checkAndRequestMultipleApps(apps, incoming = false, i = 1) {
   try {
     const numberOfPeers = fluxNetworkHelper.getNumberOfPeers();
-    if (numberOfPeers < config.fluxapps.minHashSyncPeers) {
+    if (numberOfPeers < 12) {
       log.info('checkAndRequestMultipleApps - Not enough connected peers to request missing Flux App messages');
       return;
     }
@@ -908,7 +470,7 @@ async function checkAndRequestMultipleApps(apps, incoming = false, i = 1) {
     // eslint-disable-next-line no-restricted-syntax
     for (const app of apps) {
       // eslint-disable-next-line no-await-in-loop
-      const messageReceived = await checkAndRequestApp(app.hash, app.txid, app.height, app.value, 2);
+      const messageReceived = await checkAndRequestApp(app.hash, app.txid, app.height, app.value, null, 2);
       if (messageReceived) {
         appsToRemove.push(app);
       }
@@ -923,20 +485,169 @@ async function checkAndRequestMultipleApps(apps, incoming = false, i = 1) {
   }
 }
 
+// Global variables for continuousFluxAppHashesCheck
+let continuousFluxAppHashesCheckRunning = false;
+let firstContinuousFluxAppHashesCheckRun = true;
+
+/**
+ * Continuously checks for missing flux app hashes and requests missing messages
+ * @param {boolean} force - Force check even if already running
+ * @returns {Promise<void>}
+ */
+async function continuousFluxAppHashesCheck(force = false) {
+  try {
+    if (continuousFluxAppHashesCheckRunning) {
+      return;
+    }
+    log.info('Requesting missing Flux App messages');
+    continuousFluxAppHashesCheckRunning = true;
+    const numberOfPeers = fluxNetworkHelper.getNumberOfPeers();
+    if (numberOfPeers < 12) {
+      log.info('Not enough connected peers to request missing Flux App messages');
+      continuousFluxAppHashesCheckRunning = false;
+      return;
+    }
+
+    const synced = await generalService.checkSynced();
+    if (synced !== true) {
+      log.info('Flux not yet synced');
+      continuousFluxAppHashesCheckRunning = false;
+      return;
+    }
+
+    if (firstContinuousFluxAppHashesCheckRun && !globalState.checkAndSyncAppHashesWasEverExecuted) {
+      // Import checkAndSyncAppHashes from appHashSyncService
+      // eslint-disable-next-line global-require
+      const appHashSyncService = require('./appHashSyncService');
+      await appHashSyncService.checkAndSyncAppHashes();
+    }
+
+    const dbopen = dbHelper.databaseConnection();
+    const database = dbopen.db(config.database.daemon.database);
+    const queryHeight = { generalScannedHeight: { $gte: 0 } };
+    const projectionHeight = {
+      projection: {
+        _id: 0,
+        generalScannedHeight: 1,
+      },
+    };
+    const scanHeight = await dbHelper.findOneInDatabase(database, scannedHeightCollection, queryHeight, projectionHeight);
+    if (!scanHeight) {
+      throw new Error('Scanning not initiated');
+    }
+    const explorerHeight = serviceHelper.ensureNumber(scanHeight.generalScannedHeight);
+
+    // get flux app hashes that do not have a message
+    const query = { message: false };
+    const projection = {
+      projection: {
+        _id: 0,
+        txid: 1,
+        hash: 1,
+        height: 1,
+        value: 1,
+        message: 1,
+        messageNotFound: 1,
+      },
+    };
+    const results = await dbHelper.findInDatabase(database, appsHashesCollection, query, projection);
+    // sort it by height, so we request oldest messages first
+    results.sort((a, b) => a.height - b.height);
+    let appsMessagesMissing = [];
+    // eslint-disable-next-line no-restricted-syntax
+    for (const result of results) {
+      if (!result.messageNotFound || force || firstContinuousFluxAppHashesCheckRun) { // most likely wrong data, if no message found. This attribute is cleaned every reconstructAppMessagesHashPeriod blocks so all nodes search again for missing messages
+        let heightDifference = explorerHeight - result.height;
+        if (heightDifference < 0) {
+          heightDifference = 0;
+        }
+        let maturity = Math.round(heightDifference / config.fluxapps.blocksLasting);
+        if (maturity > 12) {
+          maturity = 16; // maturity of max 16 representing its older than 1 year. Old messages will only be searched 3 times, newer messages more oftenly
+        }
+        if (invalidMessages.find((message) => message.hash === result.hash && message.txid === result.txid)) {
+          if (!force) {
+            maturity = 30; // do not request known invalid messages.
+          }
+        }
+        // every config.fluxapps.blocksLasting increment maturity by 2;
+        let numberOfSearches = maturity;
+        if (hashesNumberOfSearchs.has(result.hash)) {
+          numberOfSearches = hashesNumberOfSearchs.get(result.hash) + 2; // max 10 tries
+        }
+        hashesNumberOfSearchs.set(result.hash, numberOfSearches);
+        log.info(`Requesting missing Flux App message: ${result.hash}, ${result.txid}, ${result.height}`);
+        if (numberOfSearches <= 20) { // up to 10 searches
+          const appMessageInformation = {
+            hash: result.hash,
+            txid: result.txid,
+            height: result.height,
+            value: result.value,
+          };
+          appsMessagesMissing.push(appMessageInformation);
+          if (appsMessagesMissing.length === 500) {
+            log.info('Requesting 500 app messages');
+            checkAndRequestMultipleApps(appsMessagesMissing);
+            // eslint-disable-next-line no-await-in-loop
+            await serviceHelper.delay(2 * 60 * 1000); // delay 2 minutes to give enough time to process all messages received
+            appsMessagesMissing = [];
+          }
+        } else {
+          // eslint-disable-next-line no-await-in-loop
+          await appHashHasMessageNotFound(result.hash); // mark message as not found
+          hashesNumberOfSearchs.delete(result.hash); // remove from our map
+        }
+      }
+    }
+    if (appsMessagesMissing.length > 0) {
+      log.info(`Requesting ${appsMessagesMissing.length} app messages`);
+      checkAndRequestMultipleApps(appsMessagesMissing);
+    }
+    continuousFluxAppHashesCheckRunning = false;
+    firstContinuousFluxAppHashesCheckRun = false;
+  } catch (error) {
+    log.error(error);
+    continuousFluxAppHashesCheckRunning = false;
+    firstContinuousFluxAppHashesCheckRun = false;
+  }
+}
+
+/**
+ * API endpoint to manually trigger app hashes check
+ * @param {object} req - Request object
+ * @param {object} res - Response object
+ * @returns {Promise<void>}
+ */
+async function triggerAppHashesCheckAPI(req, res) {
+  try {
+    // only flux team and node owner can do this
+    const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
+    if (!authorized) {
+      const errMessage = messageHelper.errUnauthorizedMessage();
+      res.json(errMessage);
+      return;
+    }
+
+    continuousFluxAppHashesCheck(true);
+    const resultsResponse = messageHelper.createSuccessMessage('Running check on missing application messages ');
+    res.json(resultsResponse);
+  } catch (error) {
+    log.error(error);
+    const errMessage = messageHelper.createErrorMessage(error.message, error.name, error.code);
+    res.json(errMessage);
+  }
+}
+
 module.exports = {
-  verifyAppHash,
-  verifyAppMessageSignature,
-  verifyAppMessageUpdateSignature,
-  isExpireOnlyUpdate,
   requestAppMessage,
   requestAppsMessage,
   requestAppMessageAPI,
-  checkAppMessageExistence,
-  checkAppTemporaryMessageExistence,
   appHashHasMessage,
   appHashHasMessageNotFound,
   getAppsTemporaryMessages,
   getAppsPermanentMessages,
   checkAndRequestApp,
   checkAndRequestMultipleApps,
+  continuousFluxAppHashesCheck,
+  triggerAppHashesCheckAPI,
 };
