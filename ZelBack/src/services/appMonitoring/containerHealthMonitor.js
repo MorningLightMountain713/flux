@@ -3,7 +3,7 @@ const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const dockerService = require('../dockerService');
 const generalService = require('../generalService');
-const registryManager = require('../appDatabase/registryManager');
+const appsRepository = require('../appDatabase/appsRepository');
 const appInstaller = require('../appLifecycle/appInstaller');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appInspector = require('../appManagement/appInspector');
@@ -112,7 +112,7 @@ async function handleMissingMasterSlaveContainer(stoppedApp, mainAppName) {
     if (appTamperingDetectionService.isNetworkMissingError(recreateErr.message)) {
       await appTamperingDetectionService.recordEvent(mainAppName, 'network_pruned', `Docker network missing during recreation: ${recreateErr.message}`);
     }
-    await appUninstaller.removeAppLocally(mainAppName, null, false, true, true);
+    await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
   }
 }
 
@@ -147,7 +147,7 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
     try {
       const mainAppName = stoppedApp.split('_')[1] || stoppedApp;
       // eslint-disable-next-line no-await-in-loop
-      const appDetails = await registryManager.getApplicationGlobalSpecifications(mainAppName);
+      const appDetails = await appsRepository.getGlobalAppInfo(mainAppName);
       const appInstalledMasterSlave = appsInstalled.find((app) => app.name === mainAppName);
       const composeSpecs = appInstalledMasterSlave?.compose;
       // App-level: any component using g:/r: marks the whole app as a syncthing app
@@ -233,7 +233,7 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
                 await appTamperingDetectionService.recordEvent(mainAppName, 'network_pruned', `Docker network missing during recreation: ${recreateErr.message}`);
               }
               // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.removeAppLocally(mainAppName, null, false, true, true);
+              await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
             }
           } else {
             log.warn(`${stoppedApp} is stopped, starting`);
@@ -256,7 +256,7 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
       if (!globalState.isOperationInProgress()) {
         log.warn(`REMOVAL REASON: App start failure - ${mainAppName} failed to start with error: ${err.message} (containerHealthMonitor)`);
         // eslint-disable-next-line no-await-in-loop
-        await appUninstaller.removeAppLocally(mainAppName, null, false, true, true);
+        await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
       }
     }
   }

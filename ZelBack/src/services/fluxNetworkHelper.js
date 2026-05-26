@@ -1151,7 +1151,7 @@ async function adjustExternalIP(ip) {
       // eslint-disable-next-line global-require
       const appController = require('./appManagement/appController');
       // eslint-disable-next-line global-require
-      const enterpriseHelper = require('./utils/enterpriseHelper');
+      const { resolveSpec } = require('./utils/specCutover');
       let apps = await appQueryService.installedApps();
       if (apps.status === 'success' && apps.data.length > 0) {
         apps = apps.data;
@@ -1166,7 +1166,7 @@ async function adjustExternalIP(ip) {
             if (app.enterprise) {
               try {
                 // eslint-disable-next-line no-await-in-loop
-                appSpecs = await enterpriseHelper.checkAndDecryptAppSpecs(app);
+                appSpecs = await resolveSpec(app);
               } catch (decryptError) {
                 log.error(`Failed to decrypt enterprise specs for ${app.name}: ${decryptError.message}`);
                 // eslint-disable-next-line no-continue
