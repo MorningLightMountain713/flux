@@ -4,11 +4,13 @@ const serviceHelper = require('../serviceHelper');
 // Removed verificationHelper to avoid circular dependency - will use dynamic require where needed
 const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
-const registryManager = require('../appDatabase/registryManager');
 const appInspector = require('./appInspector');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const log = require('../../lib/log');
+const appsRepository = require('../appDatabase/appsRepository');
+const { getSpecBackend } = require('../utils/specLibs');
+const { appsFolder } = require('../utils/appConstants');
+const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 
 const globalCmdDelayMs = config.fluxapps.globalCmdDelayMs;
 
@@ -18,33 +20,10 @@ const globalCmdDelayMs = config.fluxapps.globalCmdDelayMs;
  * @returns {Promise<Array>} Application locations
  */
 async function appLocation(appname) {
-  // eslint-disable-next-line global-require
-  const dbHelper = require('../dbHelper');
-  // eslint-disable-next-line global-require
-  const config = require('config');
-  const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
-
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
-  let query = {};
   if (appname) {
-    query = { name: new RegExp(`^${appname}$`, 'i') }; // case insensitive
+    return appsRepository.listLocationsByApp(appname);
   }
-  const projection = {
-    projection: {
-      _id: 0,
-      name: 1,
-      hash: 1,
-      ip: 1,
-      broadcastedAt: 1,
-      expireAt: 1,
-      runningSince: 1,
-      osUptime: 1,
-      staticIp: 1,
-    },
-  };
-  const results = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-  return results;
+  return appsRepository.listLocations();
 }
 
 /**
@@ -65,7 +44,6 @@ async function executeAppGlobalCommand(appname, command, zelidauth, paramA, bypa
     const localPort = extractPort(localSocketAddr);
     // eslint-disable-next-line no-restricted-syntax
     for (const appInstance of locations) {
-      // HERE let the node we are connected to handle it
       const instanceIp = extractIp(appInstance.ip);
       const instancePort = extractPort(appInstance.ip);
       if (bypassMyIp && localIp === instanceIp && localPort === instancePort) {
@@ -132,89 +110,56 @@ async function appStart(req, res) {
       return res ? res.json(appResponse) : appResponse;
     }
 
-    const isComponent = appname.includes('_'); // it is a component start
+    const isComponent = appname.includes('_');
     let appRes;
 
+    const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+    if (!instantiated) {
+      throw new Error('Application not found');
+    }
+    const { DeploymentSpec } = await getSpecBackend();
+    const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+
     if (isComponent) {
-      // For component start, check if it uses g:syncthing mode
-      const componentMainApp = appname.split('_')[1];
-      const appSpecs = await registryManager.getApplicationSpecifications(componentMainApp);
-      if (appSpecs && appSpecs.version > 3) {
-        const componentSpec = appSpecs.compose.find((comp) => `${comp.name}_${appSpecs.name}` === appname);
-        if (componentSpec && componentSpec.containerData && componentSpec.containerData.includes('g:')) {
-          // Check if component is running
-          try {
-            const containers = await dockerService.dockerListContainers(false); // Get only running containers
-            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(appname) || container.Id === appname);
-            if (!isRunning) {
-              log.info(`Skipping start for g:syncthing component ${appname} - not currently running`);
-              appRes = `Component ${appname} uses g:syncthing mode and is not running - skipped start`;
-              const appResponse = messageHelper.createDataMessage(appRes);
-              return res ? res.json(appResponse) : appResponse;
-            }
-          } catch (error) {
-            log.warn(`Could not check running status for ${appname}: ${error.message}`);
+      const compName = appname.split('_')[0];
+      const deployComp = deployment.getComponent(compName);
+      if (deployComp && deployComp.hasActiveStandbySyncthing()) {
+        try {
+          const containers = await dockerService.dockerListContainers(false);
+          const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(appname) || container.Id === appname);
+          if (!isRunning) {
+            log.info(`Skipping start for activeStandby syncthing component ${appname} - not currently running`);
+            appRes = `Component ${appname} uses activeStandby syncthing and is not running - skipped start`;
+            const appResponse = messageHelper.createDataMessage(appRes);
+            return res ? res.json(appResponse) : appResponse;
           }
+        } catch (error) {
+          log.warn(`Could not check running status for ${appname}: ${error.message}`);
         }
       }
       appRes = await dockerService.appDockerStart(appname);
       appInspector.startAppMonitoring(appname);
     } else {
-      // Check if app exists before starting
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
-        throw new Error('Application not found');
-      }
-
-      if (appSpecs.version <= 3) {
-        // For non-composed apps, check if it uses g:syncthing mode
-        if (appSpecs.containerData && appSpecs.containerData.includes('g:')) {
+      for (const [, deployComp] of deployment.componentEntries()) {
+        if (deployComp.hasActiveStandbySyncthing()) {
           try {
+            // eslint-disable-next-line no-await-in-loop
             const containers = await dockerService.dockerListContainers(false);
-            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(appname) || container.Id === appname);
+            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(deployComp.identifier) || container.Id === deployComp.identifier);
             if (!isRunning) {
-              log.info(`Skipping start for g:syncthing app ${appname} - not currently running`);
-              appRes = `Application ${appname} uses g:syncthing mode and is not running - skipped start`;
-              const appResponse = messageHelper.createDataMessage(appRes);
-              return res ? res.json(appResponse) : appResponse;
+              log.info(`Skipping start for activeStandby syncthing component ${deployComp.identifier} - not currently running`);
+              // eslint-disable-next-line no-continue
+              continue;
             }
           } catch (error) {
-            log.warn(`Could not check running status for ${appname}: ${error.message}`);
+            log.warn(`Could not check running status for ${deployComp.identifier}: ${error.message}`);
           }
         }
-        appRes = await dockerService.appDockerStart(appname);
-        appInspector.startAppMonitoring(appname);
-      } else {
-        // For composed applications (version > 3), start all components
-        log.info(`Starting composed app ${appSpecs.name} with ${appSpecs.compose.length} components`);
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecs.compose) {
-          const componentName = `${appComponent.name}_${appSpecs.name}`;
-          // Check if component uses g:syncthing mode
-          if (appComponent.containerData && appComponent.containerData.includes('g:')) {
-            try {
-              // eslint-disable-next-line no-await-in-loop
-              const containers = await dockerService.dockerListContainers(false);
-              const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(componentName) || container.Id === componentName);
-              if (!isRunning) {
-                log.info(`Skipping start for g:syncthing component ${componentName} - not currently running`);
-                // eslint-disable-next-line no-continue
-                continue;
-              }
-            } catch (error) {
-              log.warn(`Could not check running status for ${componentName}: ${error.message}`);
-            }
-          }
-          log.info(`Starting component: ${componentName}`);
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerStart(componentName);
-          log.info(`Component ${componentName} started, starting monitoring`);
-          appInspector.startAppMonitoring(componentName);
-          log.info(`Monitoring started for ${componentName}`);
-        }
-        log.info(`All components started for ${appSpecs.name}`);
-        appRes = `Application ${appSpecs.name} started`;
+        // eslint-disable-next-line no-await-in-loop
+        await dockerService.appDockerStart(deployComp.identifier);
+        appInspector.startAppMonitoring(deployComp.identifier);
       }
+      appRes = `Application ${instantiated.name} started`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -273,27 +218,18 @@ async function appStop(req, res) {
       appInspector.stopAppMonitoring(appname, false);
       appRes = await dockerService.appDockerStop(appname);
     } else {
-      // Check if app exists before stopping
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
         throw new Error('Application not found');
       }
-
-      // eslint-disable-next-line no-restricted-syntax
-      if (appSpecs.version <= 3) {
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
+        appInspector.stopAppMonitoring(deployComp.identifier, false);
         // eslint-disable-next-line no-await-in-loop
-        appInspector.stopAppMonitoring(appname, false);
-        appRes = await dockerService.appDockerStop(appname);
-      } else {
-        // For composed applications (version > 3), stop all components in reverse order
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecs.compose.reverse()) {
-          appInspector.stopAppMonitoring(`${appComponent.name}_${appSpecs.name}`, false);
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerStop(`${appComponent.name}_${appSpecs.name}`);
-        }
-        appRes = `Application ${appSpecs.name} stopped`;
+        await dockerService.appDockerStop(deployComp.identifier);
       }
+      appRes = `Application ${instantiated.name} stopped`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -345,82 +281,54 @@ async function appRestart(req, res) {
       return res ? res.json(appResponse) : appResponse;
     }
 
-    const isComponent = appname.includes('_'); // it is a component restart
+    const isComponent = appname.includes('_');
     let appRes;
 
+    const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+    if (!instantiated) {
+      throw new Error('Application not found');
+    }
+    const { DeploymentSpec } = await getSpecBackend();
+    const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+
     if (isComponent) {
-      // For component restart, check if it uses g:syncthing mode
-      const componentMainApp = appname.split('_')[1];
-      const appSpecs = await registryManager.getApplicationSpecifications(componentMainApp);
-      if (appSpecs && appSpecs.version > 3) {
-        const componentSpec = appSpecs.compose.find((comp) => `${comp.name}_${appSpecs.name}` === appname);
-        if (componentSpec && componentSpec.containerData && componentSpec.containerData.includes('g:')) {
-          // Check if component is running
-          try {
-            const containers = await dockerService.dockerListContainers(false); // Get only running containers
-            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(appname) || container.Id === appname);
-            if (!isRunning) {
-              log.info(`Skipping restart for g:syncthing component ${appname} - not currently running`);
-              appRes = `Component ${appname} uses g:syncthing mode and is not running - skipped restart`;
-              const appResponse = messageHelper.createDataMessage(appRes);
-              return res ? res.json(appResponse) : appResponse;
-            }
-          } catch (error) {
-            log.warn(`Could not check running status for ${appname}: ${error.message}`);
+      const compName = appname.split('_')[0];
+      const deployComp = deployment.getComponent(compName);
+      if (deployComp && deployComp.hasActiveStandbySyncthing()) {
+        try {
+          const containers = await dockerService.dockerListContainers(false);
+          const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(appname) || container.Id === appname);
+          if (!isRunning) {
+            log.info(`Skipping restart for activeStandby syncthing component ${appname} - not currently running`);
+            appRes = `Component ${appname} uses activeStandby syncthing and is not running - skipped restart`;
+            const appResponse = messageHelper.createDataMessage(appRes);
+            return res ? res.json(appResponse) : appResponse;
           }
+        } catch (error) {
+          log.warn(`Could not check running status for ${appname}: ${error.message}`);
         }
       }
       appRes = await dockerService.appDockerRestart(appname);
     } else {
-      // Check if app exists before restarting
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      // eslint-disable-next-line no-restricted-syntax
-      if (!appSpecs) {
-        throw new Error('Application not found');
-      }
-
-      if (appSpecs.version <= 3) {
-        // For non-composed apps, check if it uses g:syncthing mode
-        if (appSpecs.containerData && appSpecs.containerData.includes('g:')) {
+      for (const [, deployComp] of deployment.componentEntries()) {
+        if (deployComp.hasActiveStandbySyncthing()) {
           try {
+            // eslint-disable-next-line no-await-in-loop
             const containers = await dockerService.dockerListContainers(false);
-            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(appname) || container.Id === appname);
+            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(deployComp.identifier) || container.Id === deployComp.identifier);
             if (!isRunning) {
-              log.info(`Skipping restart for g:syncthing app ${appname} - not currently running`);
-              appRes = `Application ${appname} uses g:syncthing mode and is not running - skipped restart`;
-              const appResponse = messageHelper.createDataMessage(appRes);
-              return res ? res.json(appResponse) : appResponse;
+              log.info(`Skipping restart for activeStandby syncthing component ${deployComp.identifier} - not currently running`);
+              // eslint-disable-next-line no-continue
+              continue;
             }
           } catch (error) {
-            log.warn(`Could not check running status for ${appname}: ${error.message}`);
+            log.warn(`Could not check running status for ${deployComp.identifier}: ${error.message}`);
           }
         }
-        appRes = await dockerService.appDockerRestart(appname);
-      } else {
-        // For composed applications (version > 3), restart all components
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecs.compose) {
-          const componentName = `${appComponent.name}_${appSpecs.name}`;
-          // Check if component uses g:syncthing mode
-          if (appComponent.containerData && appComponent.containerData.includes('g:')) {
-            try {
-              // eslint-disable-next-line no-await-in-loop
-              const containers = await dockerService.dockerListContainers(false);
-              const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(componentName) || container.Id === componentName);
-              if (!isRunning) {
-                log.info(`Skipping restart for g:syncthing component ${componentName} - not currently running`);
-                // eslint-disable-next-line no-continue
-                continue;
-              }
-            } catch (error) {
-              log.warn(`Could not check running status for ${componentName}: ${error.message}`);
-            }
-          }
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerRestart(`${appComponent.name}_${appSpecs.name}`);
-        }
-        appRes = `Application ${appSpecs.name} restarted`;
+        // eslint-disable-next-line no-await-in-loop
+        await dockerService.appDockerRestart(deployComp.identifier);
       }
+      appRes = `Application ${instantiated.name} restarted`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -463,30 +371,23 @@ async function appKill(req, res) {
       return res ? res.json(errMessage) : errMessage;
     }
 
-    const isComponent = appname.includes('_'); // it is a component kill. Proceed with killing just component
+    const isComponent = appname.includes('_');
     let appRes;
 
     if (isComponent) {
       appRes = await dockerService.appDockerKill(appname);
     } else {
-      // eslint-disable-next-line no-restricted-syntax
-      // Check if app exists before killing
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
         throw new Error('Application not found');
       }
-
-      if (appSpecs.version <= 3) {
-        appRes = await dockerService.appDockerKill(appname);
-      } else {
-        // For composed applications (version > 3), kill all components in reverse order
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecs.compose.reverse()) {
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerKill(`${appComponent.name}_${appSpecs.name}`);
-        }
-        appRes = `Application ${appSpecs.name} killed`;
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
+        // eslint-disable-next-line no-await-in-loop
+        await dockerService.appDockerKill(deployComp.identifier);
       }
+      appRes = `Application ${instantiated.name} killed`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -538,30 +439,23 @@ async function appPause(req, res) {
       return res ? res.json(appResponse) : appResponse;
     }
 
-    const isComponent = appname.includes('_'); // it is a component pause
+    const isComponent = appname.includes('_');
     let appRes;
 
     if (isComponent) {
-      // eslint-disable-next-line no-restricted-syntax
       appRes = await dockerService.appDockerPause(appname);
     } else {
-      // Check if app exists before pausing
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
         throw new Error('Application not found');
       }
-
-      if (appSpecs.version <= 3) {
-        appRes = await dockerService.appDockerPause(appname);
-      } else {
-        // For composed applications (version > 3), pause all components
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecs.compose.reverse()) {
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerPause(`${appComponent.name}_${appSpecs.name}`);
-        }
-        appRes = `Application ${appSpecs.name} paused`;
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
+        // eslint-disable-next-line no-await-in-loop
+        await dockerService.appDockerPause(deployComp.identifier);
       }
+      appRes = `Application ${instantiated.name} paused`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -613,30 +507,23 @@ async function appUnpause(req, res) {
       return res ? res.json(appResponse) : appResponse;
     }
 
-    const isComponent = appname.includes('_'); // it is a component unpause
+    const isComponent = appname.includes('_');
     let appRes;
-    // eslint-disable-next-line no-restricted-syntax
 
     if (isComponent) {
       appRes = await dockerService.appDockerUnpause(appname);
     } else {
-      // Check if app exists before unpausing
-      const appSpecs = await registryManager.getApplicationSpecifications(mainAppName);
-      if (!appSpecs) {
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
         throw new Error('Application not found');
       }
-
-      if (appSpecs.version <= 3) {
-        appRes = await dockerService.appDockerUnpause(appname);
-      } else {
-        // For composed applications (version > 3), unpause all components
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponent of appSpecs.compose) {
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerUnpause(`${appComponent.name}_${appSpecs.name}`);
-        }
-        appRes = `Application ${appSpecs.name} unpaused`;
+      const { DeploymentSpec } = await getSpecBackend();
+      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries()) {
+        // eslint-disable-next-line no-await-in-loop
+        await dockerService.appDockerUnpause(deployComp.identifier);
       }
+      appRes = `Application ${instantiated.name} unpaused`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -668,8 +555,6 @@ async function appDockerRestart(appname) {
       // Note: startAppMonitoring would need to be injected or called separately
       log.info(`Component ${appname} restarted successfully`);
     } else {
-      // ask for restarting entire composed application
-      // This would need getApplicationSpecifications from registryManager
       log.info(`Restarting entire application ${appname}`);
       await dockerService.appDockerRestart(appname);
     }
