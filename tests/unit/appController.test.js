@@ -4,7 +4,7 @@ const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const appController = require('../../ZelBack/src/services/appManagement/appController');
 const dockerService = require('../../ZelBack/src/services/dockerService');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 
@@ -54,10 +54,10 @@ describe('appController tests', () => {
 
     it('should start app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'TestApp',
         version: 3,
-      }));
+      });
 
       const req = {
         params: { appname: 'TestApp' },
@@ -131,14 +131,14 @@ describe('appController tests', () => {
 
     it('should start all components for version 4+ apps', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'ComposedApp',
         version: 4,
         compose: [
           { name: 'Component1' },
           { name: 'Component2' },
         ],
-      }));
+      });
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -187,10 +187,10 @@ describe('appController tests', () => {
 
     it('should stop app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'TestApp',
         version: 3,
-      }));
+      });
 
       const req = {
         params: { appname: 'TestApp' },
@@ -210,14 +210,14 @@ describe('appController tests', () => {
 
     it('should stop all components for version 4+ apps in reverse order', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'ComposedApp',
         version: 4,
         compose: [
           { name: 'Component1' },
           { name: 'Component2' },
         ],
-      }));
+      });
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -277,10 +277,10 @@ describe('appController tests', () => {
 
     it('should restart app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'TestApp',
         version: 3,
-      }));
+      });
 
       const req = {
         params: { appname: 'TestApp' },
@@ -299,14 +299,14 @@ describe('appController tests', () => {
 
     it('should restart all components for version 4+ apps', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'ComposedApp',
         version: 4,
         compose: [
           { name: 'Component1' },
           { name: 'Component2' },
         ],
-      }));
+      });
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -445,10 +445,10 @@ describe('appController tests', () => {
 
     it('should kill app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'TestApp',
         version: 3,
-      }));
+      });
 
       const req = {
         params: { appname: 'TestApp' },
@@ -467,14 +467,14 @@ describe('appController tests', () => {
 
     it('should kill all components for version 4+ apps in reverse order', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'ComposedApp',
         version: 4,
         compose: [
           { name: 'Component1' },
           { name: 'Component2' },
         ],
-      }));
+      });
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -493,7 +493,7 @@ describe('appController tests', () => {
 
     it('should return error if app not found', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves(null);
 
       const req = {
         params: { appname: 'NonExistentApp' },
@@ -518,10 +518,10 @@ describe('appController tests', () => {
 
     it('should pause app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'TestApp',
         version: 3,
-      }));
+      });
 
       const req = {
         params: { appname: 'TestApp' },
@@ -540,14 +540,14 @@ describe('appController tests', () => {
 
     it('should pause all components for version 4+ apps', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'ComposedApp',
         version: 4,
         compose: [
           { name: 'Component1' },
           { name: 'Component2' },
         ],
-      }));
+      });
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -572,10 +572,10 @@ describe('appController tests', () => {
 
     it('should unpause app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'TestApp',
         version: 3,
-      }));
+      });
 
       const req = {
         params: { appname: 'TestApp' },
@@ -594,14 +594,14 @@ describe('appController tests', () => {
 
     it('should unpause all components for version 4+ apps', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
         name: 'ComposedApp',
         version: 4,
         compose: [
           { name: 'Component1' },
           { name: 'Component2' },
         ],
-      }));
+      });
 
       const req = {
         params: { appname: 'ComposedApp' },
@@ -656,7 +656,7 @@ describe('appController tests', () => {
         { ip: '192.168.1.2:16127', name: 'TestApp' },
       ];
       sinon.stub(dbHelper, 'findInDatabase').resolves(locations);
-      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.3:16127');
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.3:16127');
     });
 
     it('should execute command on all app instances', async () => {
@@ -678,7 +678,7 @@ describe('appController tests', () => {
       sinon.stub(dbHelper, 'findInDatabase').resolves(locations);
       // eslint-disable-next-line global-require, no-shadow
       const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
-      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.3:16127');
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.3:16127');
 
       // eslint-disable-next-line global-require
       const axios = require('axios');
