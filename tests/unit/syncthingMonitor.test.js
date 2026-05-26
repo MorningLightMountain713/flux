@@ -22,7 +22,7 @@ const dockerServiceMock = {
 };
 
 const fluxNetworkHelperMock = {
-  getLocalSocketAddress: sinon.stub(),
+  getMyFluxIPandPort: sinon.stub(),
 };
 
 const syncthingServiceMock = {
@@ -58,8 +58,6 @@ const syncthingMonitorHelpersMock = {
   })),
   ensureStfolderExists: sinon.stub().resolves(),
   getContainerFolderPath: sinon.stub().returns(''),
-  getContainerDataFlags: sinon.stub().returns(''),
-  requiresSyncing: sinon.stub().returns(false),
   folderNeedsUpdate: sinon.stub().returns(false),
 };
 
@@ -70,8 +68,8 @@ const syncthingHealthMonitorMock = {
   }),
 };
 
-const appQueryServiceMock = {
-  decryptEnterpriseApps: sinon.stub().returnsArg(0), // Return apps as-is by default
+const deploymentProviderMock = {
+  listInstalledDeployments: sinon.stub().resolves([]),
 };
 
 // Load module with mocked dependencies
@@ -81,7 +79,7 @@ const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/sy
   '../dockerService': dockerServiceMock,
   '../fluxNetworkHelper': fluxNetworkHelperMock,
   '../syncthingService': syncthingServiceMock,
-  '../appQuery/appQueryService': appQueryServiceMock,
+  '../appRuntime/deploymentProvider': deploymentProviderMock,
   './syncthingFolderStateMachine': syncthingFolderStateMachineMock,
   './syncthingMonitorHelpers': syncthingMonitorHelpersMock,
   './syncthingHealthMonitor': syncthingHealthMonitorMock,
@@ -117,6 +115,8 @@ describe('syncthingMonitor tests', () => {
     mockRemoveAppLocallyFn = sinon.stub().resolves();
 
     // Reset all mocked services
+    deploymentProviderMock.listInstalledDeployments.reset();
+    deploymentProviderMock.listInstalledDeployments.resolves([]);
     syncthingServiceMock.getDeviceId.reset();
     syncthingServiceMock.getConfigFolders.reset();
     syncthingServiceMock.getConfigDevices.reset();
@@ -125,7 +125,7 @@ describe('syncthingMonitor tests', () => {
     syncthingServiceMock.getFolderIdErrors.reset();
     syncthingServiceMock.getConfigRestartRequired.reset();
     syncthingServiceMock.systemRestart.reset();
-    fluxNetworkHelperMock.getLocalSocketAddress.reset();
+    fluxNetworkHelperMock.getMyFluxIPandPort.reset();
     dockerServiceMock.dockerContainerInspect.reset();
     dockerServiceMock.appDockerStart.reset();
     syncthingHealthMonitorMock.monitorFolderHealth.reset();
@@ -158,11 +158,10 @@ describe('syncthingMonitor tests', () => {
     it('should return control object with stop and isActive methods', () => {
       mockInstalledAppsFn.resolves({ status: 'success', data: [] });
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
-      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      fluxNetworkHelperMock.getMyFluxIPandPort.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
-        mockInstalledAppsFn,
         mockGetGlobalStateFn,
         mockAppDockerStopFn,
         mockAppDockerRestartFn,
@@ -178,11 +177,10 @@ describe('syncthingMonitor tests', () => {
     it('should stop monitoring when stop is called', () => {
       mockInstalledAppsFn.resolves({ status: 'success', data: [] });
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
-      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      fluxNetworkHelperMock.getMyFluxIPandPort.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
-        mockInstalledAppsFn,
         mockGetGlobalStateFn,
         mockAppDockerStopFn,
         mockAppDockerRestartFn,
@@ -201,7 +199,6 @@ describe('syncthingMonitor tests', () => {
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
-        mockInstalledAppsFn,
         mockGetGlobalStateFn,
         mockAppDockerStopFn,
         mockAppDockerRestartFn,
@@ -222,7 +219,6 @@ describe('syncthingMonitor tests', () => {
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
-        mockInstalledAppsFn,
         mockGetGlobalStateFn,
         mockAppDockerStopFn,
         mockAppDockerRestartFn,
@@ -243,7 +239,6 @@ describe('syncthingMonitor tests', () => {
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
-        mockInstalledAppsFn,
         mockGetGlobalStateFn,
         mockAppDockerStopFn,
         mockAppDockerRestartFn,
@@ -263,15 +258,14 @@ describe('syncthingMonitor tests', () => {
         resolveFirst = resolve;
       });
 
-      mockInstalledAppsFn.onFirstCall().returns(firstPromise);
-      mockInstalledAppsFn.onSecondCall().resolves({ status: 'success', data: [] });
+      deploymentProviderMock.listInstalledDeployments.onFirstCall().returns(firstPromise);
+      deploymentProviderMock.listInstalledDeployments.onSecondCall().resolves([]);
 
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
-      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      fluxNetworkHelperMock.getMyFluxIPandPort.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
-        mockInstalledAppsFn,
         mockGetGlobalStateFn,
         mockAppDockerStopFn,
         mockAppDockerRestartFn,
@@ -286,10 +280,10 @@ describe('syncthingMonitor tests', () => {
       await clock.tickAsync(30000);
 
       // First execution still not complete - should skip second call
-      expect(mockInstalledAppsFn.callCount).to.equal(1);
+      expect(deploymentProviderMock.listInstalledDeployments.callCount).to.equal(1);
 
       // Complete first execution
-      resolveFirst({ status: 'success', data: [] });
+      resolveFirst([]);
       // Give time for all async operations in the promise chain to complete
       await clock.tickAsync(100);
 
@@ -297,17 +291,15 @@ describe('syncthingMonitor tests', () => {
       await clock.tickAsync(30000);
       await clock.tickAsync(100);
 
-      expect(mockInstalledAppsFn.callCount).to.be.greaterThan(1);
+      expect(deploymentProviderMock.listInstalledDeployments.callCount).to.be.greaterThan(1);
     });
 
     it('should run at regular intervals', async () => {
-      mockInstalledAppsFn.resolves({ status: 'success', data: [] });
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
-      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      fluxNetworkHelperMock.getMyFluxIPandPort.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
-        mockInstalledAppsFn,
         mockGetGlobalStateFn,
         mockAppDockerStopFn,
         mockAppDockerRestartFn,
@@ -317,13 +309,13 @@ describe('syncthingMonitor tests', () => {
 
       // Wait for first execution to complete
       await clock.tickAsync(100);
-      const firstCallCount = mockInstalledAppsFn.callCount;
+      const firstCallCount = deploymentProviderMock.listInstalledDeployments.callCount;
 
       // Advance to next interval and let it complete
       await clock.tickAsync(30000);
       await clock.tickAsync(100);
 
-      expect(mockInstalledAppsFn.callCount).to.be.greaterThan(firstCallCount);
+      expect(deploymentProviderMock.listInstalledDeployments.callCount).to.be.greaterThan(firstCallCount);
     });
   });
 });
