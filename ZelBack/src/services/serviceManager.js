@@ -63,6 +63,10 @@ const nodeConfirmationService = require('./nodeConfirmationService');
 const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const imageUpdateService = require('./imageUpdateService');
+const appsMaintenance = require('./appDatabase/appsMaintenance');
+const appsRepository = require('./appDatabase/appsRepository');
+const { rebuildPriceOracleState } = require('./pricing/priceOracleState');
+const telemetryIdentityService = require('./telemetryIdentityService');
 const { version: fluxVersion } = require('../../../package.json');
 // const throughputLogger = require('./utils/throughputLogger');
 
@@ -420,7 +424,7 @@ async function startFluxFunctions() {
 
     // This fixes an issue where the appsMessage db has NaN for valueSat. Once db is repaired on all nodes,
     // we can remove this.
-    await dbHelper.repairNanInAppsMessagesDb();
+    await appsMaintenance.repairNanInAppsMessagesDb();
 
     // The location table this node already holds, brought back as soon as the
     // database is up. Detached and best-effort - every consumer degrades safely
@@ -753,21 +757,14 @@ async function startFluxFunctions() {
       // keeping clear of the rebuild that just finished. Detached; placement
       // degrades to /16 arithmetic without a table.
       ipLocationSync.startSync().catch((err) => log.error(`ipLocationSync start error: ${err.message}`));
-      advancedWorkflows.checkAndRemoveEnterpriseAppsOnNonArcane();
-      // Detached. The sweep uninstalls apps, so it waits for policy this node has confirmed
-      // is the network's, and everything below here starts whether or not that ever arrives.
-      enterpriseNetwork.startOwnershipSweeps();
-      // STARTED ON THE POLICY, NOT ON A CLOCK. What this removes is decided by the
-      // blocklist in the signed bundle, so it runs when that changes and when the gate
-      // opens on it. An application arriving afterwards is judged by the installer
-      // before it is written, and what has neither - a specification that did not
-      // decrypt, a removal the node was too busy to take, a pass that stopped part way
-      // - is held by name and asked again on its own timer.
-      //
-      // Here rather than beside the other app services: the first thing a pass does is
-      // read the local app table, so it waits on the same db the sweep beside it waits
-      // on.
-      imageManager.startComplianceSweeps(appQueryService.installedApps, appUninstaller.removeAppLocally);
+      advancedWorkflows.reconcileInstalledApps();
+      await identityReady;
+      try {
+        await enterpriseNetwork.cleanupOwnershipViolations();
+        log.info('Enterprise network cleanup completed');
+      } catch (error) {
+        log.error(`Enterprise network cleanup failed: ${error.message || error}`);
+      }
       setInterval(() => {
         portManager.restorePortsSupport();
       }, portRestoreIntervalMs);
