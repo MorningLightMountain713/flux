@@ -19,6 +19,7 @@ describe('appsRepository', () => {
       findInDatabase: sinon.stub(),
       replaceOneInDatabase: sinon.stub(),
       removeDocumentsFromCollection: sinon.stub(),
+      aggregateInDatabase: sinon.stub().resolves([]),
     };
 
     // getSpec() returns { FluxAppSpecBase: { getVersionClass } }.
@@ -73,6 +74,7 @@ describe('appsRepository', () => {
           collections: {
             appsInformation: 'zelappsinformation',
             appsMessages: 'zelappsmessages',
+            appsLocations: 'zelappslocation',
           },
         },
         appslocal: {
@@ -87,6 +89,11 @@ describe('appsRepository', () => {
           },
         },
       },
+      fluxapps: {
+        daemonPONFork: 2020000,
+        blocksLasting: 22000,
+        newMinBlocksAllowance: 100,
+      },
     };
 
     appsRepository = proxyquire('../../ZelBack/src/services/appDatabase/appsRepository', {
@@ -98,6 +105,9 @@ describe('appsRepository', () => {
         globalAppsInformation: 'zelappsinformation',
         localAppsInformation: 'zelappsinformation',
         globalAppsMessages: 'zelappsmessages',
+      },
+      './appsMaintenance': {
+        expireHeightExpr: sinon.stub().returns({ $add: ['$height', '$expire'] }),
       },
     });
   });
@@ -284,6 +294,73 @@ describe('appsRepository', () => {
       const result = await appsRepository.getAppMessage('legacy');
       expect(result.spec).to.not.be.null;
       expect(result.spec.spec.name).to.equal('y');
+    });
+  });
+
+  describe('findUnderProvisionedApps', () => {
+    beforeEach(() => {
+      const V7 = {
+        deserialize: (doc) => ({
+          version: doc.version,
+          name: doc.name,
+          owner: doc.owner,
+          instances: doc.instances,
+          placement: { staticIp: false, dataCenter: false },
+          enterprise: doc.enterprise,
+          hasSyncthing: () => false,
+        }),
+      };
+      versionRegistry.set(7, V7);
+    });
+
+    it('should return empty array when no results', async () => {
+      dbHelperStub.aggregateInDatabase.resolves([]);
+      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      expect(result).to.deep.equal([]);
+    });
+
+    it('should hydrate pipeline results and return candidates', async () => {
+      const doc = { version: 7, name: 'testApp', owner: 'owner1', hash: 'h1', height: 2550000, instances: 3, _actual: 1, _required: 3 };
+      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      expect(result).to.have.lengthOf(1);
+      expect(result[0].instantiated.name).to.equal('testApp');
+      expect(result[0].actual).to.equal(1);
+      expect(result[0].required).to.equal(3);
+    });
+
+    it('should skip docs that fail hydration', async () => {
+      const good = { version: 7, name: 'goodApp', owner: 'o1', hash: 'h1', height: 100, instances: 3, _actual: 0, _required: 3 };
+      const bad = { version: 99, name: 'badApp', owner: 'o2', hash: 'h2', height: 100, instances: 3, _actual: 0, _required: 3 };
+      dbHelperStub.aggregateInDatabase.resolves([good, bad]);
+      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      expect(result).to.have.lengthOf(1);
+      expect(result[0].instantiated.name).to.equal('goodApp');
+    });
+
+    it('should pass currentHeight and nowSeconds into the pipeline', async () => {
+      dbHelperStub.aggregateInDatabase.resolves([]);
+      await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      expect(dbHelperStub.aggregateInDatabase.calledOnce).to.be.true;
+      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
+      expect(pipeline).to.be.an('array');
+      expect(pipeline.length).to.be.gte(4);
+    });
+
+    it('should include v9 TTL branch in the expiry check', async () => {
+      dbHelperStub.aggregateInDatabase.resolves([]);
+      await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
+      const addFieldsStage = pipeline[0];
+      expect(addFieldsStage.$addFields._isAlive.$cond.if).to.deep.equal({ $gte: ['$version', 9] });
+    });
+
+    it('should sort results by name', async () => {
+      dbHelperStub.aggregateInDatabase.resolves([]);
+      await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
+      const sortStage = pipeline[pipeline.length - 1];
+      expect(sortStage.$sort).to.deep.equal({ name: 1 });
     });
   });
 });
