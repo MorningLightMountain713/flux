@@ -78,10 +78,9 @@ describe('appInstaller tests', () => {
     };
 
     hwRequirementsStub = {
-      checkAppHWRequirements: sinon.stub().resolves(),
-      checkAppStaticIpRequirements: sinon.stub(),
-      checkAppNodesRequirements: sinon.stub().resolves(),
-      checkAppGeolocationRequirements: sinon.stub(),
+      systemArchitecture: sinon.stub().resolves('amd64'),
+      checkPlacement: sinon.stub().resolves(),
+      checkNodeResources: sinon.stub().resolves(),
     };
 
     appsRepositoryStub = {
@@ -235,44 +234,6 @@ describe('appInstaller tests', () => {
 
   afterEach(() => {
     sinon.restore();
-  });
-
-  describe('checkAppRequirements', () => {
-    it('should check all hardware requirements', async () => {
-      const appSpecs = {
-        name: 'testapp',
-        cpu: 1,
-        ram: 1000,
-        hdd: 10,
-      };
-
-      const result = await appInstaller.checkAppRequirements(appSpecs);
-
-      expect(result).to.be.true;
-      expect(hwRequirementsStub.checkAppHWRequirements.calledWith(appSpecs)).to.be.true;
-      expect(hwRequirementsStub.checkAppStaticIpRequirements.calledWith(appSpecs)).to.be.true;
-      expect(hwRequirementsStub.checkAppNodesRequirements.calledWith(appSpecs)).to.be.true;
-      expect(hwRequirementsStub.checkAppGeolocationRequirements.calledWith(appSpecs)).to.be.true;
-    });
-
-    it('should propagate hardware requirement errors', async () => {
-      const appSpecs = {
-        name: 'testapp',
-        cpu: 1,
-        ram: 1000,
-        hdd: 10,
-      };
-      const error = new Error('Insufficient hardware');
-
-      hwRequirementsStub.checkAppHWRequirements.rejects(error);
-
-      try {
-        await appInstaller.checkAppRequirements(appSpecs);
-        expect.fail('Should have thrown error');
-      } catch (err) {
-        expect(err).to.equal(error);
-      }
-    });
   });
 
   describe('installApplicationAPI', () => {
@@ -454,7 +415,6 @@ describe('appInstaller tests', () => {
         './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
         '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves() },
         '../appMessaging/messageStore': { storeAppInstallingErrorMessage: sinon.stub().resolves() },
-        '../appSystem/systemIntegration': { systemArchitecture: sinon.stub().resolves('amd64') },
         '../appSecurity/imageManager': { isImageBlocked: sinon.stub().resolves(false), verifyRepository: sinon.stub().resolves({ verified: true, supportedArchitectures: ['amd64'] }) },
         '../appManagement/appInspector': { startAppMonitoring: sinon.stub() },
         '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
@@ -470,6 +430,12 @@ describe('appInstaller tests', () => {
         },
         '../appRuntime/deploymentProvider': {
           listInstalledDeployments: listInstalledDeploymentsStub,
+          buildDeployment: sinon.stub().resolves({
+            totalResources: () => ({ cpu: 1, memory: 500, storage: 10 }),
+            allHostPorts: () => [],
+            allImages: () => [],
+            componentEntries: () => [],
+          }),
         },
         './appVolumeService': { createAppVolume: sinon.stub().resolves() },
         '../utils/specLibs': { getSpecBackend: sinon.stub().resolves({}) },
@@ -485,9 +451,17 @@ describe('appInstaller tests', () => {
         util: { promisify: (fn) => fn },
       });
 
+      const mockPlacement = {
+        staticIp: false,
+        dataCenter: false,
+        hasGeoRestrictions: () => false,
+        hasTargets: () => false,
+      };
       const mockInstantiated = {
         name: 'newapp',
-        spec: { version: 2, name: 'newapp', componentEntries: () => [] },
+        version: 2,
+        placement: mockPlacement,
+        spec: { version: 2, name: 'newapp', placement: mockPlacement, componentEntries: () => [] },
         isEncrypted: () => false,
         serialize: () => ({ version: 2, name: 'newapp' }),
       };

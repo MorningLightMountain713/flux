@@ -13,55 +13,6 @@ describe('appUtilities tests', () => {
     sinon.restore();
   });
 
-  describe('nodeFullGeolocation tests', () => {
-    it('should return formatted geolocation string', async () => {
-      sinon.stub(geolocationService, 'getNodeGeolocation').resolves({
-        continentCode: 'NA',
-        countryCode: 'US',
-        regionName: 'California',
-      });
-
-      const result = await appUtilities.nodeFullGeolocation();
-
-      expect(result).to.equal('NA_US_California');
-    });
-
-    it('should throw error when geolocation not set', async () => {
-      sinon.stub(geolocationService, 'getNodeGeolocation').resolves(null);
-
-      try {
-        await appUtilities.nodeFullGeolocation();
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('Node Geolocation not set');
-      }
-    });
-
-    it('should handle different continent codes', async () => {
-      sinon.stub(geolocationService, 'getNodeGeolocation').resolves({
-        continentCode: 'EU',
-        countryCode: 'DE',
-        regionName: 'Bavaria',
-      });
-
-      const result = await appUtilities.nodeFullGeolocation();
-
-      expect(result).to.equal('EU_DE_Bavaria');
-    });
-
-    it('should format with underscores', async () => {
-      sinon.stub(geolocationService, 'getNodeGeolocation').resolves({
-        continentCode: 'AS',
-        countryCode: 'JP',
-        regionName: 'Tokyo',
-      });
-
-      const result = await appUtilities.nodeFullGeolocation();
-
-      expect(result).to.match(/^[A-Z]{2}_[A-Z]{2}_\w+$/);
-      expect(result.split('_')).to.have.lengthOf(3);
-    });
-  });
 
   // getAppFolderSize tests removed - they execute actual sudo commands
   // which require proper system access. These should be tested in integration tests.
@@ -99,7 +50,6 @@ describe('appUtilities tests', () => {
   describe('module exports tests', () => {
     it('should export all required functions', () => {
       expect(appUtilities.appPricePerMonth).to.be.a('function');
-      expect(appUtilities.nodeFullGeolocation).to.be.a('function');
       expect(appUtilities.getAppFolderSize).to.be.a('function');
       expect(appUtilities.getContainerStorage).to.be.a('function');
       expect(appUtilities.findCommonArchitectures).to.be.a('function');

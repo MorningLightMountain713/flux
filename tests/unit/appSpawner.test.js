@@ -194,17 +194,13 @@ describe('appSpawner tests', () => {
         isAppVetted: sinon.stub().resolves(false),
       },
       '../appRequirements/hwRequirements': {
-        checkAppRequirements: sinon.stub().resolves(),
-        totalAppHWRequirements: sinon.stub().returns({ cpu: 1, ram: 1000, hdd: 10 }),
-        checkAppCpuBurstHeadroom: sinon.stub().resolves(),
+        checkNodeResources: sinon.stub().resolves(),
+        checkCpuBurstHeadroom: sinon.stub().resolves(),
+        systemArchitecture: sinon.stub().resolves('amd64'),
       },
       '../appNetwork/portManager': {
         ensureApplicationPortsNotUsed: sinon.stub().resolves(),
         checkInstallingAppPortAvailable: sinon.stub().resolves(true),
-      },
-      '../appSystem/systemIntegration': {
-        systemArchitecture: sinon.stub().resolves('amd64'),
-        nodeFullGeolocation: sinon.stub().returns('US-NY'),
       },
       '../utils/globalState': globalStateStub,
       '../geolocationService': {
