@@ -6,21 +6,12 @@ const verificationHelper = require('../verificationHelper');
 const dockerService = require('../dockerService');
 const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
-const generalService = require('../generalService');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appUninstaller = require('./appUninstaller');
-const appNetworkLinker = require('./appNetworkLinker');
-// const advancedWorkflows = require('./advancedWorkflows'); // Moved to dynamic require to avoid circular dependency
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { storeAppInstallingErrorMessage } = require('../appMessaging/messageStore');
-
-let onInstallComplete = null;
-function setOnInstallComplete(callback) {
-  onInstallComplete = callback;
-}
 const { systemArchitecture } = require('../appSystem/systemIntegration');
-const { checkApplicationImagesCompliance, verifyRepository } = require('../appSecurity/imageManager');
+const { isImageBlocked, verifyRepository } = require('../appSecurity/imageManager');
 const { startAppMonitoring } = require('../appManagement/appInspector');
 const imageVerifier = require('../utils/imageVerifier');
 // pgpService is used in commented out code
@@ -29,22 +20,28 @@ const pgpService = require('../pgpService');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { specificationFormatter } = require('../utils/appSpecHelpers');
+const cpuBurstHelper = require('../utils/cpuBurstHelper');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appVolumeService = require('./appVolumeService');
+const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
-const { localAppsInformation, scannedHeightCollection } = require('../utils/appConstants');
-const { checkAppTemporaryMessageExistence, checkAppMessageExistence } = require('../appMessaging/messageVerifier');
-const { availableApps, getApplicationGlobalSpecifications } = require('../appDatabase/registryManager');
-const hwRequirements = require('../appRequirements/hwRequirements');
-const config = require('config');
+const appsRepository = require('../appDatabase/appsRepository');
+const { localAppsInformation } = require('../utils/appConstants');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { verifyAppVolumeMount } = require('../utils/volumeService');
+const hwRequirements = require('../appRequirements/hwRequirements');
+const config = require('config');
+
+let onInstallComplete = null;
+function setOnInstallComplete(callback) {
+  onInstallComplete = callback;
+}
 
 // Legacy apps that use old gateway IP assignment method
 const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated', 'isokosse', 'ChainBraryDApp', 'health', 'ethercalc'];
 
-// Helper functions and constants for installApplicationHard
+// Helper functions and constants for installComponent
 const util = require('util');
 
 const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
@@ -56,251 +53,74 @@ const supportedArchitectures = ['amd64', 'arm64'];
  * @param {object} res - Response object for streaming
  * @returns {Promise<void>}
  */
-async function performDockerCleanup(res) {
-  const dockerContainers = {
-    status: 'Clearing up unused docker containers...',
-  };
-  log.info(dockerContainers);
-  if (res) {
-    res.write(serviceHelper.ensureString(dockerContainers));
-    if (res.flush) res.flush();
-  }
+async function performDockerCleanup(onStatus) {
+  log.info('Clearing up unused docker containers...');
+  if (onStatus) onStatus({ status: 'Clearing up unused docker containers...' });
   await dockerService.pruneContainers();
-  const dockerContainers2 = {
-    status: 'Docker containers cleaned.',
-  };
-  if (res) {
-    res.write(serviceHelper.ensureString(dockerContainers2));
-    if (res.flush) res.flush();
-  }
+  if (onStatus) onStatus({ status: 'Docker containers cleaned.' });
 
-  const dockerNetworks = {
-    status: 'Clearing up unused docker networks...',
-  };
-  log.info(dockerNetworks);
-  if (res) {
-    res.write(serviceHelper.ensureString(dockerNetworks));
-    if (res.flush) res.flush();
-  }
+  log.info('Clearing up unused docker networks...');
+  if (onStatus) onStatus({ status: 'Clearing up unused docker networks...' });
   await dockerService.pruneNetworks();
-  const dockerNetworks2 = {
-    status: 'Docker networks cleaned.',
-  };
-  if (res) {
-    res.write(serviceHelper.ensureString(dockerNetworks2));
-    if (res.flush) res.flush();
-  }
+  if (onStatus) onStatus({ status: 'Docker networks cleaned.' });
 
-  const dockerVolumes = {
-    status: 'Clearing up unused docker volumes...',
-  };
-  log.info(dockerVolumes);
-  if (res) {
-    res.write(serviceHelper.ensureString(dockerVolumes));
-    if (res.flush) res.flush();
-  }
+  log.info('Clearing up unused docker volumes...');
+  if (onStatus) onStatus({ status: 'Clearing up unused docker volumes...' });
   await dockerService.pruneVolumes();
-  const dockerVolumes2 = {
-    status: 'Docker volumes cleaned.',
-  };
-  if (res) {
-    res.write(serviceHelper.ensureString(dockerVolumes2));
-    if (res.flush) res.flush();
-  }
+  if (onStatus) onStatus({ status: 'Docker volumes cleaned.' });
 
-  const dockerImages = {
-    status: 'Clearing up unused docker images...',
-  };
-  log.info(dockerImages);
-  if (res) {
-    res.write(serviceHelper.ensureString(dockerImages));
-    if (res.flush) res.flush();
-  }
+  log.info('Clearing up unused docker images...');
+  if (onStatus) onStatus({ status: 'Clearing up unused docker images...' });
   await dockerService.pruneImages();
-  const dockerImages2 = {
-    status: 'Docker images cleaned.',
-  };
-  if (res) {
-    res.write(serviceHelper.ensureString(dockerImages2));
-    if (res.flush) res.flush();
-  }
+  if (onStatus) onStatus({ status: 'Docker images cleaned.' });
 }
 
 /**
  * Setup firewall and UPnP ports for application/component
- * @param {object} appSpecifications - App or component specifications
+ * @param {object} appSpec - App or component specifications
  * @param {string} appName - Application name
  * @param {boolean} isComponent - Whether this is a component
  * @param {object} res - Response object for streaming
  * @param {boolean} test - Whether this is a test installation (skips port setup if true)
  * @returns {Promise<void>}
  */
-async function setupApplicationPorts(appSpecifications, appName, isComponent, res, test = false) {
-  const portStatusInitial = {
-    status: isComponent ? `Allowing component ${appSpecifications.name} of Flux App ${appName} ports...` : `Allowing Flux App ${appName} ports...`,
-  };
-  log.info(portStatusInitial);
-  if (res) {
-    res.write(serviceHelper.ensureString(portStatusInitial));
-    if (res.flush) res.flush();
-  }
+async function setupApplicationPorts(comp, appName, isComponent, onStatus, test = false) {
+  const label = isComponent ? `Allowing component ${comp.name} of Flux App ${appName} ports...` : `Allowing Flux App ${appName} ports...`;
+  log.info(label);
+  if (onStatus) onStatus({ status: label });
 
-  if (!test && appSpecifications.ports) {
-    const firewallActive = await fluxNetworkHelper.isFirewallActive();
-    if (firewallActive) {
-      // eslint-disable-next-line no-restricted-syntax
-      for (const port of appSpecifications.ports) {
-        // eslint-disable-next-line no-await-in-loop
-        const portResponse = await fluxNetworkHelper.allowPort(serviceHelper.ensureNumber(port));
-        if (portResponse.status === true) {
-          const portStatus = {
-            status: `Port ${port} OK`,
-          };
-          log.info(portStatus);
-          if (res) {
-            res.write(serviceHelper.ensureString(portStatus));
-            if (res.flush) res.flush();
-          }
-        } else {
-          throw new Error(`Error: Port ${port} FAILed to open.`);
-        }
-      }
-    } else {
-      log.info('Firewall not active, application ports are open');
-    }
-    const isUPNP = upnpService.isUPNP();
-    if (isUPNP) {
-      log.info('Custom port specified, mapping ports');
-      // eslint-disable-next-line no-restricted-syntax
-      for (const port of appSpecifications.ports) {
-        // eslint-disable-next-line no-await-in-loop
-        const portResponse = await upnpService.mapUpnpPort(serviceHelper.ensureNumber(port), `Flux_App_${appName}`);
-        if (portResponse === true) {
-          const portStatus = {
-            status: `Port ${port} mapped OK`,
-          };
-          log.info(portStatus);
-          if (res) {
-            res.write(serviceHelper.ensureString(portStatus));
-            if (res.flush) res.flush();
-          }
-        } else {
-          throw new Error(`Error: Port ${port} FAILed to map.`);
-        }
-      }
-    }
-  } else if (!test && appSpecifications.port) {
-    // v1 compatibility
-    const firewallActive = await fluxNetworkHelper.isFirewallActive();
-    if (firewallActive) {
-      const portResponse = await fluxNetworkHelper.allowPort(serviceHelper.ensureNumber(appSpecifications.port));
+  const ports = test ? [] : comp.hostPorts();
+  if (ports.length === 0) return;
+
+  const firewallActive = await fluxNetworkHelper.isFirewallActive();
+  if (firewallActive) {
+    for (const port of ports) {
+      // eslint-disable-next-line no-await-in-loop
+      const portResponse = await fluxNetworkHelper.allowPort(port);
       if (portResponse.status === true) {
-        const portStatus = {
-          status: `Port ${appSpecifications.port} OK`,
-        };
-        log.info(portStatus);
-        if (res) {
-          res.write(serviceHelper.ensureString(portStatus));
-          if (res.flush) res.flush();
-        }
+        log.info(`Port ${port} OK`);
+        if (onStatus) onStatus({ status: `Port ${port} OK` });
       } else {
-        throw new Error(`Error: Port ${appSpecifications.port} FAILed to open.`);
+        throw new Error(`Error: Port ${port} FAILed to open.`);
       }
-    } else {
-      log.info('Firewall not active, application ports are open');
     }
-    const isUPNP = upnpService.isUPNP();
-    if (isUPNP) {
-      log.info('Custom port specified, mapping ports');
-      const portResponse = await upnpService.mapUpnpPort(serviceHelper.ensureNumber(appSpecifications.port), `Flux_App_${appName}`);
+  } else {
+    log.info('Firewall not active, application ports are open');
+  }
+
+  const isUPNP = upnpService.isUPNP();
+  if (isUPNP) {
+    log.info('Custom port specified, mapping ports');
+    for (const port of ports) {
+      // eslint-disable-next-line no-await-in-loop
+      const portResponse = await upnpService.mapUpnpPort(port, `Flux_App_${appName}`);
       if (portResponse === true) {
-        const portStatus = {
-          status: `Port ${appSpecifications.port} mapped OK`,
-        };
-        log.info(portStatus);
-        if (res) {
-          res.write(serviceHelper.ensureString(portStatus));
-          if (res.flush) res.flush();
-        }
+        log.info(`Port ${port} mapped OK`);
+        if (onStatus) onStatus({ status: `Port ${port} mapped OK` });
       } else {
-        throw new Error(`Error: Port ${appSpecifications.port} FAILed to map.`);
+        throw new Error(`Error: Port ${port} FAILed to map.`);
       }
     }
-  }
-}
-
-/**
- * Verify and pull Docker image for application/component
- * @param {object} appSpecifications - App or component specifications
- * @param {string} appName - Application name
- * @param {boolean} isComponent - Whether this is a component
- * @param {object} res - Response object for streaming
- * @param {object} fullAppSpecs - Full app specifications
- * @returns {Promise<void>}
- */
-async function verifyAndPullImage(appSpecifications, appName, isComponent, res, fullAppSpecs) {
-  // check image and its architecture
-  const architecture = await systemArchitecture();
-  if (!supportedArchitectures.includes(architecture)) {
-    throw new Error(`Invalid architecture ${architecture} detected.`);
-  }
-
-  // check blacklist
-  await checkApplicationImagesCompliance(fullAppSpecs);
-
-  const { repotag, repoauth } = appSpecifications;
-  const { version: specVersion } = fullAppSpecs;
-
-  const imgVerifier = new imageVerifier.ImageVerifier(
-    repotag,
-    { maxImageSize: config.fluxapps.maxImageSize, architecture, architectureSet: supportedArchitectures },
-  );
-
-  const pullConfig = { repoTag: repotag };
-
-  let authToken = null;
-
-  if (repoauth) {
-    // Use credential helper to handle version-aware decryption and cloud providers
-    const credentials = await registryCredentialHelper.getCredentials(
-      repotag,
-      repoauth,
-      specVersion, // Pass parent spec version for v7/v8 handling
-      appName, // Required for per-app provider caching
-    );
-
-    if (!credentials) {
-      throw new Error('Unable to get credentials');
-    }
-
-    // Pass credentials object directly to ImageVerifier (no string conversion needed)
-    imgVerifier.addCredentials(credentials);
-
-    // dockerService still expects string format - convert only for that
-    authToken = `${credentials.username}:${credentials.password}`;
-    pullConfig.authToken = authToken;
-  }
-
-  await imgVerifier.verifyImage();
-  imgVerifier.throwIfError();
-
-  if (!imgVerifier.supported) {
-    throw new Error(`Architecture ${architecture} not supported by ${appSpecifications.repotag}`);
-  }
-
-  // if dockerhub, this is now registry-1.docker.io instead of hub.docker.com
-  pullConfig.provider = imgVerifier.provider;
-
-  // eslint-disable-next-line no-unused-vars
-  await dockerPullStreamPromise(pullConfig, res);
-
-  const pullStatus = {
-    status: isComponent ? `Pulling component ${appSpecifications.name} of Flux App ${appName}` : `Pulling global Flux App ${appName} was successful`,
-  };
-
-  if (res) {
-    res.write(serviceHelper.ensureString(pullStatus));
-    if (res.flush) res.flush();
   }
 }
 
@@ -313,156 +133,83 @@ async function verifyAndPullImage(appSpecifications, appName, isComponent, res, 
  * @param {boolean} sendRemovalMessage whether to broadcast removal message to network if installation fails.
  * @returns {Promise<boolean>} Returns true if installation was successful, false otherwise.
  */
-async function registerAppLocally(appSpecs, componentSpecs, res, test = false, sendRemovalMessage = false) {
-  // cpu, ram, hdd were assigned to correct tiered specs.
-  // get applications specifics from app messages database
-  // check if hash is in blockchain
-  // register and launch according to specifications in message
+async function installApplication(instantiated, options = {}) {
+  const onStatus = options.onStatus || null;
+  const test = options.test || false;
+  const createVolumes = options.createVolumes !== false;
+  const sendRemovalMessage = options.sendRemovalMessage || false;
+  const appName = instantiated.name;
   try {
     if (globalState.removalInProgress) {
-      const rStatus = messageHelper.createWarningMessage('Another application is undergoing removal. Installation not possible.');
-      log.error(rStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(rStatus));
-        res.end();
-      }
+      log.error('Another application is undergoing removal. Installation not possible.');
       return false;
     }
     if (globalState.installationInProgress) {
-      const rStatus = messageHelper.createWarningMessage('Another application is undergoing installation. Installation not possible');
-      log.error(rStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(rStatus));
-        res.end();
-      }
+      log.error('Another application is undergoing installation. Installation not possible');
       return false;
     }
     globalState.installationInProgress = true;
-    const tier = await generalService.nodeTier().catch((error) => log.error(error));
-    if (!tier) {
-      const rStatus = messageHelper.createErrorMessage('Failed to get Node Tier');
-      log.error(rStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(rStatus));
-        res.end();
-      }
-      return false;
-    }
 
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     if (!localSocketAddr) {
       throw new Error('Unable to detect Flux IP address');
     }
 
-    const appSpecifications = appSpecs;
-    const appComponent = componentSpecs;
-    const appName = appSpecifications.name;
-    let isComponent = !!appComponent;
-    const precheckForInstallation = {
-      status: 'Running initial checks for Flux App...',
-    };
-    log.info(precheckForInstallation);
-    if (res) {
-      res.write(serviceHelper.ensureString(precheckForInstallation));
-      if (res.flush) res.flush();
-    }
-    // connect to mongodb
-    const dbOpenTest = {
-      status: 'Connecting to database...',
-    };
-    log.info(dbOpenTest);
-    if (res) {
-      res.write(serviceHelper.ensureString(dbOpenTest));
-      if (res.flush) res.flush();
-    }
-    const dbopen = dbHelper.databaseConnection();
+    log.info('Running initial checks for Flux App...');
+    if (onStatus) onStatus({ status: 'Running initial checks for Flux App...' });
 
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const appsQuery = { name: appName };
-    const appsProjection = {
-      projection: {
-        _id: 0,
-        name: 1,
-      },
-    };
+    log.info('Connecting to database...');
+    if (onStatus) onStatus({ status: 'Connecting to database...' });
+    dbHelper.databaseConnection();
 
-    // check if app is already installed
-    const checkDb = {
-      status: 'Checking database...',
-    };
-    log.info(checkDb);
-    if (res) {
-      res.write(serviceHelper.ensureString(checkDb));
-      if (res.flush) res.flush();
-    }
-    const appResult = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-    if (appResult && !isComponent) {
+    log.info('Checking database...');
+    if (onStatus) onStatus({ status: 'Checking database...' });
+    if (await appsRepository.existsInstalledApp(appName)) {
       globalState.installationInProgress = false;
-      const rStatus = messageHelper.createErrorMessage(`Flux App ${appName} already installed`);
-      log.error(rStatus);
-      if (res) {
-        res.write(rStatus);
-        res.end();
-      }
+      log.error(`Flux App ${appName} already installed`);
       return false;
     }
 
-    // Lazy-load appQueryService to avoid circular dependency issues
+    let spec = instantiated.spec;
+    if (instantiated.isEncrypted()) {
+      const provider = await spec.createProvider();
+      spec = (await spec.decrypt(provider)).spec;
+    }
+    await checkAppRequirements(spec);
+
     // eslint-disable-next-line global-require
     const appQueryService = require('../appQuery/appQueryService');
-    const installedAppsRes = await appQueryService.installedApps();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
-    }
+    const deployments = await deploymentProvider.listInstalledDeployments();
     const runningAppsRes = await appQueryService.listRunningApps();
     if (runningAppsRes.status !== 'success') {
       throw new Error('Unable to check running Apps');
     }
-    const appsInstalled = installedAppsRes.data;
-    const decryptedAppsInstalled = await appQueryService.decryptEnterpriseApps(appsInstalled, { formatSpecs: false });
     const runningApps = runningAppsRes.data;
     const installedAppComponentNames = [];
-    decryptedAppsInstalled.forEach((app) => {
-      if (app.version >= 4) {
-        app.compose.forEach((appAux) => {
-          installedAppComponentNames.push(`${appAux.name}_${app.name}`);
-        });
-      } else {
-        installedAppComponentNames.push(app.name);
-      }
+    deployments.forEach((deployment) => {
+      deployment.componentEntries().forEach(([, comp]) => {
+        installedAppComponentNames.push(comp.identifier);
+      });
     });
-    // kadena and folding is old naming scheme having /zel.  all global application start with /flux
     const runningAppsNames = runningApps.map((app) => {
       if (app.Names[0].startsWith('/zel')) {
         return app.Names[0].slice(4);
       }
       return app.Names[0].slice(5);
     });
-    // installed always is bigger array than running
     const runningSet = new Set(runningAppsNames);
     const stoppedApps = installedAppComponentNames.filter((installedApp) => !runningSet.has(installedApp));
-    if (stoppedApps.length === 0 && !globalState.masterSlaveAppsRunning) {
-      await performDockerCleanup(res);
+    if (stoppedApps.length === 0 && !globalState.activeStandbyCoordinationRunning) {
+      await performDockerCleanup(onStatus);
     }
 
-    // Verify the apps this app must be networked with (networkWith token in the
-    // description) are installed locally and owned by the same owner before any
-    // side effects.
-    await appNetworkLinker.checkAppNetworkRequirements(appSpecifications);
-
-    if (!isComponent) {
+    {
       let dockerNetworkAddrValue = Math.floor(Math.random() * 256);
       if (appsThatMightBeUsingOldGatewayIpAssignment.includes(appName)) {
         dockerNetworkAddrValue = appName.charCodeAt(appName.length - 1);
       }
-      const fluxNetworkStatus = {
-        status: `Checking Flux App network of ${appName}...`,
-      };
-      log.info(fluxNetworkStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(fluxNetworkStatus));
-        if (res.flush) res.flush();
-      }
+      log.info(`Checking Flux App network of ${appName}...`);
+      if (onStatus) onStatus({ status: `Checking Flux App network of ${appName}...` });
       let fluxNet = null;
       for (let i = 0; i <= 20; i += 1) {
         // eslint-disable-next-line no-await-in-loop
@@ -478,105 +225,62 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
       log.info(serviceHelper.ensureString(fluxNet));
       const fluxNetworkInterfaces = await dockerService.getFluxDockerNetworkPhysicalInterfaceNames();
       const accessRemoved = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces);
-      const accessRemovedRes = {
-        status: accessRemoved ? `Private network access removed for ${appName}` : `Error removing private network access for ${appName}`,
-      };
-      if (res) {
-        res.write(serviceHelper.ensureString(accessRemovedRes));
-        if (res.flush) res.flush();
-      }
-      const fluxNetResponse = {
-        status: `Docker network of ${appName} initiated.`,
-      };
-      if (res) {
-        res.write(serviceHelper.ensureString(fluxNetResponse));
-        if (res.flush) res.flush();
-      }
+      if (onStatus) onStatus({ status: accessRemoved ? `Private network access removed for ${appName}` : `Error removing private network access for ${appName}` });
+      if (onStatus) onStatus({ status: `Docker network of ${appName} initiated.` });
     }
 
-    const appInstallation = {
-      status: isComponent ? `Initiating Flux App component ${appComponent.name} installation...` : `Initiating Flux App ${appName} installation...`,
-    };
-    log.info(appInstallation);
-    if (res) {
-      res.write(serviceHelper.ensureString(appInstallation));
-      if (res.flush) res.flush();
-    }
-    if (!isComponent) {
-      // register the app
+    log.info(`Initiating Flux App ${appName} installation...`);
+    if (onStatus) onStatus({ status: `Initiating Flux App ${appName} installation...` });
 
-      const isEnterprise = Boolean(
-        appSpecifications.version >= 8 && appSpecifications.enterprise,
-      );
+    const dbSpecs = instantiated.serialize();
 
-      const dbSpecs = JSON.parse(JSON.stringify(appSpecifications));
-
-      if (isEnterprise) {
-        dbSpecs.compose = [];
-        dbSpecs.contacts = [];
-      }
-
-      // Ensure no stale database entry exists before inserting
-      // This prevents duplicate key errors and ensures fresh data
-      const cleanupQuery = { name: appSpecifications.name };
-      const existingEntry = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, cleanupQuery, {});
-      if (existingEntry) {
-        log.warn(`Found existing database entry for ${appSpecifications.name} during registration. Cleaning up stale entry.`);
-        await dbHelper.findOneAndDeleteInDatabase(appsDatabase, localAppsInformation, cleanupQuery, {});
-        log.info(`Stale database entry for ${appSpecifications.name} removed. Proceeding with fresh insert.`);
-      }
-
-      const insertResult = await dbHelper.insertOneToDatabase(appsDatabase, localAppsInformation, dbSpecs);
-      if (!insertResult) {
-        throw new Error(`CRITICAL: Failed to create database entry for ${appSpecifications.name}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
-      }
-      log.info(`Database entry created for ${appSpecifications.name} BEFORE Docker container creation`);
-      const hddTier = `hdd${tier}`;
-      const ramTier = `ram${tier}`;
-      const cpuTier = `cpu${tier}`;
-      appSpecifications.cpu = test ? 0.2 : appSpecifications[cpuTier] || appSpecifications.cpu;
-      appSpecifications.ram = test ? 300 : appSpecifications[ramTier] || appSpecifications.ram;
-      appSpecifications.hdd = test ? 2 : appSpecifications[hddTier] || appSpecifications.hdd;
-    } else {
-      const hddTier = `hdd${tier}`;
-      const ramTier = `ram${tier}`;
-      const cpuTier = `cpu${tier}`;
-      appComponent.cpu = test ? 0.2 : appComponent[cpuTier] || appComponent.cpu;
-      appComponent.ram = test ? 300 : appComponent[ramTier] || appComponent.ram;
-      appComponent.hdd = test ? 2 : appComponent[hddTier] || appComponent.hdd;
+    if (await appsRepository.existsInstalledApp(appName)) {
+      log.warn(`Found existing database entry for ${appName} during registration. Cleaning up stale entry.`);
+      await appsRepository.removeInstalledApp(appName);
+      log.info(`Stale database entry for ${appName} removed. Proceeding with fresh insert.`);
     }
 
-    const specificationsToInstall = isComponent ? appComponent : appSpecifications;
+    const insertResult = await appsRepository.insertInstalledApp(dbSpecs);
+    if (!insertResult) {
+      throw new Error(`CRITICAL: Failed to create database entry for ${appName}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
+    }
+    log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
 
     try {
-      // Validate database entry exists before creating Docker containers (atomic transaction check)
-      // This prevents orphaned Docker containers if DB entry was deleted/corrupted between insert and Docker creation
-      if (!isComponent) {
-        const dbValidationQuery = { name: appSpecifications.name };
-        const dbValidationProjection = { projection: { _id: 0, name: 1 } };
-        const dbEntryExists = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, dbValidationQuery, dbValidationProjection);
-        if (!dbEntryExists) {
-          throw new Error(`Database entry validation failed for ${appSpecifications.name}. Entry was inserted but disappeared before Docker container creation. Possible race condition or database corruption detected.`);
-        }
-        log.info(`Database entry validated for ${appSpecifications.name} before Docker container creation`);
+      if (!await appsRepository.existsInstalledApp(appName)) {
+        throw new Error(`Database entry validation failed for ${appName}. Entry was inserted but disappeared before Docker container creation. Possible race condition or database corruption detected.`);
       }
+      log.info(`Database entry validated for ${appName} before Docker container creation`);
 
-      if (specificationsToInstall.version >= 4) { // version is undefined for component
-        // eslint-disable-next-line no-restricted-syntax
-        for (const appComponentSpecs of specificationsToInstall.compose) {
-          isComponent = true;
-          const hddTier = `hdd${tier}`;
-          const ramTier = `ram${tier}`;
-          const cpuTier = `cpu${tier}`;
-          appComponentSpecs.cpu = test ? 0.2 : appComponentSpecs[cpuTier] || appComponentSpecs.cpu;
-          appComponentSpecs.ram = test ? 300 : appComponentSpecs[ramTier] || appComponentSpecs.ram;
-          appComponentSpecs.hdd = test ? 2 : appComponentSpecs[hddTier] || appComponentSpecs.hdd;
-          // eslint-disable-next-line no-await-in-loop, no-use-before-define
-          await installApplicationHard(appComponentSpecs, appName, isComponent, res, appSpecifications, test);
-        }
-      } else {
-        // eslint-disable-next-line no-use-before-define
-        await installApplicationHard(specificationsToInstall, appName, isComponent, res, appSpecifications, test);
+      const deployment = await deploymentProvider.getInstalledDeployment(appName);
+      if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
+
+      const blockResult = await isImageBlocked(appName, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
+      if (blockResult.blocked) throw new Error(blockResult.reason);
+
+      const owner = instantiated.owner;
+      const burstEligible = owner
+        && cpuBurstHelper.isEnterpriseOwner(owner)
+        && await cpuBurstHelper.isCpuBurstSupported();
+      const restartAlwaysOwners = config.fluxapps.restartAlwaysOwners || [];
+      const restartPolicy = (owner && restartAlwaysOwners.includes(owner)) ? 'always' : null;
+      const specVersion = instantiated.version;
+
+      const syslogCollector = deployment.componentEntries()
+        .find(([, c]) => c.toDockerEnv().some((e) => e.startsWith('LOG=COLLECT')));
+      const syslogTarget = syslogCollector ? syslogCollector[0] : null;
+
+      for (const [, component] of deployment.componentEntries()) {
+        // eslint-disable-next-line no-await-in-loop
+        await installComponent(component, {
+          onStatus,
+          test,
+          createVolumes,
+          burstEligible,
+          restartPolicy,
+          syslogTarget,
+          specVersion,
+        });
       }
     } catch (error) {
       if (!test) {
@@ -589,18 +293,14 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
         const newAppRunningMessage = {
           type: 'fluxappinstallingerror',
           version: 1,
-          name: appSpecifications.name,
-          hash: appSpecifications.hash, // hash of application specifics that are running
+          name: appName,
+          hash: instantiated.hash,
           error: serviceHelper.ensureString(errorResponse),
           ip: localSocketAddr,
           broadcastedAt,
         };
-        // store it in local database first
-        // eslint-disable-next-line no-await-in-loop, no-use-before-define
         await storeAppInstallingErrorMessage(newAppRunningMessage);
-        // broadcast messages about running apps to all peers
         await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppRunningMessage);
-        // broadcast messages about running apps to all peers
       }
       throw error;
     }
@@ -615,13 +315,8 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
       await appNetworkLinker.reconnectLinkedApps(appName);
     }
 
-    // all done message
-    const successStatus = messageHelper.createSuccessMessage(`Flux App ${appName} successfully installed and launched`);
-    log.info(successStatus);
-    if (res) {
-      res.write(serviceHelper.ensureString(successStatus));
-      res.end();
-    }
+    log.info(`Flux App ${appName} successfully installed and launched`);
+    if (onStatus) onStatus({ status: `Flux App ${appName} successfully installed and launched` });
     globalState.installationInProgress = false;
 
     // Broadcast this node's running apps AFTER releasing the install lock.
@@ -632,43 +327,31 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
     // while globalState.isOperationInProgress() is true, so broadcasting before
     // installationInProgress is cleared would exclude the just-installed app from
     // its own announcement. checkAndNotifyPeersOfRunningApps never throws (it
-    // catches internally), so running it after res.end() is safe.
+    // catches internally), so running it after the lock release is safe.
     if (!test && onInstallComplete) {
       await onInstallComplete();
-      fluxEventBus.publish('app:installed', { name: appSpecifications.name, hash: appSpecifications.hash });
+      fluxEventBus.publish('app:installed', { name: appName, hash: instantiated.hash });
     }
   } catch (error) {
     globalState.installationInProgress = false;
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    log.error(errorResponse);
-    if (res) {
-      res.write(serviceHelper.ensureString(errorResponse));
-      if (res.flush) res.flush();
-    }
+    log.error(error.message || error);
+    if (onStatus) onStatus({ status: `Error: ${error.message || error}` });
 
     if (!test) {
-      const removeStatus = messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appSpecs.name} removal`);
-      log.info(removeStatus);
-      if (res) {
-        res.write(serviceHelper.ensureString(removeStatus));
-        if (res.flush) res.flush();
-      }
-      await appUninstaller.removeAppLocally(appSpecs.name, res, true, true, sendRemovalMessage);
-      log.info(`Cleanup completed for ${appSpecs.name} after installation failure`);
+      log.info(`Error occured. Initiating Flux App ${appName} removal`);
+      if (onStatus) onStatus({ status: `Error occured. Initiating Flux App ${appName} removal` });
+      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
+      log.info(`Cleanup completed for ${appName} after installation failure`);
     }
 
     return false;
   } finally {
     if (test) {
       try {
-        await appUninstaller.removeAppLocally(appSpecs.name, null, true, false, false);
-        log.info(`Test cleanup completed for ${appSpecs.name}`);
+        await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true });
+        log.info(`Test cleanup completed for ${appName}`);
       } catch (cleanupError) {
-        log.error(`Error during test cleanup for ${appSpecs.name}: ${cleanupError.message}`);
+        log.error(`Error during test cleanup for ${appName}: ${cleanupError.message}`);
       }
     }
   }
@@ -678,32 +361,27 @@ async function registerAppLocally(appSpecs, componentSpecs, res, test = false, s
 /**
  * Checks Orbit (Deploy with Git) app health by polling its /api/status endpoint.
  * Waits for initialTestStatus to become true, then checks if the deployment failed.
- * @param {object} appSpecifications - Component specifications containing repotag and ports
+ * @param {object} appSpec - Component specifications containing repotag and ports
  * @param {string} appName - Application name
  * @param {boolean} isComponent - Whether this is a component
  * @param {object} res - Response object for streaming status updates
  * @returns {Promise<{passed: boolean, reason: string|null}>} Result with passed status and failure reason
  */
-async function checkOrbitAppHealth(appSpecifications, appName, isComponent, res) {
-  if (!appSpecifications.ports || !appSpecifications.ports.length) {
+async function checkOrbitAppHealth(component, onStatus) {
+  if (!component.hostPorts || !component.hostPorts.length) {
     return { passed: false, reason: 'No ports configured for Orbit component' };
   }
-  const hostPort = appSpecifications.ports[0];
+  const hostPort = component.hostPorts[0];
   const statusUrl = `http://127.0.0.1:${hostPort}/api/status`;
-  const pollInterval = 5000; // 5 seconds between polls
-  const maxAttempts = 24; // 2 minutes total (24 * 5s)
-  const initialWait = 5000; // 5 seconds before first poll
+  const pollInterval = 5000;
+  const maxAttempts = 24;
+  const initialWait = 5000;
 
-  const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
+  const id = component.identifier;
 
-  const checkingStatus = {
-    status: `Checking Orbit deployment status for ${identifier} on port ${hostPort}...`,
-  };
-  log.info(checkingStatus);
-  if (res) {
-    res.write(serviceHelper.ensureString(checkingStatus));
-    if (res.flush) res.flush();
-  }
+  const msg = `Checking Orbit deployment status for ${id} on port ${hostPort}...`;
+  log.info(msg);
+  if (onStatus) onStatus(msg);
 
   // Wait for Orbit to initialize before first poll
   await serviceHelper.delay(initialWait);
@@ -724,28 +402,20 @@ async function checkOrbitAppHealth(appSpecifications, appName, isComponent, res)
           status: `Orbit initial test passed for ${identifier}`,
         };
         log.info(successStatus);
-        if (res) {
-          res.write(serviceHelper.ensureString(successStatus));
-          if (res.flush) res.flush();
-        }
+        log.info(successStatus);
+        if (onStatus) onStatus(successStatus);
         return { passed: true, reason: null };
       }
 
-      // Log what Orbit is actually returning for debugging
       pollStatus = ` | response: ${JSON.stringify(response.data)}`;
     } catch (error) {
       pollStatus = ` | error: ${error.message}`;
-      log.info(`Orbit status poll attempt ${attempt}/${maxAttempts} for ${identifier}: ${error.message}`);
+      log.info(`Orbit status poll attempt ${attempt}/${maxAttempts} for ${id}: ${error.message}`);
     }
 
     const elapsed = attempt * 5;
-    const waitingStatus = {
-      status: `Waiting for Orbit initial test... (${elapsed}s/${maxAttempts * 5}s)${pollStatus}`,
-    };
-    if (res) {
-      res.write(serviceHelper.ensureString(waitingStatus));
-      if (res.flush) res.flush();
-    }
+    const waitMsg = `Waiting for Orbit initial test... (${elapsed}s/${maxAttempts * 5}s)${pollStatus}`;
+    if (onStatus) onStatus(waitMsg);
 
     // eslint-disable-next-line no-await-in-loop
     await serviceHelper.delay(pollInterval);
@@ -756,7 +426,7 @@ async function checkOrbitAppHealth(appSpecifications, appName, isComponent, res)
 
 /**
  * Install application (hard installation with Docker)
- * @param {object} appSpecifications - App specifications or component specifications
+ * @param {object} appSpec - App specifications or component specifications
  * @param {string} appName - Application name
  * @param {boolean} isComponent - Whether this is a component
  * @param {object} res - Response object
@@ -764,89 +434,115 @@ async function checkOrbitAppHealth(appSpecifications, appName, isComponent, res)
  * @param {boolean} test - Whether this is a test installation
  * @returns {Promise<void>} Installation result
  */
-async function installApplicationHard(appSpecifications, appName, isComponent, res, fullAppSpecs, test = false) {
-  // Verify the apps this app must be networked with (networkWith token) are
-  // installed locally and owned by the same owner. Enforced here too — not just
-  // in registerAppLocally — so direct callers that bypass it (container health
-  // recovery, legacy v<=3 redeploys) cannot create a container without its
-  // network links satisfied.
-  await appNetworkLinker.checkAppNetworkRequirements(fullAppSpecs);
+async function installComponent(component, options = {}) {
+  const onStatus = options.onStatus || null;
+  const test = options.test || false;
+  const createVolumes = options.createVolumes || false;
+  const burstEligible = options.burstEligible || false;
+  const restartPolicy = options.restartPolicy || null;
+  const extraEnv = options.extraEnv || [];
+  const syslogTarget = options.syslogTarget || null;
+  const specVersion = options.specVersion || null;
 
-  // Setup firewall and UPnP ports (fail fast before downloading images)
-  await setupApplicationPorts(appSpecifications, appName, isComponent, res, test);
+  const id = component.identifier;
+  const appName = component.appName;
 
-  // Verify and pull Docker image
-  await verifyAndPullImage(appSpecifications, appName, isComponent, res, fullAppSpecs);
-
-  // Dynamic require to avoid circular dependency
-  // eslint-disable-next-line global-require
-  const advancedWorkflows = require('./advancedWorkflows');
-  await advancedWorkflows.createAppVolume(appSpecifications, appName, isComponent, res);
-
-  // Verify that the volume was mounted successfully
-  const verifyingMount = {
-    status: isComponent ? `Verifying volume mount for component ${appSpecifications.name}...` : `Verifying volume mount for ${appName}...`,
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
   };
-  log.info(verifyingMount);
-  if (res) {
-    res.write(serviceHelper.ensureString(verifyingMount));
-    if (res.flush) res.flush();
+
+  status(`Allowing ${id} ports...`);
+  if (!test) {
+    const firewallActive = await fluxNetworkHelper.isFirewallActive();
+    const isUPNP = upnpService.isUPNP();
+    // eslint-disable-next-line no-restricted-syntax
+    for (const port of component.hostPorts) {
+      if (firewallActive) {
+        // eslint-disable-next-line no-await-in-loop
+        const portResponse = await fluxNetworkHelper.allowPort(port);
+        if (portResponse.status !== true) {
+          throw new Error(`Error: Port ${port} FAILed to open.`);
+        }
+      }
+      if (isUPNP) {
+        // eslint-disable-next-line no-await-in-loop
+        const mapped = await upnpService.mapUpnpPort(port, `Flux_App_${appName}`);
+        if (mapped !== true) {
+          throw new Error(`Error: Port ${port} FAILed to map.`);
+        }
+      }
+      status(`Port ${port} OK`);
+    }
   }
 
-  await verifyAppVolumeMount(appName, isComponent, appSpecifications.name);
-
-  const mountVerified = {
-    status: isComponent ? `Volume mount verified for component ${appSpecifications.name}` : `Volume mount verified for ${appName}`,
-  };
-  log.info(mountVerified);
-  if (res) {
-    res.write(serviceHelper.ensureString(mountVerified));
-    if (res.flush) res.flush();
+  const architecture = await systemArchitecture();
+  if (!supportedArchitectures.includes(architecture)) {
+    throw new Error(`Invalid architecture ${architecture} detected.`);
   }
 
-  const createApp = {
-    status: isComponent ? `Creating component ${appSpecifications.name} of Flux App ${appName}` : `Creating Flux App ${appName}`,
-  };
-  log.info(createApp);
-  if (res) {
-    res.write(serviceHelper.ensureString(createApp));
-    if (res.flush) res.flush();
+  const imgVerifier = new imageVerifier.ImageVerifier(
+    component.image,
+    { maxImageSize: config.fluxapps.maxImageSize, architecture, architectureSet: supportedArchitectures },
+  );
+
+  const pullConfig = { repoTag: component.image };
+
+  if (component.imageAuth && specVersion) {
+    const credentials = await registryCredentialHelper.getCredentials(
+      component.image,
+      component.imageAuth,
+      specVersion,
+      appName,
+    );
+    if (!credentials) {
+      throw new Error('Unable to get credentials');
+    }
+    imgVerifier.addCredentials(credentials);
+    pullConfig.authToken = `${credentials.username}:${credentials.password}`;
   }
 
-  await dockerService.appDockerCreate(appSpecifications, appName, isComponent, fullAppSpecs);
+  await imgVerifier.verifyImage();
+  imgVerifier.throwIfError();
 
-  // Attach this component to the private network of every app it is linked with
-  // so it can reach their components by docker DNS name.
-  const componentContainerName = dockerService.getAppIdentifier(isComponent ? `${appSpecifications.name}_${appName}` : appName);
-  await appNetworkLinker.connectComponentToLinkedApps(componentContainerName, fullAppSpecs);
-
-  const startStatus = {
-    status: isComponent ? `Starting component ${appSpecifications.name} of Flux App ${appName}...` : `Starting Flux App ${appName}...`,
-  };
-  log.info(startStatus);
-  if (res) {
-    res.write(serviceHelper.ensureString(startStatus));
-    if (res.flush) res.flush();
+  if (!imgVerifier.supported) {
+    throw new Error(`Architecture ${architecture} not supported by ${component.image}`);
   }
-  if (test || (!appSpecifications.containerData.includes('r:') && !appSpecifications.containerData.includes('g:'))) {
-    const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
-    const app = await dockerService.appDockerStart(identifier);
+
+  pullConfig.provider = imgVerifier.provider;
+  await dockerPullStreamPromise(pullConfig, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null);
+  status(`Pulling ${id} was successful`);
+
+  if (createVolumes) {
+    await appVolumeService.createAppVolume(component, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null, test);
+
+    status(`Verifying volume mount for ${id}...`);
+    await verifyAppVolumeMount(appName, id !== appName, component.name);
+    status(`Volume mount verified for ${id}`);
+  }
+
+  status(`Creating ${id}...`);
+  await dockerService.appDockerCreate(component, {
+    test,
+    burstEligible,
+    restartPolicy,
+    extraEnv,
+    syslogTarget,
+  });
+
+  if (test || !component.hasActiveStandbySyncthing()) {
+    status(`Starting ${id}...`);
+    const app = await dockerService.appDockerStart(id);
     if (!app) {
-      throw new Error(`Failed to start ${identifier} container`);
+      throw new Error(`Failed to start ${id} container`);
     }
     if (!test) {
-      startAppMonitoring(identifier);
+      startAppMonitoring(id);
     }
-    const appResponse = messageHelper.createDataMessage(app);
-    log.info(appResponse);
-    if (res) {
-      res.write(serviceHelper.ensureString(appResponse));
-      if (res.flush) res.flush();
-    }
+    status(`${id} started`);
 
-    // For Orbit (Deploy with Git) apps, verify deployment health during test installs
-    if (test && appSpecifications.repotag && appSpecifications.repotag.startsWith('runonflux/orbit')) {
-      const orbitHealth = await checkOrbitAppHealth(appSpecifications, appName, isComponent, res);
+    if (test && component.image?.startsWith('runonflux/orbit')) {
+      const orbitHealth = await checkOrbitAppHealth(component, onStatus);
       if (!orbitHealth.passed) {
         throw new Error(`Orbit deployment failed: ${orbitHealth.reason}`);
       }
@@ -854,68 +550,6 @@ async function installApplicationHard(appSpecifications, appName, isComponent, r
   }
 }
 
-/**
- * To soft install app. Pulls image/s, creates components/app, assigns ports to components/app and starts all containers. Does not create data volumes.
- * @param {object} appSpecifications App specifications or component specifications.
- * @param {string} appName App name.
- * @param {boolean} isComponent True if a Docker Compose component.
- * @param {object} res Response.
- * @param {object} fullAppSpecs Full app specifications.
- * @returns {Promise<void>} Return statement is only used here to interrupt the function and nothing is returned.
- */
-async function installApplicationSoft(appSpecifications, appName, isComponent, res, fullAppSpecs) {
-  // Verify the apps this app must be networked with (networkWith token) are
-  // installed locally and owned by the same owner. Enforced here too — not just
-  // in softRegisterAppLocally — so direct callers that bypass it (container
-  // health recovery, legacy v<=3 redeploys) cannot create a container without
-  // its network links satisfied.
-  await appNetworkLinker.checkAppNetworkRequirements(fullAppSpecs);
-
-  // Setup firewall and UPnP ports (fail fast before downloading images)
-  await setupApplicationPorts(appSpecifications, appName, isComponent, res);
-
-  // Verify and pull Docker image
-  await verifyAndPullImage(appSpecifications, appName, isComponent, res, fullAppSpecs);
-
-  const createApp = {
-    status: isComponent ? `Creating component ${appSpecifications.name} of local Flux App ${appName}` : `Creating local Flux App ${appName}`,
-  };
-  log.info(createApp);
-  if (res) {
-    res.write(serviceHelper.ensureString(createApp));
-    if (res.flush) res.flush();
-  }
-
-  await dockerService.appDockerCreate(appSpecifications, appName, isComponent, fullAppSpecs);
-
-  // Attach this component to the private network of every app it is linked with
-  // so it can reach their components by docker DNS name.
-  const componentContainerName = dockerService.getAppIdentifier(isComponent ? `${appSpecifications.name}_${appName}` : appName);
-  await appNetworkLinker.connectComponentToLinkedApps(componentContainerName, fullAppSpecs);
-
-  const startStatus = {
-    status: isComponent ? `Starting component ${appSpecifications.name} of Flux App ${appName}...` : `Starting Flux App ${appName}...`,
-  };
-  log.info(startStatus);
-  if (res) {
-    res.write(serviceHelper.ensureString(startStatus));
-    if (res.flush) res.flush();
-  }
-  if (!appSpecifications.containerData.includes('g:')) {
-    const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
-    const app = await dockerService.appDockerStart(identifier);
-    if (!app) {
-      throw new Error(`Failed to start ${identifier} container`);
-    }
-    startAppMonitoring(identifier);
-    const appResponse = messageHelper.createDataMessage(app);
-    log.info(appResponse);
-    if (res) {
-      res.write(serviceHelper.ensureString(appResponse));
-      if (res.flush) res.flush();
-    }
-  }
-}
 
 /**
  * Install application locally - Main API entry point
@@ -923,113 +557,35 @@ async function installApplicationSoft(appSpecifications, appName, isComponent, r
  * @param {object} res - Response object
  * @returns {Promise<void>}
  */
-async function installAppLocally(req, res) {
+async function installApplicationAPI(req, res) {
   try {
-    // appname can be app name or app hash of specific app version
     let { appname } = req.params;
     appname = appname || req.query.appname;
 
     if (!appname) {
       throw new Error('No Flux App specified');
     }
-    let blockAllowance = config.fluxapps.ownerAppAllowance;
-    // needs to be logged in
-    const authorized = await verificationHelper.verifyPrivilege('user', req);
-    if (authorized) {
-      let appSpecifications;
-      // anyone can deploy temporary app
-      // favor temporary to launch test temporary apps
-      const tempMessage = await checkAppTemporaryMessageExistence(appname);
-      if (tempMessage) {
-        // eslint-disable-next-line prefer-destructuring
-        appSpecifications = tempMessage.appSpecifications;
-        // blockAllowance is used for future validation
-        // eslint-disable-next-line no-unused-vars
-        blockAllowance = config.fluxapps.temporaryAppAllowance;
-      }
-      if (!appSpecifications) {
-        // only owner can deploy permanent message or existing app
-        const ownerAuthorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
-        if (!ownerAuthorized) {
-          const errMessage = messageHelper.errUnauthorizedMessage();
-          res.json(errMessage);
-          return;
-        }
-      }
-      if (!appSpecifications) {
-        const allApps = await availableApps();
-        appSpecifications = allApps.find((app) => app.name === appname);
-      }
-      if (!appSpecifications) {
-        // eslint-disable-next-line no-use-before-define
-        appSpecifications = await getApplicationGlobalSpecifications(appname);
-      }
-      // search in permanent messages for the specific apphash to launch
-      if (!appSpecifications) {
-        const permMessage = await checkAppMessageExistence(appname);
-        if (permMessage) {
-          // eslint-disable-next-line prefer-destructuring
-          appSpecifications = permMessage.appSpecifications;
-        }
-      }
-      if (!appSpecifications) {
-        throw new Error(`Application Specifications of ${appname} not found`);
-      }
 
-      // we have to do this as not all paths above decrypt the app specs
-      // this is a bit of a hack until we tidy up the app spec mess (use classes)
-      if (
-        appSpecifications.version >= 8
-        && appSpecifications.enterprise
-        && !appSpecifications.compose.length
-      ) {
-        appSpecifications = await checkAndDecryptAppSpecs(appSpecifications);
-        appSpecifications = specificationFormatter(appSpecifications);
-      }
-
-      // get current height
-      const dbopen = dbHelper.databaseConnection();
-      if (!appSpecifications.height && appSpecifications.height !== 0) {
-        // precaution for old temporary apps. Set up for custom test specifications.
-        const database = dbopen.db(config.database.daemon.database);
-        const query = { generalScannedHeight: { $gte: 0 } };
-        const projection = {
-          projection: {
-            _id: 0,
-            generalScannedHeight: 1,
-          },
-        };
-        const result = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
-        if (!result) {
-          throw new Error('Scanning not initiated');
-        }
-        const explorerHeight = serviceHelper.ensureNumber(result.generalScannedHeight);
-        appSpecifications.height = explorerHeight - config.fluxapps.blocksLasting + blockAllowance; // allow running for this amount of blocks
-      }
-
-      const appsDatabase = dbopen.db(config.database.appslocal.database);
-      const appsQuery = {}; // all
-      const appsProjection = {
-        projection: {
-          _id: 0,
-          name: 1,
-        },
-      };
-      const apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-      const appExists = apps.find((app) => app.name === appSpecifications.name);
-      if (appExists) { // double checked in installation process.
-        throw new Error(`Application ${appname} is already installed`);
-      }
-
-      // eslint-disable-next-line no-use-before-define
-      await checkAppRequirements(appSpecifications); // entire app
-
-      res.setHeader('Content-Type', 'application/json');
-      await registerAppLocally(appSpecifications, undefined, res); // can throw
-    } else {
+    const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
+    if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
       res.json(errMessage);
+      return;
     }
+
+    const instantiated = await appsRepository.getGlobalAppInfo(appname);
+    if (!instantiated) {
+      throw new Error(`Application Specifications of ${appname} not found`);
+    }
+
+    res.setHeader('Content-Type', 'application/json');
+    const onStatus = (msg) => {
+      const payload = typeof msg === 'string' ? { status: msg } : msg;
+      res.write(serviceHelper.ensureString(payload));
+      if (res.flush) res.flush();
+    };
+    await installApplication(instantiated, { onStatus });
+    res.end();
   } catch (error) {
     log.error(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -1070,15 +626,57 @@ async function checkAppRequirements(appSpecs, skipGeolocation = false, skipStati
   return true;
 }
 
-/**
- * Test application installation - Similar to installAppLocally but for testing with reduced resource requirements
- * @param {object} req - Request object containing appname in params or query
- * @param {object} res - Response object
- * @returns {Promise<void>}
- */
-async function testAppInstall(req, res) {
+async function testInstallApplication(appname) {
+  const tempMessage = await appsRepository.getTempMessageByName(appname);
+  if (!tempMessage) {
+    throw new Error(`No pending spec found for ${appname}`);
+  }
+
+  const { PendingSpec } = await getSpecBackend();
+  const pending = PendingSpec.fromTempMessage(tempMessage);
+
+  let spec = pending.spec;
+  if (pending.isEncrypted()) {
+    const provider = await spec.createProvider();
+    spec = (await spec.decrypt(provider)).spec;
+  }
+
+  await checkAppRequirements(spec, true, true, true);
+
+  const localArch = await systemArchitecture();
+
+  const componentArchitectures = [];
+  for (const [name, comp] of spec.componentEntries()) {
+    // eslint-disable-next-line no-await-in-loop
+    const repoVerification = await verifyRepository(comp.image, {
+      repoauth: comp.imageAuth || null,
+      specVersion: spec.version,
+      appName: spec.name,
+      architecture: localArch,
+    });
+    componentArchitectures.push({
+      name,
+      architectures: repoVerification.supportedArchitectures,
+    });
+  }
+
+  const commonArchitectures = findCommonArchitectures(componentArchitectures);
+
+  if (!commonArchitectures.includes(localArch)) {
+    return {
+      compatible: false,
+      localArch,
+      requiredArchitectures: commonArchitectures,
+    };
+  }
+
+  const instantiated = pending.promote(0);
+  await installApplication(instantiated, { test: true });
+  return { compatible: true };
+}
+
+async function testInstallApplicationAPI(req, res) {
   try {
-    // appname can be app name or app hash of specific app version
     let { appname } = req.params;
     appname = appname || req.query.appname;
 
@@ -1086,129 +684,27 @@ async function testAppInstall(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    log.info(`testAppInstall: ${appname}`);
-    let blockAllowance = config.fluxapps.ownerAppAllowance;
-
-    // needs to be logged in
     const authorized = await verificationHelper.verifyPrivilege('user', req);
-    if (authorized) {
-      let appSpecifications;
-
-      // anyone can deploy temporary app
-      // favor temporary to launch test temporary apps
-      const tempMessage = await checkAppTemporaryMessageExistence(appname);
-      if (tempMessage) {
-        // eslint-disable-next-line prefer-destructuring
-        appSpecifications = tempMessage.appSpecifications;
-        // blockAllowance is used for future validation
-        // eslint-disable-next-line no-unused-vars
-        blockAllowance = config.fluxapps.temporaryAppAllowance;
-      }
-
-      if (!appSpecifications) {
-        // only owner can deploy permanent message or existing app
-        const ownerAuthorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
-        if (!ownerAuthorized) {
-          const errMessage = messageHelper.errUnauthorizedMessage();
-          res.json(errMessage);
-          return;
-        }
-      }
-
-      if (!appSpecifications) {
-        const allApps = await availableApps();
-        appSpecifications = allApps.find((app) => app.name === appname);
-      }
-
-      if (!appSpecifications) {
-        appSpecifications = await getApplicationGlobalSpecifications(appname);
-      }
-
-      // search in permanent messages for the specific apphash to launch
-      if (!appSpecifications) {
-        const permMessage = await checkAppMessageExistence(appname);
-        if (permMessage) {
-          // eslint-disable-next-line prefer-destructuring
-          appSpecifications = permMessage.appSpecifications;
-        }
-      }
-
-      if (!appSpecifications) {
-        throw new Error(`Application Specifications of ${appname} not found`);
-      }
-
-      // Decrypt enterprise specifications if needed
-      if (
-        appSpecifications.version >= 8
-        && appSpecifications.enterprise
-        && !appSpecifications.compose.length
-      ) {
-        // Get current daemon height for decryption
-        const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-        if (!syncStatus.data.synced) {
-          throw new Error('Daemon not yet synced.');
-        }
-        const daemonHeight = syncStatus.data.height;
-
-        appSpecifications = await checkAndDecryptAppSpecs(appSpecifications, {
-          daemonHeight,
-          owner: appSpecifications.owner,
-        });
-        appSpecifications = specificationFormatter(appSpecifications);
-      }
-
-      // Test installation - similar to regular install but with test flag
-      // Skip all requirement checks for test installations (geolocation, static IP, hardware, nodes)
-      await checkAppRequirements(appSpecifications, true, true, true);
-
-      res.setHeader('Content-Type', 'application/json');
-
-      // Check architecture compatibility for test installations
-      // Get local node architecture
-      const localArch = await systemArchitecture();
-
-      // Collect supported architectures from all components
-      const componentArchitectures = [];
-      for (const component of appSpecifications.compose) {
-        const repoVerification = await verifyRepository(component.repotag, {
-          repoauth: component.repoauth,
-          specVersion: appSpecifications.version,
-          appName: appSpecifications.name,
-          architecture: localArch,
-        });
-        componentArchitectures.push({
-          name: component.name,
-          architectures: repoVerification.supportedArchitectures,
-        });
-      }
-
-      // Calculate common architectures across all components
-      const commonArchitectures = findCommonArchitectures(componentArchitectures);
-
-      // If local architecture is not in common architectures, skip Docker operations
-      if (!commonArchitectures.includes(localArch)) {
-        // Write an initial status message
-        const initMessage = {
-          status: 'Checking architecture compatibility...',
-        };
-        res.write(serviceHelper.ensureString(initMessage));
-        if (res.flush) res.flush();
-
-        // Write the skip message
-        const successMessage = {
-          status: `Test installation validation passed. Installation skipped due to architecture incompatibility: this node is ${localArch} but app requires [${commonArchitectures.join(', ')}]`,
-        };
-        res.write(serviceHelper.ensureString(successMessage));
-        res.end();
-        return;
-      }
-
-      // Run test installation (registerAppLocally with test=true)
-      await registerAppLocally(appSpecifications, undefined, res, true);
-    } else {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
+    if (!authorized) {
+      res.json(messageHelper.errUnauthorizedMessage());
+      return;
     }
+
+    const result = await testInstallApplication(appname);
+
+    if (!result.compatible) {
+      res.setHeader('Content-Type', 'application/json');
+      res.write(serviceHelper.ensureString({ status: 'Checking architecture compatibility...' }));
+      if (res.flush) res.flush();
+      res.write(serviceHelper.ensureString({
+        status: `Test installation validation passed. Installation skipped due to architecture incompatibility: this node is ${result.localArch} but app requires [${result.requiredArchitectures.join(', ')}]`,
+      }));
+      res.end();
+      return;
+    }
+
+    const successResponse = messageHelper.createSuccessMessage('Test installation successful');
+    res.json(successResponse);
   } catch (error) {
     log.error(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -1221,11 +717,10 @@ async function testAppInstall(req, res) {
 }
 
 module.exports = {
-  registerAppLocally,
-  installApplicationHard,
-  installApplicationSoft,
-  installAppLocally,
+  installApplication,
+  installComponent,
+  installApplicationAPI,
   checkAppRequirements,
-  testAppInstall,
+  testInstallApplicationAPI,
   setOnInstallComplete,
 };
