@@ -1081,7 +1081,7 @@ describe('fluxNetworkHelper tests', () => {
     let registryManagerStub;
     let appUninstallerStub;
     let appControllerStub;
-    let enterpriseHelperStub;
+    let specCutoverStub;
     let geolocationServiceStub;
     let fluxCommunicationMessagesSenderStub;
 
@@ -1154,9 +1154,9 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-      // Stub enterpriseHelper
-      enterpriseHelperStub = {
-        checkAndDecryptAppSpecs: sinon.stub().callsFake((app) => Promise.resolve(app)),
+      // Stub specCutover
+      specCutoverStub = {
+        resolveSpec: sinon.stub().callsFake((app) => Promise.resolve(app)),
       };
 
       // Stub geolocationService
@@ -1176,7 +1176,7 @@ describe('fluxNetworkHelper tests', () => {
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/enterpriseHelper': enterpriseHelperStub,
+        './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
@@ -1225,9 +1225,9 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-      // Stub enterpriseHelper to return decrypted specs with staticip: true
-      enterpriseHelperStub = {
-        checkAndDecryptAppSpecs: sinon.stub().resolves({
+      // Stub specCutover to return decrypted specs with staticip: true
+      specCutoverStub = {
+        resolveSpec: sinon.stub().resolves({
           name: 'enterpriseApp',
           version: 8,
           enterprise: 'encrypted_data',
@@ -1249,7 +1249,7 @@ describe('fluxNetworkHelper tests', () => {
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/enterpriseHelper': enterpriseHelperStub,
+        './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
@@ -1260,7 +1260,7 @@ describe('fluxNetworkHelper tests', () => {
       await fluxNetworkHelperWithStubs.adjustExternalIP(newIp);
 
       // Verify enterprise helper was called to decrypt specs
-      sinon.assert.calledOnce(enterpriseHelperStub.checkAndDecryptAppSpecs);
+      sinon.assert.calledOnce(specCutoverStub.resolveSpec);
 
       // Verify app was uninstalled due to staticip requirement
       sinon.assert.calledOnce(appUninstallerStub.uninstallApplication);
@@ -1293,9 +1293,9 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-      // Stub enterpriseHelper to throw error
-      enterpriseHelperStub = {
-        checkAndDecryptAppSpecs: sinon.stub().rejects(new Error('Decryption failed')),
+      // Stub specCutover to throw error
+      specCutoverStub = {
+        resolveSpec: sinon.stub().rejects(new Error('Decryption failed')),
       };
 
       geolocationServiceStub = {
@@ -1312,7 +1312,7 @@ describe('fluxNetworkHelper tests', () => {
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/enterpriseHelper': enterpriseHelperStub,
+        './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
@@ -1353,8 +1353,8 @@ describe('fluxNetworkHelper tests', () => {
         appDockerRestart: sinon.stub().resolves(),
       };
 
-      enterpriseHelperStub = {
-        checkAndDecryptAppSpecs: sinon.stub().callsFake((app) => Promise.resolve(app)),
+      specCutoverStub = {
+        resolveSpec: sinon.stub().callsFake((app) => Promise.resolve(app)),
       };
 
       geolocationServiceStub = {
@@ -1371,7 +1371,7 @@ describe('fluxNetworkHelper tests', () => {
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './appManagement/appController': appControllerStub,
-        './utils/enterpriseHelper': enterpriseHelperStub,
+        './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
