@@ -53,6 +53,72 @@ function localDb() {
   return dbHelper.databaseConnection().db(config.database.appslocal.database);
 }
 
+// ── Spawner Queries ──────────────────────────────────────────────────
+
+const { expireHeightExpr } = require('./appsMaintenance');
+
+async function findUnderProvisionedApps(currentHeight, nowSeconds) {
+  const ponFork = config.fluxapps.daemonPONFork;
+  const blocksLasting = config.fluxapps.blocksLasting;
+  const minBlocksAllowance = config.fluxapps.newMinBlocksAllowance;
+  const minTimeAllowance = minBlocksAllowance * 30;
+
+  const pipeline = [
+    {
+      $addFields: {
+        _isAlive: {
+          $cond: {
+            if: { $gte: ['$version', 9] },
+            then: { $gt: [{ $add: ['$registeredAt', '$ttl'] }, nowSeconds + minTimeAllowance] },
+            else: {
+              $gt: [
+                expireHeightExpr('$height', '$expire'),
+                currentHeight + minBlocksAllowance,
+              ],
+            },
+          },
+        },
+      },
+    },
+    { $match: { _isAlive: true } },
+    {
+      $lookup: {
+        from: config.database.appsglobal.collections.appsLocations,
+        localField: 'name',
+        foreignField: 'name',
+        as: '_locations',
+      },
+    },
+    {
+      $addFields: {
+        _actual: { $size: '$_locations' },
+        _required: { $ifNull: ['$instances', 3] },
+      },
+    },
+    {
+      $match: {
+        $expr: { $lt: ['$_actual', '$_required'] },
+      },
+    },
+    { $sort: { name: 1 } },
+  ];
+
+  const database = globalDb();
+  const results = await dbHelper.aggregateInDatabase(database, globalAppsInformation, pipeline);
+
+  const candidates = [];
+  for (const doc of results) {
+    const actual = doc._actual;
+    const required = doc._required;
+    // eslint-disable-next-line no-await-in-loop
+    const instantiated = await hydrate(doc);
+    if (instantiated) {
+      candidates.push({ instantiated, actual, required });
+    }
+  }
+  return candidates;
+}
+
 // ── Global App Specs (globalAppsInformation) ───────────────────────
 
 async function getGlobalAppInfo(name) {
@@ -464,6 +530,8 @@ async function listHistoricalV7Secrets() {
 module.exports = {
   hydrate,
   storageProvider,
+  // spawner
+  findUnderProvisionedApps,
   // global specs
   getGlobalAppInfo,
   getGlobalAppInfoRaw,

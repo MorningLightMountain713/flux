@@ -1,6 +1,5 @@
 // App Spawner - Handles automatic spawning of global applications
 const config = require('config');
-const dbHelper = require('../dbHelper');
 const serviceHelper = require('../serviceHelper');
 const generalService = require('../generalService');
 const benchmarkService = require('../benchmarkService');
@@ -150,101 +149,12 @@ async function trySpawningGlobalApplication() {
       return delayTime;
     }
 
-    // get all the applications list names missing instances
-    // eslint-disable-next-line global-require
-    const { globalAppsInformation } = require('../utils/appConstants');
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
     const currentHeight = syncStatus.data.height;
-    const ponFork = config.fluxapps.daemonPONFork;
-    const blocksLasting = config.fluxapps.blocksLasting;
-    const minBlocksAllowance = config.fluxapps.newMinBlocksAllowance;
-    const pipeline = [
-      // Filter out apps that are expired or expiring within minBlocksAllowance (100) blocks
-      {
-        $addFields: {
-          _expireIn: {
-            $ifNull: [
-              '$expire',
-              {
-                $cond: {
-                  if: { $gte: ['$height', ponFork] },
-                  then: blocksLasting * 4,
-                  else: blocksLasting,
-                },
-              },
-            ],
-          },
-        },
-      },
-      {
-        $addFields: {
-          _actualExpirationHeight: {
-            $cond: {
-              if: { $lt: ['$height', ponFork] },
-              then: {
-                $cond: {
-                  if: { $lte: [{ $add: ['$height', '$_expireIn'] }, ponFork] },
-                  then: { $add: ['$height', '$_expireIn'] },
-                  else: {
-                    $add: [
-                      ponFork,
-                      { $multiply: [
-                        { $subtract: [{ $add: ['$height', '$_expireIn'] }, ponFork] },
-                        4,
-                      ] },
-                    ],
-                  },
-                },
-              },
-              else: { $add: ['$height', '$_expireIn'] },
-            },
-          },
-        },
-      },
-      {
-        $match: {
-          _actualExpirationHeight: { $gt: currentHeight + minBlocksAllowance },
-        },
-      },
-      {
-        $lookup: {
-          from: 'zelappslocation',
-          localField: 'name',
-          foreignField: 'name',
-          as: 'locations',
-        },
-      },
-      {
-        $addFields: {
-          actual: { $size: '$locations.name' },
-        },
-      },
-      {
-        $match: {
-          $expr: { $lt: ['$actual', { $ifNull: ['$instances', 3] }] },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          name: '$name',
-          actual: '$actual',
-          required: { $ifNull: ['$instances', 3] },
-          nodes: { $ifNull: ['$nodes', []] },
-          geolocation: { $ifNull: ['$geolocation', []] },
-          hash: '$hash',
-          version: '$version',
-          enterprise: '$enterprise',
-          owner: '$owner',
-        },
-      },
-      { $sort: { name: 1 } },
-    ];
+    const nowSeconds = Math.floor(Date.now() / 1000);
 
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
     log.info('trySpawningGlobalApplication - Checking for apps that are missing instances on the network.');
-    let globalAppNamesLocation = await dbHelper.aggregateInDatabase(database, globalAppsInformation, pipeline);
+    let globalAppNamesLocation = await appsRepository.findUnderProvisionedApps(currentHeight, nowSeconds);
     const numberOfGlobalApps = globalAppNamesLocation.length;
     if (!numberOfGlobalApps) {
       log.info('trySpawningGlobalApplication - No installable application found');
@@ -253,11 +163,21 @@ async function trySpawningGlobalApplication() {
     log.info(`trySpawningGlobalApplication - Found ${numberOfGlobalApps} apps that are missing instances on the network.`);
 
     let appToRun = null;
-    let appToRunAux = null;
+    let selectedCandidate = null;
     let minInstances = null;
     let appFromAppsToBeCheckedLater = false;
     let appFromAppsSyncthingToBeCheckedLater = false;
     const { appsToBeCheckedLater, appsSyncthingToBeCheckedLater } = globalState;
+
+    const collateral = await generalService.obtainNodeCollateralInformation();
+    const nodeOutpoint = `${collateral.txhash}:${collateral.txindex}`;
+    const nodeOperator = fluxNetworkHelper.getFluxNodePublicKey();
+    const targetInfo = {
+      ip: localSocketAddr,
+      outpoint: nodeOutpoint,
+      operator: typeof nodeOperator === 'string' ? nodeOperator : undefined,
+      ipMatcher: socketAddressesMatch,
+    };
     const appIndex = appsToBeCheckedLater.findIndex((app) => app.timeToCheck <= Date.now());
     const appSyncthingIndex = appsSyncthingToBeCheckedLater.findIndex((app) => app.timeToCheck <= Date.now());
     let runningAppList = [];
@@ -278,28 +198,40 @@ async function trySpawningGlobalApplication() {
       appFromAppsSyncthingToBeCheckedLater = true;
       appsCountAvailableToInstallOnMyNode = Math.max(0, appsCountAvailableToInstallOnMyNode - 1);
     } else {
-      const myNodeLocation = await systemIntegration.nodeFullGeolocation();
-
-      // filter apps that failed to install before
-      globalAppNamesLocation = globalAppNamesLocation.filter((app) => !runningApps.data.find((appsRunning) => appsRunning.Names[0].slice(5) === app.name)
-        && !globalState.spawnErrorsLongerAppCache.has(app.hash)
-        && !globalState.trySpawningGlobalAppCache.has(app.hash)
-        && !appsToBeCheckedLater.some((appAux) => appAux.appName === app.name));
-      // filter apps that are non enterprise or are marked to install on my node.
-      // Enterprise-owned apps that target specific node IPs are strict: only a node
-      // whose IP is listed may install them, regardless of version (the version>=8
-      // bypass below does not apply to them).
-      globalAppNamesLocation = globalAppNamesLocation.filter((app) => {
-        if (app.nodes.length > 0 && enterpriseNetwork.isEnterpriseAppOwner(app.owner)) {
-          return app.nodes.some((ip) => socketAddressesMatch(ip, localSocketAddr));
-        }
-        return app.nodes.length === 0 || app.nodes.find((ip) => socketAddressesMatch(ip, localSocketAddr)) || app.version >= 8;
+      const nodeGeo = await geolocationService.getNodeGeolocation();
+      const nodeInfo = {
+        hasStaticIp: geolocationService.isStaticIP(),
+        isDataCenter: geolocationService.isDataCenter(),
+        location: nodeGeo ? {
+          continent: nodeGeo.continentCode,
+          country: nodeGeo.countryCode,
+          region: nodeGeo.regionName,
+        } : undefined,
+      };
+      globalAppNamesLocation = globalAppNamesLocation.filter((c) => !runningApps.data.find((appsRunning) => appsRunning.Names[0].slice(5) === c.instantiated.name)
+        && !globalState.spawnErrorsLongerAppCache.has(c.instantiated.hash)
+        && !globalState.trySpawningGlobalAppCache.has(c.instantiated.hash)
+        && !appsToBeCheckedLater.some((appAux) => appAux.appName === c.instantiated.name));
+      globalAppNamesLocation = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.matches(nodeInfo));
+      globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
+        const owner = c.instantiated.owner;
+        return isEnterprise ? enterpriseNetwork.isEnterpriseAppOwner(owner) : !enterpriseNetwork.isEnterpriseAppOwner(owner);
       });
-      // filter apps that dont have geolocation or that are forbidden to spawn on my node geolocation
-      globalAppNamesLocation = globalAppNamesLocation.filter((app) => (app.geolocation.length === 0 || app.geolocation.filter((loc) => loc.startsWith('a!c')).length === 0 || !app.geolocation.find((loc) => loc.startsWith('a!c') && `a!c${myNodeLocation}`.startsWith(loc.replace('_NONE', '')))));
-      // filter apps that dont have geolocation or have and match my node geolocation
-      globalAppNamesLocation = globalAppNamesLocation.filter((app) => (app.geolocation.length === 0 || app.geolocation.filter((loc) => loc.startsWith('ac')).length === 0 || app.geolocation.find((loc) => loc.startsWith('ac') && `ac${myNodeLocation}`.startsWith(loc))));
-      globalAppNamesLocation = enterpriseNetwork.filterAppsByOwnership(globalAppNamesLocation, isEnterprise);
+      // Enterprise-owned apps that pin nodes (IP / outpoint / operator targets) are strict:
+      // only a matching node may install them, regardless of version. Carries the legacy
+      // app.nodes enforcement forward into the v9 placement model.
+      globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
+        const { placement } = c.instantiated.spec;
+        if (placement.hasTargets() && enterpriseNetwork.isEnterpriseAppOwner(c.instantiated.owner)) {
+          return placement.matchesTarget({
+            ip: localSocketAddr,
+            ipMatcher: socketAddressesMatch,
+            outpoint: nodeOutpoint,
+            operator: nodeOperator,
+          });
+        }
+        return true;
+      });
 
       appsCountAvailableToInstallOnMyNode = globalAppNamesLocation.length + appsSyncthingToBeCheckedLater.length + appsToBeCheckedLater.length;
       ({ shortDelayTime, delayTime } = enterpriseNetwork.getSpawnDelays(isEnterprise, appsCountAvailableToInstallOnMyNode));
@@ -309,19 +241,26 @@ async function trySpawningGlobalApplication() {
         return delayTime;
       }
       log.info(`trySpawningGlobalApplication - Found ${globalAppNamesLocation.length} apps that are missing instances on the network and can be selected to try to spawn on my node.`);
-      let random = Math.floor(Math.random() * globalAppNamesLocation.length);
-      appToRunAux = globalAppNamesLocation[random];
-      const filterAppsWithNyNodeIP = globalAppNamesLocation.filter((app) => app.nodes.find((ip) => socketAddressesMatch(ip, localSocketAddr)));
-      if (filterAppsWithNyNodeIP.length > 0) {
-        random = Math.floor(Math.random() * filterAppsWithNyNodeIP.length);
-        appToRunAux = filterAppsWithNyNodeIP[random];
-      }
 
-      appToRun = appToRunAux.name;
-      appHash = appToRunAux.hash;
-      minInstances = appToRunAux.required;
+      const ipTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetIps.length > 0
+        && c.instantiated.spec.placement.matchesTarget({ ip: localSocketAddr, ipMatcher: socketAddressesMatch }));
+      const outpointTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetOutpoints.length > 0
+        && c.instantiated.spec.placement.matchesTarget({ outpoint: nodeOutpoint }));
+      const operatorTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetOperators.length > 0
+        && c.instantiated.spec.placement.matchesTarget({ operator: nodeOperator }));
 
-      log.info(`trySpawningGlobalApplication - Application ${appToRun} selected to try to spawn. Reported as been running in ${appToRunAux.actual} instances and ${appToRunAux.required} are required.`);
+      const pool = ipTargeted.length > 0 ? ipTargeted
+        : outpointTargeted.length > 0 ? outpointTargeted
+        : operatorTargeted.length > 0 ? operatorTargeted
+        : globalAppNamesLocation;
+
+      selectedCandidate = pool[Math.floor(Math.random() * pool.length)];
+
+      appToRun = selectedCandidate.instantiated.name;
+      appHash = selectedCandidate.instantiated.hash;
+      minInstances = selectedCandidate.required;
+
+      log.info(`trySpawningGlobalApplication - Application ${appToRun} selected to try to spawn. Reported as been running in ${selectedCandidate.actual} instances and ${selectedCandidate.required} are required.`);
       runningAppList = await registryManager.appLocation(appToRun);
       installingAppList = await registryManager.appInstallingLocation(appToRun);
       if (runningAppList.length + installingAppList.length > minInstances) {
@@ -329,7 +268,7 @@ async function trySpawningGlobalApplication() {
         return shortDelayTime;
       }
       const isArcane = Boolean(process.env.FLUXOS_PATH);
-      if (appToRunAux.enterprise && !isArcane) {
+      if (selectedCandidate.instantiated.spec.enterprise && !isArcane) {
         log.info(`trySpawningGlobalApplication - Application ${appToRun} can only install on ArcaneOS`);
         globalState.spawnErrorsLongerAppCache.set(appHash, '');
         return shortDelayTime;
@@ -360,7 +299,9 @@ async function trySpawningGlobalApplication() {
       return delayTime;
     }
 
-    const instantiated = await appsRepository.getGlobalAppInfo(appToRun);
+    const instantiated = selectedCandidate
+      ? selectedCandidate.instantiated
+      : await appsRepository.getGlobalAppInfo(appToRun);
     if (!instantiated) {
       throw new Error(`trySpawningGlobalApplication - Specifications for application ${appToRun} were not found!`);
     }
@@ -495,17 +436,20 @@ async function trySpawningGlobalApplication() {
       }
     }
 
+    const specPlacement = spec.placement;
+    const isEnterpriseApp = !!spec.enterprise;
+
     if (!appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater
-      && appToRunAux.nodes.length > 0 && !appToRunAux.nodes.find((ip) => socketAddressesMatch(ip, localSocketAddr))) {
+      && specPlacement.hasTargets() && !specPlacement.matchesTarget(targetInfo)) {
       const deferral = config.fluxapps.spawnDeferrals.targetedNodesMs;
+      const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
       const appToCheck = {
-        timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
+        timeToCheck: Date.now() + delayMs,
         appName: appToRun,
         hash: appHash,
         required: minInstances,
       };
-      const delayMs = appToRunAux.enterprise ? deferral.enterprise : deferral.standard;
-      log.info(`trySpawningGlobalApplication - App ${appToRun} specs have target ips, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
+      log.info(`trySpawningGlobalApplication - App ${appToRun} has targets that don't match this node, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
       globalState.appsToBeCheckedLater.push(appToCheck);
       globalState.trySpawningGlobalAppCache.delete(appHash);
       fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'targeted_nodes', delayMs });
@@ -517,7 +461,7 @@ async function trySpawningGlobalApplication() {
       const appHWrequirements = deployment.totalResources();
       let delay = false;
       const isArcane = Boolean(process.env.FLUXOS_PATH);
-      if (!appToRunAux.enterprise && isArcane) {
+      if (!isEnterpriseApp && isArcane) {
         const appToCheck = {
           timeToCheck: Date.now() + nonEnterpriseSpawnDelayMs,
           appName: appToRun,
@@ -529,73 +473,73 @@ async function trySpawningGlobalApplication() {
         globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'non_enterprise_on_arcane', delayMs: nonEnterpriseSpawnDelayMs });
         delay = true;
-      } else if (!spec.placement.staticIp && geolocationService.isStaticIP()) {
+      } else if (!specPlacement.staticIp && geolocationService.isStaticIP()) {
         const deferral = config.fluxapps.spawnDeferrals.staticIpMs;
+        const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
         const appToCheck = {
-          timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
+          timeToCheck: Date.now() + delayMs,
           appName: appToRun,
           hash: appHash,
           required: minInstances,
         };
-        const delayMs = appToRunAux.enterprise ? deferral.enterprise : deferral.standard;
         log.info(`trySpawningGlobalApplication - App ${appToRun} does not require static IP but node has static IP, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'static_ip', delayMs });
         delay = true;
-      } else if (!spec.placement.dataCenter && geolocationService.isDataCenter()) { // NOTE: datacenter=true requires enterpriseAppOwners (validator) → ownership filter routes to enterprise nodes → which skip this deferral chain entirely. So datacenter is always falsy here.
+      } else if (!specPlacement.dataCenter && geolocationService.isDataCenter()) {
         const deferral = config.fluxapps.spawnDeferrals.datacenterMs;
+        const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
         const appToCheck = {
-          timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
+          timeToCheck: Date.now() + delayMs,
           appName: appToRun,
           hash: appHash,
           required: minInstances,
         };
-        const delayMs = appToRunAux.enterprise ? deferral.enterprise : deferral.standard;
         log.info(`trySpawningGlobalApplication - App ${appToRun} does not require datacenter but node is datacenter, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'datacenter', delayMs });
         delay = true;
-      } else if (appToRunAux.nodes.length > 0 && appToRunAux.nodes.find((ip) => socketAddressesMatch(ip, localSocketAddr))) {
-        log.info(`trySpawningGlobalApplication - App ${appToRun} specs have this node as target ip`);
-      } else if (appToRunAux.nodes.length === 0 && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
+      } else if (specPlacement.matchesTarget(targetInfo)) {
+        log.info(`trySpawningGlobalApplication - App ${appToRun} targets this node`);
+      } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.largeMs;
+        const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
         const appToCheck = {
-          timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
+          timeToCheck: Date.now() + delayMs,
           appName: appToRun,
           hash: appHash,
           required: minInstances,
         };
-        const delayMs = appToRunAux.enterprise ? deferral.enterprise : deferral.standard;
         log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from cumulus, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_large', delayMs });
         delay = true;
-      } else if (appToRunAux.nodes.length === 0 && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memory < 29000 && appHWrequirements.storage < 370) {
+      } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memory < 29000 && appHWrequirements.storage < 370) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.mediumMs;
+        const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
         const appToCheck = {
-          timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
+          timeToCheck: Date.now() + delayMs,
           appName: appToRun,
           hash: appHash,
           required: minInstances,
         };
-        const delayMs = appToRunAux.enterprise ? deferral.enterprise : deferral.standard;
         log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from nimbus, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_medium', delayMs });
         delay = true;
-      } else if (appToRunAux.nodes.length === 0 && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
+      } else if (!specPlacement.hasTargets() && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.smallMs;
+        const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
         const appToCheck = {
-          timeToCheck: Date.now() + (appToRunAux.enterprise ? deferral.enterprise : deferral.standard),
+          timeToCheck: Date.now() + delayMs,
           appName: appToRun,
           hash: appHash,
           required: minInstances,
         };
-        const delayMs = appToRunAux.enterprise ? deferral.enterprise : deferral.standard;
         log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from cumulus, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         globalState.trySpawningGlobalAppCache.delete(appHash);
