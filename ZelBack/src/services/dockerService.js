@@ -8,9 +8,10 @@ const pgpService = require('./pgpService');
 const deviceHelper = require('./deviceHelper');
 const generalService = require('./generalService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
-const { extractIp } = require('./utils/socketAddressUtils');
 const log = require('../lib/log');
+const { extractIp } = require('./utils/socketAddressUtils');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
+const appVolumeService = require('./appLifecycle/appVolumeService');
 
 const globalState = require('./utils/globalState');
 
@@ -729,133 +730,31 @@ const getContainerIP = async (containerName) => {
  * @param {bool} isComponent
  * @returns {object}
  */
-async function appDockerCreate(appSpecifications, appName, isComponent, fullAppSpecs) {
-  const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
-  let exposedPorts = {};
-  let portBindings = {};
-  if (appSpecifications.version === 1) {
-    portBindings = {
-      [`${appSpecifications.containerPort.toString()}/tcp`]: [
-        {
-          HostPort: appSpecifications.port.toString(),
-        },
-      ],
-      [`${appSpecifications.containerPort.toString()}/udp`]: [
-        {
-          HostPort: appSpecifications.port.toString(),
-        },
-      ],
-    };
-    exposedPorts = {
-      [`${appSpecifications.port.toString()}/tcp`]: {},
-      [`${appSpecifications.containerPort.toString()}/tcp`]: {},
-      [`${appSpecifications.port.toString()}/udp`]: {},
-      [`${appSpecifications.containerPort.toString()}/udp`]: {},
-    };
-  } else {
-    appSpecifications.ports.forEach((port) => {
-      exposedPorts[[`${port.toString()}/tcp`]] = {};
-      exposedPorts[[`${port.toString()}/udp`]] = {};
-    });
-    appSpecifications.containerPorts.forEach((port) => {
-      exposedPorts[[`${port.toString()}/tcp`]] = {};
-      exposedPorts[[`${port.toString()}/udp`]] = {};
-    });
-    for (let i = 0; i < appSpecifications.containerPorts.length; i += 1) {
-      portBindings[[`${appSpecifications.containerPorts[i].toString()}/tcp`]] = [
-        {
-          HostPort: appSpecifications.ports[i].toString(),
-        },
-      ];
-      portBindings[[`${appSpecifications.containerPorts[i].toString()}/udp`]] = [
-        {
-          HostPort: appSpecifications.ports[i].toString(),
-        },
-      ];
-    }
-  }
-  // containerData can have flags eg. s (s:/data) for synthing enabled container data
-  // multiple data volumes can be attached, if containerData contains more paths separated by |
-  // Syntax supports:
-  //   - Primary mount: [flags]:<path>  (e.g., r:/data)
-  //   - Component ref: <number>:<path>  (e.g., 0:/shared)
-  //   - Directory mount: m:<subdir>:<path>  (e.g., m:logs:/var/log)
-  //   - File mount: f:<filename>:<path>  (e.g., f:config.yaml:/etc/config.yaml)
-  //   - Component dir: c:<number>:<subdir>:<path>  (e.g., c:0:backups:/backups)
-  //   - Component file: cf:<number>:<filename>:<path>  (e.g., cf:0:cert.pem:/etc/ssl/cert.pem)
-  // Note: Components can only reference components with lower indices (ordering restriction)
+async function appDockerCreate(deployComp, options = {}) {
+  const test = options.test || false;
+  const burstEligible = options.burstEligible || false;
+  const restartPolicyOverride = options.restartPolicy || null;
+  const extraEnv = options.extraEnv || [];
+  const syslogTarget = options.syslogTarget || null;
 
-  // Import mount parsing utilities
-  // eslint-disable-next-line global-require
-  const mountParser = require('./utils/mountParser');
-  // eslint-disable-next-line global-require
-  const volumeConstructor = require('./utils/volumeConstructor');
+  const { appName } = deployComp;
+  const identifier = deployComp.identifier;
 
-  // Parse containerData using new enhanced parser
-  let parsedMounts;
-  try {
-    parsedMounts = mountParser.parseContainerData(appSpecifications.containerData);
-    log.info(`Parsed ${parsedMounts.allMounts.length} mount(s) for ${identifier}`);
-  } catch (error) {
-    log.error(`Failed to parse containerData for ${identifier}: ${error.message}`);
-    throw error;
-  }
+  const effectiveCpu = test ? 0.2 : deployComp.cpu;
+  const effectiveMemoryMb = test ? 300 : deployComp.memory;
 
-  // Validate mount configuration
-  try {
-    volumeConstructor.validateMountConfiguration(parsedMounts, fullAppSpecs, appSpecifications);
-  } catch (error) {
-    log.error(`Mount configuration validation failed for ${identifier}: ${error.message}`);
-    throw error;
-  }
+  const portBindings = deployComp.toDockerPortBindings();
+  const exposedPorts = deployComp.toDockerExposedPorts();
 
-  // Construct Docker bind mounts
-  let constructedVolumes;
-  try {
-    constructedVolumes = volumeConstructor.constructVolumes(
-      parsedMounts,
-      identifier,
-      appName,
-      fullAppSpecs,
-      appSpecifications,
-    );
-    log.info(`Constructed ${constructedVolumes.length} volume bind(s) for ${identifier}`);
-  } catch (error) {
-    log.error(`Failed to construct volumes for ${identifier}: ${error.message}`);
-    throw error;
-  }
-  const envParams = appSpecifications.environmentParameters || appSpecifications.enviromentParameters;
-  if (appSpecifications.secrets) {
-    const decodedEnvParams = await pgpService.decryptMessage(appSpecifications.secrets);
-    const arraySecrets = JSON.parse(decodedEnvParams);
-    if (Array.isArray(arraySecrets)) {
-      arraySecrets.forEach((parameter) => {
-        if (typeof parameter !== 'string' || parameter.length > 5000000) {
-          throw new Error('Environment parameters from Secrets are invalid - type or length');
-        } else if (parameter !== 'privileged') {
-          envParams.push(parameter);
-        }
-      });
-    } else {
-      throw new Error('Environment parameters from Secrets are invalid - not an array');
-    }
-  }
-  const adjustedCommands = [];
-  appSpecifications.commands.forEach((command) => {
-    if (command !== '--privileged') {
-      adjustedCommands.push(command);
-    }
-  });
+  const envParams = deployComp.toDockerEnv();
+  envParams.push(...extraEnv);
 
-  const isSender = envParams?.some((env) => env.startsWith('LOG=SEND'));
-  const isCollector = envParams?.some((env) => env.startsWith('LOG=COLLECT'));
+  const adjustedCommands = (deployComp.cmd || []).filter((c) => c !== '--privileged');
 
-  let syslogTarget = null;
+  const isSender = envParams.some((env) => env.startsWith('LOG=SEND'));
+  const isCollector = envParams.some((env) => env.startsWith('LOG=COLLECT'));
+
   let syslogIP = null;
-
-  if (fullAppSpecs && fullAppSpecs?.compose) {
-    syslogTarget = fullAppSpecs.compose.find((app) => app.environmentParameters?.some((env) => env.startsWith('LOG=COLLECT')))?.name;
-  }
 
   if (syslogTarget && isSender) {
     syslogIP = await getContainerIP(`flux${syslogTarget}_${appName}`);
@@ -911,7 +810,7 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
       Config: {
         'gelf-address': `udp://${syslogIP}:514`,
         'gelf-compression-type': 'none',
-        tag: `${appSpecifications.name}`,
+        tag: deployComp.name,
         labels: 'app_name,host_id,host_ip',
       },
     }
@@ -924,31 +823,31 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
     };
   const autoAssignedIP = await getNextAvailableIPForApp(appName);
 
-  // CPU burst eligibility is decided once here, where the full app spec is in
-  // scope, and stamped onto the container as docker labels. Every subsequent
-  // start of this container (initial start, restart, recovery) reads the
-  // labels in appDockerStart and reapplies burst — no per-caller plumbing.
-  const burstOwner = fullAppSpecs?.owner || null;
-  const burstEligible = burstOwner
-    && cpuBurstHelper.isEnterpriseOwner(burstOwner)
-    && await cpuBurstHelper.isCpuBurstSupported();
   const burstLabels = burstEligible
     ? {
       'flux.burst.eligible': 'true',
-      'flux.burst.cores': String(appSpecifications.cpu),
+      'flux.burst.cores': String(effectiveCpu),
     }
     : null;
   const containerLabels = (labels || burstLabels)
     ? { ...(labels || {}), ...(burstLabels || {}) }
     : null;
   if (burstEligible) {
-    log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${appSpecifications.cpu})`);
+    log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${effectiveCpu})`);
   }
 
-  const options = {
-    Image: appSpecifications.repotag,
+  const restartPolicy = restartPolicyOverride || 'no';
+
+  const nanoCpus = test ? Math.round(0.2 * 1e9) : deployComp.toDockerNanoCpus();
+  const memoryBytes = test ? Math.round(300 * 1024 * 1024) : deployComp.toDockerMemoryBytes();
+  const memorySwapBytes = test
+    ? Math.round(300 * 1024 * 1024)
+    : deployComp.toDockerMemorySwapBytes();
+
+  const containerConfig = {
+    Image: deployComp.image,
     name: getAppIdentifier(identifier),
-    Hostname: appSpecifications.name,
+    Hostname: deployComp.name,
     AttachStdin: true,
     AttachStdout: true,
     AttachStderr: true,
@@ -956,30 +855,27 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
     Env: envParams,
     Tty: false,
     ExposedPorts: exposedPorts,
-    // Conditionally include Labels only if it's not null
     ...(containerLabels && { Labels: containerLabels }),
     HostConfig: {
-      NanoCPUs: Math.round(appSpecifications.cpu * 1e9),
-      Memory: Math.round(appSpecifications.ram * 1024 * 1024),
-      MemorySwap: Math.round((appSpecifications.ram + (config.fluxapps.defaultSwap * 1000)) * 1024 * 1024), // default 2GB swap
-      // StorageOpt: { size: '5G' }, // root fs has max default 5G size, v8 is 5G + specified as per config.fluxapps.hddFileSystemMinimum
-      Mounts: constructedVolumes, // Using modern Mount objects instead of legacy Binds
+      NanoCPUs: nanoCpus,
+      Memory: memoryBytes,
+      MemorySwap: memorySwapBytes,
+      Mounts: deployComp.mounts,
       Ulimits: [
         {
           Name: 'nofile',
           Soft: 100000,
-          Hard: 100000, // 1048576
+          Hard: 100000,
         },
       ],
       PortBindings: portBindings,
       RestartPolicy: {
-        Name: 'no',
+        Name: restartPolicy,
       },
       NetworkMode: `fluxDockerNetwork_${appName}`,
       LogConfig: logConfig,
       ExtraHosts: [`fluxnode.service:${config.server.fluxNodeServiceAddress}`],
     },
-    // Conditionally include NetworkingConfig only if a static IP was determined.
     ...(autoAssignedIP && {
       NetworkingConfig: {
         EndpointsConfig: {
@@ -993,30 +889,26 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
     }),
   };
 
-  // get docker info about Backing Filesystem
+  // XFS quota: apply StorageOpt if the backing filesystem supports it.
   // eslint-disable-next-line no-use-before-define
   const dockerInfoResp = await dockerInfo();
   log.info(dockerInfoResp);
   const driverStatus = dockerInfoResp.DriverStatus;
-  const backingFs = driverStatus.find((status) => status[0] === 'Backing Filesystem'); // d_type must be true for overlay, docker would not work if not
+  const backingFs = driverStatus.find((status) => status[0] === 'Backing Filesystem');
   if (backingFs && backingFs[1] === 'xfs') {
-    // check that we have quota
-
     const mountTarget = isArcane ? '/dat/var/lib/docker' : '/var/lib/docker';
-
     const hasQuotaPossibility = await deviceHelper.hasQuotaOptionForMountTarget(mountTarget);
-
     if (hasQuotaPossibility) {
-      options.HostConfig.StorageOpt = { size: `${config.fluxapps.hddFileSystemMinimum}G` }; // must also have 'pquota' mount option
+      containerConfig.HostConfig.StorageOpt = { size: `${config.fluxapps.hddFileSystemMinimum}G` };
     }
   }
 
-  if (options.Env.length) {
-    const fluxStorageEnv = options.Env.find((env) => env.startsWith(('F_S_ENV=')));
+  if (containerConfig.Env.length) {
+    const fluxStorageEnv = containerConfig.Env.find((env) => env.startsWith('F_S_ENV='));
     if (fluxStorageEnv) {
-      const index = options.Env.indexOf(fluxStorageEnv);
+      const index = containerConfig.Env.indexOf(fluxStorageEnv);
       if (index > -1) {
-        options.Env.splice(index, 1);
+        containerConfig.Env.splice(index, 1);
       }
       const url = fluxStorageEnv.split('F_S_ENV=')[1];
       const envVars = await obtainPayloadFromStorage(url, appName);
@@ -1025,7 +917,7 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
           if (typeof parameter !== 'string' || parameter.length > 5000000) {
             throw new Error(`Environment parameters from Flux Storage ${fluxStorageEnv} are invalid`);
           } else if (parameter !== '--privileged') {
-            options.Env.push(parameter);
+            containerConfig.Env.push(parameter);
           }
         });
       } else {
@@ -1034,12 +926,12 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
     }
   }
 
-  if (options.Cmd.length) {
-    const fluxStorageCmd = options.Cmd.find((cmd) => cmd.startsWith(('F_S_CMD=')));
+  if (containerConfig.Cmd.length) {
+    const fluxStorageCmd = containerConfig.Cmd.find((cmd) => cmd.startsWith('F_S_CMD='));
     if (fluxStorageCmd) {
-      const index = options.Cmd.indexOf(fluxStorageCmd);
+      const index = containerConfig.Cmd.indexOf(fluxStorageCmd);
       if (index > -1) {
-        options.Cmd.splice(index, 1);
+        containerConfig.Cmd.splice(index, 1);
       }
       const url = fluxStorageCmd.split('F_S_CMD=')[1];
       const cmdVars = await obtainPayloadFromStorage(url, appName);
@@ -1048,7 +940,7 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
           if (typeof parameter !== 'string' || parameter.length > 5000000) {
             throw new Error(`Commands parameters from Flux Storage ${fluxStorageCmd} are invalid`);
           } else if (parameter !== '--privileged') {
-            options.Cmd.push(parameter);
+            containerConfig.Cmd.push(parameter);
           }
         });
       } else {
@@ -1057,20 +949,23 @@ async function appDockerCreate(appSpecifications, appName, isComponent, fullAppS
     }
   }
 
-  // Inject Flux-provided env vars so apps can reference them directly or
-  // via ${VAR} expansion in their own config files (e.g. Datadog's
-  // DD_HOSTNAME=${FLUX_NODE_HOST_IP}). Appended last so they win over any
-  // identically-named values supplied by the operator.
   const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
   const nodeHostIp = localSocketAddr ? extractIp(localSocketAddr) : null;
   if (nodeHostIp) {
-    options.Env.push(`FLUX_NODE_HOST_IP=${nodeHostIp}`);
+    containerConfig.Env.push(`FLUX_NODE_HOST_IP=${nodeHostIp}`);
   } else {
     log.warn(`FLUX_NODE_HOST_IP not injected for ${identifier}: node IP not available`);
   }
-  options.Env.push(`FLUX_APP_NAME=${appName}`);
+  containerConfig.Env.push(`FLUX_APP_NAME=${appName}`);
 
-  const app = await docker.createContainer(options).catch((error) => {
+  try {
+    await appVolumeService.ensureMountSourcesExist(deployComp);
+  } catch (error) {
+    log.error(`Failed to ensure mount paths exist for ${identifier}: ${error.message}`);
+    throw error;
+  }
+
+  const app = await docker.createContainer(containerConfig).catch((error) => {
     log.error(error);
     throw error;
   });
@@ -1640,29 +1535,6 @@ async function dockerGetEvents(options = {}) {
   return events;
 }
 
-async function waitForDocker() {
-  const RETRY_DELAY_MS = 5000;
-  const LOG_INTERVAL_MS = 60000;
-  let lastLogAt = 0;
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    try {
-      await docker.ping();
-      log.info('Docker daemon connected');
-      return;
-    } catch (error) {
-      const now = Date.now();
-      if (!lastLogAt || now - lastLogAt >= LOG_INTERVAL_MS) {
-        log.info(`Waiting for Docker daemon... (${error.message})`);
-        lastLogAt = now;
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(RETRY_DELAY_MS);
-    }
-  }
-}
-
 /**
  * Returns docker usage information
  *
@@ -1722,6 +1594,29 @@ async function getAppNameByContainerIp(ip) {
   }
 
   return appName;
+}
+
+async function waitForDocker() {
+  const RETRY_DELAY_MS = 5000;
+  const LOG_INTERVAL_MS = 60000;
+  let lastLogAt = 0;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      await docker.ping();
+      log.info('Docker daemon connected');
+      return;
+    } catch (error) {
+      const now = Date.now();
+      if (!lastLogAt || now - lastLogAt >= LOG_INTERVAL_MS) {
+        log.info(`Waiting for Docker daemon... (${error.message})`);
+        lastLogAt = now;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(RETRY_DELAY_MS);
+    }
+  }
 }
 
 async function migrateContainerRestartPolicies() {
@@ -1794,7 +1689,6 @@ module.exports = {
   getDockerContainerOnly,
   getFluxDockerNetworkPhysicalInterfaceNames,
   getFluxDockerNetworkSubnets,
-  migrateContainerRestartPolicies,
   pruneContainers,
   pruneImages,
   pruneNetworks,
@@ -1805,5 +1699,6 @@ module.exports = {
   getAppContainerNames,
   getAppContainerObjects,
   getAppNameByContainerIp,
+  migrateContainerRestartPolicies,
   waitForDocker,
 };
