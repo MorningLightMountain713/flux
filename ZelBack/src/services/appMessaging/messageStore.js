@@ -3,11 +3,13 @@ const dbHelper = require('../dbHelper');
 const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
-const messageVerifier = require('./messageVerifier');
-const appValidator = require('../appRequirements/appValidator');
+const appsRepository = require('../appDatabase/appsRepository');
+const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
-// const advancedWorkflows = require('../appLifecycle/advancedWorkflows'); // Moved to dynamic require to avoid circular dependency
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
+const { validateSubmissionSpec, getSpec } = require('../utils/specLibs');
+const { deserializeSpec } = require('../utils/specCutover');
+const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
+const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const globalState = require('../utils/globalState');
 const {
   globalAppsMessages,
@@ -20,7 +22,6 @@ const {
   appsHashesCollection,
 } = require('../utils/appConstants');
 const appsInstallingBroadcasts = config.database.appsglobal.collections.appsInstallingBroadcasts;
-const { specificationFormatter } = require('../utils/appSpecHelpers');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 
 const {
@@ -87,19 +88,17 @@ async function storeAppTemporaryMessage(message, options = {}) {
   }
 
   const specifications = message.appSpecifications || message.zelAppSpecifications;
-  // eslint-disable-next-line no-use-before-define
-  const appSpecFormatted = specificationFormatter(specifications);
+
+  const wireSpec = await deserializeSpec(specifications);
+  const appSpecFormatted = wireSpec.serialize();
   const messageTimestamp = serviceHelper.ensureNumber(message.timestamp);
   const messageVersion = serviceHelper.ensureNumber(message.version);
 
-  // check permanent app message storage
-  const appMessage = await messageVerifier.checkAppMessageExistence(message.hash);
+  const appMessage = await appsRepository.getPermanentMessage(message.hash);
   if (appMessage) {
-    // do not rebroadcast further
     return false;
   }
-  // check temporary message storage
-  const tempMessage = await messageVerifier.checkAppTemporaryMessageExistence(message.hash);
+  const tempMessage = await appsRepository.getTempMessage(message.hash);
   if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
     // do not rebroadcast further
     return false;
@@ -131,68 +130,60 @@ async function storeAppTemporaryMessage(message, options = {}) {
   // data shall already be verified by the broadcasting node. But verify all again.
   // this takes roughly at least 1 second
   if (furtherVerification) {
-    // Dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const advancedWorkflows = require('../appLifecycle/advancedWorkflows');
     const appRegistration = message.type === 'zelappregister' || message.type === 'fluxappregister';
 
-    // For updates, fetch previous app specs first - if registration doesn't exist yet, queue the update
     let previousAppSpecs = null;
     if (!appRegistration) {
-      previousAppSpecs = await advancedWorkflows.getPreviousAppSpecifications(appSpecFormatted, messageTimestamp);
+      previousAppSpecs = await getPreviousAppSpecifications(appSpecFormatted, messageTimestamp);
       if (!previousAppSpecs) {
-        // Registration doesn't exist yet - queue this update for later processing
         const appName = appSpecFormatted.name;
         log.info(`Queueing update for ${appName} - registration not yet stored`);
         globalState.queuePendingUpdate(appName, message, block);
-        return false; // Don't rebroadcast - we'll process when registration arrives
+        return false;
       }
     }
 
-    if (appSpecFormatted.version >= 8 && appSpecFormatted.enterprise) {
+    let validationBlob;
+    if (wireSpec && wireSpec.isEncrypted) {
       // eslint-disable-next-line global-require
       const fluxService = require('../fluxService');
       if (await fluxService.isSystemSecure()) {
-        // eslint-disable-next-line no-use-before-define
-        const appSpecDecrypted = await checkAndDecryptAppSpecs(
-          appSpecFormatted,
-          { daemonHeight: block, owner: appSpecFormatted.owner },
-        );
-        // eslint-disable-next-line no-use-before-define
-        const appSpecFormattedDecrypted = specificationFormatter(appSpecDecrypted);
-        await appValidator.verifyAppSpecifications(appSpecFormattedDecrypted, block);
-        if (appRegistration) {
-          await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormattedDecrypted, message.hash);
-        } else {
-          await advancedWorkflows.validateApplicationUpdateCompatibility(appSpecFormattedDecrypted, previousAppSpecs);
-        }
+        const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+        const decrypted = await wireSpec.decrypt(provider);
+        validationBlob = decrypted.spec.serialize();
       }
     } else {
-      await appValidator.verifyAppSpecifications(appSpecFormatted, block);
+      validationBlob = appSpecFormatted;
+    }
+
+    if (validationBlob) {
+      await validateSubmissionSpec(validationBlob, { height: block });
       if (appRegistration) {
-        await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted, message.hash);
+        await registryManager.checkApplicationRegistrationNameConflicts(validationBlob, message.hash);
       } else {
-        await advancedWorkflows.validateApplicationUpdateCompatibility(appSpecFormatted, previousAppSpecs);
+        const { UpdatePolicy } = await getSpec();
+        const newSpec = await deserializeSpec(validationBlob);
+        if (newSpec && previousAppSpecs) UpdatePolicy.assertCompatible(previousAppSpecs, newSpec);
       }
     }
 
-    await messageVerifier.verifyAppHash(message);
-    if (appRegistration) {
-      await messageVerifier.verifyAppMessageSignature(message.type, messageVersion, appSpecFormatted, messageTimestamp, message.signature);
-    } else {
-      const { owner } = previousAppSpecs;
-      try {
-        await messageVerifier.verifyAppMessageUpdateSignature(message.type, messageVersion, appSpecFormatted, messageTimestamp, message.signature, owner, block, previousAppSpecs);
-      } catch (sigError) {
-        // Before height 2000000, owner-change races were accepted by the
-        // network (re-verification not deployed until v8.10.0, well after
-        // the last known race at h=1880981). Only retry on replay (on-chain).
-        if (!isAppRequested || block >= 2000000) throw sigError;
-        const prevOwner = await getPreviousOwner(appSpecFormatted.name, owner);
-        if (!prevOwner) throw sigError;
-        await messageVerifier.verifyAppMessageUpdateSignature(message.type, messageVersion, appSpecFormatted, messageTimestamp, message.signature, prevOwner, block, previousAppSpecs);
-      }
+    let appEvent;
+    try {
+      appEvent = await appEventVerifier.deserializeMessage(message);
+    } catch (err) {
+      log.error(err);
+      throw new Error(`Invalid Flux App message: ${err.message}`);
     }
+
+    const previousSpec = appRegistration
+      ? null
+      : await appEventVerifier.instantiatePreviousSpec(previousAppSpecs);
+
+    await appEventVerifier.authorize({
+      appEvent,
+      previousSpec,
+      daemonHeight: block,
+    });
   }
 
   const receivedAt = Date.now();
