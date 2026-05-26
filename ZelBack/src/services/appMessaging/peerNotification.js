@@ -1,21 +1,19 @@
 const os = require('os');
 const config = require('config');
-const dbHelper = require('../dbHelper');
 const nodeConfirmationService = require('../nodeConfirmationService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const geolocationService = require('../geolocationService');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const messageStore = require('./messageStore');
-const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
+const appsRepository = require('../appDatabase/appsRepository');
 const appQueryService = require('../appQuery/appQueryService');
 const appReconciler = require('../appMonitoring/appReconciler');
 
 const fluxEventBus = require('../utils/fluxEventBus');
 
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
-
+let checkAndNotifyPeersOfRunningAppsFirstRun = true;
 let broadcastInterval = null;
 let broadcastInProgress = false;
 let rebroadcastNeeded = false;
@@ -68,12 +66,11 @@ async function checkAndNotifyPeersOfRunningApps() {
       throw new Error('Unable to detect Flux IP address');
     }
 
-    const installedAppsRes = await appQueryService.installedApps();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
-    }
-    let appsInstalled = installedAppsRes.data;
-    appsInstalled = await decryptEnterpriseApps(appsInstalled, { formatSpecs: false });
+    // Raw specs for containerHealthMonitor (expects .compose[] format)
+    const rawAppsInstalled = await appsRepository.listInstalledAppsRaw();
+    // Hydrated specs for class-based component iteration
+    const installedSpecs = await appsRepository.listInstalledApps();
+
     const runningAppsRes = await appQueryService.listRunningApps();
     if (runningAppsRes.status !== 'success') {
       throw new Error('Unable to check running Apps');
@@ -93,47 +90,42 @@ async function checkAndNotifyPeersOfRunningApps() {
     // apps using g:/r: syncthing are advertised as installed-and-running even when
     // some components are intentionally stopped (e.g. slaves), so derive them
     // directly from the specs rather than from container run-state
-    const masterSlaveAppsInstalled = appsInstalled.filter((app) => {
+    const masterSlaveAppsInstalled = rawAppsInstalled.filter((app) => {
       const comps = app.version >= 4 && Array.isArray(app.compose) ? app.compose : [app];
       return comps.some((c) => c.containerData && (c.containerData.includes('g:') || c.containerData.includes('r:')));
     });
 
     const installedAndRunning = [];
-    appsInstalled.forEach((app) => {
-      if (app.version >= 4) {
-        let appRunningWell = true;
-        app.compose.forEach((appComponent) => {
-          if (!runningAppsNames.includes(`${appComponent.name}_${app.name}`)) {
-            appRunningWell = false;
-          }
-        });
-        if (appRunningWell) {
-          installedAndRunning.push(app);
+    installedSpecs.forEach((inst) => {
+      if (inst.version >= 4) {
+        const allRunning = inst.spec.componentNames().every(
+          (compName) => runningAppsNames.includes(`${compName}_${inst.name}`),
+        );
+        if (allRunning) {
+          installedAndRunning.push(inst);
         }
-      } else if (runningAppsNames.includes(app.name)) {
-        installedAndRunning.push(app);
+      } else if (runningAppsNames.includes(inst.name)) {
+        installedAndRunning.push(inst);
       }
     });
     installedAndRunning.push(...masterSlaveAppsInstalled);
     const applicationsToBroadcast = [...new Set(installedAndRunning)];
     const apps = [];
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
     try {
       // eslint-disable-next-line no-restricted-syntax
       for (const application of applicationsToBroadcast) {
-        const queryFind = { name: application.name, ip: localSocketAddr };
-        const projection = { _id: 0, runningSince: 1 };
+        const appName = application.name || application;
         // eslint-disable-next-line no-await-in-loop
-        const result = await dbHelper.findOneInDatabase(database, globalAppsLocations, queryFind, projection);
+        const result = await appsRepository.getAppLocation(appName, localSocketAddr);
         let runningOnMyNodeSince = new Date().toISOString();
         if (result && result.runningSince) {
           runningOnMyNodeSince = result.runningSince;
         }
-        log.info(`${application.name} is running/installed properly. Broadcasting status.`);
+        const appHash = application.hash || '';
+        log.info(`${appName} is running/installed properly. Broadcasting status.`);
         apps.push({
-          name: application.name,
-          hash: application.hash,
+          name: appName,
+          hash: appHash,
           runningSince: runningOnMyNodeSince,
         });
       }
