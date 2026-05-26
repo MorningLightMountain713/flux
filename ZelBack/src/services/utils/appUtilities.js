@@ -4,7 +4,6 @@ const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const dbHelper = require('../dbHelper');
-const geolocationService = require('../geolocationService');
 const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const mountParser = require('./mountParser');
 const appConstants = require('./appConstants');
@@ -86,18 +85,6 @@ async function appPricePerMonth(spec, height, suppliedPrices) {
   return appPrice;
 }
 
-/**
- * Get node full geolocation
- * @returns {Promise<string>} Full geolocation string
- */
-async function nodeFullGeolocation() {
-  const nodeGeo = await geolocationService.getNodeGeolocation();
-  if (!nodeGeo) {
-    throw new Error('Node Geolocation not set. Aborting.');
-  }
-  const myNodeLocationFull = `${nodeGeo.continentCode}_${nodeGeo.countryCode}_${nodeGeo.regionName}`;
-  return myNodeLocationFull;
-}
 
 /**
  * Bytes used on the filesystem a mount source sits on, when that filesystem belongs to
@@ -444,7 +431,6 @@ module.exports = {
   getAppPorts,
   getContainerStorage,
   getNonGComponentIdentifiers,
-  nodeFullGeolocation,
   parseContainerName,
   isNewestInstance,
 };
