@@ -111,7 +111,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       '../messageHelper': {},
       '../verificationHelper': {},
       '../daemonService/daemonServiceMiscRpcs': {},
-      '../fluxNetworkHelper': { getMyFluxIPandPort: sinon.stub().resolves('127.0.0.1:16127') },
+      '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('127.0.0.1:16127') },
       '../generalService': { nodeTier: sinon.stub().resolves('cumulus') },
       '../upnpService': {},
       '../appDatabase/appsRepository': appsRepositoryStub,
