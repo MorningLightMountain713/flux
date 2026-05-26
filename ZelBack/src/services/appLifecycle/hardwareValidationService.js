@@ -12,11 +12,11 @@
 
 const log = require('../../lib/log');
 const config = require('config');
-const registryManager = require('../appDatabase/registryManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const appUninstaller = require('./appUninstaller');
 const serviceHelper = require('../serviceHelper');
-const generalService = require('../generalService');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appsRepository = require('../appDatabase/appsRepository');
 
 const REMOVAL_DELAY = 5000; // 5 seconds between removals
 
@@ -35,7 +35,7 @@ async function performBootTimeHardwareValidation() {
     log.info('hardwareValidationService - Starting boot-time hardware validation');
 
     // STEP 1: Get all installed apps
-    const installedApps = await registryManager.getInstalledApps();
+    const installedApps = await appsRepository.listInstalledAppsRaw();
 
     if (!installedApps || installedApps.length === 0) {
       log.info('hardwareValidationService - No installed apps found');
@@ -82,8 +82,6 @@ async function validateAppsCumulatively(installedApps) {
   const appsToRemove = [];
 
   try {
-    // Get node tier and specs
-    const tier = await generalService.nodeTier();
     const nodeSpecs = await hwRequirements.getNodeSpecs();
 
     // Calculate available resources
@@ -113,25 +111,24 @@ async function validateAppsCumulatively(installedApps) {
     // Process each app in order (oldest to newest)
     for (const app of sortedApps) {
       try {
-        // Get full app spec (handles enterprise decryption)
-        const appSpec = await registryManager.getApplicationGlobalSpecifications(app.name);
+        // eslint-disable-next-line no-await-in-loop
+        const deployment = await deploymentProvider.getInstalledDeployment(app.name);
 
-        if (!appSpec) {
-          log.warn(`hardwareValidationService - No spec found for ${app.name}, skipping`);
+        if (!deployment) {
+          log.warn(`hardwareValidationService - No deployment found for ${app.name}, skipping`);
           continue;
         }
 
-        // Calculate resources needed by this app
-        const appResources = hwRequirements.totalAppHWRequirements(appSpec, tier);
-        const appCpu = appResources.cpu * 10;
-        const appRam = appResources.ram;
-        const appHdd = appResources.hdd + config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap;
+        const { cpu, memory, storage } = deployment.totalResources();
+        const appCpu = cpu * 10;
+        const appRam = memory;
+        const appHdd = storage + config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap;
 
         // Check if this app individually exceeds node capacity
         if (appCpu > useableCpuOnNode) {
           appsToRemove.push({
             name: app.name,
-            reason: `App requires ${appResources.cpu} CPU but node only has ${useableCpuOnNode / 10} CPU available`,
+            reason: `App requires ${cpu} CPU but node only has ${useableCpuOnNode / 10} CPU available`,
             height: app.height || 0,
           });
           log.warn(`hardwareValidationService - ${app.name} individually exceeds CPU capacity`);
@@ -223,13 +220,7 @@ async function removeNonCompliantApps(appsToRemove) {
       log.warn(`REMOVAL REASON: Hardware downgrade - ${appInfo.name} (${appInfo.reason})`);
       log.info(`hardwareValidationService - Removing ${appInfo.name}`);
 
-      await appUninstaller.removeAppLocally(
-        appInfo.name,
-        null,   // no res object
-        true,   // force=true (aggressive removal)
-        true,   // endResponse=true
-        true,   // sendMessage=true (broadcast to network)
-      );
+      await appUninstaller.uninstallApplication(appInfo.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
 
       results.removed.push(appInfo.name);
       log.info(`hardwareValidationService - Successfully removed ${appInfo.name}`);
