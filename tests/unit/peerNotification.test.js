@@ -2,119 +2,23 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+function mockInstantiatedSpec({ name, version, hash, componentNames }) {
+  return {
+    name,
+    version,
+    hash,
+    spec: {
+      componentNames: () => componentNames,
+      componentEntries: () => componentNames.map((n) => [n, {}]),
+    },
+  };
+}
+
 describe('peerNotification tests', () => {
   let peerNotification;
   let logStub;
-  let enqueueAllStub;
-  let waitForBootDrainSettledStub;
-  let storeAppRunningMessageStub;
-  let storeAppStateEventStub;
-  let broadcastMessageToAllStub;
-  let nodeSignerStub;
-  let installedAppsStub;
-  // A fresh copy of globalState per test, handed to the module under test as
-  // its own stub, so a mark set here and the one the module resolves are the
-  // same object.
-  let departingApps;
-  let testInstallingApps;
-  let announceCycle;
-  let findOneInDatabaseStub;
-
-  // One stub map, so a test that needs a different interval, expiry or cycle
-  // length states only that difference instead of restating sixty lines.
-  const loadPeerNotification = (opts = {}) => proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', {
-    config: {
-      database: {
-        appslocal: {
-          collections: { appsInformation: 'localAppsInformation' },
-          database: 'localapps',
-        },
-        appsglobal: {
-          database: 'globalapps',
-          collections: { appsLocations: 'appsLocations' },
-        },
-      },
-      fluxapps: {},
-    },
-    '../dbHelper': {
-      databaseConnection: sinon.stub().returns({ db: sinon.stub().returns({}) }),
-      findOneInDatabase: findOneInDatabaseStub,
-      findInDatabase: sinon.stub().resolves([]),
-      updateOneInDatabase: sinon.stub().resolves(),
-    },
-    '../dockerService': {
-      appDockerStart: sinon.stub().resolves(),
-      getDockerContainerOnly: sinon.stub().resolves(null),
-    },
-    '../serviceHelper': {
-      delay: sinon.stub().resolves(),
-      ensureString: sinon.stub().returnsArg(0),
-    },
-    '../generalService': {
-      isNodeStatusConfirmed: sinon.stub().resolves(true),
-      nodeTier: sinon.stub().resolves('cumulus'),
-    },
-    '../fluxNetworkHelper': {
-      getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
-    },
-    '../geolocationService': {
-      isStaticIP: sinon.stub().returns(true),
-    },
-    '../fluxCommunicationMessagesSender': {
-      broadcastMessageToOutgoing: sinon.stub().resolves(),
-      broadcastMessageToIncoming: sinon.stub().resolves(),
-      broadcastMessageToAll: broadcastMessageToAllStub,
-    },
-    './messageStore': {
-      storeAppRunningMessage: storeAppRunningMessageStub,
-      storeAppStateEvent: storeAppStateEventStub,
-      APP_STATE_EVENT_TYPES: { APPRUNNING: 'apprunning' },
-    },
-    '../appDatabase/registryManager': {
-      getApplicationGlobalSpecifications: sinon.stub().resolves(null),
-    },
-    '../appManagement/appInspector': {
-      startAppMonitoring: sinon.stub(),
-      stopAppMonitoring: sinon.stub(),
-    },
-    '../appLifecycle/appUninstaller': {
-      removeAppLocally: sinon.stub().resolves(),
-    },
-    '../appLifecycle/appInstaller': {
-      installApplicationHard: sinon.stub().resolves(),
-    },
-    '../appMonitoring/appReconciler': {
-      enqueueAll: enqueueAllStub,
-      waitForBootDrainSettled: waitForBootDrainSettledStub,
-    },
-    '../appQuery/appQueryService': {
-      installedApps: opts.installedApps ?? installedAppsStub,
-      decryptEnterpriseApps: sinon.stub().callsFake(async (apps) => ({ readable: apps, unreadable: [], inPlace: apps })),
-    },
-    '../appTamperingDetectionService': {
-      recordEvent: sinon.stub().resolves(),
-      isNetworkMissingError: sinon.stub().returns(false),
-    },
-    '../utils/appConstants': {
-      localAppsInformation: 'localAppsInformation',
-      // The announcement schedules on this, so a suite that leaves it undefined
-      // schedules on NaN and re-fires forever.
-      ANNOUNCE_INTERVAL_MS: opts.announceIntervalMs ?? 3600000,
-      RUNNING_EXPIRY_MS: opts.runningExpiryMs ?? 7500 * 1000,
-    },
-    '../nodeConfirmationService': {
-      canSendMessages: sinon.stub().returns(true),
-      onMessageCapabilityChange: sinon.stub(),
-    },
-    '../utils/globalState': {
-      departingApps,
-      testInstallingApps,
-      announceCycle,
-      runningAppsCache: new Set(),
-    },
-    '../utils/nodeSigner': { nodeSigner: nodeSignerStub },
-    '../../lib/log': logStub,
-  });
+  let monitorAndRecoverAppsStub;
+  let getAppLocationStub;
 
   beforeEach(() => {
     logStub = {
@@ -123,27 +27,63 @@ describe('peerNotification tests', () => {
       warn: sinon.stub(),
     };
 
-    findOneInDatabaseStub = sinon.stub().resolves(null);
-    enqueueAllStub = sinon.stub().resolves();
-    waitForBootDrainSettledStub = sinon.stub().resolves();
-    storeAppRunningMessageStub = sinon.stub().resolves();
-    storeAppStateEventStub = sinon.stub().resolves();
-    broadcastMessageToAllStub = sinon.stub().resolves('signed');
-    nodeSignerStub = sinon.stub().resolves({ pubKey: '04', sign: () => 'sig' });
-    installedAppsStub = sinon.stub().resolves({
-      status: 'success',
-      data: [{ name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '/data' }] }],
-    });
-    // The REAL departing tracker, taken fresh per test rather than
-    // reimplemented here: a fake that counts differently from the module would
-    // pass this suite over the defect the counting exists to prevent.
-    // proxyquire restores the require cache after loading, so the fresh copy is
-    // this suite's alone - evicting the entry instead would hand another object
-    // to every module loaded after it, and globalState is a singleton whose
-    // flags decide whether an operation may start at all.
-    ({ departingApps, testInstallingApps, announceCycle } = proxyquire('../../ZelBack/src/services/utils/globalState', {}));
+    monitorAndRecoverAppsStub = sinon.stub().resolves({ masterSlaveAppsInstalled: [], startedApps: [] });
+    getAppLocationStub = sinon.stub().resolves(null);
 
-    peerNotification = loadPeerNotification();
+    peerNotification = proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', {
+      config: {
+        fluxapps: {
+          peerNotifyIntervalMs: 3600000,
+        },
+      },
+      '../fluxNetworkHelper': {
+        getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
+      },
+      '../geolocationService': {
+        isStaticIP: sinon.stub().returns(true),
+      },
+      '../fluxCommunicationMessagesSender': {
+        broadcastMessageToOutgoing: sinon.stub().resolves(),
+        broadcastMessageToIncoming: sinon.stub().resolves(),
+        broadcastMessageToAll: sinon.stub().resolves(),
+      },
+      './messageStore': {
+        storeAppRunningMessage: sinon.stub().resolves(),
+        storeAppStateEvent: sinon.stub().resolves(),
+        APP_STATE_EVENT_TYPES: { APPRUNNING: 'apprunning' },
+      },
+      '../appMonitoring/containerHealthMonitor': {
+        monitorAndRecoverApps: monitorAndRecoverAppsStub,
+      },
+      '../appDatabase/appsRepository': {
+        listInstalledAppsRaw: sinon.stub().resolves([
+          { name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '' }] },
+        ]),
+        listInstalledApps: sinon.stub().resolves([
+          mockInstantiatedSpec({ name: 'app1', version: 4, hash: 'abc123', componentNames: ['c1'] }),
+        ]),
+        getAppLocation: getAppLocationStub,
+      },
+      '../appQuery/appQueryService': {
+        listRunningApps: sinon.stub().resolves({
+          status: 'success',
+          data: [{ Names: ['/fluxc1_app1'] }],
+        }),
+      },
+      '../nodeConfirmationService': {
+        canSendMessages: sinon.stub().returns(true),
+        onMessageCapabilityChange: sinon.stub(),
+      },
+      '../utils/globalState': {
+        backupInProgress: [],
+        restoreInProgress: [],
+        runningAppsCache: new Set(),
+      },
+      '../utils/fluxEventBus': {
+        publish: sinon.stub(),
+      },
+      '../../lib/log': logStub,
+    });
   });
 
   afterEach(() => {
@@ -155,381 +95,25 @@ describe('peerNotification tests', () => {
       expect(peerNotification.checkAndNotifyPeersOfRunningApps).to.be.a('function');
     });
 
-    it('triggers the hourly reconciler sweep', async () => {
+    it('should call monitorAndRecoverApps with raw specs', async () => {
       await peerNotification.checkAndNotifyPeersOfRunningApps();
-      expect(enqueueAllStub.calledOnceWith('hourly')).to.be.true;
+
+      expect(monitorAndRecoverAppsStub.calledOnce).to.be.true;
+      const [ip, apps, runningNames] = monitorAndRecoverAppsStub.firstCall.args;
+      expect(ip).to.equal('192.168.1.1:16127');
+      expect(apps).to.have.length(1);
+      expect(apps[0].name).to.equal('app1');
+      expect(apps[0].compose).to.be.an('array');
+      expect(runningNames).to.deep.equal(['c1_app1']);
     });
 
-    it('broadcasts a compose app whose components are all running', async () => {
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-      expect(storeAppRunningMessageStub.calledOnce).to.be.true;
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(message.type).to.equal('fluxapprunning');
-      expect(message.ip).to.equal('192.168.1.1:16127');
-      expect(message.apps.map((a) => a.name)).to.deep.equal(['app1']);
-      expect(storeAppStateEventStub.calledOnce, 'the announcement is recorded in the event log').to.be.true;
-    });
-
-    // The announcement is one fact recorded twice - the location table and the
-    // event log peers sync from - and sent once. A node that cannot sign as
-    // itself sends nothing a peer would accept, so it records nothing either:
-    // its own view of where it runs is the network's view.
-    it('records nothing and announces nothing when this node cannot sign as itself', async () => {
-      nodeSignerStub.resolves(null);
+    it('should use appsRepository.getAppLocation for location lookup', async () => {
+      getAppLocationStub.resolves({ runningSince: '2025-01-01T00:00:00.000Z' });
 
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
-      expect(storeAppRunningMessageStub.called, 'wrote its own location').to.be.false;
-      expect(broadcastMessageToAllStub.called, 'sent an announcement').to.be.false;
-      expect(storeAppStateEventStub.called, 'wrote the event log').to.be.false;
-      expect(logStub.warn.calledWith(sinon.match('cannot sign'))).to.be.true;
-    });
-
-    // The message says which apps this node holds, which is what the spawner
-    // counts against an app's instance target. Announcing only what was running
-    // meant a component that could never start silenced the node, the app never
-    // reached its target, and it was placed again on node after node.
-    it('announces an app whose component is stopped - the message is a claim, not a health report', async () => {
-      installedAppsStub.resolves({
-        status: 'success',
-        data: [
-          { name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '/data' }] },
-          { name: 'app2', version: 4, compose: [{ name: 'c2', containerData: '/data' }] },
-        ],
-      });
-      // only app1's container is running
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(message.apps.map((a) => a.name).sort()).to.deep.equal(['app1', 'app2']);
-    });
-
-    // A removal tells the network the app is gone, and the app stays installed
-    // until that removal finishes. An announcement built in between names an app
-    // the node has given up, and because peers apply the two messages in arrival
-    // order it re-creates the location row the removal had just cleared.
-    it('does not announce an app whose removal it has broadcast', async () => {
-      installedAppsStub.resolves({
-        status: 'success',
-        data: [
-          { name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '/data' }] },
-          { name: 'app2', version: 4, compose: [{ name: 'c2', containerData: '/data' }] },
-        ],
-      });
-      departingApps.enter('app2');
-
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(
-        message.apps.map((a) => a.name),
-        'the departing app is excluded and the rest still announced',
-      ).to.deep.equal(['app1']);
-    });
-
-    // The claim returns on its own: the mark lives only for the removal, so a
-    // removal that fails leaves the app announced rather than silently unplaced.
-    it('announces the app again once the removal has finished', async () => {
-      departingApps.enter('app1');
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-      expect(storeAppRunningMessageStub.called, 'announced while departing').to.be.false;
-
-      departingApps.leave('app1');
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(message.apps.map((a) => a.name)).to.deep.equal(['app1']);
-    });
-
-    it('announces nothing when every installed app is departing', async () => {
-      departingApps.enter('app1');
-
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-
-      expect(storeAppRunningMessageStub.called, 'wrote its own location').to.be.false;
-      expect(broadcastMessageToAllStub.called, 'sent an announcement').to.be.false;
-    });
-
-    it('announces an app with no container running at all', async () => {
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(
-        message.apps.map((a) => a.name),
-        'an installed app keeps its claim while its containers are down',
-      ).to.deep.equal(['app1']);
-    });
-
-    // An app's name and hash sit outside the enterprise envelope, so a spec this
-    // node cannot decrypt still states its claim. Dropping it would cost the node
-    // that app's row and have the network place the app somewhere else.
-    it('announces an enterprise app whose spec cannot be decrypted', async () => {
-      installedAppsStub.resolves({
-        status: 'success',
-        data: [
-          { name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '/data' }] },
-          { name: 'sealed', version: 8, enterprise: 'encrypted-blob', compose: [], hash: 'h2' },
-        ],
-      });
-
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(message.apps.map((a) => a.name).sort()).to.deep.equal(['app1', 'sealed']);
-    });
-
-    // broadcastedAt says when these apps were installed here, and every consumer
-    // compares it against other nodes' messages - so a stamp taken after the per-app
-    // reads would out-rank a removal that happened while they ran.
-    it('stamps the announcement when the list is taken, not when it is sent', async () => {
-      let now = 1000;
-      sinon.stub(Date, 'now').callsFake(() => now);
-      // Time passes in the per-app reads between the snapshot and the message, as
-      // it does on a real node.
-      findOneInDatabaseStub.callsFake(async () => {
-        now += 5000;
-        return null;
-      });
-
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(
-        message.broadcastedAt,
-        'stamped at the send, so the message claims to be newer than it is',
-      ).to.equal(1000);
-    });
-
-    // A test install writes the app's row like any other install and throws it away
-    // at the end, and its teardown tells the network nothing - so naming it here
-    // would hold a placement for an app this node never took on.
-    it('does not announce an app this node is only test installing', async () => {
-      installedAppsStub.resolves({
-        status: 'success',
-        data: [
-          { name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '/data' }] },
-          { name: 'trialapp', version: 4, compose: [{ name: 'c1', containerData: '/data' }] },
-        ],
-      });
-      testInstallingApps.add('trialapp');
-
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(
-        message.apps.map((a) => a.name),
-        'claimed a placement for an app it is only trying out',
-      ).to.deep.equal(['app1']);
-    });
-
-    // An empty snapshot must NEVER be broadcast: on the receive side an empty v2
-    // message deletes every appsLocations row for the sender's IP - and the sender
-    // stores its own message first, so it erases its own network presence. The
-    // legitimate corrections all have targeted mechanisms (fluxappremoved on
-    // uninstall, sigterm/TTL row expiry for wiped or dead nodes).
-    // A node with apps installed can no longer produce an empty snapshot: the set
-    // comes from what is installed, so containers not started yet do not empty it.
-    it('announces its installed apps on the first run after boot, containers not started yet', async () => {
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-
-      expect(storeAppRunningMessageStub.calledOnce, 'the node announces what it holds').to.be.true;
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(message.apps.map((a) => a.name)).to.deep.equal(['app1']);
-    });
-
-    it('never broadcasts an empty snapshot - wiped-node shape (nothing installed)', async () => {
-      installedAppsStub.resolves({ status: 'success', data: [] });
-      await peerNotification.checkAndNotifyPeersOfRunningApps(); // first run after boot
-      expect(storeAppRunningMessageStub.called, 'must not store an empty snapshot (self-wipe)').to.be.false;
-      expect(broadcastMessageToAllStub.called, 'must not broadcast an empty snapshot').to.be.false;
-    });
-
-    // The first broadcast after boot races the reconciler's container starts; a
-    // too-early snapshot misses apps whose rows then expire on the sigterm TTL.
-    // Every broadcast waits for the reconciler's boot drain to settle (the gate
-    // resolves immediately in steady state, and is capped reconciler-side so a
-    // wedged reconcile cannot suppress network presence).
-    it('waits for the reconciler boot drain before broadcasting', async () => {
-      let openDrainGate;
-      waitForBootDrainSettledStub.callsFake(() => new Promise((resolve) => { openDrainGate = resolve; }));
-
-      const callPromise = peerNotification.checkAndNotifyPeersOfRunningApps();
-      await new Promise((resolve) => { setImmediate(resolve); });
-      await new Promise((resolve) => { setImmediate(resolve); });
-      expect(storeAppRunningMessageStub.called, 'must not snapshot/broadcast before the boot drain settles').to.be.false;
-      expect(broadcastMessageToAllStub.called).to.be.false;
-
-      openDrainGate();
-      await callPromise;
-      expect(broadcastMessageToAllStub.calledOnce, 'broadcast proceeds once the drain settles').to.be.true;
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(message.apps.map((a) => a.name)).to.deep.equal(['app1']);
-    });
-
-    // g:/r: apps needed a carve-out while the set came from run-state, because a
-    // masterSlave app stops its slave components deliberately. They need none now.
-    it('announces g:/r: apps with stopped components, without a carve-out', async () => {
-      installedAppsStub.resolves({
-        status: 'success',
-        data: [
-          { name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '/data' }] },
-          { name: 'gapp', version: 4, compose: [{ name: 'gc', containerData: 'g:/data' }] },
-          { name: 'rapp', version: 4, compose: [{ name: 'rc', containerData: 'r:/data' }] },
-        ],
-      });
-      // neither gapp's nor rapp's containers are running
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-      const [message] = storeAppRunningMessageStub.firstCall.args;
-      expect(message.apps.map((a) => a.name).sort()).to.deep.equal(['app1', 'gapp', 'rapp']);
+      expect(getAppLocationStub.calledOnce).to.be.true;
+      expect(getAppLocationStub.firstCall.args).to.deep.equal(['app1', '192.168.1.1:16127']);
     });
   });
-
-  describe('the announcement period', () => {
-    // A node writes its OWN location row when it announces, and that row expires
-    // on a TTL. So the period is a contract: announce later than the row lives
-    // and the node stops being a holder of its own apps. These drive a cycle of
-    // a known length against a known interval and read the gap to the next
-    // announcement.
-    //
-    // hrtime is faked alongside the timers because the schedule is measured
-    // monotonically. Faking setTimeout alone leaves the elapsed reading real,
-    // every cycle then measures as ~0ms, and all four of these pass against the
-    // defect they exist to catch.
-    let clock;
-
-    // Only the cycles under measurement are slow. A rescheduled cycle that is
-    // slow too reschedules at zero again, and tickAsync then drains an endless
-    // chain of them rather than returning.
-    const runOneCycle = async (opts) => {
-      clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
-      let cycles = 0;
-      // The elapsed time is injected through a call the cycle actually makes.
-      // Reading the installed set is that call; container state is not consulted.
-      const installedApps = sinon.stub().callsFake(async () => {
-        cycles += 1;
-        if (opts.cycleMs && cycles <= (opts.slowCycles ?? 1)) clock.tick(opts.cycleMs);
-        return {
-          status: 'success',
-          data: [{ name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '/data' }] }],
-        };
-      });
-      const mod = loadPeerNotification({ ...opts, installedApps });
-      // Through the lifecycle rather than a bare announcement: an announcement
-      // asked for on its own does not arm the loop, which is what makes a stop
-      // taken during one final.
-      mod.startBroadcasting();
-      await clock.tickAsync(0);
-      return mod;
-    };
-
-    afterEach(() => {
-      clock?.restore();
-      clock = null;
-    });
-
-    it('subtracts the time the cycle took from the wait for the next one', async () => {
-      await runOneCycle({ announceIntervalMs: 30000, cycleMs: 20000 });
-      const announced = broadcastMessageToAllStub.callCount;
-
-      await clock.tickAsync(9999);
-      expect(broadcastMessageToAllStub.callCount, 'announced before the interval was up').to.equal(announced);
-
-      await clock.tickAsync(1);
-      expect(
-        broadcastMessageToAllStub.callCount,
-        'the cycle time was added to the interval rather than subtracted from it',
-      ).to.equal(announced + 1);
-    });
-
-    it('announces again immediately when a cycle outran its whole interval', async () => {
-      // The first cycle takes 40s against a 30s interval, so its successor is
-      // due before it finishes: clamped at zero rather than scheduled into the
-      // past, which is the most the node can do.
-      await runOneCycle({ announceIntervalMs: 30000, cycleMs: 40000 });
-
-      expect(
-        broadcastMessageToAllStub.callCount,
-        'a cycle that outran its interval waited another whole one',
-      ).to.equal(2);
-    });
-
-    it('says a cycle no longer fits its interval once, not on every cycle', async () => {
-      const mod = await runOneCycle({ announceIntervalMs: 30000, cycleMs: 40000, slowCycles: 2 });
-      // Driven rather than left to the timer, so the second overrun is the only
-      // thing between the two readings.
-      await mod.checkAndNotifyPeersOfRunningApps();
-
-      const said = logStub.warn.getCalls()
-        .filter((call) => /announcing itself less often/.test(String(call.args[0])));
-      expect(said, 'the overrun is reported on the transition, not per cycle').to.have.lengthOf(1);
-    });
-
-    it('stays stopped when the stop lands while a cycle is running', async () => {
-      // The cycle ends by arming its successor, so a stop that only clears the
-      // pending timer is undone by the work it was trying to end.
-      const mod = await runOneCycle({ announceIntervalMs: 30000, cycleMs: 20000 });
-
-      // Taken while a cycle is in flight, which is the only case that matters:
-      // a stop at an idle moment has nothing to be undone by.
-      const inFlight = mod.checkAndNotifyPeersOfRunningApps();
-      const stopping = mod.stopBroadcasting();
-      await clock.tickAsync(0);
-      await inFlight;
-      await stopping;
-      const announced = broadcastMessageToAllStub.callCount;
-
-      await clock.tickAsync(600000);
-      expect(
-        broadcastMessageToAllStub.callCount,
-        'the loop outlived the stop and went on announcing',
-      ).to.equal(announced);
-    });
-
-    it('returns from a stop only once the cycle in flight has finished', async () => {
-      const mod = await runOneCycle({ announceIntervalMs: 30000, cycleMs: 20000 });
-      let cycleDone = false;
-      const inFlight = mod.checkAndNotifyPeersOfRunningApps().then(() => { cycleDone = true; });
-
-      const stopped = mod.stopBroadcasting().then(() => cycleDone);
-      await clock.tickAsync(0);
-      await inFlight;
-
-      expect(
-        await stopped,
-        'the stop returned while the cycle it was stopping was still running',
-      ).to.equal(true);
-    });
-
-    it('announces again when asked to, without restarting the loop it stopped', async () => {
-      // The install-complete and container-started hooks call this directly. It
-      // is a request to announce, not a request to resume announcing.
-      const mod = await runOneCycle({ announceIntervalMs: 30000, cycleMs: 20000 });
-      await mod.stopBroadcasting();
-      const announced = broadcastMessageToAllStub.callCount;
-
-      await mod.checkAndNotifyPeersOfRunningApps();
-      expect(broadcastMessageToAllStub.callCount, 'the explicit announcement was refused').to.equal(announced + 1);
-
-      await clock.tickAsync(600000);
-      expect(
-        broadcastMessageToAllStub.callCount,
-        'announcing once restarted the loop that had been stopped',
-      ).to.equal(announced + 1);
-    });
-
-    it('announces on the interval the expiry derives, not on one of its own', async () => {
-      // 60s of expiry derives a 28s announce: two to a lifetime, with slack.
-      await runOneCycle({ announceIntervalMs: 28000 });
-      const announced = broadcastMessageToAllStub.callCount;
-
-      await clock.tickAsync(27999);
-      expect(broadcastMessageToAllStub.callCount).to.equal(announced);
-
-      await clock.tickAsync(1);
-      expect(
-        broadcastMessageToAllStub.callCount,
-        'the announcement did not follow the derived interval',
-      ).to.equal(announced + 1);
-    });
-  });
-
 });

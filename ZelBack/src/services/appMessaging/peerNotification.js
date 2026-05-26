@@ -1,6 +1,4 @@
 const os = require('os');
-const config = require('config');
-const dbHelper = require('../dbHelper');
 const nodeConfirmationService = require('../nodeConfirmationService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const geolocationService = require('../geolocationService');
@@ -8,6 +6,7 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const messageStore = require('./messageStore');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
+const appsRepository = require('../appDatabase/appsRepository');
 const appQueryService = require('../appQuery/appQueryService');
 const appReconciler = require('../appMonitoring/appReconciler');
 
@@ -15,7 +14,6 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const { nodeSigner } = require('../utils/nodeSigner');
 const { ANNOUNCE_INTERVAL_MS } = require('../utils/appConstants');
 
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 let broadcastTimer = null;
 let broadcastInProgress = false;
@@ -157,59 +155,67 @@ async function checkAndNotifyPeersOfRunningApps() {
       throw new Error('Unable to detect Flux IP address');
     }
 
-    // Stamped where the snapshot is taken, not where the message is built: every
-    // consumer reads broadcastedAt as the time these apps were installed here, and
-    // a stamp taken after the per-app reads below would out-rank a removal that
-    // happened while they ran.
-    const snapshotAt = Date.now();
-    const installedAppsRes = await appQueryService.installedApps();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
+    // Raw specs for containerHealthMonitor (expects .compose[] format)
+    const rawAppsInstalled = await appsRepository.listInstalledAppsRaw();
+    // Hydrated specs for class-based component iteration
+    const installedSpecs = await appsRepository.listInstalledApps();
+
+    const runningAppsRes = await appQueryService.listRunningApps();
+    if (runningAppsRes.status !== 'success') {
+      throw new Error('Unable to check running Apps');
     }
-    const appsInstalled = installedAppsRes.data;
+    const runningApps = runningAppsRes.data;
+    const runningAppsNames = runningApps.map((app) => {
+      if (app.Names[0].startsWith('/zel')) {
+        return app.Names[0].slice(4);
+      }
+      return app.Names[0].slice(5);
+    });
 
     // hourly resync trigger: let the reconciler bring any drifted containers
     // (crashed, orphaned, missed events) back to their desired state - a local
     // health concern, and not what this message reports
     appReconciler.enqueueAll('hourly').catch((err) => log.error(`peerNotification - reconcile sweep failed: ${err.message}`));
 
-    // Every app installed here, whatever its containers are doing. The message
-    // says "this node holds this app", which is what the spawner counts against
-    // an app's instance target - a container that is down is recovered here, not
-    // relocated, and whether it serves is settled by the load balancer's own
-    // health check. Deriving this from run-state instead made a component that
-    // could never start silence the node, so the app never reached its target
-    // and was placed again, without end.
-    //
-    // Read straight from the installed set: an app's name and hash sit outside
-    // the enterprise envelope, so a spec that cannot be decrypted still states
-    // its claim, and one unreadable app cannot cost this node its presence.
-    // An app whose removal this node has broadcast is excluded: it is still
-    // installed until the removal finishes, and naming it here would re-create the
-    // location row the removal just cleared. An app this node is only testing is
-    // excluded too: its row is thrown away at the end of the test, and the teardown
-    // that throws it away tells the network nothing.
-    const applicationsToBroadcast = appsInstalled.filter(
-      (application) => !globalState.departingApps.has(application.name)
-        && !globalState.testInstallingApps.has(application.name),
-    );
+    // apps using g:/r: syncthing are advertised as installed-and-running even when
+    // some components are intentionally stopped (e.g. slaves), so derive them
+    // directly from the specs rather than from container run-state
+    const masterSlaveAppsInstalled = rawAppsInstalled.filter((app) => {
+      const comps = app.version >= 4 && Array.isArray(app.compose) ? app.compose : [app];
+      return comps.some((c) => c.containerData && (c.containerData.includes('g:') || c.containerData.includes('r:')));
+    });
+
+    const installedAndRunning = [];
+    installedSpecs.forEach((inst) => {
+      if (inst.version >= 4) {
+        const allRunning = inst.spec.componentNames().every(
+          (compName) => runningAppsNames.includes(`${compName}_${inst.name}`),
+        );
+        if (allRunning) {
+          installedAndRunning.push(inst);
+        }
+      } else if (runningAppsNames.includes(inst.name)) {
+        installedAndRunning.push(inst);
+      }
+    });
+    installedAndRunning.push(...masterSlaveAppsInstalled);
+    const applicationsToBroadcast = [...new Set(installedAndRunning)];
     const apps = [];
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
     try {
       // eslint-disable-next-line no-restricted-syntax
       for (const application of applicationsToBroadcast) {
-        const queryFind = { name: application.name, ip: localSocketAddr };
-        const projection = { _id: 0, runningSince: 1 };
+        const appName = application.name || application;
         // eslint-disable-next-line no-await-in-loop
-        const result = await dbHelper.findOneInDatabase(database, globalAppsLocations, queryFind, projection);
+        const result = await appsRepository.getAppLocation(appName, localSocketAddr);
         let runningOnMyNodeSince = new Date().toISOString();
         if (result && result.runningSince) {
           runningOnMyNodeSince = result.runningSince;
         }
+        const appHash = application.hash || '';
+        log.info(`${appName} is running/installed properly. Broadcasting status.`);
         apps.push({
-          name: application.name,
-          hash: application.hash,
+          name: appName,
+          hash: appHash,
           runningSince: runningOnMyNodeSince,
         });
       }
@@ -226,7 +232,7 @@ async function checkAndNotifyPeersOfRunningApps() {
         version: 2,
         apps,
         ip: localSocketAddr,
-        broadcastedAt: snapshotAt,
+        broadcastedAt: Date.now(),
         osUptime: os.uptime(),
         staticIp: geolocationService.isStaticIP(),
       };
