@@ -345,15 +345,11 @@ describe('appStartupManager tests', () => {
         { name: 'NormalApp' },
       ]);
 
-      // SyncApp uses g: syncthing mode
       appsRepositoryStub.getGlobalAppInfo.withArgs('SyncApp').resolves({
-        version: 3,
-        containerData: 'g:/data',
+        spec: { serialize: () => ({ version: 3, containerData: 'g:/data' }) },
       });
-      // NormalApp does not
       appsRepositoryStub.getGlobalAppInfo.withArgs('NormalApp').resolves({
-        version: 3,
-        containerData: '',
+        spec: { serialize: () => ({ version: 3, containerData: '' }) },
       });
 
       // NormalApp has expired location
@@ -377,12 +373,16 @@ describe('appStartupManager tests', () => {
       dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'MixedApp' }]);
 
       appsRepositoryStub.getGlobalAppInfo.withArgs('MixedApp').resolves({
-        version: 8,
-        name: 'MixedApp',
-        compose: [
-          { name: 'web', containerData: '' },
-          { name: 'db', containerData: 'g:/data' },
-        ],
+        spec: {
+          serialize: () => ({
+            version: 8,
+            name: 'MixedApp',
+            compose: [
+              { name: 'web', containerData: '' },
+              { name: 'db', containerData: 'g:/data' },
+            ],
+          }),
+        },
       });
 
       // Valid location
@@ -408,12 +408,16 @@ describe('appStartupManager tests', () => {
       dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'AllGApp' }]);
 
       appsRepositoryStub.getGlobalAppInfo.withArgs('AllGApp').resolves({
-        version: 8,
-        name: 'AllGApp',
-        compose: [
-          { name: 'a', containerData: 'g:/x' },
-          { name: 'b', containerData: 'g:/y' },
-        ],
+        spec: {
+          serialize: () => ({
+            version: 8,
+            name: 'AllGApp',
+            compose: [
+              { name: 'a', containerData: 'g:/x' },
+              { name: 'b', containerData: 'g:/y' },
+            ],
+          }),
+        },
       });
 
       const results = await appStartupManager.reconcileAppsOnBoot();
