@@ -62,7 +62,6 @@ const imageManager = require('../appSecurity/imageManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const portManager = require('../appNetwork/portManager');
 const placementFeasibility = require('../appPlacement/placementFeasibility');
-const systemIntegration = require('../appSystem/systemIntegration');
 const { getSpecBackend } = require('../utils/specLibs');
 const { appsFolder } = require('../utils/appConstants');
 const globalState = require('../utils/globalState');
@@ -442,9 +441,8 @@ async function trySpawningGlobalApplication() {
       });
       return shortDelayTime;
     }
-    // Needed by the public availability check below.
-    const appPorts = deployment.allHostPorts();
     const appSpecifications = spec.serialize();
+    const appPorts = deployment.allHostPorts();
 
     // verify app compliance
     const blockResult = await imageManager.isImageBlocked(instantiated.name, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
@@ -468,10 +466,9 @@ async function trySpawningGlobalApplication() {
     }
 
     // verify requirements
-    await hwRequirements.checkAppRequirements(spec);
-    // enterprise network nodes: reserve >4 vCores of burst headroom (automatic CPU burst)
+    await hwRequirements.checkNodeResources(deployment);
     if (isEnterprise) {
-      await hwRequirements.checkAppCpuBurstHeadroom(appSpecifications);
+      await hwRequirements.checkCpuBurstHeadroom(deployment);
     }
 
     // ensure ports unused
@@ -789,7 +786,7 @@ async function trySpawningGlobalApplication() {
     }
 
     // ToDo: Move this to global
-    const architecture = await systemIntegration.systemArchitecture();
+    const architecture = await hwRequirements.systemArchitecture();
 
     for (const [, component] of spec.componentEntries()) {
       // eslint-disable-next-line no-await-in-loop

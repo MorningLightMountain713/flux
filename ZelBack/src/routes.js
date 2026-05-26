@@ -49,7 +49,6 @@ const imageManager = require('./services/appSecurity/imageManager');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
-const systemIntegration = require('./services/appSystem/systemIntegration');
 
 const explorerService = require('./services/explorerService');
 const generalService = require('./services/generalService');
@@ -1030,7 +1029,7 @@ module.exports = (app) => {
     return appInstaller.testInstallApplicationAPI(req, res);
   }));
   app.get('/apps/createfluxnetwork', asyncRoute((req, res) => {
-    return systemIntegration.createFluxNetworkAPI(req, res);
+    return appController.createFluxNetworkAPI(req, res);
   }));
   app.get('/apps/rescanglobalappsinformation/:blockheight?/:removelastinformation?', asyncRoute((req, res) => {
     return registryManager.rescanGlobalAppsInformationAPI(req, res);
