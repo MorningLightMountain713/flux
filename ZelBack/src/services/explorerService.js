@@ -722,10 +722,10 @@ async function processBlock(blockHeight, isInsightExplorer) {
           await registryManager.expireGlobalApplications();
         }
         if (blockHeight % (config.fluxapps.removeFluxAppsPeriod * speedMultiplier) === 0) {
-          advancedWorkflows.checkAndRemoveApplicationInstance();
+          advancedWorkflows.reconcileInstalledApps();
         }
         if (blockHeight % (updateFluxAppsPeriod * speedMultiplier) === 0) {
-          advancedWorkflows.reinstallOldApplications();
+          advancedWorkflows.reconcileInstalledApps();
           updateFluxAppsPeriod = Math.floor(Math.random() * 6 + 4);
         }
         if (blockDataVerbose.height % (config.fluxapps.reconstructAppMessagesHashPeriod * speedMultiplier) === 0) {

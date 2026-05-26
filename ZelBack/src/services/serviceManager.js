@@ -468,9 +468,9 @@ async function startFluxFunctions() {
         fluxNetworkHelper.isArcane,
       );
     }, bootDelay(3 * 60 * 1000));
-    nodeStatusMonitor.initialize(appQueryService.installedApps, appUninstaller.removeAppLocally);
+    nodeStatusMonitor.initialize(appQueryService.installedApps);
     setTimeout(() => {
-      nodeStatusMonitor.monitorNodeStatus(appQueryService.installedApps, appUninstaller.removeAppLocally);
+      nodeStatusMonitor.monitorNodeStatus(appQueryService.installedApps);
     }, bootDelay(1.5 * 60 * 1000));
     // Start the syncthing/masterSlave deciders once boot container state has settled
     // (the same AsyncGate the reconciler starts on), not after a fixed delay. Each
@@ -486,27 +486,18 @@ async function startFluxFunctions() {
         appQueryService.installedApps,
         () => globalState,
       ); // rechecks syncthing configuration each cycle
-      // masterSlave self-gates on syncthingAppsFirstRun (the syncthing monitor's
-      // first-run mount-safety must complete before any g: election), so it starts
-      // concurrently rather than after a timed offset.
-      advancedWorkflows.masterSlaveApps(
-        globalState,
-        appQueryService.installedApps,
-        appQueryService.listRunningApps,
-        globalState.receiveOnlySyncthingAppsCache,
-        globalState.backupInProgress,
-        globalState.restoreInProgress,
-        https,
-      ); // stops and starts g: syncthing apps when a new master is required or changed.
       setTimeout(() => {
-        appInspector.monitorSharedDBApps(appQueryService.installedApps, appUninstaller.removeAppLocally, globalState); // Monitor SharedDB Apps.
+        advancedWorkflows.coordinateActiveStandbyApps();
+      }, 30 * 1000);
+      setTimeout(() => {
+        appInspector.monitorSharedDBApps(globalState);
       }, 60 * 1000);
     });
     // Hash sync and spawner startup are now managed by the AppSyncOrchestrator (event-driven)
     orchestrator.start(bootContext);
     log.info('AppSyncOrchestrator started');
     setInterval(() => {
-      imageManager.checkApplicationsCompliance(appQueryService.installedApps, appUninstaller.removeAppLocally);
+      imageManager.checkApplicationsCompliance();
     }, imageComplianceIntervalMs);
     setTimeout(() => {
       advancedWorkflows.forceAppRemovals();
@@ -514,7 +505,6 @@ async function startFluxFunctions() {
         advancedWorkflows.forceAppRemovals();
       }, forceRemovalIntervalMs);
     }, bootDelay(30 * 60 * 1000));
-    // Daemon health monitoring
     setTimeout(() => {
       daemonHealthMonitor.checkDaemonHealthAndCleanup();
       setInterval(() => {
@@ -522,12 +512,7 @@ async function startFluxFunctions() {
       }, bootDelay(15 * 60 * 1000));
     }, bootDelay(5 * 60 * 1000));
     setTimeout(() => {
-      appInspector.checkStorageSpaceForApps(
-        appQueryService.installedApps,
-        appUninstaller.removeAppLocally,
-        advancedWorkflows.softRedeploy,
-        appsStorageViolations,
-      );
+      appInspector.checkStorageSpaceForApps(appsStorageViolations);
     }, bootDelay(20 * 60 * 1000));
     setInterval(() => {
       backupRestoreService.cleanLocalBackup();
