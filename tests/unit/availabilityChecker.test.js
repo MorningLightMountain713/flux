@@ -114,7 +114,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(null);
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves(null);
 
       await availabilityChecker.checkMyAppsAvailability(
         mockDosState,
@@ -130,7 +130,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([]);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(fluxNetworkHelper, 'isPortUserBlocked').returns(false);
@@ -155,7 +155,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
@@ -180,7 +180,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
@@ -204,7 +204,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
@@ -226,7 +226,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(true);
 
@@ -247,7 +247,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(upnpService, 'isUPNP').returns(true);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -274,7 +274,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
 
@@ -295,7 +295,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
@@ -318,7 +318,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves('192.168.1.200:16127');
@@ -340,7 +340,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(upnpService, 'isUPNP').returns(true);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -373,7 +373,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(upnpService, 'isUPNP').returns(true);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -419,7 +419,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
@@ -444,7 +444,7 @@ describe('availabilityChecker tests', () => {
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'getMyFluxIPandPort').resolves('192.168.1.100:16127');
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves(deployments);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
