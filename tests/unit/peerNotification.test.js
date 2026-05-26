@@ -2,10 +2,23 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+function mockInstantiatedSpec({ name, version, hash, componentNames }) {
+  return {
+    name,
+    version,
+    hash,
+    spec: {
+      componentNames: () => componentNames,
+      componentEntries: () => componentNames.map((n) => [n, {}]),
+    },
+  };
+}
+
 describe('peerNotification tests', () => {
   let peerNotification;
   let logStub;
   let monitorAndRecoverAppsStub;
+  let getAppLocationStub;
 
   beforeEach(() => {
     logStub = {
@@ -15,40 +28,13 @@ describe('peerNotification tests', () => {
     };
 
     monitorAndRecoverAppsStub = sinon.stub().resolves({ masterSlaveAppsInstalled: [], startedApps: [] });
+    getAppLocationStub = sinon.stub().resolves(null);
 
     peerNotification = proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', {
       config: {
-        database: {
-          appslocal: {
-            collections: { appsInformation: 'localAppsInformation' },
-            database: 'localapps',
-          },
-          appsglobal: {
-            database: 'globalapps',
-            collections: { appsLocations: 'appsLocations' },
-          },
-        },
         fluxapps: {
           peerNotifyIntervalMs: 3600000,
         },
-      },
-      '../dbHelper': {
-        databaseConnection: sinon.stub().returns({ db: sinon.stub().returns({}) }),
-        findOneInDatabase: sinon.stub().resolves(null),
-        findInDatabase: sinon.stub().resolves([]),
-        updateOneInDatabase: sinon.stub().resolves(),
-      },
-      '../dockerService': {
-        appDockerStart: sinon.stub().resolves(),
-        getDockerContainerOnly: sinon.stub().resolves(null),
-      },
-      '../serviceHelper': {
-        delay: sinon.stub().resolves(),
-        ensureString: sinon.stub().returnsArg(0),
-      },
-      '../generalService': {
-        isNodeStatusConfirmed: sinon.stub().resolves(true),
-        nodeTier: sinon.stub().resolves('cumulus'),
       },
       '../fluxNetworkHelper': {
         getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
@@ -63,40 +49,26 @@ describe('peerNotification tests', () => {
       },
       './messageStore': {
         storeAppRunningMessage: sinon.stub().resolves(),
-      },
-      '../appDatabase/registryManager': {
-        getApplicationGlobalSpecifications: sinon.stub().resolves(null),
-      },
-      '../appManagement/appInspector': {
-        startAppMonitoring: sinon.stub(),
-        stopAppMonitoring: sinon.stub(),
-      },
-      '../appLifecycle/appUninstaller': {
-        removeAppLocally: sinon.stub().resolves(),
-      },
-      '../appLifecycle/appInstaller': {
-        installApplicationHard: sinon.stub().resolves(),
+        storeAppStateEvent: sinon.stub().resolves(),
+        APP_STATE_EVENT_TYPES: { APPRUNNING: 'apprunning' },
       },
       '../appMonitoring/containerHealthMonitor': {
         monitorAndRecoverApps: monitorAndRecoverAppsStub,
       },
+      '../appDatabase/appsRepository': {
+        listInstalledAppsRaw: sinon.stub().resolves([
+          { name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '' }] },
+        ]),
+        listInstalledApps: sinon.stub().resolves([
+          mockInstantiatedSpec({ name: 'app1', version: 4, hash: 'abc123', componentNames: ['c1'] }),
+        ]),
+        getAppLocation: getAppLocationStub,
+      },
       '../appQuery/appQueryService': {
-        installedApps: sinon.stub().resolves({
-          status: 'success',
-          data: [{ name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '' }] }],
-        }),
         listRunningApps: sinon.stub().resolves({
           status: 'success',
           data: [{ Names: ['/fluxc1_app1'] }],
         }),
-        decryptEnterpriseApps: sinon.stub().callsFake(async (apps) => apps),
-      },
-      '../appTamperingDetectionService': {
-        recordEvent: sinon.stub().resolves(),
-        isNetworkMissingError: sinon.stub().returns(false),
-      },
-      '../utils/appConstants': {
-        localAppsInformation: 'localAppsInformation',
       },
       '../nodeConfirmationService': {
         canSendMessages: sinon.stub().returns(true),
@@ -105,6 +77,10 @@ describe('peerNotification tests', () => {
       '../utils/globalState': {
         backupInProgress: [],
         restoreInProgress: [],
+        runningAppsCache: new Set(),
+      },
+      '../utils/fluxEventBus': {
+        publish: sinon.stub(),
       },
       '../../lib/log': logStub,
     });
@@ -119,7 +95,7 @@ describe('peerNotification tests', () => {
       expect(peerNotification.checkAndNotifyPeersOfRunningApps).to.be.a('function');
     });
 
-    it('should call monitorAndRecoverApps with correct args', async () => {
+    it('should call monitorAndRecoverApps with raw specs', async () => {
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
       expect(monitorAndRecoverAppsStub.calledOnce).to.be.true;
@@ -127,7 +103,17 @@ describe('peerNotification tests', () => {
       expect(ip).to.equal('192.168.1.1:16127');
       expect(apps).to.have.length(1);
       expect(apps[0].name).to.equal('app1');
+      expect(apps[0].compose).to.be.an('array');
       expect(runningNames).to.deep.equal(['c1_app1']);
+    });
+
+    it('should use appsRepository.getAppLocation for location lookup', async () => {
+      getAppLocationStub.resolves({ runningSince: '2025-01-01T00:00:00.000Z' });
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      expect(getAppLocationStub.calledOnce).to.be.true;
+      expect(getAppLocationStub.firstCall.args).to.deep.equal(['app1', '192.168.1.1:16127']);
     });
   });
 });
