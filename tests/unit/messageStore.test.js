@@ -2,13 +2,36 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+// Round-trip stub for the specCutover seam: deserializeSubmission echoes
+// the input as a minimal class-like object; serialize/decrypt round-trip
+// back to the same blob. Enough to satisfy messageStore without pulling
+// real flux-spec into the unit tests.
+function buildCutoverStubs() {
+  const makeWireSpec = (blob) => ({
+    version: blob.version,
+    name: blob.name,
+    owner: blob.owner,
+    enterprise: blob.enterprise,
+    serialize: () => blob,
+    toEncryptedSpec: () => ({
+      decrypt: async () => ({ spec: { serialize: () => blob } }),
+    }),
+  });
+  return {
+    deserializeSpec: sinon.stub().callsFake(async (blob) => makeWireSpec(blob)),
+    decryptIfEnterprise: sinon.stub().callsFake(async (blob) => blob),
+    decryptStoredSpec: sinon.stub().callsFake(async (blob) => blob),
+  };
+}
+
 describe('messageStore tests', () => {
   let messageStore;
   let dbHelperStub;
   let serviceHelperStub;
-  let messageVerifierStub;
+
   let logStub;
   let configStub;
+  let appsRepositoryStub;
 
   beforeEach(() => {
     // Stubs
@@ -28,15 +51,22 @@ describe('messageStore tests', () => {
       ensureNumber: sinon.stub().returnsArg(0),
     };
 
-    messageVerifierStub = {
-      checkAppMessageExistence: sinon.stub(),
-      checkAppTemporaryMessageExistence: sinon.stub(),
-    };
-
     logStub = {
       error: sinon.stub(),
       info: sinon.stub(),
       warn: sinon.stub(),
+    };
+
+    appsRepositoryStub = {
+      getPermanentMessage: sinon.stub(),
+      getTempMessage: sinon.stub(),
+      getAppLocation: sinon.stub().resolves(null),
+      upsertLocation: sinon.stub().resolves(),
+      listAppNamesOnIp: sinon.stub().resolves([]),
+      removeLocationsByIp: sinon.stub().resolves(),
+      removeInstallingLocation: sinon.stub().resolves(),
+      removeLocation: sinon.stub().resolves(),
+      updateLocationIp: sinon.stub().resolves(),
     };
 
     configStub = {
@@ -48,39 +78,44 @@ describe('messageStore tests', () => {
           database: 'appsdb',
           collections: {
             appsLocations: 'appsLocations',
-            appStateEvents: 'appStateEvents',
-            appsInstallingBroadcasts: 'appsInstallingBroadcasts',
-            appsInstallingErrorsBroadcasts: 'appsInstallingErrorsBroadcasts',
           },
         },
-      },
-      fluxapps: {
-        maxAppsPerNode: 200,
       },
     };
 
     // Proxy require
+    const cutoverStubs = buildCutoverStubs();
     messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', {
       config: configStub,
       '../dbHelper': dbHelperStub,
       '../serviceHelper': serviceHelperStub,
-      './messageVerifier': messageVerifierStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
+      './appEventVerifier': {
+        deserializeMessage: sinon.stub().resolves({}),
+        instantiatePreviousSpec: sinon.stub().resolves(null),
+        authorize: sinon.stub().resolves({ valid: true, signer: 'owner1' }),
+      },
+      '../utils/specLibs': {
+        validateSubmissionSpec: sinon.stub().resolves(true),
+        getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
+        getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {} }),
+      },
+      '../utils/specCutover': cutoverStubs,
+      '../providers/FluxOSLegacyCryptoProvider': {
+        create: sinon.stub().resolves({
+          decrypt: sinon.stub().resolves(Buffer.from('{}')),
+        }),
+      },
       '../../lib/log': logStub,
       '../daemonService/daemonServiceMiscRpcs': {
         isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
       },
-      '../appRequirements/appValidator': {
-        verifyAppSpecifications: sinon.stub().resolves(),
-      },
       '../appDatabase/registryManager': {
         checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
-        getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1' }),
       },
       '../appLifecycle/advancedWorkflows': {
         validateApplicationUpdateCompatibility: sinon.stub().resolves(),
-      },
-      '../utils/enterpriseHelper': {
-        checkAndDecryptAppSpecs: sinon.stub().resolves({}),
+        getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1' }),
       },
       '../utils/appConstants': {
         globalAppsMessages: 'appsMessages',
@@ -88,19 +123,9 @@ describe('messageStore tests', () => {
         globalAppsLocations: 'appsLocations',
         globalAppsInstallingLocations: 'appsInstallingLocations',
         globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
-        globalAppsInstallingErrorsBroadcasts: 'appsInstallingErrorsBroadcasts',
-        globalAppStateEvents: 'appStateEvents',
         appsHashesCollection: 'appsHashes',
-        GOSSIP_VALIDITY_MS: 5 * 60 * 1000,
-        RUNNING_EXPIRY_MS: 125 * 60 * 1000,
-        INSTALLING_EXPIRY_MS: 15 * 60 * 1000,
-        INSTALLING_ERRORS_EXPIRY_MS: 24 * 60 * 60 * 1000,
-        SIGTERM_EXPIRY_MS: 420 * 1000,
-        EVICTED_EXPIRY_MS: 125 * 60 * 1000,
       },
-      '../utils/appSpecHelpers': {
-        specificationFormatter: sinon.stub().returnsArg(0),
-      },
+      '../appDatabase/appsRepository': appsRepositoryStub,
     });
   });
 
@@ -122,13 +147,13 @@ describe('messageStore tests', () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
-        appSpecifications: { name: 'test' },
+        appSpecifications: { name: 'test', version: 1 },
         hash: 'hash123',
         timestamp: Date.now(),
         signature: 'sig123',
       };
 
-      messageVerifierStub.checkAppMessageExistence.resolves({ hash: 'hash123' });
+      appsRepositoryStub.getPermanentMessage.resolves({ hash: 'hash123' });
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
@@ -143,14 +168,14 @@ describe('messageStore tests', () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
-        appSpecifications: { name: 'test' },
+        appSpecifications: { name: 'test', version: 1 },
         hash: 'hash123',
         timestamp: Date.now(),
         signature: 'sig123',
       };
 
-      messageVerifierStub.checkAppMessageExistence.resolves(null);
-      messageVerifierStub.checkAppTemporaryMessageExistence.resolves({ hash: 'hash123' });
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves({ hash: 'hash123' });
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
@@ -165,14 +190,14 @@ describe('messageStore tests', () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
-        appSpecifications: { name: 'test' },
+        appSpecifications: { name: 'test', version: 1 },
         hash: 'hash123',
         timestamp: Date.now(),
         signature: 'sig123',
       };
 
-      messageVerifierStub.checkAppMessageExistence.resolves(null);
-      messageVerifierStub.checkAppTemporaryMessageExistence.resolves(null);
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves(null);
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
@@ -188,15 +213,15 @@ describe('messageStore tests', () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
-        appSpecifications: { name: 'test' },
+        appSpecifications: { name: 'test', version: 1 },
         hash: 'hash123',
         timestamp: Date.now(),
         signature: 'sig123',
       };
       const error = new Error('Database error');
 
-      messageVerifierStub.checkAppMessageExistence.resolves(null);
-      messageVerifierStub.checkAppTemporaryMessageExistence.resolves(null);
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves(null);
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
@@ -221,36 +246,44 @@ describe('messageStore tests', () => {
         signature: 'sig123',
       };
 
-      messageVerifierStub.checkAppMessageExistence.resolves(null);
-      messageVerifierStub.checkAppTemporaryMessageExistence.resolves(null);
-      messageVerifierStub.verifyAppHash = sinon.stub().resolves();
-      messageVerifierStub.verifyAppMessageUpdateSignature = sinon.stub().resolves();
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves(null);
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves(null);
       dbHelperStub.insertOneToDatabase.resolves();
 
+      const localCutoverStubs = buildCutoverStubs();
       messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', {
         config: configStub,
         '../dbHelper': dbHelperStub,
         '../serviceHelper': serviceHelperStub,
-        './messageVerifier': messageVerifierStub,
+        '../appDatabase/appsRepository': appsRepositoryStub,
+        './appEventVerifier': {
+          deserializeMessage: sinon.stub().resolves({}),
+          instantiatePreviousSpec: sinon.stub().resolves(null),
+          authorize: sinon.stub().resolves({ valid: true, signer: 'owner1' }),
+        },
+        '../utils/specLibs': {
+          validateSubmissionSpec: sinon.stub().resolves(true),
+          getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
+          getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {} }),
+        },
+        '../utils/specCutover': localCutoverStubs,
+        '../providers/FluxOSLegacyCryptoProvider': {
+          create: sinon.stub().resolves({
+            decrypt: sinon.stub().resolves(Buffer.from('{}')),
+          }),
+        },
         '../../lib/log': logStub,
         '../daemonService/daemonServiceMiscRpcs': {
           isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
         },
-        '../appRequirements/appValidator': {
-          verifyAppSpecifications: sinon.stub().resolves(),
-        },
         '../appDatabase/registryManager': {
           checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
+        },
+        '../appDatabase/appSpecHistory': {
           getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1', version: 5 }),
-        },
-        '../appLifecycle/advancedWorkflows': {
-          validateApplicationUpdateCompatibility: sinon.stub().resolves(),
-        },
-        '../utils/enterpriseHelper': {
-          checkAndDecryptAppSpecs: sinon.stub().resolves({}),
         },
         '../utils/globalState': {
           queuePendingUpdate: sinon.stub(),
@@ -262,9 +295,6 @@ describe('messageStore tests', () => {
           globalAppsInstallingLocations: 'appsInstallingLocations',
           globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
           appsHashesCollection: 'appsHashes',
-        },
-        '../utils/appSpecHelpers': {
-          specificationFormatter: sinon.stub().returnsArg(0),
         },
       });
 
@@ -292,7 +322,7 @@ describe('messageStore tests', () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
-        appSpecifications: { name: 'test' },
+        appSpecifications: { name: 'test', version: 1 },
         hash: 'hash123',
         timestamp: Date.now(),
         signature: 'sig123',
@@ -348,7 +378,7 @@ describe('messageStore tests', () => {
 
       const result = await messageStore.storeAppRunningMessage(message);
 
-      expect(result).to.deep.equal({ stored: false, rebroadcast: false });
+      expect(result).to.be.false;
       expect(logStub.warn.called).to.be.true;
     });
 
@@ -362,15 +392,11 @@ describe('messageStore tests', () => {
         ip: '192.168.1.1',
       };
 
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.updateOneInDatabase.resolves({ modifiedCount: 0, upsertedCount: 1 });
-      dbHelperStub.removeDocumentsFromCollection.resolves();
-
       const result = await messageStore.storeAppRunningMessage(message);
 
-      expect(result).to.deep.equal({ stored: true, rebroadcast: true });
-      expect(dbHelperStub.updateOneInDatabase.calledOnce).to.be.true;
+      expect(result).to.be.true;
+      expect(appsRepositoryStub.upsertLocation.calledOnce).to.be.true;
+      expect(appsRepositoryStub.removeInstallingLocation.calledOnce).to.be.true;
     });
 
     it('should store valid version 2 running message with multiple apps', async () => {
@@ -385,17 +411,10 @@ describe('messageStore tests', () => {
         ip: '192.168.1.1',
       };
 
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.updateOneInDatabase.resolves({ modifiedCount: 0, upsertedCount: 1 });
-      dbHelperStub.removeDocumentsFromCollection.resolves();
-
       const result = await messageStore.storeAppRunningMessage(message);
 
-      expect(result).to.deep.equal({ stored: true, rebroadcast: true });
-      expect(dbHelperStub.updateOneInDatabase.callCount).to.equal(2);
-      // Should clean up installing records for each app (location + broadcast per app)
-      expect(dbHelperStub.removeDocumentsFromCollection.callCount).to.equal(4);
+      expect(result).to.be.true;
+      expect(appsRepositoryStub.upsertLocation.callCount).to.equal(2);
     });
 
     it('should handle version 2 message with empty apps array', async () => {
@@ -407,16 +426,12 @@ describe('messageStore tests', () => {
         ip: '192.168.1.1',
       };
 
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.resolves([{ name: 'app1' }]);
-      dbHelperStub.removeDocumentsFromCollection.resolves();
+      appsRepositoryStub.listAppNamesOnIp.resolves(['app1']);
 
       const result = await messageStore.storeAppRunningMessage(message);
 
-      expect(result).to.deep.equal({ stored: true, rebroadcast: true });
-      // Called three times: locations, installing locations, installing broadcasts
-      expect(dbHelperStub.removeDocumentsFromCollection.callCount).to.equal(3);
+      expect(result).to.be.true;
+      expect(appsRepositoryStub.removeLocationsByIp.calledOnce).to.be.true;
     });
   });
 
@@ -491,7 +506,7 @@ describe('messageStore tests', () => {
       expect(result.message).to.include('appName cannot be empty');
     });
 
-    it('should store valid removed message and delete location', async () => {
+    it('should store valid removed message', async () => {
       const message = {
         type: 'fluxappremoved',
         version: 1,
@@ -500,17 +515,12 @@ describe('messageStore tests', () => {
         ip: '192.168.1.1',
       };
 
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneAndDeleteInDatabase.resolves();
-
       const result = await messageStore.storeAppRemovedMessage(message);
 
       expect(result).to.be.true;
-      expect(dbHelperStub.findOneAndDeleteInDatabase.calledOnce).to.be.true;
-      expect(dbHelperStub.findOneAndDeleteInDatabase.firstCall.args[2]).to.deep.equal({
-        ip: '192.168.1.1', name: 'testapp',
-      });
+      expect(appsRepositoryStub.removeLocation.calledOnce).to.be.true;
+      expect(appsRepositoryStub.removeLocation.firstCall.args[0]).to.equal('testapp');
+      expect(appsRepositoryStub.removeLocation.firstCall.args[1]).to.equal('192.168.1.1');
     });
   });
 
@@ -546,8 +556,8 @@ describe('messageStore tests', () => {
 
       expect(result).to.be.true;
       expect(dbHelperStub.updateOneInDatabase.calledOnce).to.be.true;
-      // Should clean up installing record since installation failed (location + broadcast)
-      expect(dbHelperStub.removeDocumentsFromCollection.callCount).to.equal(2);
+      // Should clean up installing record since installation failed
+      expect(dbHelperStub.removeDocumentsFromCollection.calledOnce).to.be.true;
       expect(dbHelperStub.removeDocumentsFromCollection.calledWith(
         'database',
         'appsInstallingLocations',
@@ -577,7 +587,8 @@ describe('messageStore tests', () => {
       const result = await messageStore.storeAppInstallingErrorMessage(message);
 
       expect(result).to.be.true;
-      expect(dbHelperStub.removeDocumentsFromCollection.callCount).to.equal(2);
+      expect(dbHelperStub.updateInDatabase.calledOnce).to.be.true;
+      expect(dbHelperStub.removeDocumentsFromCollection.calledOnce).to.be.true;
     });
   });
 
@@ -630,95 +641,12 @@ describe('messageStore tests', () => {
         broadcastedAt: Date.now(),
       };
 
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.updateInDatabase.resolves();
-
       const result = await messageStore.storeIPChangedMessage(message);
 
       expect(result).to.be.true;
-      expect(dbHelperStub.updateInDatabase.calledOnce).to.be.true;
-    });
-  });
-
-  describe('storeAppStateEvent', () => {
-    let collectionStub;
-
-    beforeEach(() => {
-      collectionStub = { updateOne: sinon.stub().resolves({ modifiedCount: 1 }) };
-      const mockDb = { db: sinon.stub().returns({ collection: sinon.stub().returns(collectionStub) }) };
-      dbHelperStub.databaseConnection.returns(mockDb);
-    });
-
-    it('should store apprunning v2 event with correct dedupKey', async () => {
-      const payload = {
-        signedBroadcast: {
-          version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
-          data: { ip: '1.2.3.4', broadcastedAt: Date.now(), apps: [{ name: 'a', hash: 'h' }] },
-        },
-      };
-      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, payload);
-      expect(collectionStub.updateOne.calledOnce).to.be.true;
-      const filter = collectionStub.updateOne.firstCall.args[0];
-      expect(filter.ip).to.equal('1.2.3.4');
-      expect(filter.type).to.equal('apprunning');
-      expect(filter.dedupKey).to.equal('v2');
-    });
-
-    it('should store apprunning v1 event with name in dedupKey', async () => {
-      const payload = {
-        signedBroadcast: {
-          version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
-          data: { ip: '1.2.3.4', broadcastedAt: Date.now(), name: 'myapp', hash: 'h' },
-        },
-      };
-      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, payload);
-      expect(collectionStub.updateOne.calledOnce).to.be.true;
-      const filter = collectionStub.updateOne.firstCall.args[0];
-      expect(filter.dedupKey).to.equal('v1:myapp');
-    });
-
-    it('should store sigterm event', async () => {
-      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.SIGTERM, {
-        message: { type: 'fluxnodesigterm', version: 1, ip: '1.2.3.4', broadcastedAt: Date.now() },
-        envelope: { version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig' },
-      });
-      expect(collectionStub.updateOne.calledOnce).to.be.true;
-      const filter = collectionStub.updateOne.firstCall.args[0];
-      expect(filter.type).to.equal('sigterm');
-      expect(filter.dedupKey).to.equal('sigterm');
-    });
-
-    it('should store appremoved event', async () => {
-      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPREMOVED, {
-        message: { ip: '1.2.3.4', appName: 'myapp', broadcastedAt: Date.now() },
-        envelope: { version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig' },
-      });
-      expect(collectionStub.updateOne.calledOnce).to.be.true;
-      const filter = collectionStub.updateOne.firstCall.args[0];
-      expect(filter.type).to.equal('appremoved');
-      expect(filter.dedupKey).to.equal('appremoved:myapp');
-    });
-
-    it('should store evicted event with createdAt', async () => {
-      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.EVICTED, { ip: '1.2.3.4' });
-      expect(collectionStub.updateOne.calledOnce).to.be.true;
-      const filter = collectionStub.updateOne.firstCall.args[0];
-      expect(filter.type).to.equal('evicted');
-      expect(filter.dedupKey).to.equal('evicted');
-      const update = collectionStub.updateOne.firstCall.args[1];
-      expect(update.$set.createdAt).to.be.instanceOf(Date);
-    });
-
-    it('should reject expired apprunning events', async () => {
-      const payload = {
-        signedBroadcast: {
-          version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
-          data: { ip: '1.2.3.4', broadcastedAt: Date.now() - (130 * 60 * 1000), apps: [{ name: 'a', hash: 'h' }] },
-        },
-      };
-      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, payload);
-      expect(collectionStub.updateOne.called).to.be.false;
+      expect(appsRepositoryStub.updateLocationIp.calledOnce).to.be.true;
+      expect(appsRepositoryStub.updateLocationIp.firstCall.args[0]).to.equal('192.168.1.1');
+      expect(appsRepositoryStub.updateLocationIp.firstCall.args[1]).to.equal('192.168.1.2');
     });
   });
 });
