@@ -4,6 +4,9 @@ const nodecmd = require('node-cmd');
 const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
+const appsRepository = require('../appDatabase/appsRepository');
+const { deserializeSpec } = require('../utils/specCutover');
+const { getSpecBackend } = require('../utils/specLibs');
 const { localAppsInformation, appsFolder } = require('../utils/appConstants');
 const dockerService = require('../dockerService');
 const appUninstaller = require('./appUninstaller');
@@ -21,34 +24,22 @@ async function getInstalledAppIds() {
   const installedAppIds = new Set();
 
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-
-    const appsProjection = {
-      projection: { _id: 0 },
-    };
-
-    const apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, {}, appsProjection);
+    const apps = await appsRepository.listInstalledAppsRaw();
 
     if (!apps || !Array.isArray(apps)) {
       return installedAppIds;
     }
 
-    apps.forEach((app) => {
-      if (app.version <= 3) {
-        // Legacy app - single app ID
-        const appId = dockerService.getAppIdentifier(app.name);
-        installedAppIds.add(appId);
-      } else {
-        // Newer app - multiple components
-        if (app.compose && Array.isArray(app.compose)) {
-          app.compose.forEach((component) => {
-            const appId = dockerService.getAppIdentifier(`${component.name}_${app.name}`);
-            installedAppIds.add(appId);
-          });
-        }
+    const { DeploymentSpec } = await getSpecBackend();
+    for (const app of apps) {
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await deserializeSpec(app);
+      if (!spec) continue;
+      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+      for (const [, deployComp] of deployment.componentEntries()) {
+        installedAppIds.add(dockerService.getAppIdentifier(deployComp.identifier));
       }
-    });
+    }
   } catch (error) {
     log.error(`getInstalledAppIds - Error: ${error.message}`);
   }
@@ -335,7 +326,7 @@ async function cleanupCrontabAndMounts() {
             const appName = extractAppNameFromAppId(appId);
             log.warn(`cleanupCrontabAndMounts - Removing app ${appName} due to crontab update failure`);
             // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.removeAppLocally(appName, null, true, false, true).catch((uninstallError) => {
+            await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((uninstallError) => {
               log.error(`cleanupCrontabAndMounts - Failed to uninstall ${appName}: ${uninstallError.message}`);
             });
             // Remove from mounts to verify since app is being uninstalled
