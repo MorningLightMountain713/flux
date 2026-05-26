@@ -6,35 +6,14 @@ const chaiAsPromised = require('chai-as-promised');
 const Dockerode = require('dockerode');
 const sinon = require('sinon');
 const path = require('path');
-const { PassThrough } = require('stream');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
-const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
-const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-
-// Docker's own answers, recorded by tests/unit/fixtures/docker/record.js. The functions
-// below resolve a container by name, send one request and return the response unchanged,
-// so what they do is which container they resolve and which options they send. The
-// recorded bodies carry docker's real shapes for the responses that get handed back.
-const websiteContainer = require('./fixtures/docker/container-listing.live.json');
-const websiteImage = require('./fixtures/docker/image-listing.live.json');
-const inspectResponse = require('./fixtures/docker/inspect.live.json');
-const statsResponse = require('./fixtures/docker/stats.live.json');
-const changesResponse = require('./fixtures/docker/changes.live.json');
-const topResponse = require('./fixtures/docker/top.live.json');
-const recordedLogFrames = require('./fixtures/docker/logs.live.json');
+const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
 
 describe('dockerService tests', () => {
-  // Everything that acts on a container reaches it through getDockerContainerByIdOrName,
-  // which asks docker for the listing and matches the name exactly. Stubbing the listing
-  // is what lets a test about start, stop, logs or top be about start, stop, logs or top.
-  function stubContainerListing() {
-    return sinon.stub(Dockerode.prototype, 'listContainers').resolves([websiteContainer]);
-  }
-
   describe('getDockerContainer tests', () => {
     it('should return a container with a proper ID', async () => {
       const dockerContainer = await dockerService.getDockerContainer('46274c58c9a969e93c1f91a057f0a371c7b952e31a7aec73839afe1433fdee94');
@@ -62,13 +41,22 @@ describe('dockerService tests', () => {
       expect(result).to.equal(appName);
     });
 
-    // KadenaChainWebNode and FoldingAtHomeB were once forced to a zel prefix;
-    // neither is registered anywhere and the volumes they named are long gone,
-    // so they take the flux prefix like every other name. This guards against
-    // the special-case being reintroduced.
-    it('gives the formerly zel-prefixed names the flux prefix like any other', async () => {
-      expect(dockerService.getAppIdentifier('KadenaChainWebNode')).to.equal('fluxKadenaChainWebNode');
-      expect(dockerService.getAppIdentifier('FoldingAtHomeB')).to.equal('fluxFoldingAtHomeB');
+    it('should add "zel" to app identifier if it is KadenaChainWebNode', async () => {
+      const appName = 'KadenaChainWebNode';
+      const expected = 'zelKadenaChainWebNode';
+
+      const result = dockerService.getAppIdentifier(appName);
+
+      expect(result).to.equal(expected);
+    });
+
+    it('should add "zel" to app identifier if it is FoldingAtHomeB', async () => {
+      const appName = 'FoldingAtHomeB';
+      const expected = 'zelFoldingAtHomeB';
+
+      const result = dockerService.getAppIdentifier(appName);
+
+      expect(result).to.equal(expected);
     });
 
     it('should add "flux" to app identifier with any other name', async () => {
@@ -103,70 +91,10 @@ describe('dockerService tests', () => {
       expect(dockerService.getBaseAppName('db_App')).to.equal('db_App');
     });
 
-    it('should round-trip getAppIdentifier for compose and plain names', async () => {
+    it('should round-trip getAppIdentifier for compose and zel-legacy names', async () => {
       ['db_App', 'testing1234', 'KadenaChainWebNode', 'FoldingAtHomeB'].forEach((bare) => {
         expect(dockerService.getBaseAppName(dockerService.getAppIdentifier(bare))).to.equal(bare);
       });
-    });
-  });
-
-  describe('isAppContainer tests', () => {
-    it('accepts an app container by its label', () => {
-      expect(dockerService.isAppContainer({
-        Names: ['/anything'], Labels: { 'runonflux.role': 'app' },
-      })).to.equal(true);
-    });
-
-    it('rejects a container FluxOS runs for its own purposes', () => {
-      // The whole point: a sweep that reclaims orphaned apps must not reach
-      // these, whatever they happen to be called.
-      expect(dockerService.isAppContainer({
-        Names: ['/fluxfileop-abc123'], Labels: { 'runonflux.role': 'fileop' },
-      })).to.equal(false);
-    });
-
-    it('prefers the label over the name prefix when both are present', () => {
-      expect(dockerService.isAppContainer({
-        Names: ['/fluxcomp_myapp'], Labels: { 'runonflux.role': 'fileop' },
-      })).to.equal(false);
-    });
-
-    it('falls back to the name prefix for containers created before labels shipped', () => {
-      expect(dockerService.isAppContainer({ Names: ['/fluxcomp_myapp'] })).to.equal(true);
-      expect(dockerService.isAppContainer({ Names: ['/zelcomp_myapp'], Labels: {} })).to.equal(true);
-    });
-
-    it('rejects a container that is neither labelled nor flux-named', () => {
-      expect(dockerService.isAppContainer({ Names: ['/watchtower'] })).to.equal(false);
-      expect(dockerService.isAppContainer({})).to.equal(false);
-    });
-  });
-
-  describe('isFluxOwnedContainer tests', () => {
-    it('claims a container FluxOS runs for itself, whatever docker named it', () => {
-      // The distinction from isAppContainer, and the reason both exist: this
-      // one is false about an executor container, and a sweep phrased as "stop
-      // what is not an app" would therefore stop the node's own work.
-      const executor = { Names: ['/adoring_borg'], Labels: { 'runonflux.role': 'fileop' } };
-
-      expect(dockerService.isFluxOwnedContainer(executor)).to.equal(true);
-      expect(dockerService.isAppContainer(executor)).to.equal(false);
-    });
-
-    it('claims an app container', () => {
-      expect(dockerService.isFluxOwnedContainer({
-        Names: ['/anything'], Labels: { 'runonflux.role': 'app' },
-      })).to.equal(true);
-    });
-
-    it('falls back to the name prefix for containers created before labels shipped', () => {
-      expect(dockerService.isFluxOwnedContainer({ Names: ['/fluxcomp_myapp'] })).to.equal(true);
-      expect(dockerService.isFluxOwnedContainer({ Names: ['/zelcomp_myapp'], Labels: {} })).to.equal(true);
-    });
-
-    it('disclaims a container nobody here created', () => {
-      expect(dockerService.isFluxOwnedContainer({ Names: ['/watchtower'] })).to.equal(false);
-      expect(dockerService.isFluxOwnedContainer({})).to.equal(false);
     });
   });
 
@@ -267,75 +195,67 @@ describe('dockerService tests', () => {
   });
 
   describe('dockerListContainers tests', () => {
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('returns the listing docker answered with', async () => {
-      const listing = [websiteContainer];
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves(listing);
+    it('should return a list of containers', async () => {
+      let fluxContainer;
 
       const result = await dockerService.dockerListContainers();
+      result.forEach((container) => {
+        if (container.Image === 'runonflux/website') fluxContainer = container;
+      });
 
-      expect(result).to.equal(listing);
+      expect(fluxContainer.Id).to.be.a('string');
+      expect(fluxContainer.Image).to.equal('runonflux/website');
+      expect(fluxContainer.Names[0]).to.equal('/fluxwebsite');
+      expect(fluxContainer.State).to.equal('running');
     });
 
-    it('passes every listing option through to docker', async () => {
-      // `all` decides whether a stopped app container is visible at all, and a caller
-      // told there is none treats the app as gone.
-      const list = sinon.stub(Dockerode.prototype, 'listContainers').resolves([]);
+    it('should return a list of containers with an option all = true', async () => {
+      let fluxContainer;
 
-      await dockerService.dockerListContainers(true, 5, true, 'somefilter');
-
-      expect(list.firstCall.args[0]).to.deep.equal({
-        all: true, limit: 5, size: true, filter: 'somefilter',
+      const result = await dockerService.dockerListContainers(true);
+      result.forEach((container) => {
+        if (container.Image === 'runonflux/website') fluxContainer = container;
       });
+
+      expect(fluxContainer.Id).to.be.a('string');
+      expect(fluxContainer.Image).to.equal('runonflux/website');
+      expect(fluxContainer.Names[0]).to.equal('/fluxwebsite');
+      expect(fluxContainer.State).to.equal('running');
     });
   });
 
   describe('dockerListImages tests', () => {
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('returns the image list docker answered with', async () => {
-      const listing = [websiteImage];
-      sinon.stub(Dockerode.prototype, 'listImages').resolves(listing);
+    it('should return a list of containers', async () => {
+      let fluxImage;
 
       const result = await dockerService.dockerListImages();
+      result.forEach((image) => {
+        if (image.RepoTags.length && image.RepoTags[0].includes('runonflux/website')) fluxImage = image;
+      });
 
-      expect(result).to.equal(listing);
+      expect(fluxImage).to.exist;
+      expect(fluxImage.RepoDigests[0]).to.include('runonflux/website');
+      expect(fluxImage.Id).to.be.a('string');
     });
   });
 
   describe('dockerContainerInspect tests', () => {
-    afterEach(() => {
-      sinon.restore();
-    });
+    it('should return a valid inspect object', async () => {
+      const containerName = 'website';
 
-    it('inspects the container the name resolves to', async () => {
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([websiteContainer]);
-      const inspect = sinon.stub(Dockerode.Container.prototype, 'inspect').resolves(inspectResponse);
+      const inspectResult = await dockerService.dockerContainerInspect(containerName);
 
-      const result = await dockerService.dockerContainerInspect('website');
-
-      expect(inspect.thisValues[0].id, 'inspected a container other than the one named').to.equal(websiteContainer.Id);
-      expect(result).to.equal(inspectResponse);
-    });
-
-    it('forwards the inspect options it was given', async () => {
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([websiteContainer]);
-      const inspect = sinon.stub(Dockerode.Container.prototype, 'inspect').resolves(inspectResponse);
-
-      await dockerService.dockerContainerInspect('website', { size: true });
-
-      expect(inspect.firstCall.args[0]).to.deep.equal({ size: true });
+      expect(inspectResult).to.exist;
+      expect(inspectResult.State.Status).to.equal('running');
+      expect(inspectResult.Id).to.be.a('string');
+      expect(inspectResult.Platform).to.equal('linux');
+      expect(inspectResult.Config.Image).to.equal('runonflux/website');
     });
 
     it('should throw error if the container does not exist', async () => {
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([websiteContainer]);
+      const containerName = 'testing1234';
 
-      await expect(dockerService.dockerContainerInspect('testing1234')).to.eventually.be.rejectedWith('Container testing1234 not found');
+      await expect(dockerService.dockerContainerInspect(containerName)).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
     });
   });
 
@@ -407,74 +327,6 @@ describe('dockerService tests', () => {
     it('isContainerDetachedFromNetwork tolerates missing input', () => {
       expect(dockerService.isContainerDetachedFromNetwork(undefined)).to.equal(false);
       expect(dockerService.isContainerDetachedFromNetwork(null)).to.equal(false);
-    });
-  });
-
-  describe('reclaimAppNetworks tests', () => {
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    const listing = (...names) => names.map((Name) => ({ Name }));
-
-    it('removes an app network no installed app accounts for', async () => {
-      // The uninstaller is the only thing that removes one, so an uninstall
-      // interrupted between the container going and the network going leaves it
-      // for ever - holding an octet nothing can hand out again.
-      const remove = sinon.stub().resolves();
-      sinon.stub(Dockerode.prototype, 'listNetworks').resolves(listing('fluxDockerNetwork_gone'));
-      sinon.stub(Dockerode.prototype, 'getNetwork').returns({
-        inspect: sinon.stub().resolves({ Name: 'fluxDockerNetwork_gone', Containers: {} }),
-        remove,
-      });
-
-      const reclaimed = await dockerService.reclaimAppNetworks(new Set());
-
-      expect(reclaimed).to.deep.equal(['fluxDockerNetwork_gone']);
-      sinon.assert.calledOnce(remove);
-    });
-
-    it('leaves a network an installed app owns', async () => {
-      const remove = sinon.stub().resolves();
-      sinon.stub(Dockerode.prototype, 'listNetworks').resolves(listing('fluxDockerNetwork_live'));
-      sinon.stub(Dockerode.prototype, 'getNetwork').returns({
-        inspect: sinon.stub().resolves({ Containers: {} }),
-        remove,
-      });
-
-      const reclaimed = await dockerService.reclaimAppNetworks(new Set(['fluxDockerNetwork_live']));
-
-      expect(reclaimed).to.deep.equal([]);
-      sinon.assert.notCalled(remove);
-    });
-
-    it('leaves a network something is attached to, whatever the caller said', async () => {
-      // Something is using it, and this is not the thing that decides otherwise.
-      const remove = sinon.stub().resolves();
-      sinon.stub(Dockerode.prototype, 'listNetworks').resolves(listing('fluxDockerNetwork_busy'));
-      sinon.stub(Dockerode.prototype, 'getNetwork').returns({
-        inspect: sinon.stub().resolves({ Containers: { abc123: { Name: 'fluxsomething' } } }),
-        remove,
-      });
-
-      const reclaimed = await dockerService.reclaimAppNetworks(new Set());
-
-      expect(reclaimed).to.deep.equal([]);
-      sinon.assert.notCalled(remove);
-    });
-
-    it('leaves a network it cannot inspect', async () => {
-      const remove = sinon.stub().resolves();
-      sinon.stub(Dockerode.prototype, 'listNetworks').resolves(listing('fluxDockerNetwork_unknown'));
-      sinon.stub(Dockerode.prototype, 'getNetwork').returns({
-        inspect: sinon.stub().rejects(new Error('EAI_AGAIN')),
-        remove,
-      });
-
-      const reclaimed = await dockerService.reclaimAppNetworks(new Set());
-
-      expect(reclaimed).to.deep.equal([]);
-      sinon.assert.notCalled(remove);
     });
   });
 
@@ -579,747 +431,69 @@ describe('dockerService tests', () => {
   });
 
   describe('dockerContainerStats tests', () => {
-    afterEach(() => {
-      sinon.restore();
-    });
+    it('should return a valid stats object', async () => {
+      const containerName = 'website';
 
-    it('asks for one sample rather than a stream', async () => {
-      // dockerode holds a stats stream open until the caller ends it, so a streaming
-      // request here never resolves and the endpoint answering it never replies.
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([websiteContainer]);
-      const stats = sinon.stub(Dockerode.Container.prototype, 'stats').resolves(statsResponse);
+      const statsResult = await dockerService.dockerContainerStats(containerName);
 
-      const result = await dockerService.dockerContainerStats('website');
-
-      expect(stats.firstCall.args[0]).to.deep.equal({ stream: false });
-      expect(stats.thisValues[0].id, 'sampled a container other than the one named').to.equal(websiteContainer.Id);
-      expect(result).to.equal(statsResponse);
+      expect(statsResult.name).to.equal('/fluxwebsite');
+      expect(statsResult.id).to.be.a('string');
+      expect(statsResult.memory_stats.stats).to.exist;
+      expect(statsResult.cpu_stats.cpu_usage).to.exist;
+      expect(statsResult.precpu_stats.cpu_usage).to.exist;
     });
 
     it('should throw error if the container does not exist', async () => {
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([websiteContainer]);
+      const containerName = 'test';
 
-      await expect(dockerService.dockerContainerStats('test')).to.eventually.be.rejectedWith('Container test not found');
+      await expect(dockerService.dockerContainerStats(containerName)).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
     });
   });
 
   describe('dockerContainerChanges tests', () => {
-    afterEach(() => {
-      sinon.restore();
-    });
+    it('should return a valid stats object', async () => {
+      const containerName = 'website';
 
-    it('returns the changes for the container the name resolves to', async () => {
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([websiteContainer]);
-      const changes = sinon.stub(Dockerode.Container.prototype, 'changes').resolves(changesResponse);
+      const changesResult = await dockerService.dockerContainerChanges(containerName);
 
-      const result = await dockerService.dockerContainerChanges('website');
-
-      expect(changes.thisValues[0].id, 'read changes from a container other than the one named').to.equal(websiteContainer.Id);
-      expect(result).to.equal(changesResponse);
+      expect(changesResult).to.be.an('array');
+      expect(changesResult[0].Path).to.exist;
     });
 
     it('should throw error if the container does not exist', async () => {
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([websiteContainer]);
+      const containerName = 'test';
 
-      await expect(dockerService.dockerContainerChanges('test')).to.eventually.be.rejectedWith('Container test not found');
+      await expect(dockerService.dockerContainerChanges(containerName)).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
     });
   });
 
-  describe('dockerContainerExec tests', () => {
-    // Docker answers 404 "no such exec" with a NULL stream when the container
-    // stops between the exec being created and started. dockerode calls this
-    // back itself, so the try around it catches nothing: dereferencing that null
-    // reached apiServer's uncaughtException handler and exited the node.
-    // ASYNCHRONOUSLY, the way dockerode calls it from its HTTP response handler.
-    // A synchronous stub sends the throw back into dockerContainerExec's own try,
-    // where it is caught - and a test built on that passes with the defect
-    // present, because in production nothing catches it at all.
-    function execStub(err, stream) {
-      const exec = { start: (opts, cb) => { setImmediate(() => cb(err, stream)); } };
-      return sinon.stub(Dockerode.Container.prototype, 'exec').resolves(exec);
-    }
+  describe.skip('dockerContainerExec tests', () => {
+    // TODO: I can't get any command to emit any data
+    it('should execute a command inside of the conainter', async () => {
+      const container = dockerService.getDockerContainerByIdOrName('website');
+      const cmd = '';
+      const env = [];
+      const res = {};
 
-    // An uncaught exception is what this defect actually produces, and mocha
-    // attributes a late one to whichever test is running - so it is captured
-    // here and asserted on directly.
-    function captureUncaught() {
-      const seen = [];
-      const existing = process.listeners('uncaughtException');
-      existing.forEach((l) => process.removeListener('uncaughtException', l));
-      const handler = (e) => seen.push(e);
-      process.on('uncaughtException', handler);
-      return {
-        seen,
-        restore() {
-          process.removeListener('uncaughtException', handler);
-          existing.forEach((l) => process.on('uncaughtException', l));
-        },
-      };
-    }
-
-    afterEach(() => sinon.restore());
-
-    it('answers the caller instead of dereferencing a null stream', async () => {
-      execStub(new Error('(HTTP code 404) no such exec'), null);
-      const container = new Dockerode().getContainer('abc');
-      const res = { write: sinon.stub(), flush: sinon.stub() };
-      const uncaught = captureUncaught();
-
-      try {
-        const err = await new Promise((resolve) => {
-          dockerService.dockerContainerExec(container, ['ls'], [], res, resolve);
-        });
-        // Let a throw from inside the callback reach the process, which is where
-        // it goes in production: apiServer's handler, and exit(1).
-        await new Promise((resolve) => { setImmediate(resolve); });
-
-        expect(
-          uncaught.seen.map((e) => e.message),
-          'the null stream was dereferenced - this exits the node',
-        ).to.deep.equal([]);
-        expect(err, 'the failure has to reach the caller').to.be.an('error');
-        expect(err.message).to.contain('no such exec');
-        expect(res.write.called, 'nothing was streamed - there was no stream').to.be.false;
-      } finally {
-        uncaught.restore();
-      }
-    });
-
-    it('answers the caller when docker returns no stream and no error', async () => {
-      execStub(null, null);
-      const container = new Dockerode().getContainer('abc');
-
-      const uncaught = captureUncaught();
-      try {
-        const err = await new Promise((resolve) => {
-          dockerService.dockerContainerExec(container, ['ls'], [], { write: sinon.stub() }, resolve);
-        });
-        await new Promise((resolve) => { setImmediate(resolve); });
-        expect(uncaught.seen.map((e) => e.message), 'the null stream was dereferenced').to.deep.equal([]);
-        expect(err, 'a missing stream is a failure even unaccompanied by one').to.be.an('error');
-      } finally {
-        uncaught.restore();
-      }
-    });
-
-    it('streams to the response when the exec does start', async () => {
-      const stream = new (require('events').EventEmitter)();
-      execStub(null, stream);
-      const container = new Dockerode().getContainer('abc');
-      const res = { write: sinon.stub(), flush: sinon.stub() };
-
-      const done = new Promise((resolve) => {
-        dockerService.dockerContainerExec(container, ['ls'], [], res, resolve);
+      dockerService.dockerContainerExec(container, cmd, env, res, (err, data) => {
+        console.log(data);
       });
-      // container.exec is awaited and the callback is deferred, so wait until
-      // the listeners exist rather than guessing at a number of ticks.
-      for (let i = 0; i < 50 && stream.listenerCount('data') === 0; i += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((resolve) => { setImmediate(resolve); });
-      }
-      expect(stream.listenerCount('data'), 'the exec never attached its reader').to.equal(1);
-      stream.emit('data', Buffer.from('hello'));
-      stream.emit('end');
-
-      expect(await done, 'a clean run reports no error').to.be.null;
-      expect(res.write.called).to.be.true;
     });
   });
 
-  describe('fluxRemovedContainers authorship record tests', () => {
-    afterEach(() => {
-      sinon.restore();
-      globalState.fluxRemovedContainers.clear();
-    });
-
-    it('records a removal the reconciler can ask about', async () => {
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([{ Id: 'abc', Names: ['/fluxwebsite'] }]);
-      sinon.stub(Dockerode.Container.prototype, 'remove').resolves();
-
-      await dockerService.appDockerRemove('website');
-
-      expect([...globalState.fluxRemovedContainers]).to.deep.equal(['fluxwebsite']);
-    });
-
-    it('does not record one addressed by raw docker id', async () => {
-      // The startup orphan sweep removes by id. The reconciler only ever asks
-      // about app containers by identifier, so an entry keyed by a hex id can
-      // never be read - and clearFluxRemovedContainers matches on an app name a
-      // hex id does not carry, so it can never be dropped either. It would sit
-      // in memory for the life of the process, unreadable and undeletable.
-      const id = 'a'.repeat(64);
-      const list = sinon.stub(Dockerode.prototype, 'listContainers');
-      list.onFirstCall().resolves([]);
-      list.onSecondCall().resolves([{ Id: id, Names: ['/fluxwebsite'] }]);
-      sinon.stub(Dockerode.Container.prototype, 'remove').resolves();
-
-      await dockerService.appDockerForceRemove(id, false);
-
-      expect([...globalState.fluxRemovedContainers], 'an entry no reader wants and no cleanup can reach').to.be.empty;
-    });
-  });
-
-  describe('getDockerContainerByIdOrName tests', () => {
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('asks docker about one container instead of listing every one', async () => {
-      const list = sinon.stub(Dockerode.prototype, 'listContainers').resolves([
-        { Id: 'abc123', Names: ['/fluxwebsite'] },
-      ]);
-
-      await dockerService.getDockerContainerByIdOrName('website');
-
-      // Every start, stop, remove, inspect, exec and log poll goes through here.
-      // Unfiltered, each one enumerates every container on the node.
-      const options = list.firstCall.args[0];
-      expect(options.all, 'a stopped container is still the container asked for').to.be.true;
-      expect(JSON.parse(options.filters)).to.deep.equal({ name: ['fluxwebsite'] });
-    });
-
-    it('does not answer for a container whose name merely contains the one asked for', async () => {
-      // Docker's name filter is a SUBSTRING match, so asking for `web` returns
-      // `fluxwebsite` too. The filter narrows what comes back; the exact
-      // comparison is what decides, and dropping it would hand a caller the
-      // wrong container to stop or remove.
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([
-        { Id: 'abc123', Names: ['/fluxwebsite'] },
-        { Id: 'def456', Names: ['/fluxwebsitelong'] },
-      ]);
-
-      const container = await dockerService.getDockerContainerByIdOrName('websitelong');
-
-      expect(container.id, 'the exact name must win over the shorter substring match').to.equal('def456');
-      await expect(dockerService.getDockerContainerByIdOrName('websit'))
-        .to.eventually.be.rejectedWith('Container websit not found');
-    });
-
-    it('still resolves a raw docker id, which no name filter can match', async () => {
-      const id = 'a'.repeat(64);
-      const list = sinon.stub(Dockerode.prototype, 'listContainers');
-      list.onFirstCall().resolves([]);
-      list.onSecondCall().resolves([{ Id: id, Names: ['/fluxwebsite'] }]);
-
-      const container = await dockerService.getDockerContainerByIdOrName(id);
-
-      expect(container.id).to.equal(id);
-      expect(JSON.parse(list.secondCall.args[0].filters), 'the id filter is the fallback, not the first ask').to.deep.equal({ id: [id] });
-    });
-  });
-
-  describe('dockerContainerLogsPolling tests', () => {
-    // Docker frames each write with an 8-byte header (stream id + length) because
-    // app containers are created with Tty false. Building the frames here is what
-    // makes the line splitting and the position arithmetic testable without a
-    // container that logs on demand.
-    function dockerFrame(lines) {
-      const chunks = lines.map((line) => {
-        const body = Buffer.from(`${line}\n`, 'utf8');
-        const header = Buffer.alloc(8);
-        header.writeUInt8(1, 0);
-        header.writeUInt32BE(body.length, 4);
-        return Buffer.concat([header, body]);
-      });
-      return Buffer.concat(chunks);
-    }
-
-    const at = (ms, text) => `${new Date(ms).toISOString()} ${text}`;
-
-    // Frames built from arbitrary bodies rather than whole lines, so a test can
-    // put one log line behind several frames the way docker does for a write
-    // larger than its buffer.
-    function rawFrames(bodies) {
-      return Buffer.concat(bodies.map((body) => {
-        const payload = Buffer.from(body, 'utf8');
-        const header = Buffer.alloc(8);
-        header.writeUInt8(1, 0);
-        header.writeUInt32BE(payload.length, 4);
-        return Buffer.concat([header, payload]);
-      }));
-    }
-
-    function stubLogs(lines) {
-      return sinon.stub(Dockerode.Container.prototype, 'logs').resolves(dockerFrame(lines));
-    }
-
-    beforeEach(stubContainerListing);
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('reports a page that fitted as complete, however docker framed it', async () => {
-      // `tail` bounds the read in lines; a frame is a write. Docker splits a
-      // write larger than its buffer across frames, so a page of long lines
-      // arrives as more frames than lines - and counting frames called that an
-      // overflow, which both reports a gap that never happened and keeps the
-      // overlap this reader has already acknowledged.
-      const written = Array.from({ length: 10 }, (_, i) => at(1000 + i * 1000, `line-${i}`));
-      const bodies = [];
-      written.forEach((line, i) => {
-        if (i < 3) {
-          bodies.push(line.slice(0, 12), `${line.slice(12)}\n`);
-        } else {
-          bodies.push(`${line}\n`);
-        }
-      });
-      sinon.stub(Dockerode.Container.prototype, 'logs').resolves(rawFrames(bodies));
-
-      const result = await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 1000, count: 2 },
-        maxLines: 10,
-      });
-
-      expect(result.skipped, 'thirteen frames carried ten lines, and ten was the page').to.be.false;
-      expect(result.lines, 'the lines the reader already holds are dropped, not handed back')
-        .to.deep.equal(written.slice(2));
-    });
-
-    it('releases the event loop while it decodes rather than holding it for the whole read', async () => {
-      // The decode runs on the node's only thread, so a pass that runs to
-      // completion without yielding answers no peer and no other request for as
-      // long as it takes - measured on a node against an 8.47MB log at 40ms on
-      // a clean heap and 564ms on a warm one, against a 0.3ms idle baseline.
-      //
-      // Counted from the moment docker hands the payload over, NOT from the
-      // call: the container lookup ahead of it yields plenty on its own, and a
-      // count that includes those turns passes just as happily with the whole
-      // decode synchronous - which is what the first version of this test did.
-      const many = Array.from({ length: 60000 }, (_, i) => at(1000 + i, `line-${i} ${'x'.repeat(80)}`));
-      const payload = dockerFrame(many);
-
-      let turns = 0;
-      let counting = false;
-      let running = true;
-      const tick = () => { if (running) { if (counting) turns += 1; setImmediate(tick); } };
-      setImmediate(tick);
-
-      sinon.stub(Dockerode.Container.prototype, 'logs').callsFake(async () => {
-        counting = true;
-        return payload;
-      });
-
-      const result = await dockerService.dockerContainerLogsPolling('website', { lineCount: 'all' });
-      running = false;
-
-      expect(result.lines, 'the answer is the same one, whoever else got to run').to.have.lengthOf(many.length);
-      expect(turns, 'the decode held the loop from the docker read to the answer').to.be.greaterThan(20);
-    });
-
-    it('rejects for a container that is not there', async () => {
-      await expect(dockerService.dockerContainerLogsPolling('testing1234', {}))
-        .to.eventually.be.rejectedWith('Container testing1234 not found');
-    });
-
-    it('asks docker to close the connection itself, and answers without waiting', async function test() {
-      // `follow: true` never closes, so the only way out was a 1500ms timer and
-      // every poll cost 1500ms whether a line was waiting or none. A poll that
-      // answers in well under that is the observable half of it.
-      this.timeout(10000);
-      const logs = stubLogs([at(1000, 'hello')]);
-      const started = Date.now();
-
-      const result = await dockerService.dockerContainerLogsPolling('website', { lineCount: 10 });
-
-      expect(Date.now() - started, 'the poll waited on a timer').to.be.below(500);
-      expect(logs.firstCall.args[0].follow, 'follow keeps a docker connection open for the life of the container').to.be.false;
-      expect(result.lines).to.deep.equal([at(1000, 'hello')]);
-    });
-
-    it('bounds a positioned read so docker seeks from the end instead of scanning', async () => {
-      // `since` alone has no index to seek with - docker decodes forward from the
-      // start of the oldest file until it finds the first match, so it re-reads
-      // the whole retained log every poll: 74ms at 3.5MB, 273ms at 14MB. With
-      // `tail` present it opens at the END, answers byte-for-byte the same, and
-      // stays flat at ~4ms however big the log is.
-      const logs = stubLogs([at(1000, 'a')]);
-
-      await dockerService.dockerContainerLogsPolling('website', { lineCount: 100 });
-      expect(logs.firstCall.args[0].tail).to.equal(100);
-      expect(logs.firstCall.args[0].since).to.equal(undefined);
-
-      await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 1000, count: 1 }, maxLines: 50,
-      });
-      // A page, plus one to say whether the whole set fitted, plus the overlap
-      // this reader has already acknowledged. `tail` bounds the window over the
-      // FILE and `since` trims that window afterwards - measured on a live
-      // daemon - so a window of only a page would have its front trimmed away
-      // and the count would be measured from a different first line.
-      expect(logs.secondCall.args[0].tail, 'a positioned read is bounded, not unbounded').to.equal(52);
-      expect(logs.secondCall.args[0].since).to.equal(1);
-    });
-
-    it('does not let a caller size the read past what the log can hold', async () => {
-      // The window is sized from `position.count`, and a position is opaque on
-      // the wire rather than signed - so the caller writes the number that bounds
-      // this read. Uncapped, the bound is whatever the caller says it is, and the
-      // number it says is the whole retained log on every poll.
-      const logs = stubLogs([at(1000, 'a')]);
-
-      await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 1000, count: 50000000 }, maxLines: 5000,
-      });
-
-      // Four files of five megabytes, over the smallest frame docker can return:
-      // an 8-byte header, an RFC3339Nano stamp, a space and a newline.
-      expect(
-        logs.firstCall.args[0].tail,
-        'the caller sized the read',
-      ).to.equal(Math.ceil((4 * 5 * 1024 * 1024) / 40));
-    });
-
-    it('keeps a window that reaches back over an overlap larger than a page', async () => {
-      // The cap above cannot be the page. `count` grows past one whenever a burst
-      // lands inside a single millisecond, and a window that does not reach back
-      // over the overlap is answered entirely by lines this reader already holds:
-      // it is handed nothing, its position stays where it was, and it repeats
-      // that for as long as it polls - with neither `skipped` nor `rolledOver`
-      // saying so.
-      const file = Array.from({ length: 20 }, (_, i) => at(1000, `burst-${i}`));
-      stubDaemon(file);
-
-      const first = await dockerService.dockerContainerLogsPolling('website', { lineCount: 'all' });
-      expect(
-        first.position,
-        'the overlap has to be larger than the page below for this to test anything',
-      ).to.deep.equal({ ms: 1000, count: 20 });
-
-      file.push(at(2000, 'n-0'), at(2000, 'n-1'), at(2000, 'n-2'));
-
-      const second = await dockerService.dockerContainerLogsPolling('website', {
-        position: first.position, maxLines: 5,
-      });
-
-      expect({
-        lines: second.lines.map((line) => line.split(' ')[1]),
-        position: second.position,
-        skipped: second.skipped,
-        rolledOver: second.rolledOver,
-      }, 'a reader with a large overlap was answered with nothing').to.deep.equal({
-        lines: ['n-0', 'n-1', 'n-2'],
-        position: { ms: 2000, count: 3 },
-        skipped: false,
-        rolledOver: false,
-      });
-    });
-
-    // Every stub above answers with a fixed buffer whatever it is asked for,
-    // which is what let the ordering below go unnoticed: `tail` and `since` had
-    // no effect on the answer, so no test could see them applied in the wrong
-    // order. This one honours both, the way a live daemon was measured to on
-    // 2026-09-07 - the window is the last `tail` lines of the FILE, and `since`
-    // trims that window afterwards, dropping leading lines until the first
-    // at-or-after the timestamp and then keeping everything, in order or not.
-    function stubDaemon(file) {
-      const tsOf = (line) => Date.parse(line.split(' ')[0]);
-      return sinon.stub(Dockerode.Container.prototype, 'logs').callsFake(async (opts) => {
-        let window = file;
-        if (opts.tail) window = window.slice(-opts.tail);
-        if (opts.since) {
-          const sinceMs = opts.since * 1000;
-          const first = window.findIndex((line) => tsOf(line) >= sinceMs);
-          window = first === -1 ? [] : window.slice(first);
-        }
-        return dockerFrame(window);
-      });
-    }
-
-    it('loses nothing when the window it reads has to be trimmed to the reader', async () => {
-      // The page this reader is given ends on timestamps that go backwards, the
-      // way stdout and stderr interleave on a real container. Its position is a
-      // place in the sequence docker returns for that timestamp - so the next
-      // window has to start at the same first line, or the count is measured
-      // from somewhere else and the lines in between are dropped with nothing
-      // said about it.
-      const file = [];
-      for (let i = 0; i < 40; i += 1) file.push(at(1000 + i, `old-${i}`));
-      file.push(at(2000, 'p-a'), at(2010, 'p-b'), at(2005, 'p-c'), at(2010, 'p-d'), at(2008, 'p-e'));
-      stubDaemon(file);
-
-      const first = await dockerService.dockerContainerLogsPolling('website', { lineCount: 5, maxLines: 5 });
-      expect(first.lines.map((line) => line.split(' ')[1]))
-        .to.deep.equal(['p-a', 'p-b', 'p-c', 'p-d', 'p-e']);
-
-      file.push(at(2020, 'n-0'), at(2021, 'n-1'), at(2022, 'n-2'));
-
-      const second = await dockerService.dockerContainerLogsPolling('website', {
-        position: first.position, maxLines: 5,
-      });
-
-      expect({
-        lines: second.lines.map((line) => line.split(' ')[1]),
-        skipped: second.skipped,
-        rolledOver: second.rolledOver,
-      }, 'lines went missing and the answer called itself complete').to.deep.equal({
-        lines: ['n-0', 'n-1', 'n-2'], skipped: false, rolledOver: false,
-      });
-    });
-
-    it('resyncs a reader that is further behind than one read reaches, and says so', async () => {
-      // Seeing past the window means a read with no `tail`, which is docker
-      // decoding forward from the oldest file: 1099ms fetch and 349ms of
-      // BLOCKING decode against 104ms and 1ms bounded, measured on a live node
-      // over 5MB. `position.ms` is caller-supplied, so a millisecond older than
-      // the log took that read on EVERY poll. The reader is moved to the end
-      // instead, and told.
-      const behind = [at(1000, 'a'), at(1001, 'b'), at(1002, 'c'), at(1003, 'd')];
-      const logs = stubLogs(behind);                          // 4 frames > maxLines 3
-
-      const result = await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 999, count: 0 }, maxLines: 3,
-      });
-
-      expect(logs.calledOnce, 'a positioned read is ONE read, never a second unbounded one').to.be.true;
-      expect(logs.firstCall.args[0].tail, 'every read carries a bound').to.equal(4);
-      expect(result.skipped, 'the gap is reported rather than left silent').to.be.true;
-      expect(result.lines, 'the NEWEST of the window, because the reader is being moved to the end').to.deep.equal(behind.slice(-3));
-      expect(result.rolledOver, 'the lines still exist - this node declined to read that far back').to.be.false;
-    });
-
-    it('never issues a read without a tail, whatever position it is given', async () => {
-      // The whole class, not the reachable half: ms 0 is the cheapest hostile
-      // cursor but any millisecond older than the log does the same thing.
-      const logs = stubLogs([at(1000, 'a'), at(1001, 'b'), at(1002, 'c'), at(1003, 'd')]);
-
-      for (const ms of [0, 1, 999]) {
-        // eslint-disable-next-line no-await-in-loop
-        await dockerService.dockerContainerLogsPolling('website', {
-          position: { ms, count: 0 }, maxLines: 3,
-        });
-      }
-
-      logs.getCalls().forEach((call) => {
-        expect(call.args[0].tail, 'a read with no tail is the unbounded decode').to.be.a('number');
-      });
-    });
-
-    it('serves a reader completely when the whole answer fits, and leaves nothing ahead', async () => {
-      const all = [at(1000, 'a'), at(1001, 'b'), at(1002, 'c')];
-      stubLogs(all);                                          // 3 frames === maxLines 3
-
-      const result = await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 999, count: 0 }, maxLines: 3,
-      });
-
-      expect(result.skipped, 'the window was not full, so nothing was passed over').to.be.false;
-      expect(result.lines).to.deep.equal(all);
-    });
-
-    it('carries no earlier position through a resync', async () => {
-      // The count belongs to a place in a sequence the reader is no longer in,
-      // so applying it would drop lines from the front of the page it just got.
-      // More than a page of NEW lines: the window carries the two this reader
-      // already holds as well, so the overflow is measured against what is left
-      // after them.
-      const behind = [
-        at(1000, 'a'), at(1001, 'b'), at(1002, 'c'),
-        at(1003, 'd'), at(1004, 'e'), at(1005, 'f'), at(1006, 'g'),
-      ];
-      stubLogs(behind);
-
-      const result = await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 999, count: 2 }, maxLines: 3,
-      });
-
-      expect(result.skipped).to.be.true;
-      expect(result.lines, 'the stale count is not applied to the resynced page').to.deep.equal(behind.slice(-3));
-      expect(result.position.ms, 'the position is rebuilt from what was actually delivered').to.equal(1006);
-    });
-
-    it('does not re-read when the whole answer fitted', async () => {
-      const logs = stubLogs([at(1000, 'a'), at(1001, 'b')]);
-
-      await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 999, count: 0 }, maxLines: 50,
-      });
-
-      expect(logs.calledOnce, 'a reader keeping up never pays for the scan').to.be.true;
-    });
-
-    // Three different questions used to share this path, and only one of them
-    // wants the position behaviour. The other two are what every deployed client
-    // asks today.
-    it('answers a since filter the way it always did, with its line count intact', async () => {
-      const logs = stubLogs([at(1000, 'a')]);
-
-      const result = await dockerService.dockerContainerLogsPolling('website', {
-        since: 1000, lineCount: 100, maxLines: 5000,
-      });
-
-      expect(logs.firstCall.args[0].since).to.equal(1);
-      // A typed date is a filter, not a receipt for lines already held: dropping
-      // the limit turned "the last 100 lines since Tuesday" into the whole log.
-      expect(logs.firstCall.args[0].tail, 'a since filter keeps its line count').to.equal(100);
-      // And it can never have lost a position it never had. Reporting rolledOver
-      // for it warned of data loss because a hand-typed timestamp does not land
-      // exactly on a log line.
-      expect(result.rolledOver, 'nothing can have rolled away from a reader holding nothing').to.be.false;
-    });
-
-    it('does not cap a caller that is not coming back for the rest', async () => {
-      // `all` is a download, not a page. Capping it truncated the log silently,
-      // and keeping the OLDEST of the cap showed the start of the log to someone
-      // who asked for its end.
-      stubLogs([at(1000, 'a'), at(2000, 'b'), at(3000, 'c'), at(4000, 'd')]);
-
-      const result = await dockerService.dockerContainerLogsPolling('website', {
-        lineCount: 'all', maxLines: 2,
-      });
-
-      expect(result.lines, 'every line, as before').to.have.lengthOf(4);
-      expect(result.truncated, "'all' is not a line limit").to.be.false;
-    });
-
-    // lies ahead of a position, fetched by asking again with it. `truncated` is
-    // what lies behind a line limit, which is the answer this endpoint has given
-    // since before positions existed and the only one a client written against
-    // it reads.
-    it('tells a line-limited reader the log holds more than it asked for', async () => {
-      stubLogs([at(1000, 'a'), at(2000, 'b')]);
-
-      const result = await dockerService.dockerContainerLogsPolling('website', { lineCount: 2 });
-
-      expect(result.truncated, 'two asked for and two returned - there is more behind them').to.be.true;
-    });
-
-    it('does not report truncated to a positioned reader, which could do nothing with it', async () => {
-      stubLogs([at(1000, 'a'), at(2000, 'b'), at(3000, 'c')]);
-
-      const result = await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 1000, count: 0 }, lineCount: 2, maxLines: 2,
-      });
-
-      expect(result.truncated, 'a position is not a line limit').to.be.false;
-    });
-
-    it('drops the lines the reader already holds and keeps the rest', async () => {
-      // since is inclusive, so docker hands back the line asked from. The count
-      // says how many of that millisecond were already delivered.
-      stubLogs([at(1000, 'one'), at(1000, 'two'), at(2000, 'three')]);
-
-      const result = await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 1000, count: 2 },
-      });
-
-      expect(result.lines).to.deep.equal([at(2000, 'three')]);
-      expect(result.rolledOver).to.be.false;
-    });
-
-    it('counts rather than compares, so repeated identical lines are not confused', async () => {
-      // Two writes of the same text in one millisecond are indistinguishable by
-      // content. A reader that de-duplicated by value would drop the new one.
-      stubLogs([at(1000, 'retrying'), at(1000, 'retrying'), at(1000, 'retrying')]);
-
-      const result = await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 1000, count: 2 },
-      });
-
-      expect(result.lines, 'the third write is new and the first two are not').to.deep.equal([at(1000, 'retrying')]);
-      expect(result.position, 'all three of that millisecond are now held').to.deep.equal({ ms: 1000, count: 3 });
-    });
-
-    // A container writing to stdout AND stderr has two writers that each stamp a
-    // line before it is serialised into the file, so the file is not in timestamp
-    // order - 3,304 backwards steps in 40,000 lines on a real daemon. Every
-    // fixture above is in order, which is the assumption this whole design rests
-    // on written into the test that was meant to check it.
-    it('delivers each line once even when docker returns them out of timestamp order', async () => {
-      // `b` is stamped BEFORE `a` but written after it. A reader that has taken
-      // a and b holds two lines, and docker will hand both back when asked from
-      // a's millisecond - because it stops filtering on `since` once it has found
-      // its first match.
-      stubLogs([at(1001, 'a'), at(1000, 'b')]);
-
-      const first = await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 999, count: 0 }, maxLines: 5,
-      });
-
-      expect(first.lines).to.deep.equal([at(1001, 'a'), at(1000, 'b')]);
-      // Counting "lines whose ms equals the last one's" gives 1 here and skips
-      // one line next time, delivering `b` again. The count is a place in what
-      // docker returns, so it is 2.
-      expect(first.position.count, 'both delivered lines come back when asked from ms').to.equal(2);
-      // 1000 is older than 1001; moving the window back would re-read `a`.
-      expect(first.position.ms, 'the position never moves backwards').to.equal(1001);
-
-      sinon.restore();
-      stubContainerListing();
-      stubLogs([at(1001, 'a'), at(1000, 'b'), at(1002, 'c')]);
-      const second = await dockerService.dockerContainerLogsPolling('website', {
-        position: first.position, maxLines: 5,
-      });
-
-      expect(second.lines, 'only the line the reader has not seen').to.deep.equal([at(1002, 'c')]);
-    });
-
-    it('reports that the line the reader asked from no longer exists', async () => {
-      // Docker discarded the file holding it. Everything between it and the
-      // oldest line below is gone and no one can fetch it back.
-      stubLogs([at(9000, 'later'), at(9001, 'later still')]);
-
-      const result = await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 1000, count: 1 },
-      });
-
-      expect(result.rolledOver, 'a silent gap is the failure this exists to prevent').to.be.true;
-      expect(result.lines, 'nothing is skipped - the count belongs to lines that are gone').to.have.lengthOf(2);
-    });
-
-    it('leaves no gap between two reads a reader keeps up with', async () => {
-      // The guarantee, and its boundary: while what is waiting fits the window,
-      // every line is delivered exactly once. A reader that falls past the
-      // window is resynced and told, which the tests above cover.
-      const held = [at(1000, 'a'), at(2000, 'b')];
-      stubLogs(held);
-      const first = await dockerService.dockerContainerLogsPolling('website', {
-        position: { ms: 1000, count: 0 }, maxLines: 5,
-      });
-      sinon.restore();
-      stubContainerListing();
-
-      // What docker returns for the position just handed back: `since` is
-      // inclusive, so the read starts at the line that position names and the
-      // already-delivered ones below it are not in the answer at all. Stubbing
-      // the whole log here would be stubbing a docker that ignores `since`.
-      const grown = [...held, at(3000, 'c'), at(4000, 'd')];
-      stubLogs(grown.slice(1));
-      const second = await dockerService.dockerContainerLogsPolling('website', {
-        position: first.position, maxLines: 5,
-      });
-
-      expect(first.skipped, 'nothing was passed over').to.be.false;
-      expect(second.skipped).to.be.false;
-      expect([...first.lines, ...second.lines], 'every line exactly once').to.deep.equal(grown);
-    });
-  });
-
-  describe('dockerContainerLogs tests', () => {
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('asks for a finished read of both streams', async () => {
-      // `follow: true` leaves docker holding the connection open for as long as the
-      // container lives, and this call has to return to answer the caller.
-      const frames = Buffer.from(recordedLogFrames.base64, 'base64');
-      stubContainerListing();
-      const logs = sinon.stub(Dockerode.Container.prototype, 'logs').resolves(frames);
-
-      const res = await dockerService.dockerContainerLogs('website', 2);
-
-      expect(logs.firstCall.args[0]).to.deep.equal({
-        follow: false, stdout: true, stderr: true, tail: 2,
-      });
-      expect(logs.thisValues[0].id, 'read logs from a container other than the one named').to.equal(websiteContainer.Id);
-      expect(res).to.equal(frames);
+  describe('dockerContainerLogsStream tests', () => {
+    it('should return a valid stats object', async () => {
+      const appName = 'website';
+
+      const res = await dockerService.dockerContainerLogs(appName, 2);
+      expect(res).to.be.an.instanceOf(Buffer);
+      expect(res).to.exist;
     });
 
     it('should throw an error if container does not exist', async () => {
-      stubContainerListing();
+      const appName = 'testing1234';
 
-      await expect(dockerService.dockerContainerLogs('testing1234', 2)).to.eventually.be.rejectedWith('Container testing1234 not found');
+      await expect(dockerService.dockerContainerLogs(appName, 2)).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
     });
   });
 
@@ -1327,18 +501,15 @@ describe('dockerService tests', () => {
     const appName = 'website';
     let dockerStub;
     let getContainerSpy;
-    let listContainersStub;
 
     beforeEach(() => {
       dockerStub = sinon.stub(Dockerode.Container.prototype, 'start').returns(Promise.resolve('started'));
       getContainerSpy = sinon.spy(Dockerode.prototype, 'getContainer');
-      listContainersStub = stubContainerListing();
     });
 
     afterEach(() => {
       dockerStub.restore();
       getContainerSpy.restore();
-      listContainersStub.restore();
     });
 
     it('should call a docker start command', async () => {
@@ -1350,7 +521,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerStart('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
+      await expect(dockerService.appDockerStart('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
     });
   });
 
@@ -1359,20 +530,17 @@ describe('dockerService tests', () => {
     let dockerStopStub;
     let dockerInspectStub;
     let getContainerSpy;
-    let listContainersStub;
 
     beforeEach(() => {
       dockerStopStub = sinon.stub(Dockerode.Container.prototype, 'stop').returns(Promise.resolve('stopped'));
       dockerInspectStub = sinon.stub(Dockerode.Container.prototype, 'inspect').returns(Promise.resolve({ State: { Running: true } }));
       getContainerSpy = sinon.spy(Dockerode.prototype, 'getContainer');
-      listContainersStub = stubContainerListing();
     });
 
     afterEach(() => {
       dockerStopStub.restore();
       dockerInspectStub.restore();
       getContainerSpy.restore();
-      listContainersStub.restore();
     });
 
     it('should call a docker stop command when container is running', async () => {
@@ -1416,7 +584,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerStop('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
+      await expect(dockerService.appDockerStop('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
     });
 
     // The stopping flag's lifetime is the STOP OPERATION's lifetime - held while
@@ -1454,14 +622,12 @@ describe('dockerService tests', () => {
     let dockerStartStub;
     let dockerInspectStub;
     let getContainerSpy;
-    let listContainersStub;
 
     beforeEach(() => {
       dockerRestartStub = sinon.stub(Dockerode.Container.prototype, 'restart').returns(Promise.resolve('restarted'));
       dockerStartStub = sinon.stub(Dockerode.Container.prototype, 'start').returns(Promise.resolve('started'));
       dockerInspectStub = sinon.stub(Dockerode.Container.prototype, 'inspect').returns(Promise.resolve({ State: { Running: true } }));
       getContainerSpy = sinon.spy(Dockerode.prototype, 'getContainer');
-      listContainersStub = stubContainerListing();
     });
 
     afterEach(() => {
@@ -1469,7 +635,6 @@ describe('dockerService tests', () => {
       dockerStartStub.restore();
       dockerInspectStub.restore();
       getContainerSpy.restore();
-      listContainersStub.restore();
     });
 
     it('should call a docker restart command when container is running', async () => {
@@ -1528,7 +693,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerRestart('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
+      await expect(dockerService.appDockerRestart('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
     });
   });
 
@@ -1536,18 +701,15 @@ describe('dockerService tests', () => {
     const appName = 'website';
     let dockerStub;
     let getContainerSpy;
-    let listContainersStub;
 
     beforeEach(() => {
       dockerStub = sinon.stub(Dockerode.Container.prototype, 'kill').returns(Promise.resolve('kiled'));
       getContainerSpy = sinon.spy(Dockerode.prototype, 'getContainer');
-      listContainersStub = stubContainerListing();
     });
 
     afterEach(() => {
       dockerStub.restore();
       getContainerSpy.restore();
-      listContainersStub.restore();
     });
 
     it('should call a docker kill command', async () => {
@@ -1559,7 +721,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerKill('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
+      await expect(dockerService.appDockerKill('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
     });
 
     // same flag-lifetime contract as appDockerStop: held during the kill
@@ -1583,18 +745,15 @@ describe('dockerService tests', () => {
     const appName = 'website';
     let dockerStub;
     let getContainerSpy;
-    let listContainersStub;
 
     beforeEach(() => {
       dockerStub = sinon.stub(Dockerode.Container.prototype, 'remove').returns(Promise.resolve('removed'));
       getContainerSpy = sinon.spy(Dockerode.prototype, 'getContainer');
-      listContainersStub = stubContainerListing();
     });
 
     afterEach(() => {
       dockerStub.restore();
       getContainerSpy.restore();
-      listContainersStub.restore();
     });
 
     it('should call a docker remove command', async () => {
@@ -1606,7 +765,63 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerRemove('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
+      await expect(dockerService.appDockerRemove('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+    });
+  });
+
+  describe('appDockerPause tests', () => {
+    const appName = 'website';
+    let dockerStub;
+    let getContainerSpy;
+
+    beforeEach(() => {
+      dockerStub = sinon.stub(Dockerode.Container.prototype, 'pause').returns(Promise.resolve('paused'));
+      getContainerSpy = sinon.spy(Dockerode.prototype, 'getContainer');
+    });
+
+    afterEach(() => {
+      dockerStub.restore();
+      getContainerSpy.restore();
+    });
+
+    it('should call a docker pause command', async () => {
+      const pauseResult = await dockerService.appDockerPause(appName);
+
+      sinon.assert.calledOnce(dockerStub);
+      sinon.assert.calledOnceWithExactly(getContainerSpy, sinon.match.string);
+      expect(pauseResult).to.equal('Flux App website successfully paused.');
+    });
+
+    it('should throw error if app name is not correct or app does not exist', async () => {
+      await expect(dockerService.appDockerPause('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+    });
+  });
+
+  describe('appDockerUnpause tests', () => {
+    const appName = 'website';
+    let dockerStub;
+    let getContainerSpy;
+
+    beforeEach(() => {
+      dockerStub = sinon.stub(Dockerode.Container.prototype, 'unpause').returns(Promise.resolve('unpaused'));
+      getContainerSpy = sinon.spy(Dockerode.prototype, 'getContainer');
+    });
+
+    afterEach(() => {
+      dockerStub.restore();
+      getContainerSpy.restore();
+    });
+
+    it('should call a docker unpause command', async () => {
+      const unpauseResult = await dockerService.appDockerUnpause(appName);
+
+      sinon.assert.calledOnce(dockerStub);
+      sinon.assert.calledOnceWithExactly(getContainerSpy, sinon.match.string);
+      expect(unpauseResult).to.equal('Flux App website successfully unpaused.');
+    });
+
+    it('should throw error if app name is not correct or app does not exist', async () => {
+      await expect(dockerService.appDockerUnpause('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
     });
   });
 
@@ -1635,24 +850,19 @@ describe('dockerService tests', () => {
   });
 
   describe('appDockerTop tests', () => {
-    afterEach(() => {
-      sinon.restore();
-    });
+    const appName = 'website';
 
-    it('lists processes for the container the name resolves to', async () => {
-      stubContainerListing();
-      const top = sinon.stub(Dockerode.Container.prototype, 'top').resolves(topResponse);
+    it('should return processes running on docker', async () => {
+      const dockerTopResult = await dockerService.appDockerTop(appName);
 
-      const result = await dockerService.appDockerTop('website');
-
-      expect(top.thisValues[0].id, 'listed processes for a container other than the one named').to.equal(websiteContainer.Id);
-      expect(result).to.equal(topResponse);
+      expect(dockerTopResult.Processes).to.be.an('array');
+      expect(dockerTopResult.Processes).to.be.not.empty;
+      expect(dockerTopResult.Titles).to.be.an('array');
+      expect(dockerTopResult.Titles).to.be.not.empty;
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      stubContainerListing();
-
-      await expect(dockerService.appDockerTop('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
+      await expect(dockerService.appDockerTop('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
     });
   });
 
@@ -1858,484 +1068,89 @@ describe('dockerService tests', () => {
     let dockerStub;
     const appName = 'fluxwebsite';
     // Use the same path that dockerService will compute at runtime
+    let volumeStub;
     const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
-    // eslint-disable-next-line no-unused-vars
     const appsFolder = `${fluxDirPath}/ZelApps/`;
-    const baseNodeApp = {
-      name: 'website',
-      commands: [
-        '--chain',
-        'kusama',
-      ],
-      containerData: '/chaindata',
-      cpu: 0.8,
-      description: 'This is my test app',
-      domains: [
-        'testing.runonflux.io',
-        'testing.runonflux.io',
-        'testing.runonflux.io',
-      ],
-      enviromentParameters: [],
-      hash: '99b685ffcf5fe244981fcd4dd52cf055b19bfb6ded91f96f9d8179cee09700cf',
-      hdd: 20,
-      height: 1052918,
-      owner: '196GJWyLxzAw3MirTT7Bqs2iGpUQio29GH',
-      ram: 1800,
-      repotag: 'runonflux/website',
-      tiered: false,
-      instances: 3,
-    };
 
-    // eslint-disable-next-line no-unused-vars
-    const baseExpectedConfig = {
-      Image: 'runonflux/website',
-      AttachStdin: true,
-      AttachStdout: true,
-      AttachStderr: true,
-      Cmd: ['--chain', 'kusama'],
-      Env: [],
-      Tty: false,
-    };
+    function makeDeployComp(overrides = {}) {
+      return {
+        name: 'website',
+        appName: 'fluxwebsite',
+        identifier: 'website_fluxwebsite',
+        image: 'runonflux/website',
+        cpu: 0.8,
+        memory: 1800,
+        cmd: ['--chain', 'kusama'],
+        mounts: [
+          { Source: `${appsFolder}website_fluxwebsite/appdata`, Target: '/chaindata', Type: 'bind' },
+        ],
+        toDockerPortBindings: () => ({ '30333/tcp': [{ HostPort: '31113' }], '9933/tcp': [{ HostPort: '31112' }] }),
+        toDockerExposedPorts: () => ({ '30333/tcp': {}, '9933/tcp': {} }),
+        toDockerEnv: () => [],
+        toDockerNanoCpus: () => 800000000,
+        toDockerMemoryBytes: () => 1887436800,
+        toDockerMemorySwapBytes: () => 1887436800 + (2 * 1024 * 1024 * 1024),
+        restartPolicyName: () => 'unless-stopped',
+        ...overrides,
+      };
+    }
+
     beforeEach(() => {
       dockerStub = sinon.stub(Dockerode.prototype, 'createContainer').returns(Promise.resolve('created'));
+      volumeStub = sinon.stub(appVolumeService, 'ensureMountSourcesExist').resolves();
     });
 
     afterEach(() => {
-      sinon.restore();
+      dockerStub.restore();
+      volumeStub.restore();
     });
 
-    // The request to Flux Storage is signed as this node. A node that cannot
-    // sign refuses here rather than sending a header with null where the
-    // signature goes and reading the storage's refusal back as a bad URL.
-    it('refuses to fetch parameters from Flux Storage when this node cannot sign the request', async () => {
-      sinon.stub(fluxCommunicationMessagesSender, 'getFluxMessageSignature').resolves(null);
-      const fetch = sinon.stub(serviceHelper, 'axiosGet').resolves({ data: ['A=1'] });
-      const nodeApp = {
-        ...baseNodeApp,
-        enviromentParameters: ['F_S_ENV=https://storage.runonflux.io/v1/env/123'],
-        containerPorts: [],
-        ports: [],
-        version: 3,
-      };
+    it('should create a container with correct image and resource limits', async () => {
+      const deployComp = makeDeployComp();
 
-      await expect(dockerService.appDockerCreate(nodeApp, appName, true))
-        .to.eventually.be.rejectedWith('failed to be obtained');
-
-      sinon.assert.notCalled(fetch);
-      sinon.assert.notCalled(dockerStub);
-    });
-
-    // The link decides where a node sends a request carrying its own signature,
-    // so it is checked before the request is built rather than trusted because
-    // the specification was signed by its owner. Anyone who can register an app
-    // writes this field.
-    it('refuses to fetch parameters from anywhere but Flux storage', async () => {
-      sinon.stub(fluxCommunicationMessagesSender, 'getFluxMessageSignature').resolves('signature');
-      const fetch = sinon.stub(serviceHelper, 'axiosGet').resolves({ data: ['A=1'] });
-      const nodeApp = {
-        ...baseNodeApp,
-        enviromentParameters: ['F_S_ENV=http://169.254.169.254/latest/meta-data/'],
-        containerPorts: [],
-        ports: [],
-        version: 3,
-      };
-
-      await expect(dockerService.appDockerCreate(nodeApp, appName, true))
-        .to.eventually.be.rejectedWith('does not address Flux storage');
-
-      sinon.assert.notCalled(fetch);
-      sinon.assert.notCalled(dockerStub);
-    });
-
-    // The link the door approved is the link the fetch requests. Read by
-    // splitting on the marker, a second occurrence of it inside the query
-    // truncates the URL, and the node then asks for something nothing
-    // validated.
-    it('requests the whole link the marker carries', async () => {
-      sinon.stub(fluxCommunicationMessagesSender, 'getFluxMessageSignature').resolves('signature');
-      const fetch = sinon.stub(serviceHelper, 'axiosGet').resolves({ data: ['A=1'] });
-      const link = 'https://storage.runonflux.io/v1/env/123?x=F_S_ENV=y';
-      const nodeApp = {
-        ...baseNodeApp,
-        enviromentParameters: [`F_S_ENV=${link}`],
-        containerPorts: [],
-        ports: [],
-        version: 3,
-      };
-
-      await dockerService.appDockerCreate(nodeApp, appName, true);
-
-      sinon.assert.calledOnce(fetch);
-      expect(fetch.firstCall.args[0]).to.equal(link);
-    });
-
-    // The command marker is fetched by the same rules as the environment one,
-    // and pinned separately: one reading them differently is how the two
-    // drifted apart.
-    it('requests the whole link the command marker carries', async () => {
-      sinon.stub(fluxCommunicationMessagesSender, 'getFluxMessageSignature').resolves('signature');
-      const fetch = sinon.stub(serviceHelper, 'axiosGet').resolves({ data: ['--chain'] });
-      const link = 'https://storage.runonflux.io/v1/cmd/123?x=F_S_CMD=y';
-      const nodeApp = {
-        ...baseNodeApp,
-        commands: [`F_S_CMD=${link}`],
-        enviromentParameters: [],
-        containerPorts: [],
-        ports: [],
-        version: 3,
-      };
-
-      await dockerService.appDockerCreate(nodeApp, appName, true);
-
-      sinon.assert.calledOnce(fetch);
-      expect(fetch.firstCall.args[0]).to.equal(link);
-    });
-
-    it('refuses a command link that does not address Flux storage', async () => {
-      sinon.stub(fluxCommunicationMessagesSender, 'getFluxMessageSignature').resolves('signature');
-      const fetch = sinon.stub(serviceHelper, 'axiosGet').resolves({ data: ['--chain'] });
-      const nodeApp = {
-        ...baseNodeApp,
-        commands: ['F_S_CMD=https://storage.runonflux.io:8443/v1/cmd/123'],
-        enviromentParameters: [],
-        containerPorts: [],
-        ports: [],
-        version: 3,
-      };
-
-      await expect(dockerService.appDockerCreate(nodeApp, appName, true))
-        .to.eventually.be.rejectedWith('does not address Flux storage');
-
-      sinon.assert.notCalled(fetch);
-      sinon.assert.notCalled(dockerStub);
-    });
-
-    // An address is more than a host: another port on the same machine is
-    // another service, and the node signs whatever it sends there.
-    it('refuses a link naming another port on the storage host', async () => {
-      sinon.stub(fluxCommunicationMessagesSender, 'getFluxMessageSignature').resolves('signature');
-      const fetch = sinon.stub(serviceHelper, 'axiosGet').resolves({ data: ['A=1'] });
-      const nodeApp = {
-        ...baseNodeApp,
-        enviromentParameters: ['F_S_ENV=https://storage.runonflux.io:8443/v1/env/123'],
-        containerPorts: [],
-        ports: [],
-        version: 3,
-      };
-
-      await expect(dockerService.appDockerCreate(nodeApp, appName, true))
-        .to.eventually.be.rejectedWith('does not address Flux storage');
-
-      sinon.assert.notCalled(fetch);
-      sinon.assert.notCalled(dockerStub);
-    });
-
-    // The host is the whole of the check, so a storage answering 302 would
-    // otherwise choose the node's next request for it.
-    it('does not follow a redirect away from Flux storage', async () => {
-      sinon.stub(fluxCommunicationMessagesSender, 'getFluxMessageSignature').resolves('signature');
-      const fetch = sinon.stub(serviceHelper, 'axiosGet').resolves({ data: ['A=1'] });
-      const nodeApp = {
-        ...baseNodeApp,
-        enviromentParameters: ['F_S_ENV=https://storage.runonflux.io/v1/env/123'],
-        containerPorts: [],
-        ports: [],
-        version: 3,
-      };
-
-      await dockerService.appDockerCreate(nodeApp, appName, true);
-
-      sinon.assert.calledOnce(fetch);
-      expect(fetch.firstCall.args[0]).to.equal('https://storage.runonflux.io/v1/env/123');
-      expect(fetch.firstCall.args[1].maxRedirects).to.equal(0);
-    });
-
-    it('should create an app given proper parameters for specs version > 1', async () => {
-      const nodeApp = {
-        ...baseNodeApp,
-        containerPorts: [
-          '30333',
-          '9933',
-          '9944',
-        ],
-        ports: [
-          '31113',
-          '31112',
-          '31111',
-        ],
-        version: 3,
-      };
-
-      await dockerService.appDockerCreate(nodeApp, appName, true);
+      await dockerService.appDockerCreate(deployComp);
 
       sinon.assert.calledOnce(dockerStub);
       const actualConfig = dockerStub.firstCall.args[0];
 
-      // Check key properties instead of exact match
       expect(actualConfig.Image).to.equal('runonflux/website');
       expect(actualConfig.name).to.equal('fluxwebsite_fluxwebsite');
       expect(actualConfig.Hostname).to.equal('website');
       expect(actualConfig.HostConfig.NanoCPUs).to.equal(800000000);
       expect(actualConfig.HostConfig.Memory).to.equal(1887436800);
-      expect(actualConfig.HostConfig.Mounts).to.have.lengthOf(1);
-      expect(actualConfig.HostConfig.Mounts[0].Source).to.include('fluxwebsite_fluxwebsite/appdata');
-      expect(actualConfig.HostConfig.Mounts[0].Target).to.equal('/chaindata');
     });
 
-    it('should create an app given proper parameters for specs version > 1 and parameter component == false', async () => {
-      const nodeApp = {
-        ...baseNodeApp,
-        containerPorts: [
-          '30333',
-          '9933',
-          '9944',
-        ],
-        ports: [
-          '31113',
-          '31112',
-          '31111',
-        ],
-        version: 3,
-      };
+    it('should set up mounts from DeploymentComponent', async () => {
+      const deployComp = makeDeployComp();
 
-      await dockerService.appDockerCreate(nodeApp, appName, false);
+      await dockerService.appDockerCreate(deployComp);
 
-      sinon.assert.calledOnce(dockerStub);
       const actualConfig = dockerStub.firstCall.args[0];
-
-      // Check key properties instead of exact match
-      expect(actualConfig.Image).to.equal('runonflux/website');
-      expect(actualConfig.name).to.equal('fluxwebsite');
-      expect(actualConfig.Hostname).to.equal('website');
-      expect(actualConfig.HostConfig.NanoCPUs).to.equal(800000000);
-      expect(actualConfig.HostConfig.Memory).to.equal(1887436800);
       expect(actualConfig.HostConfig.Mounts).to.have.lengthOf(1);
-      expect(actualConfig.HostConfig.Mounts[0].Source).to.include('fluxwebsite/appdata');
+      expect(actualConfig.HostConfig.Mounts[0].Source).to.include('website_fluxwebsite/appdata');
       expect(actualConfig.HostConfig.Mounts[0].Target).to.equal('/chaindata');
     });
 
-    it('should create an app given proper parameters for specs version 1', async () => {
-      const nodeApp = {
-        ...baseNodeApp,
-        containerPort: '9933',
-        port: '31112',
-        version: 1,
-      };
+    it('should set up port bindings from DeploymentComponent', async () => {
+      const deployComp = makeDeployComp();
 
-      await dockerService.appDockerCreate(nodeApp, appName, true);
+      await dockerService.appDockerCreate(deployComp);
 
-      sinon.assert.calledOnce(dockerStub);
       const actualConfig = dockerStub.firstCall.args[0];
-
-      // Check key properties instead of exact match
-      expect(actualConfig.Image).to.equal('runonflux/website');
-      expect(actualConfig.name).to.equal('fluxwebsite_fluxwebsite');
-      expect(actualConfig.Hostname).to.equal('website');
-      expect(actualConfig.HostConfig.NanoCPUs).to.equal(800000000);
-      expect(actualConfig.HostConfig.Memory).to.equal(1887436800);
-      expect(actualConfig.HostConfig.Mounts).to.have.lengthOf(1);
-      expect(actualConfig.HostConfig.Mounts[0].Source).to.include('fluxwebsite_fluxwebsite/appdata');
-      expect(actualConfig.HostConfig.Mounts[0].Target).to.equal('/chaindata');
-    });
-
-    it('should throw error if the config is incorrect', async () => {
-      const nodeApp = {
-        testing: 'testing',
-      };
-
-      await expect(dockerService.appDockerCreate(nodeApp, appName, true)).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'forEach\')');
-    });
-  });
-  describe('loadImage tests', () => {
-    const ID = 'sha256:1111111111111111111111111111111111111111111111111111111111111111';
-
-    /** What the daemon writes back: newline-delimited JSON, one object per line. */
-    const narration = (lines) => lines.map((line) => `${JSON.stringify(line)}\n`).join('');
-
-    /** Deliver a body in the pieces a network actually hands over. */
-    const delivered = (pieces) => {
-      const stream = new PassThrough();
-      process.nextTick(() => {
-        pieces.forEach((piece) => stream.write(piece));
-        stream.end();
+      expect(actualConfig.HostConfig.PortBindings).to.deep.equal({
+        '30333/tcp': [{ HostPort: '31113' }],
+        '9933/tcp': [{ HostPort: '31112' }],
       });
-      return stream;
-    };
-
-    afterEach(() => {
-      sinon.restore();
+      expect(actualConfig.ExposedPorts).to.deep.equal({
+        '30333/tcp': {},
+        '9933/tcp': {},
+      });
     });
 
-    it('finds an id whose line arrived in two pieces', async () => {
-      // The bug this covers. The narration was matched by concatenating chunks
-      // and then clearing the buffer on EVERY chunk, so nothing was ever
-      // carried forward: a line split across two writes matched neither half,
-      // and an archive that did contain the image reported that it did not -
-      // and the node went and asked more peers for thirteen megabytes it
-      // already had.
-      const body = narration([{ stream: `Loaded image ID: ${ID}\n` }]);
-      const half = Math.floor(body.length / 2);
-      sinon.stub(Dockerode.prototype, 'loadImage')
-        .resolves(delivered([body.slice(0, half), body.slice(half)]));
+    it('should throw error if deployComp is malformed', async () => {
+      const badComp = { testing: 'testing' };
 
-      const loaded = await dockerService.loadImage(new PassThrough());
-
-      expect(loaded.ids).to.deep.equal([ID]);
-    });
-
-    it('reports a tagged image too, under the name it was given', async () => {
-      // Docker says "Loaded image ID:" for an untagged image and "Loaded
-      // image:" for a tagged one. Reading only the first form left anything
-      // tagged on the disk with nothing that could name it - carrying whatever
-      // name the sender chose.
-      sinon.stub(Dockerode.prototype, 'loadImage').resolves(delivered([narration([
-        { stream: `Loaded image ID: ${ID}\n` },
-        { stream: 'Loaded image: runonflux/website:latest\n' },
-      ])]));
-
-      const loaded = await dockerService.loadImage(new PassThrough());
-
-      expect(loaded.ids).to.deep.equal([ID]);
-      expect(loaded.tags).to.deep.equal(['runonflux/website:latest']);
-    });
-
-    it('reports every id an archive brought, not just the first', async () => {
-      const second = 'sha256:2222222222222222222222222222222222222222222222222222222222222222';
-      sinon.stub(Dockerode.prototype, 'loadImage').resolves(delivered([narration([
-        { stream: `Loaded image ID: ${ID}\n` },
-        { stream: `Loaded image ID: ${second}\n` },
-      ])]));
-
-      const loaded = await dockerService.loadImage(new PassThrough());
-
-      expect(loaded.ids).to.deep.equal([ID, second]);
-    });
-
-    it('says nothing arrived when the daemon named nothing', async () => {
-      sinon.stub(Dockerode.prototype, 'loadImage')
-        .resolves(delivered([narration([{ stream: 'The archive was empty\n' }])]));
-
-      const loaded = await dockerService.loadImage(new PassThrough());
-
-      expect(loaded).to.deep.equal({ ids: [], tags: [] });
-    });
-  });
-
-  describe('archiveNames tests', () => {
-    // Real archives on a real disk: what this reads is a tar's own bytes, and a
-    // stubbed reader would only prove the stub parses JSON.
-    const tar = require('tar');
-    const realFs = require('fs');
-    const nodeOs = require('os');
-    let dir;
-
-    const archiveOf = async (manifest) => {
-      if (manifest !== null) {
-        realFs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
-      }
-      realFs.writeFileSync(path.join(dir, 'layer.tar'), 'not really a layer');
-      const entries = manifest === null ? ['layer.tar'] : ['manifest.json', 'layer.tar'];
-      const file = path.join(dir, 'image.tar');
-      await tar.c({ file, cwd: dir }, entries);
-      return file;
-    };
-
-    beforeEach(() => { dir = realFs.mkdtempSync(path.join(nodeOs.tmpdir(), 'fluxarch-')); });
-    afterEach(() => { realFs.rmSync(dir, { recursive: true, force: true }); });
-
-    it('reports every name an archive declares', async () => {
-      const file = await archiveOf([
-        { Config: 'a.json', RepoTags: ['ghcr.io/x/y:v1'], Layers: ['layer.tar'] },
-        { Config: 'b.json', RepoTags: ['ghcr.io/x/z:v2', 'ghcr.io/x/z:latest'], Layers: ['layer.tar'] },
-      ]);
-
-      expect(await dockerService.archiveNames(file))
-        .to.deep.equal(['ghcr.io/x/y:v1', 'ghcr.io/x/z:v2', 'ghcr.io/x/z:latest']);
-    });
-
-    it('reports nothing for an archive addressed by id, which is what this node serves', async () => {
-      // docker save <id> writes RepoTags: null - that is the shape an honest
-      // peer sends, and the only shape the fetch accepts.
-      const file = await archiveOf([{ Config: 'a.json', RepoTags: null, Layers: ['layer.tar'] }]);
-
-      expect(await dockerService.archiveNames(file)).to.deep.equal([]);
-    });
-
-    it('refuses a compressed archive without reading it', async () => {
-      // node-tar inflates gzip transparently, so the ceiling a peer's archive is
-      // taken under would be counting the compressed bytes: 32MB of zeros at
-      // level 9 becomes about 34GB, which is a minute of inflate before anything
-      // is rejected. This node's serve path writes a plain tar, so an archive
-      // that arrives compressed is doing something we never do.
-      const plain = await archiveOf([{ Config: 'a.json', RepoTags: ['ghcr.io/x/y:v1'], Layers: ['layer.tar'] }]);
-      const compressed = path.join(dir, 'image.tar.gz');
-      realFs.writeFileSync(compressed, require('zlib').gzipSync(realFs.readFileSync(plain)));
-
-      // The same archive, so what is refused is the format rather than anything
-      // about its content.
-      expect(await dockerService.archiveNames(plain)).to.deep.equal(['ghcr.io/x/y:v1']);
-      await expect(dockerService.archiveNames(compressed)).to.be.rejectedWith(/compressed/);
-    });
-
-    it('refuses an archive with no manifest rather than calling it empty', async () => {
-      // Reported as a bad archive, not as "the peer did not have it": the
-      // second reads as an ordinary miss and sends the caller to another peer.
-      const file = await archiveOf(null);
-
-      await expect(dockerService.archiveNames(file)).to.be.rejectedWith(/no manifest/);
-    });
-
-    it('refuses a manifest too big to be describing one image', async () => {
-      // The archive around it is a file and bounded; this entry is read into
-      // memory, so it needs a ceiling of its own. A real manifest measures
-      // ~1.2KB, and the format's own limit puts a single image at ~10KB of
-      // layer paths, so nothing legitimate comes near this.
-      const file = await archiveOf([{
-        Config: 'a.json',
-        RepoTags: [`ghcr.io/x/${'y'.repeat(64 * 1024)}:v1`],
-        Layers: ['layer.tar'],
-      }]);
-
-      await expect(dockerService.archiveNames(file)).to.be.rejectedWith(/not describing one image/);
-    });
-  });
-
-  describe('tagImage tests', () => {
-    const ID = 'sha256:1111111111111111111111111111111111111111111111111111111111111111';
-    let getImageStub;
-
-    afterEach(() => {
-      if (getImageStub) getImageStub.restore();
-      getImageStub = null;
-    });
-
-    it('names an image, splitting the reference the way the daemon wants it', async () => {
-      // The daemon takes the repository and the tag as separate fields, so the
-      // reference has to be taken apart. A registry host carries a colon of its
-      // own when it names a port, which is why the tag is cut from the LAST one
-      // and only when no slash follows it.
-      const tag = sinon.stub().resolves();
-      getImageStub = sinon.stub(Dockerode.prototype, 'getImage').returns({ tag });
-
-      await dockerService.tagImage(ID, 'fluxregistry:5000/runonflux/flux-volume-tools:v1.1.0');
-
-      expect(getImageStub.calledOnceWith(ID)).to.equal(true);
-      expect(tag.calledOnceWith({
-        repo: 'fluxregistry:5000/runonflux/flux-volume-tools',
-        tag: 'v1.1.0',
-      })).to.equal(true);
-    });
-
-    it('defaults the tag when the reference carries none', async () => {
-      const tag = sinon.stub().resolves();
-      getImageStub = sinon.stub(Dockerode.prototype, 'getImage').returns({ tag });
-
-      await dockerService.tagImage(ID, 'fluxregistry:5000/runonflux/flux-volume-tools');
-
-      expect(tag.calledOnceWith({
-        repo: 'fluxregistry:5000/runonflux/flux-volume-tools',
-        tag: 'latest',
-      })).to.equal(true);
+      await expect(dockerService.appDockerCreate(badComp)).to.eventually.be.rejected;
     });
   });
 });

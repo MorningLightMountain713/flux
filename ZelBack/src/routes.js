@@ -1,4 +1,5 @@
 const daemonServiceAddressRpcs = require('./services/daemonService/daemonServiceAddressRpcs');
+const fluxEventBus = require('./services/utils/fluxEventBus');
 const daemonServiceTransactionRpcs = require('./services/daemonService/daemonServiceTransactionRpcs');
 const daemonServiceBlockchainRpcs = require('./services/daemonService/daemonServiceBlockchainRpcs');
 const daemonServiceBenchmarkRpcs = require('./services/daemonService/daemonServiceBenchmarkRpcs');
@@ -53,7 +54,6 @@ const enterpriseNodesService = require('./services/enterpriseNodesService');
 const backupRestoreService = require('./services/backupRestoreService');
 const arcaneAuthService = require('./services/arcaneAuthService');
 const appTamperingDetectionService = require('./services/appTamperingDetectionService');
-const fluxEventBus = require('./services/utils/fluxEventBus');
 
 module.exports = (app) => {
   // GET PUBLIC methods
@@ -64,10 +64,10 @@ module.exports = (app) => {
     return daemonServiceControlRpcs.getInfo(req, res);
   }));
   app.get('/daemon/getfluxnodestatus', cache('60 seconds'), asyncRoute((req, res) => {
-    return daemonServiceNodeRpcs.getFluxNodeStatusApi(req, res);
+    return daemonServiceNodeRpcs.getFluxNodeStatus(req, res);
   }));
   app.get('/daemon/getzelnodestatus', cache('60 seconds'), asyncRoute((req, res) => { // DEPRECATED
-    return daemonServiceNodeRpcs.getFluxNodeStatusApi(req, res);
+    return daemonServiceNodeRpcs.getFluxNodeStatus(req, res);
   }));
   app.get('/daemon/listfluxnodes/:filter?', cache('30 seconds'), asyncRoute((req, res) => {
     return daemonServiceNodeRpcs.listFluxNodes(req, res);
@@ -305,9 +305,6 @@ module.exports = (app) => {
   app.get('/flux/restart', asyncRoute((req, res) => {
     return fluxService.restartFluxOS(req, res);
   }));
-  app.get('/flux/dosstate', cache('30 seconds'), asyncRoute((req, res) => {
-    return fluxNetworkHelper.getDOSState(req, res);
-  }));
   app.get('/flux/health', cache('30 seconds'), asyncRoute((req, res) => {
     return idService.nodeHealth(req, res);
   }));
@@ -461,9 +458,6 @@ module.exports = (app) => {
   // route's response is also built for one caller in particular - the payload is
   // encrypted to a session key they supply in a header - so there is nothing in
   // it another caller could use even if it were shared.
-  app.get('/apps/updatetolatestspecs/:appname', asyncRoute((req, res) => {
-    return registryManager.updateApplicationSpecificationAPI(req, res);
-  }));
   app.get('/apps/appspecifications/:appname/:decrypt?', asyncRoute((req, res) => {
     return registryManager.getApplicationSpecificationAPI(req, res);
   }));
@@ -863,9 +857,6 @@ module.exports = (app) => {
   app.get('/flux/removeincomingpeer/:ip?', asyncRoute((req, res) => {
     return fluxCommunication.removeIncomingPeer(req, res);
   }));
-  app.get('/flux/startdiscovery', asyncRoute((req, res) => {
-    return fluxCommunication.startDiscoveryApi(req, res);
-  }));
   app.get('/flux/allowport/:port?', asyncRoute((req, res) => {
     return fluxNetworkHelper.allowPortApi(req, res);
   }));
@@ -993,10 +984,10 @@ module.exports = (app) => {
     return appUninstaller.removeAppLocallyApi(req, res);
   }));
   app.get('/apps/installapplocally/:appname?', requireBootSettled, requirePolicyReady, asyncRoute((req, res) => {
-    return appInstaller.installAppLocally(req, res);
+    return appInstaller.installApplicationAPI(req, res);
   }));
   app.get('/apps/testappinstall/:appname?', requireBootSettled, requirePolicyReady, asyncRoute((req, res) => {
-    return appInstaller.testAppInstall(req, res);
+    return appInstaller.testInstallApplicationAPI(req, res);
   }));
   app.get('/apps/createfluxnetwork', asyncRoute((req, res) => {
     return systemIntegration.createFluxNetworkAPI(req, res);
@@ -1011,7 +1002,7 @@ module.exports = (app) => {
     return registryManager.reindexGlobalAppsLocationAPI(req, res);
   }));
   app.get('/apps/redeploy/:appname?/:force?/:global?', alwaysRespond, requireBootSettled, requirePolicyReady, asyncRoute((req, res) => {
-    return advancedWorkflows.redeployAPI(req, res);
+    return advancedWorkflows.redeployApplicationAPI(req, res);
   }));
   app.get('/apps/redeploycomponent/:appname?/:component?/:force?', alwaysRespond, requireBootSettled, requirePolicyReady, asyncRoute((req, res) => {
     return advancedWorkflows.redeployComponentAPI(req, res);
@@ -1306,9 +1297,6 @@ module.exports = (app) => {
     return explorerService.isExplorerSynced(req, res);
   }));
 
-  app.get('/flux/eventstream', asyncRoute((req, res) => {
-    return fluxEventBus.sseHandler(req, res);
-  }));
 
   // Cadence, read rather than streamed - see the rule at the top of
   // fluxEventBus.js. 404s in production, like the stream above.

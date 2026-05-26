@@ -743,7 +743,7 @@ async function startFluxFunctions() {
     // interval is the fallback for a config that cannot be read at all. Once cached, hot
     // paths (spawn loop) read it synchronously via getCachedEnterpriseIdentity() with no
     // network call and no throws.
-    enterpriseNetwork.scheduleIdentityResolution();
+    const identityReady = enterpriseNetwork.scheduleIdentityResolution();
 
     // Services that read from zelappsinformation wait for the orchestrator
     // to finish rebuilding it rather than guessing a setTimeout delay.

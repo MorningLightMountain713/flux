@@ -12,9 +12,9 @@ describe('appQueryService tests', () => {
   let messageHelperStub;
   let dockerServiceStub;
   let registryManagerStub;
-  let enterpriseHelperStub;
+
   let appSpecHelpersStub;
-  let cacheManagerStub;
+  let appsRepositoryStub;
   let logStub;
   let configStub;
 
@@ -86,21 +86,11 @@ describe('appQueryService tests', () => {
       appInstallingLocation: sinon.stub(),
     };
 
-    enterpriseHelperStub = {
-      checkAndDecryptAppSpecs: sinon.stub().returnsArg(0), // Return app as-is by default
-    };
 
-    appSpecHelpersStub = {
-      specificationFormatter: sinon.stub().returnsArg(0), // Return app as-is by default
-    };
+    appSpecHelpersStub = {};
 
-    cacheManagerStub = {
-      default: {
-        enterpriseAppDecryptionCache: {
-          get: sinon.stub().returns(null), // By default, cache misses
-          set: sinon.stub(),
-        },
-      },
+    appsRepositoryStub = {
+      listInstalledAppsRaw: sinon.stub(),
     };
 
     logStub = {
@@ -126,9 +116,8 @@ describe('appQueryService tests', () => {
       '../messageHelper': messageHelperStub,
       '../dockerService': dockerServiceStub,
       '../appDatabase/registryManager': registryManagerStub,
-      '../utils/enterpriseHelper': enterpriseHelperStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
       '../utils/appSpecHelpers': appSpecHelpersStub,
-      '../utils/cacheManager': cacheManagerStub,
       '../../lib/log': logStub,
       '../verificationHelper': verificationHelperStub,
       '../fluxNetworkHelper': fluxNetworkHelperStub,
@@ -264,26 +253,19 @@ describe('appQueryService tests', () => {
         { name: 'app1', version: 4 },
         { name: 'app2', version: 3 },
       ];
-      const mockDb = {
-        db: sinon.stub().returns('appsDatabase'),
-      };
 
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.resolves(mockApps);
+      appsRepositoryStub.listInstalledAppsRaw.resolves(mockApps);
       messageHelperStub.createDataMessage.returns({ status: 'success', data: mockApps });
 
       const result = await appQueryService.installedApps();
 
       expect(result).to.deep.equal({ status: 'success', data: mockApps });
-      expect(dbHelperStub.findInDatabase.calledOnce).to.be.true;
+      expect(appsRepositoryStub.listInstalledAppsRaw.calledOnce).to.be.true;
       expect(messageHelperStub.createDataMessage.calledWith(mockApps)).to.be.true;
     });
 
     it('should return installed apps with specific appname from query', async () => {
       const mockApp = { name: 'app1', version: 4 };
-      const mockDb = {
-        db: sinon.stub().returns('appsDatabase'),
-      };
       const req = {
         params: { appname: 'app1' },
         query: {},
@@ -292,40 +274,31 @@ describe('appQueryService tests', () => {
         json: sinon.stub(),
       };
 
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.resolves([mockApp]);
+      appsRepositoryStub.listInstalledAppsRaw.resolves([mockApp]);
       messageHelperStub.createDataMessage.returns({ status: 'success', data: [mockApp] });
 
       await appQueryService.installedApps(req, res);
 
       expect(res.json.calledOnce).to.be.true;
-      expect(dbHelperStub.findInDatabase.calledOnce).to.be.true;
+      expect(appsRepositoryStub.listInstalledAppsRaw.calledOnce).to.be.true;
     });
 
     it('should handle string parameter for appname', async () => {
       const mockApp = [{ name: 'app1', version: 4 }];
-      const mockDb = {
-        db: sinon.stub().returns('appsDatabase'),
-      };
 
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.resolves(mockApp);
+      appsRepositoryStub.listInstalledAppsRaw.resolves(mockApp);
       messageHelperStub.createDataMessage.returns({ status: 'success', data: mockApp });
 
       const result = await appQueryService.installedApps('app1');
 
       expect(result).to.deep.equal({ status: 'success', data: mockApp });
-      expect(dbHelperStub.findInDatabase.calledOnce).to.be.true;
+      expect(appsRepositoryStub.listInstalledAppsRaw.calledOnce).to.be.true;
     });
 
     it('should return error message on database failure', async () => {
-      const mockDb = {
-        db: sinon.stub().returns('appsDatabase'),
-      };
       const error = new Error('Database error');
 
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.rejects(error);
+      appsRepositoryStub.listInstalledAppsRaw.rejects(error);
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Database error' } });
 
       const result = await appQueryService.installedApps();
@@ -340,9 +313,6 @@ describe('appQueryService tests', () => {
         { name: 'app1', version: 4 },
         { name: 'app2', version: 3 },
       ];
-      const mockDb = {
-        db: sinon.stub().returns('appsDatabase'),
-      };
       const res = {
         json: sinon.stub(),
       };
@@ -351,8 +321,7 @@ describe('appQueryService tests', () => {
         query: {},
       };
 
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.resolves(mockApps);
+      appsRepositoryStub.listInstalledAppsRaw.resolves(mockApps);
       messageHelperStub.createDataMessage.returns({ status: 'success', data: mockApps });
 
       await appQueryService.installedApps(req, res);
@@ -361,17 +330,13 @@ describe('appQueryService tests', () => {
     });
 
     it('should return error with response passed on database failure', async () => {
-      const mockDb = {
-        db: sinon.stub().returns('appsDatabase'),
-      };
       const error = new Error('Database error');
       const res = {
         json: sinon.stub(),
       };
       const req = 'appName';
 
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.rejects(error);
+      appsRepositoryStub.listInstalledAppsRaw.rejects(error);
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Database error' } });
 
       await appQueryService.installedApps(req, res);
