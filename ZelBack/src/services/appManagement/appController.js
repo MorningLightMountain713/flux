@@ -642,6 +642,29 @@ async function stopAllNonFluxRunningApps() {
   }
 }
 
+async function createFluxNetworkAPI(req, res) {
+  try {
+    // eslint-disable-next-line global-require
+    const verificationHelper = require('../verificationHelper');
+    const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
+    if (!authorized) {
+      const errMessage = messageHelper.errUnauthorizedMessage();
+      return res.json(errMessage);
+    }
+    const dockerRes = await dockerService.createFluxDockerNetwork();
+    const response = messageHelper.createDataMessage(dockerRes);
+    return res.json(response);
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    return res.json(errorResponse);
+  }
+}
+
 module.exports = {
   executeAppGlobalCommand,
   appStart,
@@ -652,4 +675,5 @@ module.exports = {
   appUnpause,
   appDockerRestart,
   stopAllNonFluxRunningApps,
+  createFluxNetworkAPI,
 };
