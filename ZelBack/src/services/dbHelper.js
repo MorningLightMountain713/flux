@@ -1393,11 +1393,9 @@ module.exports = {
   isReindexAppsInformationRequired,
   reindexGlobalAppsInformation,
   removeDocumentsFromCollection,
-  repairNanInAppsMessagesDb,
   replaceOneInDatabase,
   updateInDatabase,
   updateOneInDatabase,
-  validateAppsInformation,
   waitForMongo,
   NEWEST_APP_MESSAGE_SORT,
 };

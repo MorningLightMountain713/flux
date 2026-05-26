@@ -1,6 +1,4 @@
 const os = require('os');
-const config = require('config');
-const dbHelper = require('../dbHelper');
 const nodeConfirmationService = require('../nodeConfirmationService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const geolocationService = require('../geolocationService');
@@ -8,16 +6,14 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const messageStore = require('./messageStore');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
+const appsRepository = require('../appDatabase/appsRepository');
 const appQueryService = require('../appQuery/appQueryService');
 const appReconciler = require('../appMonitoring/appReconciler');
 
 const fluxEventBus = require('../utils/fluxEventBus');
 const { nodeSigner } = require('../utils/nodeSigner');
-const { appRunningEntries } = require('../utils/appRunningEntries');
-const appPlacements = require('../appManagement/appPlacements');
 const { ANNOUNCE_INTERVAL_MS } = require('../utils/appConstants');
 
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 let broadcastTimer = null;
 let broadcastInProgress = false;
@@ -35,14 +31,11 @@ let overrunning = false;
 // loop survives its own abort. Nothing resets this.
 let broadcasting = false;
 
-// Held from a cycle's snapshot to its broadcast. A removal waits on it, so its
-// message goes out after an announcement that took its list before the removal,
-// which is why it lives in globalState.
-const cycleLock = globalState.announceCycle;
-// Settles when the cycle in flight, if any, has finished, so a stop can wait for
-// it rather than returning while it is still running. A teardown that returns
+// Held for the whole of a cycle, so a stop can wait for the cycle in flight
+// rather than returning while it is still running. A teardown that returns
 // before the thing is torn down is the same lie as a stop that does not stop.
-let cycleFinished = Promise.resolve();
+// A removal waits on it too, which is why it lives in globalState.
+const cycleLock = globalState.announceCycle;
 
 /**
  * Schedule the next announcement so that the PERIOD is fixed, rather than the
@@ -118,7 +111,7 @@ async function stopBroadcasting() {
   // The queued repeat goes with the stop. Left set, it is a cycle the next
   // start would run before the one it schedules for itself.
   rebroadcastNeeded = false;
-  await cycleFinished;
+  await cycleLock.waitReady();
 }
 
 function initialize() {
@@ -137,15 +130,13 @@ async function checkAndNotifyPeersOfRunningApps() {
     return;
   }
   broadcastInProgress = true;
-  let finishCycle;
-  cycleFinished = new Promise((resolve) => { finishCycle = resolve; });
   // Taken before any work, so the schedule below subtracts the WHOLE cycle -
   // including the paths that give up early, which cost time too.
   const startedAt = process.hrtime.bigint();
-  let locked = false;
+  await cycleLock.enable();
   try {
-    // Observation only. The lock taken below is what a caller waiting on a cycle
-    // in flight actually waits for.
+    // Observation only. The lock above is what a caller waiting on a cycle in
+    // flight actually waits for.
     fluxEventBus.publish('app:announcing', {});
     if (!nodeConfirmationService.canSendMessages()) {
       log.info('checkAndNotifyPeersOfRunningApps - Node cannot send messages, skipping broadcast');
@@ -158,92 +149,75 @@ async function checkAndNotifyPeersOfRunningApps() {
     // best-effort. Resolves immediately in steady state; capped reconciler-side,
     // so a wedged reconcile cannot block the node's network presence.
     await appReconciler.waitForBootDrainSettled();
-    // Every app installed at start has a record before the first snapshot reads them.
-    await appPlacements.waitForBackfill();
 
-    const localSocketAddr = await fluxNetworkHelper.waitForLocalSocketAddress();
-
-    // A cycle is in flight from the snapshot to the broadcast, and a removal waits
-    // for it so the two go out in the order they happened. The waits above are
-    // outside it, so a node waiting for its address holds up no removal.
-    await cycleLock.enable();
-    locked = true;
-
-    // Stamped where the snapshot is taken, not where the message is built: every
-    // consumer reads broadcastedAt as the time these apps were installed here, and
-    // a stamp taken after the per-app reads below would out-rank a removal that
-    // happened while they ran.
-    const snapshotAt = Date.now();
-    const installedAppsRes = await appQueryService.installedApps();
-    if (installedAppsRes.status !== 'success') {
-      throw new Error('Failed to get installed Apps');
+    const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
+    if (!localSocketAddr) {
+      throw new Error('Unable to detect Flux IP address');
     }
-    const appsInstalled = installedAppsRes.data;
+
+    // Raw specs for containerHealthMonitor (expects .compose[] format)
+    const rawAppsInstalled = await appsRepository.listInstalledAppsRaw();
+    // Hydrated specs for class-based component iteration
+    const installedSpecs = await appsRepository.listInstalledApps();
+
+    const runningAppsRes = await appQueryService.listRunningApps();
+    if (runningAppsRes.status !== 'success') {
+      throw new Error('Unable to check running Apps');
+    }
+    const runningApps = runningAppsRes.data;
+    const runningAppsNames = runningApps.map((app) => {
+      if (app.Names[0].startsWith('/zel')) {
+        return app.Names[0].slice(4);
+      }
+      return app.Names[0].slice(5);
+    });
 
     // hourly resync trigger: let the reconciler bring any drifted containers
     // (crashed, orphaned, missed events) back to their desired state - a local
     // health concern, and not what this message reports
     appReconciler.enqueueAll('hourly').catch((err) => log.error(`peerNotification - reconcile sweep failed: ${err.message}`));
 
-    // Every app installed here, whatever its containers are doing. The message
-    // says "this node holds this app", which is what the spawner counts against
-    // an app's instance target - a container that is down is recovered here, not
-    // relocated, and whether it serves is settled by the load balancer's own
-    // health check. Deriving this from run-state instead made a component that
-    // could never start silence the node, so the app never reached its target
-    // and was placed again, without end.
-    //
-    // Read straight from the installed set: an app's name and hash sit outside
-    // the enterprise envelope, so a spec that cannot be decrypted still states
-    // its claim, and one unreadable app cannot cost this node its presence.
-    // An app whose removal this node has broadcast is excluded: it is still
-    // installed until the removal finishes, and naming it here would re-create the
-    // location row the removal just cleared. An app this node is only testing is
-    // excluded too: its row is thrown away at the end of the test, and the teardown
-    // that throws it away tells the network nothing. So is an app boot has not yet
-    // confirmed this node still holds: naming it would renew a location record that
-    // may have expired, and the boot check would then read it as valid.
-    const applicationsToBroadcast = appsInstalled.filter(
-      (application) => !globalState.departingApps.has(application.name)
-        && !globalState.testInstallingApps.has(application.name)
-        && !globalState.unconfirmedApps.has(application.name),
-    );
-    // An installed app without a string name and hash is left out and logged: no
-    // node stores such an entry, and a node that has not upgraded refuses the
-    // whole message for it, which would cost this node every other app it holds.
-    const { stored: announceable, refused } = appRunningEntries(applicationsToBroadcast);
-    if (refused.length) {
-      log.warn(`checkAndNotifyPeersOfRunningApps - installed apps without a name and hash are not announced: ${refused.map((application) => application?.name).join(', ')}`);
-    }
-    const apps = [];
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    try {
-      // When this node took each app comes from its own record of that, never from
-      // the network's copy of its location rows: those lapse in normal running
-      // while the app goes on running here. An app with no record is announced
-      // from its row, and from now without one.
-      const placements = await appPlacements.placementsOf(announceable.map((application) => application.name));
-      const unrecorded = [];
-      // eslint-disable-next-line no-restricted-syntax
-      for (const application of announceable) {
-        let runningOnMyNodeSince = placements.get(application.name);
-        if (!runningOnMyNodeSince) {
-          unrecorded.push(application.name);
-          const queryFind = { name: application.name, ip: localSocketAddr };
-          const projection = { _id: 0, runningSince: 1 };
-          // eslint-disable-next-line no-await-in-loop
-          const result = await dbHelper.findOneInDatabase(database, globalAppsLocations, queryFind, projection);
-          runningOnMyNodeSince = result?.runningSince ?? new Date();
+    // apps using g:/r: syncthing are advertised as installed-and-running even when
+    // some components are intentionally stopped (e.g. slaves), so derive them
+    // directly from the specs rather than from container run-state
+    const masterSlaveAppsInstalled = rawAppsInstalled.filter((app) => {
+      const comps = app.version >= 4 && Array.isArray(app.compose) ? app.compose : [app];
+      return comps.some((c) => c.containerData && (c.containerData.includes('g:') || c.containerData.includes('r:')));
+    });
+
+    const installedAndRunning = [];
+    installedSpecs.forEach((inst) => {
+      if (inst.version >= 4) {
+        const allRunning = inst.spec.componentNames().every(
+          (compName) => runningAppsNames.includes(`${compName}_${inst.name}`),
+        );
+        if (allRunning) {
+          installedAndRunning.push(inst);
         }
-        apps.push({
-          name: application.name,
-          hash: application.hash,
-          runningSince: new Date(runningOnMyNodeSince).toISOString(),
-        });
+      } else if (runningAppsNames.includes(inst.name)) {
+        installedAndRunning.push(inst);
       }
-      if (unrecorded.length) {
-        log.warn(`checkAndNotifyPeersOfRunningApps - no placement record for ${unrecorded.join(', ')}; announced from the location table`);
+    });
+    installedAndRunning.push(...masterSlaveAppsInstalled);
+    const applicationsToBroadcast = [...new Set(installedAndRunning)];
+    const apps = [];
+    try {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const application of applicationsToBroadcast) {
+        const appName = application.name || application;
+        // eslint-disable-next-line no-await-in-loop
+        const result = await appsRepository.getAppLocation(appName, localSocketAddr);
+        let runningOnMyNodeSince = new Date().toISOString();
+        if (result && result.runningSince) {
+          runningOnMyNodeSince = result.runningSince;
+        }
+        const appHash = application.hash || '';
+        log.info(`${appName} is running/installed properly. Broadcasting status.`);
+        apps.push({
+          name: appName,
+          hash: appHash,
+          runningSince: runningOnMyNodeSince,
+        });
       }
       // An empty snapshot is NEVER broadcast: the receive side treats an empty
       // v2 message as "delete every appsLocations row for this IP" - and we
@@ -258,7 +232,7 @@ async function checkAndNotifyPeersOfRunningApps() {
         version: 2,
         apps,
         ip: localSocketAddr,
-        broadcastedAt: snapshotAt,
+        broadcastedAt: Date.now(),
         osUptime: os.uptime(),
         staticIp: geolocationService.isStaticIP(),
       };
@@ -272,17 +246,10 @@ async function checkAndNotifyPeersOfRunningApps() {
         log.warn('checkAndNotifyPeersOfRunningApps - this node cannot sign as itself; its running apps are not announced');
         return;
       }
-      // Every peer applies the same rule to the message as this store does, so a
-      // message this node will not store is one no peer stores either.
-      const ownStore = await messageStore.storeAppRunningMessage(appRunningMessage);
-      if (ownStore instanceof Error) {
-        log.error(`checkAndNotifyPeersOfRunningApps - this node refuses its own announcement, not broadcast: ${ownStore.message}`);
-        fluxEventBus.publish('app:announcementRefused', { reason: ownStore.message });
-        return;
-      }
+      await messageStore.storeAppRunningMessage(appRunningMessage);
       const signed = await fluxCommunicationMessagesSender.broadcastMessageToAll(appRunningMessage);
       await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: signed });
-      fluxEventBus.publish('app:running', { apps, ip: appRunningMessage.ip, unannounced: refused.map((application) => application?.name ?? null) });
+      fluxEventBus.publish('app:running', { apps, ip: appRunningMessage.ip });
       log.info(`App Running Message broadcasted: ${apps.length} apps`);
     } catch (err) {
       log.error(err);
@@ -298,8 +265,7 @@ async function checkAndNotifyPeersOfRunningApps() {
     log.error(error);
   } finally {
     broadcastInProgress = false;
-    if (locked) cycleLock.disable();
-    finishCycle();
+    cycleLock.disable();
     if (rebroadcastNeeded) {
       rebroadcastNeeded = false;
       setImmediate(() => checkAndNotifyPeersOfRunningApps());
