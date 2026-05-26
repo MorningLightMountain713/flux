@@ -1941,7 +1941,7 @@ async function appsStayingThroughIpMove(previousSocket, currentSocket) {
   // eslint-disable-next-line global-require
   const appUninstaller = require('./appLifecycle/appUninstaller');
   // eslint-disable-next-line global-require
-  const enterpriseHelper = require('./utils/enterpriseHelper');
+  const { resolveSpec } = require('./utils/specCutover');
   const staying = [];
   let complete = true;
   // Gone, or never there: either way not installed here now.
@@ -1963,7 +1963,9 @@ async function appsStayingThroughIpMove(previousSocket, currentSocket) {
       if (app.enterprise) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          appSpecs = await enterpriseHelper.checkAndDecryptAppSpecs(app);
+          const resolved = await resolveSpec(app);
+          if (!resolved) throw new Error('the specification could not be decrypted');
+          appSpecs = (resolved.spec || resolved).serialize();
         } catch (decryptError) {
           log.error(`Failed to decrypt enterprise specs for ${app.name}: ${decryptError.message}`);
           complete = false;
