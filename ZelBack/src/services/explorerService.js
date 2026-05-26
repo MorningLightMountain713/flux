@@ -828,9 +828,6 @@ async function processBlock(blockHeight, isInsightExplorer) {
         if (blockWorkDue('expireGlobalApplications', blockHeight, 2 * speedMultiplier)) {
           await registryManager.expireGlobalApplications();
         }
-        if (blockWorkDue('checkAndRemoveApplicationInstance', blockHeight, config.fluxapps.removeFluxAppsPeriod * speedMultiplier)) {
-          advancedWorkflows.reconcileInstalledApps();
-        }
         if (blockWorkDue('reinstallOldApplications', blockHeight, updateFluxAppsPeriod * speedMultiplier)) {
           advancedWorkflows.reconcileInstalledApps();
           updateFluxAppsPeriod = Math.floor(Math.random() * 6 + 4);
