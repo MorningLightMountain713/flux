@@ -10,7 +10,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appUninstaller = require('./appUninstaller');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { storeAppInstallingErrorMessage } = require('../appMessaging/messageStore');
-const { systemArchitecture } = require('../appSystem/systemIntegration');
+const { systemArchitecture, checkPlacement, checkNodeResources } = require('../appRequirements/hwRequirements');
 const { isImageBlocked, verifyRepository } = require('../appSecurity/imageManager');
 const { startAppMonitoring } = require('../appManagement/appInspector');
 const imageVerifier = require('../utils/imageVerifier');
@@ -30,7 +30,6 @@ const appsRepository = require('../appDatabase/appsRepository');
 const { localAppsInformation } = require('../utils/appConstants');
 const fluxEventBus = require('../utils/fluxEventBus');
 const volumeService = require('../utils/volumeService');
-const hwRequirements = require('../appRequirements/hwRequirements');
 const config = require('config');
 
 let onInstallComplete = null;
@@ -269,12 +268,10 @@ async function installApplication(instantiated, options = {}) {
       return false;
     }
 
-    let spec = instantiated.spec;
-    if (instantiated.isEncrypted()) {
-      const provider = await spec.createProvider();
-      spec = (await spec.decrypt(provider)).spec;
-    }
-    await checkAppRequirements(spec);
+    await checkPlacement(instantiated);
+
+    const deployment = await deploymentProvider.buildDeployment(instantiated);
+    await checkNodeResources(deployment);
 
     // eslint-disable-next-line global-require
     const appQueryService = require('../appQuery/appQueryService');
@@ -696,34 +693,6 @@ async function installApplicationAPI(req, res) {
   }
 }
 
-/**
- * Check application requirements - validates hardware, static IP, nodes, and geolocation requirements
- * @param {object} appSpecs - Application specifications to check
- * @param {boolean} skipGeolocation - Whether to skip geolocation checks (useful for testing)
- * @param {boolean} skipStaticIp - Whether to skip static IP checks (useful for testing)
- * @param {boolean} skipHardware - Whether to skip hardware and nodes checks (useful for testing)
- * @returns {Promise<boolean>} True if requirements are met
- */
-async function checkAppRequirements(appSpecs, skipGeolocation = false, skipStaticIp = false, skipHardware = false) {
-  // appSpecs has hdd, cpu and ram assigned to correct tier
-  if (!skipHardware) {
-    await hwRequirements.checkAppHWRequirements(appSpecs);
-  }
-
-  if (!skipStaticIp) {
-    hwRequirements.checkAppStaticIpRequirements(appSpecs);
-  }
-
-  if (!skipHardware) {
-    await hwRequirements.checkAppNodesRequirements(appSpecs);
-  }
-
-  if (!skipGeolocation) {
-    await hwRequirements.checkAppGeolocationRequirements(appSpecs);
-  }
-
-  return true;
-}
 
 async function testInstallApplication(appname) {
   const tempMessage = await appsRepository.getTempMessageByName(appname);
@@ -739,8 +708,6 @@ async function testInstallApplication(appname) {
     const provider = await spec.createProvider();
     spec = (await spec.decrypt(provider)).spec;
   }
-
-  await checkAppRequirements(spec, true, true, true);
 
   const localArch = await systemArchitecture();
 
@@ -820,7 +787,6 @@ module.exports = {
   installComponent,
   installApplicationAPI,
   ensureAppDockerNetwork,
-  checkAppRequirements,
   testInstallApplicationAPI,
   setOnInstallComplete,
 };
