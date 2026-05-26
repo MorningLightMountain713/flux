@@ -2,6 +2,7 @@ const config = require('config');
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const messageHelper = require('./messageHelper');
 const dbHelper = require('./dbHelper');
+const appsRepository = require('./appDatabase/appsRepository');
 const log = require('../lib/log');
 
 const globalAppsInformation = config.database.appsglobal.collections.appsInformation;
@@ -26,11 +27,7 @@ async function getEnterpriseList() {
     // v7: nodes field - array of IPs that can run the app, that should be able to decode the app.
     // each component now has secrets possibility - env variables field that gets encrypted by the IPs pgps
     // each component now has  repoauth username:token or auth token. - encrypted field for pulling private docker image
-    const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.database.appsglobal.database);
-    const query = { version: { $gte: 7 } };
-    const projection = { projection: { _id: 0 } };
-    const globalApps = await dbHelper.findInDatabase(database, globalAppsInformation, query, projection); // get apps v7
+    const globalApps = await appsRepository.listGlobalAppInfoRaw({ filter: { version: { $gte: 7 } } }); // get apps v7
     const globalAppsScoped = globalApps.filter((apps) => apps.nodes.length); // only enterprise apps
     const isAlreadyEnterprised = {}; // ip/collateral: points
     globalAppsScoped.forEach((app) => {
