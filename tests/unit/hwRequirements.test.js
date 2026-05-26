@@ -2,1011 +2,420 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-function makeSpecLibsStub() {
+// ── Placement helpers ───────────────────────────────────────────────
+
+function mockPlacement(overrides = {}) {
   return {
-    getSpecBackend: sinon.stub().resolves({
-      DeploymentSpec: {
-        fromSpec(spec) {
-          if (spec.compose) {
-            const totals = spec.compose.reduce((acc, c) => ({
-              cpu: acc.cpu + (c.cpu || 0),
-              memory: acc.memory + (c.ram || 0),
-              storage: acc.storage + (c.hdd || 0),
-            }), { cpu: 0, memory: 0, storage: 0 });
-            return { totalResources: () => totals };
-          }
-          return {
-            totalResources: () => ({ cpu: spec.cpu || 0, memory: spec.ram || 0, storage: spec.hdd || 0 }),
-          };
-        },
-      },
-    }),
+    staticIp: false,
+    dataCenter: false,
+    hasGeoRestrictions: () => false,
+    hasGeoDeny: () => false,
+    hasGeoAllow: () => false,
+    isAllowedIn: () => true,
+    isDeniedIn: () => false,
+    hasTargets: () => false,
+    matchesTarget: () => true,
+    ...overrides,
   };
 }
 
-describe('hwRequirements tests', () => {
-  let hwRequirements;
-  let serviceHelperStub;
-  let logStub;
+function mockSpec(overrides = {}) {
+  return {
+    name: 'testapp',
+    version: 9,
+    placement: mockPlacement(),
+    ...overrides,
+  };
+}
 
-  beforeEach(() => {
-    serviceHelperStub = {
-      ensureNumber: sinon.stub().returnsArg(0),
-    };
+function mockDeployment(resources = {}) {
+  const defaults = { cpu: 1, memory: 500, storage: 10, swap: 0 };
+  return {
+    totalResources: () => ({ ...defaults, ...resources }),
+  };
+}
 
-    logStub = {
-      error: sinon.stub(),
-      info: sinon.stub(),
-      warn: sinon.stub(),
-    };
+// ── Module builder ──────────────────────────────────────────────────
 
-    hwRequirements = proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-      '../serviceHelper': serviceHelperStub,
-      '../benchmarkService': {
-        getBenchmarks: sinon.stub().resolves({
-          status: 'success',
-          data: {
-            cpucores: 4,
-            ram: 8000,
-            ssd: 100,
-          },
-        }),
+function buildHw(opts = {}) {
+  const {
+    cpucores = 16,
+    ram = 32000,
+    ssd = 500,
+    appsCpusLocked = 0,
+    appsRamLocked = 0,
+    appsHddLocked = 0,
+    resourcesStatus = 'success',
+    lockedCpu = 10,
+    lockedRam = 0,
+    lockedHdd = 0,
+    lockedExtrahdd = 0,
+    isStaticIP = true,
+    isDataCenter = true,
+    nodeGeo = { continentCode: 'EU', countryCode: 'CZ', regionName: 'PRG' },
+    localSocketAddr = '1.2.3.4:16127',
+    collateral = { txhash: 'abc123', txindex: 0 },
+    operatorPubKey = 'pubkey123',
+  } = opts;
+
+  return proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
+    '../benchmarkService': {
+      getBenchmarks: sinon.stub().resolves({
+        status: 'success',
+        data: { cpucores, ram, ssd, architecture: 'amd64' },
+      }),
+    },
+    '../generalService': {
+      nodeTier: sinon.stub().resolves('cumulus'),
+      obtainNodeCollateralInformation: sinon.stub().resolves(collateral),
+    },
+    '../geolocationService': {
+      isStaticIP: sinon.stub().returns(isStaticIP),
+      isDataCenter: sinon.stub().returns(isDataCenter),
+      getNodeGeolocation: sinon.stub().resolves(nodeGeo),
+    },
+    '../fluxNetworkHelper': {
+      getLocalSocketAddress: sinon.stub().resolves(localSocketAddr),
+      getFluxNodePublicKey: sinon.stub().resolves(operatorPubKey),
+    },
+    '../utils/socketAddressUtils': {
+      socketAddressesMatch: (a, b) => a === b,
+    },
+    '../appQuery/resourceQueryService': {
+      appsResources: sinon.stub().resolves({
+        status: resourcesStatus,
+        data: { appsCpusLocked, appsRamLocked, appsHddLocked },
+      }),
+    },
+    '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
+    os: {
+      cpus: sinon.stub().returns(new Array(cpucores)),
+      totalmem: sinon.stub().returns(ram * 1024 * 1024),
+    },
+    config: {
+      fluxSpecifics: {
+        cpu: { cumulus: 2, nimbus: 4, stratus: 8 },
+        ram: { cumulus: 4000, nimbus: 8000, stratus: 16000 },
+        hdd: { cumulus: 220, nimbus: 440, stratus: 880 },
       },
-      '../generalService': {
-        nodeTier: sinon.stub().resolves('cumulus'),
+      lockedSystemResources: {
+        cpu: lockedCpu, ram: lockedRam, hdd: lockedHdd, extrahdd: lockedExtrahdd,
       },
-      '../geolocationService': {
-        isStaticIP: sinon.stub().returns(true),
-        getNodeGeolocation: sinon.stub().returns('US-NY'),
-      },
-      '../fluxNetworkHelper': {
-        getFluxNodeCount: sinon.stub().resolves(1000),
-      },
-      '../appDatabase/registryManager': {
-        availableApps: sinon.stub().resolves([]),
-      },
-      '../appQuery/appQueryService': {
-        installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-      },
-      '../../lib/log': logStub,
-      config: {
-        fluxSpecifics: {
-          cpu: {
-            cumulus: 2,
-            nimbus: 4,
-            stratus: 8,
-          },
-          ram: {
-            cumulus: 4000,
-            nimbus: 8000,
-            stratus: 16000,
-          },
-          hdd: {
-            cumulus: 220,
-            nimbus: 440,
-            stratus: 880,
-          },
-        },
-      },
+    },
+  });
+}
+
+describe('hwRequirements', () => {
+  afterEach(() => sinon.restore());
+
+  // ── Placement checks ────────────────────────────────────────────
+
+  describe('checkPlacement', () => {
+    describe('static IP', () => {
+      it('passes when app does not require static IP', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({ placement: mockPlacement({ staticIp: false }) });
+        await hw.checkPlacement(spec);
+      });
+
+      it('passes when node has static IP and app requires it', async () => {
+        const hw = buildHw({ isStaticIP: true });
+        const spec = mockSpec({ placement: mockPlacement({ staticIp: true }) });
+        await hw.checkPlacement(spec);
+      });
+
+      it('throws when node lacks static IP and app requires it', async () => {
+        const hw = buildHw({ isStaticIP: false });
+        const spec = mockSpec({ placement: mockPlacement({ staticIp: true }) });
+        try {
+          await hw.checkPlacement(spec);
+          expect.fail('expected throw');
+        } catch (err) {
+          expect(err.message).to.include('static IP');
+        }
+      });
+    });
+
+    describe('data center', () => {
+      it('passes when app does not require data center', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({ placement: mockPlacement({ dataCenter: false }) });
+        await hw.checkPlacement(spec);
+      });
+
+      it('throws when node is not a data center and app requires it', async () => {
+        const hw = buildHw({ isDataCenter: false });
+        const spec = mockSpec({ placement: mockPlacement({ dataCenter: true }) });
+        try {
+          await hw.checkPlacement(spec);
+          expect.fail('expected throw');
+        } catch (err) {
+          expect(err.message).to.include('data center');
+        }
+      });
+    });
+
+    describe('geolocation', () => {
+      it('passes when no geo restrictions', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({ placement: mockPlacement({ hasGeoRestrictions: () => false }) });
+        await hw.checkPlacement(spec);
+      });
+
+      it('throws when node geolocation is not set', async () => {
+        const hw = buildHw({ nodeGeo: null });
+        const spec = mockSpec({
+          placement: mockPlacement({
+            hasGeoRestrictions: () => true,
+          }),
+        });
+        try {
+          await hw.checkPlacement(spec);
+          expect.fail('expected throw');
+        } catch (err) {
+          expect(err.message).to.include('Geolocation not set');
+        }
+      });
+
+      it('throws when node is in denied geo', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({
+          placement: mockPlacement({
+            hasGeoRestrictions: () => true,
+            isDeniedIn: () => true,
+          }),
+        });
+        try {
+          await hw.checkPlacement(spec);
+          expect.fail('expected throw');
+        } catch (err) {
+          expect(err.message).to.include('forbidden');
+        }
+      });
+
+      it('throws when node is not in allowed geo', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({
+          placement: mockPlacement({
+            hasGeoRestrictions: () => true,
+            isDeniedIn: () => false,
+            isAllowedIn: () => false,
+          }),
+        });
+        try {
+          await hw.checkPlacement(spec);
+          expect.fail('expected throw');
+        } catch (err) {
+          expect(err.message).to.include('not matching');
+        }
+      });
+
+      it('passes when node is in allowed geo and not denied', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({
+          placement: mockPlacement({
+            hasGeoRestrictions: () => true,
+            isDeniedIn: () => false,
+            isAllowedIn: () => true,
+          }),
+        });
+        await hw.checkPlacement(spec);
+      });
+    });
+
+    describe('targets', () => {
+      it('passes when no targets set', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({ placement: mockPlacement({ hasTargets: () => false }) });
+        await hw.checkPlacement(spec);
+      });
+
+      it('passes for v8 even with targets (v8 does not enforce)', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({
+          version: 8,
+          placement: mockPlacement({
+            hasTargets: () => true,
+            matchesTarget: () => false,
+          }),
+        });
+        await hw.checkPlacement(spec);
+      });
+
+      it('throws for v7 when node does not match targets', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({
+          version: 7,
+          placement: mockPlacement({
+            hasTargets: () => true,
+            matchesTarget: () => false,
+          }),
+        });
+        try {
+          await hw.checkPlacement(spec);
+          expect.fail('expected throw');
+        } catch (err) {
+          expect(err.message).to.include('not allowed to run');
+        }
+      });
+
+      it('passes for v7 when node matches targets', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({
+          version: 7,
+          placement: mockPlacement({
+            hasTargets: () => true,
+            matchesTarget: () => true,
+          }),
+        });
+        await hw.checkPlacement(spec);
+      });
+
+      it('throws for v9 when node does not match targets', async () => {
+        const hw = buildHw();
+        const spec = mockSpec({
+          version: 9,
+          placement: mockPlacement({
+            hasTargets: () => true,
+            matchesTarget: () => false,
+          }),
+        });
+        try {
+          await hw.checkPlacement(spec);
+          expect.fail('expected throw');
+        } catch (err) {
+          expect(err.message).to.include('not allowed to run');
+        }
+      });
     });
   });
 
-  afterEach(() => {
-    sinon.restore();
-  });
+  // ── Resource checks ─────────────────────────────────────────────
 
-
-  describe('checkAppStaticIpRequirements', () => {
-    it('should pass when app does not require static IP', () => {
-      const appSpecs = {
-        name: 'testapp',
-        staticip: false,
-      };
-
-      // Should not throw
-      hwRequirements.checkAppStaticIpRequirements(appSpecs);
+  describe('checkNodeResources', () => {
+    it('passes when node has enough resources', async () => {
+      const hw = buildHw({ ssd: 500, cpucores: 16, ram: 32000 });
+      const deployment = mockDeployment({ cpu: 1, memory: 500, storage: 10 });
+      await hw.checkNodeResources(deployment);
     });
 
-    it('should pass when node has static IP and app requires it', () => {
-      const appSpecs = {
-        name: 'testapp',
-        staticip: true,
-      };
-
-      // Should not throw
-      hwRequirements.checkAppStaticIpRequirements(appSpecs);
-    });
-  });
-
-  describe('checkAppGeolocationRequirements', () => {
-    it('should pass when app has no geolocation restrictions', async () => {
-      const appSpecs = {
-        name: 'testapp',
-        geolocation: [],
-      };
-
-      // Should not throw
-      await hwRequirements.checkAppGeolocationRequirements(appSpecs);
-    });
-
-    it('should throw if geolocation returns undefined', async () => {
-      const hwRequirementsWithUndefinedGeo = proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-        '../serviceHelper': serviceHelperStub,
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              cpucores: 4,
-              ram: 8000,
-              ssd: 100,
-            },
-          }),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-          getNodeGeolocation: sinon.stub().resolves(undefined),
-        },
-        '../fluxNetworkHelper': {
-          getFluxNodeCount: sinon.stub().resolves(1000),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-        },
-        '../../lib/log': logStub,
-        config: {
-          fluxSpecifics: {
-            cpu: {
-              cumulus: 2,
-              nimbus: 4,
-              stratus: 8,
-            },
-            ram: {
-              cumulus: 4000,
-              nimbus: 8000,
-              stratus: 16000,
-            },
-            hdd: {
-              cumulus: 220,
-              nimbus: 440,
-              stratus: 880,
-            },
-          },
-        },
-      });
-
-      const appSpec = {
-        version: 5,
-        geolocation: ['acEU'],
-      };
-
+    it('throws when node has zero SSD', async () => {
+      const hw = buildHw({ ssd: 0 });
+      const deployment = mockDeployment({ storage: 10 });
       try {
-        await hwRequirementsWithUndefinedGeo.checkAppGeolocationRequirements(appSpec);
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error).to.exist;
-      }
-    });
-
-    it('should return true if app ver < 5', async () => {
-      const appSpec = {
-        version: 4,
-      };
-
-      const result = await hwRequirements.checkAppGeolocationRequirements(appSpec);
-
-      expect(result).to.equal(true);
-    });
-
-    it('should return true if geolocation matches', async () => {
-      const hwRequirementsWithMatchingGeo = proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-        '../serviceHelper': serviceHelperStub,
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              cpucores: 4,
-              ram: 8000,
-              ssd: 100,
-            },
-          }),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-          getNodeGeolocation: sinon.stub().resolves({
-            continentCode: 'EU',
-            countryCode: 'CZ',
-            regionName: 'PRG',
-          }),
-        },
-        '../fluxNetworkHelper': {
-          getFluxNodeCount: sinon.stub().resolves(1000),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-        },
-        '../../lib/log': logStub,
-        config: {
-          fluxSpecifics: {
-            cpu: {
-              cumulus: 2,
-              nimbus: 4,
-              stratus: 8,
-            },
-            ram: {
-              cumulus: 4000,
-              nimbus: 8000,
-              stratus: 16000,
-            },
-            hdd: {
-              cumulus: 220,
-              nimbus: 440,
-              stratus: 880,
-            },
-          },
-        },
-      });
-
-      const appSpec = {
-        version: 5,
-        geolocation: ['acEU_CZ_PRG'],
-      };
-
-      const result = await hwRequirementsWithMatchingGeo.checkAppGeolocationRequirements(appSpec);
-
-      expect(result).to.equal(true);
-    });
-
-    it('should throw if geolocation is forbidden', async () => {
-      const hwRequirementsWithForbiddenGeo = proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-        '../serviceHelper': serviceHelperStub,
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              cpucores: 4,
-              ram: 8000,
-              ssd: 100,
-            },
-          }),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-          getNodeGeolocation: sinon.stub().resolves({
-            continentCode: 'EU',
-            countryCode: 'CZ',
-            regionName: 'PRG',
-          }),
-        },
-        '../fluxNetworkHelper': {
-          getFluxNodeCount: sinon.stub().resolves(1000),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-        },
-        '../../lib/log': logStub,
-        config: {
-          fluxSpecifics: {
-            cpu: {
-              cumulus: 2,
-              nimbus: 4,
-              stratus: 8,
-            },
-            ram: {
-              cumulus: 4000,
-              nimbus: 8000,
-              stratus: 16000,
-            },
-            hdd: {
-              cumulus: 220,
-              nimbus: 440,
-              stratus: 880,
-            },
-          },
-        },
-      });
-
-      const appSpec = {
-        version: 5,
-        geolocation: ['a!cEU_CZ_PRG'],
-      };
-
-      try {
-        await hwRequirementsWithForbiddenGeo.checkAppGeolocationRequirements(appSpec);
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error).to.exist;
-      }
-    });
-
-    it('should throw if geolocation is not matching', async () => {
-      const hwRequirementsWithNonMatchingGeo = proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-        '../serviceHelper': serviceHelperStub,
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              cpucores: 4,
-              ram: 8000,
-              ssd: 100,
-            },
-          }),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-          getNodeGeolocation: sinon.stub().resolves({
-            continentCode: 'EU',
-            countryCode: 'CZ',
-            regionName: 'PRG',
-          }),
-        },
-        '../fluxNetworkHelper': {
-          getFluxNodeCount: sinon.stub().resolves(1000),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-        },
-        '../../lib/log': logStub,
-        config: {
-          fluxSpecifics: {
-            cpu: {
-              cumulus: 2,
-              nimbus: 4,
-              stratus: 8,
-            },
-            ram: {
-              cumulus: 4000,
-              nimbus: 8000,
-              stratus: 16000,
-            },
-            hdd: {
-              cumulus: 220,
-              nimbus: 440,
-              stratus: 880,
-            },
-          },
-        },
-      });
-
-      const appSpec = {
-        version: 5,
-        geolocation: ['acEU_PL_GDA'],
-      };
-
-      try {
-        await hwRequirementsWithNonMatchingGeo.checkAppGeolocationRequirements(appSpec);
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error).to.exist;
-      }
-    });
-  });
-
-  describe('checkAppHWRequirements tests', () => {
-    it('should throw error if there would be insufficient space on node for the app - 0 on the node', async () => {
-      const hwRequirementsWithResources = proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-        '../serviceHelper': serviceHelperStub,
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              cpucores: 0,
-              ram: 0,
-              ssd: 0,
-            },
-          }),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-          getNodeGeolocation: sinon.stub().returns('US-NY'),
-        },
-        '../fluxNetworkHelper': {
-          getFluxNodeCount: sinon.stub().resolves(1000),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-        },
-        '../appQuery/resourceQueryService': {
-          appsResources: sinon.stub().resolves({
-            status: 'success',
-            data: { appsCpusLocked: 0, appsRamLocked: 0, appsHddLocked: 0 },
-          }),
-        },
-        '../utils/specLibs': makeSpecLibsStub(),
-        '../../lib/log': logStub,
-        os: {
-          cpus: sinon.stub().returns(new Array(4)),
-          totalmem: sinon.stub().returns(8000 * 1024 * 1024),
-        },
-        config: {
-          fluxSpecifics: {
-            cpu: {
-              cumulus: 2,
-              nimbus: 4,
-              stratus: 8,
-            },
-            ram: {
-              cumulus: 4000,
-              nimbus: 8000,
-              stratus: 16000,
-            },
-            hdd: {
-              cumulus: 220,
-              nimbus: 440,
-              stratus: 880,
-            },
-          },
-          lockedSystemResources: {
-            cpu: 0,
-            ram: 0,
-            hdd: 0,
-            extrahdd: 0,
-          },
-        },
-      });
-
-      const appSpecs = {
-        cpu: 256000,
-        hdd: 100,
-        ram: 50,
-        version: 3,
-      };
-
-      try {
-        await hwRequirementsWithResources.checkAppHWRequirements(appSpecs);
-        expect.fail('Should have thrown error');
+        await hw.checkNodeResources(deployment);
+        expect.fail('expected throw');
       } catch (err) {
-        expect(err.message).to.include('Insufficient');
+        expect(err.message).to.include('Insufficient space');
       }
     });
 
-    it('should throw error if there would be insufficient space on node for the app', async () => {
-      const hwRequirementsWithLimitedSpace = proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-        '../serviceHelper': serviceHelperStub,
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              cpucores: 10,
-              ram: 20,
-              ssd: 90,
-            },
-          }),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-          getNodeGeolocation: sinon.stub().returns('US-NY'),
-        },
-        '../fluxNetworkHelper': {
-          getFluxNodeCount: sinon.stub().resolves(1000),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({
-            status: 'success',
-            data: [
-              {
-                version: 3,
-                tiered: true,
-                cpu: 1000,
-                ram: 256000,
-                hdd: 100000,
-                cpucumulus: 2000,
-                ramcumulus: 100000,
-                hddcumulus: 200000,
-              },
-            ],
-          }),
-        },
-        '../appQuery/resourceQueryService': {
-          appsResources: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              appsCpusLocked: 0,
-              appsRamLocked: 0,
-              appsHddLocked: 0,
-            },
-          }),
-        },
-        '../utils/specLibs': makeSpecLibsStub(),
-        '../../lib/log': logStub,
-        os: {
-          cpus: sinon.stub().returns(new Array(4)),
-          totalmem: sinon.stub().returns(8000 * 1024 * 1024),
-        },
-        config: {
-          fluxSpecifics: {
-            cpu: {
-              cumulus: 2,
-              nimbus: 4,
-              stratus: 8,
-            },
-            ram: {
-              cumulus: 4000,
-              nimbus: 8000,
-              stratus: 16000,
-            },
-            hdd: {
-              cumulus: 220,
-              nimbus: 440,
-              stratus: 880,
-            },
-          },
-          lockedSystemResources: {
-            cpu: 0,
-            ram: 0,
-            hdd: 0,
-            extrahdd: 0,
-          },
-        },
-      });
-
-      const appSpecs = {
-        cpu: 256000,
-        hdd: 100,
-        ram: 50,
-        version: 3,
-      };
-
+    it('throws when insufficient disk space', async () => {
+      const hw = buildHw({ ssd: 20, appsHddLocked: 10 });
+      const deployment = mockDeployment({ storage: 100 });
       try {
-        await hwRequirementsWithLimitedSpace.checkAppHWRequirements(appSpecs);
-        expect.fail('Should have thrown error');
+        await hw.checkNodeResources(deployment);
+        expect.fail('expected throw');
       } catch (err) {
-        expect(err.message).to.include('Insufficient');
+        expect(err.message).to.include('Insufficient space');
       }
     });
 
-    it('should throw error if there would be insufficient cpu power on node for the app', async () => {
-      const hwRequirementsWithLimitedCpu = proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-        '../serviceHelper': serviceHelperStub,
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              cpucores: 10,
-              ram: 20,
-              ssd: 2000000,
-            },
-          }),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-          getNodeGeolocation: sinon.stub().returns('US-NY'),
-        },
-        '../fluxNetworkHelper': {
-          getFluxNodeCount: sinon.stub().resolves(1000),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({
-            status: 'success',
-            data: [
-              {
-                version: 3,
-                tiered: true,
-                cpu: 1000,
-                ram: 256000,
-                hdd: 100000,
-                cpucumulus: 2000,
-                ramcumulus: 100000,
-                hddcumulus: 200000,
-              },
-            ],
-          }),
-        },
-        '../appQuery/resourceQueryService': {
-          appsResources: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              appsCpusLocked: 0,
-              appsRamLocked: 0,
-              appsHddLocked: 0,
-            },
-          }),
-        },
-        '../utils/specLibs': makeSpecLibsStub(),
-        '../../lib/log': logStub,
-        os: {
-          cpus: sinon.stub().returns(new Array(4)),
-          totalmem: sinon.stub().returns(8000 * 1024 * 1024),
-        },
-        config: {
-          fluxSpecifics: {
-            cpu: {
-              cumulus: 2,
-              nimbus: 4,
-              stratus: 8,
-            },
-            ram: {
-              cumulus: 4000,
-              nimbus: 8000,
-              stratus: 16000,
-            },
-            hdd: {
-              cumulus: 220,
-              nimbus: 440,
-              stratus: 880,
-            },
-          },
-          lockedSystemResources: {
-            cpu: 0,
-            ram: 0,
-            hdd: 0,
-            extrahdd: 0,
-          },
-        },
-      });
-
-      const appSpecs = {
-        cpu: 256000,
-        hdd: 100,
-        ram: 50,
-        version: 3,
-      };
-
+    it('throws when insufficient CPU', async () => {
+      const hw = buildHw({ cpucores: 4, appsCpusLocked: 3 });
+      const deployment = mockDeployment({ cpu: 100 });
       try {
-        await hwRequirementsWithLimitedCpu.checkAppHWRequirements(appSpecs);
-        expect.fail('Should have thrown error');
+        await hw.checkNodeResources(deployment);
+        expect.fail('expected throw');
       } catch (err) {
-        expect(err.message).to.include('Insufficient');
+        expect(err.message).to.include('Insufficient CPU');
       }
     });
 
-    it('should throw error if there would be insufficient ram on node for the app', async () => {
-      const hwRequirementsWithLimitedRam = proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-        '../serviceHelper': serviceHelperStub,
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              cpucores: 10000,
-              ram: 50,
-              ssd: 2000000,
-            },
-          }),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-          getNodeGeolocation: sinon.stub().returns('US-NY'),
-        },
-        '../fluxNetworkHelper': {
-          getFluxNodeCount: sinon.stub().resolves(1000),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({
-            status: 'success',
-            data: [
-              {
-                version: 3,
-                tiered: true,
-                cpu: 1000,
-                ram: 256000,
-                hdd: 100000,
-                cpucumulus: 2000,
-                ramcumulus: 100000,
-                hddcumulus: 200000,
-              },
-            ],
-          }),
-        },
-        '../appQuery/resourceQueryService': {
-          appsResources: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              appsCpusLocked: 0,
-              appsRamLocked: 0,
-              appsHddLocked: 0,
-            },
-          }),
-        },
-        '../utils/specLibs': makeSpecLibsStub(),
-        '../../lib/log': logStub,
-        os: {
-          cpus: sinon.stub().returns(new Array(4)),
-          totalmem: sinon.stub().returns(8000 * 1024 * 1024),
-        },
-        config: {
-          fluxSpecifics: {
-            cpu: {
-              cumulus: 2,
-              nimbus: 4,
-              stratus: 8,
-            },
-            ram: {
-              cumulus: 4000,
-              nimbus: 8000,
-              stratus: 16000,
-            },
-            hdd: {
-              cumulus: 220,
-              nimbus: 440,
-              stratus: 880,
-            },
-          },
-          lockedSystemResources: {
-            cpu: 0,
-            ram: 0,
-            hdd: 0,
-            extrahdd: 0,
-          },
-        },
-      });
-
-      const appSpecs = {
-        cpu: 4000,
-        hdd: 100,
-        ram: 50,
-        version: 3,
-      };
-
+    it('throws when insufficient RAM', async () => {
+      const hw = buildHw({ ram: 4000, appsRamLocked: 3000 });
+      const deployment = mockDeployment({ memory: 2000 });
       try {
-        await hwRequirementsWithLimitedRam.checkAppHWRequirements(appSpecs);
-        expect.fail('Should have thrown error');
+        await hw.checkNodeResources(deployment);
+        expect.fail('expected throw');
       } catch (err) {
-        expect(err.message).to.include('Insufficient');
+        expect(err.message).to.include('Insufficient RAM');
       }
     });
 
-    it('should return true if all reqs are met', async () => {
-      const hwRequirementsWithGoodResources = proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-        '../serviceHelper': serviceHelperStub,
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              cpucores: 10000,
-              ram: 256000,
-              ssd: 2000000,
-            },
-          }),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('cumulus'),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-          getNodeGeolocation: sinon.stub().returns('US-NY'),
-        },
-        '../fluxNetworkHelper': {
-          getFluxNodeCount: sinon.stub().resolves(1000),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({
-            status: 'success',
-            data: [],
-          }),
-        },
-        '../appQuery/resourceQueryService': {
-          appsResources: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              appsCpusLocked: 0,
-              appsRamLocked: 0,
-              appsHddLocked: 0,
-            },
-          }),
-        },
-        '../utils/specLibs': makeSpecLibsStub(),
-        '../../lib/log': logStub,
-        os: {
-          cpus: sinon.stub().returns(new Array(4)),
-          totalmem: sinon.stub().returns(8000 * 1024 * 1024),
-        },
-        config: {
-          fluxSpecifics: {
-            cpu: {
-              cumulus: 2,
-              nimbus: 4,
-              stratus: 8,
-            },
-            ram: {
-              cumulus: 4000,
-              nimbus: 8000,
-              stratus: 16000,
-            },
-            hdd: {
-              cumulus: 220,
-              nimbus: 440,
-              stratus: 880,
-            },
-          },
-          lockedSystemResources: {
-            cpu: 0,
-            ram: 0,
-            hdd: 0,
-            extrahdd: 0,
-          },
-        },
-      });
-
-      const appSpecs = {
-        cpu: 0.5,
-        hdd: 100,
-        ram: 50,
-        version: 3,
-      };
-
-      const result = await hwRequirementsWithGoodResources.checkAppHWRequirements(appSpecs);
-
-      expect(result).to.equal(true);
+    it('throws when appsResources cannot be read', async () => {
+      const hw = buildHw({ resourcesStatus: 'error' });
+      const deployment = mockDeployment();
+      try {
+        await hw.checkNodeResources(deployment);
+        expect.fail('expected throw');
+      } catch (err) {
+        expect(err.message).to.include('locked system resources');
+      }
     });
   });
 
-  describe('checkAppCpuBurstHeadroom tests', () => {
-    // Build a fresh hwRequirements module with plugable cpu/lock/app values.
-    // Formula: freeCoresAfterInstall = cpuCores - lockedSystemResources.cpu/10
-    //   - appsCpusLocked - appHWrequirements.cpu
-    // Throws when freeCoresAfterInstall <= 4.
-    function buildHw({ cpucores, appsCpusLocked, lockedCpuTenths = 10, appsResourcesStatus = 'success' }) {
-      return proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-        '../serviceHelper': serviceHelperStub,
-        '../utils/specLibs': makeSpecLibsStub(),
-        '../benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: { cpucores, ram: 8000, ssd: 1000 },
-          }),
-        },
-        '../generalService': {
-          nodeTier: sinon.stub().resolves('stratus'),
-        },
-        '../geolocationService': {
-          isStaticIP: sinon.stub().returns(true),
-          getNodeGeolocation: sinon.stub().returns('US-NY'),
-        },
-        '../fluxNetworkHelper': {
-          getFluxNodeCount: sinon.stub().resolves(1000),
-        },
-        '../appDatabase/registryManager': {
-          availableApps: sinon.stub().resolves([]),
-        },
-        '../appQuery/appQueryService': {
-          installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-        },
-        '../appQuery/resourceQueryService': {
-          appsResources: sinon.stub().resolves({
-            status: appsResourcesStatus,
-            data: { appsCpusLocked, appsRamLocked: 0, appsHddLocked: 0 },
-          }),
-        },
-        '../../lib/log': logStub,
-        os: {
-          cpus: sinon.stub().returns(new Array(cpucores)),
-          totalmem: sinon.stub().returns(8000 * 1024 * 1024),
-        },
-        config: {
-          fluxSpecifics: {
-            cpu: { cumulus: 2, nimbus: 4, stratus: 8 },
-            ram: { cumulus: 4000, nimbus: 8000, stratus: 16000 },
-            hdd: { cumulus: 220, nimbus: 440, stratus: 880 },
-          },
-          lockedSystemResources: {
-            cpu: lockedCpuTenths, ram: 0, hdd: 0, extrahdd: 0,
-          },
-        },
-      });
-    }
-
-    it('passes when remaining free cores after install are > 4', async () => {
-      // 16 cores - 1 (system) - 3 (locked) - 2 (this app) = 10 > 4 → ok
-      const hw = buildHw({ cpucores: 16, appsCpusLocked: 3 });
-      const result = await hw.checkAppCpuBurstHeadroom({ version: 3, cpu: 2, ram: 10, hdd: 10 });
-      expect(result).to.equal(true);
+  describe('checkCpuBurstHeadroom', () => {
+    it('passes when remaining free cores > 4', async () => {
+      // 16 cores - 1 (system) - 3 (locked) - 2 (this app) = 10 > 4
+      const hw = buildHw({ cpucores: 16, appsCpusLocked: 3, lockedCpu: 10 });
+      const deployment = mockDeployment({ cpu: 2 });
+      await hw.checkCpuBurstHeadroom(deployment);
     });
 
-    it('throws when remaining free cores would be exactly 4 (boundary)', async () => {
-      // 10 cores - 1 - 3 - 2 = 4 → throw (rule is strict <=)
-      const hw = buildHw({ cpucores: 10, appsCpusLocked: 3 });
+    it('throws when remaining free cores exactly 4 (boundary)', async () => {
+      // 10 cores - 1 - 3 - 2 = 4 → throw
+      const hw = buildHw({ cpucores: 10, appsCpusLocked: 3, lockedCpu: 10 });
+      const deployment = mockDeployment({ cpu: 2 });
       try {
-        await hw.checkAppCpuBurstHeadroom({ version: 3, cpu: 2, ram: 10, hdd: 10 });
-        expect.fail('should have thrown');
+        await hw.checkCpuBurstHeadroom(deployment);
+        expect.fail('expected throw');
       } catch (err) {
         expect(err.message).to.include('CPU burst headroom');
       }
     });
 
-    it('passes at 5 free cores (just above the boundary)', async () => {
-      // 10 cores - 1 - 3 - 1 = 5 > 4 → ok
-      const hw = buildHw({ cpucores: 10, appsCpusLocked: 3 });
-      const result = await hw.checkAppCpuBurstHeadroom({ version: 3, cpu: 1, ram: 10, hdd: 10 });
-      expect(result).to.equal(true);
+    it('passes at 5 free cores (just above boundary)', async () => {
+      // 10 cores - 1 - 3 - 1 = 5 > 4
+      const hw = buildHw({ cpucores: 10, appsCpusLocked: 3, lockedCpu: 10 });
+      const deployment = mockDeployment({ cpu: 1 });
+      await hw.checkCpuBurstHeadroom(deployment);
     });
 
-    it('throws when remaining free cores would be negative (over-subscribed)', async () => {
-      // 8 cores - 1 - 5 - 4 = -2 → throw
-      const hw = buildHw({ cpucores: 8, appsCpusLocked: 5 });
+    it('throws when over-subscribed (negative free cores)', async () => {
+      // 8 cores - 1 - 5 - 4 = -2
+      const hw = buildHw({ cpucores: 8, appsCpusLocked: 5, lockedCpu: 10 });
+      const deployment = mockDeployment({ cpu: 4 });
       try {
-        await hw.checkAppCpuBurstHeadroom({ version: 3, cpu: 4, ram: 10, hdd: 10 });
-        expect.fail('should have thrown');
+        await hw.checkCpuBurstHeadroom(deployment);
+        expect.fail('expected throw');
       } catch (err) {
         expect(err.message).to.include('CPU burst headroom');
       }
     });
 
     it('throws when appsResources cannot be read', async () => {
-      const hw = buildHw({ cpucores: 16, appsCpusLocked: 0, appsResourcesStatus: 'error' });
+      const hw = buildHw({ resourcesStatus: 'error' });
+      const deployment = mockDeployment();
       try {
-        await hw.checkAppCpuBurstHeadroom({ version: 3, cpu: 1, ram: 10, hdd: 10 });
-        expect.fail('should have thrown');
+        await hw.checkCpuBurstHeadroom(deployment);
+        expect.fail('expected throw');
       } catch (err) {
         expect(err.message).to.include('locked system resources');
       }
     });
-
-    it('sums cpu across compose components for v4+ apps', async () => {
-      // 10 cores - 1 - 0 - (3+3) = 0 → throw (compose summed)
-      const hw = buildHw({ cpucores: 10, appsCpusLocked: 0 });
-      const appSpecs = {
-        version: 4,
-        compose: [
-          { name: 'c1', cpu: 3, ram: 10, hdd: 10 },
-          { name: 'c2', cpu: 3, ram: 10, hdd: 10 },
-        ],
-      };
-      try {
-        await hw.checkAppCpuBurstHeadroom(appSpecs);
-        expect.fail('should have thrown');
-      } catch (err) {
-        expect(err.message).to.include('CPU burst headroom');
-      }
-    });
   });
 
-  describe('exported functions', () => {
-    it('should export requirement checking functions', () => {
-      expect(hwRequirements.checkAppHWRequirements).to.be.a('function');
-      expect(hwRequirements.checkAppCpuBurstHeadroom).to.be.a('function');
-      expect(hwRequirements.checkAppStaticIpRequirements).to.be.a('function');
-      expect(hwRequirements.checkAppNodesRequirements).to.be.a('function');
-      expect(hwRequirements.checkAppGeolocationRequirements).to.be.a('function');
+  // ── Exports ─────────────────────────────────────────────────────
+
+  describe('exports', () => {
+    it('exports the expected functions', () => {
+      const hw = buildHw();
+      expect(hw.checkPlacement).to.be.a('function');
+      expect(hw.checkNodeResources).to.be.a('function');
+      expect(hw.checkCpuBurstHeadroom).to.be.a('function');
+      expect(hw.systemArchitecture).to.be.a('function');
+      expect(hw.getNodeSpecs).to.be.a('function');
     });
   });
 });
