@@ -573,7 +573,7 @@ module.exports = {
     // that were never required to agree on the time.
     siblingAskValidityMs: 60000,
     spawnReconfirmDelayMs: 7500000,
-    nonEnterpriseSpawnDelayMs: 120000,
+    unencryptedSpawnDelayMs: 120000,
     globalCmdDelayMs: 500,
     // How many times a global command retries a node that answers 503 while it
     // is still reconciling its apps after boot. The refusal carries a 15s
@@ -612,12 +612,13 @@ module.exports = {
     nodeMonitorCheckIntervalMs: 120000,
     nodeMonitorCheckTimeoutMs: 10000,
     spawnDeferrals: {
-      staticIpMs: { enterprise: 1620000, standard: 3420000 },
-      datacenterMs: { enterprise: 1620000, standard: 3420000 },
+      targetedNodesMs: { encrypted: 1800000, standard: 3420000 },
+      staticIpMs: { encrypted: 1620000, standard: 3420000 },
+      datacenterMs: { encrypted: 1620000, standard: 3420000 },
       capacityGap: {
-        largeMs: { enterprise: 1800000, standard: 7020000 },
-        mediumMs: { enterprise: 1260000, standard: 5220000 },
-        smallMs: { enterprise: 720000, standard: 3420000 },
+        largeMs: { encrypted: 1800000, standard: 7020000 },
+        mediumMs: { encrypted: 1260000, standard: 5220000 },
+        smallMs: { encrypted: 720000, standard: 3420000 },
       },
     },
     spawnDelayMultiplier: 1,
