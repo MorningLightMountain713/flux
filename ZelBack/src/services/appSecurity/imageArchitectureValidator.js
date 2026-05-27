@@ -18,7 +18,6 @@ async function verifyImageRegistryAndArchitectures(spec, options = {}) {
     // eslint-disable-next-line no-await-in-loop
     const result = await imageManager.verifyRepository(comp.image, {
       repoauth: comp.imageAuth || null,
-      specVersion: spec.version,
       appName: spec.name,
     });
 

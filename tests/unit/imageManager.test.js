@@ -58,7 +58,6 @@ describe('imageManager tests', () => {
     it('should verify repository with authentication', async () => {
       await imageManager.verifyRepository('test/app:latest', {
         repoauth: 'myuser:mytoken',
-        specVersion: 8,
         appName: 'testapp',
       });
 
@@ -72,7 +71,6 @@ describe('imageManager tests', () => {
       try {
         await imageManager.verifyRepository('test/app:latest', {
           repoauth: 'invalid_credentials',
-          specVersion: 7,
           appName: 'testapp',
         });
         expect.fail('Should have thrown an error');
