@@ -172,7 +172,7 @@ describe('messageStore tests', () => {
 
       const result = await messageStore.storeAppTemporaryMessage(message);
 
-      expect(result).to.be.false;
+      expect(result).to.equal(false);
       expect(dbHelperStub.insertOneToDatabase.called).to.be.false;
     });
 
@@ -194,11 +194,11 @@ describe('messageStore tests', () => {
 
       const result = await messageStore.storeAppTemporaryMessage(message);
 
-      expect(result).to.be.false;
+      expect(result).to.equal(false);
       expect(dbHelperStub.insertOneToDatabase.called).to.be.false;
     });
 
-    it('should store new temporary message and return true', async () => {
+    it('should store new temporary message and return rebroadcast true', async () => {
       const message = {
         type: 'fluxappregister',
         version: 1,
@@ -217,8 +217,36 @@ describe('messageStore tests', () => {
 
       const result = await messageStore.storeAppTemporaryMessage(message, { furtherVerification: false });
 
-      expect(result).to.be.true;
+      expect(result).to.deep.equal({ rebroadcast: true });
       expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
+    });
+
+    it('should return promotion info when hash is already on chain', async () => {
+      const message = {
+        type: 'fluxappregister',
+        version: 1,
+        appSpecifications: { name: 'test' },
+        hash: 'hash123',
+        timestamp: Date.now(),
+        signature: 'sig123',
+      };
+
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves(null);
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves({ height: 500, txid: 'txid123', value: 10000 });
+      dbHelperStub.insertOneToDatabase.resolves();
+
+      const result = await messageStore.storeAppTemporaryMessage(message, { furtherVerification: false });
+
+      expect(result.rebroadcast).to.equal(false);
+      expect(result.promotion).to.deep.equal({
+        hash: 'hash123',
+        txid: 'txid123',
+        height: 500,
+        value: 10000,
+      });
     });
 
     it('should handle database errors gracefully', async () => {
@@ -267,10 +295,9 @@ describe('messageStore tests', () => {
 
       messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', buildProxyquireStubs());
 
-      // v5->v6 update should be accepted -- version policy is enforced at API layer, not here
       const result = await messageStore.storeAppTemporaryMessage(message);
 
-      expect(result).to.be.true;
+      expect(result).to.deep.equal({ rebroadcast: true });
       expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
     });
   });
