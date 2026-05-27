@@ -24,6 +24,7 @@ const {
 const { invalidMessages } = require('../invalidMessages');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const globalState = require('../utils/globalState');
+const { processPendingUpdates } = require('./messageStore');
 
 // Import hashesNumberOfSearchs from appsService - this should be shared state
 // For now, we'll create a local instance, but ideally this should be moved to globalState
@@ -316,25 +317,6 @@ async function handleExpiredApp(name) {
     // eslint-disable-next-line global-require
     const appUninstaller = require('../appLifecycle/appUninstaller');
     await appUninstaller.uninstallApplication(name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
-  }
-}
-
-async function processPendingUpdates(appName) {
-  const pendingUpdates = globalState.getPendingUpdates(appName);
-  if (pendingUpdates.length === 0) return;
-  log.info(`Processing ${pendingUpdates.length} pending updates for ${appName}`);
-  // eslint-disable-next-line global-require
-  const messageStore = require('./messageStore');
-  for (let idx = 0; idx < pendingUpdates.length; idx += 1) {
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await messageStore.storeAppTemporaryMessage(pendingUpdates[idx].message);
-      log.info(`Processed pending update ${idx + 1}/${pendingUpdates.length} for ${appName}`);
-    } catch (error) {
-      log.warn(`Pending update for ${appName} failed: ${error.message}. Clearing ${pendingUpdates.length - idx} remaining updates.`);
-      globalState.clearPendingUpdates(appName);
-      break;
-    }
   }
 }
 
