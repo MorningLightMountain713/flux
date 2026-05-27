@@ -5,31 +5,45 @@ const proxyquire = require('proxyquire').noCallThru();
 describe('messageStore tests', () => {
   let messageStore;
   let dbHelperStub;
-  let serviceHelperStub;
   let appsRepositoryStub;
   let appEventVerifierStub;
-  let deserializeSpecStub;
-  let validateSubmissionSpecStub;
   let logStub;
   let configStub;
 
-  function makeDeserializeSpecStub() {
-    return sinon.stub().callsFake((spec) => Promise.resolve({
-      serialize: () => spec,
-      isEncrypted: false,
-      name: spec.name,
-      owner: spec.owner,
-    }));
+  function makeMockAppEvent(message) {
+    const specs = message.appSpecifications || message.zelAppSpecifications || {};
+    return {
+      hash: message.hash,
+      timestamp: message.timestamp,
+      spec: {
+        name: specs.name,
+        owner: specs.owner,
+        version: specs.version || 1,
+        serialize: () => specs,
+      },
+      isRegistration: message.type === 'fluxappregister' || message.type === 'zelappregister',
+      isUpdate: message.type === 'fluxappupdate' || message.type === 'zelappupdate',
+      isEncrypted: () => false,
+      serialize: () => ({
+        type: message.type,
+        version: message.version,
+        appSpecifications: specs,
+        hash: message.hash,
+        timestamp: message.timestamp,
+        signature: message.signature,
+      }),
+    };
   }
 
   function buildProxyquireStubs(overrides = {}) {
     return {
       config: configStub,
       '../dbHelper': dbHelperStub,
-      '../serviceHelper': serviceHelperStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       './appEventVerifier': appEventVerifierStub,
+      './messageVerifier': { checkAndRequestApp: sinon.stub().resolves() },
       '../../lib/log': logStub,
+      '../fluxService': { isSystemSecure: sinon.stub().resolves(false) },
       '../daemonService/daemonServiceMiscRpcs': {
         isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
       },
@@ -39,15 +53,8 @@ describe('messageStore tests', () => {
       '../appDatabase/appSpecHistory': {
         getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1' }),
       },
-      '../utils/specCutover': {
-        deserializeSpec: deserializeSpecStub,
-      },
       '../utils/specLibs': {
-        validateSubmissionSpec: validateSubmissionSpecStub,
         getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
-      },
-      '../providers/FluxOSLegacyCryptoProvider': {
-        create: sinon.stub().resolves({}),
       },
       '../utils/globalState': {
         queuePendingUpdate: sinon.stub(),
@@ -90,23 +97,17 @@ describe('messageStore tests', () => {
       countInDatabase: sinon.stub(),
     };
 
-    serviceHelperStub = {
-      ensureNumber: sinon.stub().returnsArg(0),
-    };
-
     appsRepositoryStub = {
       getPermanentMessage: sinon.stub(),
       getTempMessage: sinon.stub(),
     };
 
     appEventVerifierStub = {
+      deserializeTempMessage: sinon.stub().callsFake((msg) => Promise.resolve(makeMockAppEvent(msg))),
       deserializeMessage: sinon.stub().resolves({}),
       authorize: sinon.stub().resolves(),
       instantiatePreviousSpec: sinon.stub().resolves(null),
     };
-
-    deserializeSpecStub = makeDeserializeSpecStub();
-    validateSubmissionSpecStub = sinon.stub().resolves();
 
     logStub = {
       error: sinon.stub(),
@@ -131,6 +132,7 @@ describe('messageStore tests', () => {
       },
       fluxapps: {
         maxAppsPerNode: 200,
+        appSpecsEnforcementHeights: {},
       },
     };
 

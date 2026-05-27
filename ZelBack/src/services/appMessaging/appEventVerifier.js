@@ -11,6 +11,14 @@ async function deserializeMessage(message) {
   return AppEventLegacy.deserialize(message);
 }
 
+async function deserializeTempMessage(message) {
+  const { AppEventLegacy, SignedAppEvent } = await getSpecBackend();
+  if (message.version === 2) {
+    return SignedAppEvent.deserialize(message);
+  }
+  return AppEventLegacy.deserialize(message);
+}
+
 async function verifyFn(payload, address, signature) {
   return signatureVerifier.verifySignature(payload, address, signature);
 }
@@ -99,6 +107,7 @@ async function computeOutboundHash({
 
 module.exports = {
   deserializeMessage,
+  deserializeTempMessage,
   authorize,
   instantiatePreviousSpec,
   computeOutboundHash,
