@@ -504,7 +504,7 @@ async function callOtherNodeToKeepUpnpPortsOpen() {
     const { DeploymentSpec } = await getSpecBackend();
     for (const app of apps) {
       // eslint-disable-next-line no-await-in-loop
-      const spec = await deserializeSpec(app);
+      const spec = await resolveSpec(app);
       if (!spec) continue;
       const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
       ports.push(...deployment.allHostPorts());
