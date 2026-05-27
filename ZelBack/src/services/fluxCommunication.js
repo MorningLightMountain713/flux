@@ -5,6 +5,7 @@ const WebSocket = require('ws');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const messageStore = require('./appMessaging/messageStore');
+const messageVerifier = require('./appMessaging/messageVerifier');
 const verificationHelper = require('./verificationHelper');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
@@ -70,8 +71,15 @@ async function handleAppMessages(message, fromIP, port) {
     // check if we have it in database and if not add
     // if not in database, rebroadcast to all connections
     // do furtherVerification of message
-    const rebroadcastToPeers = await messageStore.storeAppTemporaryMessage(message.data);
-    if (rebroadcastToPeers === true) {
+    const storeResult = await messageStore.storeAppTemporaryMessage(message.data);
+    if (storeResult.promotion) {
+      setImmediate(() => {
+        const p = storeResult.promotion;
+        messageVerifier.checkAndRequestApp(p.hash, p.txid, p.height, p.value, 2)
+          .catch((err) => log.error(`Immediate promotion failed for ${p.hash}: ${err.message}`));
+      });
+    }
+    if (storeResult.rebroadcast) {
       fluxEventBus.publish('network:appmessage', { hash: message.data.hash, type: message.data.type, name: message.data.appSpecifications?.name });
       announceToPeers(message, `${fromIP}:${port}`);
     }
@@ -152,7 +160,7 @@ async function handleTempSyncResponse(message, peerSocket) {
     for (const msg of messages) {
       try {
         const result = await messageStore.storeAppTemporaryMessage(msg, { furtherVerification: true });
-        if (result === true || result === false) stored += 1;
+        if (result && typeof result === 'object' && 'rebroadcast' in result) stored += 1;
       } catch (err) {
         log.error(`Temp sync message failed: ${err.message}`);
       }
