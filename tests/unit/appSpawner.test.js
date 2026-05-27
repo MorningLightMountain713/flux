@@ -26,15 +26,15 @@ describe('appSpawner tests', () => {
         maxAppsPerNode: 200,
         installCollisionWaitMs: 5000,
         spawnReconfirmDelayMs: 10000,
-        nonEnterpriseSpawnDelayMs: 120000,
+        unencryptedSpawnDelayMs: 120000,
         spawnDeferrals: {
-          targetedNodesMs: { standard: 300000, enterprise: 60000 },
-          staticIpMs: { standard: 300000, enterprise: 60000 },
-          datacenterMs: { standard: 300000, enterprise: 60000 },
+          targetedNodesMs: { standard: 300000, encrypted: 60000 },
+          staticIpMs: { standard: 300000, encrypted: 60000 },
+          datacenterMs: { standard: 300000, encrypted: 60000 },
           capacityGap: {
-            largeMs: { standard: 300000, enterprise: 60000 },
-            mediumMs: { standard: 300000, enterprise: 60000 },
-            smallMs: { standard: 300000, enterprise: 60000 },
+            largeMs: { standard: 300000, encrypted: 60000 },
+            mediumMs: { standard: 300000, encrypted: 60000 },
+            smallMs: { standard: 300000, encrypted: 60000 },
           },
         },
         ...overrides,
@@ -96,7 +96,7 @@ describe('appSpawner tests', () => {
       owner: spec.owner,
       hash: overrides.hash || 'abc123',
       spec,
-      isEncrypted: () => false,
+      isEncrypted: () => !!overrides.encrypted,
       serialize: () => overrides,
     };
   }
