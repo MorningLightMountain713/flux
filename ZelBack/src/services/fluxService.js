@@ -2076,18 +2076,8 @@ async function streamChain(req, res) {
   }
 }
 
-// Return boolean true if system is running ArcaneOS
 async function isSystemSecure() {
-  try {
-    const benchmarkResponse = await benchmarkService.getBenchmarks();
-    if (benchmarkResponse.status === 'error') {
-      throw new Error('Not possible to check if node is ArcaneOS.');
-    }
-    return benchmarkResponse.data.systemsecure;
-  } catch (error) {
-    log.error(error);
-    return false;
-  }
+  return benchmarkService.isSystemSecure();
 }
 
 /**
