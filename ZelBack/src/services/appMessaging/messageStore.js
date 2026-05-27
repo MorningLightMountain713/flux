@@ -7,7 +7,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
 const messageVerifier = require('./messageVerifier');
 const registryManager = require('../appDatabase/registryManager');
-const { getSpec } = require('../utils/specLibs');
+const { getSpec, validateSubmissionSpec } = require('../utils/specLibs');
 const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const {
@@ -118,21 +118,19 @@ async function storeAppTemporaryMessage(message, options = {}) {
   }
 
   if (furtherVerification) {
-    const specVersion = appEvent.spec.version;
-    const enforcementHeight = config.fluxapps.appSpecsEnforcementHeights[specVersion];
-    if (enforcementHeight && block < enforcementHeight) {
-      throw new Error(`Flux apps specifications of version ${specVersion} not yet supported`);
-    }
-
-    let validationSpec = appEvent.spec;
+    let validationBlob;
     if (appEvent.isEncrypted()) {
       if (await fluxService.isSystemSecure()) {
         const provider = await appEvent.spec.createProvider();
         const decrypted = await appEvent.spec.decrypt(provider);
-        validationSpec = decrypted;
-      } else {
-        validationSpec = null;
+        validationBlob = decrypted.spec.serialize();
       }
+    } else {
+      validationBlob = message.appSpecifications || message.zelAppSpecifications;
+    }
+
+    if (validationBlob) {
+      await validateSubmissionSpec(validationBlob, { height: block });
     }
 
     let previousAppSpecs = null;
@@ -145,12 +143,12 @@ async function storeAppTemporaryMessage(message, options = {}) {
       }
     }
 
-    if (validationSpec) {
+    if (validationBlob) {
       if (appEvent.isRegistration) {
         await registryManager.checkApplicationRegistrationNameConflicts(appEvent.spec, appEvent.hash);
       } else if (previousAppSpecs) {
         const { UpdatePolicy } = await getSpec();
-        UpdatePolicy.assertCompatible(previousAppSpecs, validationSpec);
+        UpdatePolicy.assertCompatible(previousAppSpecs, appEvent.spec);
       }
     }
 
