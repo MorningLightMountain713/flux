@@ -16,43 +16,29 @@ const { ImageVerifier } = require('./imageVerifier');
 const { RepoAuthParser } = require('../registryAuth/utils/repoAuthParser');
 const { AuthProviderFactory } = require('../registryAuth/services/authProviderFactory');
 
+const PGP_ARMOR_PREFIX = '-----BEGIN PGP MESSAGE-----';
+
 /**
  * Get credentials for docker registry authentication
  *
  * @param {string} repotag - Docker image tag (e.g., "nginx:latest" or "123.dkr.ecr.us-east-1.amazonaws.com/app:v1")
- * @param {string} repoauth - Authentication string (encrypted for v7, plain for v8+)
- * @param {number} specVersion - Application specification version (7, 8, etc.)
+ * @param {string} repoauth - Authentication string (PGP-armored or plaintext)
  * @param {string} appName - Application name for per-app provider caching isolation
  * @returns {Promise<{username: string, password: string}|null>} Credentials object or null if no auth
  * @throws {Error} If decryption fails or credentials are invalid
  */
-async function getCredentials(repotag, repoauth, specVersion, appName) {
-  // No authentication needed
+async function getCredentials(repotag, repoauth, appName) {
   if (!repoauth) {
     return null;
   }
 
-  // Validate specVersion is a positive integer
-  if (typeof specVersion !== 'number' || !Number.isInteger(specVersion) || specVersion < 1) {
-    throw new Error(`specVersion must be a positive integer, got: ${specVersion} (type: ${typeof specVersion})`);
-  }
-
-  if (specVersion < 7) {
-    throw new Error('Specs less than 7 do not have repoauth');
-  }
-
-  // Version-aware decryption
   let plainRepoauth;
-
-  if (specVersion === 7) {
-    // v7: repoauth is PGP encrypted
+  if (typeof repoauth === 'string' && repoauth.startsWith(PGP_ARMOR_PREFIX)) {
     plainRepoauth = await pgpService.decryptMessage(repoauth);
-
     if (!plainRepoauth) {
       throw new Error('Unable to decrypt provided credentials');
     }
   } else {
-    // v8+: repoauth is already plain text (was inside encrypted enterprise blob)
     plainRepoauth = repoauth;
   }
 
