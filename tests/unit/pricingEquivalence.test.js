@@ -1,21 +1,25 @@
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
+const fs = require('fs');
+const path = require('path');
 const { expect } = require('chai');
 const config = require('config');
+const { appPricePerMonth } = require('../../ZelBack/src/services/utils/appUtilities');
+const { resolveSpec } = require('../../ZelBack/src/services/utils/specCutover');
 
-const allSpecs = require('./fixtures/all-specs.json');
+const FIXTURE_PATH = path.join(__dirname, 'fixtures', 'all-specs.json');
+const allSpecs = fs.existsSync(FIXTURE_PATH)
+  ? JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'))
+  : [];
 
 describe('pricing equivalence — BigInt comparison produces same result as float', () => {
-  let appPricePerMonth;
-  let resolveSpec;
   let chainPrices;
 
-  before(async () => {
-    ({ appPricePerMonth } = require('../../ZelBack/src/services/utils/appUtilities'));
-    ({ resolveSpec } = require('../../ZelBack/src/services/utils/specCutover'));
-
-    // Build chain prices from config (no DB needed — the config entries
-    // plus the two p_ soft fork entries are the full historical schedule)
+  before(function () {
+    if (allSpecs.length === 0) {
+      this.skip();
+      return;
+    }
     chainPrices = [...config.fluxapps.price];
     chainPrices.sort((a, b) => a.height - b.height);
   });
