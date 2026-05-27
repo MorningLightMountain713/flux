@@ -1318,7 +1318,7 @@ async function updateAppGlobaly(params) {
   }
 
   const wireForm = wireSpec.serialize();
-  const appEvent = await appEventVerifier.deserializeMessage({
+  const appEvent = await appEventVerifier.deserializeTempMessage({
     type: cleanMessageType,
     version: cleanTypeVersion,
     appSpecifications: wireForm,
@@ -1326,7 +1326,7 @@ async function updateAppGlobaly(params) {
     signature: cleanSignature,
   });
   const previousSpec = await appEventVerifier.instantiatePreviousSpec(appInfo);
-  await appEventVerifier.authorize({ appEvent, previousSpec, daemonHeight });
+  await appEventVerifier.authorize({ appEvent, previousSpec, daemonHeight, verifyHash: false });
 
   const { latestSupportedSpecVersion } = config.fluxapps;
   if (appInfo.version !== spec.version && spec.version !== latestSupportedSpecVersion) {
