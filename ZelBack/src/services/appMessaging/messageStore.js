@@ -1,15 +1,14 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
-const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const fluxService = require('../fluxService');
 const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
+const messageVerifier = require('./messageVerifier');
 const registryManager = require('../appDatabase/registryManager');
-const { validateSubmissionSpec, getSpec } = require('../utils/specLibs');
-const { deserializeSpec } = require('../utils/specCutover');
+const { getSpec } = require('../utils/specLibs');
 const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
-const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const globalState = require('../utils/globalState');
 const {
   globalAppsMessages,
@@ -71,14 +70,7 @@ async function getPreviousOwner(appName, currentOwner) {
  */
 async function storeAppTemporaryMessage(message, options = {}) {
   const furtherVerification = options.furtherVerification ?? true;
-  /* message object
-  * @param type string
-  * @param version number
-  * @param appSpecifications object
-  * @param hash string
-  * @param timestamp number
-  * @param signature string
-  */
+
   if (!message || typeof message !== 'object' || typeof message.type !== 'string' || typeof message.version !== 'number' || typeof message.signature !== 'string' || typeof message.timestamp !== 'number' || typeof message.hash !== 'string') {
     return new Error('Invalid Flux App message for storing');
   }
@@ -86,26 +78,25 @@ async function storeAppTemporaryMessage(message, options = {}) {
     return new Error('Invalid Flux App message for storing');
   }
 
-  const specifications = message.appSpecifications;
+  let appEvent;
+  try {
+    appEvent = await appEventVerifier.deserializeTempMessage(message);
+  } catch (err) {
+    return new Error(`Invalid Flux App message: ${err.message}`);
+  }
 
-  const wireSpec = await deserializeSpec(specifications);
-  const appSpecFormatted = wireSpec.serialize();
-  const messageTimestamp = serviceHelper.ensureNumber(message.timestamp);
-  const messageVersion = serviceHelper.ensureNumber(message.version);
-
-  const appMessage = await appsRepository.getPermanentMessage(message.hash);
+  const appMessage = await appsRepository.getPermanentMessage(appEvent.hash);
   if (appMessage) {
     return false;
   }
-  const tempMessage = await appsRepository.getTempMessage(message.hash);
+  const tempMessage = await appsRepository.getTempMessage(appEvent.hash);
   if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
-    // do not rebroadcast further
     return false;
   }
 
   let isAppRequested = false;
   const db = dbHelper.databaseConnection();
-  const query = { hash: message.hash };
+  const query = { hash: appEvent.hash };
   const projection = {
     projection: {
       _id: 0,
@@ -123,58 +114,47 @@ async function storeAppTemporaryMessage(message, options = {}) {
   if (result && !result.message) {
     isAppRequested = true;
     block = result.height;
-    appSyncEvents.emit(SYNC_EVENTS.HASH_RESPONSE_RECEIVED, message.hash);
+    appSyncEvents.emit(SYNC_EVENTS.HASH_RESPONSE_RECEIVED, appEvent.hash);
   }
 
-  // data shall already be verified by the broadcasting node. But verify all again.
-  // this takes roughly at least 1 second
   if (furtherVerification) {
-    const appRegistration = message.type === 'zelappregister' || message.type === 'fluxappregister';
+    const specVersion = appEvent.spec.version;
+    const enforcementHeight = config.fluxapps.appSpecsEnforcementHeights[specVersion];
+    if (enforcementHeight && block < enforcementHeight) {
+      throw new Error(`Flux apps specifications of version ${specVersion} not yet supported`);
+    }
+
+    let validationSpec = appEvent.spec;
+    if (appEvent.isEncrypted()) {
+      if (await fluxService.isSystemSecure()) {
+        const provider = await appEvent.spec.createProvider();
+        const decrypted = await appEvent.spec.decrypt(provider);
+        validationSpec = decrypted;
+      } else {
+        validationSpec = null;
+      }
+    }
 
     let previousAppSpecs = null;
-    if (!appRegistration) {
-      previousAppSpecs = await getPreviousAppSpecifications(appSpecFormatted, messageTimestamp);
+    if (!appEvent.isRegistration) {
+      previousAppSpecs = await getPreviousAppSpecifications(appEvent.spec, appEvent.timestamp);
       if (!previousAppSpecs) {
-        const appName = appSpecFormatted.name;
-        log.info(`Queueing update for ${appName} - registration not yet stored`);
-        globalState.queuePendingUpdate(appName, message, block);
+        log.info(`Queueing update for ${appEvent.spec.name} - registration not yet stored`);
+        globalState.queuePendingUpdate(appEvent.spec.name, message, block);
         return false;
       }
     }
 
-    let validationBlob;
-    if (wireSpec && wireSpec.isEncrypted) {
-      // eslint-disable-next-line global-require
-      const fluxService = require('../fluxService');
-      if (await fluxService.isSystemSecure()) {
-        const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
-        const decrypted = await wireSpec.decrypt(provider);
-        validationBlob = decrypted.spec.serialize();
-      }
-    } else {
-      validationBlob = appSpecFormatted;
-    }
-
-    if (validationBlob) {
-      await validateSubmissionSpec(validationBlob, { height: block });
-      if (appRegistration) {
-        await registryManager.checkApplicationRegistrationNameConflicts(validationBlob, message.hash);
-      } else {
+    if (validationSpec) {
+      if (appEvent.isRegistration) {
+        await registryManager.checkApplicationRegistrationNameConflicts(appEvent.spec, appEvent.hash);
+      } else if (previousAppSpecs) {
         const { UpdatePolicy } = await getSpec();
-        const newSpec = await deserializeSpec(validationBlob);
-        if (newSpec && previousAppSpecs) UpdatePolicy.assertCompatible(previousAppSpecs, newSpec);
+        UpdatePolicy.assertCompatible(previousAppSpecs, validationSpec);
       }
     }
 
-    let appEvent;
-    try {
-      appEvent = await appEventVerifier.deserializeMessage(message);
-    } catch (err) {
-      log.error(err);
-      throw new Error(`Invalid Flux App message: ${err.message}`);
-    }
-
-    const previousSpec = appRegistration
+    const previousSpec = appEvent.isRegistration
       ? null
       : await appEventVerifier.instantiatePreviousSpec(previousAppSpecs);
 
@@ -186,33 +166,35 @@ async function storeAppTemporaryMessage(message, options = {}) {
   }
 
   const receivedAt = Date.now();
-  const validTill = receivedAt + (60 * 60 * 1000); // 60 minutes
+  const validTill = receivedAt + (60 * 60 * 1000);
 
-  const newMessage = {
-    appSpecifications: appSpecFormatted,
-    type: message.type, // shall be fluxappregister, fluxappupdate
-    version: messageVersion,
-    hash: message.hash,
-    timestamp: messageTimestamp,
-    signature: message.signature,
+  const serialized = appEvent.serialize();
+  const value = {
+    type: serialized.type,
+    version: serialized.version,
+    appSpecifications: serialized.appSpecifications,
+    hash: serialized.hash,
+    timestamp: serialized.timestamp,
+    signature: serialized.signature,
     receivedAt: new Date(receivedAt),
     expireAt: new Date(validTill),
     arcaneSender: message.arcaneSender,
   };
-  const value = newMessage;
+  if (serialized.contentHash !== undefined) {
+    value.contentHash = serialized.contentHash;
+    value.extend = serialized.extend;
+  }
 
   database = db.db(config.database.appsglobal.database);
-  // message does not exist anywhere and is ok, store it
   await dbHelper.insertOneToDatabase(database, globalAppsTempMessages, value).catch((error) => {
     log.error(error);
     throw error;
   });
-  // it is stored and rebroadcasted
   if (isAppRequested) {
     if (result && result.txid && result.height) {
       setImmediate(() => {
-        messageVerifier.checkAndRequestApp(message.hash, result.txid, result.height, result.value, 2)
-          .catch((err) => log.error(`Immediate promotion failed for ${message.hash}: ${err.message}`));
+        messageVerifier.checkAndRequestApp(appEvent.hash, result.txid, result.height, result.value, 2)
+          .catch((err) => log.error(`Immediate promotion failed for ${appEvent.hash}: ${err.message}`));
       });
     }
     return false;

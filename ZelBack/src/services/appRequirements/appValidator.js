@@ -251,7 +251,7 @@ async function registerAppGlobalyApi(req, res) {
         ? wireSpec.serialize()
         : appSpecFormatted;
 
-      const signedEvent = await appEventVerifier.deserializeMessage({
+      const signedEvent = await appEventVerifier.deserializeTempMessage({
         type: messageType,
         version: typeVersion,
         appSpecifications: broadcastSpecBlob,
