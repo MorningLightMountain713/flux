@@ -14,7 +14,6 @@ const registryCredentialHelper = require('./utils/registryCredentialHelper');
 const { ImageVerifier } = require('./utils/imageVerifier');
 const serviceHelper = require('./serviceHelper');
 const deploymentProvider = require('./appRuntime/deploymentProvider');
-const appsRepository = require('./appDatabase/appsRepository');
 const globalState = require('./utils/globalState');
 const fluxEventBus = require('./utils/fluxEventBus');
 
@@ -150,21 +149,18 @@ async function getLocalImageDigest(containerName) {
  * Gets the remote manifest digest from a registry.
  * @param {string} repotag Image tag (e.g., 'nginx:latest')
  * @param {string|null} repoauth Authentication string (encrypted for v7, plain for v8+)
- * @param {number} specVersion Application specification version
  * @param {string} appName Application name (for credential caching)
  * @returns {Promise<{error: string|null, digest: string|null}>} Result object with error and digest
  */
-async function getRemoteManifestDigest(repotag, repoauth, specVersion, appName) {
+async function getRemoteManifestDigest(repotag, repoauth, appName) {
   try {
     const verifierOptions = {};
 
-    // Get credentials if authentication is required
-    if (repoauth && specVersion >= 7) {
+    if (repoauth) {
       try {
         const credentials = await registryCredentialHelper.getCredentials(
           repotag,
           repoauth,
-          specVersion,
           appName,
         );
         if (credentials) {
@@ -207,7 +203,7 @@ async function getRemoteManifestDigest(repotag, repoauth, specVersion, appName) 
  * @param {object} appSpec Application specification
  * @returns {Promise<{needsUpdate: boolean, components: Array, rateLimited: boolean}>} Update status and components that need updates
  */
-async function checkAppForUpdates(deployment, specVersion) {
+async function checkAppForUpdates(deployment) {
   const result = { needsUpdate: false, components: [], rateLimited: false };
 
   try {
@@ -227,7 +223,6 @@ async function checkAppForUpdates(deployment, specVersion) {
       const remoteResult = await getRemoteManifestDigest(
         deployComp.image,
         deployComp.imageAuth || null,
-        specVersion,
         deployment.appName,
       );
 
@@ -305,8 +300,6 @@ async function checkForImageUpdates() {
 
   try {
     const deployments = await deploymentProvider.listInstalledDeployments();
-    const installedRaw = await appsRepository.listInstalledAppsRaw({ projection: { name: 1, version: 1 } });
-    const versionByName = new Map(installedRaw.map((r) => [r.name, r.version]));
 
     log.info(`Checking ${deployments.length} installed apps for image updates`);
 
@@ -321,10 +314,9 @@ async function checkForImageUpdates() {
 
       try {
         appsChecked += 1;
-        const specVersion = versionByName.get(deployment.appName);
 
         // eslint-disable-next-line no-await-in-loop
-        const updateStatus = await checkAppForUpdates(deployment, specVersion);
+        const updateStatus = await checkAppForUpdates(deployment);
 
         if (updateStatus.rateLimited) {
           log.warn('Rate limited by registry, aborting remaining checks this cycle');

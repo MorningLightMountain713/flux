@@ -261,7 +261,6 @@ async function installApplication(instantiated, options = {}) {
         && await cpuBurstHelper.isCpuBurstSupported();
       const restartAlwaysOwners = config.fluxapps.restartAlwaysOwners || [];
       const restartPolicy = (owner && restartAlwaysOwners.includes(owner)) ? 'always' : null;
-      const specVersion = instantiated.version;
 
       const syslogCollector = deployment.componentEntries()
         .find(([, c]) => c.toDockerEnv().some((e) => e.startsWith('LOG=COLLECT')));
@@ -276,7 +275,6 @@ async function installApplication(instantiated, options = {}) {
           burstEligible,
           restartPolicy,
           syslogTarget,
-          specVersion,
         });
       }
     } catch (error) {
@@ -422,7 +420,6 @@ async function installComponent(component, options = {}) {
   const restartPolicy = options.restartPolicy || null;
   const extraEnv = options.extraEnv || [];
   const syslogTarget = options.syslogTarget || null;
-  const specVersion = options.specVersion || null;
 
   const id = component.identifier;
   const appName = component.appName;
@@ -468,11 +465,10 @@ async function installComponent(component, options = {}) {
 
   const pullConfig = { repoTag: component.image };
 
-  if (component.imageAuth && specVersion) {
+  if (component.imageAuth) {
     const credentials = await registryCredentialHelper.getCredentials(
       component.image,
       component.imageAuth,
-      specVersion,
       appName,
     );
     if (!credentials) {
@@ -600,7 +596,6 @@ async function testInstallApplication(appname) {
     // eslint-disable-next-line no-await-in-loop
     const repoVerification = await verifyRepository(comp.image, {
       repoauth: comp.imageAuth || null,
-      specVersion: spec.version,
       appName: spec.name,
       architecture: localArch,
     });
