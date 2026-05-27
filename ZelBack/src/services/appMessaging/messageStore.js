@@ -2,10 +2,9 @@ const config = require('config');
 const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
-const fluxService = require('../fluxService');
+const benchmarkService = require('../benchmarkService');
 const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
-const messageVerifier = require('./messageVerifier');
 const registryManager = require('../appDatabase/registryManager');
 const { getSpec, validateSubmissionSpec } = require('../utils/specLibs');
 const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
@@ -120,7 +119,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
   if (furtherVerification) {
     let validationBlob;
     if (appEvent.isEncrypted()) {
-      if (await fluxService.isSystemSecure()) {
+      if (await benchmarkService.isSystemSecure()) {
         const provider = await appEvent.spec.createProvider();
         const decrypted = await appEvent.spec.decrypt(provider);
         validationBlob = decrypted.spec.serialize();
@@ -189,15 +188,12 @@ async function storeAppTemporaryMessage(message, options = {}) {
     throw error;
   });
   if (isAppRequested) {
-    if (result && result.txid && result.height) {
-      setImmediate(() => {
-        messageVerifier.checkAndRequestApp(appEvent.hash, result.txid, result.height, result.value, 2)
-          .catch((err) => log.error(`Immediate promotion failed for ${appEvent.hash}: ${err.message}`));
-      });
-    }
-    return false;
+    const promotion = (result && result.txid && result.height)
+      ? { hash: appEvent.hash, txid: result.txid, height: result.height, value: result.value }
+      : null;
+    return { rebroadcast: false, promotion };
   }
-  return true;
+  return { rebroadcast: true };
 }
 
 /**
@@ -968,9 +964,27 @@ async function storeBatchAppInstallingErrorMessages(verifiedBroadcasts) {
   return { stored: signedOps.length };
 }
 
+async function processPendingUpdates(appName) {
+  const pendingUpdates = globalState.getPendingUpdates(appName);
+  if (pendingUpdates.length === 0) return;
+  log.info(`Processing ${pendingUpdates.length} pending updates for ${appName}`);
+  for (let idx = 0; idx < pendingUpdates.length; idx += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await storeAppTemporaryMessage(pendingUpdates[idx].message);
+      log.info(`Processed pending update ${idx + 1}/${pendingUpdates.length} for ${appName}`);
+    } catch (error) {
+      log.warn(`Pending update for ${appName} failed: ${error.message}. Clearing ${pendingUpdates.length - idx} remaining updates.`);
+      globalState.clearPendingUpdates(appName);
+      break;
+    }
+  }
+}
+
 module.exports = {
   storeAppTemporaryMessage,
   storeAppPermanentMessage,
+  processPendingUpdates,
   storeAppRunningMessage,
   storeBatchAppRunningMessages,
   storeAppStateEvent,
