@@ -19,6 +19,18 @@ function mockComponent(plain) {
   };
 }
 
+function mockPlacement(plain) {
+  return {
+    staticIp: plain.staticip || false,
+    dataCenter: plain.datacenter || false,
+    geoAllow: [],
+    geoDeny: [],
+    targetIps: plain.nodes || plain.targetIps || [],
+    targetOutpoints: plain.targetOutpoints || [],
+    targetOperators: plain.targetOperators || [],
+  };
+}
+
 function mockClassSpec(plain) {
   const comps = (plain.compose || []).map(mockComponent);
   const componentsObj = {};
@@ -27,9 +39,9 @@ function mockClassSpec(plain) {
     name: plain.name,
     version: plain.version || 4,
     expire: plain.expire,
-    staticip: plain.staticip,
+    ttl: plain.ttl,
     instances: plain.instances,
-    nodes: plain.nodes || [],
+    placement: mockPlacement(plain),
     components: componentsObj,
     componentCount: comps.length,
     getComponent(name) { return componentsObj[name]; },
@@ -55,6 +67,7 @@ function mockInstantiatedSpec(appInfo) {
   return {
     spec: classSpec,
     height: appInfo.height,
+    registeredAt: appInfo.registeredAt || null,
     name: appInfo.name,
     version: appInfo.version || 4,
     hash: appInfo.hash || 'testhash',
@@ -465,6 +478,166 @@ describe('appSpecHelpers tests', () => {
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.true;
+    });
+
+    it('should return true for v9-to-v9 free update with same TTL', async () => {
+      const daemonHeight = 2700000;
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const ttl = 2592000; // 30 days
+      const spec = mockClassSpec({
+        name: 'TestApp',
+        version: 9,
+        ttl,
+        instances: 3,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      });
+
+      const appInfo = {
+        name: 'TestApp',
+        version: 9,
+        ttl,
+        instances: 3,
+        registeredAt: nowSeconds - 100,
+        height: daemonHeight - 3,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      };
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
+      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
+      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+
+      const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
+      expect(result).to.be.true;
+    });
+
+    it('should return false for v9 update that significantly extends TTL', async () => {
+      const daemonHeight = 2700000;
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const spec = mockClassSpec({
+        name: 'TestApp',
+        version: 9,
+        ttl: 5184000, // 60 days
+        instances: 3,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      });
+
+      const appInfo = {
+        name: 'TestApp',
+        version: 9,
+        ttl: 2592000, // 30 days
+        instances: 3,
+        registeredAt: nowSeconds - 100,
+        height: daemonHeight - 3,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      };
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
+
+      const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
+      expect(result).to.be.false;
+    });
+
+    it('should return false for v9 update with no TTL', async () => {
+      const spec = mockClassSpec({
+        name: 'TestApp',
+        version: 9,
+        ttl: 0,
+        instances: 3,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      });
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec({
+        name: 'TestApp', version: 9, ttl: 2592000, instances: 3,
+        registeredAt: Math.floor(Date.now() / 1000) - 100, height: 2700000,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      }));
+
+      const result = await appSpecHelpers.checkFreeAppUpdate(spec, 2700000);
+      expect(result).to.be.false;
+    });
+
+    it('should handle v8-to-v9 cross-version free update', async () => {
+      const daemonHeight = 2700000;
+      const spec = mockClassSpec({
+        name: 'TestApp',
+        version: 9,
+        ttl: 2640000, // 30.5 days ≈ 88000 blocks × 30s
+        instances: 3,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      });
+
+      // v8 app with 88000 blocks remaining (~30.5 days)
+      const appInfo = {
+        name: 'TestApp',
+        version: 8,
+        expire: 88000,
+        instances: 3,
+        height: daemonHeight,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      };
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
+      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
+      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+
+      const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
+      expect(result).to.be.true;
+    });
+
+    it('should return false for v7-to-v9 cross-version with TTL extension', async () => {
+      const daemonHeight = 2700000;
+      const spec = mockClassSpec({
+        name: 'TestApp',
+        version: 9,
+        ttl: 5184000, // 60 days
+        instances: 3,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      });
+
+      // v7 app with ~30 days remaining
+      const appInfo = {
+        name: 'TestApp',
+        version: 7,
+        expire: 88000,
+        instances: 3,
+        height: daemonHeight,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      };
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
+
+      const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
+      expect(result).to.be.false;
+    });
+
+    it('should return false when v9 target arrays change', async () => {
+      const daemonHeight = 2700000;
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const ttl = 2592000;
+      const spec = mockClassSpec({
+        name: 'TestApp',
+        version: 9,
+        ttl,
+        instances: 3,
+        targetOutpoints: ['abc:0', 'def:1'],
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      });
+
+      const appInfo = {
+        name: 'TestApp',
+        version: 9,
+        ttl,
+        instances: 3,
+        targetOutpoints: ['abc:0'],
+        registeredAt: nowSeconds - 100,
+        height: daemonHeight - 3,
+        compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
+      };
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
+
+      const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
+      expect(result).to.be.false;
     });
   });
 
