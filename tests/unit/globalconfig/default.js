@@ -371,12 +371,13 @@ module.exports = {
     connectionBackoffMs: [120000, 300000, 600000, 900000],
     nodeMonitorIntervalMs: 1200000,
     spawnDeferrals: {
-      staticIpMs: { enterprise: 1620000, standard: 3420000 },
-      datacenterMs: { enterprise: 1620000, standard: 3420000 },
+      targetedNodesMs: { encrypted: 1800000, standard: 3420000 },
+      staticIpMs: { encrypted: 1620000, standard: 3420000 },
+      datacenterMs: { encrypted: 1620000, standard: 3420000 },
       capacityGap: {
-        largeMs: { enterprise: 1800000, standard: 7020000 },
-        mediumMs: { enterprise: 1260000, standard: 5220000 },
-        smallMs: { enterprise: 720000, standard: 3420000 },
+        largeMs: { encrypted: 1800000, standard: 7020000 },
+        mediumMs: { encrypted: 1260000, standard: 5220000 },
+        smallMs: { encrypted: 720000, standard: 3420000 },
       },
       domainShareMs: { enterprise: 1920000, standard: 1920000 },
     },

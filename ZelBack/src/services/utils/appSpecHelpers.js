@@ -121,13 +121,13 @@ function hasResourceGrowth(spec, prevSpec) {
   return false;
 }
 
+const SECONDS_PER_BLOCK = 30;
+const MAX_FREE_EXTENSION_SECONDS = 8 * SECONDS_PER_BLOCK;
+
 /**
  * Check if an app update qualifies as free (no effective fee).
- *
- * Takes a class instance; mutates `spec.expire` on free updates to remove
- * any subscription extension — the caller is responsible for holding a
- * spec whose expire field is safe to mutate (the submission path already
- * uses a fresh instance).
+ * Handles all version combinations (v1-v8 block-based and v9 TTL-based
+ * expiry) by normalizing to wall-clock seconds.
  *
  * @param {import('@runonflux/flux-spec').FluxAppSpecBase} spec - New spec
  * @param {number} daemonHeight
@@ -135,26 +135,38 @@ function hasResourceGrowth(spec, prevSpec) {
  */
 async function checkFreeAppUpdate(spec, daemonHeight) {
   const instantiated = await appsRepository.getGlobalAppInfo(spec.name);
-  if (!instantiated || !spec.expire) return false;
+  if (!instantiated) return false;
 
   const prevSpec = instantiated.isEncrypted()
     ? await resolveSpec(instantiated.serialize())
     : instantiated.spec;
 
-  if (!prevSpec.expire) return false;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const newRemainingSeconds = spec.version >= 9
+    ? spec.ttl
+    : (spec.expire || 0) * SECONDS_PER_BLOCK;
+  if (!newRemainingSeconds) return false;
 
-  const newExpirationHeight = Number(daemonHeight) + spec.expire;
-  const blocksToExtend = newExpirationHeight - instantiated.expiresAtHeight;
+  let oldRemainingSeconds;
+  if (prevSpec.version >= 9) {
+    if (!instantiated.registeredAt || !prevSpec.ttl) return false;
+    oldRemainingSeconds = (instantiated.registeredAt + prevSpec.ttl) - nowSeconds;
+  } else {
+    if (!prevSpec.expire) return false;
+    oldRemainingSeconds = (instantiated.expiresAtHeight - daemonHeight) * SECONDS_PER_BLOCK;
+  }
 
-  const staticipMatch = (spec.staticip ?? false) === (prevSpec.staticip ?? false);
-  const aNodes = spec.nodes || [];
-  const bNodes = prevSpec.nodes || [];
-  const nodesMatch = aNodes.length === bNodes.length;
+  const extensionSeconds = newRemainingSeconds - oldRemainingSeconds;
+
+  const placementMatch = spec.placement.staticIp === prevSpec.placement.staticIp;
+  const targetsMatch = spec.placement.targetIps.length === prevSpec.placement.targetIps.length
+    && spec.placement.targetOutpoints.length === prevSpec.placement.targetOutpoints.length
+    && spec.placement.targetOperators.length === prevSpec.placement.targetOperators.length;
   const instancesMatch = spec.instances === prevSpec.instances;
-  const blocksOk = blocksToExtend <= 8;
+  const extensionOk = extensionSeconds <= MAX_FREE_EXTENSION_SECONDS;
 
-  if (!(nodesMatch && instancesMatch && staticipMatch && blocksOk)) {
-    log.info(`[checkFreeAppUpdate] App: ${spec.name}, RESULT: NOT FREE - basic conditions failed (nodes: ${nodesMatch}, instances: ${instancesMatch}, staticip: ${staticipMatch}, blocks: ${blocksOk})`);
+  if (!(placementMatch && targetsMatch && instancesMatch && extensionOk)) {
+    log.info(`[checkFreeAppUpdate] App: ${spec.name}, RESULT: NOT FREE - basic conditions failed (placement: ${placementMatch}, targets: ${targetsMatch}, instances: ${instancesMatch}, extension: ${extensionOk})`);
     return false;
   }
 

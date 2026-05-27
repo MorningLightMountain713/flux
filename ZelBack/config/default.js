@@ -709,12 +709,13 @@ module.exports = {
     nodeMonitorCheckIntervalMs: 120000,
     nodeMonitorCheckTimeoutMs: 10000,
     spawnDeferrals: {
-      staticIpMs: { enterprise: 1620000, standard: 3420000 },
-      datacenterMs: { enterprise: 1620000, standard: 3420000 },
+      targetedNodesMs: { encrypted: 1800000, standard: 3420000 },
+      staticIpMs: { encrypted: 1620000, standard: 3420000 },
+      datacenterMs: { encrypted: 1620000, standard: 3420000 },
       capacityGap: {
-        largeMs: { enterprise: 1800000, standard: 7020000 },
-        mediumMs: { enterprise: 1260000, standard: 5220000 },
-        smallMs: { enterprise: 720000, standard: 3420000 },
+        largeMs: { encrypted: 1800000, standard: 7020000 },
+        mediumMs: { encrypted: 1260000, standard: 5220000 },
+        smallMs: { encrypted: 720000, standard: 3420000 },
       },
       // A synced app's node steps aside for a better-placed fault domain this long
       // before it places the copy in its own; another domain is preferred if it takes
