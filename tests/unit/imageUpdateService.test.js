@@ -275,7 +275,7 @@ describe('imageUpdateService tests', () => {
     it('should return digest for public image without auth', async () => {
       mockDigestToReturn = 'sha256:remote123';
 
-      const result = await imageUpdateService.getRemoteManifestDigest('nginx:latest', null, 4, 'testApp');
+      const result = await imageUpdateService.getRemoteManifestDigest('nginx:latest', null, 'testApp');
 
       expect(result).to.deep.equal({ error: null, digest: 'sha256:remote123' });
     });
@@ -284,7 +284,7 @@ describe('imageUpdateService tests', () => {
       mockVerifierParseError = true;
       mockVerifierErrorDetail = 'Invalid tag';
 
-      const result = await imageUpdateService.getRemoteManifestDigest('invalid tag', null, 4, 'testApp');
+      const result = await imageUpdateService.getRemoteManifestDigest('invalid tag', null, 'testApp');
 
       expect(result).to.deep.equal({ error: 'parse_error', digest: null });
     });
@@ -299,7 +299,6 @@ describe('imageUpdateService tests', () => {
       const result = await imageUpdateService.getRemoteManifestDigest(
         'private/image:v1',
         'encrypted_auth',
-        7,
         'privateApp',
       );
 
@@ -309,7 +308,6 @@ describe('imageUpdateService tests', () => {
         registryCredentialHelperStub.getCredentials,
         'private/image:v1',
         'encrypted_auth',
-        7,
         'privateApp',
       );
     });
@@ -320,7 +318,6 @@ describe('imageUpdateService tests', () => {
       const result = await imageUpdateService.getRemoteManifestDigest(
         'private/image:v1',
         'bad_auth',
-        7,
         'privateApp',
       );
 
@@ -359,7 +356,7 @@ describe('imageUpdateService tests', () => {
 
       mockDigestToReturn = remoteDigest;
 
-      const result = await imageUpdateService.checkAppForUpdates(deployment, 3);
+      const result = await imageUpdateService.checkAppForUpdates(deployment);
 
       expect(result.needsUpdate).to.equal(true);
       expect(result.components).to.have.lengthOf(1);
@@ -382,7 +379,7 @@ describe('imageUpdateService tests', () => {
 
       mockDigestToReturn = sameDigest;
 
-      const result = await imageUpdateService.checkAppForUpdates(deployment, 3);
+      const result = await imageUpdateService.checkAppForUpdates(deployment);
 
       expect(result.needsUpdate).to.equal(false);
       expect(result.components).to.have.lengthOf(0);
@@ -409,7 +406,7 @@ describe('imageUpdateService tests', () => {
 
       mockDigestToReturn = webRemoteDigest;
 
-      const result = await imageUpdateService.checkAppForUpdates(deployment, 4);
+      const result = await imageUpdateService.checkAppForUpdates(deployment);
 
       expect(result.needsUpdate).to.equal(true);
       expect(result.components.length).to.be.at.least(1);
@@ -423,7 +420,7 @@ describe('imageUpdateService tests', () => {
 
       dockerServiceStub.dockerContainerInspect.rejects(new Error('Container not found'));
 
-      const result = await imageUpdateService.checkAppForUpdates(deployment, 3);
+      const result = await imageUpdateService.checkAppForUpdates(deployment);
 
       expect(result.needsUpdate).to.equal(false);
     });

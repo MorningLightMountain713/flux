@@ -224,7 +224,7 @@ describe('appInstaller tests', () => {
         decryptEnterpriseApps: sinon.stub().callsFake(async (apps) => apps),
       },
       '../utils/registryCredentialHelper': {
-        addCredentialsToImageVerifier: sinon.stub().resolves(),
+        getCredentials: sinon.stub().resolves(null),
       },
       util: {
         promisify: (fn) => fn,
@@ -447,7 +447,7 @@ describe('appInstaller tests', () => {
         '../appQuery/appQueryService': {
           listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
         },
-        '../utils/registryCredentialHelper': { addCredentialsToImageVerifier: sinon.stub().resolves() },
+        '../utils/registryCredentialHelper': { getCredentials: sinon.stub().resolves(null) },
         util: { promisify: (fn) => fn },
       });
 
