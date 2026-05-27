@@ -30,7 +30,7 @@ let appsCountAvailableToInstallOnMyNode = 0;
 
 const collisionWaitMs = config.fluxapps.installCollisionWaitMs;
 const spawnReconfirmDelayMs = config.fluxapps.spawnReconfirmDelayMs;
-const nonEnterpriseSpawnDelayMs = config.fluxapps.nonEnterpriseSpawnDelayMs ?? 2 * 60 * 1000;
+const unencryptedSpawnDelayMs = config.fluxapps.unencryptedSpawnDelayMs ?? 2 * 60 * 1000;
 
 let spawnLoopRunning = false;
 
@@ -75,13 +75,13 @@ async function spawnLoop() {
  */
 async function trySpawningGlobalApplication() {
   const installDelay = config.fluxapps.installation.delay * 1000;
-  const isEnterprise = enterpriseNetwork.getCachedEnterpriseIdentity();
-  if (isEnterprise === null) {
+  const isEnterpriseNode = enterpriseNetwork.getCachedEnterpriseIdentity();
+  if (isEnterpriseNode === null) {
     log.info('Flux enterprise identity not yet resolved');
     fluxEventBus.publish('spawner:blocked', { reason: 'enterprise_unresolved' });
     return installDelay;
   }
-  let { shortDelayTime, delayTime } = enterpriseNetwork.getSpawnDelays(isEnterprise, 0);
+  let { shortDelayTime, delayTime } = enterpriseNetwork.getSpawnDelays(isEnterpriseNode, 0);
   let appHash = null;
   try {
     const synced = await generalService.checkSynced();
@@ -214,11 +214,13 @@ async function trySpawningGlobalApplication() {
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.matches(nodeInfo));
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
         const owner = c.instantiated.owner;
-        return isEnterprise ? enterpriseNetwork.isEnterpriseAppOwner(owner) : !enterpriseNetwork.isEnterpriseAppOwner(owner);
+        const isEnterpriseOwner = enterpriseNetwork.isEnterpriseAppOwner(owner);
+        const eligible = isEnterpriseNode ? isEnterpriseOwner : !isEnterpriseOwner;
+        return eligible;
       });
 
       appsCountAvailableToInstallOnMyNode = globalAppNamesLocation.length + appsSyncthingToBeCheckedLater.length + appsToBeCheckedLater.length;
-      ({ shortDelayTime, delayTime } = enterpriseNetwork.getSpawnDelays(isEnterprise, appsCountAvailableToInstallOnMyNode));
+      ({ shortDelayTime, delayTime } = enterpriseNetwork.getSpawnDelays(isEnterpriseNode, appsCountAvailableToInstallOnMyNode));
 
       if (globalAppNamesLocation.length === 0) {
         log.info('trySpawningGlobalApplication - No app currently to be processed');
@@ -252,8 +254,8 @@ async function trySpawningGlobalApplication() {
         return shortDelayTime;
       }
       const isArcane = Boolean(process.env.FLUXOS_PATH);
-      if (selectedCandidate.instantiated.spec.enterprise && !isArcane) {
-        log.info(`trySpawningGlobalApplication - Application ${appToRun} can only install on ArcaneOS`);
+      if (selectedCandidate.instantiated.isEncrypted() && !isArcane) {
+        log.info(`trySpawningGlobalApplication - Application ${appToRun} is encrypted, can only install on ArcaneOS`);
         globalState.spawnErrorsLongerAppCache.set(appHash, '');
         return shortDelayTime;
       }
@@ -329,7 +331,7 @@ async function trySpawningGlobalApplication() {
     }
 
     await hwRequirements.checkNodeResources(deployment);
-    if (isEnterprise) {
+    if (isEnterpriseNode) {
       await hwRequirements.checkCpuBurstHeadroom(deployment);
     }
 
@@ -419,12 +421,12 @@ async function trySpawningGlobalApplication() {
     }
 
     const specPlacement = spec.placement;
-    const isEnterpriseApp = !!spec.enterprise;
+    const isEncryptedApp = instantiated.isEncrypted();
 
     if (!appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater
       && specPlacement.hasTargets() && !specPlacement.matchesTarget(targetInfo)) {
       const deferral = config.fluxapps.spawnDeferrals.targetedNodesMs;
-      const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
+      const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
       const appToCheck = {
         timeToCheck: Date.now() + delayMs,
         appName: appToRun,
@@ -438,26 +440,26 @@ async function trySpawningGlobalApplication() {
       return shortDelayTime;
     }
 
-    if (!isEnterprise && !appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater) {
+    if (!isEnterpriseNode && !appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater) {
       const tier = await generalService.nodeTier();
       const appHWrequirements = deployment.totalResources();
       let delay = false;
       const isArcane = Boolean(process.env.FLUXOS_PATH);
-      if (!isEnterpriseApp && isArcane) {
+      if (!isEncryptedApp && isArcane) {
         const appToCheck = {
-          timeToCheck: Date.now() + nonEnterpriseSpawnDelayMs,
+          timeToCheck: Date.now() + unencryptedSpawnDelayMs,
           appName: appToRun,
           hash: appHash,
           required: minInstances,
         };
-        log.info(`trySpawningGlobalApplication - App ${appToRun} specs not enterprise, will check in around ${Math.round(nonEnterpriseSpawnDelayMs / 1000)}s if instances are still missing`);
+        log.info(`trySpawningGlobalApplication - App ${appToRun} not encrypted, will check in around ${Math.round(unencryptedSpawnDelayMs / 1000)}s if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         globalState.trySpawningGlobalAppCache.delete(appHash);
-        fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'non_enterprise_on_arcane', delayMs: nonEnterpriseSpawnDelayMs });
+        fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'unencrypted_on_arcane', delayMs: unencryptedSpawnDelayMs });
         delay = true;
       } else if (!specPlacement.staticIp && geolocationService.isStaticIP()) {
         const deferral = config.fluxapps.spawnDeferrals.staticIpMs;
-        const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
+        const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
           timeToCheck: Date.now() + delayMs,
           appName: appToRun,
@@ -471,7 +473,7 @@ async function trySpawningGlobalApplication() {
         delay = true;
       } else if (!specPlacement.dataCenter && geolocationService.isDataCenter()) {
         const deferral = config.fluxapps.spawnDeferrals.datacenterMs;
-        const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
+        const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
           timeToCheck: Date.now() + delayMs,
           appName: appToRun,
@@ -487,7 +489,7 @@ async function trySpawningGlobalApplication() {
         log.info(`trySpawningGlobalApplication - App ${appToRun} targets this node`);
       } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.largeMs;
-        const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
+        const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
           timeToCheck: Date.now() + delayMs,
           appName: appToRun,
@@ -501,7 +503,7 @@ async function trySpawningGlobalApplication() {
         delay = true;
       } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memory < 29000 && appHWrequirements.storage < 370) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.mediumMs;
-        const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
+        const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
           timeToCheck: Date.now() + delayMs,
           appName: appToRun,
@@ -515,7 +517,7 @@ async function trySpawningGlobalApplication() {
         delay = true;
       } else if (!specPlacement.hasTargets() && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.smallMs;
-        const delayMs = isEnterpriseApp ? deferral.enterprise : deferral.standard;
+        const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
           timeToCheck: Date.now() + delayMs,
           appName: appToRun,
@@ -671,7 +673,8 @@ async function trySpawningGlobalApplication() {
     }
 
     log.info('trySpawningGlobalApplication - Reinitiating possible app installation');
-    return isEnterprise ? 0 : delayTime;
+    const nextDelay = isEnterpriseNode ? 0 : delayTime;
+    return nextDelay;
   } catch (error) {
     log.error(error);
     if (appHash && !globalState.spawnErrorsLongerAppCache.has(appHash) && !globalState.trySpawningGlobalAppCache.has(appHash)) {
