@@ -9,7 +9,8 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const upnpService = require('../upnpService');
 const networkStateService = require('../networkStateService');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
-const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
+const appsRepository = require('../appDatabase/appsRepository');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const log = require('../../lib/log');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 
@@ -54,14 +55,13 @@ async function handleTestShutdown(testingPort, testHttpServer, isArcane, options
 
 /**
  * Check my apps availability by testing ports from external nodes
- * @param {Function} installedAppsFn - Function to get installed apps
  * @param {object} dosState - DOS state object with getters and setters
  * @param {object} portsNotWorking - Set of ports not working
  * @param {object} failedNodesTestPortsCache - Cache of failed nodes
  * @param {boolean} isArcane - Whether running on Arcane
  * @returns {Promise<void>}
  */
-async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane) {
+async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane) {
   const timeouts = {
     default: 3_600_000,
     error: 60_000,
@@ -83,7 +83,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
     dosState.dosStateValue = thresholds.dos;
 
     await serviceHelper.delay(timeouts.appError);
-    setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+    setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
     return;
   }
 
@@ -115,7 +115,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
     if (!syncStatus.data.synced) {
       log.info('Flux Node daemon not synced. Application checks are disabled');
       await serviceHelper.delay(timeouts.appError);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
@@ -125,7 +125,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
     if (!isNodeConfirmed) {
       log.info('Flux Node not Confirmed. Application checks are disabled');
       await serviceHelper.delay(timeouts.appError);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
@@ -133,39 +133,21 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
     if (!localSocketAddress) {
       log.info('No Public IP found. Application checks are disabled');
       await serviceHelper.delay(timeouts.appError);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
-    const installedAppsRes = await installedAppsFn();
-    if (installedAppsRes.status !== 'success') {
-      log.error('Failed to get installed Apps');
-      await serviceHelper.delay(timeouts.appError);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
-    }
-
-    // Decrypt enterprise apps (version 8 with encrypted content)
-    installedAppsRes.data = await decryptEnterpriseApps(installedAppsRes.data);
-
-    const apps = installedAppsRes.data;
+    const installedApps = await appsRepository.listInstalledApps();
     const appPorts = [];
 
-    apps.forEach((app) => {
-      if (app.version === 1) {
-        appPorts.push(+app.port);
-      } else if (app.version <= 3) {
-        app.ports.forEach((port) => {
-          appPorts.push(+port);
-        });
-      } else {
-        app.compose.forEach((component) => {
-          component.ports.forEach((port) => {
-            appPorts.push(+port);
-          });
-        });
+    for (const instantiated of installedApps) {
+      try {
+        const deployment = await deploymentProvider.buildDeployment(instantiated);
+        appPorts.push(...deployment.allHostPorts());
+      } catch (err) {
+        log.warn(`checkMyAppsAvailability: could not resolve ports for ${instantiated.name}: ${err.message}`);
       }
-    });
+    }
 
     if (dosState.nextTestingPort) {
       // eslint-disable-next-line no-param-reassign
@@ -183,7 +165,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
       log.info(`checkMyAppsAvailability - Testing port ${dosState.testingPort} is banned`);
       setNextPort();
       await serviceHelper.delay(timeouts.failure);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
@@ -193,7 +175,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
         log.info(`checkMyAppsAvailability - Testing port ${dosState.testingPort} is UPNP banned`);
         setNextPort();
         await serviceHelper.delay(timeouts.failure);
-        setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+        setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
         return;
       }
     }
@@ -203,7 +185,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
       log.info(`checkMyAppsAvailability - Testing port ${dosState.testingPort} is user blocked`);
       setNextPort();
       await serviceHelper.delay(timeouts.failure);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
@@ -211,20 +193,20 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
       log.info(`checkMyAppsAvailability - Skipped checking ${dosState.testingPort} - in use`);
       setNextPort();
       await serviceHelper.delay(timeouts.failure);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
     const remoteSocketAddress = await networkStateService.getRandomSocketAddress(localSocketAddress);
     if (!remoteSocketAddress) {
       await serviceHelper.delay(timeouts.appError);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
     if (failedNodesTestPortsCache.has(remoteSocketAddress)) {
       await serviceHelper.delay(timeouts.failure);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
@@ -255,7 +237,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
         });
         const upnpDelay = dosState.dosMessage ? timeouts.dos : timeouts.error;
         await serviceHelper.delay(upnpDelay);
-        setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+        setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
         return;
       }
       // eslint-disable-next-line no-param-reassign
@@ -285,7 +267,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
         skipHttpServer: true,
       });
       await serviceHelper.delay(timeouts.error);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
@@ -329,7 +311,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
 
     if (!resMyAppAvailability) {
       await serviceHelper.delay(timeouts.failure);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
@@ -343,7 +325,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
     if (!['success', 'error'].includes(responseStatus)) {
       log.warn(`checkMyAppsAvailability - Unexpected response status: ${responseStatus}`);
       await serviceHelper.delay(timeouts.error);
-      setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
       return;
     }
 
@@ -408,7 +390,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
     }
 
     await serviceHelper.delay(waitMs);
-    setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+    setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
   } catch (error) {
     if (!dosState.dosMessage && (dosState.dosMountMessage || dosState.dosDuplicateAppMessage)) {
       // eslint-disable-next-line no-param-reassign
@@ -417,7 +399,7 @@ async function checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorkin
     await handleTestShutdown(dosState.testingPort, testHttpServer, isArcane, { skipUpnp: !isUpnp });
     log.error(`checkMyAppsAvailability - Error: ${error}`);
     await serviceHelper.delay(timeouts.appError);
-    setImmediate(() => checkMyAppsAvailability(installedAppsFn, dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+    setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
   }
 }
 

@@ -56,9 +56,6 @@ describe('peerNotification tests', () => {
         monitorAndRecoverApps: monitorAndRecoverAppsStub,
       },
       '../appDatabase/appsRepository': {
-        listInstalledAppsRaw: sinon.stub().resolves([
-          { name: 'app1', version: 4, compose: [{ name: 'c1', containerData: '' }] },
-        ]),
         listInstalledApps: sinon.stub().resolves([
           mockInstantiatedSpec({ name: 'app1', version: 4, hash: 'abc123', componentNames: ['c1'] }),
         ]),
@@ -95,7 +92,7 @@ describe('peerNotification tests', () => {
       expect(peerNotification.checkAndNotifyPeersOfRunningApps).to.be.a('function');
     });
 
-    it('should call monitorAndRecoverApps with raw specs', async () => {
+    it('should call monitorAndRecoverApps with InstantiatedSpec array', async () => {
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
       expect(monitorAndRecoverAppsStub.calledOnce).to.be.true;
@@ -103,7 +100,7 @@ describe('peerNotification tests', () => {
       expect(ip).to.equal('192.168.1.1:16127');
       expect(apps).to.have.length(1);
       expect(apps[0].name).to.equal('app1');
-      expect(apps[0].compose).to.be.an('array');
+      expect(apps[0].spec.componentNames()).to.deep.equal(['c1']);
       expect(runningNames).to.deep.equal(['c1_app1']);
     });
 

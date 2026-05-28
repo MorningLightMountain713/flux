@@ -59,9 +59,6 @@ async function checkAndNotifyPeersOfRunningApps() {
       throw new Error('Unable to detect Flux IP address');
     }
 
-    // Raw specs for containerHealthMonitor (expects .compose[] format)
-    const rawAppsInstalled = await appsRepository.listInstalledAppsRaw();
-    // Hydrated specs for class-based component iteration
     const installedSpecs = await appsRepository.listInstalledApps();
 
     const runningAppsRes = await appQueryService.listRunningApps();
@@ -76,7 +73,7 @@ async function checkAndNotifyPeersOfRunningApps() {
       return app.Names[0].slice(5);
     });
 
-    const { masterSlaveAppsInstalled, startedApps } = await containerHealthMonitor.monitorAndRecoverApps(localSocketAddr, rawAppsInstalled, runningAppsNames);
+    const { masterSlaveAppsInstalled, startedApps } = await containerHealthMonitor.monitorAndRecoverApps(localSocketAddr, installedSpecs, runningAppsNames);
     runningAppsNames.push(...startedApps);
 
     const installedAndRunning = [];

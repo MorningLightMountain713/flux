@@ -2,90 +2,43 @@ const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const dockerService = require('../dockerService');
-const generalService = require('../generalService');
 const appsRepository = require('../appDatabase/appsRepository');
 const appInstaller = require('../appLifecycle/appInstaller');
 const appUninstaller = require('../appLifecycle/appUninstaller');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appInspector = require('../appManagement/appInspector');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const globalState = require('../utils/globalState');
 const cacheManager = require('../utils/cacheManager').default;
-const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
-const { localAppsInformation } = require('../utils/appConstants');
 const { verifyAppVolumeMount } = require('../utils/volumeService');
 
 const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 async function recreateMissingContainers(componentIdentifier) {
   const mainAppName = componentIdentifier.split('_')[1] || componentIdentifier;
-  const dbopen = dbHelper.databaseConnection();
-  const appsDatabase = dbopen.db(config.database.appslocal.database);
-
-  const appsQuery = { name: mainAppName };
-  const appsProjection = { projection: { _id: 0 } };
-  let appSpec = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-
-  if (!appSpec) {
+  const instantiated = await appsRepository.getInstalledApp(mainAppName);
+  if (!instantiated) {
     throw new Error(`App ${mainAppName} not found in local database`);
   }
 
-  appSpec = await decryptEnterpriseApps([appSpec], { formatSpecs: false });
-  // eslint-disable-next-line prefer-destructuring
-  appSpec = appSpec[0];
-
-  if (!appSpec.compose || appSpec.compose.length === 0) {
-    throw new Error(`App ${mainAppName} has no components to install`);
-  }
-
-  const tier = await generalService.nodeTier();
+  const deployment = await deploymentProvider.buildDeployment(instantiated);
   const isComponent = componentIdentifier.includes('_');
+  const componentName = isComponent ? componentIdentifier.split('_')[0] : null;
+  const components = componentName
+    ? [[componentName, deployment.getComponent(componentName)]]
+    : deployment.componentEntries();
 
-  if (isComponent) {
-    const componentName = componentIdentifier.split('_')[0];
-    const componentSpec = appSpec.compose.find((c) => c.name === componentName);
-    if (!componentSpec) {
+  for (const [, deployComp] of components) {
+    if (!deployComp) {
       throw new Error(`Component ${componentName} not found in app ${mainAppName}`);
     }
-    const hddTier = `hdd${tier}`;
-    const ramTier = `ram${tier}`;
-    const cpuTier = `cpu${tier}`;
-    componentSpec.cpu = componentSpec[cpuTier] || componentSpec.cpu;
-    componentSpec.ram = componentSpec[ramTier] || componentSpec.ram;
-    componentSpec.hdd = componentSpec[hddTier] || componentSpec.hdd;
     let volumeMounted = false;
     try {
-      volumeMounted = await verifyAppVolumeMount(mainAppName, true, componentName);
+      volumeMounted = await verifyAppVolumeMount(mainAppName, true, deployComp.name);
     } catch {
       // volume not mounted
     }
-    if (volumeMounted) {
-      await appInstaller.installApplicationSoft(componentSpec, mainAppName, true, null, appSpec);
-    } else {
-      await appInstaller.installApplicationHard(componentSpec, mainAppName, true, null, appSpec);
-    }
-  } else {
-    for (const componentSpec of appSpec.compose) {
-      const hddTier = `hdd${tier}`;
-      const ramTier = `ram${tier}`;
-      const cpuTier = `cpu${tier}`;
-      componentSpec.cpu = componentSpec[cpuTier] || componentSpec.cpu;
-      componentSpec.ram = componentSpec[ramTier] || componentSpec.ram;
-      componentSpec.hdd = componentSpec[hddTier] || componentSpec.hdd;
-      let volumeMounted = false;
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        volumeMounted = await verifyAppVolumeMount(mainAppName, true, componentSpec.name);
-      } catch {
-        // volume not mounted
-      }
-      if (volumeMounted) {
-        // eslint-disable-next-line no-await-in-loop
-        await appInstaller.installApplicationSoft(componentSpec, mainAppName, true, null, appSpec);
-      } else {
-        // eslint-disable-next-line no-await-in-loop
-        await appInstaller.installApplicationHard(componentSpec, mainAppName, true, null, appSpec);
-      }
-    }
+    await appInstaller.installComponent(deployComp, { createVolumes: !volumeMounted });
   }
 
   log.info(`Successfully recreated missing containers for ${componentIdentifier}`);
@@ -121,15 +74,11 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
   const masterSlaveAppsInstalled = [];
   const startedApps = [];
   const installedAppComponentNames = [];
-  appsInstalled.forEach((app) => {
-    if (app.version >= 4) {
-      app.compose.forEach((appComponent) => {
-        installedAppComponentNames.push(`${appComponent.name}_${app.name}`);
-      });
-    } else {
-      installedAppComponentNames.push(app.name);
+  for (const inst of appsInstalled) {
+    for (const compName of inst.spec.componentNames()) {
+      installedAppComponentNames.push(`${compName}_${inst.name}`);
     }
-  });
+  }
   const runningSet = new Set(runningAppsNames);
   const stoppedApps = installedAppComponentNames.filter((installedApp) => !runningSet.has(installedApp));
 
@@ -148,37 +97,13 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
       const mainAppName = stoppedApp.split('_')[1] || stoppedApp;
       // eslint-disable-next-line no-await-in-loop
       const appDetails = await appsRepository.getGlobalAppInfo(mainAppName);
-      const appInstalledMasterSlave = appsInstalled.find((app) => app.name === mainAppName);
-      const composeSpecs = appInstalledMasterSlave?.compose;
-      // App-level: any component using g:/r: marks the whole app as a syncthing app
-      // for broadcast purposes (masterSlaveAppsInstalled is included in installedAndRunning
-      // even when some components are stopped, since stopped slaves are expected).
-      const appInstalledSyncthing = composeSpecs
-        ? composeSpecs.find((comp) => comp.containerData.includes('g:') || comp.containerData.includes('r:'))
-        : (appInstalledMasterSlave?.containerData
-          && (appInstalledMasterSlave.containerData.includes('g:') || appInstalledMasterSlave.containerData.includes('r:')));
-
-      // Component-level: classify the specific stopped component so that auto-restart
-      // and grace-period decisions are made per component rather than per app. Without
-      // this, a non-g component of a g: app would never be auto-restarted at runtime.
-      let stoppedCompIsG = false;
-      let stoppedCompIsRorG = false;
-      if (composeSpecs && composeSpecs.length > 0) {
-        const componentName = stoppedApp.split('_')[0];
-        const stoppedCompSpec = composeSpecs.find((c) => c.name === componentName);
-        if (stoppedCompSpec && stoppedCompSpec.containerData) {
-          stoppedCompIsG = stoppedCompSpec.containerData.includes('g:');
-          stoppedCompIsRorG = stoppedCompIsG || stoppedCompSpec.containerData.includes('r:');
-        }
-      } else if (appInstalledMasterSlave?.containerData) {
-        stoppedCompIsG = appInstalledMasterSlave.containerData.includes('g:');
-        stoppedCompIsRorG = stoppedCompIsG || appInstalledMasterSlave.containerData.includes('r:');
+      const inst = appsInstalled.find((app) => app.name === mainAppName);
+      const hasSyncthing = inst?.spec.hasSyncthing();
+      const hasActiveStandby = inst?.spec.hasActiveStandbySyncthing();
+      if (hasSyncthing) {
+        masterSlaveAppsInstalled.push(inst);
       }
-
-      if (appInstalledSyncthing) {
-        masterSlaveAppsInstalled.push(appInstalledMasterSlave);
-      }
-      if (stoppedCompIsG && appDetails) {
+      if (hasActiveStandby && appDetails) {
         const backupSkip = backupInProgress.some((backupItem) => stoppedApp === backupItem);
         const restoreSkip = restoreInProgress.some((backupItem) => stoppedApp === backupItem);
         if (!backupSkip && !restoreSkip) {
@@ -196,10 +121,7 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
           // eslint-disable-next-line no-await-in-loop
           const containerExists = await dockerService.getDockerContainerOnly(stoppedApp);
 
-          // 30-minute install grace applies only to syncthing components (r: here, since
-          // g: branched off above). Non-syncthing siblings of a g:/r: app must not inherit
-          // the delay — they should auto-restart immediately like any other component.
-          if (containerExists && stoppedCompIsRorG) {
+          if (containerExists && hasSyncthing) {
             const db = dbHelper.databaseConnection();
             const database = db.db(config.database.appsglobal.database);
             const queryFind = { name: mainAppName, ip: localSocketAddr };
