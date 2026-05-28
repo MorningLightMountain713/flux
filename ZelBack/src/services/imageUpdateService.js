@@ -62,7 +62,7 @@ async function removeWatchtowerContainer() {
 
     try {
       // Get the container object and stop it
-      const container = dockerService.getDockerContainer(watchtowerContainer.Id);
+      const container = dockerService.getDockerContainerHandle(watchtowerContainer.Id);
       if (watchtowerContainer.State === 'running') {
         await container.stop();
         log.info('flux_watchtower container stopped');
@@ -73,7 +73,7 @@ async function removeWatchtowerContainer() {
       // Container might already be stopped, try to remove directly
       log.warn(`Error stopping watchtower container: ${stopError.message}, attempting remove`);
       try {
-        const container = dockerService.getDockerContainer(watchtowerContainer.Id);
+        const container = dockerService.getDockerContainerHandle(watchtowerContainer.Id);
         await container.remove({ force: true });
         log.info('flux_watchtower container force removed');
       } catch (removeError) {

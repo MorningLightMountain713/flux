@@ -510,7 +510,7 @@ async function appLogsHandler(socket) {
         return;
       }
 
-      const container = await dockerService.getDockerContainerByIdOrName(nameOrId).catch((error) => {
+      const container = await dockerService.getDockerContainer(nameOrId).catch((error) => {
         log.error(`appLogsHandler: container lookup failed for ${nameOrId}: ${error.message}`);
         return null;
       });
