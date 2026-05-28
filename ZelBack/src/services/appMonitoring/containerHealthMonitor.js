@@ -45,7 +45,7 @@ async function recreateMissingContainers(componentIdentifier) {
 }
 
 async function handleMissingMasterSlaveContainer(stoppedApp, mainAppName) {
-  const containerExists = await dockerService.getDockerContainerOnly(stoppedApp);
+  const containerExists = await dockerService.getDockerContainer(stoppedApp);
   if (containerExists) return;
 
   log.warn(`Container for master/slave app ${stoppedApp} doesn't exist, recreating...`);
@@ -54,7 +54,7 @@ async function handleMissingMasterSlaveContainer(stoppedApp, mainAppName) {
     log.info(`Successfully recreated master/slave app container ${stoppedApp}`);
     appInspector.startAppMonitoring(stoppedApp, globalState.appsMonitored);
   } catch (recreateErr) {
-    const containerExistsNow = await dockerService.getDockerContainerOnly(stoppedApp);
+    const containerExistsNow = await dockerService.getDockerContainer(stoppedApp);
     if (containerExistsNow) {
       log.info(`Container for ${stoppedApp} was created by another process, skipping removal`);
       return;
@@ -119,7 +119,7 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
         }
         if (!globalState.isOperationInProgress() && !restoreSkip && !backupSkip) {
           // eslint-disable-next-line no-await-in-loop
-          const containerExists = await dockerService.getDockerContainerOnly(stoppedApp);
+          const containerExists = await dockerService.getDockerContainer(stoppedApp);
 
           if (containerExists && hasSyncthing) {
             const db = dbHelper.databaseConnection();
