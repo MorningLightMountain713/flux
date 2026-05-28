@@ -13,9 +13,9 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 describe('dockerService tests', () => {
-  describe('getDockerContainer tests', () => {
-    it('should return a container with a proper ID', async () => {
-      const dockerContainer = await dockerService.getDockerContainer('46274c58c9a969e93c1f91a057f0a371c7b952e31a7aec73839afe1433fdee94');
+  describe('getDockerContainerHandle tests', () => {
+    it('should return a container with a proper ID', () => {
+      const dockerContainer = dockerService.getDockerContainerHandle('46274c58c9a969e93c1f91a057f0a371c7b952e31a7aec73839afe1433fdee94');
 
       expect(dockerContainer.id).to.be.a('string');
       expect(dockerContainer.defaultOptions).to.exist;
@@ -234,7 +234,8 @@ describe('dockerService tests', () => {
     it('should throw error if the container does not exist', async () => {
       const containerName = 'testing1234';
 
-      await expect(dockerService.dockerContainerInspect(containerName)).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      const result = await dockerService.dockerContainerInspect(containerName);
+      expect(result).to.be.null;
     });
   });
 
@@ -254,7 +255,8 @@ describe('dockerService tests', () => {
     it('should throw error if the container does not exist', async () => {
       const containerName = 'test';
 
-      await expect(dockerService.dockerContainerStats(containerName)).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      const result = await dockerService.dockerContainerStats(containerName);
+      expect(result).to.be.null;
     });
   });
 
@@ -271,21 +273,8 @@ describe('dockerService tests', () => {
     it('should throw error if the container does not exist', async () => {
       const containerName = 'test';
 
-      await expect(dockerService.dockerContainerChanges(containerName)).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
-    });
-  });
-
-  describe.skip('dockerContainerExec tests', () => {
-    // TODO: I can't get any command to emit any data
-    it('should execute a command inside of the conainter', async () => {
-      const container = dockerService.getDockerContainerByIdOrName('website');
-      const cmd = '';
-      const env = [];
-      const res = {};
-
-      dockerService.dockerContainerExec(container, cmd, env, res, (err, data) => {
-        console.log(data);
-      });
+      const result = await dockerService.dockerContainerChanges(containerName);
+      expect(result).to.be.null;
     });
   });
 
@@ -301,7 +290,8 @@ describe('dockerService tests', () => {
     it('should throw an error if container does not exist', async () => {
       const appName = 'testing1234';
 
-      await expect(dockerService.dockerContainerLogs(appName, 2)).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      const result = await dockerService.dockerContainerLogs(appName, 2);
+      expect(result).to.be.null;
     });
   });
 
@@ -329,7 +319,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerStart('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      await expect(dockerService.appDockerStart('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
     });
   });
 
@@ -392,7 +382,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerStop('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      await expect(dockerService.appDockerStop('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
     });
   });
 
@@ -473,7 +463,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerRestart('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      await expect(dockerService.appDockerRestart('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
     });
   });
 
@@ -501,7 +491,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerKill('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      await expect(dockerService.appDockerKill('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
     });
   });
 
@@ -529,7 +519,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerRemove('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      await expect(dockerService.appDockerRemove('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
     });
   });
 
@@ -557,7 +547,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerPause('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      await expect(dockerService.appDockerPause('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
     });
   });
 
@@ -585,7 +575,7 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerUnpause('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      await expect(dockerService.appDockerUnpause('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
     });
   });
 
@@ -626,7 +616,8 @@ describe('dockerService tests', () => {
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
-      await expect(dockerService.appDockerTop('testing123')).to.eventually.be.rejectedWith('Cannot read properties of undefined (reading \'Id\')');
+      const result = await dockerService.appDockerTop('testing123');
+      expect(result).to.be.null;
     });
   });
 

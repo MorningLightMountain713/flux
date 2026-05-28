@@ -32,7 +32,7 @@ const docker = new Docker();
  *
  * @returns {object} docker container object
  */
-function getDockerContainer(id) {
+function getDockerContainerHandle(id) {
   const dockerContainer = docker.getContainer(id);
   return dockerContainer;
 }
@@ -156,42 +156,34 @@ async function dockerListImages() {
 }
 
 /**
- * Returns a docker container found by name or ID
- * @param {string} idOrName
- * @returns {object} dockerContainer from list containers
+ * Look up a Docker container by name or ID.
+ * Returns a dockerode container handle, or null if not found.
+ *
+ * @param {string} identifier - Container name or ID
+ * @param {object} [options]
+ * @param {string} [options.identifierType='name'] - 'name' or 'id'
+ * @returns {Promise<object|null>} dockerode container handle or null
  */
-async function getDockerContainerOnly(idOrName) {
+async function getDockerContainer(identifier, options = {}) {
+  const identifierType = options.identifierType || 'name';
   const containers = await dockerListContainers(true);
-  const myContainer = containers.find((container) => (container.Names[0] === getAppDockerNameIdentifier(idOrName) || container.Id === idOrName));
-  if (!myContainer) {
-    log.error(`Container ${idOrName} not found`);
-  }
-  return myContainer;
+  const match = identifierType === 'id'
+    ? containers.find((c) => c.Id === identifier)
+    : containers.find((c) => c.Names[0] === getAppDockerNameIdentifier(identifier));
+  if (!match) return null;
+  return docker.getContainer(match.Id);
 }
 
 /**
- * Returns a docker container found by name or ID
+ * Returns low-level information about a container, or null if not found.
  *
  * @param {string} idOrName
- * @returns {object} dockerContainer
- */
-async function getDockerContainerByIdOrName(idOrName) {
-  const myContainer = await getDockerContainerOnly(idOrName);
-  // Don't throw error here, let it fail with property access error
-  // to match test expectations
-  const dockerContainer = docker.getContainer(myContainer.Id);
-  return dockerContainer;
-}
-/**
- * Returns low-level information about a container.
- *
- * @param {string} idOrName
- * @param {object} options
- * @returns {object}
+ * @param {object} [options]
+ * @returns {Promise<object|null>}
  */
 async function dockerContainerInspect(idOrName, options = {}) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) return null;
   const response = await dockerContainer.inspect(options);
   return response;
 }
@@ -203,13 +195,9 @@ async function dockerContainerInspect(idOrName, options = {}) {
  * @returns docker container statistics
  */
 async function dockerContainerStats(idOrName) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
-
-  const options = {
-    stream: false,
-  };
-  const response = await dockerContainer.stats(options); // output hw usage statistics just once
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) return null;
+  const response = await dockerContainer.stats({ stream: false });
   return response;
 }
 
@@ -220,8 +208,11 @@ async function dockerContainerStats(idOrName) {
  * @param {function} callback Callback.
  */
 async function dockerContainerStatsStream(idOrName, req, res, callback) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) {
+    callback(new Error(`Container ${idOrName} not found`));
+    return;
+  }
 
   dockerContainer.stats(idOrName, (err, mystream) => {
     function onFinished(error, output) {
@@ -257,9 +248,8 @@ async function dockerContainerStatsStream(idOrName, req, res, callback) {
  * @returns  docker container changes
  */
 async function dockerContainerChanges(idOrName) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
-
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) return null;
   const response = await dockerContainer.changes();
   return response;
 }
@@ -413,14 +403,13 @@ async function dockerContainerLogsStream(idOrName, res, callback) {
  * @returns {buffer}
  */
 async function dockerContainerLogs(idOrName, lines) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
-
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) return null;
   const options = {
     follow: false,
     stdout: true,
     stderr: true,
-    tail: lines, // TODO FIXME when using tail, some nodes hang on execution, those nodes need to update, upgrade restart docker daemon.
+    tail: lines,
   };
   const logs = await dockerContainer.logs(options);
   return logs;
@@ -428,7 +417,11 @@ async function dockerContainerLogs(idOrName, lines) {
 
 async function dockerContainerLogsPolling(idOrName, lineCount, sinceTimestamp, callback) {
   try {
-    const dockerContainer = await getDockerContainerByIdOrName(idOrName);
+    const dockerContainer = await getDockerContainer(idOrName);
+    if (!dockerContainer) {
+      if (callback) callback(new Error(`Container ${idOrName} not found`));
+      return;
+    }
     const logStream = new stream.PassThrough();
     let logBuffer = '';
 
@@ -956,8 +949,8 @@ async function appDockerCreate(deployComp, options = {}) {
  */
 async function appDockerUpdateCpu(idOrName, nanoCpus) {
   try {
-    // Get the Docker container by ID or name
-    const dockerContainer = await getDockerContainerByIdOrName(idOrName);
+    const dockerContainer = await getDockerContainer(idOrName);
+    if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
     // Update the container's CPU resources
     await dockerContainer.update({
@@ -979,8 +972,8 @@ async function appDockerUpdateCpu(idOrName, nanoCpus) {
  */
 async function appDockerStart(idOrName) {
   try {
-    // container ID or name
-    const dockerContainer = await getDockerContainerByIdOrName(idOrName);
+    const dockerContainer = await getDockerContainer(idOrName);
+    if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
     globalState.stoppingContainers.delete(getDockerName(idOrName));
     await dockerContainer.start(); // may throw
@@ -1022,8 +1015,8 @@ async function appDockerStart(idOrName) {
  * @returns {string} message
  */
 async function appDockerStop(idOrName, timeout) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
   // Check if container is running before attempting to stop
   const containerInfo = await dockerContainer.inspect();
@@ -1052,8 +1045,8 @@ async function appDockerStop(idOrName, timeout) {
  * @returns {string} message
  */
 async function appDockerRestart(idOrName) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
   // Check if container is running
   const containerInfo = await dockerContainer.inspect();
@@ -1081,8 +1074,8 @@ async function appDockerRestart(idOrName) {
  * @returns {string} message
  */
 async function appDockerKill(idOrName) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
   const dockerName = getDockerName(idOrName);
   globalState.stoppingContainers.add(dockerName);
@@ -1103,9 +1096,8 @@ async function appDockerKill(idOrName) {
  * @returns {string} message
  */
 async function appDockerRemove(idOrName) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
-
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
   globalState.stoppingContainers.delete(getDockerName(idOrName));
   await dockerContainer.remove();
   return `Flux App ${idOrName} successfully removed.`;
@@ -1119,9 +1111,8 @@ async function appDockerRemove(idOrName) {
  * @returns {string} message
  */
 async function appDockerForceRemove(idOrName, removeVolumes = true) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
-
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
   globalState.stoppingContainers.delete(getDockerName(idOrName));
   await dockerContainer.remove({ force: true, v: removeVolumes });
   return `Flux App ${idOrName} successfully force removed.`;
@@ -1147,9 +1138,8 @@ async function appDockerImageRemove(idOrName) {
  * @returns {string} message
  */
 async function appDockerPause(idOrName) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
-
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
   await dockerContainer.pause();
   return `Flux App ${idOrName} successfully paused.`;
 }
@@ -1161,9 +1151,8 @@ async function appDockerPause(idOrName) {
  * @returns {string} message
  */
 async function appDockerUnpause(idOrName) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
-
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
   await dockerContainer.unpause();
   return `Flux App ${idOrName} successfully unpaused.`;
 }
@@ -1175,9 +1164,8 @@ async function appDockerUnpause(idOrName) {
  * @returns {string} message
  */
 async function appDockerTop(idOrName) {
-  // container ID or name
-  const dockerContainer = await getDockerContainerByIdOrName(idOrName);
-
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) return null;
   const processes = await dockerContainer.top();
   return processes;
 }
@@ -1654,8 +1642,7 @@ module.exports = {
   getAppDockerNameIdentifier,
   getAppIdentifier,
   getDockerContainer,
-  getDockerContainerByIdOrName,
-  getDockerContainerOnly,
+  getDockerContainerHandle,
   getFluxDockerNetworkPhysicalInterfaceNames,
   getFluxDockerNetworkSubnets,
   pruneContainers,
