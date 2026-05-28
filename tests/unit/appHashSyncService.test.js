@@ -34,7 +34,7 @@ describe('appHashSyncService tests', () => {
   let peerManagerStub;
   let collectionStub;
   let deserializeSpecStub;
-  let validateSubmissionSpecStub;
+  let validateGossipSpecStub;
 
   function makePeer(ip, port, source = 'random') {
     return {
@@ -61,7 +61,7 @@ describe('appHashSyncService tests', () => {
       '../appDatabase/registryManager': { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
       '../utils/appSpecHelpers': { specificationFormatter: sinon.stub().returnsArg(0) },
       '../utils/specCutover': { deserializeSpec: deserializeSpecStub },
-      '../utils/specLibs': { validateSubmissionSpec: validateSubmissionSpecStub, getSpec: sinon.stub().resolves({}) },
+      '../utils/specLibs': { validateGossipSpec: validateGossipSpecStub, getSpec: sinon.stub().resolves({}) },
       '../providers/FluxOSLegacyCryptoProvider': { create: sinon.stub().resolves({}) },
       '../utils/appUtilities': { appPricePerMonth: sinon.stub().returns(0.01) },
       '../utils/chainUtilities': { getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01, cpu: 1, ram: 1, hdd: 1 }]) },
@@ -145,7 +145,7 @@ describe('appHashSyncService tests', () => {
     };
 
     deserializeSpecStub = makeDeserializeSpecStub();
-    validateSubmissionSpecStub = sinon.stub().resolves();
+    validateGossipSpecStub = sinon.stub().resolves();
 
     messageStoreStub = {
       storeAppTemporaryMessage: sinon.stub().resolves(true),
@@ -753,7 +753,7 @@ describe('appHashSyncService tests', () => {
     let localDbHelperStub;
     let localAppEventVerifierStub;
     let localDeserializeSpecStub;
-    let localValidateSubmissionSpecStub;
+    let localValidateGossipSpecStub;
     let localLegacyCryptoProviderStub;
     let localLogStub;
 
@@ -783,7 +783,7 @@ describe('appHashSyncService tests', () => {
       };
 
       localDeserializeSpecStub = makeDeserializeSpecStub();
-      localValidateSubmissionSpecStub = sinon.stub().resolves();
+      localValidateGossipSpecStub = sinon.stub().resolves();
       localLegacyCryptoProviderStub = { create: sinon.stub().resolves({}) };
 
       localLogStub = {
@@ -805,7 +805,7 @@ describe('appHashSyncService tests', () => {
         '../appDatabase/registryManager': { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
         '../utils/appSpecHelpers': { specificationFormatter: sinon.stub().returnsArg(0) },
         '../utils/specCutover': { deserializeSpec: localDeserializeSpecStub },
-        '../utils/specLibs': { validateSubmissionSpec: localValidateSubmissionSpecStub, getSpec: sinon.stub().resolves({}) },
+        '../utils/specLibs': { validateGossipSpec: localValidateGossipSpecStub, getSpec: sinon.stub().resolves({}) },
         '../providers/FluxOSLegacyCryptoProvider': localLegacyCryptoProviderStub,
         '../utils/appUtilities': { appPricePerMonth: sinon.stub().returns(0.01) },
         '../utils/chainUtilities': { getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01, cpu: 1, ram: 1, hdd: 1 }]) },
