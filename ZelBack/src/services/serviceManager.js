@@ -461,7 +461,6 @@ async function startFluxFunctions() {
     setTimeout(() => {
       // appsService.checkForNonAllowedAppsOnLocalNetwork();
       availabilityChecker.checkMyAppsAvailability(
-        appQueryService.installedApps,
         dosState,
         portsNotWorking,
         portManager.failedNodesTestPortsCache,
