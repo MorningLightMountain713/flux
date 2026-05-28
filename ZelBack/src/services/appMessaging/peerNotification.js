@@ -66,9 +66,6 @@ async function checkAndNotifyPeersOfRunningApps() {
       throw new Error('Unable to detect Flux IP address');
     }
 
-    // Raw specs for containerHealthMonitor (expects .compose[] format)
-    const rawAppsInstalled = await appsRepository.listInstalledAppsRaw();
-    // Hydrated specs for class-based component iteration
     const installedSpecs = await appsRepository.listInstalledApps();
 
     const runningAppsRes = await appQueryService.listRunningApps();
@@ -90,9 +87,9 @@ async function checkAndNotifyPeersOfRunningApps() {
     // apps using g:/r: syncthing are advertised as installed-and-running even when
     // some components are intentionally stopped (e.g. slaves), so derive them
     // directly from the specs rather than from container run-state
-    const masterSlaveAppsInstalled = rawAppsInstalled.filter((app) => {
-      const comps = app.version >= 4 && Array.isArray(app.compose) ? app.compose : [app];
-      return comps.some((c) => c.containerData && (c.containerData.includes('g:') || c.containerData.includes('r:')));
+    const masterSlaveAppsInstalled = installedSpecs.filter((inst) => {
+      const comps = inst.spec.componentEntries().map(([, c]) => c);
+      return comps.some((c) => c.hasSyncthing());
     });
 
     const installedAndRunning = [];
