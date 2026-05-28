@@ -9,16 +9,11 @@ const sinon = require('sinon');
 const axios = require('axios');
 const config = require('config');
 
-// Patch appQueryService before availabilityChecker is loaded — decryptEnterpriseApps
-// was removed from the exports but the source still destructures it.
-const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
-if (!appQueryService.decryptEnterpriseApps) {
-  appQueryService.decryptEnterpriseApps = async (apps) => apps;
-}
-
 const availabilityChecker = require('../../ZelBack/src/services/appMonitoring/availabilityChecker');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 // eslint-disable-next-line no-unused-vars
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
@@ -27,16 +22,18 @@ const upnpService = require('../../ZelBack/src/services/upnpService');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 
 describe('availabilityChecker tests', () => {
-  let mockInstalledAppsFn;
   let mockDosState;
   let mockPortsNotWorking;
   let mockFailedNodesCache;
   let isArcane;
   let delayStub;
   let setImmediateStub;
+  let listInstalledAppsStub;
+  let buildDeploymentStub;
 
   beforeEach(() => {
-    mockInstalledAppsFn = sinon.stub();
+    listInstalledAppsStub = sinon.stub(appsRepository, 'listInstalledApps').resolves([]);
+    buildDeploymentStub = sinon.stub(deploymentProvider, 'buildDeployment');
     mockDosState = {
       dosMessage: null,
       dosMountMessage: null,
@@ -66,7 +63,6 @@ describe('availabilityChecker tests', () => {
       mockDosState.dosMountMessage = 'Mount error detected';
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -83,7 +79,6 @@ describe('availabilityChecker tests', () => {
       mockDosState.dosDuplicateAppMessage = 'Duplicate app detected';
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -100,14 +95,13 @@ describe('availabilityChecker tests', () => {
       });
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
         isArcane,
       );
 
-      sinon.assert.notCalled(mockInstalledAppsFn);
+      sinon.assert.notCalled(listInstalledAppsStub);
       sinon.assert.calledWith(delayStub, 240_000);
     });
 
@@ -118,14 +112,13 @@ describe('availabilityChecker tests', () => {
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(false);
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
         isArcane,
       );
 
-      sinon.assert.notCalled(mockInstalledAppsFn);
+      sinon.assert.notCalled(listInstalledAppsStub);
     });
 
     it('should return early if no public IP found', async () => {
@@ -136,14 +129,13 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(null);
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
         isArcane,
       );
 
-      sinon.assert.notCalled(mockInstalledAppsFn);
+      sinon.assert.notCalled(listInstalledAppsStub);
     });
 
     it('should return early if failed to get installed apps', async () => {
@@ -152,100 +144,41 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'error', data: { message: 'Failed' } });
+      listInstalledAppsStub.rejects(new Error('Failed'));
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
         isArcane,
       );
 
-      sinon.assert.calledOnce(mockInstalledAppsFn);
+      sinon.assert.calledOnce(listInstalledAppsStub);
     });
 
-    it('should collect ports from v1 apps', async () => {
-      const apps = [
-        { name: 'App1', version: 1, port: 30001 },
-      ];
+    it('should collect ports via DeploymentSpec.allHostPorts', async () => {
+      const mockInstantiated = { name: 'App1' };
+      listInstalledAppsStub.resolves([mockInstantiated]);
+      buildDeploymentStub.resolves({ allHostPorts: () => [30001, 30002, 30003] });
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
         isArcane,
       );
 
-      // Port should be skipped if it's in use
-      sinon.assert.calledOnce(mockInstalledAppsFn);
-    });
-
-    it('should collect ports from v2-v3 apps', async () => {
-      const apps = [
-        { name: 'App1', version: 3, ports: [30001, 30002, 30003] },
-      ];
-
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
-      sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
-      sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
-
-      await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
-        mockDosState,
-        mockPortsNotWorking,
-        mockFailedNodesCache,
-        isArcane,
-      );
-
-      sinon.assert.calledOnce(mockInstalledAppsFn);
-    });
-
-    it('should collect ports from compose apps (v4+)', async () => {
-      const apps = [
-        {
-          name: 'ComposedApp',
-          version: 4,
-          compose: [
-            { name: 'Component1', ports: [30001, 30002] },
-            { name: 'Component2', ports: [30003] },
-          ],
-        },
-      ];
-
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
-      sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
-      sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
-
-      await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
-        mockDosState,
-        mockPortsNotWorking,
-        mockFailedNodesCache,
-        isArcane,
-      );
-
-      sinon.assert.calledOnce(mockInstalledAppsFn);
+      sinon.assert.calledOnce(listInstalledAppsStub);
+      sinon.assert.calledOnce(buildDeploymentStub);
+      sinon.assert.calledWith(buildDeploymentStub, mockInstantiated);
     });
 
     it('should skip banned ports', async () => {
@@ -256,11 +189,10 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
+      listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(true);
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -278,13 +210,12 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
+      listInstalledAppsStub.resolves(apps);
       sinon.stub(upnpService, 'isUPNP').returns(true);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(fluxNetworkHelper, 'isPortUPNPBanned').returns(true);
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -306,11 +237,10 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
+      listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -328,12 +258,11 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
+      listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -352,12 +281,11 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
+      listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves('192.168.1.200:16127');
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -375,7 +303,7 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
+      listInstalledAppsStub.resolves(apps);
       sinon.stub(upnpService, 'isUPNP').returns(true);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       // The port under test is drawn at random, so this gate has to be closed
@@ -390,7 +318,6 @@ describe('availabilityChecker tests', () => {
       sinon.stub(upnpService, 'removeMapUpnpPort').resolves();
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -409,7 +336,7 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
+      listInstalledAppsStub.resolves(apps);
       sinon.stub(upnpService, 'isUPNP').returns(true);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       // The port under test is drawn at random, so this gate has to be closed
@@ -424,7 +351,6 @@ describe('availabilityChecker tests', () => {
       sinon.stub(upnpService, 'removeMapUpnpPort').resolves();
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -438,7 +364,6 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').throws(new Error('Service error'));
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -457,12 +382,11 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
+      listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
@@ -483,12 +407,11 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      mockInstalledAppsFn.resolves({ status: 'success', data: apps });
+      listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
 
       await availabilityChecker.checkMyAppsAvailability(
-        mockInstalledAppsFn,
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
