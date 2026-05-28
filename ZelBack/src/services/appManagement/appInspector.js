@@ -465,7 +465,7 @@ function startAppMonitoring(appName, appsMonitored) {
         return;
       // eslint-disable-next-line no-param-reassign
       }
-      const dockerContainer = await dockerService.getDockerContainerOnly(appName);
+      const dockerContainer = await dockerService.getDockerContainer(appName);
       if (!dockerContainer) {
         log.error(`Monitoring of ${appName} not possible. App does not exist. Forcing stopping of monitoring`);
         // eslint-disable-next-line no-use-before-define
@@ -570,7 +570,7 @@ async function appExec(req, res) {
 
         const containers = await dockerService.dockerListContainers(true);
         const myContainer = containers.find((container) => (container.Names[0] === dockerService.getAppDockerNameIdentifier(processedBody.appname) || container.Id === processedBody.appname));
-        const dockerContainer = dockerService.getDockerContainer(myContainer.Id);
+        const dockerContainer = dockerService.getDockerContainerHandle(myContainer.Id);
 
         res.setHeader('Content-Type', 'application/json');
 
