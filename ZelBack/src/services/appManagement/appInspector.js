@@ -581,7 +581,7 @@ function startAppMonitoring(appName) {
         log.error(`Monitoring of ${appName} already stopped`);
         return;
       }
-      const dockerContainer = await dockerService.getDockerContainerOnly(appName);
+      const dockerContainer = await dockerService.getDockerContainer(appName);
       if (!dockerContainer) {
         log.error(`Monitoring of ${appName} not possible. App does not exist. Forcing stopping of monitoring`);
         // eslint-disable-next-line no-use-before-define
@@ -737,7 +737,7 @@ async function appExec(req, res) {
           throw new Error(`Application ${processedBody.appname} is not installed on this node`);
         }
 
-        const dockerContainer = dockerService.getDockerContainer(myContainer.Id);
+        const dockerContainer = dockerService.getDockerContainerHandle(myContainer.Id);
 
         res.setHeader('Content-Type', 'application/json');
 

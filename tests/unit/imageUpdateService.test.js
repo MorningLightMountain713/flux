@@ -10,7 +10,7 @@ const dockerServiceStub = {
   dockerListContainers: sinon.stub(),
   dockerListImages: sinon.stub(),
   dockerContainerInspect: sinon.stub(),
-  getDockerContainer: sinon.stub(),
+  getDockerContainerHandle: sinon.stub(),
   getAppIdentifier: sinon.stub(),
 };
 
@@ -91,7 +91,7 @@ describe('imageUpdateService tests', () => {
     dockerServiceStub.dockerListContainers.reset();
     dockerServiceStub.dockerListImages.reset();
     dockerServiceStub.dockerContainerInspect.reset();
-    dockerServiceStub.getDockerContainer.reset();
+    dockerServiceStub.getDockerContainerHandle.reset();
     dockerServiceStub.getAppIdentifier.reset();
 
     deploymentProviderStub.listInstalledDeployments.reset();
@@ -151,7 +151,7 @@ describe('imageUpdateService tests', () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/flux_watchtower'], Id: 'watchtower123', State: 'running' },
       ]);
-      dockerServiceStub.getDockerContainer.returns(mockContainer);
+      dockerServiceStub.getDockerContainerHandle.returns(mockContainer);
       dockerServiceStub.dockerListImages.resolves([]);
 
       const result = await imageUpdateService.removeWatchtowerContainer();
@@ -170,7 +170,7 @@ describe('imageUpdateService tests', () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/flux_watchtower'], Id: 'watchtower123', State: 'exited' },
       ]);
-      dockerServiceStub.getDockerContainer.returns(mockContainer);
+      dockerServiceStub.getDockerContainerHandle.returns(mockContainer);
       dockerServiceStub.dockerListImages.resolves([]);
 
       const result = await imageUpdateService.removeWatchtowerContainer();
@@ -189,7 +189,7 @@ describe('imageUpdateService tests', () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/flux_watchtower'], Id: 'watchtower123', State: 'running' },
       ]);
-      dockerServiceStub.getDockerContainer.returns(mockContainer);
+      dockerServiceStub.getDockerContainerHandle.returns(mockContainer);
       dockerServiceStub.dockerListImages.resolves([]);
 
       const result = await imageUpdateService.removeWatchtowerContainer();
