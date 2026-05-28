@@ -7,7 +7,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
-const { getSpec, validateSubmissionSpec } = require('../utils/specLibs');
+const { getSpec, validateGossipSpec } = require('../utils/specLibs');
 const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const { appRunningEntries } = require('../utils/appRunningEntries');
@@ -139,7 +139,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
     }
 
     if (validationBlob) {
-      await validateSubmissionSpec(validationBlob, { height: block });
+      await validateGossipSpec(validationBlob, { height: block });
     }
 
     let previousAppSpecs = null;

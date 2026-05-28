@@ -10,7 +10,7 @@ const appEventVerifier = require('./appEventVerifier');
 const appValidator = require('../appRequirements/appValidator');
 const { deserializeSpec } = require('../utils/specCutover');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
-const { validateSubmissionSpec, getSpec } = require('../utils/specLibs');
+const { validateGossipSpec, getSpec } = require('../utils/specLibs');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
@@ -385,7 +385,7 @@ async function processMessages(messages, records, onProgress) {
         }
 
         if (validationBlob) {
-          await validateSubmissionSpec(validationBlob, { height });
+          await validateGossipSpec(validationBlob, { height });
         }
 
         const permMsg = {

@@ -54,7 +54,7 @@ describe('messageStore tests', () => {
         getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1' }),
       },
       '../utils/specLibs': {
-        validateSubmissionSpec: sinon.stub().resolves(),
+        validateGossipSpec: sinon.stub().resolves(),
         getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
       },
       '../utils/globalState': {
