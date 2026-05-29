@@ -85,8 +85,8 @@ describe('fluxCommunication tests', () => {
       sinon.restore();
     });
 
-    it('should broadcast the app message if a proper data is given', async () => {
-      sinon.stub(messageStore, 'storeAppTemporaryMessage').returns(true);
+    it('should relay a valid app message to peers', async () => {
+      sinon.stub(messageStore, 'storeAppTemporaryMessage').resolves({ rebroadcast: true });
       const fromIp = '127.0.0.5';
       const port = '16127';
       const appSpecifications = {
