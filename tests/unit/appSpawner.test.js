@@ -96,7 +96,7 @@ describe('appSpawner tests', () => {
       owner: spec.owner,
       hash: overrides.hash || 'abc123',
       spec,
-      isEncrypted: () => !!overrides.encrypted,
+      isEncrypted: !!overrides.encrypted,
       serialize: () => overrides,
     };
   }

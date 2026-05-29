@@ -137,7 +137,7 @@ async function checkFreeAppUpdate(spec, daemonHeight) {
   const instantiated = await appsRepository.getGlobalAppInfo(spec.name);
   if (!instantiated) return false;
 
-  const prevSpec = instantiated.isEncrypted()
+  const prevSpec = instantiated.isEncrypted
     ? await resolveSpec(instantiated.serialize())
     : instantiated.spec;
 
