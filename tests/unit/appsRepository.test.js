@@ -167,21 +167,33 @@ describe('appsRepository', () => {
     });
   });
 
-  describe('raw accessors skip hydration', () => {
-    it('getGlobalAppInfoRaw returns the raw doc without version dispatch', async () => {
-      const doc = { name: 'raw', version: 7, hash: 'h' };
-      dbHelperStub.findOneInDatabase.resolves(doc);
-
-      const result = await appsRepository.getGlobalAppInfoRaw('raw');
-      expect(result).to.equal(doc);
+  describe('lean scalar accessors skip hydration', () => {
+    it('getGlobalAppOwner returns just the owner via an owner projection', async () => {
+      dbHelperStub.findOneInDatabase.resolves({ owner: 'ownerX' });
+      const result = await appsRepository.getGlobalAppOwner('app');
+      expect(result).to.equal('ownerX');
+      const options = dbHelperStub.findOneInDatabase.firstCall.args[3];
+      expect(options.projection).to.deep.equal({ _id: 0, owner: 1 });
       expect(specLibsStub.getSpec.called).to.be.false;
     });
 
-    it('getGlobalAppInfoRaw merges caller projection with _id:0 default', async () => {
+    it('getGlobalAppOwner returns null when the app is absent', async () => {
       dbHelperStub.findOneInDatabase.resolves(null);
-      await appsRepository.getGlobalAppInfoRaw('x', { name: 1, hash: 1 });
+      expect(await appsRepository.getGlobalAppOwner('missing')).to.be.null;
+    });
+
+    it('getGlobalAppHeight returns the numeric height via a height projection', async () => {
+      dbHelperStub.findOneInDatabase.resolves({ height: 1234 });
+      const result = await appsRepository.getGlobalAppHeight('app');
+      expect(result).to.equal(1234);
       const options = dbHelperStub.findOneInDatabase.firstCall.args[3];
-      expect(options.projection).to.deep.equal({ _id: 0, name: 1, hash: 1 });
+      expect(options.projection).to.deep.equal({ _id: 0, height: 1 });
+      expect(specLibsStub.getSpec.called).to.be.false;
+    });
+
+    it('getGlobalAppHeight returns null when the app is absent', async () => {
+      dbHelperStub.findOneInDatabase.resolves(null);
+      expect(await appsRepository.getGlobalAppHeight('missing')).to.be.null;
     });
   });
 

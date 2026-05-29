@@ -245,9 +245,9 @@ async function storeAppInstallingMessage(message) {
  * @returns {string|null} Owner.
  */
 async function getApplicationOwner(appName) {
-  const appSpecs = await appsRepository.getGlobalAppInfoRaw(appName, { owner: 1 });
-  if (appSpecs) {
-    return appSpecs.owner;
+  const owner = await appsRepository.getGlobalAppOwner(appName);
+  if (owner) {
+    return owner;
   }
   // eslint-disable-next-line no-use-before-define
   const allApps = await availableApps();
@@ -570,8 +570,8 @@ async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash)
  * @returns {Promise<boolean>} Update result
  */
 async function updateAppSpecsForRescanReindex(appSpecs) {
-  const existing = await appsRepository.getGlobalAppInfoRaw(appSpecs.name);
-  if (!existing || existing.height < appSpecs.height) {
+  const existingHeight = await appsRepository.getGlobalAppHeight(appSpecs.name);
+  if (existingHeight === null || existingHeight < appSpecs.height) {
     await appsRepository.upsertGlobalAppInfo(appSpecs);
   }
   return true;
@@ -593,19 +593,6 @@ async function storeAppSpecificationInPermanentStorage(appSpec) {
   }
 }
 
-/**
- * Get app specification from database
- * @param {string} appName - Application name
- * @returns {Promise<object|null>} App specification
- */
-async function getAppSpecificationFromDb(appName) {
-  try {
-    return await appsRepository.getGlobalAppInfoRaw(appName);
-  } catch (error) {
-    log.error(`Error getting app specification from database: ${error.message}`);
-    return null;
-  }
-}
 
 /**
  * Get all apps information (both global and local)
@@ -1312,7 +1299,6 @@ module.exports = {
   checkApplicationRegistrationNameConflicts,
   updateAppSpecsForRescanReindex,
   storeAppSpecificationInPermanentStorage,
-  getAppSpecificationFromDb,
   getAllAppsInformation,
   getRunningApps,
   getRunningAppIpList,
