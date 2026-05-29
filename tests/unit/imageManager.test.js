@@ -459,6 +459,25 @@ describe('imageManager tests', () => {
       expect(result.reason).to.be.null;
     });
 
+    it('handles a 64-char hash in the blocklist without catastrophic backtracking', async () => {
+      // Blocklists are a flat mix of repos, owners and 64-char hashes; every
+      // entry is run through stripTag. A 64-char hash once hung the event loop.
+      const hash = '6d691f2c09e08e9b6acf046a46566132bcf8dc6c0fbd2042e8faf087d5504e09';
+      serviceHelper.axiosGet.resolves({ data: ['blocked/repo', hash] });
+
+      const start = process.hrtime.bigint();
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app:latest'],
+        { owner: '1ValidOwner', hash },
+      );
+      const ms = Number(process.hrtime.bigint() - start) / 1e6;
+
+      expect(ms, `isImageBlocked took ${ms.toFixed(0)}ms`).to.be.below(1000);
+      expect(result.blocked).to.be.true; // the app's own hash is on the blocklist
+      expect(result.reason).to.include('is not allowed to be spawned');
+    });
+
     it('should return blocked for blocked app hash', async () => {
       const result = await imageManager.isImageBlocked(
         'TestApp',
