@@ -32,25 +32,19 @@ function mockDeployment(spec) {
 
 function makeStubs() {
   const appsRepositoryStub = {
-    listInstalledAppsRaw: sinon.stub().resolves([]),
-    listGlobalAppInfoRaw: sinon.stub().resolves([]),
+    listGlobalAppInfo: sinon.stub().resolves([]),
   };
 
-  const resolveSpecStub = sinon.stub().callsFake(async (plain) => plain);
-
-  const DeploymentSpecMock = {
-    fromSpec(spec) { return mockDeployment(spec); },
+  const deploymentProviderStub = {
+    listInstalledDeployments: sinon.stub().resolves([]),
+    buildDeployment: sinon.stub().callsFake(async (inst) => mockDeployment(inst)),
   };
-
-  const getSpecBackendStub = sinon.stub().resolves({
-    DeploymentSpec: DeploymentSpecMock,
-  });
 
   const verificationHelperStub = {
     signMessage: sinon.stub().resolves('test-signature'),
   };
 
-  return { appsRepositoryStub, resolveSpecStub, getSpecBackendStub, verificationHelperStub };
+  return { appsRepositoryStub, deploymentProviderStub, verificationHelperStub };
 }
 
 function buildProxyquireMap(stubs, overrides = {}) {
@@ -61,8 +55,7 @@ function buildProxyquireMap(stubs, overrides = {}) {
     axios: { post: sinon.stub().resolves({ data: { status: 'success' } }) },
     '../dbHelper': {},
     '../appDatabase/appsRepository': stubs.appsRepositoryStub,
-    '../utils/specCutover': { resolveSpec: stubs.resolveSpecStub },
-    '../utils/specLibs': { getSpecBackend: stubs.getSpecBackendStub },
+    '../appRuntime/deploymentProvider': stubs.deploymentProviderStub,
     '../utils/appConstants': {
       localAppsInformation: 'zelappsinformation',
       globalAppsInformation: 'zelappsglobalinformation',
@@ -143,10 +136,10 @@ describe('portManager tests', () => {
 
   describe('assignedPortsInstalledApps tests', () => {
     it('should return ports assigned by installed apps', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'App1', version: 3, ports: [30001, 30002] },
         { name: 'App2', version: 3, ports: [30003, 30004] },
-      ]);
+      ].map(mockDeployment));
 
       const result = await portManager.assignedPortsInstalledApps();
 
@@ -158,9 +151,9 @@ describe('portManager tests', () => {
     });
 
     it('should handle version 1 apps', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'OldApp', version: 1, port: 30005 },
-      ]);
+      ].map(mockDeployment));
 
       const result = await portManager.assignedPortsInstalledApps();
 
@@ -170,7 +163,7 @@ describe('portManager tests', () => {
     });
 
     it('should handle version 4+ compose apps', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         {
           name: 'ComposedApp',
           version: 4,
@@ -179,7 +172,7 @@ describe('portManager tests', () => {
             { name: 'Component2', ports: [30008] },
           ],
         },
-      ]);
+      ].map(mockDeployment));
 
       const result = await portManager.assignedPortsInstalledApps();
 
@@ -193,9 +186,9 @@ describe('portManager tests', () => {
 
   describe('ensureApplicationPortsNotUsed tests', () => {
     it('should pass if ports are not used', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
-      ]);
+      ].map(mockDeployment));
 
       const deployment = mockDeployment({ name: 'NewApp', version: 3, ports: [30010, 30011] });
       const result = await portManager.ensureApplicationPortsNotUsed(deployment, []);
@@ -204,9 +197,9 @@ describe('portManager tests', () => {
     });
 
     it('should throw error if port is already used by different app', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
-      ]);
+      ].map(mockDeployment));
 
       const deployment = mockDeployment({ name: 'NewApp', version: 3, ports: [30001, 30011] });
 
@@ -219,9 +212,9 @@ describe('portManager tests', () => {
     });
 
     it('should allow same app to use its own ports', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
-      ]);
+      ].map(mockDeployment));
 
       const deployment = mockDeployment({ name: 'ExistingApp', version: 3, ports: [30001, 30002] });
       const result = await portManager.ensureApplicationPortsNotUsed(deployment, []);
@@ -230,9 +223,9 @@ describe('portManager tests', () => {
     });
 
     it('should handle version 1 apps with conflicting port', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
-      ]);
+      ].map(mockDeployment));
 
       const deployment = mockDeployment({ name: 'OldNewApp', version: 1, port: 30001 });
 
@@ -245,9 +238,9 @@ describe('portManager tests', () => {
     });
 
     it('should handle version 4+ compose apps with conflicting port', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
-      ]);
+      ].map(mockDeployment));
 
       const deployment = mockDeployment({
         name: 'NewComposedApp',
@@ -269,10 +262,10 @@ describe('portManager tests', () => {
 
   describe('isPortAvailable tests', () => {
     beforeEach(() => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'App1', version: 3, ports: [30001, 30002] },
         { name: 'App2', version: 3, ports: [30003] },
-      ]);
+      ].map(mockDeployment));
     });
 
     it('should return false if port is used', async () => {
@@ -302,9 +295,9 @@ describe('portManager tests', () => {
 
   describe('findNextAvailablePort tests', () => {
     beforeEach(() => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'App1', version: 3, ports: [30001, 30002, 30003] },
-      ]);
+      ].map(mockDeployment));
     });
 
     it('should find next available port', async () => {
@@ -328,10 +321,10 @@ describe('portManager tests', () => {
 
   describe('getAllUsedPorts tests', () => {
     it('should return all used ports without duplicates', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'App1', version: 3, ports: [30001, 30002] },
         { name: 'App2', version: 3, ports: [30002, 30003] },
-      ]);
+      ].map(mockDeployment));
 
       const result = await portManager.getAllUsedPorts();
 
@@ -384,9 +377,9 @@ describe('portManager tests', () => {
 
   describe('restoreAppsPortsSupport tests', () => {
     it('should setup firewall for app ports when active', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'App1', version: 3, ports: [30001] },
-      ]);
+      ].map(mockDeployment));
 
       const fluxNetOverride = {
         isFirewallActive: sinon.stub().resolves(true),
@@ -401,9 +394,9 @@ describe('portManager tests', () => {
     });
 
     it('should setup UPNP for app ports when active', async () => {
-      stubs.appsRepositoryStub.listInstalledAppsRaw.resolves([
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'App1', version: 3, ports: [30001] },
-      ]);
+      ].map(mockDeployment));
 
       const upnpOverride = {
         isUPNP: sinon.stub().returns(true),

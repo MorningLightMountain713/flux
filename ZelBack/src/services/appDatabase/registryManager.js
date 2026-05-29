@@ -11,8 +11,7 @@ const appEventVerifier = require('../appMessaging/appEventVerifier');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
-const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
-const { deserializeSpec } = require('../utils/specCutover');
+const { validateSubmissionSpec } = require('../utils/specLibs');
 const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 const fluxEventBus = require('../utils/fluxEventBus');
 const {
@@ -471,7 +470,8 @@ async function getGlobalAppsSpecifications(req, res) {
     if (appname) {
       filter.name = appname;
     }
-    const results = await appsRepository.listGlobalAppInfoRaw({ filter });
+    const apps = await appsRepository.listGlobalAppInfo({ filter });
+    const results = apps.map((app) => app.serialize());
     const resultsResponse = messageHelper.createDataMessage(results);
     res.json(resultsResponse);
   } catch (error) {
@@ -492,9 +492,9 @@ async function getGlobalAppsSpecifications(req, res) {
  */
 async function availableApps(_req, res) {
   try {
-    const globalApps = await appsRepository.listGlobalAppInfoRaw();
-    const localApps = await appsRepository.listInstalledAppsRaw();
-    const allApps = [...globalApps, ...localApps];
+    const globalApps = await appsRepository.listGlobalAppInfo();
+    const localApps = await appsRepository.listInstalledApps();
+    const allApps = [...globalApps, ...localApps].map((app) => app.serialize());
 
     if (res) {
       const resultsResponse = messageHelper.createDataMessage(allApps);
@@ -653,27 +653,6 @@ function registrationInformation(_req, res) {
 }
 
 /**
- * Get all global applications from database
- * @param {string[]} proj - Optional projection fields
- * @returns {Promise<object[]>} Array of global applications
- */
-async function getAllGlobalApplications(proj = []) {
-  try {
-    const projection = {};
-    proj.forEach((field) => {
-      projection[field] = 1;
-    });
-    return await appsRepository.listGlobalAppInfoRaw({
-      projection: Object.keys(projection).length > 0 ? projection : undefined,
-      sort: { height: 1 },
-    });
-  } catch (error) {
-    log.error(error);
-    return [];
-  }
-}
-
-/**
  * Remove expired applications from global database and local installations
  * @returns {Promise<void>} Completion status
  */
@@ -712,26 +691,17 @@ async function expireGlobalApplications() {
       await dbHelper.removeDocumentsFromCollection(databaseApps, globalAppsInstallingErrorsLocations, { name: app.name });
     }
 
-    const installedDocs = await appsRepository.listInstalledAppsRaw({});
-    const { InstantiatedSpec } = await getSpecBackend();
+    const installedApps = await appsRepository.listInstalledApps();
     const appsToRemoveNames = [];
-    for (const app of installedDocs) {
+    for (const app of installedApps) {
       if (appNamesToExpire.includes(app.name)) {
         appsToRemoveNames.push(app.name);
       } else if (!app.height) {
         appsToRemoveNames.push(app.name);
       } else if (app.height === 0) {
         // forever lasting local app — skip
-      } else {
-        try {
-          const is = InstantiatedSpec.deserialize(app);
-          if (is.isExpired(nowSeconds, explorerHeight)) {
-            appsToRemoveNames.push(app.name);
-          }
-        } catch (err) {
-          log.warn(`expireGlobalApplications: failed to hydrate local app ${app.name}: ${err.message}`);
-          appsToRemoveNames.push(app.name);
-        }
+      } else if (app.isExpired(nowSeconds, explorerHeight)) {
+        appsToRemoveNames.push(app.name);
       }
     }
 
@@ -1303,7 +1273,6 @@ module.exports = {
   getRunningApps,
   getRunningAppIpList,
   registrationInformation,
-  getAllGlobalApplications,
   expireGlobalApplications,
   reindexGlobalAppsInformation,
   reindexGlobalAppsLocation,
