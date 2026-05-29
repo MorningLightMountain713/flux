@@ -13,7 +13,7 @@ const { buildPricingEngine } = require('../pricing/buildPricingEngine');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
-const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
+const { getPreviousSpec } = require('../appDatabase/appSpecHistory');
 const appEventVerifier = require('./appEventVerifier');
 const {
   globalAppsMessages,
@@ -368,12 +368,12 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
     // Prevents race: two updates verified against same state at temp time,
     // but the first one changed the owner before the second is promoted.
     if (confirmedEvent.isUpdate) {
-      const previousAppSpecs = await getPreviousAppSpecifications(specifications, tempMessage.timestamp);
-      if (previousAppSpecs) {
-        const previousInstantiated = await appsRepository.getGlobalAppInfo(specifications.name);
+      const previousSpec = await getPreviousSpec(specifications, tempMessage.timestamp);
+      if (previousSpec) {
+        const currentState = await appsRepository.getGlobalAppInfo(specifications.name);
         await appEventVerifier.authorize({
           appEvent: confirmedEvent,
-          previousSpec: previousInstantiated ? previousInstantiated.spec : null,
+          previousSpec: currentState ? currentState.spec : null,
           daemonHeight: getDaemonHeight(),
         });
       }
