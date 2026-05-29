@@ -130,12 +130,22 @@ async function getGlobalAppInfo(name) {
   return hydrate(doc);
 }
 
-async function getGlobalAppInfoRaw(name, projection = {}) {
-  return dbHelper.findOneInDatabase(
+async function getGlobalAppOwner(name) {
+  const doc = await dbHelper.findOneInDatabase(
     globalDb(), globalAppsInformation,
     { name: nameRegex(name) },
-    { projection: { _id: 0, ...projection } },
+    { projection: { _id: 0, owner: 1 } },
   );
+  return doc ? doc.owner : null;
+}
+
+async function getGlobalAppHeight(name) {
+  const doc = await dbHelper.findOneInDatabase(
+    globalDb(), globalAppsInformation,
+    { name: nameRegex(name) },
+    { projection: { _id: 0, height: 1 } },
+  );
+  return doc && typeof doc.height === 'number' ? doc.height : null;
 }
 
 async function existsGlobalApp(name) {
@@ -195,14 +205,6 @@ async function getInstalledApp(name) {
     { projection: { _id: 0 } },
   );
   return hydrate(doc);
-}
-
-async function getInstalledAppRaw(name, projection = {}) {
-  return dbHelper.findOneInDatabase(
-    localDb(), localAppsInformation,
-    { name: nameRegex(name) },
-    { projection: { _id: 0, ...projection } },
-  );
 }
 
 async function countInstalledApps() {
@@ -332,8 +334,8 @@ async function getPreviousPermanentMessage(name, beforeTimestamp) {
 // ── Upsert-if-newer + Installing Errors ────────────────────────────
 
 async function upsertIfNewer(instantiated) {
-  const existing = await getGlobalAppInfoRaw(instantiated.name, { height: 1 });
-  if (existing && existing.height >= instantiated.height) return false;
+  const existingHeight = await getGlobalAppHeight(instantiated.name);
+  if (existingHeight !== null && existingHeight >= instantiated.height) return false;
   await upsertGlobalAppInfo(instantiated.serialize());
   return true;
 }
@@ -534,7 +536,8 @@ module.exports = {
   findUnderProvisionedApps,
   // global specs
   getGlobalAppInfo,
-  getGlobalAppInfoRaw,
+  getGlobalAppOwner,
+  getGlobalAppHeight,
   existsGlobalApp,
   listGlobalAppInfo,
   listGlobalAppInfoRaw,
@@ -542,7 +545,6 @@ module.exports = {
   removeGlobalAppInfo,
   // installed apps
   getInstalledApp,
-  getInstalledAppRaw,
   countInstalledApps,
   existsInstalledApp,
   listInstalledApps,
