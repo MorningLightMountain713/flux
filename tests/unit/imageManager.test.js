@@ -383,6 +383,22 @@ describe('imageManager tests', () => {
       expect(result).to.deep.equal(['evil/repo']);
     });
 
+    it('exempts a marketplace offering even when the config entry has a tag and mixed case', async () => {
+      globalThis.userconfig = { initial: { blockedRepositories: ['Evil/Repo:latest', 'MarketplaceApp/Img:1.2.3'] } };
+      sinon.stub(axios, 'get').resolves({
+        data: {
+          status: 'success',
+          data: [{ visible: true, compose: [{ repotag: 'marketplaceapp/img:v1' }] }],
+        },
+      });
+
+      const result = await imageManager.getUserBlockedRepositories();
+
+      // tag + case are normalised; the marketplace entry is dropped, the other
+      // is stored as its tag-stripped, lowercased name.
+      expect(result).to.deep.equal(['evil/repo']);
+    });
+
     it('should cache the result across calls', async () => {
       globalThis.userconfig = { initial: { blockedRepositories: ['evil/repo'] } };
       const axiosGet = sinon.stub(axios, 'get').resolves({
