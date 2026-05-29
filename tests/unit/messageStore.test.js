@@ -23,7 +23,7 @@ describe('messageStore tests', () => {
       },
       isRegistration: message.type === 'fluxappregister' || message.type === 'zelappregister',
       isUpdate: message.type === 'fluxappupdate' || message.type === 'zelappupdate',
-      isEncrypted: () => false,
+      isEncrypted: false,
       serialize: () => ({
         type: message.type,
         version: message.version,
