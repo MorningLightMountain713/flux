@@ -72,7 +72,7 @@ function mockInstantiatedSpec(appInfo) {
     version: appInfo.version || 4,
     hash: appInfo.hash || 'testhash',
     expiresAtHeight,
-    isEncrypted: () => false,
+    isEncrypted: false,
     serialize: () => ({ ...appInfo }),
   };
 }

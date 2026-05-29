@@ -5,7 +5,7 @@ const { resolveSpec } = require('../utils/specCutover');
 const log = require('../../lib/log');
 
 async function toDeployment(instantiated) {
-  const spec = instantiated.isEncrypted()
+  const spec = instantiated.isEncrypted
     ? await resolveSpec(instantiated.serialize())
     : instantiated.spec;
 
