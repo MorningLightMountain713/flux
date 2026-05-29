@@ -208,9 +208,11 @@ async function getVettedRepositories() {
   }
 }
 
+// The repository name with any :tag / @digest removed, via the shared parser.
+// Non-image entries (owner ids, hashes) don't parse and pass through unchanged.
 function stripTag(imageRef) {
-  const lastColon = imageRef.lastIndexOf(':');
-  return lastColon > -1 ? imageRef.substring(0, lastColon) : imageRef;
+  const parsed = imageVerifier.ImageVerifier.parseImageReference(imageRef);
+  return parsed.error ? imageRef : parsed.reference;
 }
 
 function extractNamespace(repository) {
@@ -250,7 +252,10 @@ async function getUserBlockedRepositories() {
     }
 
     const userconfig = globalThis.userconfig;
-    const userBlockedRepos = userconfig.initial.blockedRepositories || [];
+    // Normalise case up front: image references are lowercase, but operators
+    // type blockedRepositories config in any case. Stored entries are the
+    // tag/digest-stripped name, which is what isImageBlocked compares against.
+    const userBlockedRepos = (userconfig.initial.blockedRepositories || []).map((repo) => repo.toLowerCase());
     if (userBlockedRepos.length === 0) {
       return userBlockedRepos;
     }
@@ -259,14 +264,15 @@ async function getUserBlockedRepositories() {
     const response = await axios.get(marketPlaceUrl);
     if (response && response.data && response.data.status === 'success') {
       const visibleApps = response.data.data.filter((val) => val.visible);
-      for (let i = 0; i < userBlockedRepos.length; i += 1) {
-        const userRepo = userBlockedRepos[i];
-        userRepo.substring(0, userRepo.lastIndexOf(':') > -1 ? userRepo.lastIndexOf(':') : userRepo.length);
-        const exist = visibleApps.find((app) => app.compose.find((compose) => compose.repotag.substring(0, compose.repotag.lastIndexOf(':') > -1 ? compose.repotag.lastIndexOf(':') : compose.repotag.length).toLowerCase() === userRepo.toLowerCase()));
-        if (!exist) {
-          usableUserBlockedRepos.push(userRepo);
+      for (const userRepo of userBlockedRepos) {
+        const userRepoName = stripTag(userRepo);
+        const isMarketplaceImage = visibleApps.some(
+          (app) => app.compose.some((component) => stripTag(component.repotag).toLowerCase() === userRepoName),
+        );
+        if (isMarketplaceImage) {
+          log.info(`${userRepo} is part of a marketplace offer; despite being on blockedRepositories it will not be taken into consideration`);
         } else {
-          log.info(`${userRepo} is part of marketplace offer and despite being on blockedRepositories it will not be take in consideration`);
+          usableUserBlockedRepos.push(userRepoName);
         }
       }
       cacheUserBlockedRepos = usableUserBlockedRepos;
@@ -353,7 +359,7 @@ async function checkDockerAccessibility(req, res) {
       const processedBody = serviceHelper.ensureObject(body);
 
       if (!processedBody.repotag) {
-        throw new Error('No repotag specifiec');
+        throw new Error('No repotag specified');
       }
 
       const message = messageHelper.createSuccessMessage('deprecated');
