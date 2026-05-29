@@ -14,7 +14,13 @@ class ImageVerifier {
   // End-anchored and digest-aware so a match describes the whole reference:
   // [HOST[:PORT]/][NAMESPACE/]REPOSITORY[:TAG][@DIGEST]. The `d` flag exposes
   // match indices so consumers can locate the tag without re-scanning.
-  static imagePattern = /^(?:(?<provider>(?:(?:[\w-]+(?:\.[\w-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?\/?(?<namespace>(?:(?:[a-z0-9]+(?:(?:[._]|__|[-]*)[a-z0-9]+)*)\/){0,2})(?<repository>[a-z0-9-_.]+\/{0,1}[a-z0-9-_.]+)(?::(?<tag>[\w][\w.-]{0,127}))?(?:@(?<digest>[a-z0-9]+:[0-9a-f]+))?$/d;
+  // The name separator is `[-]+` (one or more), NOT `[-]*` — an empty-matchable
+  // separator inside the outer `*` is a classic (a+)+ ReDoS: it lets a long
+  // alphanumeric run be partitioned exponentially many ways, which catastrophically
+  // backtracks against the end anchor (a 64-char hash once hung the event loop).
+  // `[-]+` matches the same valid names (greedy [a-z0-9]+ already covers the
+  // no-separator case) and matches the Docker reference grammar.
+  static imagePattern = /^(?:(?<provider>(?:(?:[\w-]+(?:\.[\w-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?\/?(?<namespace>(?:(?:[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)\/){0,2})(?<repository>[a-z0-9-_.]+\/{0,1}[a-z0-9-_.]+)(?::(?<tag>[\w][\w.-]{0,127}))?(?:@(?<digest>[a-z0-9]+:[0-9a-f]+))?$/d;
 
   static wwwAuthHeaderPattern = /(?<scheme>Bearer|Basic)\s+realm="(?<realm>[^"]+)"(?:,\s*service="(?<service>[^"]+)")?(?:,\s*scope="(?<scope>[^"]+)")?/;
 
