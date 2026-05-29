@@ -426,6 +426,65 @@ describe('imageVerifier tests', () => {
     });
   });
 
+  describe('parseImageReference tests', () => {
+    const parse = (ref) => ImageVerifier.parseImageReference(ref);
+    const digest = 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
+    it('parses a Docker Hub image with a tag', () => {
+      const r = parse('nginx:latest');
+      expect(r.error).to.be.undefined;
+      expect(r.repository).to.equal('nginx');
+      expect(r.tag).to.equal('latest');
+      expect(r.digest).to.equal(null);
+      expect(r.reference).to.equal('nginx');
+    });
+
+    it('reports a tagless reference with a null tag', () => {
+      const r = parse('library/nginx');
+      expect(r.tag).to.equal(null);
+      expect(r.reference).to.equal('library/nginx');
+    });
+
+    it('does not mistake a registry port for a tag when tagged', () => {
+      const r = parse('myregistry.com:5000/team/app:v1');
+      expect(r.provider).to.equal('myregistry.com:5000');
+      expect(r.tag).to.equal('v1');
+      expect(r.reference).to.equal('myregistry.com:5000/team/app');
+    });
+
+    it('does not mistake a registry port for a tag when untagged', () => {
+      const r = parse('myregistry.com:5000/team/app');
+      expect(r.tag).to.equal(null);
+      expect(r.reference).to.equal('myregistry.com:5000/team/app');
+    });
+
+    it('captures a digest and excludes it from the reference', () => {
+      const r = parse(`library/redis:7@${digest}`);
+      expect(r.tag).to.equal('7');
+      expect(r.digest).to.equal(digest);
+      expect(r.reference).to.equal('library/redis');
+    });
+
+    it('handles a digest with no tag', () => {
+      const r = parse(`nginx@${digest}`);
+      expect(r.tag).to.equal(null);
+      expect(r.digest).to.equal(digest);
+      expect(r.reference).to.equal('nginx');
+    });
+
+    it('rejects trailing content after the tag (end-anchored)', () => {
+      expect(parse('nginx:latest:junk').error).to.be.a('string');
+      expect(parse('nginx:tag@notadigest').error).to.be.a('string');
+    });
+
+    it('rejects malformed references', () => {
+      expect(parse('Foo/Bar:latest').error).to.be.a('string'); // uppercase
+      expect(parse('has space:tag').error).to.be.a('string');
+      expect(parse('/leadingslash').error).to.be.a('string');
+      expect(parse(42).error).to.equal('Invalid Docker Image Tag');
+    });
+  });
+
   describe('parseAuthHeader tests', () => {
     it('should parse auth header correctly', async () => {
       const authHeader = 'Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:runonflux/secretwebsite:pull"';

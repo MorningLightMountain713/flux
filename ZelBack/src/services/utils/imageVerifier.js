@@ -11,7 +11,10 @@ const { AsyncLock } = require('./asyncLock');
 class ImageVerifier {
   static defaultDockerRegistry = 'registry-1.docker.io';
 
-  static imagePattern = /^(?:(?<provider>(?:(?:[\w-]+(?:\.[\w-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?\/?(?<namespace>(?:(?:[a-z0-9]+(?:(?:[._]|__|[-]*)[a-z0-9]+)*)\/){0,2})(?<repository>[a-z0-9-_.]+\/{0,1}[a-z0-9-_.]+)[:]?(?<tag>[\w][\w.-]{0,127})?/;
+  // End-anchored and digest-aware so a match describes the whole reference:
+  // [HOST[:PORT]/][NAMESPACE/]REPOSITORY[:TAG][@DIGEST]. The `d` flag exposes
+  // match indices so consumers can locate the tag without re-scanning.
+  static imagePattern = /^(?:(?<provider>(?:(?:[\w-]+(?:\.[\w-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?\/?(?<namespace>(?:(?:[a-z0-9]+(?:(?:[._]|__|[-]*)[a-z0-9]+)*)\/){0,2})(?<repository>[a-z0-9-_.]+\/{0,1}[a-z0-9-_.]+)(?::(?<tag>[\w][\w.-]{0,127}))?(?:@(?<digest>[a-z0-9]+:[0-9a-f]+))?$/d;
 
   static wwwAuthHeaderPattern = /(?<scheme>Bearer|Basic)\s+realm="(?<realm>[^"]+)"(?:,\s*service="(?<service>[^"]+)")?(?:,\s*scope="(?<scope>[^"]+)")?/;
 
@@ -211,69 +214,100 @@ class ImageVerifier {
     }
   }
 
-  #parseDockerTag() {
-    if (this.error) return;
-
-    if (/\s/.test(this.rawImageTag)) {
-      this.#parseErrorDetail = `Image tag: "${this.rawImageTag}" should not contain space characters.`;
-      return;
+  /**
+   * Pure, network-free parse of a docker image reference into its parts. The
+   * single source of truth for splitting a reference — shared by the verifier
+   * and by consumers that only need the components (e.g. tag stripping for
+   * blocklist matching) without standing up a registry client.
+   *
+   * @param {string} rawImageTag
+   * @returns {{error: string}
+   *   | {provider: string, namespace: string, repository: string, tag: string|null,
+   *      digest: string|null, reference: string, ambiguous: boolean}}
+   *   `reference` is the name as written, minus tag and digest.
+   */
+  static parseImageReference(rawImageTag) {
+    if (typeof rawImageTag !== 'string') {
+      return { error: 'Invalid Docker Image Tag' };
     }
 
-    if (this.rawImageTag.startsWith('/') || this.rawImageTag.endsWith('/')) {
-      this.#parseErrorDetail = `Image tag: "${this.rawImageTag}" cannot start or end with a backslash.`;
-      return;
+    if (/\s/.test(rawImageTag)) {
+      return { error: `Image tag: "${rawImageTag}" should not contain space characters.` };
     }
 
-    const match = ImageVerifier.imagePattern.exec(this.rawImageTag);
+    if (rawImageTag.startsWith('/') || rawImageTag.endsWith('/')) {
+      return { error: `Image tag: "${rawImageTag}" cannot start or end with a backslash.` };
+    }
+
+    const match = ImageVerifier.imagePattern.exec(rawImageTag);
 
     if (match === null) {
-      this.#parseErrorDetail = `Image tag: ${this.rawImageTag} is not in valid format [HOST[:PORT_NUMBER]/][NAMESPACE/]REPOSITORY[:TAG]`;
-      return;
+      return { error: `Image tag: ${rawImageTag} is not in valid format [HOST[:PORT_NUMBER]/][NAMESPACE/]REPOSITORY[:TAG]` };
     }
 
     const {
       groups: {
-        provider, namespace, repository, tag,
+        provider: matchedProvider, namespace: matchedNamespace, repository: matchedRepository, tag: matchedTag, digest: matchedDigest,
       },
     } = match;
 
-    this.provider = provider || ImageVerifier.defaultDockerRegistry;
+    const provider = matchedProvider || ImageVerifier.defaultDockerRegistry;
+    let namespace;
+    let repository = matchedRepository;
+    // Absent tag/digest are always null (never undefined or '').
+    const tag = matchedTag === undefined ? null : matchedTag;
+    const digest = matchedDigest === undefined ? null : matchedDigest;
+    // The name as written, minus tag and digest — sliced at the repository's
+    // end offset (the `d` flag), so no re-scanning and no canonicalisation.
+    const [, repositoryEnd] = match.indices.groups.repository;
+    const reference = rawImageTag.slice(0, repositoryEnd);
+    let ambiguous;
 
     // Without doing a lookup against the dockerhub library, no way to know if a single string is
     // an image or a namespace
-    if (tag === undefined) {
-      if (this.provider === ImageVerifier.defaultDockerRegistry) {
+    if (matchedTag === undefined) {
+      if (provider === ImageVerifier.defaultDockerRegistry) {
         // we can't tell, so we set namespace to repository if no namespace
-        this.namespace = namespace || repository;
-        this.repository = namespace ? repository : '';
-        this.tag = tag;
-        this.ambiguous = this.repository === '';
+        namespace = matchedNamespace || matchedRepository;
+        repository = matchedNamespace ? matchedRepository : '';
+        ambiguous = repository === '';
       } else {
-        // registry
-        this.namespace = namespace;
-        this.repository = repository;
-        this.tag = '';
         // a registry is ambiguous as you can have multiple / in both namespace and repository,
         // and we don't know how it is split, until we get a tag
-        this.ambiguous = true;
+        namespace = matchedNamespace;
+        ambiguous = true;
       }
     } else {
-      // we have certainty that the image parts that we have are correct
       // Docker Hub uses 'library' namespace for official images, but other registries don't use default namespaces
-      // this would be better to lookup against dockerhub library (only 150 odd images to pull via api)
-      const isDockerHub = this.provider === ImageVerifier.defaultDockerRegistry;
-      const defaultNamespace = isDockerHub ? 'library' : '';
-
-      this.namespace = namespace || defaultNamespace;
-      this.repository = repository;
-      this.tag = tag;
-      this.ambiguous = false;
+      const isDockerHub = provider === ImageVerifier.defaultDockerRegistry;
+      namespace = matchedNamespace || (isDockerHub ? 'library' : '');
+      ambiguous = false;
     }
 
     // ToDo: update regex so we don't have to strip last namespace /
-    if (this.namespace.slice(-1) === '/') {
-      this.namespace = this.namespace.slice(0, -1);
+    if (namespace.slice(-1) === '/') {
+      namespace = namespace.slice(0, -1);
     }
+
+    return {
+      provider, namespace, repository, tag, digest, reference, ambiguous,
+    };
+  }
+
+  #parseDockerTag() {
+    if (this.error) return;
+
+    const parsed = ImageVerifier.parseImageReference(this.rawImageTag);
+    if (parsed.error) {
+      this.#parseErrorDetail = parsed.error;
+      return;
+    }
+
+    this.provider = parsed.provider;
+    this.namespace = parsed.namespace;
+    this.repository = parsed.repository;
+    this.tag = parsed.tag;
+    this.ambiguous = parsed.ambiguous;
   }
 
   /**
