@@ -72,7 +72,7 @@ describe('appQueryService tests', () => {
     appSpecHelpersStub = {};
 
     appsRepositoryStub = {
-      listInstalledAppsRaw: sinon.stub(),
+      listInstalledApps: sinon.stub(),
     };
 
     logStub = {
@@ -108,13 +108,13 @@ describe('appQueryService tests', () => {
         { name: 'app2', version: 3 },
       ];
 
-      appsRepositoryStub.listInstalledAppsRaw.resolves(mockApps);
+      appsRepositoryStub.listInstalledApps.resolves(mockApps.map((d) => ({ serialize: () => d })));
       messageHelperStub.createDataMessage.returns({ status: 'success', data: mockApps });
 
       const result = await appQueryService.installedApps();
 
       expect(result).to.deep.equal({ status: 'success', data: mockApps });
-      expect(appsRepositoryStub.listInstalledAppsRaw.calledOnce).to.be.true;
+      expect(appsRepositoryStub.listInstalledApps.calledOnce).to.be.true;
       expect(messageHelperStub.createDataMessage.calledWith(mockApps)).to.be.true;
     });
 
@@ -128,31 +128,31 @@ describe('appQueryService tests', () => {
         json: sinon.stub(),
       };
 
-      appsRepositoryStub.listInstalledAppsRaw.resolves([mockApp]);
+      appsRepositoryStub.listInstalledApps.resolves([mockApp].map((d) => ({ serialize: () => d })));
       messageHelperStub.createDataMessage.returns({ status: 'success', data: [mockApp] });
 
       await appQueryService.installedApps(req, res);
 
       expect(res.json.calledOnce).to.be.true;
-      expect(appsRepositoryStub.listInstalledAppsRaw.calledOnce).to.be.true;
+      expect(appsRepositoryStub.listInstalledApps.calledOnce).to.be.true;
     });
 
     it('should handle string parameter for appname', async () => {
       const mockApp = [{ name: 'app1', version: 4 }];
 
-      appsRepositoryStub.listInstalledAppsRaw.resolves(mockApp);
+      appsRepositoryStub.listInstalledApps.resolves(mockApp.map((d) => ({ serialize: () => d })));
       messageHelperStub.createDataMessage.returns({ status: 'success', data: mockApp });
 
       const result = await appQueryService.installedApps('app1');
 
       expect(result).to.deep.equal({ status: 'success', data: mockApp });
-      expect(appsRepositoryStub.listInstalledAppsRaw.calledOnce).to.be.true;
+      expect(appsRepositoryStub.listInstalledApps.calledOnce).to.be.true;
     });
 
     it('should return error message on database failure', async () => {
       const error = new Error('Database error');
 
-      appsRepositoryStub.listInstalledAppsRaw.rejects(error);
+      appsRepositoryStub.listInstalledApps.rejects(error);
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Database error' } });
 
       const result = await appQueryService.installedApps();
@@ -175,7 +175,7 @@ describe('appQueryService tests', () => {
         query: {},
       };
 
-      appsRepositoryStub.listInstalledAppsRaw.resolves(mockApps);
+      appsRepositoryStub.listInstalledApps.resolves(mockApps.map((d) => ({ serialize: () => d })));
       messageHelperStub.createDataMessage.returns({ status: 'success', data: mockApps });
 
       await appQueryService.installedApps(req, res);
@@ -190,7 +190,7 @@ describe('appQueryService tests', () => {
       };
       const req = 'appName';
 
-      appsRepositoryStub.listInstalledAppsRaw.rejects(error);
+      appsRepositoryStub.listInstalledApps.rejects(error);
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Database error' } });
 
       await appQueryService.installedApps(req, res);
