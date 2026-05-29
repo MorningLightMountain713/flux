@@ -11,9 +11,8 @@ const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
 const appsRepository = require('../appDatabase/appsRepository');
-const { resolveSpec } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
-const { localAppsInformation, globalAppsInformation, appsFolder } = require('../utils/appConstants');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
+const { localAppsInformation, globalAppsInformation } = require('../utils/appConstants');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { Privilege, authOf } = require('../utils/privileges');
 const fluxCaching = require('../utils/cacheManager');
@@ -38,13 +37,6 @@ const UPNP_MAP_RETRY_DELAY_MS = 30 * 1000;
 const upnpMapFailures = new Map();
 
 const monotonicMs = () => Number(process.hrtime.bigint() / 1000000n);
-
-async function buildDeployment(plainSpec) {
-  const { DeploymentSpec } = await getSpecBackend();
-  const spec = await resolveSpec(plainSpec);
-  return DeploymentSpec.fromSpec(spec, appsFolder);
-}
-
 /**
  * The host ports the applications installed on this node hold.
  *
@@ -60,18 +52,8 @@ async function buildDeployment(plainSpec) {
  *   and the ports each holds
  */
 async function assignedPortsInstalledApps() {
-  const results = await appsRepository.listInstalledAppsRaw();
-  const apps = [];
-  for (const rawSpec of results) {
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const deployment = await buildDeployment(rawSpec);
-      apps.push({ name: deployment.appName, ports: deployment.allHostPorts() });
-    } catch (err) {
-      log.warn(`assignedPortsInstalledApps: skipping ${rawSpec.name}: ${err.message}`);
-    }
-  }
-  return apps;
+  const deployments = await deploymentProvider.listInstalledDeployments();
+  return deployments.map((deployment) => ({ name: deployment.appName, ports: deployment.allHostPorts() }));
 }
 
 /**
@@ -99,18 +81,18 @@ async function assignedPortsGlobalApps(appNames) {
   if (!appNames || appNames.length === 0) return [];
 
   const appsQuery = appNames.map((app) => ({ name: app }));
-  const results = await appsRepository.listGlobalAppInfoRaw({ filter: { $or: appsQuery } });
+  const globalApps = await appsRepository.listGlobalAppInfo({ filter: { $or: appsQuery } });
   const apps = [];
-  for (const rawSpec of results) {
+  for (const inst of globalApps) {
     try {
       // eslint-disable-next-line no-await-in-loop
-      const deployment = await buildDeployment(rawSpec);
+      const deployment = await deploymentProvider.buildDeployment(inst);
       const ports = deployment.allHostPorts();
       if (ports.length > 0) {
         apps.push({ name: deployment.appName, ports });
       }
     } catch (err) {
-      log.warn(`assignedPortsGlobalApps: skipping ${rawSpec.name}: ${err.message}`);
+      log.warn(`assignedPortsGlobalApps: skipping ${inst.name}: ${err.message}`);
     }
   }
   return apps;
@@ -1090,24 +1072,11 @@ async function callOtherNodeToKeepUpnpPortsOpen() {
       return;
     }
 
-    // Import locally to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const appQueryService = require('../appQuery/appQueryService');
-    const installedAppsRes = await appQueryService.installedApps();
-    if (installedAppsRes.status !== 'success') {
-      return;
-    }
-    const apps = installedAppsRes.data;
     const signer = await nodeSigner();
     if (!signer) throw new Error('Unable to sign the UPnP request');
-
+    const deployments = await deploymentProvider.listInstalledDeployments();
     const ports = [];
-    const { DeploymentSpec } = await getSpecBackend();
-    for (const app of apps) {
-      // eslint-disable-next-line no-await-in-loop
-      const spec = await resolveSpec(app);
-      if (!spec) continue;
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+    for (const deployment of deployments) {
       ports.push(...deployment.allHostPorts());
     }
 

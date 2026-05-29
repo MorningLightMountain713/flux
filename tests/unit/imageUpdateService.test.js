@@ -18,9 +18,7 @@ const deploymentProviderStub = {
   listInstalledDeployments: sinon.stub(),
 };
 
-const appsRepositoryStub = {
-  listInstalledAppsRaw: sinon.stub(),
-};
+const appsRepositoryStub = {};
 
 const advancedWorkflowsStub = {
   redeployApplication: sinon.stub(),
@@ -95,8 +93,6 @@ describe('imageUpdateService tests', () => {
 
     deploymentProviderStub.listInstalledDeployments.reset();
     deploymentProviderStub.listInstalledDeployments.resolves([]);
-    appsRepositoryStub.listInstalledAppsRaw.reset();
-    appsRepositoryStub.listInstalledAppsRaw.resolves([]);
 
     advancedWorkflowsStub.redeployApplication.reset();
 
@@ -507,10 +503,6 @@ describe('imageUpdateService tests', () => {
         mockDeployment('App1', [{ name: 'App1', image: 'nginx:latest' }]),
         mockDeployment('App2', [{ name: 'App2', image: 'redis:latest' }]),
       ]);
-      appsRepositoryStub.listInstalledAppsRaw.resolves([
-        { name: 'App1', version: 3 },
-        { name: 'App2', version: 3 },
-      ]);
 
       dockerServiceStub.getAppIdentifier.callsFake((name) => `flux${name}`);
       dockerServiceStub.dockerContainerInspect.resolves({ Image: 'sha256:img' });
@@ -529,10 +521,6 @@ describe('imageUpdateService tests', () => {
       deploymentProviderStub.listInstalledDeployments.resolves([
         mockDeployment('App1', [{ name: 'App1', image: 'nginx:latest' }]),
         mockDeployment('App2', [{ name: 'App2', image: 'redis:latest' }]),
-      ]);
-      appsRepositoryStub.listInstalledAppsRaw.resolves([
-        { name: 'App1', version: 3 },
-        { name: 'App2', version: 3 },
       ]);
 
       dockerServiceStub.getAppIdentifier.callsFake((name) => `flux${name}`);

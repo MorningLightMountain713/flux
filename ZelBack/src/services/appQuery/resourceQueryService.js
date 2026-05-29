@@ -4,9 +4,7 @@ const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const hwRequirements = require('../appRequirements/hwRequirements');
-const appConstants = require('../utils/appConstants');
-const { resolveSpec } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const log = require('../../lib/log');
 
 // Import appQueryService to avoid circular dependency (will be cleaned up later)
@@ -79,29 +77,24 @@ async function fluxUsage(req, res) {
 async function appsResources() {
   log.info('Checking appsResources');
   try {
-    const appsResult = await appsRepository.listInstalledAppsRaw();
-    const unreadable = [];
+    const installed = await appsRepository.listInstalledApps();
+    const deployments = await deploymentProvider.listInstalledDeployments();
+    // An app whose deployment could not be built (its components are inside a
+    // blob this node cannot read) is absent from `deployments`, not zero-sized:
+    // it is named, so the caller can tell unaccountable from unused.
+    const built = new Set(deployments.map((deployment) => deployment.appName));
+    const unreadable = installed.filter((inst) => !built.has(inst.name));
     let appsCpusLocked = 0;
     let appsRamLocked = 0;
     let appsHddLocked = 0;
 
-    const { DeploymentSpec } = await getSpecBackend();
-    const apps = Array.isArray(appsResult) ? appsResult : [];
     // eslint-disable-next-line no-restricted-syntax
-    for (const app of apps) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const spec = await resolveSpec(app);
-        const deployment = DeploymentSpec.fromSpec(spec, appConstants.appsFolder);
-        const { cpu, memory, storage } = deployment.totalResources();
-        const componentCount = deployment.componentCount();
-        appsCpusLocked += cpu;
-        appsRamLocked += memory;
-        appsHddLocked += storage + (config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap) * componentCount;
-      } catch (err) {
-        log.error(`Failed to compute resources for ${app.name}: ${err.message}`);
-        unreadable.push(app);
-      }
+    for (const deployment of deployments) {
+      const { cpu, memory, storage } = deployment.totalResources();
+      const componentCount = deployment.componentCount();
+      appsCpusLocked += cpu;
+      appsRamLocked += memory;
+      appsHddLocked += storage + (config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap) * componentCount;
     }
     const appsUsage = {
       appsCpusLocked,
