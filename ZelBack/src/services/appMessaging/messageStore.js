@@ -118,7 +118,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
 
   if (furtherVerification) {
     let validationBlob;
-    if (appEvent.isEncrypted()) {
+    if (appEvent.isEncrypted) {
       if (await benchmarkService.isSystemSecure()) {
         const provider = await appEvent.spec.createProvider();
         const decrypted = await appEvent.spec.decrypt(provider);

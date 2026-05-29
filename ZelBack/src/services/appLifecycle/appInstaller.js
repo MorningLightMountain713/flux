@@ -584,7 +584,7 @@ async function testInstallApplication(appname) {
   const pending = PendingSpec.fromTempMessage(tempMessage);
 
   let spec = pending.spec;
-  if (pending.isEncrypted()) {
+  if (pending.isEncrypted) {
     const provider = await spec.createProvider();
     spec = (await spec.decrypt(provider)).spec;
   }

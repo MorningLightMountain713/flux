@@ -1560,7 +1560,7 @@ async function reconcileInstalledApps() {
 
         if (registrySpec.hash === installed.hash) continue;
 
-        if (registrySpec.isEncrypted() && !isArcane) {
+        if (registrySpec.isEncrypted && !isArcane) {
           log.warn(`REMOVAL REASON: Enterprise app requires arcaneOS - ${installed.name}`);
           // eslint-disable-next-line no-await-in-loop
           await appUninstaller.uninstallApplication(installed.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });

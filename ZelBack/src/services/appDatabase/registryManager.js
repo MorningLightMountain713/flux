@@ -341,7 +341,7 @@ async function getApplicationSpecification(appname, encryptedEnterpriseKey) {
     throw new Error(`Application: ${appname} not found`);
   }
 
-  if (!encryptedEnterpriseKey || !instantiated.isEncrypted()) {
+  if (!encryptedEnterpriseKey || !instantiated.isEncrypted) {
     return instantiated.spec.serialize();
   }
 
