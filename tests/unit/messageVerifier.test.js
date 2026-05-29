@@ -106,7 +106,7 @@ function makeBaseStubs(overrides = {}) {
       updateAppSpecifications: sinon.stub().resolves(),
     },
     '../appDatabase/appSpecHistory': {
-      getPreviousAppSpecifications: sinon.stub().resolves(null),
+      getPreviousSpec: sinon.stub().resolves(null),
     },
     './appEventVerifier': {
       authorize: sinon.stub().resolves(),

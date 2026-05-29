@@ -43,17 +43,17 @@ let syncRunning = false;
 
 // The message right before one in the log, in (height, timestamp) order - the order
 // getPreviousAppSpecifications and appMessageChain use, so a registration and an update paid in
-// one block are in the same order for a bulk-synced node as for a live one. specs is sorted by
+// one block are in the same order for a bulk-synced node as for a live one. messages is sorted by
 // (height, timestamp).
-function findPrevSpec(specs, height, timestamp = -Infinity) {
+function findPrevMessage(messages, height, timestamp = -Infinity) {
   let lo = 0;
-  let hi = specs.length;
+  let hi = messages.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (isBefore(specs[mid], height, timestamp)) lo = mid + 1;
+    if (isBefore(messages[mid], height, timestamp)) lo = mid + 1;
     else hi = mid;
   }
-  return lo > 0 ? specs[lo - 1] : null;
+  return lo > 0 ? messages[lo - 1] : null;
 }
 
 async function getMissingHashes(options = {}) {
@@ -283,7 +283,7 @@ async function processMessages(messages, records, onProgress) {
   const placed = messages
     .filter((message) => records.has(message.hash))
     .map((message) => withOwnChainRecord(message, records.get(message.hash)));
-  // (height, timestamp): the order findPrevSpec searches, and the one a same-block pair confirmed in
+  // (height, timestamp): the order findPrevMessage searches, and the one a same-block pair confirmed in
   placed.sort((a, b) => (a.height - b.height) || ((a.timestamp || 0) - (b.timestamp || 0)));
   const filtered = placed.filter((app) => app.valueSat !== null);
 
@@ -329,7 +329,7 @@ async function processMessages(messages, records, onProgress) {
         if (specs) updateNames.add(specs.name);
       }
     }
-    const prevSpecsMap = new Map();
+    const prevMessagesMap = new Map();
     if (updateNames.size > 0) {
       const prevDocs = await appsGlobalDb.collection(globalAppsMessages)
         .find({ 'appSpecifications.name': { $in: [...updateNames] } })
@@ -340,8 +340,8 @@ async function processMessages(messages, records, onProgress) {
       for (const doc of prevDocs) {
         const name = doc.appSpecifications?.name;
         if (!name) continue;
-        if (!prevSpecsMap.has(name)) prevSpecsMap.set(name, []);
-        prevSpecsMap.get(name).push(doc);
+        if (!prevMessagesMap.has(name)) prevMessagesMap.set(name, []);
+        prevMessagesMap.get(name).push(doc);
       }
     }
 
@@ -349,7 +349,7 @@ async function processMessages(messages, records, onProgress) {
     // the message before it among those that count, from this node's payment records.
     const paymentFacts = await dbHelper.appPaymentFacts(
       daemonDb,
-      [...[...prevSpecsMap.values()].flat(), ...newMessages].map((message) => message.hash),
+      [...[...prevMessagesMap.values()].flat(), ...newMessages].map((message) => message.hash),
     );
     const countedBefore = (list) => messagesThatCount(
       list.filter((message) => !paymentFacts.notOnChain.has(message.hash)),
@@ -368,6 +368,7 @@ async function processMessages(messages, records, onProgress) {
         const wireSpec = await deserializeSpec(specifications);
         const appSpecFormatted = wireSpec.serialize();
         const height = serviceHelper.ensureNumber(appMessage.height);
+        const messageTimestamp = serviceHelper.ensureNumber(appMessage.timestamp);
         const valueSat = serviceHelper.ensureNumber(appMessage.valueSat);
         const isRegistration = appMessage.type === 'fluxappregister' || appMessage.type === 'zelappregister';
 
@@ -404,14 +405,14 @@ async function processMessages(messages, records, onProgress) {
 
         let previousSpec = null;
         if (!isRegistration) {
-          const prevSpecsList = prevSpecsMap.get(appSpecFormatted.name);
-          const prevMsg = prevSpecsList ? findPrevSpec(countedBefore(prevSpecsList), height, messageTimestamp) : null;
+          const prevMessagesList = prevMessagesMap.get(appSpecFormatted.name);
+          const prevMsg = prevMessagesList ? findPrevMessage(countedBefore(prevMessagesList), height, messageTimestamp) : null;
           if (!prevMsg) {
             failed += 1;
             continue;
           }
-          const prevSpecs = prevMsg.appSpecifications;
-          previousSpec = await appEventVerifier.instantiatePreviousSpec(prevSpecs);
+          const prevSpecBlob = prevMsg.appSpecifications;
+          previousSpec = await deserializeSpec(prevSpecBlob);
         }
 
         await appEventVerifier.authorize({
@@ -422,10 +423,10 @@ async function processMessages(messages, records, onProgress) {
 
         // Verified — add to batch and update map for subsequent messages
         permInserts.push(permMsg);
-        if (!prevSpecsMap.has(appSpecFormatted.name)) prevSpecsMap.set(appSpecFormatted.name, []);
-        // kept sorted, as findPrevSpec searches it: a gap filled late lands mid-list, not at its end
-        const prevList = prevSpecsMap.get(appSpecFormatted.name);
-        const at = prevList.indexOf(findPrevSpec(prevList, height, messageTimestamp)) + 1;
+        if (!prevMessagesMap.has(appSpecFormatted.name)) prevMessagesMap.set(appSpecFormatted.name, []);
+        // kept sorted, as findPrevMessage searches it: a gap filled late lands mid-list, not at its end
+        const prevList = prevMessagesMap.get(appSpecFormatted.name);
+        const at = prevList.indexOf(findPrevMessage(prevList, height, messageTimestamp)) + 1;
         prevList.splice(at, 0, permMsg);
 
         hashMarkOps.push({
@@ -852,7 +853,7 @@ async function resetHashSyncForUpgrade(currentHeight) {
 }
 
 module.exports = {
-  findPrevSpec,
+  findPrevMessage,
   syncMissingHashes,
   getMissingHashes,
   resetHashSyncForUpgrade,

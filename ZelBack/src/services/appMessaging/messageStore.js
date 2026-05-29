@@ -8,7 +8,7 @@ const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const { getSpec, validateGossipSpec } = require('../utils/specLibs');
-const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
+const { getPreviousSpec } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const { appRunningEntries } = require('../utils/appRunningEntries');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -142,10 +142,10 @@ async function storeAppTemporaryMessage(message, options = {}) {
       await validateGossipSpec(validationBlob, { height: block });
     }
 
-    let previousAppSpecs = null;
+    let previousSpec = null;
     if (!appEvent.isRegistration) {
-      previousAppSpecs = await getPreviousAppSpecifications(appEvent.spec, appEvent.timestamp);
-      if (!previousAppSpecs) {
+      previousSpec = await getPreviousSpec(appEvent.spec, appEvent.timestamp);
+      if (!previousSpec) {
         log.info(`Queueing update for ${appEvent.spec.name} - registration not yet stored`);
         globalState.queuePendingUpdate(appEvent.spec.name, message, block);
         return false;
@@ -155,13 +155,11 @@ async function storeAppTemporaryMessage(message, options = {}) {
     if (validationBlob) {
       if (appEvent.isRegistration) {
         await registryManager.checkApplicationRegistrationNameConflicts(appEvent.spec, appEvent.hash);
-      } else if (previousAppSpecs) {
+      } else if (previousSpec) {
         const { UpdatePolicy } = await getSpec();
-        UpdatePolicy.assertCompatible(previousAppSpecs, appEvent.spec);
+        UpdatePolicy.assertCompatible(previousSpec, appEvent.spec);
       }
     }
-
-    const previousSpec = appEvent.isRegistration ? null : previousAppSpecs;
 
     await appEventVerifier.authorize({
       appEvent,
