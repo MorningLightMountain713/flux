@@ -39,15 +39,6 @@ function resolveTeamSupportAddress(daemonHeight) {
   return intervals[intervals.length - 1].address;
 }
 
-async function instantiatePreviousSpec(rawSpec) {
-  if (!rawSpec || typeof rawSpec.version !== 'number') return null;
-  await getSpecBackend();
-  const { FluxAppSpecBase } = await getSpec();
-  const VersionClass = FluxAppSpecBase.getVersionClass(rawSpec.version);
-  if (!VersionClass) return null;
-  return VersionClass.deserialize(rawSpec);
-}
-
 async function authorize({
   appEvent, previousSpec, daemonHeight, verifyHash = true,
 }) {
@@ -109,7 +100,6 @@ module.exports = {
   deserializeMessage,
   deserializeTempMessage,
   authorize,
-  instantiatePreviousSpec,
   computeOutboundHash,
   _internal: {
     isMarketplaceApp,

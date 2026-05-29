@@ -3,8 +3,8 @@ const { resolveSpec } = require('../utils/specCutover');
 
 const validTypes = ['zelappregister', 'fluxappregister', 'zelappupdate', 'fluxappupdate'];
 
-async function getPreviousAppSpecifications(specifications, verificationTimestamp) {
-  const messages = await appsRepository.listAppMessagesByName(specifications.name);
+async function getPreviousSpec(spec, verificationTimestamp) {
+  const messages = await appsRepository.listAppMessagesByName(spec.name);
 
   let latest;
   for (const message of messages) {
@@ -29,5 +29,5 @@ async function getPreviousAppSpecifications(specifications, verificationTimestam
 }
 
 module.exports = {
-  getPreviousAppSpecifications,
+  getPreviousSpec,
 };

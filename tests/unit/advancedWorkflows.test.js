@@ -16,7 +16,7 @@ describe('advancedWorkflows tests', () => {
     sinon.restore();
   });
 
-  describe('getPreviousAppSpecifications tests', () => {
+  describe('previous spec lookup', () => {
     it('should return null if no previous message found', async () => {
       const specifications = { name: 'NewApp' };
       const verificationTimestamp = Date.now();
@@ -26,7 +26,7 @@ describe('advancedWorkflows tests', () => {
       });
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
 
-      const result = await appSpecHistory.getPreviousAppSpecifications(specifications, verificationTimestamp);
+      const result = await appSpecHistory.getPreviousSpec(specifications, verificationTimestamp);
       expect(result).to.be.null;
     });
   });

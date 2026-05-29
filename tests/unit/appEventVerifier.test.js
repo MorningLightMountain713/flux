@@ -51,8 +51,7 @@ describe('appEventVerifier', () => {
     static deserialize(doc) { return { kind: 'v2', doc }; }
   }
 
-  // Minimal spec-backend registry double. Supports getVersionClass lookups
-  // for `instantiatePreviousSpec`.
+  // Minimal spec-backend registry double. Supports getVersionClass lookups.
   const registeredVersionClasses = {};
   class FakeFluxAppSpecBase {
     static getVersionClass(v) { return registeredVersionClasses[v]; }
@@ -404,24 +403,4 @@ describe('appEventVerifier', () => {
     });
   });
 
-  describe('instantiatePreviousSpec', () => {
-    it('returns null for null/malformed input', async () => {
-      expect(await appEventVerifier.instantiatePreviousSpec(null)).to.be.null;
-      expect(await appEventVerifier.instantiatePreviousSpec({})).to.be.null;
-      expect(await appEventVerifier.instantiatePreviousSpec({ version: 'abc' })).to.be.null;
-    });
-
-    it('deserializes a v8 raw doc via the registered version class', async () => {
-      const result = await appEventVerifier.instantiatePreviousSpec({
-        version: 8, name: 'myapp', owner: 'ownerA',
-      });
-      expect(result._kind).to.equal('v8');
-      expect(result.name).to.equal('myapp');
-    });
-
-    it('returns null when no version class is registered for the spec version', async () => {
-      const result = await appEventVerifier.instantiatePreviousSpec({ version: 99 });
-      expect(result).to.be.null;
-    });
-  });
 });

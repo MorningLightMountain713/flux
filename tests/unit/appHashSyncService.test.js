@@ -141,7 +141,6 @@ describe('appHashSyncService tests', () => {
     appEventVerifierStub = {
       deserializeMessage: sinon.stub().resolves({}),
       authorize: sinon.stub().resolves(),
-      instantiatePreviousSpec: sinon.stub().resolves(null),
     };
 
     deserializeSpecStub = makeDeserializeSpecStub();
@@ -779,7 +778,6 @@ describe('appHashSyncService tests', () => {
       localAppEventVerifierStub = {
         deserializeMessage: sinon.stub().resolves({}),
         authorize: sinon.stub().resolves(),
-        instantiatePreviousSpec: sinon.stub().resolves(null),
       };
 
       localDeserializeSpecStub = makeDeserializeSpecStub();
@@ -878,8 +876,10 @@ describe('appHashSyncService tests', () => {
       expect(localAppEventVerifierStub.deserializeMessage.callCount).to.equal(2);
       // appEventVerifier.authorize called for each message
       expect(localAppEventVerifierStub.authorize.callCount).to.equal(2);
-      // appEventVerifier.instantiatePreviousSpec called for each update message
-      expect(localAppEventVerifierStub.instantiatePreviousSpec.callCount).to.equal(2);
+      // previous spec resolved and passed to authorize for each update message
+      // (first update sees the registered owner; second sees the first update's owner)
+      expect(localAppEventVerifierStub.authorize.firstCall.args[0].previousSpec).to.have.property('owner', 'oldOwner');
+      expect(localAppEventVerifierStub.authorize.secondCall.args[0].previousSpec).to.have.property('owner', 'newOwner');
       // Both messages should be inserted
       expect(localCollectionStub.insertMany.called).to.be.true;
       const inserted = localCollectionStub.insertMany.firstCall.args[0];
