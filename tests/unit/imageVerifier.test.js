@@ -485,6 +485,60 @@ describe('imageVerifier tests', () => {
     });
   });
 
+  describe('parseImageReference ReDoS safety', () => {
+    // The blocklist/vetted lists are a flat mix of image repos, owner addresses,
+    // and 64-char message/app hashes — all flow through the parser. A 64-char
+    // hash once triggered catastrophic backtracking (event loop hung for minutes).
+    // A safe parse is sub-millisecond; budget is generous to avoid CI flakiness
+    // while still being orders of magnitude below any ReDoS (which is seconds+).
+    const BUDGET_MS = 250;
+
+    const realWorldTokens = [
+      '6d691f2c09e08e9b6acf046a46566132bcf8dc6c0fbd2042e8faf087d5504e09', // the original culprit hash
+      '36dfd682482f4d6d529b7164f3f6eda8c9862a6abbdcfa9f19b65282eed3e827',
+      '1G3bo7vckii4hfDCM6ywagzvhQcWhSGVjB', // owner zelid (base58)
+      '1BiVdDVq5qywspqiRuHPFk8NnJ2hDCT66Q',
+      'tornadocash',
+      'yurinnick/folding-at-home:latest',
+      'registry.gitlab.com:443/group/sub/img:tag',
+    ];
+
+    // Generators that target the historical (a+)+ blow-up: long runs of each
+    // name character class, then a tail that forces a full-string backtrack.
+    const adversarial = [
+      (n) => `${'a'.repeat(n)}!`,
+      (n) => `${'a.'.repeat(n)}!`,
+      (n) => `${'a-'.repeat(n)}!`,
+      (n) => `${'a__'.repeat(n)}b!`,
+      (n) => `${'a.-_'.repeat(n)}!`,
+      (n) => `${'a-'.repeat(n)}/!`,
+      (n) => '0123456789abcdef'.repeat(Math.ceil(n / 16)).slice(0, n),
+    ];
+
+    function parseMs(input) {
+      const start = process.hrtime.bigint();
+      ImageVerifier.parseImageReference(input);
+      return Number(process.hrtime.bigint() - start) / 1e6;
+    }
+
+    it('parses real-world blocklist tokens (incl. hashes) within budget', () => {
+      for (const token of realWorldTokens) {
+        const ms = parseMs(token);
+        expect(ms, `parsing ${token} took ${ms.toFixed(1)}ms`).to.be.below(BUDGET_MS);
+      }
+    });
+
+    it('stays linear on adversarial inputs (no catastrophic backtracking)', () => {
+      for (const gen of adversarial) {
+        for (const n of [40, 64, 100]) {
+          const input = gen(n);
+          const ms = parseMs(input);
+          expect(ms, `len=${input.length} took ${ms.toFixed(1)}ms`).to.be.below(BUDGET_MS);
+        }
+      }
+    });
+  });
+
   describe('parseAuthHeader tests', () => {
     it('should parse auth header correctly', async () => {
       const authHeader = 'Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:runonflux/secretwebsite:pull"';
