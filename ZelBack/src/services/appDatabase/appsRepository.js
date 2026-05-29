@@ -172,12 +172,13 @@ async function listGlobalAppInfo({ filter = {}, sort } = {}) {
   return specs;
 }
 
-async function listGlobalAppInfoRaw({ filter = {}, projection, sort } = {}) {
-  const mongoOptions = { projection: { _id: 0, ...(projection || {}) } };
-  if (sort) mongoOptions.sort = sort;
-  return dbHelper.findInDatabase(
-    globalDb(), globalAppsInformation, filter, mongoOptions,
+async function listGlobalAppNodes() {
+  const docs = await dbHelper.findInDatabase(
+    globalDb(), globalAppsInformation,
+    { version: { $gte: 7 } },
+    { projection: { _id: 0, name: 1, nodes: 1 } },
   );
+  return docs.map((doc) => ({ name: doc.name, nodes: doc.nodes || [] }));
 }
 
 async function upsertGlobalAppInfo(specDoc) {
@@ -220,9 +221,9 @@ async function existsInstalledApp(name) {
   return !!doc;
 }
 
-async function listInstalledApps() {
+async function listInstalledApps({ filter = {} } = {}) {
   const docs = await dbHelper.findInDatabase(
-    localDb(), localAppsInformation, {}, { projection: { _id: 0 } },
+    localDb(), localAppsInformation, filter, { projection: { _id: 0 } },
   );
   const specs = [];
   for (const doc of docs) {
@@ -231,13 +232,6 @@ async function listInstalledApps() {
     if (spec) specs.push(spec);
   }
   return specs;
-}
-
-async function listInstalledAppsRaw({ filter = {}, projection } = {}) {
-  const mongoOptions = { projection: { _id: 0, ...(projection || {}) } };
-  return dbHelper.findInDatabase(
-    localDb(), localAppsInformation, filter, mongoOptions,
-  );
 }
 
 async function removeInstalledApp(name) {
@@ -467,10 +461,7 @@ async function assertNoNameConflicts(appName, options = {}) {
     }
   }
 
-  const globalApps = await listGlobalAppInfoRaw();
-  const localApps = await listInstalledAppsRaw();
-  const allApps = [...globalApps, ...localApps];
-  const appExists = allApps.find((a) => a.name.toLowerCase() === appName.toLowerCase());
+  const appExists = (await existsGlobalApp(appName)) || (await existsInstalledApp(appName));
   if (appExists) {
     throw new Error(`Flux App ${appName} already assigned to local application. Flux App has to be registered under different name.`);
   }
@@ -540,7 +531,7 @@ module.exports = {
   getGlobalAppHeight,
   existsGlobalApp,
   listGlobalAppInfo,
-  listGlobalAppInfoRaw,
+  listGlobalAppNodes,
   upsertGlobalAppInfo,
   removeGlobalAppInfo,
   // installed apps
@@ -548,7 +539,6 @@ module.exports = {
   countInstalledApps,
   existsInstalledApp,
   listInstalledApps,
-  listInstalledAppsRaw,
   removeInstalledApp,
   insertInstalledApp,
   upsertInstalledApp,
