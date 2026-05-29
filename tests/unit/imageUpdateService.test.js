@@ -20,7 +20,6 @@ const deploymentProviderStub = {
 
 const appsRepositoryStub = {
   listInstalledAppsRaw: sinon.stub(),
-  getInstalledAppRaw: sinon.stub(),
 };
 
 const advancedWorkflowsStub = {
@@ -98,7 +97,6 @@ describe('imageUpdateService tests', () => {
     deploymentProviderStub.listInstalledDeployments.resolves([]);
     appsRepositoryStub.listInstalledAppsRaw.reset();
     appsRepositoryStub.listInstalledAppsRaw.resolves([]);
-    appsRepositoryStub.getInstalledAppRaw.reset();
 
     advancedWorkflowsStub.redeployApplication.reset();
 

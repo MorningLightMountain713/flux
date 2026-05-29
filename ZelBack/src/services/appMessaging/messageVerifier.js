@@ -307,12 +307,12 @@ async function computeUpdateFee(spec, prevSpec, height, prevHeight) {
 
 async function handleExpiredApp(name) {
   log.warn(`App ${name} has expired. Cleaning up stale data.`);
-  const existingGlobal = await appsRepository.getGlobalAppInfoRaw(name, { name: 1 });
+  const existingGlobal = await appsRepository.existsGlobalApp(name);
   if (existingGlobal) {
     log.warn(`Removing expired app ${name} from global apps database`);
     await appsRepository.removeGlobalAppInfo(name);
   }
-  const existingLocal = await appsRepository.getInstalledAppRaw(name, { name: 1 });
+  const existingLocal = await appsRepository.existsInstalledApp(name);
   if (existingLocal) {
     log.warn(`REMOVAL REASON: App expired - ${name} update received after expiration (messageVerifier)`);
     // eslint-disable-next-line global-require
