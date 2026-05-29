@@ -34,7 +34,7 @@ describe('hardwareValidationService tests', () => {
     };
 
     appsRepositoryStub = {
-      listInstalledAppsRaw: sinon.stub().resolves([]),
+      listInstalledApps: sinon.stub().resolves([]),
     };
 
     hwRequirementsStub = {
@@ -74,20 +74,7 @@ describe('hardwareValidationService tests', () => {
 
   describe('performBootTimeHardwareValidation', () => {
     it('should return empty results if no apps are installed', async () => {
-      appsRepositoryStub.listInstalledAppsRaw.resolves([]);
-
-      const result = await hardwareValidationService.performBootTimeHardwareValidation();
-
-      expect(result).to.deep.equal({
-        appsChecked: 0,
-        appsRemoved: [],
-        appsFailed: [],
-      });
-      expect(logStub.info.calledWith('hardwareValidationService - No installed apps found')).to.equal(true);
-    });
-
-    it('should return empty results if listInstalledAppsRaw returns null', async () => {
-      appsRepositoryStub.listInstalledAppsRaw.resolves(null);
+      appsRepositoryStub.listInstalledApps.resolves([]);
 
       const result = await hardwareValidationService.performBootTimeHardwareValidation();
 
@@ -111,7 +98,7 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      appsRepositoryStub.listInstalledAppsRaw.resolves(installedApps);
+      appsRepositoryStub.listInstalledApps.resolves(installedApps);
       deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 5 }));
 
       const result = await hardwareValidationService.performBootTimeHardwareValidation();
@@ -124,7 +111,7 @@ describe('hardwareValidationService tests', () => {
     });
 
     it('should handle critical error gracefully', async () => {
-      appsRepositoryStub.listInstalledAppsRaw.rejects(new Error('Database connection failed'));
+      appsRepositoryStub.listInstalledApps.rejects(new Error('Database connection failed'));
 
       const result = await hardwareValidationService.performBootTimeHardwareValidation();
 

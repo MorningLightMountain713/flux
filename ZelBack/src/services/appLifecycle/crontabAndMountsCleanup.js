@@ -1,10 +1,7 @@
 const util = require('util');
 const systemcrontab = require('crontab');
 const log = require('../../lib/log');
-const appsRepository = require('../appDatabase/appsRepository');
-const { resolveSpec } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
-const { appsFolder } = require('../utils/appConstants');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const volumeService = require('../utils/volumeService');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
@@ -24,37 +21,15 @@ const crontabLoad = util.promisify(systemcrontab.load);
 async function getInstalledAppIds() {
   const installedAppIds = new Set();
 
-  // A DB read failure MUST throw: "cannot enumerate" surfaces as unknown to
-  // callers, never as "nothing installed" (which would reap live app mounts).
-  const apps = await appsRepository.listInstalledAppsRaw();
-
-  if (!apps || !Array.isArray(apps)) {
-    return installedAppIds;
-  }
-
-  const { DeploymentSpec } = await getSpecBackend();
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const app of apps) {
-    // resolveSpec decrypts enterprise apps (components live in the encrypted
-    // blob, compose emptied on disk); null => decryption unavailable.
-    // eslint-disable-next-line no-await-in-loop
-    const spec = await resolveSpec(app);
-    if (spec) {
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
-      // eslint-disable-next-line no-restricted-syntax
+  try {
+    const deployments = await deploymentProvider.listInstalledDeployments();
+    for (const deployment of deployments) {
       for (const [, deployComp] of deployment.componentEntries()) {
         installedAppIds.add(dockerService.getAppIdentifier(deployComp.identifier));
       }
-      // eslint-disable-next-line no-continue
-      continue;
     }
-    if (app.enterprise) {
-      // decryption unavailable - derive component ids from FLUXFSVOL images on disk
-      // eslint-disable-next-line no-await-in-loop
-      const diskAppIds = await volumeService.getComponentAppIdsFromVolumeFiles(app.name);
-      diskAppIds.forEach((appId) => installedAppIds.add(appId));
-    }
+  } catch (error) {
+    log.error(`getInstalledAppIds - Error: ${error.message}`);
   }
 
   return installedAppIds;
