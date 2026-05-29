@@ -27,8 +27,8 @@ async function getEnterpriseList() {
     // v7: nodes field - array of IPs that can run the app, that should be able to decode the app.
     // each component now has secrets possibility - env variables field that gets encrypted by the IPs pgps
     // each component now has  repoauth username:token or auth token. - encrypted field for pulling private docker image
-    const globalApps = await appsRepository.listGlobalAppInfoRaw({ filter: { version: { $gte: 7 } } }); // get apps v7
-    const globalAppsScoped = globalApps.filter((apps) => apps.nodes.length); // only enterprise apps
+    const globalApps = await appsRepository.listGlobalAppNodes(); // v7+ apps with their target node lists
+    const globalAppsScoped = globalApps.filter((app) => app.nodes.length); // only enterprise apps
     const isAlreadyEnterprised = {}; // ip/collateral: points
     globalAppsScoped.forEach((app) => {
       app.nodes.forEach((node) => {

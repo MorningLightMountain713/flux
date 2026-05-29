@@ -90,7 +90,8 @@ async function installedApps(req, res) {
       filter = { name: req };
     }
 
-    const apps = await appsRepository.listInstalledAppsRaw({ filter });
+    const installed = await appsRepository.listInstalledApps({ filter });
+    const apps = installed.map((app) => app.serialize());
     const dataResponse = messageHelper.createDataMessage(apps);
     return res ? res.json(dataResponse) : dataResponse;
   } catch (error) {
