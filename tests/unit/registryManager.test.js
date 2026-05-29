@@ -389,7 +389,7 @@ describe('registryManager tests', () => {
       };
       await registryManager.updateAppSpecifications(updatedSpecs);
 
-      const result = await registryManager.getAppSpecificationFromDb('UpdateTestApp');
+      const result = await dbHelper.findOneInDatabase(database, config.database.appsglobal.collections.appsInformation, { name: 'UpdateTestApp' });
       expect(result.name).to.equal('UpdateTestApp');
       expect(result.height).to.equal(200);
       expect(result.hash).to.equal('newhash');
@@ -414,7 +414,7 @@ describe('registryManager tests', () => {
 
       await registryManager.updateAppSpecifications(lowerHeightSpecs);
 
-      const result = await registryManager.getAppSpecificationFromDb('HeightTestApp');
+      const result = await dbHelper.findOneInDatabase(database, config.database.appsglobal.collections.appsInformation, { name: 'HeightTestApp' });
       expect(result.height).to.equal(300);
       expect(result.hash).to.equal('hash1');
     });
@@ -448,7 +448,7 @@ describe('registryManager tests', () => {
       };
       await registryManager.updateAppSpecifications(v4Spec);
 
-      const result = await registryManager.getAppSpecificationFromDb('GhostFieldTestApp');
+      const result = await dbHelper.findOneInDatabase(database, config.database.appsglobal.collections.appsInformation, { name: 'GhostFieldTestApp' });
       expect(result.version).to.equal(4);
       expect(result.compose).to.exist;
       // Ghost flat fields from v3 should NOT exist
