@@ -269,7 +269,7 @@ async function trySpawningGlobalApplication() {
         return shortDelayTime;
       }
       const isArcane = Boolean(process.env.FLUXOS_PATH);
-      if (selectedCandidate.instantiated.isEncrypted() && !isArcane) {
+      if (selectedCandidate.instantiated.isEncrypted && !isArcane) {
         log.info(`trySpawningGlobalApplication - Application ${appToRun} is encrypted, can only install on ArcaneOS`);
         globalState.spawnErrorsLongerAppCache.set(appHash, '');
         return shortDelayTime;
@@ -313,7 +313,7 @@ async function trySpawningGlobalApplication() {
     }
 
     let spec = instantiated.spec;
-    if (instantiated.isEncrypted()) {
+    if (instantiated.isEncrypted) {
       const provider = await spec.createProvider();
       spec = (await spec.decrypt(provider)).spec;
     }
@@ -436,7 +436,7 @@ async function trySpawningGlobalApplication() {
     }
 
     const specPlacement = spec.placement;
-    const isEncryptedApp = instantiated.isEncrypted();
+    const isEncryptedApp = instantiated.isEncrypted;
 
     if (!appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater
       && specPlacement.hasTargets() && !specPlacement.matchesTarget(targetInfo)) {
