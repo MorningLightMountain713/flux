@@ -140,17 +140,17 @@ async function validateAppUpdate(appSpecification) {
   await verifyAppSpecifications(appSpecFormatted, daemonHeight, true);
 
   const timestamp = Date.now();
-  const { getPreviousAppSpecifications } = require('../appDatabase/appSpecHistory');
-  const previousAppSpecs = await getPreviousAppSpecifications(appSpecFormatted, timestamp);
-  if (!previousAppSpecs) {
+  const { getPreviousSpec } = require('../appDatabase/appSpecHistory');
+  const previousSpec = await getPreviousSpec(appSpecFormatted, timestamp);
+  if (!previousSpec) {
     throw new Error(`Flux App ${appSpecFormatted.name} does not exist and cannot be updated`);
   }
 
   const { latestSupportedSpecVersion } = config.fluxapps;
-  if (previousAppSpecs.version !== appSpecFormatted.version && appSpecFormatted.version !== latestSupportedSpecVersion) {
+  if (previousSpec.version !== appSpecFormatted.version && appSpecFormatted.version !== latestSupportedSpecVersion) {
     throw new Error(
       `Application update rejected: Version changes are only allowed when updating to version ${latestSupportedSpecVersion} (current latest supported version). `
-      + `Current version: ${previousAppSpecs.version}, Attempted version: ${appSpecFormatted.version}. `
+      + `Current version: ${previousSpec.version}, Attempted version: ${appSpecFormatted.version}. `
       + `To update this application, please use version ${latestSupportedSpecVersion} specifications.`,
     );
   }

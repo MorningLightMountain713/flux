@@ -1315,7 +1315,7 @@ async function updateAppGlobaly(params) {
     await assertSecretsNotConflicting(spec.name, componentName, secrets, spec.owner);
   }
 
-  const appInfo = await appsRepository.getGlobalAppInfoRaw(spec.name);
+  const appInfo = await appsRepository.getGlobalAppInfo(spec.name);
   if (!appInfo) {
     throw new Error('Flux App update received but application to update does not exist!');
   }
@@ -1328,7 +1328,7 @@ async function updateAppGlobaly(params) {
     timestamp: cleanTimestamp,
     signature: cleanSignature,
   });
-  const previousSpec = await appEventVerifier.instantiatePreviousSpec(appInfo);
+  const previousSpec = appInfo.spec;
   await appEventVerifier.authorize({ appEvent, previousSpec, daemonHeight, verifyHash: false });
 
   const { latestSupportedSpecVersion } = config.fluxapps;
@@ -1341,7 +1341,7 @@ async function updateAppGlobaly(params) {
   }
 
   const { UpdatePolicy } = await getSpec();
-  UpdatePolicy.assertCompatible(previousSpec.spec, spec);
+  UpdatePolicy.assertCompatible(previousSpec, spec);
 
   const message = cleanMessageType + cleanTypeVersion + JSON.stringify(wireForm) + cleanTimestamp + cleanSignature;
   const messageHASH = await generalService.messageHash(message);

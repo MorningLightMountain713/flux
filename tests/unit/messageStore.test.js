@@ -51,7 +51,7 @@ describe('messageStore tests', () => {
         checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
       },
       '../appDatabase/appSpecHistory': {
-        getPreviousAppSpecifications: sinon.stub().resolves({ owner: 'owner1' }),
+        getPreviousSpec: sinon.stub().resolves({ owner: 'owner1' }),
       },
       '../utils/specLibs': {
         validateGossipSpec: sinon.stub().resolves(),
@@ -107,7 +107,6 @@ describe('messageStore tests', () => {
       deserializeTempMessage: sinon.stub().callsFake((msg) => Promise.resolve(makeMockAppEvent(msg))),
       deserializeMessage: sinon.stub().resolves({}),
       authorize: sinon.stub().resolves(),
-      instantiatePreviousSpec: sinon.stub().resolves(null),
     };
 
     logStub = {
