@@ -48,7 +48,7 @@ function mockInstantiatedSpec(spec) {
     version: spec.version || 4,
     hash: 'testhash',
     height: 1000,
-    isEncrypted: () => false,
+    isEncrypted: false,
     serialize: () => ({ ...spec }),
   };
 }

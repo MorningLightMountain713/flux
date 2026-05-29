@@ -338,7 +338,7 @@ describe('appInstaller tests', () => {
         name: 'testapp',
         componentEntries: () => [],
       },
-      isEncrypted: () => false,
+      isEncrypted: false,
       serialize: () => ({
         version: 2,
         name: 'testapp',
@@ -462,7 +462,7 @@ describe('appInstaller tests', () => {
         version: 2,
         placement: mockPlacement,
         spec: { version: 2, name: 'newapp', placement: mockPlacement, componentEntries: () => [] },
-        isEncrypted: () => false,
+        isEncrypted: false,
         serialize: () => ({ version: 2, name: 'newapp' }),
       };
       // installApplication will proceed past the prune guard before eventually failing on network setup

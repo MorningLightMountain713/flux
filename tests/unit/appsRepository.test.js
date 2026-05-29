@@ -49,7 +49,7 @@ describe('appsRepository', () => {
           name: spec.name,
           version: spec.version,
           owner: spec.owner,
-          isEncrypted: () => false,
+          isEncrypted: false,
         };
       },
     };
