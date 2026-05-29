@@ -36,15 +36,15 @@ const EPHEMERAL_PEERS_COUNT = config.fluxapps.hashSyncEphemeralPeers ?? 5;
 
 let syncRunning = false;
 
-function findPrevSpec(specs, height) {
+function findPrevMessage(messages, height) {
   let lo = 0;
-  let hi = specs.length;
+  let hi = messages.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (specs[mid].height < height) lo = mid + 1;
+    if (messages[mid].height < height) lo = mid + 1;
     else hi = mid;
   }
-  return lo > 0 ? specs[lo - 1] : null;
+  return lo > 0 ? messages[lo - 1] : null;
 }
 
 async function getMissingHashes(options = {}) {
@@ -276,7 +276,7 @@ async function processMessages(messages, onProgress) {
         if (specs) updateNames.add(specs.name);
       }
     }
-    const prevSpecsMap = new Map();
+    const prevMessagesMap = new Map();
     if (updateNames.size > 0) {
       const prevDocs = await appsGlobalDb.collection(globalAppsMessages)
         .find({ 'appSpecifications.name': { $in: [...updateNames] } })
@@ -286,8 +286,8 @@ async function processMessages(messages, onProgress) {
       for (const doc of prevDocs) {
         const name = doc.appSpecifications?.name;
         if (!name) continue;
-        if (!prevSpecsMap.has(name)) prevSpecsMap.set(name, []);
-        prevSpecsMap.get(name).push(doc);
+        if (!prevMessagesMap.has(name)) prevMessagesMap.set(name, []);
+        prevMessagesMap.get(name).push(doc);
       }
     }
 
@@ -339,14 +339,14 @@ async function processMessages(messages, onProgress) {
 
         let previousSpec = null;
         if (!isRegistration) {
-          const prevSpecsList = prevSpecsMap.get(appSpecFormatted.name);
-          const prevMsg = prevSpecsList ? findPrevSpec(prevSpecsList, height) : null;
+          const prevMessagesList = prevMessagesMap.get(appSpecFormatted.name);
+          const prevMsg = prevMessagesList ? findPrevMessage(prevMessagesList, height) : null;
           if (!prevMsg) {
             failed += 1;
             continue;
           }
-          const prevSpecs = prevMsg.appSpecifications || prevMsg.zelAppSpecifications;
-          previousSpec = await appEventVerifier.instantiatePreviousSpec(prevSpecs);
+          const prevSpecBlob = prevMsg.appSpecifications || prevMsg.zelAppSpecifications;
+          previousSpec = await deserializeSpec(prevSpecBlob);
         }
 
         await appEventVerifier.authorize({
@@ -357,8 +357,8 @@ async function processMessages(messages, onProgress) {
 
         // Verified — add to batch and update map for subsequent messages
         permInserts.push(permMsg);
-        if (!prevSpecsMap.has(appSpecFormatted.name)) prevSpecsMap.set(appSpecFormatted.name, []);
-        prevSpecsMap.get(appSpecFormatted.name).push(permMsg);
+        if (!prevMessagesMap.has(appSpecFormatted.name)) prevMessagesMap.set(appSpecFormatted.name, []);
+        prevMessagesMap.get(appSpecFormatted.name).push(permMsg);
 
         hashMarkOps.push({
           updateOne: { filter: { hash: appMessage.hash }, update: { $set: { message: true, messageNotFound: false } } },
