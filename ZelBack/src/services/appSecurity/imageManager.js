@@ -164,7 +164,7 @@ async function verifyRepository(repotag, options = {}) {
  * Get blocked repositories from official source
  * @returns {Promise<Array|null>} List of blocked repositories
  */
-async function getBlockedRepositores() {
+async function getBlockedRepositories() {
   try {
     const cachedResponse = fluxCaching.blockedRepositoriesCache.get('blockedRepositories');
     if (cachedResponse) {
@@ -240,7 +240,7 @@ async function isAppVetted(options = {}) {
  * Get user-defined blocked repositories from configuration
  * @returns {Promise<Array>} List of user blocked repositories
  */
-async function getUserBlockedRepositores() {
+async function getUserBlockedRepositories() {
   try {
     if (cacheUserBlockedRepos) {
       return cacheUserBlockedRepos;
@@ -254,7 +254,6 @@ async function getUserBlockedRepositores() {
     const usableUserBlockedRepos = [];
     const marketPlaceUrl = `${config.stats.baseUrl}/marketplace/listapps`;
     const response = await axios.get(marketPlaceUrl);
-    console.log(response);
     if (response && response.data && response.data.status === 'success') {
       const visibleApps = response.data.data.filter((val) => val.visible);
       for (let i = 0; i < userBlockedRepos.length; i += 1) {
@@ -280,8 +279,8 @@ async function getUserBlockedRepositores() {
 async function isImageBlocked(appName, images, options = {}) {
   const { owner = null, hash = null } = options;
 
-  const repos = await getBlockedRepositores();
-  const userBlockedRepos = await getUserBlockedRepositores();
+  const repos = await getBlockedRepositories();
+  const userBlockedRepos = await getUserBlockedRepositories();
 
   if (!repos && !userBlockedRepos) {
     return { blocked: false, reason: null };
@@ -399,7 +398,7 @@ async function getBlocklist() {
   // served as 200 is held for six hours - and mapping over it throws a TypeError that no
   // caller recognises, which in the spawner reads as a permanently unspawnable application
   // rather than as a policy source that could not be read.
-  const repos = await getBlockedRepositores();
+  const repos = await getBlockedRepositories();
   if (!Array.isArray(repos)) return null;
   return repos.map((value) => ({ kind: 'legacy', value }));
 }
@@ -569,11 +568,11 @@ async function checkApplicationsCompliance() {
 
 module.exports = {
   verifyRepository,
-  getBlockedRepositores,
+  getBlockedRepositories,
   getBlocklist,
   blockedReasonFor,
   imagesOf,
-  getUserBlockedRepositores,
+  getUserBlockedRepositories,
   getVettedRepositories,
   isAppVetted,
   isImageBlocked,
