@@ -37,22 +37,8 @@ const appUninstallerMock = {
   uninstallApplication: sinon.stub(),
 };
 
-const appsRepositoryMock = {
-  listInstalledAppsRaw: sinon.stub(),
-};
-
-const deserializeSpecMock = sinon.stub();
-
-const specLibsMock = {
-  getSpecBackend: sinon.stub().resolves({
-    DeploymentSpec: {
-      fromSpec(spec) {
-        return {
-          componentEntries: () => Object.entries(spec._components || {}),
-        };
-      },
-    },
-  }),
+const deploymentProviderMock = {
+  listInstalledDeployments: sinon.stub(),
 };
 
 const isPathMountedMock = sinon.stub();
@@ -72,9 +58,7 @@ const crontabAndMountsCleanup = proxyquire('../../ZelBack/src/services/appLifecy
   '../dbHelper': dbHelperMock,
   '../dockerService': dockerServiceMock,
   './appUninstaller': appUninstallerMock,
-  '../appDatabase/appsRepository': appsRepositoryMock,
-  '../utils/specCutover': { deserializeSpec: deserializeSpecMock },
-  '../utils/specLibs': specLibsMock,
+  '../appRuntime/deploymentProvider': deploymentProviderMock,
   '../appMonitoring/syncthingFolderStateMachine': { isPathMounted: isPathMountedMock },
   'node:fs': fsMock,
 });
@@ -91,17 +75,7 @@ describe('crontabAndMountsCleanup tests', () => {
     dbHelperMock.findInDatabase.reset();
     dockerServiceMock.getAppIdentifier.reset();
     appUninstallerMock.uninstallApplication.reset();
-    appsRepositoryMock.listInstalledAppsRaw.reset();
-    deserializeSpecMock.reset();
-    specLibsMock.getSpecBackend.resolves({
-      DeploymentSpec: {
-        fromSpec(spec) {
-          return {
-            componentEntries: () => Object.entries(spec._components || {}),
-          };
-        },
-      },
-    });
+    deploymentProviderMock.listInstalledDeployments.reset();
     isPathMountedMock.reset();
     fsMock.promises.access.reset();
     fsMock.promises.stat.reset();
@@ -249,7 +223,7 @@ describe('crontabAndMountsCleanup tests', () => {
 
   describe('getInstalledAppIds', () => {
     it('should return empty set when no apps installed', async () => {
-      appsRepositoryMock.listInstalledAppsRaw.resolves([]);
+      deploymentProviderMock.listInstalledDeployments.resolves([]);
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
       expect(result).to.be.instanceOf(Set);
@@ -257,10 +231,9 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should handle single-component apps', async () => {
-      const rawApp = { name: 'myapp', version: 3 };
-      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
-      const fakeSpec = { _components: { myapp: { identifier: 'myapp' } } };
-      deserializeSpecMock.withArgs(rawApp).resolves(fakeSpec);
+      deploymentProviderMock.listInstalledDeployments.resolves([
+        { componentEntries: () => [['myapp', { identifier: 'myapp' }]] },
+      ]);
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
@@ -269,16 +242,15 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should handle multi-component apps', async () => {
-      const rawApp = { name: 'wordpress123', version: 4 };
-      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
-      const fakeSpec = {
-        _components: {
-          wp: { identifier: 'wp_wordpress123' },
-          mysql: { identifier: 'mysql_wordpress123' },
-          operator: { identifier: 'operator_wordpress123' },
+      deploymentProviderMock.listInstalledDeployments.resolves([
+        {
+          componentEntries: () => [
+            ['wp', { identifier: 'wp_wordpress123' }],
+            ['mysql', { identifier: 'mysql_wordpress123' }],
+            ['operator', { identifier: 'operator_wordpress123' }],
+          ],
         },
-      };
-      deserializeSpecMock.withArgs(rawApp).resolves(fakeSpec);
+      ]);
       dockerServiceMock.getAppIdentifier.withArgs('wp_wordpress123').returns('fluxwp_wordpress123');
       dockerServiceMock.getAppIdentifier.withArgs('mysql_wordpress123').returns('fluxmysql_wordpress123');
       dockerServiceMock.getAppIdentifier.withArgs('operator_wordpress123').returns('fluxoperator_wordpress123');
@@ -291,19 +263,12 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should handle errors gracefully', async () => {
-      appsRepositoryMock.listInstalledAppsRaw.rejects(new Error('DB connection failed'));
+      deploymentProviderMock.listInstalledDeployments.rejects(new Error('DB connection failed'));
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
       expect(result).to.be.instanceOf(Set);
       expect(result.size).to.equal(0);
       expect(logMock.error.called).to.be.true;
-    });
-
-    it('should handle null response from repository', async () => {
-      appsRepositoryMock.listInstalledAppsRaw.resolves(null);
-
-      const result = await crontabAndMountsCleanup.getInstalledAppIds();
-      expect(result.size).to.equal(0);
     });
   });
 
@@ -418,7 +383,7 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should return empty results when no crontab jobs', async () => {
-      appsRepositoryMock.listInstalledAppsRaw.resolves([]);
+      deploymentProviderMock.listInstalledDeployments.resolves([]);
       mockJobs = [];
 
       const result = await crontabAndMountsCleanup.cleanupCrontabAndMounts();
@@ -430,7 +395,7 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should remove jobs for uninstalled apps', async () => {
-      appsRepositoryMock.listInstalledAppsRaw.resolves([]); // No apps installed
+      deploymentProviderMock.listInstalledDeployments.resolves([]); // No apps installed
 
       const oldJob = {
         isValid: () => true,
@@ -447,9 +412,9 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should update jobs without wait logic', async () => {
-      const rawApp = { name: 'myapp', version: 3 };
-      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
-      deserializeSpecMock.withArgs(rawApp).resolves({ _components: { myapp: { identifier: 'myapp' } } });
+      deploymentProviderMock.listInstalledDeployments.resolves([
+        { componentEntries: () => [['myapp', { identifier: 'myapp' }]] },
+      ]);
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const oldJob = {
@@ -473,9 +438,9 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should keep jobs that already have wait logic', async () => {
-      const rawApp = { name: 'myapp', version: 3 };
-      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
-      deserializeSpecMock.withArgs(rawApp).resolves({ _components: { myapp: { identifier: 'myapp' } } });
+      deploymentProviderMock.listInstalledDeployments.resolves([
+        { componentEntries: () => [['myapp', { identifier: 'myapp' }]] },
+      ]);
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const goodJob = {
@@ -496,9 +461,9 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should uninstall app if crontab update fails', async () => {
-      const rawApp = { name: 'myapp', version: 3 };
-      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
-      deserializeSpecMock.withArgs(rawApp).resolves({ _components: { myapp: { identifier: 'myapp' } } });
+      deploymentProviderMock.listInstalledDeployments.resolves([
+        { componentEntries: () => [['myapp', { identifier: 'myapp' }]] },
+      ]);
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const oldJob = {
@@ -521,9 +486,9 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should verify and create missing mounts', async () => {
-      const rawApp = { name: 'myapp', version: 3 };
-      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp]);
-      deserializeSpecMock.withArgs(rawApp).resolves({ _components: { myapp: { identifier: 'myapp' } } });
+      deploymentProviderMock.listInstalledDeployments.resolves([
+        { componentEntries: () => [['myapp', { identifier: 'myapp' }]] },
+      ]);
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const goodJob = {
@@ -548,11 +513,10 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should handle multiple apps correctly', async () => {
-      const rawApp1 = { name: 'app1', version: 3 };
-      const rawApp2 = { name: 'app2', version: 3 };
-      appsRepositoryMock.listInstalledAppsRaw.resolves([rawApp1, rawApp2]);
-      deserializeSpecMock.withArgs(rawApp1).resolves({ _components: { app1: { identifier: 'app1' } } });
-      deserializeSpecMock.withArgs(rawApp2).resolves({ _components: { app2: { identifier: 'app2' } } });
+      deploymentProviderMock.listInstalledDeployments.resolves([
+        { componentEntries: () => [['app1', { identifier: 'app1' }]] },
+        { componentEntries: () => [['app2', { identifier: 'app2' }]] },
+      ]);
       dockerServiceMock.getAppIdentifier.withArgs('app1').returns('fluxapp1');
       dockerServiceMock.getAppIdentifier.withArgs('app2').returns('fluxapp2');
 

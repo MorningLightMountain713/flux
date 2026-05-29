@@ -4,10 +4,7 @@ const nodecmd = require('node-cmd');
 const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
-const appsRepository = require('../appDatabase/appsRepository');
-const { deserializeSpec } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
-const { localAppsInformation, appsFolder } = require('../utils/appConstants');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const appUninstaller = require('./appUninstaller');
 const { isPathMounted } = require('../appMonitoring/syncthingFolderStateMachine');
@@ -24,18 +21,8 @@ async function getInstalledAppIds() {
   const installedAppIds = new Set();
 
   try {
-    const apps = await appsRepository.listInstalledAppsRaw();
-
-    if (!apps || !Array.isArray(apps)) {
-      return installedAppIds;
-    }
-
-    const { DeploymentSpec } = await getSpecBackend();
-    for (const app of apps) {
-      // eslint-disable-next-line no-await-in-loop
-      const spec = await deserializeSpec(app);
-      if (!spec) continue;
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+    const deployments = await deploymentProvider.listInstalledDeployments();
+    for (const deployment of deployments) {
       for (const [, deployComp] of deployment.componentEntries()) {
         installedAppIds.add(dockerService.getAppIdentifier(deployComp.identifier));
       }
