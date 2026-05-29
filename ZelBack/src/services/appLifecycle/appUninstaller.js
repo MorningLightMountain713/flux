@@ -19,7 +19,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
-const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const { getSpecBackend } = require('../utils/specLibs');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const imageManager = require('../appSecurity/imageManager');
@@ -844,17 +844,9 @@ async function uninstallApplication(appName, options = {}) {
       }
       spec = await appsRepository.getGlobalAppInfo(resolvedAppName);
       if (!spec) {
-        const globalApps = await appsRepository.listGlobalAppInfoRaw();
-        const localApps = await appsRepository.listInstalledAppsRaw();
-        const hardcoded = [...globalApps, ...localApps].find((a) => a.name === resolvedAppName);
-        if (hardcoded) {
-          const { FluxAppSpecBase } = await getSpec();
-          await getSpecBackend();
-          const VersionClass = FluxAppSpecBase.getVersionClass(hardcoded.version);
-          if (VersionClass) {
-            spec = VersionClass.deserialize(hardcoded);
-          }
-        }
+        const globalApps = await appsRepository.listGlobalAppInfo();
+        const localApps = await appsRepository.listInstalledApps();
+        spec = [...globalApps, ...localApps].find((a) => a.name === resolvedAppName) || null;
         if (!spec) {
           const dbopen = dbHelper.databaseConnection();
           const database = dbopen.db(config.database.appsglobal.database);
