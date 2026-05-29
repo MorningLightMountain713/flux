@@ -151,9 +151,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
       }
     }
 
-    const previousSpec = appEvent.isRegistration
-      ? null
-      : await appEventVerifier.instantiatePreviousSpec(previousAppSpecs);
+    const previousSpec = appEvent.isRegistration ? null : previousAppSpecs;
 
     await appEventVerifier.authorize({
       appEvent,
