@@ -10,7 +10,8 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
 const { buildPricingEngine } = require('../pricing/buildPricingEngine');
-const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const { getSpecBackend } = require('../utils/specLibs');
+const { resolveSpec } = require('../utils/specCutover');
 const appsRepository = require('../appDatabase/appsRepository');
 const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
 const { getPreviousSpec } = require('../appDatabase/appSpecHistory');
@@ -394,10 +395,20 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
       return true;
     }
 
-    // Pricing — the spec is already a class instance on confirmedEvent.spec
+    // Pricing — the spec is a class instance on confirmedEvent.spec. Pricing
+    // reads the cleartext components (DeploymentSpec.fromSpec), so an encrypted
+    // (enterprise) spec must be decrypted first. Identity/lookups still use the
+    // encrypted wire form (no decrypt needed).
     const spec = instantiated.spec;
+    const pricingSpec = instantiated.isEncrypted
+      ? await resolveSpec(instantiated.serialize())
+      : spec;
+    if (!pricingSpec) {
+      log.error(`checkAndRequestApp - could not resolve spec for ${instantiated.name} to compute fee`);
+      return true;
+    }
     if (confirmedEvent.isRegistration) {
-      const requiredSats = await computeRegistrationFee(spec, height);
+      const requiredSats = await computeRegistrationFee(pricingSpec, height);
       if (BigInt(valueSat) >= requiredSats) {
         await insertAppSpecifications(instantiated.serialize());
         await processPendingUpdates(instantiated.name);
@@ -413,10 +424,14 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         return true;
       }
       const prevSpecs = prevMessage.appSpecifications;
-      await getSpec();
-      const { deserializeSpec } = await getSpecBackend();
-      const prevSpec = deserializeSpec(prevSpecs);
-      const requiredSats = await computeUpdateFee(spec, prevSpec, height, prevMessage.height);
+      // resolveSpec deserializes and decrypts (if encrypted) the previous spec —
+      // computeUpdateFee prices the previous spec too.
+      const prevSpec = await resolveSpec(prevSpecs);
+      if (!prevSpec) {
+        log.error(`checkAndRequestApp - could not resolve previous spec for ${spec.name} to compute update fee`);
+        return true;
+      }
+      const requiredSats = await computeUpdateFee(pricingSpec, prevSpec, height, prevMessage.height);
       if (BigInt(valueSat) >= requiredSats) {
         await updateAppSpecifications(instantiated.serialize());
       } else {
