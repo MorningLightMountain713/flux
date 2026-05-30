@@ -123,7 +123,7 @@ describe('cryptographicKeys tests', () => {
         await cryptographicKeys.getAppPublicKey('1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC', 'TestApp', 1000);
         expect.fail('Should have thrown error');
       } catch (error) {
-        expect(error.message).to.include('Error getting public key to encrypt app enterprise content from SAS');
+        expect(error.message).to.include('Error getting public key to encrypt app enterprise content');
       }
     });
 

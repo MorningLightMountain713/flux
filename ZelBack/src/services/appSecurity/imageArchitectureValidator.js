@@ -1,9 +1,9 @@
-const { supportedArchitectures, enterpriseRequiredArchitectures } = require('../utils/appConstants');
+const { supportedArchitectures, arcaneRequiredArchitectures } = require('../utils/appConstants');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const imageManager = require('./imageManager');
 
 async function verifyImageRegistryAndArchitectures(spec, options = {}) {
-  const { owner = null, hash = null } = options;
+  const { owner = null, hash = null, isEncrypted = false } = options;
 
   const blockResult = await imageManager.isImageBlocked(spec.name, spec.allImages(), { owner, hash });
   if (blockResult.blocked) {
@@ -28,17 +28,18 @@ async function verifyImageRegistryAndArchitectures(spec, options = {}) {
     });
   }
 
-  const isEnterpriseArcane = spec.isEncrypted;
-
-  if (isEnterpriseArcane) {
+  // Encrypted apps run on Arcane nodes (amd64-only), so every component must
+  // support amd64. `isEncrypted` is supplied by the caller — a decrypted spec
+  // instance reports isEncrypted=false, so it can't be read off the spec here.
+  if (isEncrypted) {
     const missing = componentArchitectures.filter(
-      (c) => !enterpriseRequiredArchitectures.every((arch) => c.architectures.includes(arch)),
+      (c) => !arcaneRequiredArchitectures.every((arch) => c.architectures.includes(arch)),
     );
     if (missing.length > 0) {
       const names = missing.map((c) => `${c.name} (${c.image})`).join(', ');
       throw new Error(
-        `Enterprise application '${spec.name}' must support ${enterpriseRequiredArchitectures.join(', ')} `
-        + `architecture on ALL components. The following components do not support ${enterpriseRequiredArchitectures.join(', ')}: ${names}. `
+        `Encrypted application '${spec.name}' must support ${arcaneRequiredArchitectures.join(', ')} `
+        + `architecture on ALL components. The following components do not support ${arcaneRequiredArchitectures.join(', ')}: ${names}. `
         + 'Arcane nodes are amd64-only.',
       );
     }

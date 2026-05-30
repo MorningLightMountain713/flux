@@ -1,16 +1,15 @@
 /**
  * FluxOSTransportProvider — transport CryptoProvider for v9.
  *
- * decrypt: calls SAS /v2/transportOpen via fluxbenchd to unseal an
- *   HPKE envelope (submission direction, frontend → backend).
+ * decrypt: unseals an HPKE envelope from the submission direction
+ *   (frontend → backend) by routing the open through the benchmark service.
  *
  * encrypt: HPKE-seals toward the frontend's ephemeral X25519 public key
- *   using @hpke/core (view direction, backend → frontend). No SAS call
- *   needed — the sender's ephemeral keypair is generated and discarded
- *   in scope.
+ *   using @hpke/core (view direction, backend → frontend). The sender's
+ *   ephemeral keypair is generated and discarded in scope.
  *
  * The two directions use different HPKE info strings:
- *   - Submission (decrypt): "FLUX_APP_TRANSPORT_v1" (hardcoded in SAS)
+ *   - Submission (decrypt): "FLUX_APP_TRANSPORT_v1"
  *   - View (encrypt):       "FLUX_APP_SPEC_VIEW_v1"
  *
  * Usage (validation endpoint):
@@ -21,10 +20,7 @@
  */
 
 const benchmarkService = require('../benchmarkService');
-const { getSpecBackend } = require('../utils/specLibs');
-
-const VIEW_INFO = 'FLUX_APP_SPEC_VIEW_v1';
-const ALGORITHM = 'HPKE-X25519-HKDF-SHA256-AES-256-GCM';
+const { getSpec, getSpecBackend } = require('../utils/specLibs');
 
 let hpkeCache;
 
@@ -45,7 +41,7 @@ async function getHpke() {
 /**
  * Create a v9 transport CryptoProvider.
  *
- * @param {string} appName - App name (SAS key derivation input)
+ * @param {string} appName - App name (key derivation input)
  * @param {string} owner   - fluxID / owner address
  * @param {string} recipientPubkeyBase64 - Frontend's ephemeral X25519 pubkey (for encrypt/view direction)
  * @returns {Promise<import('@runonflux/flux-spec-backend').CryptoProvider>}
@@ -71,8 +67,9 @@ async function create(appName, owner, recipientPubkeyBase64) {
      */
     async encrypt(plaintext, aad) {
       const { suite, DhkemX25519HkdfSha256: Kem } = await getHpke();
+      const { TRANSPORT_ALGORITHM, SPEC_VIEW_INFO } = await getSpec();
       const recipientPublicKey = await new Kem().deserializePublicKey(this.#recipientPubkeyBytes);
-      const info = new TextEncoder().encode(VIEW_INFO);
+      const info = new TextEncoder().encode(SPEC_VIEW_INFO);
 
       const sender = await suite.createSenderContext({
         recipientPublicKey,
@@ -83,14 +80,14 @@ async function create(appName, owner, recipientPubkeyBase64) {
       const ct = await sender.seal(plaintext, aadBytes);
 
       return {
-        algorithm: ALGORITHM,
+        algorithm: TRANSPORT_ALGORITHM,
         encapsulatedKey: Buffer.from(sender.enc).toString('base64'),
         ciphertext: Buffer.from(ct).toString('base64'),
       };
     }
 
     /**
-     * Unseal an HPKE envelope via SAS /v2/transportOpen.
+     * Unseal an HPKE envelope via the benchmark service.
      * Used for the submission direction.
      */
     async decrypt(encrypted, aad) {
@@ -128,6 +125,4 @@ async function create(appName, owner, recipientPubkeyBase64) {
 
 module.exports = {
   create,
-  VIEW_INFO,
-  ALGORITHM,
 };

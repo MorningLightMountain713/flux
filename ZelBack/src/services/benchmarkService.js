@@ -355,6 +355,20 @@ async function unseal(params) {
   return executeCall(rpccall, rpcparameters);
 }
 
+// v2 transport methods use clean encoding: the object is passed directly in
+// params, not JSON.stringify'd (unlike v1 seal/unseal).
+async function transportPublicKey(params) {
+  const rpccall = 'v2transportpubkey';
+  const rpcparameters = [params];
+  return executeCall(rpccall, rpcparameters);
+}
+
+async function transportOpen(params) {
+  const rpccall = 'v2transportopen';
+  const rpcparameters = [params];
+  return executeCall(rpccall, rpcparameters);
+}
+
 // == Control ==
 /**
  * To request help message.
@@ -527,4 +541,6 @@ module.exports = {
   encryptMessage,
   seal,
   unseal,
+  transportPublicKey,
+  transportOpen,
 };
