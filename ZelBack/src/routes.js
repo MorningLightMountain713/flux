@@ -1138,6 +1138,9 @@ module.exports = (app) => {
   app.post('/apps/getpublickey', asyncRoute((req, res) => {
     return cryptographicKeys.getPublicKey(req, res);
   }));
+  app.get('/apps/transportpubkey/:appname', asyncRoute((req, res) => {
+    return cryptographicKeys.getTransportPublicKey(req, res);
+  }));
 
   // POST PROTECTED API - FluxNode owner level
 

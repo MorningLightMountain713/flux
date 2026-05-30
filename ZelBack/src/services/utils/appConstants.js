@@ -57,8 +57,8 @@ const APP_VOLUME_MOUNT_OPTIONS = 'loop,nosuid,nodev';
 // Supported architectures
 const supportedArchitectures = ['amd64', 'arm64'];
 
-// Enterprise required architectures (Arcane nodes are amd64-only)
-const enterpriseRequiredArchitectures = ['amd64'];
+// Architectures an encrypted app must support — it runs on Arcane nodes, which are amd64-only
+const arcaneRequiredArchitectures = ['amd64'];
 
 // Environment flags
 const isArcane = Boolean(process.env.FLUXOS_PATH);
@@ -174,7 +174,7 @@ module.exports = {
 
   // Configuration
   supportedArchitectures,
-  enterpriseRequiredArchitectures,
+  arcaneRequiredArchitectures,
   isArcane,
   appsThatMightBeUsingOldGatewayIpAssignment,
   defaultNodeSpecs,

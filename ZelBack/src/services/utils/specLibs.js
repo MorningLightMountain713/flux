@@ -82,10 +82,37 @@ async function validateGossipSpec(spec, { height } = {}) {
   }
 }
 
+/**
+ * Enforce cross-update invariants (fields locked at first registration, e.g.
+ * `referral`). Compares the incoming spec against the app's previous on-chain
+ * spec. Both must be cleartext class instances — decrypt encrypted specs at
+ * the perimeter (resolveSpec) before calling. Call only when a previous spec
+ * exists (first registration is unconstrained).
+ *
+ * @param {object} priorSpec - previous confirmed spec (cleartext)
+ * @param {object} newSpec - incoming update spec (cleartext)
+ * @throws {Error} with a clean message if an immutable field changed
+ */
+async function assertUpdateInvariants(priorSpec, newSpec) {
+  const { assertUpdateInvariants: impl } = await getSpecBackend();
+  const { ValidationError } = await getSpec();
+  try {
+    impl(priorSpec, newSpec);
+  } catch (err) {
+    if (err instanceof ValidationError && Array.isArray(err.errors) && err.errors.length > 0) {
+      const first = err.errors[0];
+      const path = first.field ? `${first.field}: ` : '';
+      throw new Error(`${path}${first.message}`);
+    }
+    throw err;
+  }
+}
+
 module.exports = {
   getSpec,
   getSpecBackend,
   getSpecPolicy,
   validateSubmissionSpec,
   validateGossipSpec,
+  assertUpdateInvariants,
 };
