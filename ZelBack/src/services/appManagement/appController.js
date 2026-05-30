@@ -9,8 +9,7 @@ const appsRuntimeState = require('./appsRuntimeState');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
-const { getSpecBackend } = require('../utils/specLibs');
-const { appsFolder } = require('../utils/appConstants');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 
 const globalCmdDelayMs = config.fluxapps.globalCmdDelayMs;
@@ -138,8 +137,7 @@ async function appStart(req, res) {
     if (!instantiated) {
       throw new Error('Application not found');
     }
-    const { DeploymentSpec } = await getSpecBackend();
-    const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+    const deployment = await deploymentProvider.buildDeployment(instantiated);
 
     if (isComponent) {
       // user-initiated start clears the operator stop lock so the reconciler keeps it running
@@ -249,8 +247,7 @@ async function appStop(req, res) {
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      const deployment = await deploymentProvider.buildDeployment(instantiated);
       // operator stop persists so the reconciler does not restart it
       await setAppOperatorStopped(appname, deployment, true);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
@@ -317,8 +314,7 @@ async function appRestart(req, res) {
     if (!instantiated) {
       throw new Error('Application not found');
     }
-    const { DeploymentSpec } = await getSpecBackend();
-    const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+    const deployment = await deploymentProvider.buildDeployment(instantiated);
 
     if (isComponent) {
       const compName = appname.split('_')[0];
@@ -411,8 +407,7 @@ async function appKill(req, res) {
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      const deployment = await deploymentProvider.buildDeployment(instantiated);
       // operator kill persists so the reconciler does not restart it
       await setAppOperatorStopped(appname, deployment, true);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
@@ -481,8 +476,7 @@ async function appPause(req, res) {
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      const deployment = await deploymentProvider.buildDeployment(instantiated);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerPause(deployComp.identifier);
@@ -549,8 +543,7 @@ async function appUnpause(req, res) {
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      const deployment = await deploymentProvider.buildDeployment(instantiated);
       for (const [, deployComp] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerUnpause(deployComp.identifier);
