@@ -69,13 +69,18 @@ async function handleMissingMasterSlaveContainer(stoppedApp, mainAppName) {
   }
 }
 
-async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningAppsNames) {
+async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningAppsNames, resolvedViews) {
   await globalState.waitForBootContainerStateSettled();
   const masterSlaveAppsInstalled = [];
   const startedApps = [];
   const installedAppComponentNames = [];
+  // `resolvedViews` maps app name → its cleartext spec view (decrypted for
+  // enterprise apps). Component names and syncthing predicates are spec-level
+  // methods absent on the EncryptedSpecV8 wrapper, so read them from the view.
   for (const inst of appsInstalled) {
-    for (const compName of inst.spec.componentNames()) {
+    const view = resolvedViews.get(inst.name);
+    if (!view) continue;
+    for (const compName of view.componentNames()) {
       installedAppComponentNames.push(`${compName}_${inst.name}`);
     }
   }
@@ -98,8 +103,9 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
       // eslint-disable-next-line no-await-in-loop
       const appDetails = await appsRepository.getGlobalAppInfo(mainAppName);
       const inst = appsInstalled.find((app) => app.name === mainAppName);
-      const hasSyncthing = inst?.spec.hasSyncthing();
-      const hasActiveStandby = inst?.spec.hasActiveStandbySyncthing();
+      const view = inst && resolvedViews.get(inst.name);
+      const hasSyncthing = view?.hasSyncthing();
+      const hasActiveStandby = view?.hasActiveStandbySyncthing();
       if (hasSyncthing) {
         masterSlaveAppsInstalled.push(inst);
       }
