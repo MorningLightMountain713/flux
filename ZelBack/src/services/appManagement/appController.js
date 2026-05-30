@@ -8,8 +8,7 @@ const appInspector = require('./appInspector');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
-const { getSpecBackend } = require('../utils/specLibs');
-const { appsFolder } = require('../utils/appConstants');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 
 const globalCmdDelayMs = config.fluxapps.globalCmdDelayMs;
@@ -117,8 +116,7 @@ async function appStart(req, res) {
     if (!instantiated) {
       throw new Error('Application not found');
     }
-    const { DeploymentSpec } = await getSpecBackend();
-    const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+    const deployment = await deploymentProvider.buildDeployment(instantiated);
 
     if (isComponent) {
       const compName = appname.split('_')[0];
@@ -222,8 +220,7 @@ async function appStop(req, res) {
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      const deployment = await deploymentProvider.buildDeployment(instantiated);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         appInspector.stopAppMonitoring(deployComp.identifier, false);
         // eslint-disable-next-line no-await-in-loop
@@ -288,8 +285,7 @@ async function appRestart(req, res) {
     if (!instantiated) {
       throw new Error('Application not found');
     }
-    const { DeploymentSpec } = await getSpecBackend();
-    const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+    const deployment = await deploymentProvider.buildDeployment(instantiated);
 
     if (isComponent) {
       const compName = appname.split('_')[0];
@@ -381,8 +377,7 @@ async function appKill(req, res) {
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      const deployment = await deploymentProvider.buildDeployment(instantiated);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerKill(deployComp.identifier);
@@ -449,8 +444,7 @@ async function appPause(req, res) {
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      const deployment = await deploymentProvider.buildDeployment(instantiated);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerPause(deployComp.identifier);
@@ -517,8 +511,7 @@ async function appUnpause(req, res) {
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      const deployment = await deploymentProvider.buildDeployment(instantiated);
       for (const [, deployComp] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerUnpause(deployComp.identifier);
