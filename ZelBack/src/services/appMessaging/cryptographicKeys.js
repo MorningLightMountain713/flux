@@ -32,7 +32,7 @@ async function getAppPublicKey(fluxID, appName, blockHeight) {
     const dataParsed = JSON.parse(data);
     publicKey = dataParsed.status === 'ok' ? dataParsed.publicKey : null;
     if (!publicKey) {
-      throw new Error('Error getting public key to encrypt app enterprise content from SAS.');
+      throw new Error('Error getting public key to encrypt app enterprise content.');
     }
   } else {
     throw new Error('Error getting public key to encrypt app enterprise content.');
@@ -88,7 +88,47 @@ async function getPublicKey(req, res) {
   });
 }
 
+/**
+ * Get the attested per-app X25519 transport public key (v9 HPKE submission
+ * direction). The response is returned unmodified — the attestation bytes are
+ * load-bearing for the client's signature check and must not be re-encoded.
+ * @param {object} req Request — appname in the path, fluxid in the query.
+ * @param {object} res Response.
+ */
+async function getTransportPublicKey(req, res) {
+  try {
+    const appName = req.params.appname;
+    const fluxID = req.query.fluxid || req.query.fluxId;
+
+    if (!appName || !fluxID) {
+      return res.json(messageHelper.createErrorMessage('transportpubkey requires appname and fluxid'));
+    }
+
+    const rpcResult = await benchmarkService.transportPublicKey({ appName, fluxID });
+    if (rpcResult.status !== 'success') {
+      return res.json(rpcResult);
+    }
+
+    const sasResponse = typeof rpcResult.data === 'string'
+      ? JSON.parse(rpcResult.data) : rpcResult.data;
+    if (!sasResponse || sasResponse.status !== 'ok') {
+      throw new Error(`Error getting transport public key: ${(sasResponse && sasResponse.message) || 'unknown'}`);
+    }
+
+    return res.json(messageHelper.createDataMessage(sasResponse));
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    return res.json(errorResponse);
+  }
+}
+
 module.exports = {
   getAppPublicKey,
   getPublicKey,
+  getTransportPublicKey,
 };

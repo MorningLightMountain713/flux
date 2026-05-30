@@ -9,84 +9,88 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const registryManager = require('../appDatabase/registryManager');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
-const imageManager = require('../appSecurity/imageManager');
-const { supportedArchitectures, enterpriseRequiredArchitectures } = require('../utils/appConstants');
-const { findCommonArchitectures } = require('../utils/appUtilities');
-const { validateSubmissionSpec } = require('../utils/specLibs');
-const { deserializeSpec, resolveSpec } = require('../utils/specCutover');
+const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
+const { validateSubmissionSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
+const { deserializeSpec } = require('../utils/specCutover');
+const transportHelper = require('../utils/transportHelper');
+const cryptoProvider = require('../providers/FluxOSCryptoProvider');
 const appsRepository = require('../appDatabase/appsRepository');
-const portManager = require('../appNetwork/portManager');
 const { peerManager } = require('../utils/peerState');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
 
-async function verifyAppSpecifications(appSpecifications, height, checkDockerAndWhitelist = false) {
-  await validateSubmissionSpec(appSpecifications, { height });
+/**
+ * Resolve + validate a submission spec, class-first, across all v8/v9
+ * cleartext and encrypted forms:
+ *   - v9 transport-encrypted → HPKE-open to cleartext, validate, then
+ *     backend-encrypt for storage
+ *   - v8 enterprise (backend-encrypted blob) → decrypt, validate the
+ *     cleartext, keep the original blob as the wire form
+ *   - cleartext → validate
+ *
+ * Returns the validated spec instance, whether the app is encrypted, and the
+ * wire blob to broadcast/store — never cleartext for an encrypted app.
+ *
+ * @param {object} appSpecification - raw submission spec
+ * @param {object} meta - { contentHash, timestamp, type, daemonHeight } from the signed envelope
+ * @returns {Promise<{ spec: object, isEncrypted: boolean, broadcastBlob: object }>}
+ */
+async function resolveSubmission(appSpecification, {
+  contentHash, timestamp, type, daemonHeight,
+}) {
+  const wasTransportEncrypted = Boolean(appSpecification && appSpecification.transportEncrypted);
 
-  portManager.ensureAppUniquePorts(appSpecifications);
+  // STAGE 1 — v9 transport-open (no-op when there is no envelope)
+  const submissionBlob = await transportHelper.openTransportEnvelope(appSpecification, {
+    contentHash, timestamp, type,
+  });
 
-  if (checkDockerAndWhitelist) {
-    await imageManager.checkApplicationImagesCompliance(appSpecifications);
+  // STAGE 2 — parse + validate as a submission (strict, class-first)
+  const wireSpec = await deserializeSpec(submissionBlob);
+  if (!wireSpec) throw new Error('Could not deserialize app specifications');
 
-    const componentArchitectures = [];
+  let spec;
+  if (wireSpec.isEncrypted) {
+    // v8 enterprise blob — decrypt, then hold the decrypted instance to submission rules
+    const provider = await wireSpec.createProvider();
+    spec = await wireSpec.decrypt(provider);
+    await validateSubmissionSpec(spec.spec.serialize(), { height: daemonHeight });
+  } else {
+    spec = await validateSubmissionSpec(submissionBlob, { height: daemonHeight });
+  }
 
-    if (appSpecifications.version <= 3) {
-      const result = await imageManager.verifyRepository(appSpecifications.repotag);
-      componentArchitectures.push({
-        name: appSpecifications.name,
-        repotag: appSpecifications.repotag,
-        architectures: result.supportedArchitectures,
-      });
-    } else {
-      for (const appComponent of appSpecifications.compose) {
-        const skipVerification = appSpecifications.version === 7 && appComponent.repoauth;
-        if (skipVerification) return true;
+  const isEncrypted = wasTransportEncrypted || wireSpec.isEncrypted;
 
-        // eslint-disable-next-line no-await-in-loop
-        const result = await imageManager.verifyRepository(appComponent.repotag, {
-          repoauth: appComponent.repoauth,
-          specVersion: appSpecifications.version,
-          appName: appSpecifications.name,
-        });
-
-        componentArchitectures.push({
-          name: appComponent.name,
-          repotag: appComponent.repotag,
-          architectures: result.supportedArchitectures,
-        });
-      }
-
-      const isEnterpriseArcane = appSpecifications.version >= 8 && appSpecifications.enterprise;
-
-      if (isEnterpriseArcane) {
-        const missing = componentArchitectures.filter(
-          (comp) => !enterpriseRequiredArchitectures.every((arch) => comp.architectures.includes(arch)),
-        );
-        if (missing.length > 0) {
-          const names = missing.map((c) => `${c.name} (${c.repotag})`).join(', ');
-          throw new Error(
-            `Enterprise application '${appSpecifications.name}' must support ${enterpriseRequiredArchitectures.join(', ')} `
-            + `architecture on ALL components. The following components do not support ${enterpriseRequiredArchitectures.join(', ')}: ${names}. `
-            + `Arcane nodes are amd64-only.`,
-          );
-        }
-      } else if (componentArchitectures.length > 1) {
-        const common = findCommonArchitectures(componentArchitectures);
-        if (common.length === 0) {
-          const details = componentArchitectures
-            .map((c) => `  - ${c.name} (${c.repotag}): ${c.architectures.join(', ') || 'none'}`)
-            .join('\n');
-          throw new Error(
-            `Application '${appSpecifications.name}' components do not share a common architecture. `
-            + `All components must support at least one common architecture (${supportedArchitectures.join(' or ')}). `
-            + `Component architectures:\n${details}`,
-          );
-        }
-      }
+  // The signed contentHash (v9) must match the actual decrypted content, so a
+  // tampered envelope can't slip different bytes past the signature.
+  if (contentHash) {
+    const cleartext = spec.spec || spec;
+    if (typeof cleartext.contentHash === 'function' && cleartext.contentHash() !== contentHash) {
+      const err = new Error('contentHash does not match submitted spec');
+      err.code = 'DECRYPT_FAILED';
+      throw err;
     }
   }
 
-  return true;
+  // STAGE 3 — runtime image registry + architecture checks
+  await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner, isEncrypted });
+
+  // STAGE 5 — wire form for broadcast/storage; never cleartext for encrypted apps
+  let broadcastBlob;
+  if (wasTransportEncrypted) {
+    // v9 transport submission — backend-encrypt the validated cleartext for storage
+    const { EncryptedSpecV9 } = await getSpecBackend();
+    const backendProvider = await cryptoProvider.create(spec.name, spec.owner);
+    const encryptedSpec = await EncryptedSpecV9.fromSpec(spec, backendProvider);
+    broadcastBlob = encryptedSpec.serialize();
+  } else if (wireSpec.isEncrypted) {
+    // v8 enterprise — the submitted blob is already the stored (encrypted) form
+    broadcastBlob = wireSpec.serialize();
+  } else {
+    broadcastBlob = spec.serialize();
+  }
+
+  return { spec, isEncrypted, broadcastBlob };
 }
 
 async function verifyAppRegistrationParameters(req, res) {
@@ -96,7 +100,12 @@ async function verifyAppRegistrationParameters(req, res) {
   });
   req.on('end', async () => {
     try {
-      const appSpecification = serviceHelper.ensureObject(body);
+      const processedBody = serviceHelper.ensureObject(body);
+      // A transport-encrypted preflight nests the spec under appSpecification
+      // and carries the signed-envelope metadata alongside; a cleartext
+      // preflight is just the spec object.
+      const appSpecification = serviceHelper.ensureObject(processedBody.appSpecification || processedBody);
+      const { contentHash, timestamp, type } = processedBody;
 
       const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
       if (!syncStatus.data.synced) {
@@ -104,15 +113,13 @@ async function verifyAppRegistrationParameters(req, res) {
       }
       const daemonHeight = syncStatus.data.height;
 
-      const wireSpec = await deserializeSpec(appSpecification);
-      const spec = wireSpec.isEncrypted ? await resolveSpec(appSpecification) : wireSpec;
-      const appSpecFormatted = spec.serialize();
+      const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
+        contentHash, timestamp, type: type || 'fluxappregister', daemonHeight,
+      });
 
-      await verifyAppSpecifications(appSpecFormatted, daemonHeight, true);
+      await registryManager.checkApplicationRegistrationNameConflicts(spec);
 
-      await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted);
-
-      const respondPrice = messageHelper.createDataMessage(appSpecFormatted);
+      const respondPrice = messageHelper.createDataMessage(broadcastBlob);
       res.json(respondPrice);
     } catch (error) {
       log.warn(error);
@@ -126,36 +133,38 @@ async function verifyAppRegistrationParameters(req, res) {
   });
 }
 
-async function validateAppUpdate(appSpecification) {
+async function validateAppUpdate(appSpecification, meta = {}) {
   const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
   if (!syncStatus.data.synced) {
     throw new Error('Daemon not yet synced.');
   }
   const daemonHeight = syncStatus.data.height;
 
-  const wireSpec = await deserializeSpec(appSpecification);
-  const spec = wireSpec.isEncrypted ? await resolveSpec(appSpecification) : wireSpec;
-  const appSpecFormatted = spec.serialize();
+  const { contentHash, timestamp, type } = meta;
+  const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
+    contentHash, timestamp, type: type || 'fluxappupdate', daemonHeight,
+  });
 
-  await verifyAppSpecifications(appSpecFormatted, daemonHeight, true);
-
-  const timestamp = Date.now();
+  const verificationTimestamp = timestamp || Date.now();
   const { getPreviousSpec } = require('../appDatabase/appSpecHistory');
-  const previousSpec = await getPreviousSpec(appSpecFormatted, timestamp);
+  const previousSpec = await getPreviousSpec(spec, verificationTimestamp);
   if (!previousSpec) {
-    throw new Error(`Flux App ${appSpecFormatted.name} does not exist and cannot be updated`);
+    throw new Error(`Flux App ${spec.name} does not exist and cannot be updated`);
   }
 
+  // Registration-locked invariants (e.g. referral) — compare cleartext specs.
+  await assertUpdateInvariants(previousSpec, spec);
+
   const { latestSupportedSpecVersion } = config.fluxapps;
-  if (previousSpec.version !== appSpecFormatted.version && appSpecFormatted.version !== latestSupportedSpecVersion) {
+  if (previousSpec.version !== spec.version && spec.version !== latestSupportedSpecVersion) {
     throw new Error(
       `Application update rejected: Version changes are only allowed when updating to version ${latestSupportedSpecVersion} (current latest supported version). `
-      + `Current version: ${previousSpec.version}, Attempted version: ${appSpecFormatted.version}. `
+      + `Current version: ${previousSpec.version}, Attempted version: ${spec.version}. `
       + `To update this application, please use version ${latestSupportedSpecVersion} specifications.`,
     );
   }
 
-  return appSpecFormatted;
+  return broadcastBlob;
 }
 
 async function verifyAppUpdateApi(req, res) {
@@ -165,8 +174,10 @@ async function verifyAppUpdateApi(req, res) {
   });
   req.on('end', async () => {
     try {
-      const appSpecification = serviceHelper.ensureObject(serviceHelper.ensureObject(body));
-      const appSpecFormatted = await validateAppUpdate(appSpecification);
+      const processedBody = serviceHelper.ensureObject(serviceHelper.ensureObject(body));
+      const appSpecification = serviceHelper.ensureObject(processedBody.appSpecification || processedBody);
+      const { contentHash, timestamp, type } = processedBody;
+      const appSpecFormatted = await validateAppUpdate(appSpecification, { contentHash, timestamp, type });
       const respondPrice = messageHelper.createDataMessage(appSpecFormatted);
       res.json(respondPrice);
     } catch (error) {
@@ -204,6 +215,7 @@ async function registerAppGlobalyApi(req, res) {
 
       const processedBody = serviceHelper.ensureObject(body);
       let { appSpecification, timestamp, signature } = processedBody;
+      const { contentHash, extend } = processedBody;
       let messageType = processedBody.type;
       let typeVersion = processedBody.version;
 
@@ -215,7 +227,8 @@ async function registerAppGlobalyApi(req, res) {
         throw new Error('Invalid type of message');
       }
 
-      if (typeVersion !== 1) {
+      // envelope version 1 = legacy v1-v8, 2 = v9 (AppEventV2 / contentHash signing)
+      if (typeVersion !== 1 && typeVersion !== 2) {
         throw new Error('Invalid version of message');
       }
 
@@ -239,23 +252,19 @@ async function registerAppGlobalyApi(req, res) {
 
       const daemonHeight = syncStatus.data.height;
 
-      const wireSpec = await deserializeSpec(appSpecification);
-      const spec = wireSpec.isEncrypted ? await resolveSpec(appSpecification) : wireSpec;
-      const appSpecFormatted = spec.serialize();
+      const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
+        contentHash, timestamp, type: messageType, daemonHeight,
+      });
 
-      await verifyAppSpecifications(appSpecFormatted, daemonHeight, true);
-
-      await registryManager.checkApplicationRegistrationNameConflicts(appSpecFormatted);
-
-      const broadcastSpecBlob = wireSpec.isEncrypted
-        ? wireSpec.serialize()
-        : appSpecFormatted;
+      await registryManager.checkApplicationRegistrationNameConflicts(spec);
 
       const signedEvent = await appEventVerifier.deserializeTempMessage({
         type: messageType,
         version: typeVersion,
-        appSpecifications: broadcastSpecBlob,
+        appSpecifications: broadcastBlob,
+        contentHash,
         timestamp,
+        extend,
         signature,
       });
       await appEventVerifier.authorize({
@@ -264,15 +273,11 @@ async function registerAppGlobalyApi(req, res) {
         verifyHash: false,
       });
 
-      if (isEnterprise) {
-        appSpecFormatted.contacts = [];
-        appSpecFormatted.compose = [];
-      }
-
       const messageHASH = await appEventVerifier.computeOutboundHash({
         type: messageType,
         envelopeVersion: typeVersion,
-        specBlob: broadcastSpecBlob,
+        specBlob: broadcastBlob,
+        contentHash,
         timestamp,
         signature,
       });
@@ -280,9 +285,11 @@ async function registerAppGlobalyApi(req, res) {
       const temporaryAppMessage = {
         type: messageType,
         version: typeVersion,
-        appSpecifications: appSpecFormatted,
+        appSpecifications: broadcastBlob,
         hash: messageHASH,
+        contentHash,
         timestamp,
+        extend,
         signature,
         arcaneSender: isArcane,
       };
@@ -365,7 +372,7 @@ async function assertSecretsNotConflicting(appName, componentName, secrets, owne
 }
 
 module.exports = {
-  verifyAppSpecifications,
+  resolveSubmission,
   verifyAppRegistrationParameters,
   validateAppUpdate,
   verifyAppUpdateApi,
