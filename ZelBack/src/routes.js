@@ -1378,6 +1378,9 @@ module.exports = (app) => {
   app.post('/apps/getpublickey', (req, res) => {
     cryptographicKeys.getPublicKey(req, res);
   });
+  app.get('/apps/transportpubkey/:appname', (req, res) => {
+    cryptographicKeys.getTransportPublicKey(req, res);
+  });
 
   // POST PROTECTED API - FluxNode owner level
   app.post('/daemon/signrawtransaction', (req, res) => {

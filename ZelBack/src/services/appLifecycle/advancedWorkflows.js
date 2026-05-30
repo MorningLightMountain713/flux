@@ -31,7 +31,7 @@ const registryManager = require('../appDatabase/registryManager');
 const { isNewestInstance } = require('../utils/appUtilities');
 const https = require('https');
 const { deserializeSpec } = require('../utils/specCutover');
-const { getSpec } = require('../utils/specLibs');
+const { getSpec, assertUpdateInvariants } = require('../utils/specLibs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const appQueryService = require('../appQuery/appQueryService');
 const { listRunningContainers } = appQueryService;
@@ -1266,7 +1266,8 @@ async function updateAppGlobaly(params) {
   if (messageType !== 'zelappupdate' && messageType !== 'fluxappupdate') {
     throw new Error('Invalid type of message');
   }
-  if (typeVersion !== 1) {
+  // envelope version 1 = legacy v1-v8, 2 = v9 (AppEventV2 / contentHash signing)
+  if (typeVersion !== 1 && typeVersion !== 2) {
     throw new Error('Invalid version of message');
   }
 
@@ -1289,24 +1290,15 @@ async function updateAppGlobaly(params) {
   const daemonHeight = syncStatus.data.height;
 
   const appSpecObj = serviceHelper.ensureObject(appSpecification);
-  const wireSpec = await deserializeSpec(appSpecObj);
-  if (!wireSpec) throw new Error('Could not deserialize app specifications');
-
-  let spec = wireSpec;
-  if (wireSpec.isEncrypted) {
-    const provider = await wireSpec.createProvider();
-    spec = await wireSpec.decrypt(provider);
-  }
+  const cleanContentHash = params.contentHash;
+  const cleanExtend = params.extend;
 
   // eslint-disable-next-line global-require
-  const { validateSubmissionSpec } = require('../utils/specLibs');
-  // eslint-disable-next-line global-require
-  const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
-  await validateSubmissionSpec(appSpecObj, { height: daemonHeight });
-  await verifyImageRegistryAndArchitectures(appSpecObj);
+  const { resolveSubmission, assertSecretsNotConflicting } = require('../appRequirements/appValidator');
+  const { spec, broadcastBlob } = await resolveSubmission(appSpecObj, {
+    contentHash: cleanContentHash, timestamp: cleanTimestamp, type: cleanMessageType, daemonHeight,
+  });
 
-  // eslint-disable-next-line global-require
-  const { assertSecretsNotConflicting } = require('../appRequirements/appValidator');
   for (const { componentName, secrets } of spec.getComponentSecrets()) {
     // eslint-disable-next-line no-await-in-loop
     await assertSecretsNotConflicting(spec.name, componentName, secrets, spec.owner);
@@ -1316,16 +1308,24 @@ async function updateAppGlobaly(params) {
   if (!appInfo) {
     throw new Error('Flux App update received but application to update does not exist!');
   }
+  const previousSpec = appInfo.spec;
 
-  const wireForm = wireSpec.serialize();
+  // Registration-locked invariants (e.g. referral). Both specs must be
+  // cleartext; the stored prior spec may be encrypted, so decrypt it first.
+  const priorCleartext = previousSpec.isEncrypted
+    ? await previousSpec.decrypt(await previousSpec.createProvider())
+    : previousSpec;
+  await assertUpdateInvariants(priorCleartext, spec);
+
   const appEvent = await appEventVerifier.deserializeTempMessage({
     type: cleanMessageType,
     version: cleanTypeVersion,
-    appSpecifications: wireForm,
+    appSpecifications: broadcastBlob,
+    contentHash: cleanContentHash,
     timestamp: cleanTimestamp,
+    extend: cleanExtend,
     signature: cleanSignature,
   });
-  const previousSpec = appInfo.spec;
   await appEventVerifier.authorize({ appEvent, previousSpec, daemonHeight, verifyHash: false });
 
   const { latestSupportedSpecVersion } = config.fluxapps;
@@ -1340,15 +1340,23 @@ async function updateAppGlobaly(params) {
   const { UpdatePolicy } = await getSpec();
   UpdatePolicy.assertCompatible(previousSpec, spec);
 
-  const message = cleanMessageType + cleanTypeVersion + JSON.stringify(wireForm) + cleanTimestamp + cleanSignature;
-  const messageHASH = await generalService.messageHash(message);
+  const messageHASH = await appEventVerifier.computeOutboundHash({
+    type: cleanMessageType,
+    envelopeVersion: cleanTypeVersion,
+    specBlob: broadcastBlob,
+    contentHash: cleanContentHash,
+    timestamp: cleanTimestamp,
+    signature: cleanSignature,
+  });
 
   const temporaryAppMessage = {
     type: cleanMessageType,
     version: cleanTypeVersion,
-    appSpecifications: wireForm,
+    appSpecifications: broadcastBlob,
     hash: messageHASH,
+    contentHash: cleanContentHash,
     timestamp: cleanTimestamp,
+    extend: cleanExtend,
     signature: cleanSignature,
     arcaneSender: isArcane,
   };
