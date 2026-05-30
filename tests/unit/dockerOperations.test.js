@@ -58,7 +58,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
   let dockerServiceStub;
   let registryManagerStub;
   let appsRepositoryStub;
-  let getSpecBackendStub;
+  let buildDeploymentStub;
   let appInspectorStub;
   let appVolumeServiceStub;
   let logStub;
@@ -80,9 +80,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       getGlobalAppInfo: sinon.stub().resolves(null),
     };
 
-    getSpecBackendStub = sinon.stub().resolves({
-      DeploymentSpec: { fromSpec: sinon.stub() },
-    });
+    buildDeploymentStub = sinon.stub().resolves(null);
 
     appInspectorStub = {
       startAppMonitoring: sinon.stub(),
@@ -102,7 +100,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     advancedWorkflows = proxyquire('../../ZelBack/src/services/appLifecycle/advancedWorkflows', {
       '../dockerService': dockerServiceStub,
       '../appDatabase/registryManager': registryManagerStub,
-      '../utils/specLibs': { getSpec: sinon.stub(), getSpecBackend: getSpecBackendStub },
+      '../utils/specLibs': { getSpec: sinon.stub() },
       '../appManagement/appInspector': appInspectorStub,
       './appVolumeService': appVolumeServiceStub,
       '../../lib/log': logStub,
@@ -116,7 +114,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       '../upnpService': {},
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appQuery/appQueryService': { listRunningContainers: sinon.stub().resolves([]), listAllApps: sinon.stub().resolves([]), installedApps: sinon.stub().resolves({ data: [] }) },
-      '../appRuntime/deploymentProvider': { getInstalledDeployment: sinon.stub().resolves(null) },
+      '../appRuntime/deploymentProvider': { getInstalledDeployment: sinon.stub().resolves(null), buildDeployment: buildDeploymentStub },
       './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
       './appInstaller': { installComponent: sinon.stub().resolves() },
       '../utils/globalState': { removalInProgress: false, installationInProgress: false },
@@ -159,9 +157,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
           ['Web', { identifier: 'Web_TestApp' }],
         ]),
       };
-      getSpecBackendStub.resolves({
-        DeploymentSpec: { fromSpec: sinon.stub().returns(mockDeployment) },
-      });
+      buildDeploymentStub.resolves(mockDeployment);
 
       await advancedWorkflows.stopApplication('TestApp');
 
@@ -175,9 +171,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
 
       const componentEntriesStub = sinon.stub().returns([]);
-      getSpecBackendStub.resolves({
-        DeploymentSpec: { fromSpec: sinon.stub().returns({ componentEntries: componentEntriesStub }) },
-      });
+      buildDeploymentStub.resolves({ componentEntries: componentEntriesStub });
 
       await advancedWorkflows.stopApplication('TestApp');
 
@@ -211,9 +205,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
           ['API', { identifier: 'API_TestApp' }],
         ]),
       };
-      getSpecBackendStub.resolves({
-        DeploymentSpec: { fromSpec: sinon.stub().returns(mockDeployment) },
-      });
+      buildDeploymentStub.resolves(mockDeployment);
 
       await advancedWorkflows.startApplication('TestApp');
 
@@ -238,9 +230,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
 
       const mockDeployComp = { identifier: 'Web_TestApp', mounts: [{ Source: '/tmp' }] };
-      getSpecBackendStub.resolves({
-        DeploymentSpec: { fromSpec: sinon.stub().returns({ getComponent: () => mockDeployComp }) },
-      });
+      buildDeploymentStub.resolves({ getComponent: () => mockDeployComp });
 
       await advancedWorkflows.restartApplication('Web_TestApp');
 
@@ -255,9 +245,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
 
       const mockDeployComp = { identifier: 'Web_TestApp', mounts: [] };
-      getSpecBackendStub.resolves({
-        DeploymentSpec: { fromSpec: sinon.stub().returns({ getComponent: () => mockDeployComp }) },
-      });
+      buildDeploymentStub.resolves({ getComponent: () => mockDeployComp });
 
       await advancedWorkflows.restartApplication('Web_TestApp');
 
@@ -276,9 +264,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       };
       mockDeployment.getComponent.withArgs('Web').returns(webComp);
       mockDeployment.getComponent.withArgs('API').returns(apiComp);
-      getSpecBackendStub.resolves({
-        DeploymentSpec: { fromSpec: sinon.stub().returns(mockDeployment) },
-      });
+      buildDeploymentStub.resolves(mockDeployment);
 
       await advancedWorkflows.restartApplication('TestApp');
 
@@ -299,12 +285,8 @@ describe('advancedWorkflows application lifecycle tests', () => {
 
     it('should handle docker restart errors gracefully', async () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
-      getSpecBackendStub.resolves({
-        DeploymentSpec: {
-          fromSpec: sinon.stub().returns({
-            getComponent: () => ({ identifier: 'Web_TestApp', mounts: [] }),
-          }),
-        },
+      buildDeploymentStub.resolves({
+        getComponent: () => ({ identifier: 'Web_TestApp', mounts: [] }),
       });
       dockerServiceStub.appDockerRestart.rejects(new Error('Docker restart failed'));
 
