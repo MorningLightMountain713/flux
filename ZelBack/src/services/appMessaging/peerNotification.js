@@ -10,6 +10,7 @@ const globalState = require('../utils/globalState');
 const appsRepository = require('../appDatabase/appsRepository');
 const appQueryService = require('../appQuery/appQueryService');
 const appReconciler = require('../appMonitoring/appReconciler');
+const { resolveSpec } = require('../utils/specCutover');
 
 const fluxEventBus = require('../utils/fluxEventBus');
 
@@ -61,6 +62,23 @@ async function checkAndNotifyPeersOfRunningApps() {
 
     const installedSpecs = await appsRepository.listInstalledApps();
 
+    // Resolve each installed spec to its cleartext view for component/syncthing
+    // introspection. Enterprise (encrypted) apps must be decrypted first — the
+    // EncryptedSpecV8 wrapper has no componentNames()/hasSyncthing(). The node
+    // installed these apps, so it can decrypt them. Skip + log any that fail to
+    // resolve so one undecryptable app can't abort the whole broadcast cycle.
+    const resolvedViews = new Map();
+    // eslint-disable-next-line no-restricted-syntax
+    for (const inst of installedSpecs) {
+      // eslint-disable-next-line no-await-in-loop
+      const view = inst.isEncrypted ? await resolveSpec(inst.serialize()) : inst.spec;
+      if (view) {
+        resolvedViews.set(inst.name, view);
+      } else {
+        log.warn(`peerNotification - could not resolve spec for ${inst.name}; skipping from monitoring/broadcast this cycle`);
+      }
+    }
+
     const runningAppsRes = await appQueryService.listRunningApps();
     if (runningAppsRes.status !== 'success') {
       throw new Error('Unable to check running Apps');
@@ -79,16 +97,22 @@ async function checkAndNotifyPeersOfRunningApps() {
 
     // apps using g:/r: syncthing are advertised as installed-and-running even when
     // some components are intentionally stopped (e.g. slaves), so derive them
-    // directly from the specs rather than from container run-state
+    // directly from the specs rather than from container run-state. Encrypted
+    // specs answer through their resolved (decrypted) view; unresolvable specs
+    // were already excluded from this cycle above.
     const masterSlaveAppsInstalled = installedSpecs.filter((inst) => {
-      const comps = inst.spec.componentEntries().map(([, c]) => c);
+      const view = resolvedViews.get(inst.name);
+      if (!view) return false;
+      const comps = view.componentEntries().map(([, c]) => c);
       return comps.some((c) => c.hasSyncthing());
     });
 
     const installedAndRunning = [];
     installedSpecs.forEach((inst) => {
+      const view = resolvedViews.get(inst.name);
+      if (!view) return; // unresolved (decrypt failure) — skip this cycle
       if (inst.version >= 4) {
-        const allRunning = inst.spec.componentNames().every(
+        const allRunning = view.componentNames().every(
           (compName) => runningAppsNames.includes(`${compName}_${inst.name}`),
         );
         if (allRunning) {
