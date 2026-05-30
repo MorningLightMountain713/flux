@@ -3,7 +3,7 @@ const messageHelper = require('../messageHelper');
 const appInspector = require('../appManagement/appInspector');
 const log = require('../../lib/log');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
-const { deserializeSpec } = require('../utils/specCutover');
+const { resolveSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const { appsFolder } = require('../utils/appConstants');
 
@@ -30,7 +30,9 @@ async function startMonitoringOfApps(appSpecsToMonitor) {
     for (const app of appSpecsToMonitor) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        const spec = await deserializeSpec(app);
+        // resolveSpec decrypts enterprise apps - DeploymentSpec.fromSpec needs the
+        // cleartext components. deserializeSpec alone yields an EncryptedSpecV8.
+        const spec = await resolveSpec(app);
         if (spec) deployments.push(DeploymentSpec.fromSpec(spec, appsFolder));
       } catch (error) {
         log.error(`startMonitoringOfApps - could not read ${app?.name || '<unnamed app>'}: ${error.message}`);
