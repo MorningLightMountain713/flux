@@ -90,6 +90,9 @@ function makeBaseStubs(overrides = {}) {
         deserializeSpec: sinon.stub().returnsArg(0),
       }),
     },
+    '../utils/specCutover': {
+      resolveSpec: sinon.stub().resolvesArg(0),
+    },
     '../appDatabase/appsRepository': {
       getPermanentMessage: sinon.stub().resolves(null),
       getTempMessage: sinon.stub().resolves(null),
@@ -476,6 +479,59 @@ describe('messageVerifier tests', () => {
       const result = await mv.checkAndRequestApp('crashHash', 'txid', 2000000, 100000000);
       expect(result).to.be.false;
       expect(logStub.error.called).to.be.true;
+    });
+
+    it('decrypts an encrypted registration spec before pricing it', async () => {
+      const serializedEvent = {
+        type: 'fluxappregister',
+        appSpecifications: { name: 'encapp', version: 8, owner: 'owner1', enterprise: 'base64blob' },
+        hash: 'encReg',
+      };
+      const mockConfirmedEvent = {
+        isRegistration: true,
+        isUpdate: false,
+        spec: { name: 'encapp', version: 8 },
+        serialize: sinon.stub().returns(serializedEvent),
+        toInstantiatedSpec: sinon.stub().returns({}),
+      };
+      // Encrypted installed spec: spec is the encrypted wrapper (no components);
+      // serialize() yields the wire form fed to resolveSpec.
+      const wireForm = { name: 'encapp', version: 8, enterprise: 'base64blob' };
+      const mockInstantiated = {
+        name: 'encapp',
+        isEncrypted: true,
+        spec: { name: 'encapp', version: 8 },
+        isExpired: sinon.stub().returns(false),
+        serialize: sinon.stub().returns(wireForm),
+      };
+      // The decrypted view appPricePerMonth can price.
+      const decryptedSpec = { name: 'encapp', version: 8, expire: 88000 };
+
+      const { stubs } = makeBaseStubs();
+      const resolveSpecStub = sinon.stub().resolves(decryptedSpec);
+      stubs['../utils/specCutover'].resolveSpec = resolveSpecStub;
+      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
+        type: 'fluxappregister', version: 1, appSpecifications: wireForm,
+        hash: 'encReg', timestamp: Date.now(), signature: 'sig',
+      });
+      stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
+        AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
+        ConfirmedAppEvent: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
+        InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
+        deserializeSpec: sinon.stub().returnsArg(0),
+      });
+      const appPriceStub = sinon.stub().resolves(1);
+      stubs['../utils/appUtilities'].appPricePerMonth = appPriceStub;
+
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+      const result = await mv.checkAndRequestApp('encReg', 'txid', 2000000, 200000000, null, 2);
+
+      expect(result).to.be.true;
+      // resolveSpec called with the encrypted wire form (decrypt before pricing)
+      expect(resolveSpecStub.calledOnceWith(wireForm)).to.be.true;
+      // pricing ran against the decrypted spec, never the encrypted wrapper
+      expect(appPriceStub.calledOnce).to.be.true;
+      expect(appPriceStub.firstCall.args[0]).to.equal(decryptedSpec);
     });
   });
 
