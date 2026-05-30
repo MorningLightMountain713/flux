@@ -31,7 +31,7 @@ const registryManager = require('../appDatabase/registryManager');
 const { isNewestInstance } = require('../utils/appUtilities');
 const https = require('https');
 const { deserializeSpec } = require('../utils/specCutover');
-const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const { getSpec } = require('../utils/specLibs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const appQueryService = require('../appQuery/appQueryService');
 const { listRunningContainers } = appQueryService;
@@ -614,8 +614,7 @@ async function startApplication(appname) {
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      const deployment = await deploymentProvider.buildDeployment(instantiated);
       for (const [, deployComp] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerStart(deployComp.identifier);
@@ -644,8 +643,7 @@ async function stopApplication(appname) {
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const { DeploymentSpec } = await getSpecBackend();
-      const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+      const deployment = await deploymentProvider.buildDeployment(instantiated);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
         await dockerService.appDockerStop(deployComp.identifier);
@@ -670,8 +668,7 @@ async function restartApplication(appname) {
     if (!instantiated) {
       throw new Error('Application not found');
     }
-    const { DeploymentSpec } = await getSpecBackend();
-    const deployment = DeploymentSpec.fromSpec(instantiated.spec, appsFolder);
+    const deployment = await deploymentProvider.buildDeployment(instantiated);
     const isComponent = appname.includes('_');
     if (isComponent) {
       const componentName = appname.split('_')[0];
