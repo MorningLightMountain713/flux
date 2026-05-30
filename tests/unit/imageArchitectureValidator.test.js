@@ -50,12 +50,12 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
     sinon.restore();
   });
 
-  describe('enterprise Arcane (v8+) apps', () => {
+  describe('encrypted apps (run on Arcane, amd64-only)', () => {
     it('accepts when every component supports amd64', async () => {
       verifyRepositoryStub.resolves({
         verified: true, supportedArchitectures: ['amd64', 'arm64'],
       });
-      await verifyImageRegistryAndArchitectures(makeSpec({ isEncrypted: true }));
+      await verifyImageRegistryAndArchitectures(makeSpec(), { isEncrypted: true });
     });
 
     it('rejects when any component lacks amd64 support', async () => {
@@ -63,11 +63,10 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
         verified: true, supportedArchitectures: ['arm64'],
       });
       const spec = makeSpec({
-        isEncrypted: true,
         compose: [{ name: 'c1', image: 'arm-only:latest' }],
       });
       try {
-        await verifyImageRegistryAndArchitectures(spec);
+        await verifyImageRegistryAndArchitectures(spec, { isEncrypted: true });
         expect.fail('Should have thrown');
       } catch (err) {
         expect(err.message).to.include('amd64');
