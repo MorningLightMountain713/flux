@@ -4,7 +4,7 @@ const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const appInspector = require('../appManagement/appInspector');
 const log = require('../../lib/log');
-const { deserializeSpec } = require('../utils/specCutover');
+const { resolveSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 const { appsFolder } = require('../utils/appConstants');
 
@@ -28,8 +28,10 @@ async function startMonitoringOfApps(appSpecsToMonitor, appsMonitored, installed
 
     const { DeploymentSpec } = await getSpecBackend();
     for (const app of apps) {
+      // resolveSpec decrypts enterprise apps — DeploymentSpec.fromSpec needs the
+      // cleartext components. deserializeSpec alone yields an EncryptedSpecV8.
       // eslint-disable-next-line no-await-in-loop
-      const spec = await deserializeSpec(app);
+      const spec = await resolveSpec(app);
       if (!spec) continue;
       const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
       for (const [, deployComp] of deployment.componentEntries()) {
@@ -63,8 +65,10 @@ async function stopMonitoringOfApps(appSpecsToMonitor, deleteData = false, appsM
 
     const { DeploymentSpec } = await getSpecBackend();
     for (const app of apps) {
+      // resolveSpec decrypts enterprise apps — DeploymentSpec.fromSpec needs the
+      // cleartext components. deserializeSpec alone yields an EncryptedSpecV8.
       // eslint-disable-next-line no-await-in-loop
-      const spec = await deserializeSpec(app);
+      const spec = await resolveSpec(app);
       if (!spec) continue;
       const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
