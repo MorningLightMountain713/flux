@@ -11,7 +11,6 @@ const globalState = require('../utils/globalState');
 const log = require('../../lib/log');
 const { localAppsInformation, globalAppsInformation, globalAppsMessages } = require('../utils/appConstants');
 const config = require('config');
-// const advancedWorkflows = require('./advancedWorkflows'); // Moved to dynamic require to avoid circular dependency
 const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
