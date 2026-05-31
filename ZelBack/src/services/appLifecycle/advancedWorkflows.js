@@ -38,6 +38,7 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
 const appUninstaller = require('./appUninstaller');
 const appInstaller = require('./appInstaller');
+const appNetworkLinker = require('./appNetworkLinker');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const globalState = require('../utils/globalState');
 
@@ -342,6 +343,9 @@ async function redeployApplication(appName, options = {}) {
     }
     await hwRequirements.checkNodeResources(freshDeployment);
 
+    // Re-verify shared-network links before recreating containers.
+    await appNetworkLinker.checkAppNetworkRequirements(instantiated);
+
     for (const [, deployComp] of freshDeployment.componentEntries()) {
       status(`Installing ${deployComp.identifier}...`);
       // eslint-disable-next-line no-await-in-loop
@@ -349,6 +353,9 @@ async function redeployApplication(appName, options = {}) {
         createVolumes,
         specVersion: instantiated.version,
       });
+      // Re-attach the recreated container to every linked app's network.
+      // eslint-disable-next-line no-await-in-loop
+      await appNetworkLinker.connectComponentToLinkedApps(deployComp.identifier, instantiated);
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
     }
