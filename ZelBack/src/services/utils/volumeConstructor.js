@@ -60,16 +60,16 @@ function constructComponentHostPath(componentIdentifier, subdir) {
  * Validate component index and get component identifier
  * @param {number} componentIndex - Component index to reference
  * @param {number} currentIndex - Current component's index
- * @param {object} fullAppSpecs - Full application specifications
+ * @param {object} fullAppSpec - Full application specifications
  * @param {string} appName - Application name
  * @returns {string} Component identifier
  * @throws {Error} If validation fails
  */
-function validateAndGetComponentIdentifier(componentIndex, currentIndex, fullAppSpecs, appName) {
+function validateAndGetComponentIdentifier(componentIndex, currentIndex, fullAppSpec, appName) {
   // Validate component index exists
-  if (fullAppSpecs.version >= 4) {
-    if (componentIndex < 0 || componentIndex >= fullAppSpecs.compose.length) {
-      throw new Error(`Invalid component index: ${componentIndex}. Valid range: 0-${fullAppSpecs.compose.length - 1}`);
+  if (fullAppSpec.version >= 4) {
+    if (componentIndex < 0 || componentIndex >= fullAppSpec.compose.length) {
+      throw new Error(`Invalid component index: ${componentIndex}. Valid range: 0-${fullAppSpec.compose.length - 1}`);
     }
 
     // Enforce ordering: can only reference previous components
@@ -80,7 +80,7 @@ function validateAndGetComponentIdentifier(componentIndex, currentIndex, fullApp
       );
     }
 
-    const componentName = fullAppSpecs.compose[componentIndex].name;
+    const componentName = fullAppSpec.compose[componentIndex].name;
     return `${componentName}_${appName}`;
   }
 
@@ -102,7 +102,7 @@ function validateAndGetComponentIdentifier(componentIndex, currentIndex, fullApp
  * @param {object} parsedMounts - Parsed mount data from mountParser
  * @param {string} identifier - Current component identifier (e.g., "component_appname")
  * @param {string} appName - Application name
- * @param {object} fullAppSpecs - Full application specifications (required for component refs)
+ * @param {object} fullAppSpec - Full application specifications (required for component refs)
  * @param {object} appSpecifications - Current component specifications
  * @param {boolean} useModernMounts - If true, return Mount objects instead of Binds strings (default: true)
  * @returns {Array<Object|string>} Array of Docker Mount objects or bind mount strings
@@ -134,13 +134,13 @@ function validateAndGetComponentIdentifier(componentIndex, currentIndex, fullApp
  * // - docs/multiple-mounts-api-reference.md
  * // - docs/multiple-mounts-guide.md
  */
-function constructVolumes(parsedMounts, identifier, appName, fullAppSpecs, appSpecifications, useModernMounts = true) {
+function constructVolumes(parsedMounts, identifier, appName, fullAppSpec, appSpecifications, useModernMounts = true) {
   const volumes = [];
 
   // Find current component's index (for validation)
   let currentComponentIndex;
-  if (fullAppSpecs && fullAppSpecs.version >= 4 && appSpecifications) {
-    currentComponentIndex = fullAppSpecs.compose.findIndex(
+  if (fullAppSpec && fullAppSpec.version >= 4 && appSpecifications) {
+    currentComponentIndex = fullAppSpec.compose.findIndex(
       (comp) => comp.name === appSpecifications.name,
     );
     if (currentComponentIndex === -1) {
@@ -177,7 +177,7 @@ function constructVolumes(parsedMounts, identifier, appName, fullAppSpecs, appSp
       case MountType.COMPONENT_PRIMARY:
       case MountType.COMPONENT_DIRECTORY: {
         // Component reference mounts
-        if (!fullAppSpecs) {
+        if (!fullAppSpec) {
           throw new Error(
             `Complete App Specification required for component reference mount: ${mount.containerPath}`,
           );
@@ -187,7 +187,7 @@ function constructVolumes(parsedMounts, identifier, appName, fullAppSpecs, appSp
         const componentIdentifier = validateAndGetComponentIdentifier(
           mount.componentIndex,
           currentComponentIndex,
-          fullAppSpecs,
+          fullAppSpec,
           appName,
         );
 
@@ -197,7 +197,7 @@ function constructVolumes(parsedMounts, identifier, appName, fullAppSpecs, appSp
 
       case MountType.COMPONENT_FILE: {
         // Component file reference mounts
-        if (!fullAppSpecs) {
+        if (!fullAppSpec) {
           throw new Error(
             `Complete App Specification required for component file mount: ${mount.containerPath}`,
           );
@@ -207,7 +207,7 @@ function constructVolumes(parsedMounts, identifier, appName, fullAppSpecs, appSp
         const componentIdentifier = validateAndGetComponentIdentifier(
           mount.componentIndex,
           currentComponentIndex,
-          fullAppSpecs,
+          fullAppSpec,
           appName,
         );
 
@@ -281,24 +281,24 @@ function getSyncthingMounts(parsedMounts) {
 /**
  * Validate mount configuration
  * @param {object} parsedMounts - Parsed mount data
- * @param {object} fullAppSpecs - Full application specifications
+ * @param {object} fullAppSpec - Full application specifications
  * @param {object} appSpecifications - Current component specifications (reserved for future use)
  * @throws {Error} If validation fails
  */
 // eslint-disable-next-line no-unused-vars
-function validateMountConfiguration(parsedMounts, fullAppSpecs, appSpecifications) {
+function validateMountConfiguration(parsedMounts, fullAppSpec, appSpecifications) {
   // Check that component references exist
   // eslint-disable-next-line no-restricted-syntax
   for (const mount of parsedMounts.additional) {
     if (mount.type === MountType.COMPONENT_PRIMARY
         || mount.type === MountType.COMPONENT_DIRECTORY
         || mount.type === MountType.COMPONENT_FILE) {
-      if (!fullAppSpecs) {
+      if (!fullAppSpec) {
         throw new Error('Component references require full application specifications');
       }
 
-      if (fullAppSpecs.version >= 4) {
-        if (mount.componentIndex < 0 || mount.componentIndex >= fullAppSpecs.compose.length) {
+      if (fullAppSpec.version >= 4) {
+        if (mount.componentIndex < 0 || mount.componentIndex >= fullAppSpec.compose.length) {
           throw new Error(`Invalid component index: ${mount.componentIndex}`);
         }
       }
