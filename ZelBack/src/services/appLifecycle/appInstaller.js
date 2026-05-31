@@ -4,6 +4,7 @@ const path = require('path');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const dockerService = require('../dockerService');
+const appNetworkLinker = require('./appNetworkLinker');
 const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -200,6 +201,10 @@ async function installApplication(instantiated, options = {}) {
       await performDockerCleanup(onStatus);
     }
 
+    // Verify every app this app shares a network with is installed locally and
+    // same-owner before any container is created — aborts early otherwise.
+    await appNetworkLinker.checkAppNetworkRequirements(instantiated);
+
     {
       let dockerNetworkAddrValue = Math.floor(Math.random() * 256);
       if (appsThatMightBeUsingOldGatewayIpAssignment.includes(appName)) {
@@ -266,6 +271,13 @@ async function installApplication(instantiated, options = {}) {
         .find(([, c]) => c.toDockerEnv().some((e) => e.startsWith('LOG=COLLECT')));
       const syslogTarget = syslogCollector ? syslogCollector[0] : null;
 
+      // No in-app collector: discover one in a linked (shareWith) app so a
+      // SEND component can ship cross-app. Resolved here (orchestrator) and
+      // passed down, so the docker primitive never depends on the linker.
+      const crossAppLogCollector = syslogTarget
+        ? null
+        : await appNetworkLinker.findLinkedAppLogCollector(instantiated);
+
       for (const [, component] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
         await installComponent(component, {
@@ -275,7 +287,13 @@ async function installApplication(instantiated, options = {}) {
           burstEligible,
           restartPolicy,
           syslogTarget,
+          crossAppLogCollector,
         });
+        // Attach the freshly created container to every linked app's network.
+        if (!test) {
+          // eslint-disable-next-line no-await-in-loop
+          await appNetworkLinker.connectComponentToLinkedApps(component.identifier, instantiated);
+        }
       }
     } catch (error) {
       if (!test) {
@@ -420,14 +438,10 @@ async function checkOrbitAppHealth(component, onStatus) {
 }
 
 /**
- * Install application (hard installation with Docker)
- * @param {object} appSpec - App specifications or component specifications
- * @param {string} appName - Application name
- * @param {boolean} isComponent - Whether this is a component
- * @param {object} res - Response object
- * @param {object} fullAppSpecs - Full app specifications
- * @param {boolean} test - Whether this is a test installation
- * @returns {Promise<void>} Installation result
+ * Install a single app component (pull image, create volume, create + start container).
+ * @param {object} component - DeploymentComponent to install
+ * @param {object} options - { onStatus, test, createVolumes, burstEligible, restartPolicy, extraEnv, syslogTarget, crossAppLogCollector }
+ * @returns {Promise<void>}
  */
 async function installComponent(component, options = {}) {
   const onStatus = options.onStatus || null;
@@ -437,6 +451,7 @@ async function installComponent(component, options = {}) {
   const restartPolicy = options.restartPolicy || null;
   const extraEnv = options.extraEnv || [];
   const syslogTarget = options.syslogTarget || null;
+  const crossAppLogCollector = options.crossAppLogCollector || null;
 
   const id = component.identifier;
   const appName = component.appName;
@@ -521,6 +536,7 @@ async function installComponent(component, options = {}) {
     restartPolicy,
     extraEnv,
     syslogTarget,
+    crossAppLogCollector,
   });
 
   if (test || !component.hasActiveStandbySyncthing()) {

@@ -2,101 +2,85 @@
  * App Network Linker
  *
  * Implements opt-in app-to-app network linking. An app owner links the app to
- * other apps by embedding a token in the app `description` text:
- *
- *     networkWith:[appA,appB]
- *
- * Brackets are required, quotes are optional, the key is matched
- * case-insensitively and names are comma separated. When the token is present,
- * before the app is installed or redeployed the node verifies every named app
- * is installed locally and owned by the same owner; otherwise the install
- * fails. Each of the app's component containers is then attached to the
- * private docker network of every linked app (`fluxDockerNetwork_<linked>`), so
- * it can reach that app's components by their docker DNS name
+ * other apps via the typed `network.shareWith` spec field (a list of app
+ * names). When set, before the app is installed or redeployed the node verifies
+ * every named app is installed locally and owned by the same owner; otherwise
+ * the install fails. Each of the app's component containers is then attached to
+ * the private docker network of every linked app (`fluxDockerNetwork_<linked>`),
+ * so it can reach that app's components by their docker DNS name
  * `flux<component>_<linkedApp>` — exactly as if both apps were a single app.
  *
- * This is purely node-local behaviour: it does not introduce an app
- * specification field, change validation, or touch any network consensus. An
- * app whose description has no (or a malformed) token behaves exactly as before.
+ * Declaration is one-directional (B lists A in shareWith; A declares nothing)
+ * but reachability is mutual. This is node-local behaviour; cross-node linking
+ * is `network.mesh`, a separate field.
  */
 
-const config = require('config');
-const dbHelper = require('../dbHelper');
+const appsRepository = require('../appDatabase/appsRepository');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const log = require('../../lib/log');
-const { localAppsInformation, APP_NAME_REGEX } = require('../utils/appConstants');
 
 /**
- * Parses the `networkWith:[...]` token out of an app description.
+ * Returns the linked app names declared by an app via `network.shareWith`,
+ * excluding any self reference and duplicates. Empty for legacy (v1-v8) and
+ * encrypted specs (no readable shareWith on this node).
  *
- * @param {string} description - app description text
- * @returns {string[]} unique, syntactically valid linked app names ([] if none)
- */
-function parseNetworkWith(description) {
-  if (typeof description !== 'string' || !description) {
-    return [];
-  }
-  const match = description.match(/\bnetworkWith\s*[:=]\s*\[([^\]]*)\]/i);
-  if (!match) {
-    return [];
-  }
-  const names = [];
-  const seen = new Set();
-  match[1].split(',').forEach((raw) => {
-    const name = raw.trim().replace(/^["']+|["']+$/g, '').trim();
-    const key = name.toLowerCase();
-    if (name && APP_NAME_REGEX.test(name) && !seen.has(key)) {
-      seen.add(key);
-      names.push(name);
-    }
-  });
-  return names;
-}
-
-/**
- * Returns the linked app names declared by an app, excluding any self
- * reference to the app itself.
- *
- * @param {object} appSpecs - full app specification
+ * @param {object} instantiated - InstantiatedSpec instance
  * @returns {string[]} linked app names
  */
-function getLinkedApps(appSpecs) {
-  if (!appSpecs || !appSpecs.name) {
+function getLinkedApps(instantiated) {
+  if (!instantiated || instantiated.isEncrypted) {
     return [];
   }
-  const selfName = String(appSpecs.name).toLowerCase();
-  return parseNetworkWith(appSpecs.description).filter((linked) => linked.toLowerCase() !== selfName);
+  const { spec } = instantiated;
+  const shareWith = spec && spec.network && Array.isArray(spec.network.shareWith)
+    ? spec.network.shareWith
+    : [];
+  if (!shareWith.length) {
+    return [];
+  }
+  const selfName = String(instantiated.name || '').toLowerCase();
+  const names = [];
+  const seen = new Set();
+  for (const raw of shareWith) {
+    if (typeof raw !== 'string') {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const key = raw.toLowerCase();
+    if (key && key !== selfName && !seen.has(key)) {
+      seen.add(key);
+      names.push(raw);
+    }
+  }
+  return names;
 }
 
 /**
  * Verifies every app this app is linked to is installed locally and owned by
  * the same owner. Throws otherwise, aborting the install/redeploy.
  *
- * @param {object} appSpecs - full app specification
+ * @param {object} instantiated - InstantiatedSpec instance of the parent app
  * @returns {Promise<boolean>} true when all network links are satisfied
  */
-async function checkAppNetworkRequirements(appSpecs) {
-  const linkedApps = getLinkedApps(appSpecs);
+async function checkAppNetworkRequirements(instantiated) {
+  const linkedApps = getLinkedApps(instantiated);
   if (!linkedApps.length) {
     return true;
   }
 
-  const dbopen = dbHelper.databaseConnection();
-  const appsDatabase = dbopen.db(config.database.appslocal.database);
-  const projection = { projection: { _id: 0, name: 1, owner: 1 } };
-
   // eslint-disable-next-line no-restricted-syntax
   for (const linkedApp of linkedApps) {
     // eslint-disable-next-line no-await-in-loop
-    const installed = await dbHelper.findOneInDatabase(appsDatabase, localAppsInformation, { name: linkedApp }, projection);
+    const installed = await appsRepository.getInstalledApp(linkedApp);
     if (!installed) {
-      throw new Error(`App '${linkedApp}' that '${appSpecs.name}' must be networked with is not installed on this node. Installation aborted.`);
+      throw new Error(`App '${linkedApp}' that '${instantiated.name}' must be networked with is not installed on this node. Installation aborted.`);
     }
-    if (installed.owner !== appSpecs.owner) {
-      throw new Error(`App '${linkedApp}' that '${appSpecs.name}' must be networked with is owned by a different owner. Installation aborted.`);
+    if (installed.owner !== instantiated.owner) {
+      throw new Error(`App '${linkedApp}' that '${instantiated.name}' must be networked with is owned by a different owner. Installation aborted.`);
     }
   }
-  log.info(`App network links satisfied for ${appSpecs.name}: ${linkedApps.join(', ')}`);
+  log.info(`App network links satisfied for ${instantiated.name}: ${linkedApps.join(', ')}`);
   return true;
 }
 
@@ -106,11 +90,11 @@ async function checkAppNetworkRequirements(appSpecs) {
  * components. Throws on a real connection failure so the install is rolled back.
  *
  * @param {string} componentContainerName - docker container name (flux<component>_<app>)
- * @param {object} fullAppSpecs - full app specification of the parent app
+ * @param {object} instantiated - InstantiatedSpec instance of the parent app
  * @returns {Promise<void>}
  */
-async function connectComponentToLinkedApps(componentContainerName, fullAppSpecs) {
-  const linkedApps = getLinkedApps(fullAppSpecs);
+async function connectComponentToLinkedApps(componentContainerName, instantiated) {
+  const linkedApps = getLinkedApps(instantiated);
   if (!linkedApps.length) {
     return;
   }
@@ -135,9 +119,7 @@ async function connectComponentToLinkedApps(componentContainerName, fullAppSpecs
 async function reconnectLinkedApps(appName) {
   let installedApps;
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    installedApps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, {}, { projection: { _id: 0 } });
+    installedApps = await appsRepository.listInstalledApps();
   } catch (error) {
     log.error(`reconnectLinkedApps: failed to read installed apps for ${appName}: ${error.message}`);
     return;
@@ -181,9 +163,7 @@ async function reconnectLinkedApps(appName) {
 async function reconcileAllAppNetworkLinks() {
   let installedApps;
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    installedApps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, {}, { projection: { _id: 0 } });
+    installedApps = await appsRepository.listInstalledApps();
   } catch (error) {
     log.error(`reconcileAllAppNetworkLinks: failed to read installed apps: ${error.message}`);
     return;
@@ -217,57 +197,49 @@ async function reconcileAllAppNetworkLinks() {
 }
 
 /**
- * For a SEND component being installed in an app whose own compose array does
- * NOT contain a LOG=COLLECT component, looks at every app this app is
- * networkWith-linked to and returns the first linked app that owns a COLLECT
- * component. The actual container name resolution happens in the caller.
+ * For a SEND component being installed in an app whose own components do NOT
+ * contain a LOG=COLLECT component, looks at every app this app is linked to and
+ * returns the first linked app that owns a COLLECT component. The actual
+ * container name resolution happens in the caller.
  *
- * Enterprise linked apps whose `compose` is blanked in the local DB and not
- * decryptable on this node are skipped — the SEND container will fall back to
- * json-file logging.
+ * Encrypted linked apps whose deployment cannot be built on this node are
+ * skipped — the SEND container falls back to json-file logging.
  *
- * @param {object} fullAppSpecs - app specification of the app being installed
+ * @param {object} instantiated - InstantiatedSpec instance of the app being installed
  * @returns {Promise<{linkedAppName: string, collectorComponentName: string}|null>}
  */
-async function findLinkedAppLogCollector(fullAppSpecs) {
-  const linkedApps = getLinkedApps(fullAppSpecs);
+async function findLinkedAppLogCollector(instantiated) {
+  const linkedApps = getLinkedApps(instantiated);
   if (!linkedApps.length) {
     return null;
   }
 
-  // Lazy require to avoid the circular dependency dockerService → appLifecycle/appNetworkLinker → appDatabase/registryManager → dockerService.
-  // eslint-disable-next-line global-require
-  const registryManager = require('../appDatabase/registryManager');
-
   // eslint-disable-next-line no-restricted-syntax
   for (const linkedAppName of linkedApps) {
-    let linkedSpec;
+    let deployment;
     try {
       // eslint-disable-next-line no-await-in-loop
-      linkedSpec = await registryManager.getApplicationSpecifications(linkedAppName);
+      deployment = await deploymentProvider.getInstalledDeployment(linkedAppName);
     } catch (error) {
-      log.warn(`findLinkedAppLogCollector: failed to read spec for ${linkedAppName}: ${error.message}`);
+      log.warn(`findLinkedAppLogCollector: failed to build deployment for ${linkedAppName}: ${error.message}`);
       // eslint-disable-next-line no-continue
       continue;
     }
-    if (!linkedSpec || !Array.isArray(linkedSpec.compose) || !linkedSpec.compose.length) {
-      // No compose to scan — typical for enterprise apps on non-Arcane nodes.
+    if (!deployment) {
+      // No deployment to scan — typical for encrypted apps on non-Arcane nodes.
       // eslint-disable-next-line no-continue
       continue;
     }
-    const collectorComponent = linkedSpec.compose.find((component) => {
-      const envs = (component && (component.environmentParameters || component.enviromentParameters)) || [];
-      return envs.some((env) => typeof env === 'string' && env.startsWith('LOG=COLLECT'));
-    });
-    if (collectorComponent && collectorComponent.name) {
-      return { linkedAppName, collectorComponentName: collectorComponent.name };
+    const collector = deployment.componentEntries().find(([, component]) => component
+      .toDockerEnv().some((env) => typeof env === 'string' && env.startsWith('LOG=COLLECT')));
+    if (collector) {
+      return { linkedAppName, collectorComponentName: collector[0] };
     }
   }
   return null;
 }
 
 module.exports = {
-  parseNetworkWith,
   getLinkedApps,
   checkAppNetworkRequirements,
   connectComponentToLinkedApps,
