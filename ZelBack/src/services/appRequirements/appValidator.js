@@ -15,6 +15,7 @@ const { deserializeSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
 const cryptoProvider = require('../providers/FluxOSCryptoProvider');
 const appsRepository = require('../appDatabase/appsRepository');
+const entitlementsState = require('../entitlementsState');
 const { peerManager } = require('../utils/peerState');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
@@ -74,6 +75,13 @@ async function resolveSubmission(appSpecification, {
 
   // STAGE 3 — runtime image registry + architecture checks
   await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner, isEncrypted });
+
+  // STAGE 4 — feature entitlements gate (v9 only): reject gated features the
+  // owner's on-chain policy groups do not grant at this height.
+  const cleartextSpec = spec.spec || spec;
+  if (cleartextSpec.version === 9 && typeof cleartextSpec.toCanonical === 'function') {
+    await entitlementsState.assertSpecEntitled(cleartextSpec, spec.owner, daemonHeight);
+  }
 
   // STAGE 5 — wire form for broadcast/storage; never cleartext for encrypted apps
   let broadcastBlob;
