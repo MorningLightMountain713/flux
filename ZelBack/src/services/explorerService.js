@@ -27,6 +27,7 @@ const { Privilege, authOf } = require('./utils/privileges');
 const { BlockCadence } = require('./utils/blockCadence');
 const { getSpecPolicy } = require('./utils/specLibs');
 const priceOracleState = require('./pricing/priceOracleState');
+const entitlementsState = require('./entitlementsState');
 
 const coinbaseFusionIndexCollection = config.database.daemon.collections.coinbaseFusionIndex; // fusion
 const utxoIndexCollection = config.database.daemon.collections.utxoIndex;
@@ -395,6 +396,9 @@ async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
       if (!isSenderFoundation) return;
       log.info(`PolicyGroupMessage at height ${height}: ${txid}`);
       await storeToCollection(policyGroupMessagesCollection, { txid, height, message });
+      if (entitlementsState.getPolicyGroupHistory()) {
+        entitlementsState.getPolicyGroupHistory().add(message, height);
+      }
       break;
     default:
       break;
@@ -1028,6 +1032,11 @@ async function restoreDatabaseToBlockheightState(height) {
   log.info('Rescanning Blockchain Parameters!');
   const databaseUpdates = dbHelper.onMaintenanceClient(dbopen.db(config.database.chainparams.database));
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, chainParamsMessagesCollection, query);
+  // Roll back policy-group chain state on reorg: prune the persisted messages
+  // above the restore height and drop the matching in-memory entries (the DB
+  // query keeps blocks <= height, so the history drops >= height + 1).
+  await dbHelper.removeDocumentsFromCollection(databaseUpdates, policyGroupMessagesCollection, query);
+  entitlementsState.removeAtHeight(height + 1);
   log.info('Rescan completed');
   return true;
 }
@@ -1481,6 +1490,11 @@ async function initiateBlockProcessor(restoreDatabase, deepRestore) {
         log.error(`zelAppSpecifications migration failed: ${error.message}`);
       }
     }
+    // Rebuild in-memory chain-message state from persisted messages before the
+    // scan resumes adding to it. The symmetric rebuildPriceOracleState() belongs
+    // here too but is left to the pricing workstream (its state is still
+    // unconsumed) — see fluxos/FLUXOS_PRICING_WORKSTREAM.md.
+    await entitlementsState.rebuildPolicyGroupState();
 
     let scannedBlockHeight = await getScannedBlockHeightFromDb(database);
 
