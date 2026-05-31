@@ -332,7 +332,12 @@ describe('nodeConfirmationService', () => {
 
   describe('daemon staleness', () => {
     async function advanceByMinutes(minutes) {
-      await clock.tickAsync(minutes * 60 * 1000);
+      // Jump the wall clock forward, then fire a single poll so it observes the
+      // elapsed window. Ticking the full span would fire one poll per 30s
+      // interval (252 polls for 126 min, 642 for 321 min); under full-suite
+      // load those event-loop turns flake against mocha's 2s timeout.
+      clock.setSystemTime(Date.now() + minutes * 60 * 1000);
+      await clock.tickAsync(30 * 1000);
     }
 
     it('should not be stale initially', async () => {
