@@ -12,7 +12,6 @@ const {
   localAppsInformation, globalAppsInformation, globalAppsMessages, ANNOUNCE_CYCLE_WAIT_MS,
 } = require('../utils/appConstants');
 const config = require('config');
-// const advancedWorkflows = require('./advancedWorkflows'); // Moved to dynamic require to avoid circular dependency
 const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
