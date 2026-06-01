@@ -7,8 +7,7 @@ const os = require('os');
 const bitcoinMessage = require('bitcoinjs-message');
 const proxyquire = require('proxyquire');
 const { PassThrough } = require('stream');
-const qs = require('qs');
-const config = require('config');
+const log = require('../../ZelBack/src/lib/log');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
@@ -16,7 +15,7 @@ const { requireMongo } = require('./dbTestHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
-const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 
 const adminConfig = {
@@ -29,6 +28,9 @@ const adminConfig = {
     testnet: true,
   },
 };
+
+// Set globalThis.userconfig for idService which reads from globalThis
+globalThis.userconfig = adminConfig;
 
 const idService = proxyquire(
   '../../ZelBack/src/services/idService',
@@ -47,23 +49,232 @@ const generateResponse = () => {
 };
 
 describe('idService tests', () => {
-  // The modules idService calls read the user config from globalThis. Set for
-  // these tests only: mocha loads every file before running any.
-  let originalUserConfig;
-  before(() => {
-    originalUserConfig = globalThis.userconfig;
-    globalThis.userconfig = adminConfig;
-  });
   before(requireMongo);
-  after(() => {
-    globalThis.userconfig = originalUserConfig;
+
+  describe('confirmNodeTierHardware tests', () => {
+    let osTotalmemStub;
+    let osCpusStub;
+    let tierStub;
+    let collateralStub;
+    let logSpy;
+
+    beforeEach(() => {
+      osTotalmemStub = sinon.stub(os, 'totalmem');
+      osCpusStub = sinon.stub(os, 'cpus');
+      tierStub = sinon.stub(generalService, 'nodeTier');
+      collateralStub = sinon.stub(generalService, 'nodeCollateral');
+      logSpy = sinon.spy(log, 'error');
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('should return false and log error if stratus (100000) has less than 8 cpu threads', async () => {
+      tierStub.resolves('bamf');
+      collateralStub.resolves(100000);
+      osTotalmemStub.returns(30 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (4) below Stratus requirements')));
+    });
+
+    it('should return false and log error if stratus (100000) has less than 30gb ram', async () => {
+      tierStub.resolves('bamf');
+      collateralStub.resolves(100000);
+      osTotalmemStub.returns(29 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (29) below Stratus requirements')));
+    });
+
+    it('should return true if stratus (100000) matches requirements', async () => {
+      tierStub.resolves('bamf');
+      collateralStub.resolves(100000);
+      osTotalmemStub.returns(30 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(true);
+      sinon.assert.notCalled(logSpy);
+    });
+
+    it('should return false and log error if stratus (40000) has less than 16 cpu threads', async () => {
+      tierStub.resolves('bamf');
+      collateralStub.resolves(40000);
+      osTotalmemStub.returns(61 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (15) below new Stratus requirements')));
+    });
+
+    it('should return false and log error if stratus (40000) has less than 61gb ram', async () => {
+      tierStub.resolves('bamf');
+      collateralStub.resolves(40000);
+      osTotalmemStub.returns(60 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (60) below new Stratus requirements')));
+    });
+
+    it('should return true if stratus (40000) matches requirements', async () => {
+      tierStub.resolves('bamf');
+      collateralStub.resolves(40000);
+      osTotalmemStub.returns(61 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(true);
+      sinon.assert.notCalled(logSpy);
+    });
+
+    it('should return false and log error if Nimbus (25000) has less than 4 cpu threads', async () => {
+      tierStub.resolves('super');
+      collateralStub.resolves(25000);
+      osTotalmemStub.returns(7 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (3) below Nimbus requirements')));
+    });
+
+    it('should return false and log error if Nimbus (25000) has less than 7gb ram', async () => {
+      tierStub.resolves('super');
+      collateralStub.resolves(25000);
+      osTotalmemStub.returns(6 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (6) below Nimbus requirements')));
+    });
+
+    it('should return true if Nimbus (25000) matches requirements', async () => {
+      tierStub.resolves('super');
+      collateralStub.resolves(25000);
+      osTotalmemStub.returns(8 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(true);
+      sinon.assert.notCalled(logSpy);
+    });
+
+    it('should return false and log error if Nimbus (12500) has less than 8 cpu threads', async () => {
+      tierStub.resolves('super');
+      collateralStub.resolves(12500);
+      osTotalmemStub.returns(30 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (7) below new Nimbus requirements')));
+    });
+
+    it('should return false and log error if Nimbus (12500) has less than 30gb ram', async () => {
+      tierStub.resolves('super');
+      collateralStub.resolves(12500);
+      osTotalmemStub.returns(29 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (29) below new Nimbus requirements')));
+    });
+
+    it('should return true if Nimbus (12500) matches requirements', async () => {
+      tierStub.resolves('super');
+      collateralStub.resolves(12500);
+      osTotalmemStub.returns(30 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(true);
+      sinon.assert.notCalled(logSpy);
+    });
+
+    it('should return false and log error if Cumulus (10000) has less than 2 cpu threads', async () => {
+      tierStub.resolves('basic');
+      collateralStub.resolves(10000);
+      osTotalmemStub.returns(3 * 1024 ** 3);
+      osCpusStub.returns([1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (1) below Cumulus requirements')));
+    });
+
+    it('should return false and log error if Cumulus (10000) has less than 3gb ram', async () => {
+      tierStub.resolves('basic');
+      collateralStub.resolves(10000);
+      osTotalmemStub.returns(2 * 1024 ** 3);
+      osCpusStub.returns([1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (2) below Cumulus requirements')));
+    });
+
+    it('should return true if Cumulus (10000) matches requirements', async () => {
+      tierStub.resolves('basic');
+      collateralStub.resolves(10000);
+      osTotalmemStub.returns(3 * 1024 ** 3);
+      osCpusStub.returns([1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(true);
+      sinon.assert.notCalled(logSpy);
+    });
+
+    it('should return false and log error if Cumulus (1000) has less than 4 cpu threads', async () => {
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
+      osTotalmemStub.returns(3 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (3) below new Cumulus requirements')));
+    });
+
+    it('should return false and log error if Cumulus (1000) has less than 3gb ram', async () => {
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
+      osTotalmemStub.returns(2 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(false);
+      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (2) below new Cumulus requirements')));
+    });
+
+    it('should return true if Cumulus (1000) matches requirements', async () => {
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
+      osTotalmemStub.returns(3 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1]);
+      const response = await idService.confirmNodeTierHardware();
+
+      expect(response).to.eql(true);
+      sinon.assert.notCalled(logSpy);
+    });
   });
 
   describe('loginPhrase tests', () => {
     let osTotalmemStub;
     let osCpusStub;
-    let collateralTierStub;
-    let getDOSStateStub;
+    let tierStub;
+    let collateralStub;
+    let getDosDataStub;
 
     before(async () => {
       await dbHelper.initiateDB();
@@ -72,8 +283,9 @@ describe('idService tests', () => {
     beforeEach(() => {
       osTotalmemStub = sinon.stub(os, 'totalmem');
       osCpusStub = sinon.stub(os, 'cpus');
-      collateralTierStub = sinon.stub(generalService, 'nodeCollateralTier');
-      getDOSStateStub = sinon.stub(fluxNetworkHelper, 'getDOSState');
+      tierStub = sinon.stub(generalService, 'nodeTier');
+      collateralStub = sinon.stub(generalService, 'nodeCollateral');
+      getDosDataStub = sinon.stub(nodeDosState, 'getDosData');
       syncthingService.setSyncthingRunningState(true);
       // only checks for docker availablity
       sinon.stub(dockerService, 'dockerListImages').returns(true);
@@ -85,7 +297,8 @@ describe('idService tests', () => {
 
     it('should return error if hw reqs are not met', async () => {
       const res = generateResponse();
-      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
       osTotalmemStub.returns(1 * 1024 ** 3);
       osCpusStub.returns([1]);
       const expectedResponse = {
@@ -93,7 +306,7 @@ describe('idService tests', () => {
         data: {
           code: undefined,
           name: 'Error',
-          message: 'Node Total Ram (1) below new Cumulus requirements',
+          message: 'Node hardware requirements not met',
         },
       };
 
@@ -104,16 +317,14 @@ describe('idService tests', () => {
 
     it('should return error if dosState > 11 and message is Flux IP detection failed', async () => {
       const res = generateResponse();
-      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 11,
           dosMessage: 'Flux IP detection failed',
-        },
-      });
+        });
 
       const expectedResponse = {
         status: 'error',
@@ -131,16 +342,14 @@ describe('idService tests', () => {
 
     it('should return error if dosState > 11 and message is Flux collision detection', async () => {
       const res = generateResponse();
-      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 11,
           dosMessage: 'Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.',
-        },
-      });
+        });
 
       const expectedResponse = {
         status: 'error',
@@ -158,16 +367,14 @@ describe('idService tests', () => {
 
     it('should return CONNERROR error if dosState > 11 and message is anything else', async () => {
       const res = generateResponse();
-      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 11,
           dosMessage: 'test',
-        },
-      });
+        });
 
       const expectedResponse = {
         status: 'error',
@@ -194,16 +401,14 @@ describe('idService tests', () => {
     // still take the node out, rather than reading as healthy.
     it('fails on the dos score alone, even with no message paired to it', async () => {
       const res = generateResponse();
-      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 11,
           dosMessage: null,
-        },
-      });
+        });
 
       await idService.loginPhrase(undefined, res);
 
@@ -217,16 +422,14 @@ describe('idService tests', () => {
 
     it('fails on a message alone, with the score still at zero', async () => {
       const res = generateResponse();
-      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 0,
           dosMessage: 'Flux IP detection failed',
-        },
-      });
+        });
 
       await idService.loginPhrase(undefined, res);
 
@@ -241,67 +444,276 @@ describe('idService tests', () => {
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
       const res = generateResponse();
-      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 0,
           dosMessage: null,
-        },
-      });
+        });
 
       await idService.loginPhrase(undefined, res);
 
       sinon.assert.calledOnce(insertintoDBStub);
       sinon.assert.calledOnceWithMatch(res.json, { status: 'success', data: sinon.match.string });
     });
+  });
 
-    describe('gated on nodeHealthService.checkNodeFitness', () => {
+  describe('nodeHealth / checkNodeFitness tests', () => {
+    let osTotalmemStub;
+    let osCpusStub;
+    let tierStub;
+    let collateralStub;
+    let getDosDataStub;
+
+    before(async () => {
+      await dbHelper.initiateDB();
+    });
+
+    const healthyHardware = () => {
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
+      osTotalmemStub.returns(8 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1]);
+      getDosDataStub.returns({ dosState: 0, dosMessage: null });
+    };
+
+    beforeEach(() => {
+      osTotalmemStub = sinon.stub(os, 'totalmem');
+      osCpusStub = sinon.stub(os, 'cpus');
+      tierStub = sinon.stub(generalService, 'nodeTier');
+      collateralStub = sinon.stub(generalService, 'nodeCollateral');
+      getDosDataStub = sinon.stub(nodeDosState, 'getDosData');
+      syncthingService.setSyncthingRunningState(true);
+      sinon.stub(dockerService, 'dockerListImages').returns(true);
+    });
+
+    afterEach(() => {
+      syncthingService.setSyncthingRunningState(true);
+      sinon.restore();
+    });
+
+    it('nodeHealth reports success with per-check data when the node is fit', async () => {
+      healthyHardware();
+      const res = generateResponse();
+
+      await idService.nodeHealth(undefined, res);
+
+      sinon.assert.calledOnceWithMatch(res.json, {
+        status: 'success',
+        data: { db: 'ok', syncthing: 'ok', docker: 'ok', hardware: 'ok', dos: 'ok', appsDos: 'ok' },
+      });
+    });
+
+    it('checkNodeFitness returns ok with the checks when the node is fit', async () => {
+      healthyHardware();
+
+      const fitness = await idService.checkNodeFitness();
+
+      expect(fitness.ok).to.equal(true);
+      expect(fitness.error).to.equal(null);
+      expect(fitness.checks.syncthing).to.equal('ok');
+    });
+
+    it('nodeHealth gates on hardware exactly as loginPhrase does', async () => {
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
+      osTotalmemStub.returns(1 * 1024 ** 3);
+      osCpusStub.returns([1]);
+      const res = generateResponse();
+
+      await idService.nodeHealth(undefined, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'error',
+        data: { code: undefined, name: 'Error', message: 'Node hardware requirements not met' },
+      });
+    });
+
+    it('nodeHealth gates on syncthing - a sustained outage fails the node', async () => {
+      healthyHardware();
+      syncthingService.setSyncthingRunningState(false);
+      const res = generateResponse();
+
+      await idService.nodeHealth(undefined, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'error',
+        data: { code: undefined, name: 'Error', message: 'Syncthing is not running properly' },
+      });
+    });
+
+    it('loginPhrase gates on syncthing the same way, through the shared check', async () => {
+      healthyHardware();
+      syncthingService.setSyncthingRunningState(false);
+      const res = generateResponse();
+
+      await idService.loginPhrase(undefined, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'error',
+        data: { code: undefined, name: 'Error', message: 'Syncthing is not running properly' },
+      });
+    });
+
+    // The boot defect, at the layer that reported it. The node stamped itself
+    // healthy at module load and the sentinel started behind an unbounded wait
+    // for the daemon, so a node whose fluxd was slow to warm up went stale
+    // before a single probe had run - and then told fluxbench, for minutes on
+    // end, that the operator's syncthing was broken. Nothing had looked at it.
+    describe('with nothing having measured syncthing yet', () => {
       beforeEach(() => {
-        collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
-        osTotalmemStub.returns(8 * 1024 ** 3);
-        osCpusStub.returns([1, 1, 1, 1]);
-        getDOSStateStub.returns({ status: 'success', data: { dosState: 0, dosMessage: null } });
-      });
-
-      afterEach(() => {
-        syncthingService.setSyncthingRunningState(true);
-      });
-
-      it('refuses with the failing check\'s message when syncthing is broken', async () => {
-        sinon.stub(syncthingService, 'ownsSyncthing').returns(true);
-        syncthingService.setSyncthingRunningState(false);
-        const res = generateResponse();
-
-        await idService.loginPhrase(undefined, res);
-
-        sinon.assert.calledOnceWithExactly(res.json, {
-          status: 'error',
-          data: { code: undefined, name: 'Error', message: 'Syncthing is not running properly' },
-        });
-      });
-
-      it('answers a phrase while syncthing is unmeasured', async () => {
         syncthingService.setSyncthingUnmeasured();
+      });
+
+      it('does not refuse the node for a check it has not run', async () => {
+        healthyHardware();
+
+        const fitness = await idService.checkNodeFitness();
+
+        expect(fitness.ok, 'a node was taken off the network over a probe that had never happened').to.equal(true);
+      });
+
+      it('says unmeasured rather than claiming either verdict', async () => {
+        healthyHardware();
+
+        const fitness = await idService.checkNodeFitness();
+
+        expect(fitness.checks.syncthing).to.equal('unmeasured');
+      });
+
+      it('loginPhrase answers a phrase rather than a syncthing error', async () => {
+        healthyHardware();
         const res = generateResponse();
 
         await idService.loginPhrase(undefined, res);
 
         const [answer] = res.json.firstCall.args;
-        expect(answer.status, 'a check that could not be run refused a login phrase').to.equal('success');
+        expect(answer.status, 'the boot window refused a login phrase and failed the benchmark').to.equal('success');
+      });
+    });
+
+    // /id/loginphrase is uncached and fluxbench retries it on a 30s sleep while a
+    // node is failing, so a line per refusal is ~2,880 a day for one unchanged
+    // state - and the line that says WHEN it started is buried under thousands
+    // of copies of itself. The transition is the event; the condition is not.
+    describe('fitness logging says when the verdict changed, not that it holds', () => {
+      let warnStub;
+      let infoStub;
+
+      beforeEach(async () => {
+        healthyHardware();
+        // Normalise the module's remembered verdict through the real function,
+        // so these tests do not inherit whatever the previous one left.
+        await idService.checkNodeFitness();
+        warnStub = sinon.stub(log, 'warn');
+        infoStub = sinon.stub(log, 'info');
       });
 
-      it('answers a phrase while the daemon is warming up', async () => {
-        collateralTierStub.rejects({ code: -28, name: 'Error', message: 'Loading block index...' });
-        const res = generateResponse();
+      it('says a node is unfit once, however often it is asked', async () => {
+        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
 
-        await idService.loginPhrase(undefined, res);
+        await idService.checkNodeFitness();
+        await idService.checkNodeFitness();
+        await idService.checkNodeFitness();
 
-        const [answer] = res.json.firstCall.args;
-        expect(answer.status).to.equal('success');
+        expect(
+          warnStub.callCount,
+          'every refusal logged, so a node sitting in DOS writes a line every time anyone asks',
+        ).to.equal(1);
       });
+
+      // The case that makes keying on the code wrong: the score accrues while
+      // the condition is the same one.
+      it('does not speak again as the dos score climbs under the same message', async () => {
+        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
+        await idService.checkNodeFitness();
+
+        getDosDataStub.returns({ dosState: 13, dosMessage: 'Flux IP detection failed' });
+        await idService.checkNodeFitness();
+
+        expect(
+          warnStub.callCount,
+          'a climbing score counted as a new fault, which is the flood keying on the message exists to stop',
+        ).to.equal(1);
+      });
+
+      it('speaks again when a different check is the one failing', async () => {
+        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
+        await idService.checkNodeFitness();
+
+        getDosDataStub.returns({ dosState: 0, dosMessage: null });
+        osTotalmemStub.returns(1 * 1024 ** 3);
+        osCpusStub.returns([1]);
+        await idService.checkNodeFitness();
+
+        expect(warnStub.callCount, 'the node started failing for a new reason and said nothing').to.equal(2);
+        expect(warnStub.secondCall.args[0]).to.contain('hardware');
+      });
+
+      it('says so once when the node recovers, and not again', async () => {
+        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
+        await idService.checkNodeFitness();
+
+        healthyHardware();
+        await idService.checkNodeFitness();
+        await idService.checkNodeFitness();
+
+        const recovered = infoStub.getCalls().filter((c) => String(c.args[0]).includes('fit to serve'));
+        expect(recovered.length, 'recovery was silent, or repeated on every healthy pass').to.equal(1);
+      });
+    });
+
+    // The syncthing gate asks whether the operator has broken a syncthing FluxOS
+    // can do something about, so it is held to the nodes that own the daemon -
+    // the same question the repair path is held to. Where we do not own it,
+    // FluxOS cannot restart it, and failing the node would take it off the
+    // network for a fault it cannot repair. Reported, not fatal.
+    //
+    // Stubbed on ownsSyncthing rather than set through FLUXOS_PATH: the node
+    // type is no longer what decides this, and a test that reaches the branch
+    // through the old variable would pass while the branch had moved.
+    describe('where FluxOS does not own syncthing, the outage is reported, not fatal', () => {
+      beforeEach(() => {
+        sinon.stub(syncthingService, 'ownsSyncthing').returns(false);
+      });
+
+      it('reports syncthing degraded and stays fit', async () => {
+        healthyHardware();
+        syncthingService.setSyncthingRunningState(false);
+
+        const fitness = await idService.checkNodeFitness();
+
+        expect(fitness.ok, 'a node was failed for a syncthing it cannot restart').to.equal(true);
+        expect(fitness.checks.syncthing, 'the outage went unreported instead of being shown').to.equal('degraded');
+      });
+
+      it('still fails on a check that is not syncthing', async () => {
+        healthyHardware();
+        syncthingService.setSyncthingRunningState(false);
+        osTotalmemStub.returns(1 * 1024 ** 3);
+        osCpusStub.returns([1]);
+
+        const fitness = await idService.checkNodeFitness();
+
+        expect(fitness.ok, 'the carve-out let a genuinely unfit node through').to.equal(false);
+        expect(fitness.error.message).to.equal('Node hardware requirements not met');
+      });
+    });
+
+    // The other side of the same question, and the case that used to be decided
+    // differently here than in syncthingService: a node whose syncthing FluxOS
+    // does own is still refused for it.
+    it('refuses a node whose own syncthing is broken', async () => {
+      healthyHardware();
+      sinon.stub(syncthingService, 'ownsSyncthing').returns(true);
+      syncthingService.setSyncthingRunningState(false);
+
+      const fitness = await idService.checkNodeFitness();
+
+      expect(fitness.ok).to.equal(false);
+      expect(fitness.error.message).to.equal('Syncthing is not running properly');
     });
   });
 
@@ -346,6 +758,10 @@ describe('idService tests', () => {
     let bitcoinMessageStub;
 
     beforeEach(() => {
+      // A successful login defers stripping the signature from the database by
+      // a minute. Left real, that timer outlives this file and writes to the
+      // database against restored stubs.
+      sinon.useFakeTimers({ toFake: ['setTimeout'], shouldAdvanceTime: true });
       bitcoinMessageStub = sinon.stub(bitcoinMessage, 'verify');
     });
 
@@ -670,7 +1086,6 @@ describe('idService tests', () => {
         loginPhrase: `${timestamp - 10000}11111111111111111111111111111`,
       });
       sinon.stub(dbHelper, 'insertOneToDatabase').resolves(true);
-      sinon.stub(dbHelper, 'findOneAndUpdateInDatabase').resolves({ loginPhrase: 'used' });
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
       const req = {
@@ -697,70 +1112,6 @@ describe('idService tests', () => {
       await serviceHelper.delay(100);
 
       sinon.assert.calledOnceWithMatch(res.json, expectedError);
-    });
-
-    const loginWithPhrase = async (claimed) => {
-      bitcoinMessageStub.returns(true);
-      const timestamp = Date.now();
-      const message = `${timestamp - 300000}11111111111111111111111111111`;
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves({ loginPhrase: message });
-      const insertStub = sinon.stub(dbHelper, 'insertOneToDatabase').resolves(true);
-      sinon.stub(dbHelper, 'findOneAndUpdateInDatabase').callsFake(claimed);
-      await dbHelper.initiateDB();
-      const mockStream = new PassThrough();
-      mockStream.push(JSON.stringify({ zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg', signature: '1234356asdf', message }));
-      mockStream.end();
-      const res = generateResponse();
-      await idService.verifyLogin(mockStream, res);
-      await serviceHelper.delay(100);
-      return { res, insertStub };
-    };
-
-    it('writes no login when its phrase cannot be marked used', async () => {
-      const { res, insertStub } = await loginWithPhrase(async () => { throw new Error('connection timed out'); });
-
-      sinon.assert.notCalled(insertStub);
-      sinon.assert.calledOnceWithMatch(res.json, { status: 'error' });
-    });
-
-    it('writes no login when another request used its phrase first', async () => {
-      const { res, insertStub } = await loginWithPhrase(async () => null);
-
-      sinon.assert.notCalled(insertStub);
-      sinon.assert.calledOnceWithMatch(res.json, { status: 'error', data: { message: 'Signed message is no longer valid. Please request a new one.' } });
-    });
-
-    it('should keep the signature off the login, in its own collection, written first and with no timer', async () => {
-      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'], shouldAdvanceTime: true });
-      bitcoinMessageStub.returns(true);
-      const timestamp = Date.now();
-      const message = `${timestamp - 300000}11111111111111111111111111111`;
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves({ loginPhrase: message });
-      sinon.stub(dbHelper, 'findOneAndUpdateInDatabase').resolves({ loginPhrase: message });
-      const insertStub = sinon.stub(dbHelper, 'insertOneToDatabase').resolves(true);
-      await dbHelper.initiateDB();
-      dbHelper.databaseConnection();
-      const mockStream = new PassThrough();
-      mockStream.push(JSON.stringify({ zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg', signature: '1234356asdf', message }));
-      mockStream.end();
-      const res = generateResponse();
-
-      await idService.verifyLogin(mockStream, res);
-      await serviceHelper.delay(100);
-
-      const signatureInsert = insertStub.withArgs(sinon.match.any, 'loginsignatures');
-      const loginInsert = insertStub.withArgs(sinon.match.any, 'loggedusers');
-      sinon.assert.calledOnceWithExactly(signatureInsert, sinon.match.any, 'loginsignatures', {
-        loginPhrase: message,
-        signature: '1234356asdf',
-        createdAt: sinon.match.date,
-      });
-      sinon.assert.calledOnce(loginInsert);
-      expect(loginInsert.firstCall.args[2]).to.not.have.property('signature');
-      sinon.assert.callOrder(signatureInsert, loginInsert);
-      // the database driver keeps its own short timers; a login schedules nothing
-      const minuteOut = Object.values(clock.timers).filter((timer) => timer.delay >= 60000);
-      expect(minuteOut).to.have.length(0);
     });
   });
 
@@ -1205,13 +1556,13 @@ describe('idService tests', () => {
     });
 
     it('should return proper message if user is fluxTeamFluxID', async () => {
-      dbStub.withArgs(sinon.match.any, 'loggedusers').resolves({
+      dbStub.resolves({
         zelid: adminConfig.fluxTeamFluxID,
         loginPhrase: '12333345656',
+        signature: 'signature1',
         createdAt: '168450311',
         expireAt: '168460311',
       });
-      dbStub.withArgs(sinon.match.any, 'loginsignatures').resolves({ loginPhrase: '12333345656', signature: 'signature1' });
       const ws = generateWebsocket();
       const req = {
         params: {
@@ -1226,13 +1577,13 @@ describe('idService tests', () => {
     });
 
     it('should return proper message if user is admin', async () => {
-      dbStub.withArgs(sinon.match.any, 'loggedusers').resolves({
+      dbStub.resolves({
         zelid: adminConfig.initial.zelid,
         loginPhrase: '12333345656',
+        signature: 'signature1',
         createdAt: '168450311',
         expireAt: '168460311',
       });
-      dbStub.withArgs(sinon.match.any, 'loginsignatures').resolves({ loginPhrase: '12333345656', signature: 'signature1' });
       const ws = generateWebsocket();
       const req = {
         params: {
@@ -1246,25 +1597,6 @@ describe('idService tests', () => {
       sinon.assert.calledOnceWithExactly(
         ws.send,
         'status=success&data%5Bmessage%5D=Successfully%20logged%20in&data%5Bzelid%5D=1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC&data%5BloginPhrase%5D=12333345656&data%5Bsignature%5D=signature1&data%5Bprivilage%5D=admin&data%5BcreatedAt%5D=168450311&data%5BexpireAt%5D=168460311',
-      );
-    });
-
-    it('should answer a login without its signature once the signature has expired', async () => {
-      dbStub.withArgs(sinon.match.any, 'loggedusers').resolves({
-        zelid: adminConfig.initial.zelid,
-        loginPhrase: '12333345656',
-        createdAt: '168450311',
-        expireAt: '168460311',
-      });
-      dbStub.withArgs(sinon.match.any, 'loginsignatures').resolves(null);
-      const ws = generateWebsocket();
-
-      await idService.wsRespondLoginPhrase(ws, '12333345656');
-      await serviceHelper.delay(150);
-
-      sinon.assert.calledOnceWithExactly(
-        ws.send,
-        'status=success&data%5Bmessage%5D=Successfully%20logged%20in&data%5Bzelid%5D=1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC&data%5BloginPhrase%5D=12333345656&data%5Bprivilage%5D=admin&data%5BcreatedAt%5D=168450311&data%5BexpireAt%5D=168460311',
       );
     });
 
@@ -1285,339 +1617,6 @@ describe('idService tests', () => {
         ws.send,
         'status=error&data%5Bname%5D=error%20message&data%5Bmessage%5D=Unknown%20error',
       );
-    });
-  });
-
-  describe('a login page waiting on its phrase', () => {
-    const zelid = '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg';
-    let findOne;
-    let insert;
-    let claim;
-    let phrase;
-    // the phrase's record: absent, or as issued, or marked used
-    let phraseRecord;
-
-    const page = () => ({ send: sinon.stub(), close: sinon.stub() });
-    const sentMessage = (ws) => qs.parse(ws.send.firstCall.args[0]);
-    async function login() {
-      const stream = new PassThrough();
-      stream.push(JSON.stringify({ zelid, signature: '1234356asdf', message: phrase }));
-      stream.end();
-      const res = generateResponse();
-      await idService.verifyLogin(stream, res);
-      await serviceHelper.delay(50);
-      return res;
-    }
-
-    beforeEach(async () => {
-      sinon.stub(bitcoinMessage, 'verify').returns(true);
-      phrase = `${Date.now() - 60000}11111111111111111111111111111`;
-      phraseRecord = { loginPhrase: phrase };
-      findOne = sinon.stub(dbHelper, 'findOneInDatabase');
-      findOne.withArgs(sinon.match.any, 'loggedusers').resolves(null);
-      // a login asks for the phrase unused; the page asks for it in any state
-      findOne.withArgs(sinon.match.any, 'activeloginphrases').callsFake(async (db, coll, query) => {
-        if (!phraseRecord) return null;
-        if (query.usedAt && phraseRecord.usedAt) return null;
-        return phraseRecord;
-      });
-      insert = sinon.stub(dbHelper, 'insertOneToDatabase').resolves(true);
-      claim = sinon.stub(dbHelper, 'findOneAndUpdateInDatabase').callsFake(async () => {
-        if (!phraseRecord || phraseRecord.usedAt) return null;
-        phraseRecord = { ...phraseRecord, usedAt: new Date() };
-        return phraseRecord;
-      });
-      await dbHelper.initiateDB();
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('is told the login the moment it is written, and reads nothing more', async () => {
-      const ws = page();
-      await idService.wsRespondLoginPhrase(ws, phrase);
-
-      await login();
-
-      sinon.assert.calledOnce(ws.send);
-      expect(sentMessage(ws)).to.deep.include({ status: 'success' });
-      expect(sentMessage(ws).data).to.include({ zelid, loginPhrase: phrase, message: 'Successfully logged in' });
-      sinon.assert.calledOnceWithExactly(ws.close, 4012);
-      sinon.assert.calledOnce(findOne.withArgs(sinon.match.any, 'loggedusers'));
-    });
-
-    it('is told the login when it connects after the phrase is used and before the login is written', async () => {
-      let writeLogin;
-      insert.withArgs(sinon.match.any, 'loggedusers').callsFake(() => new Promise((resolve) => { writeLogin = resolve; }));
-      const loggingIn = login();
-      await serviceHelper.delay(20);
-      expect(phraseRecord.usedAt, 'the phrase was not used, so this proves nothing').to.be.a('date');
-
-      const ws = page();
-      await idService.wsRespondLoginPhrase(ws, phrase);
-      sinon.assert.notCalled(ws.send);
-      writeLogin(true);
-      await loggingIn;
-
-      expect(sentMessage(ws)).to.deep.include({ status: 'success' });
-    });
-
-    it('is told the login when it is written while the page is still reading', async () => {
-      let answerRead;
-      findOne.withArgs(sinon.match.any, 'loggedusers').callsFake(() => new Promise((resolve) => { answerRead = resolve; }));
-      const ws = page();
-      const connecting = idService.wsRespondLoginPhrase(ws, phrase);
-
-      await login();
-      answerRead(null);
-      await connecting;
-
-      expect(sentMessage(ws)).to.deep.include({ status: 'success' });
-    });
-
-    it('is told the login failed once its phrase is used and the login cannot be written', async () => {
-      insert.withArgs(sinon.match.any, 'loggedusers').rejects(new Error('connection timed out'));
-      const ws = page();
-      await idService.wsRespondLoginPhrase(ws, phrase);
-
-      await login();
-
-      expect(sentMessage(ws)).to.deep.include({ status: 'error' });
-      expect(sentMessage(ws).data.message).to.equal('connection timed out');
-    });
-
-    it('is told its phrase is no longer valid when it expires with no login', async () => {
-      const clock = sinon.useFakeTimers({ now: Date.now(), toFake: ['setTimeout', 'clearTimeout', 'Date'] });
-      try {
-        const ws = page();
-        await idService.wsRespondLoginPhrase(ws, phrase);
-        await clock.tickAsync(14 * 60 * 1000 - 1000);
-        sinon.assert.notCalled(ws.send);
-
-        await clock.tickAsync(1000);
-
-        expect(sentMessage(ws).data.message).to.equal('Signed message is no longer valid. Please request a new one.');
-      } finally {
-        clock.restore();
-      }
-    });
-
-    it('is told its phrase is no longer valid when the phrase is gone and no login used it', async () => {
-      phraseRecord = null;
-      const ws = page();
-
-      await idService.wsRespondLoginPhrase(ws, phrase);
-
-      expect(sentMessage(ws).data.message).to.equal('Signed message is no longer valid. Please request a new one.');
-    });
-
-    // The phrase is marked used before any login is written, and a login is counted
-    // from before it tries the phrase: a page never reads a used phrase while the
-    // login using it is uncounted.
-    it('waits, and is told the login, when it reads the phrase used while the login that used it is still being written', async () => {
-      let writeLogin;
-      insert.withArgs(sinon.match.any, 'loggedusers').callsFake(() => new Promise((resolve) => { writeLogin = resolve; }));
-      const loggingIn = login();
-      await serviceHelper.delay(20);
-      expect(phraseRecord.usedAt, 'the phrase was not used, so this proves nothing').to.be.a('date');
-
-      const ws = page();
-      await idService.wsRespondLoginPhrase(ws, phrase);
-      sinon.assert.notCalled(ws.send);
-
-      writeLogin(true);
-      await loggingIn;
-      expect(sentMessage(ws)).to.deep.include({ status: 'success' });
-    });
-
-    it('waits while the phrase is being marked used, and is told the login', async () => {
-      let markUsed;
-      claim.callsFake(() => new Promise((resolve) => {
-        markUsed = () => {
-          phraseRecord = { ...phraseRecord, usedAt: new Date() };
-          resolve(phraseRecord);
-        };
-      }));
-      const loggingIn = login();
-      await serviceHelper.delay(20);
-      expect(markUsed, 'no login was marking the phrase, so this proves nothing').to.be.a('function');
-      // the mark has landed in the database, and the login has not yet heard so
-      phraseRecord = { ...phraseRecord, usedAt: new Date() };
-
-      const ws = page();
-      await idService.wsRespondLoginPhrase(ws, phrase);
-      sinon.assert.notCalled(ws.send);
-
-      markUsed();
-      await loggingIn;
-      expect(sentMessage(ws)).to.deep.include({ status: 'success' });
-    });
-
-    it('is told at once that its phrase is no longer valid when it was used by a login that has ended without writing one', async () => {
-      insert.withArgs(sinon.match.any, 'loggedusers').rejects(new Error('connection timed out'));
-      await login();
-      expect(phraseRecord.usedAt, 'the phrase was not used, so this proves nothing').to.be.a('date');
-
-      const ws = page();
-      await idService.wsRespondLoginPhrase(ws, phrase);
-
-      expect(sentMessage(ws).data.message).to.equal('Signed message is no longer valid. Please request a new one.');
-    });
-
-    it('is told the login when it reads the phrase used by a login that has written it and ended', async () => {
-      await login();
-      findOne.withArgs(sinon.match.any, 'loggedusers').resolves({ zelid, loginPhrase: phrase });
-
-      const ws = page();
-      await idService.wsRespondLoginPhrase(ws, phrase);
-
-      expect(sentMessage(ws)).to.deep.include({ status: 'success' });
-    });
-
-    // Two requests of one phrase: one uses it, the other is refused. The page waits
-    // on whichever is still counted, and reads again once neither is.
-    it('is told its phrase is no longer valid once the last login counted against it ends, when none wrote a login', async () => {
-      const clock = sinon.useFakeTimers({ now: Date.now(), toFake: ['setTimeout', 'clearTimeout', 'Date'], shouldAdvanceTime: true });
-      try {
-        insert.withArgs(sinon.match.any, 'loggedusers').rejects(new Error('connection timed out'));
-        let refuseSecond;
-        claim.onSecondCall().callsFake(() => new Promise((resolve) => { refuseSecond = () => resolve(null); }));
-        // the second reads the phrase while it is still unused
-        const first = login();
-        const second = login();
-        await first;
-        expect(refuseSecond, 'the second login was not under way, so this proves nothing').to.be.a('function');
-
-        const ws = page();
-        await idService.wsRespondLoginPhrase(ws, phrase);
-        sinon.assert.notCalled(ws.send);
-
-        refuseSecond();
-        await second;
-        await clock.tickAsync(0);
-
-        expect(sentMessage(ws).data.message, 'the page waited out the phrase instead').to.equal('Signed message is no longer valid. Please request a new one.');
-      } finally {
-        clock.restore();
-      }
-    });
-
-    it('is told the login, not that its phrase is gone, when a refused login ends while the one that used it is still writing', async () => {
-      let writeLogin;
-      insert.withArgs(sinon.match.any, 'loggedusers').callsFake(() => new Promise((resolve) => { writeLogin = resolve; }));
-      const first = login();
-      const second = login();
-      await second;
-      expect(writeLogin, 'the first login was not writing, so this proves nothing').to.be.a('function');
-
-      const ws = page();
-      await idService.wsRespondLoginPhrase(ws, phrase);
-      sinon.assert.notCalled(ws.send);
-
-      writeLogin(true);
-      await first;
-      expect(sentMessage(ws)).to.deep.include({ status: 'success' });
-    });
-
-    // The login was written before the page connected, and the last login counted
-    // against the phrase ends while the page is still reading: the page reads again
-    // rather than taking the end for a phrase that signed nobody in.
-    it('is told the login when the last login counted ends while it is still reading', async () => {
-      let refuseSecond;
-      claim.onSecondCall().callsFake(() => new Promise((resolve) => { refuseSecond = () => resolve(null); }));
-      const first = login();
-      const second = login();
-      await first;
-      expect(refuseSecond, 'the second login was not under way, so this proves nothing').to.be.a('function');
-      let answerRead;
-      const loginRow = { zelid, loginPhrase: phrase };
-      findOne.withArgs(sinon.match.any, 'loggedusers').onFirstCall().callsFake(() => new Promise((resolve) => { answerRead = resolve; }));
-      findOne.withArgs(sinon.match.any, 'loggedusers').resolves(loginRow);
-
-      const ws = page();
-      const connecting = idService.wsRespondLoginPhrase(ws, phrase);
-      refuseSecond();
-      await second;
-      answerRead(loginRow);
-      await connecting;
-
-      sinon.assert.calledOnce(ws.send);
-      expect(sentMessage(ws)).to.deep.include({ status: 'success' });
-    });
-
-    it('lists only the phrases no login has used as active', async () => {
-      const list = sinon.stub(dbHelper, 'findInDatabase').resolves([]);
-      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-
-      await idService.activeLoginPhrases({}, generateResponse());
-
-      expect(list.firstCall.args[2]).to.deep.equal({ usedAt: { $exists: false } });
-    });
-  });
-
-  // On the database itself: of the logins that try one phrase at once, one marks it
-  // used and writes its login; the rest are refused, and the phrase stays, used.
-  describe('a login phrase on the database', () => {
-    const zelid = '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg';
-    let phrase;
-    let database;
-    const { activeLoginPhrases, loggedUsers } = config.database.local.collections;
-
-    async function login() {
-      const stream = new PassThrough();
-      stream.push(JSON.stringify({ zelid, signature: '1234356asdf', message: phrase }));
-      stream.end();
-      const res = generateResponse();
-      await idService.verifyLogin(stream, res);
-      await serviceHelper.delay(100);
-      return res.json.firstCall.args[0];
-    }
-
-    beforeEach(async () => {
-      sinon.stub(bitcoinMessage, 'verify').returns(true);
-      await dbHelper.initiateDB();
-      database = dbHelper.databaseConnection().db(config.database.local.database);
-      phrase = `${Date.now() - 60000}${Math.random().toString(36).substring(2, 15)}1111111111111111111`;
-      await database.collection(activeLoginPhrases).insertOne({ loginPhrase: phrase, createdAt: new Date(), expireAt: new Date(Date.now() + 900000) });
-    });
-
-    afterEach(async () => {
-      sinon.restore();
-      await database.collection(activeLoginPhrases).deleteMany({ loginPhrase: phrase });
-      await database.collection(loggedUsers).deleteMany({ loginPhrase: phrase });
-    });
-
-    it('signs in one of two logins that try the phrase at once, and leaves the phrase marked used', async () => {
-      // both have read the phrase unused before either marks it
-      const markUsed = dbHelper.findOneAndUpdateInDatabase;
-      let arrived = 0;
-      let bothArrived;
-      const barrier = new Promise((resolve) => { bothArrived = resolve; });
-      sinon.stub(dbHelper, 'findOneAndUpdateInDatabase').callsFake(async (...args) => {
-        arrived += 1;
-        if (arrived === 2) bothArrived();
-        await barrier;
-        return markUsed(...args);
-      });
-
-      const answers = await Promise.all([login(), login()]);
-
-      expect(arrived, 'the two logins did not both try the phrase, so this proves nothing').to.equal(2);
-
-      expect(answers.map((a) => a.status).sort()).to.deep.equal(['error', 'success']);
-      expect(answers.find((a) => a.status === 'error').data.message).to.equal('Signed message is no longer valid. Please request a new one.');
-      expect(await database.collection(loggedUsers).countDocuments({ loginPhrase: phrase }), 'logins written').to.equal(1);
-      expect((await database.collection(activeLoginPhrases).findOne({ loginPhrase: phrase }))?.usedAt).to.be.a('date');
-    });
-
-    it('refuses a login of a phrase already used', async () => {
-      expect((await login()).status).to.equal('success');
-
-      const again = await login();
-
-      expect(again.status).to.equal('error');
-      expect(await database.collection(loggedUsers).countDocuments({ loginPhrase: phrase })).to.equal(1);
     });
   });
 

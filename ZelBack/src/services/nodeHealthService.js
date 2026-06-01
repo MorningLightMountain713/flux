@@ -8,6 +8,7 @@ const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const dockerService = require('./dockerService');
 const syncthingService = require('./syncthingService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
+const nodeDosState = require('./nodeDosState');
 const appInspector = require('./appManagement/appInspector');
 const { isDaemonUnavailable } = require('./utils/routeGuards');
 
@@ -209,10 +210,9 @@ async function checkNodeFitness() {
   }
   checks.hardware = hardware.result;
 
-  // DOS state. getDOSState answers with createDataMessage, which hardcodes
-  // status 'success', so there is no error shape to branch on; its data is
-  // dosState and dosMessage.
-  const { data: dos } = fluxNetworkHelper.getDOSState();
+  // DOS state, read straight off nodeDosState: it is plain data, so there is no
+  // error shape to branch on; it carries dosState and dosMessage.
+  const dos = nodeDosState.getDosData();
   if (dos.dosState > 10 || dos.dosMessage !== null) {
     let error = { message: dos.dosMessage, name: 'DOS', code: dos.dosState };
     if (dos.dosMessage !== 'Flux IP detection failed' && dos.dosMessage !== 'Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.') {
