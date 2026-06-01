@@ -327,6 +327,21 @@ async function transportOpen(params) {
   return executeCall(rpccall, rpcparameters);
 }
 
+// v2 arcane attestation: sign a message proving a genuine SAS instance
+// processed an encrypted spec. The sign call takes the JSON body as a single
+// string param (same convention as seal/transportOpen); the public-key call
+// takes no params.
+async function attest(params) {
+  const rpccall = 'v2attest';
+  const rpcparameters = [JSON.stringify(params)];
+  return executeCall(rpccall, rpcparameters);
+}
+
+async function attestationPublicKey() {
+  const rpccall = 'v2attestationpublickey';
+  return executeCall(rpccall);
+}
+
 // == Control ==
 /**
  * To request help message.
@@ -500,4 +515,6 @@ module.exports = {
   unseal,
   transportPublicKey,
   transportOpen,
+  attest,
+  attestationPublicKey,
 };
