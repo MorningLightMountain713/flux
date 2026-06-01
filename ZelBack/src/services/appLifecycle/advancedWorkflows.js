@@ -1298,7 +1298,7 @@ async function updateAppGlobaly(params) {
   const cleanExtend = params.extend;
 
   // eslint-disable-next-line global-require
-  const { resolveSubmission, assertSecretsNotConflicting } = require('../appRequirements/appValidator');
+  const { resolveSubmission, assertSecretsNotConflicting } = require('../appRequirements/appSubmission');
   const { spec, broadcastBlob } = await resolveSubmission(appSpecObj, {
     contentHash: cleanContentHash, timestamp: cleanTimestamp, type: cleanMessageType, daemonHeight,
   });
