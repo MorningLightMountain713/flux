@@ -9,7 +9,7 @@ const verificationHelper = require('./verificationHelper');
 const generalService = require('./generalService');
 const dockerService = require('./dockerService');
 const syncthingService = require('./syncthingService');
-const fluxNetworkHelper = require('./fluxNetworkHelper');
+const nodeDosState = require('./nodeDosState');
 const appInspector = require('./appManagement/appInspector');
 const signatureVerifier = require('./signatureVerifier');
 
@@ -136,26 +136,18 @@ async function loginPhrase(req, res) {
       throw new Error('Node hardware requirements not met');
     }
     // check DOS state (contains daemon checks)
-    const dosState = fluxNetworkHelper.getDOSState();
-    if (dosState.status === 'error') {
-      const errorMessage = 'Unable to check DOS state';
-      const errMessage = messageHelper.createErrorMessage(errorMessage);
+    const dosData = nodeDosState.getDosData();
+    // nodeHardwareSpecsGood is not part of getDosData yet
+    if (dosData.dosState > 10 || dosData.dosMessage !== null || dosData.nodeHardwareSpecsGood === false) {
+      let errMessage = messageHelper.createErrorMessage(dosData.dosMessage, 'DOS', dosData.dosState);
+      if (dosData.dosMessage !== 'Flux IP detection failed' && dosData.dosMessage !== 'Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.') {
+        errMessage = messageHelper.createErrorMessage(dosData.dosMessage, 'CONNERROR', dosData.dosState);
+      }
+      if (dosData.nodeHardwareSpecsGood === false) {
+        errMessage = messageHelper.createErrorMessage('Minimum hardware required for FluxNode tier not met', 'DOS', 100);
+      }
       res.json(errMessage);
       return;
-    }
-    if (dosState.status === 'success') {
-      // nodeHardwareSpecsGood is not part of response yet
-      if (dosState.data.dosState > 10 || dosState.data.dosMessage !== null || dosState.data.nodeHardwareSpecsGood === false) {
-        let errMessage = messageHelper.createErrorMessage(dosState.data.dosMessage, 'DOS', dosState.data.dosState);
-        if (dosState.data.dosMessage !== 'Flux IP detection failed' && dosState.data.dosMessage !== 'Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.') {
-          errMessage = messageHelper.createErrorMessage(dosState.data.dosMessage, 'CONNERROR', dosState.data.dosState);
-        }
-        if (dosState.data.nodeHardwareSpecsGood === false) {
-          errMessage = messageHelper.createErrorMessage('Minimum hardware required for FluxNode tier not met', 'DOS', 100);
-        }
-        res.json(errMessage);
-        return;
-      }
     }
 
     // check Apps DOS state
