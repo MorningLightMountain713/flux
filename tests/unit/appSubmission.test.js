@@ -2,8 +2,8 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-describe('appValidator tests', () => {
-  let appValidator;
+describe('appSubmission tests', () => {
+  let appSubmission;
   let stubs;
 
   // Builds a cleartext v9 spec instance shape (the thing validateSubmissionSpec returns).
@@ -20,7 +20,7 @@ describe('appValidator tests', () => {
   }
 
   function load() {
-    return proxyquire('../../ZelBack/src/services/appRequirements/appValidator', {
+    return proxyquire('../../ZelBack/src/services/appRequirements/appSubmission', {
       config: { fluxapps: { latestSupportedSpecVersion: 9, minOutgoing: 0, minIncoming: 0 } },
       '../utils/transportHelper': stubs.transportHelper,
       '../utils/specCutover': stubs.specCutover,
@@ -65,14 +65,14 @@ describe('appValidator tests', () => {
 
   describe('resolveSubmission', () => {
     it('validates a cleartext v9 submission and broadcasts the cleartext wire form', async () => {
-      appValidator = load();
+      appSubmission = load();
       const spec = v9Spec();
       const submission = { version: 9, name: 'myapp', owner: 'owner1' };
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
       stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
 
-      const result = await appValidator.resolveSubmission(submission, {
+      const result = await appSubmission.resolveSubmission(submission, {
         contentHash: 'HASH123', timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
       });
 
@@ -84,7 +84,7 @@ describe('appValidator tests', () => {
     });
 
     it('backend-encrypts a transport-encrypted v9 submission and never broadcasts cleartext', async () => {
-      appValidator = load();
+      appSubmission = load();
       const spec = v9Spec();
       const sparse = { version: 9, name: 'myapp', owner: 'owner1' };
       const submission = {
@@ -97,7 +97,7 @@ describe('appValidator tests', () => {
       const EncryptedSpecV9 = { fromSpec: sinon.stub().resolves(encryptedSpec) };
       stubs.specLibs.getSpecBackend.resolves({ EncryptedSpecV9 });
 
-      const result = await appValidator.resolveSubmission(submission, {
+      const result = await appSubmission.resolveSubmission(submission, {
         contentHash: 'HASH123', timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
       });
 
@@ -111,7 +111,7 @@ describe('appValidator tests', () => {
     });
 
     it('decrypts a v8 enterprise blob, validates the inner spec, and keeps the encrypted wire form', async () => {
-      appValidator = load();
+      appSubmission = load();
       const innerSerialize = sinon.stub().returns({ inner: 'cleartext' });
       const decrypted = { spec: { serialize: innerSerialize, version: 8 }, name: 'myapp', owner: 'owner1' };
       const wireSpec = {
@@ -124,7 +124,7 @@ describe('appValidator tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
       stubs.specCutover.deserializeSpec.resolves(wireSpec);
 
-      const result = await appValidator.resolveSubmission(submission, {
+      const result = await appSubmission.resolveSubmission(submission, {
         timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
       });
 
@@ -137,14 +137,14 @@ describe('appValidator tests', () => {
     });
 
     it('rejects when the signed contentHash does not match the decrypted content', async () => {
-      appValidator = load();
+      appSubmission = load();
       const spec = v9Spec({ contentHash: sinon.stub().returns('ACTUAL') });
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
 
       try {
-        await appValidator.resolveSubmission({ version: 9 }, { contentHash: 'EXPECTED', daemonHeight: 100 });
+        await appSubmission.resolveSubmission({ version: 9 }, { contentHash: 'EXPECTED', daemonHeight: 100 });
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('contentHash does not match');
@@ -153,7 +153,7 @@ describe('appValidator tests', () => {
     });
 
     it('propagates a feature-entitlement denial from the STAGE 4 gate', async () => {
-      appValidator = load();
+      appSubmission = load();
       const spec = v9Spec();
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
@@ -163,7 +163,7 @@ describe('appValidator tests', () => {
       stubs.entitlementsState.assertSpecEntitled.rejects(denial);
 
       try {
-        await appValidator.resolveSubmission({ version: 9 }, { contentHash: 'HASH123', daemonHeight: 100 });
+        await appSubmission.resolveSubmission({ version: 9 }, { contentHash: 'HASH123', daemonHeight: 100 });
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.code).to.equal('FEATURE_NOT_ENTITLED');
@@ -173,7 +173,7 @@ describe('appValidator tests', () => {
 
   describe('validateAppUpdate', () => {
     it('enforces registration-locked invariants via assertUpdateInvariants', async () => {
-      appValidator = load();
+      appSubmission = load();
       const spec = v9Spec();
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
@@ -183,7 +183,7 @@ describe('appValidator tests', () => {
       stubs.specLibs.assertUpdateInvariants.rejects(lockErr);
 
       try {
-        await appValidator.validateAppUpdate({ version: 9 }, { contentHash: 'HASH123' });
+        await appSubmission.validateAppUpdate({ version: 9 }, { contentHash: 'HASH123' });
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('registration-locked');
@@ -192,7 +192,7 @@ describe('appValidator tests', () => {
     });
 
     it('rejects when the app to update does not exist', async () => {
-      appValidator = load();
+      appSubmission = load();
       const spec = v9Spec();
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
@@ -200,7 +200,7 @@ describe('appValidator tests', () => {
       stubs.appSpecHistory.getPreviousSpec.resolves(null);
 
       try {
-        await appValidator.validateAppUpdate({ version: 9 }, { contentHash: 'HASH123' });
+        await appSubmission.validateAppUpdate({ version: 9 }, { contentHash: 'HASH123' });
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('does not exist and cannot be updated');
@@ -208,7 +208,7 @@ describe('appValidator tests', () => {
     });
 
     it('rejects a version change that is not to the latest supported version', async () => {
-      appValidator = load();
+      appSubmission = load();
       const updateSpec = {
         name: 'myapp', owner: 'owner1', version: 8, serialize: sinon.stub().returns({ form: 'v8' }),
       };
@@ -218,7 +218,7 @@ describe('appValidator tests', () => {
       stubs.appSpecHistory.getPreviousSpec.resolves({ name: 'myapp', owner: 'owner1', version: 7 });
 
       try {
-        await appValidator.validateAppUpdate({ version: 8 }, {});
+        await appSubmission.validateAppUpdate({ version: 8 }, {});
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('Version changes are only allowed');
