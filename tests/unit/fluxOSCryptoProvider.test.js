@@ -61,7 +61,7 @@ describe('FluxOSCryptoProvider', () => {
   });
 
   describe('encrypt()', () => {
-    it('forwards appName, owner, context, and base64-encoded plaintext to seal', async () => {
+    it('forwards appName, fluxID, and base64-encoded message to seal', async () => {
       benchmarkServiceStub.seal.resolves({
         status: 'success',
         data: {
@@ -79,9 +79,8 @@ describe('FluxOSCryptoProvider', () => {
       expect(benchmarkServiceStub.seal.calledOnce).to.be.true;
       const params = benchmarkServiceStub.seal.firstCall.args[0];
       expect(params.appName).to.equal('TestApp');
-      expect(params.owner).to.equal('1abc');
-      expect(params.context).to.equal(fluxOSCryptoProvider.SPEC_ENCRYPT_CONTEXT);
-      expect(params.plaintext).to.equal(Buffer.from('hello').toString('base64'));
+      expect(params.fluxID).to.equal('1abc');
+      expect(params.message).to.equal(Buffer.from('hello').toString('base64'));
       expect(params.aad).to.equal(Buffer.from('metadata').toString('base64'));
 
       expect(result).to.deep.equal({
@@ -146,7 +145,7 @@ describe('FluxOSCryptoProvider', () => {
     it('forwards the full encrypted envelope plus aad to unseal', async () => {
       benchmarkServiceStub.unseal.resolves({
         status: 'success',
-        data: { status: 'ok', plaintext: Buffer.from('hello').toString('base64') },
+        data: { status: 'ok', message: Buffer.from('hello').toString('base64') },
       });
 
       const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
@@ -161,8 +160,7 @@ describe('FluxOSCryptoProvider', () => {
       expect(plaintext.toString()).to.equal('hello');
       const params = benchmarkServiceStub.unseal.firstCall.args[0];
       expect(params.appName).to.equal('TestApp');
-      expect(params.owner).to.equal('1abc');
-      expect(params.algorithm).to.equal('AES-256-GCM');
+      expect(params.fluxID).to.equal('1abc');
       expect(params.ciphertext).to.equal('Y2lwaGVy');
       expect(params.nonce).to.equal('bm9uY2U=');
       expect(params.tag).to.equal('dGFn');
@@ -180,9 +178,5 @@ describe('FluxOSCryptoProvider', () => {
         algorithm: 'AES-256-GCM', ciphertext: 'x', nonce: 'y', tag: 'z',
       })).to.be.rejectedWith(/unseal RPC rejected: DECRYPT_FAILED/);
     });
-  });
-
-  it('exports the HKDF domain separator as FLUX_APP_ENCRYPT_v1', () => {
-    expect(fluxOSCryptoProvider.SPEC_ENCRYPT_CONTEXT).to.equal('FLUX_APP_ENCRYPT_v1');
   });
 });

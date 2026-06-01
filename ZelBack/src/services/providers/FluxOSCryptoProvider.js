@@ -1,8 +1,6 @@
 const benchmarkService = require('../benchmarkService');
 const { getSpecBackend } = require('../utils/specLibs');
 
-const SPEC_ENCRYPT_CONTEXT = 'FLUX_APP_ENCRYPT_v1';
-
 async function create(appName, owner) {
   const { CryptoProvider: Base } = await getSpecBackend();
 
@@ -19,9 +17,8 @@ async function create(appName, owner) {
     async encrypt(plaintext, aad) {
       const params = {
         appName: this.#appName,
-        owner: this.#owner,
-        context: SPEC_ENCRYPT_CONTEXT,
-        plaintext: plaintext.toString('base64'),
+        fluxID: this.#owner,
+        message: plaintext.toString('base64'),
       };
       if (aad) {
         params.aad = aad.toString('base64');
@@ -48,9 +45,7 @@ async function create(appName, owner) {
     async decrypt(encrypted, aad) {
       const params = {
         appName: this.#appName,
-        owner: this.#owner,
-        context: SPEC_ENCRYPT_CONTEXT,
-        algorithm: encrypted.algorithm,
+        fluxID: this.#owner,
         ciphertext: encrypted.ciphertext,
         nonce: encrypted.nonce,
         tag: encrypted.tag,
@@ -69,7 +64,7 @@ async function create(appName, owner) {
         throw new Error(`unseal RPC rejected: ${data.status}`);
       }
 
-      return Buffer.from(data.plaintext, 'base64');
+      return Buffer.from(data.message, 'base64');
     }
   }
 
@@ -78,5 +73,4 @@ async function create(appName, owner) {
 
 module.exports = {
   create,
-  SPEC_ENCRYPT_CONTEXT,
 };
