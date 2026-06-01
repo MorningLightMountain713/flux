@@ -1,5 +1,4 @@
 const chai = require('chai');
-const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 
 const { PassThrough } = require('stream');
@@ -8,56 +7,11 @@ const fluxRpc = require('../../ZelBack/src/services/utils/fluxRpc');
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
 const fs = require('node:fs/promises');
 
-chai.use(chaiAsPromised);
 const { expect } = chai;
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 
 describe('benchmarkService tests', () => {
-  describe('buildBenchdClient tests', () => {
-    let connectionBefore;
-
-    beforeEach(() => {
-      connectionBefore = process.env.FLUXBENCH_CONNECTION;
-      sinon.stub(fs, 'stat').resolves(true);
-    });
-
-    afterEach(() => {
-      if (connectionBefore === undefined) delete process.env.FLUXBENCH_CONNECTION;
-      else process.env.FLUXBENCH_CONNECTION = connectionBefore;
-      sinon.restore();
-    });
-
-    it('should call over the socket FLUXBENCH_CONNECTION names', async () => {
-      process.env.FLUXBENCH_CONNECTION = 'unix:///run/fluxbenchd/full.sock';
-
-      const client = await benchmarkService.buildBenchdClient();
-
-      expect(client.socketPath).to.equal('/run/fluxbenchd/full.sock');
-    });
-
-    it('should call over TCP with the bench credentials when FLUXBENCH_CONNECTION is unset', async () => {
-      delete process.env.FLUXBENCH_CONNECTION;
-
-      const client = await benchmarkService.buildBenchdClient();
-
-      expect(client.socketPath).to.equal(null);
-      expect(client.auth).to.eql({ username: 'fluxbenchuser', password: 'fluxbenchpassword' });
-    });
-
-    it('should refuse a FLUXBENCH_CONNECTION that is not a unix socket', async () => {
-      process.env.FLUXBENCH_CONNECTION = 'http://127.0.0.1:16224/run/fluxbenchd/full.sock';
-
-      await expect(benchmarkService.buildBenchdClient()).to.be.rejectedWith('FLUXBENCH_CONNECTION must be unix:///<socket path>');
-    });
-
-    it('should refuse a FLUXBENCH_CONNECTION that names no socket path', async () => {
-      process.env.FLUXBENCH_CONNECTION = 'unix:///';
-
-      await expect(benchmarkService.buildBenchdClient()).to.be.rejectedWith('FLUXBENCH_CONNECTION must be unix:///<socket path>');
-    });
-  });
-
   describe('executeCall tests', () => {
     let benchmarkStub;
 
@@ -125,23 +79,7 @@ describe('benchmarkService tests', () => {
     });
   });
 
-  describe('app request tests', () => {
-    const appCalls = [
-      ['getPublicKey', 'getpublickey'],
-      ['decryptRSAMessage', 'decryptrsamessage'],
-      ['encryptMessage', 'encryptmessage'],
-      ['decryptMessage', 'decryptmessage'],
-    ];
-    const validRequest = {
-      fluxID: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-      appName: 'my-app1',
-      message: 'aGVsbG8=',
-      blockHeight: 2000000,
-    };
-    const refused = {
-      status: 'error',
-      data: { code: undefined, name: undefined, message: 'Invalid app name or owner' },
-    };
+  describe('v2 transport methods', () => {
     let benchmarkStub;
 
     beforeEach(() => {
@@ -153,37 +91,23 @@ describe('benchmarkService tests', () => {
       sinon.restore();
     });
 
-    appCalls.forEach(([fn, rpc]) => {
-      it(`${fn} should send a request with a valid app name and owner`, async () => {
-        const message = JSON.stringify(validRequest);
+    it('should request the transport public key as a url-encoded query string', async () => {
+      await benchmarkService.transportPublicKey({ appName: 'my app', fluxID: '1abc/def' });
 
-        const result = await benchmarkService[fn](message);
-
-        expect(result).to.eql({ status: 'success', data: 'called' });
-        sinon.assert.calledOnceWithExactly(benchmarkStub, rpc, { params: [message] });
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'v2transportpublickey', {
+        params: ['appName=my%20app&fluxID=1abc%2Fdef'],
       });
+    });
 
-      [
-        ['an invalid app name', { appName: 'my_app' }],
-        ['an invalid owner', { fluxID: 'my-owner' }],
-      ].forEach(([description, change]) => {
-        it(`${fn} should refuse a request with ${description}`, async () => {
-          const message = JSON.stringify({ ...validRequest, ...change });
+    it('should send the transport open payload as a single stringified param', async () => {
+      const payload = {
+        appName: 'myapp', fluxID: '1xyz', encapsulatedKey: 'ek', ciphertext: 'ct', aad: 'aad',
+      };
 
-          const result = await benchmarkService[fn](message);
+      await benchmarkService.transportOpen(payload);
 
-          expect(result).to.eql(refused);
-          sinon.assert.notCalled(benchmarkStub);
-        });
-      });
-
-      ['not json', 'null', '"myapp"', '[]'].forEach((message) => {
-        it(`${fn} should refuse ${message} as a request`, async () => {
-          const result = await benchmarkService[fn](message);
-
-          expect(result).to.eql(refused);
-          sinon.assert.notCalled(benchmarkStub);
-        });
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'v2transportopen', {
+        params: [JSON.stringify(payload)],
       });
     });
   });
