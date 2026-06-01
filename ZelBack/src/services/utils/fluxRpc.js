@@ -198,6 +198,8 @@ class FluxRpc {
       ['v2transportopen', null],
       ['v2encrypt', null],
       ['v2decrypt', null],
+      ['v2attest', null],
+      ['v2attestationpublickey', null],
     ]),
   };
 
