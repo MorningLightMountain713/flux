@@ -50,11 +50,11 @@ describe('nodeDosState tests', () => {
       expect(nodeDosState.getDosMessage()).to.be.null;
     });
 
-    it('sets the regular message without emitting', () => {
+    it('sets the regular message and emits dos:changed', () => {
       nodeDosState.setDosMessage('a reason');
       expect(nodeDosState.getRawDosMessage()).to.equal('a reason');
       expect(nodeDosState.getDosMessage()).to.equal('a reason');
-      sinon.assert.notCalled(publishStub);
+      sinon.assert.calledOnceWithExactly(publishStub, 'dos:changed', { dosState: 0, dosMessage: 'a reason' });
     });
   });
 
@@ -79,6 +79,12 @@ describe('nodeDosState tests', () => {
       nodeDosState.clearStickyDosMessage();
       expect(nodeDosState.getStickyDosMessage()).to.be.null;
       expect(nodeDosState.isNodeDos()).to.be.false;
+    });
+
+    it('emits the effective DOS status on sticky mutations', () => {
+      nodeDosState.setStickyDosStateValue(100);
+      nodeDosState.setStickyDosMessage('sticky reason');
+      sinon.assert.calledWithExactly(publishStub.lastCall, 'dos:changed', { dosState: 100, dosMessage: 'sticky reason' });
     });
   });
 
