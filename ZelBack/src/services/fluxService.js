@@ -1268,7 +1268,7 @@ async function getFluxInfo(req, res) {
     // eslint-disable-next-line global-require
     const appInspector = require('./appManagement/appInspector');
     const dosAppsResult = await appInspector.getAppsDOSState();
-    if (dosResult.status === 'error') {
+    if (dosAppsResult.status === 'error') {
       throw dosAppsResult.data;
     }
     const arcaneHumanVersion = process.env.FLUXOS_HUMAN_VERSION;
