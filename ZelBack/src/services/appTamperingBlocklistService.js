@@ -2,7 +2,7 @@ const config = require('config');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const dbHelper = require('./dbHelper');
-const fluxNetworkHelper = require('./fluxNetworkHelper');
+const nodeDosState = require('./nodeDosState');
 const generalService = require('./generalService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const benchmarkService = require('./benchmarkService');
@@ -26,7 +26,7 @@ let syncWaitResolver = null;
  * Identified by the DOS_MESSAGE_PREFIX we always prepend when we set it.
  */
 function isOurStickyDos() {
-  const msg = fluxNetworkHelper.getStickyDosMessage();
+  const msg = nodeDosState.getStickyDosMessage();
   return typeof msg === 'string' && msg.startsWith(DOS_MESSAGE_PREFIX);
 }
 
@@ -162,8 +162,8 @@ async function enforceBlocklist() {
 
   if (shouldDos) {
     const message = `${DOS_MESSAGE_PREFIX}: ${eventCount} events, txhash ${myTxhash}`;
-    fluxNetworkHelper.setStickyDosMessage(message);
-    fluxNetworkHelper.setStickyDosStateValue(100);
+    nodeDosState.setStickyDosMessage(message);
+    nodeDosState.setStickyDosStateValue(100);
     ourDosActive = true;
     log.error(message);
     return;
@@ -171,7 +171,7 @@ async function enforceBlocklist() {
 
   if (ourDosActive || isOurStickyDos()) {
     log.info(`appTamperingBlocklist - clearing sticky DOS (listed=${listed}, events=${eventCount})`);
-    fluxNetworkHelper.clearStickyDosMessage();
+    nodeDosState.clearStickyDosMessage();
     ourDosActive = false;
   }
 }
