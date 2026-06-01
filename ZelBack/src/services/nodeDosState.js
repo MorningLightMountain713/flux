@@ -15,10 +15,12 @@ let stickyDosState = 0;
 let stickyDosMessage = null;
 
 /**
- * Emits the current DOS state on the event bus (SSE observability).
+ * Emits the current effective DOS state on the event bus (SSE observability).
+ * Every mutator calls this so observers see the true node DOS status, including
+ * sticky precedence.
  */
 function publishChanged() {
-  fluxEventBus.publish('dos:changed', { dosState, dosMessage });
+  fluxEventBus.publish('dos:changed', getDosData());
 }
 
 /**
@@ -53,6 +55,7 @@ function addDosState(delta) {
  */
 function setDosMessage(message) {
   dosMessage = message;
+  publishChanged();
 }
 
 /**
@@ -80,6 +83,7 @@ function getDosMessage() {
  */
 function setStickyDosMessage(message) {
   stickyDosMessage = message;
+  publishChanged();
 }
 
 /**
@@ -96,6 +100,7 @@ function getStickyDosMessage() {
 function clearStickyDosMessage() {
   stickyDosMessage = null;
   stickyDosState = 0;
+  publishChanged();
 }
 
 /**
@@ -104,6 +109,7 @@ function clearStickyDosMessage() {
  */
 function setStickyDosStateValue(value) {
   stickyDosState = value;
+  publishChanged();
 }
 
 /**
