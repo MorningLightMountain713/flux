@@ -78,6 +78,39 @@ describe('benchmarkService tests', () => {
     });
   });
 
+  describe('v2 transport methods', () => {
+    let benchmarkStub;
+
+    beforeEach(() => {
+      sinon.stub(fs, 'stat').resolves(true);
+      benchmarkStub = sinon.stub(fluxRpc.FluxRpc.prototype, 'run').resolves('called');
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('should request the transport public key as a url-encoded query string', async () => {
+      await benchmarkService.transportPublicKey({ appName: 'my app', fluxID: '1abc/def' });
+
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'v2transportpublickey', {
+        params: ['appName=my%20app&fluxID=1abc%2Fdef'],
+      });
+    });
+
+    it('should send the transport open payload as a single stringified param', async () => {
+      const payload = {
+        appName: 'myapp', fluxID: '1xyz', encapsulatedKey: 'ek', ciphertext: 'ct', aad: 'aad',
+      };
+
+      await benchmarkService.transportOpen(payload);
+
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'v2transportopen', {
+        params: [JSON.stringify(payload)],
+      });
+    });
+  });
+
   describe('getStatus tests', () => {
     let benchmarkStub;
 
