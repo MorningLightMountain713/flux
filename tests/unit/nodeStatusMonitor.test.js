@@ -44,8 +44,8 @@ describe('nodeStatusMonitor tests', () => {
       '../generalService': {
         isNodeStatusConfirmed: sinon.stub().resolves(true),
       },
-      '../fluxNetworkHelper': {
-        getDosStateValue: sinon.stub().returns(0),
+      '../nodeDosState': {
+        isNodeDos: sinon.stub().returns(false),
       },
       '../fluxCommunicationUtils': {
         socketAddressInFluxList: sinon.stub().resolves(true),

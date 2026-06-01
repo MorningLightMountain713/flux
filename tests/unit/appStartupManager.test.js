@@ -35,7 +35,6 @@ describe('appStartupManager tests', () => {
 
     fluxNetworkHelperStub = {
       getLocalSocketAddress: sinon.stub(),
-      isNodeDos: sinon.stub().returns(false),
     };
 
     registryManagerStub = {};
@@ -81,6 +80,7 @@ describe('appStartupManager tests', () => {
       '../dockerService': dockerServiceStub,
       '../serviceHelper': { delay: sinon.stub().resolves() },
       '../fluxNetworkHelper': fluxNetworkHelperStub,
+      '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       './advancedWorkflows': advancedWorkflowsStub,
