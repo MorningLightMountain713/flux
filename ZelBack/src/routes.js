@@ -30,7 +30,7 @@ const volumeExecutor = require('./services/appSystem/volumeExecutor');
 const operationsController = require('./services/appManagement/operationsController');
 const cryptographicKeys = require('./services/appMessaging/cryptographicKeys');
 const registryManager = require('./services/appDatabase/registryManager');
-const appValidator = require('./services/appRequirements/appValidator');
+const appSubmission = require('./services/appRequirements/appSubmission');
 const placementFeasibility = require('./services/appPlacement/placementFeasibility');
 const appSpecHelpers = require('./services/utils/appSpecHelpers');
 const appInspector = require('./services/appManagement/appInspector');
@@ -506,10 +506,10 @@ module.exports = (app) => {
     return generalService.whitelistedRepositories(req, res);
   }));
   app.post('/apps/verifyappregistrationspecifications', asyncRoute((req, res) => { // returns formatted app specifications
-    return appValidator.verifyAppRegistrationParameters(req, res);
+    return appSubmission.verifyAppRegistrationParameters(req, res);
   }));
   app.post('/apps/verifyappupdatespecifications', asyncRoute((req, res) => { // returns formatted app specifications
-    return appValidator.verifyAppUpdateApi(req, res);
+    return appSubmission.verifyAppUpdateApi(req, res);
   }));
   app.post('/apps/placementfeasibility', asyncRoute((req, res) => { // fault domains and per-domain instance share for a prospective spec
     return placementFeasibility.placementFeasibilityAPI(req, res);
@@ -1130,7 +1130,7 @@ module.exports = (app) => {
     return imageManager.checkDockerAccessibility(req, res);
   }));
   app.post('/apps/appregister', asyncRoute((req, res) => {
-    return registryManager.registerAppGlobalyApi(req, res);
+    return appSubmission.registerAppGlobalyApi(req, res);
   }));
   app.post('/apps/appupdate', asyncRoute((req, res) => {
     return advancedWorkflows.updateAppGlobalyApi(req, res);
