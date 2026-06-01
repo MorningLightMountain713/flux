@@ -127,6 +127,8 @@ class FluxRpc {
       ['encryptmessage', null],
       ['v2transportpublickey', null],
       ['v2transportopen', null],
+      ['v2encrypt', null],
+      ['v2decrypt', null],
     ]),
   };
 
