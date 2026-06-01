@@ -297,14 +297,16 @@ async function getPublicKey(message) {
   return executeCall(rpccall, rpcparameters);
 }
 
+// v2 backend spec encryption (AES-256-GCM, key derived per app+owner). The
+// RPC takes the request object as a single JSON string param.
 async function seal(params) {
-  const rpccall = 'seal';
+  const rpccall = 'v2encrypt';
   const rpcparameters = [JSON.stringify(params)];
   return executeCall(rpccall, rpcparameters);
 }
 
 async function unseal(params) {
-  const rpccall = 'unseal';
+  const rpccall = 'v2decrypt';
   const rpcparameters = [JSON.stringify(params)];
   return executeCall(rpccall, rpcparameters);
 }
