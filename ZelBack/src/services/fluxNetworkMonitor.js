@@ -128,8 +128,6 @@ async function adjustExternalIP(ip) {
     const oldUserConfigIp = userconfig.initial.ipaddress;
     log.info(`Adjusting External IP from ${userconfig.initial.ipaddress} to ${ip}`);
     const dataToWrite = `module.exports = {
-  setOnAddressChanged,
-  setOnAddressChanged,
   initial: {
     ipaddress: '${ip}',
     zelid: '${userconfig.initial.zelid || config.fluxTeamFluxID}',
@@ -574,6 +572,7 @@ async function checkDeterministicNodesCollisions() {
 }
 
 module.exports = {
+  setOnAddressChanged,
   ipChangesOverLimit,
   getMaxNumberOfIpChanges,
   adjustExternalIP,
