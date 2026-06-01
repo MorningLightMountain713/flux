@@ -14,6 +14,7 @@ const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const registryManager = require('../appDatabase/registryManager');
 const appReconciler = require('../appMonitoring/appReconciler');
+const nodeDosState = require('../nodeDosState');
 const appsRepository = require('../appDatabase/appsRepository');
 const advancedWorkflows = require('./advancedWorkflows');
 const appUninstaller = require('./appUninstaller');
@@ -450,12 +451,12 @@ async function manageAppsOnBoot(bootContext) {
       return;
     }
 
-    if (fluxNetworkHelper.isStickyDosHeldBy(fluxNetworkHelper.StickyDosOwner.HOST_STALL)) {
+    if (nodeDosState.isStickyDosHeldBy(nodeDosState.StickyDosOwner.HOST_STALL)) {
       log.error('appStartupManager - Node is out of service for a host stall; its own removal unloads the apps');
       return;
     }
 
-    if (fluxNetworkHelper.isNodeDos()) {
+    if (nodeDosState.isNodeDos()) {
       log.error('appStartupManager - Node is in DOS state, removing all apps');
       await removeAllApps('Node DOS');
       return;

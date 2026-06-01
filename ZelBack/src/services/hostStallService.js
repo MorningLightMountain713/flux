@@ -34,6 +34,7 @@ const config = require('config');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
+const nodeDosState = require('./nodeDosState');
 
 const DEPENDENCIES = new Set(['mongod', 'dockerd', 'containerd', 'syncthing', 'fluxd', 'fluxbenchd']);
 const READ_INTERVAL_MS = config.hostStall.readIntervalMs;
@@ -248,7 +249,7 @@ async function writeState(text, stateFile) {
  * reading waits for one.
  */
 function keepState() {
-  const trip = fluxNetworkHelper.isStickyDosHeldBy(fluxNetworkHelper.StickyDosOwner.HOST_STALL) ? tripReason : null;
+  const trip = nodeDosState.isStickyDosHeldBy(nodeDosState.StickyDosOwner.HOST_STALL) ? tripReason : null;
   const text = JSON.stringify({ trip, threads: [...tracked] });
   if (text === (queuedText ?? keptText)) return;
   queuedText = text;
@@ -269,7 +270,7 @@ function announceTrip() {
  */
 function onTrip(listener) {
   tripListeners.push(listener);
-  if (fluxNetworkHelper.isStickyDosHeldBy(fluxNetworkHelper.StickyDosOwner.HOST_STALL)) listener();
+  if (nodeDosState.isStickyDosHeldBy(nodeDosState.StickyDosOwner.HOST_STALL)) listener();
 }
 
 /** Restore what an earlier FluxOS in this boot kept: the trip, and every thread's count. */
@@ -283,7 +284,7 @@ async function restoreState() {
     keptText = text;
     if (trip) {
       tripReason = trip;
-      fluxNetworkHelper.setStickyDos(fluxNetworkHelper.StickyDosOwner.HOST_STALL, trip);
+      nodeDosState.setStickyDos(nodeDosState.StickyDosOwner.HOST_STALL, trip);
       announceTrip();
     }
   } catch (error) {
@@ -299,9 +300,9 @@ async function act() {
     return;
   }
   fluxNetworkHelper.setPlacementHold(fluxNetworkHelper.PlacementHoldOwner.HOST_STALL, describe(longest));
-  if (longest.intervals >= STUCK_INTERVALS && !fluxNetworkHelper.isStickyDosHeldBy(fluxNetworkHelper.StickyDosOwner.HOST_STALL)) {
+  if (longest.intervals >= STUCK_INTERVALS && !nodeDosState.isStickyDosHeldBy(nodeDosState.StickyDosOwner.HOST_STALL)) {
     tripReason = `Host stall: ${describe(longest)}`;
-    fluxNetworkHelper.setStickyDos(fluxNetworkHelper.StickyDosOwner.HOST_STALL, tripReason);
+    nodeDosState.setStickyDos(nodeDosState.StickyDosOwner.HOST_STALL, tripReason);
     announceTrip();
   }
 }

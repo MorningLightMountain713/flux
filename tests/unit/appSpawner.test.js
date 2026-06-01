@@ -147,8 +147,10 @@ describe('appSpawner tests', () => {
       '../fluxNetworkHelper': {
         isPortOpen: sinon.stub().resolves(true),
         isPortUserBlocked: sinon.stub().returns(false),
-        isNodeDos: sinon.stub().returns(false),
         getFluxNodePublicKey: sinon.stub().returns('pubkey123'),
+      },
+      '../nodeDosState': {
+        isNodeDos: sinon.stub().returns(false),
       },
       '../daemonService/daemonServiceMiscRpcs': {
         isDaemonSynced: daemonSyncStub,
