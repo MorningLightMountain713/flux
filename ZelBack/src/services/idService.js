@@ -10,7 +10,7 @@ const verificationHelperUtils = require('./verificationHelperUtils');
 const generalService = require('./generalService');
 const dockerService = require('./dockerService');
 const syncthingService = require('./syncthingService');
-const fluxNetworkHelper = require('./fluxNetworkHelper');
+const nodeDosState = require('./nodeDosState');
 const appInspector = require('./appManagement/appInspector');
 const signatureVerifier = require('./signatureVerifier');
 const { Privilege, authOf } = require('./utils/privileges');
@@ -234,9 +234,9 @@ async function checkNodeFitness() {
   }
   checks.hardware = 'ok';
 
-  // DOS state (contains daemon checks). getDOSState answers with
-  // createDataMessage, which hardcodes status 'success', so there is no error
-  // shape to branch on and no success to test for.
+  // DOS state (contains daemon checks), read straight off nodeDosState: it is
+  // plain data, so there is no error shape to branch on and no success to test
+  // for.
   //
   // It answers with dosState and dosMessage and nothing else. The checks here
   // used to also read nodeHardwareSpecsGood, a field no caller in this repo,
@@ -244,7 +244,7 @@ async function checkNodeFitness() {
   // both of its conditions permanently false, including the one that returned
   // code 100. The hardware question it was reaching for is answered live four
   // lines above, by confirmNodeTierHardware.
-  const { data: dos } = fluxNetworkHelper.getDOSState();
+  const dos = nodeDosState.getDosData();
   if (dos.dosState > 10 || dos.dosMessage !== null) {
     let error = { message: dos.dosMessage, name: 'DOS', code: dos.dosState };
     if (dos.dosMessage !== 'Flux IP detection failed' && dos.dosMessage !== 'Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.') {

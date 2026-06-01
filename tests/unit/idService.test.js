@@ -15,7 +15,7 @@ const { requireMongo } = require('./dbTestHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
-const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 
 const adminConfig = {
@@ -274,7 +274,7 @@ describe('idService tests', () => {
     let osCpusStub;
     let tierStub;
     let collateralStub;
-    let getDOSStateStub;
+    let getDosDataStub;
 
     before(async () => {
       await dbHelper.initiateDB();
@@ -285,7 +285,7 @@ describe('idService tests', () => {
       osCpusStub = sinon.stub(os, 'cpus');
       tierStub = sinon.stub(generalService, 'nodeTier');
       collateralStub = sinon.stub(generalService, 'nodeCollateral');
-      getDOSStateStub = sinon.stub(fluxNetworkHelper, 'getDOSState');
+      getDosDataStub = sinon.stub(nodeDosState, 'getDosData');
       syncthingService.setSyncthingRunningState(true);
       // only checks for docker availablity
       sinon.stub(dockerService, 'dockerListImages').returns(true);
@@ -321,13 +321,10 @@ describe('idService tests', () => {
       collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 11,
           dosMessage: 'Flux IP detection failed',
-        },
-      });
+        });
 
       const expectedResponse = {
         status: 'error',
@@ -349,13 +346,10 @@ describe('idService tests', () => {
       collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 11,
           dosMessage: 'Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.',
-        },
-      });
+        });
 
       const expectedResponse = {
         status: 'error',
@@ -377,13 +371,10 @@ describe('idService tests', () => {
       collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 11,
           dosMessage: 'test',
-        },
-      });
+        });
 
       const expectedResponse = {
         status: 'error',
@@ -414,13 +405,10 @@ describe('idService tests', () => {
       collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 11,
           dosMessage: null,
-        },
-      });
+        });
 
       await idService.loginPhrase(undefined, res);
 
@@ -438,13 +426,10 @@ describe('idService tests', () => {
       collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 0,
           dosMessage: 'Flux IP detection failed',
-        },
-      });
+        });
 
       await idService.loginPhrase(undefined, res);
 
@@ -463,13 +448,10 @@ describe('idService tests', () => {
       collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: {
+      getDosDataStub.returns({
           dosState: 0,
           dosMessage: null,
-        },
-      });
+        });
 
       await idService.loginPhrase(undefined, res);
 
@@ -483,7 +465,7 @@ describe('idService tests', () => {
     let osCpusStub;
     let tierStub;
     let collateralStub;
-    let getDOSStateStub;
+    let getDosDataStub;
 
     before(async () => {
       await dbHelper.initiateDB();
@@ -494,10 +476,7 @@ describe('idService tests', () => {
       collateralStub.resolves(1000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: { dosState: 0, dosMessage: null },
-      });
+      getDosDataStub.returns({ dosState: 0, dosMessage: null });
     };
 
     beforeEach(() => {
@@ -505,7 +484,7 @@ describe('idService tests', () => {
       osCpusStub = sinon.stub(os, 'cpus');
       tierStub = sinon.stub(generalService, 'nodeTier');
       collateralStub = sinon.stub(generalService, 'nodeCollateral');
-      getDOSStateStub = sinon.stub(fluxNetworkHelper, 'getDOSState');
+      getDosDataStub = sinon.stub(nodeDosState, 'getDosData');
       syncthingService.setSyncthingRunningState(true);
       sinon.stub(dockerService, 'dockerListImages').returns(true);
     });
@@ -633,10 +612,7 @@ describe('idService tests', () => {
       });
 
       it('says a node is unfit once, however often it is asked', async () => {
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 11, dosMessage: 'Flux IP detection failed' },
-        });
+        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
 
         await idService.checkNodeFitness();
         await idService.checkNodeFitness();
@@ -651,16 +627,10 @@ describe('idService tests', () => {
       // The case that makes keying on the code wrong: the score accrues while
       // the condition is the same one.
       it('does not speak again as the dos score climbs under the same message', async () => {
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 11, dosMessage: 'Flux IP detection failed' },
-        });
+        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
         await idService.checkNodeFitness();
 
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 13, dosMessage: 'Flux IP detection failed' },
-        });
+        getDosDataStub.returns({ dosState: 13, dosMessage: 'Flux IP detection failed' });
         await idService.checkNodeFitness();
 
         expect(
@@ -670,16 +640,10 @@ describe('idService tests', () => {
       });
 
       it('speaks again when a different check is the one failing', async () => {
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 11, dosMessage: 'Flux IP detection failed' },
-        });
+        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
         await idService.checkNodeFitness();
 
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 0, dosMessage: null },
-        });
+        getDosDataStub.returns({ dosState: 0, dosMessage: null });
         osTotalmemStub.returns(1 * 1024 ** 3);
         osCpusStub.returns([1]);
         await idService.checkNodeFitness();
@@ -689,10 +653,7 @@ describe('idService tests', () => {
       });
 
       it('says so once when the node recovers, and not again', async () => {
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 11, dosMessage: 'Flux IP detection failed' },
-        });
+        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
         await idService.checkNodeFitness();
 
         healthyHardware();
