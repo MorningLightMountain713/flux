@@ -111,6 +111,37 @@ describe('benchmarkService tests', () => {
     });
   });
 
+  describe('v2 attestation methods', () => {
+    let benchmarkStub;
+
+    beforeEach(() => {
+      sinon.stub(fs, 'stat').resolves(true);
+      benchmarkStub = sinon.stub(fluxRpc.FluxRpc.prototype, 'run').resolves('called');
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('should send the attest payload as a single stringified param', async () => {
+      const payload = { message: 'FLUX_ARCANE_ATTEST_v1deadbeef' };
+
+      await benchmarkService.attest(payload);
+
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'v2attest', {
+        params: [JSON.stringify(payload)],
+      });
+    });
+
+    it('should request the attestation public key with no params', async () => {
+      await benchmarkService.attestationPublicKey();
+
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'v2attestationpublickey', {
+        params: [],
+      });
+    });
+  });
+
   describe('getStatus tests', () => {
     let benchmarkStub;
 
