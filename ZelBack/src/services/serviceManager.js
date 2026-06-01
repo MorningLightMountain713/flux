@@ -14,6 +14,7 @@ const fluxNetworkHelper = require('./fluxNetworkHelper');
 const databaseHealthService = require('./databaseHealthService');
 const hostStallService = require('./hostStallService');
 const appKill = require('./appLifecycle/appKill');
+const fluxNetworkMonitor = require('./fluxNetworkMonitor');
 const nodeDosState = require('./nodeDosState');
 // App modular services - replacing appsService
 const appInstaller = require('./appLifecycle/appInstaller');
@@ -540,17 +541,7 @@ async function startFluxFunctions() {
     // the node's address moved, so every app that survived it has to come up on
     // the new one - asked for durably here rather than driven from the network
     // layer, which sits underneath the reconciler and cannot require it
-    fluxNetworkHelper.setOnAddressChanged((apps, reason, key) => appReconciler.requestRestartOf(apps, reason, key));
-    // this node's own address moved: it records the move as its peers will, so
-    // it knows FDM naming its old IP means itself, and tells them once it has
-    // peers at the new address
-    fluxNetworkHelper.setOnOwnAddressMoved((oldIp, newIp, movedAt) => fluxCommunication.handleOwnAddressMove(oldIp, newIp, movedAt));
-    // whether this node ran apps at an address it has no record of leaving
-    fluxNetworkHelper.setInstalledAppsListedAt((socketAddress) => appQueryService.installedAppsListedAt(socketAddress));
-    fluxCommunication.announceRecordedOwnMovesWhenConnected();
-    // every address benchmark reports as this node's own, from boot on: one that
-    // differs from the address it last adopted is its move
-    fluxNetworkHelper.startOwnAddressWatch();
+    fluxNetworkMonitor.setOnAddressChanged((apps, reason) => appReconciler.requestRestartOf(apps, reason));
     log.info('App Spawner initialized');
 
     fluxNetworkHelper.allowNodeToBindPrivilegedPorts();
@@ -572,10 +563,7 @@ async function startFluxFunctions() {
         log.info('Native image update service started');
       }).catch((error) => log.error(`Image update service start error: ${error.message}`));
     }, bootDelay(10 * 60 * 1000)); // 10 minutes after startup
-    // this node's own standing on the network - collisions, reachability, its
-    // own address - judged as each thing it depends on changes
-    fluxNetworkHelper.startOwnStandingWatch();
-    syncthingService.onListenerStateKnown(fluxNetworkHelper.noteSyncthingListenerKnown);
+    fluxNetworkMonitor.checkDeterministicNodesCollisions();
     // STARTED ON THE POLICY, NOT ON BOOT. The blocklist this enforces is a document in the
     // signed bundle, and the bundle is not resolved by the time this line runs. Started
     // here, its first tick reads nothing - and reading nothing is correctly refused rather
