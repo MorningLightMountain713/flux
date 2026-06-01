@@ -27,7 +27,7 @@ const fileQueryService = require('./services/appQuery/fileQueryService');
 const fileSystemManager = require('./services/appSystem/fileSystemManager');
 const cryptographicKeys = require('./services/appMessaging/cryptographicKeys');
 const registryManager = require('./services/appDatabase/registryManager');
-const appValidator = require('./services/appRequirements/appValidator');
+const appSubmission = require('./services/appRequirements/appSubmission');
 const appSpecHelpers = require('./services/utils/appSpecHelpers');
 const appInspector = require('./services/appManagement/appInspector');
 const appController = require('./services/appManagement/appController');
@@ -443,10 +443,10 @@ module.exports = (app) => {
     generalService.whitelistedRepositories(req, res);
   });
   app.post('/apps/verifyappregistrationspecifications', (req, res) => { // returns formatted app specifications
-    appValidator.verifyAppRegistrationParameters(req, res);
+    appSubmission.verifyAppRegistrationParameters(req, res);
   });
   app.post('/apps/verifyappupdatespecifications', (req, res) => { // returns formatted app specifications
-    appValidator.verifyAppUpdateApi(req, res);
+    appSubmission.verifyAppUpdateApi(req, res);
   });
   app.get('/apps/deploymentinformation', cache('30 seconds'), (req, res) => {
     deploymentInfoService.deploymentInformation(req, res);
@@ -1370,7 +1370,7 @@ module.exports = (app) => {
     imageManager.checkDockerAccessibility(req, res);
   });
   app.post('/apps/appregister', (req, res) => {
-    registryManager.registerAppGlobalyApi(req, res);
+    appSubmission.registerAppGlobalyApi(req, res);
   });
   app.post('/apps/appupdate', (req, res) => {
     advancedWorkflows.updateAppGlobalyApi(req, res);

@@ -7,7 +7,6 @@ const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
-const appValidator = require('../appRequirements/appValidator');
 const { deserializeSpec } = require('../utils/specCutover');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const { validateGossipSpec, getSpec } = require('../utils/specLibs');
