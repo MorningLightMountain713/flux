@@ -24,21 +24,12 @@ const { CLOSE_CODES, DIRECTION } = require('./utils/FluxPeerSocket');
 const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
 const fluxEventBus = require('./utils/fluxEventBus');
+const nodeDosState = require('./nodeDosState');
 const {
   normalizeSocketAddress, extractIp, extractPort, socketAddressesMatch, parseSocketAddress,
 } = require('./utils/socketAddressUtils');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
-
-let dosState = 0; // we can start at bigger number later
-let dosMessage = null;
-
-// Sticky DOS state. Owned exclusively by whoever set it (e.g. the tampering
-// blocklist enforcer). Not affected by setDosMessage(null) / setDosStateValue
-// calls from other checks. When set, it takes precedence in getDosMessage()
-// and getDOSState() over the regular dosMessage/dosState.
-let stickyDosState = 0;
-let stickyDosMessage = null;
 
 let storedFluxBenchAllowed = null;
 let ipChangeData = null;
@@ -578,91 +569,6 @@ function setLocalSocketAddress(value) {
 }
 
 /**
- * Setter for dosMessage.
- * Main goal for this is testing availability.
- *
- * @param {string} message New message
- */
-function setDosMessage(message) {
-  dosMessage = message;
-}
-
-/**
- * Getter for dosMessage.
- * Returns the sticky DOS message if one is set, otherwise the regular one.
- * Main goal for this is testing availability.
- *
- * @returns {string} dosMessage
- */
-function getDosMessage() {
-  return stickyDosMessage || dosMessage;
-}
-
-/**
- * Setter for the sticky DOS message. The sticky slot is not cleared by
- * setDosMessage(null); only the owner that set it should clear it via
- * clearStickyDosMessage().
- * @param {string} message
- */
-function setStickyDosMessage(message) {
-  stickyDosMessage = message;
-}
-
-/**
- * Getter for the sticky DOS message (ignores regular dosMessage).
- * @returns {string|null}
- */
-function getStickyDosMessage() {
-  return stickyDosMessage;
-}
-
-/**
- * Clears the sticky DOS message and sticky state value.
- */
-function clearStickyDosMessage() {
-  stickyDosMessage = null;
-  stickyDosState = 0;
-}
-
-/**
- * Setter for the sticky DOS state value.
- * @param {number} value
- */
-function setStickyDosStateValue(value) {
-  stickyDosState = value;
-}
-
-/**
- * Setter for dosState.
- * Main goal for this is testing availability.
- *
- * @param {number} sets dosState
- */
-function setDosStateValue(value) {
-  dosState = value;
-  fluxEventBus.publish('dos:changed', { dosState, dosMessage });
-}
-
-/**
- * Getter for dosState.
- * Main goal for this is testing availability.
- *
- * @returns {number} dosState
- */
-function getDosStateValue() {
-  return dosState;
-}
-
-// Future: refactor all 21 direct `dosState += N` / `dosState = N` mutations
-// to go through addDosState()/setDosStateValue() with event emission on
-// threshold crossing. This would eliminate polling and give immediate
-// response to DOS state changes.
-function isNodeDos() {
-  const effectiveState = stickyDosMessage ? stickyDosState : dosState;
-  return effectiveState >= 100;
-}
-
-/**
  * Get this node's socket address (ip:port).
  * @returns {Promise<string|null>} Normalized socket address (always ip:port) or null.
  */
@@ -810,20 +716,20 @@ async function checkFluxbenchVersionAllowed() {
       if (versionOK) {
         return true;
       }
-      dosState += 11;
-      setDosMessage(`Fluxbench Version Error. Current lower version allowed is v${config.minimumFluxBenchAllowedVersion} found v${benchmarkVersion}`);
-      log.error(dosMessage);
+      nodeDosState.addDosState(11);
+      nodeDosState.setDosMessage(`Fluxbench Version Error. Current lower version allowed is v${config.minimumFluxBenchAllowedVersion} found v${benchmarkVersion}`);
+      log.error(nodeDosState.getRawDosMessage());
       return false;
     }
-    dosState += 2;
-    setDosMessage('Fluxbench Version Error. Error obtaining FluxBench Version.');
-    log.error(dosMessage);
+    nodeDosState.addDosState(2);
+    nodeDosState.setDosMessage('Fluxbench Version Error. Error obtaining FluxBench Version.');
+    log.error(nodeDosState.getRawDosMessage());
     return false;
   } catch (err) {
     log.error(err);
     log.error(`Error on checkFluxBenchVersion: ${err.message}`);
-    dosState += 2;
-    setDosMessage('Fluxbench Version Error. Error obtaining Flux Version.');
+    nodeDosState.addDosState(2);
+    nodeDosState.setDosMessage('Fluxbench Version Error. Error obtaining Flux Version.');
     return false;
   }
 }
@@ -1145,9 +1051,9 @@ async function adjustExternalIP(ip) {
       const measuredUptime = fluxUptime();
       if (await ipChangesOverLimit() && measuredUptime.status === 'success' && measuredUptime.data > config.fluxapps.minUpTime) {
         log.info('IP changes over the limit allowed, one in 20 hours');
-        dosState += 11;
-        setDosMessage('IP changes over the limit allowed, one in 20 hours');
-        log.error(dosMessage);
+        nodeDosState.addDosState(11);
+        nodeDosState.setDosMessage('IP changes over the limit allowed, one in 20 hours');
+        log.error(nodeDosState.getRawDosMessage());
       }
       // eslint-disable-next-line global-require
       const appQueryService = require('./appQuery/appQueryService');
@@ -1240,8 +1146,8 @@ async function adjustExternalIP(ip) {
  */
 async function checkMyFluxAvailability(retryNumber = 0) {
   if (dosTooManyIpChanges) {
-    dosState += 11;
-    setDosMessage('IP changes over the limit allowed, one in 20 hours');
+    nodeDosState.addDosState(11);
+    nodeDosState.setDosMessage('IP changes over the limit allowed, one in 20 hours');
     return false;
   }
 
@@ -1251,8 +1157,8 @@ async function checkMyFluxAvailability(retryNumber = 0) {
   userBlockedPorts = serviceHelper.ensureObject(userBlockedPorts);
   if (Array.isArray(userBlockedPorts)) {
     if (userBlockedPorts.length > 100) {
-      dosState += 11;
-      setDosMessage('User blocked ports above 100 limit');
+      nodeDosState.addDosState(11);
+      nodeDosState.setDosMessage('User blocked ports above 100 limit');
       return false;
     }
   }
@@ -1260,8 +1166,8 @@ async function checkMyFluxAvailability(retryNumber = 0) {
   userBlockedRepositories = serviceHelper.ensureObject(userBlockedRepositories);
   if (Array.isArray(userBlockedRepositories)) {
     if (userBlockedRepositories.length > 10) {
-      dosState += 11;
-      setDosMessage('User blocked repositories above 10 limit');
+      nodeDosState.addDosState(11);
+      nodeDosState.setDosMessage('User blocked repositories above 10 limit');
       return false;
     }
   }
@@ -1299,10 +1205,10 @@ async function checkMyFluxAvailability(retryNumber = 0) {
   );
 
   if (!resMyAvailability) {
-    dosState += 2;
-    if (dosState > 10) {
-      setDosMessage(dosMessage || 'Flux communication is limited, other nodes on the network cannot reach yours through API calls');
-      log.error(dosMessage);
+    nodeDosState.addDosState(2);
+    if (nodeDosState.getDosStateValue() > 10) {
+      nodeDosState.setDosMessage(nodeDosState.getRawDosMessage() || 'Flux communication is limited, other nodes on the network cannot reach yours through API calls');
+      log.error(nodeDosState.getRawDosMessage());
       return false;
     }
     if (retryNumber <= 6) {
@@ -1314,7 +1220,7 @@ async function checkMyFluxAvailability(retryNumber = 0) {
   if (resMyAvailability.data.status === 'error' || resMyAvailability.data.data.message.includes('not')) {
     log.error(`My Flux unavailability detected from: ${remoteIp}:${remotePort}`);
     // Asked Flux cannot reach me lets check if ip changed
-    if (retryNumber === 4 || dosState > 10) {
+    if (retryNumber === 4 || nodeDosState.getDosStateValue() > 10) {
       log.info('Getting publicIp from FluxBench');
       const benchIpResponse = await benchmarkService.getPublicIp();
       if (benchIpResponse.status === 'success') {
@@ -1323,30 +1229,30 @@ async function checkMyFluxAvailability(retryNumber = 0) {
         if (benchMyIP && extractIp(benchMyIP) !== localIp) {
           daemonServiceUtils.setStandardCache('getbenchmarks[]', null);
           log.info('New IP found... updating network');
-          dosState = 0;
-          setDosMessage(null);
+          nodeDosState.setDosStateValue(0);
+          nodeDosState.setDosMessage(null);
           await adjustExternalIP(extractIp(benchMyIP));
           return true;
         } if (benchMyIP && extractIp(benchMyIP) === localIp) {
           log.info('FluxBench reported the same Ip that was already in use');
         } else {
           log.info('FluxBench reported a invalid IP');
-          setDosMessage('Error getting publicIp from FluxBench');
-          dosState += 15;
+          nodeDosState.setDosMessage('Error getting publicIp from FluxBench');
+          nodeDosState.addDosState(15);
           log.error('FluxBench wasnt able to detect flux node public ip');
         }
       } else {
         log.info('FluxBench reported returned error on getpublicipcall');
-        setDosMessage('Error getting publicIp from FluxBench');
-        dosState += 15;
-        log.error(dosMessage);
+        nodeDosState.setDosMessage('Error getting publicIp from FluxBench');
+        nodeDosState.addDosState(15);
+        log.error(nodeDosState.getRawDosMessage());
         return false;
       }
     }
-    dosState += 2;
-    if (dosState > 10) {
-      setDosMessage(dosMessage || 'Flux is not available for outside communication');
-      log.error(dosMessage);
+    nodeDosState.addDosState(2);
+    if (nodeDosState.getDosStateValue() > 10) {
+      nodeDosState.setDosMessage(nodeDosState.getRawDosMessage() || 'Flux is not available for outside communication');
+      log.error(nodeDosState.getRawDosMessage());
       return false;
     }
     if (retryNumber <= 6) {
@@ -1364,10 +1270,10 @@ async function checkMyFluxAvailability(retryNumber = 0) {
       // check sufficient connections
       const connectionInfo = isCommunicationEstablished();
       if (connectionInfo.status === 'error') {
-        dosState += 0.13; // slow increment, DOS after ~75 minutes. 0.13 per minute. This check depends on other nodes being able to connect to my node
-        if (dosState > 10) {
-          setDosMessage(connectionInfo.data.message || 'Flux does not have sufficient peers');
-          log.error(dosMessage);
+        nodeDosState.addDosState(0.13); // slow increment, DOS after ~75 minutes. 0.13 per minute. This check depends on other nodes being able to connect to my node
+        if (nodeDosState.getDosStateValue() > 10) {
+          nodeDosState.setDosMessage(connectionInfo.data.message || 'Flux does not have sufficient peers');
+          log.error(nodeDosState.getRawDosMessage());
           return false;
         }
         await adjustExternalIP(localIp);
@@ -1377,8 +1283,8 @@ async function checkMyFluxAvailability(retryNumber = 0) {
   } else if (measuredUptime.status === 'error') {
     log.error('Flux uptime is not available'); // introduce dos increment
   }
-  dosState = 0;
-  setDosMessage(null);
+  nodeDosState.setDosStateValue(0);
+  nodeDosState.setDosMessage(null);
   await adjustExternalIP(localIp);
   return true;
 }
@@ -1421,8 +1327,8 @@ async function checkDeterministicNodesCollisions() {
             // keep running only older collaterals
             if (filterEarlierSame.length >= 1) {
               log.error(`Flux earlier collision detection on ip:${localSocketAddr}`);
-              dosState = 100;
-              setDosMessage(`Flux earlier collision detection on ip:${localSocketAddr}`);
+              nodeDosState.setDosStateValue(100);
+              nodeDosState.setDosMessage(`Flux earlier collision detection on ip:${localSocketAddr}`);
               setTimeout(() => {
                 checkDeterministicNodesCollisions();
               }, 60 * 1000);
@@ -1433,8 +1339,8 @@ async function checkDeterministicNodesCollisions() {
         } else if (result.length === 1) {
           if (!myNode) {
             log.error('Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.');
-            dosState = 100;
-            setDosMessage('Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.');
+            nodeDosState.setDosStateValue(100);
+            nodeDosState.setDosMessage('Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.');
             setTimeout(() => {
               checkDeterministicNodesCollisions();
             }, 60 * 1000);
@@ -1452,8 +1358,8 @@ async function checkDeterministicNodesCollisions() {
           if (!errorCall) {
             // Other node is reachable and confirmed - this is a collision
             log.error(`Flux collision detection. Node at ${askingIP}:${askingIpPort} is confirmed and reachable on flux network with the same collateral transaction information.`);
-            dosState = 100;
-            setDosMessage(`Flux collision detection. Node at ${askingIP}:${askingIpPort} is confirmed and reachable on flux network with the same collateral transaction information.`);
+            nodeDosState.setDosStateValue(100);
+            nodeDosState.setDosMessage(`Flux collision detection. Node at ${askingIP}:${askingIpPort} is confirmed and reachable on flux network with the same collateral transaction information.`);
             setTimeout(() => {
               checkDeterministicNodesCollisions();
             }, 60 * 1000);
@@ -1474,10 +1380,10 @@ async function checkDeterministicNodesCollisions() {
             const daemonResult = await daemonServiceWalletRpcs.createConfirmationTransaction();
             log.info(`node was confirmed on a different machine ip - createConfirmationTransaction: ${JSON.stringify(daemonResult)}`);
             // Clear any previous DOS state related to this collision
-            if (getDosMessage() && getDosMessage().includes('is confirmed and reachable on flux network')) {
+            if (nodeDosState.getDosMessage() && nodeDosState.getDosMessage().includes('is confirmed and reachable on flux network')) {
               log.info('Clearing previous collision DOS state - this node has successfully taken over the collateral');
-              dosState = 0;
-              setDosMessage(null);
+              nodeDosState.setDosStateValue(0);
+              nodeDosState.setDosMessage(null);
             }
           } else {
             // Other node came back online during grace period
@@ -1514,10 +1420,10 @@ async function checkDeterministicNodesCollisions() {
         }
       }
     } else {
-      dosState += 1;
-      if (dosState > 10) {
-        setDosMessage(dosMessage || 'Flux IP detection failed');
-        log.error(dosMessage);
+      nodeDosState.addDosState(1);
+      if (nodeDosState.getDosStateValue() > 10) {
+        nodeDosState.setDosMessage(nodeDosState.getRawDosMessage() || 'Flux IP detection failed');
+        log.error(nodeDosState.getRawDosMessage());
       } else {
         const measuredUptime = fluxUptime();
         if (measuredUptime.status === 'success' && measuredUptime.data > (config.fluxapps.minUpTime)) {
@@ -1550,11 +1456,7 @@ async function checkDeterministicNodesCollisions() {
  * @returns {object} Message.
  */
 function getDOSState(req, res) {
-  const data = {
-    dosState: stickyDosMessage ? stickyDosState : dosState,
-    dosMessage: stickyDosMessage || dosMessage,
-  };
-  const message = messageHelper.createDataMessage(data);
+  const message = messageHelper.createDataMessage(nodeDosState.getDosData());
   return res ? res.json(message) : message;
 }
 
@@ -1575,9 +1477,12 @@ async function setDOSStateApi(req, res) {
   if (Number.isNaN(newDosState)) {
     return res.json(messageHelper.createErrorMessage('dosState must be a number'));
   }
-  setDosMessage(body.dosMessage ?? null);
-  setDosStateValue(newDosState);
-  return res.json(messageHelper.createSuccessMessage({ dosState, dosMessage }));
+  nodeDosState.setDosMessage(body.dosMessage ?? null);
+  nodeDosState.setDosStateValue(newDosState);
+  return res.json(messageHelper.createSuccessMessage({
+    dosState: nodeDosState.getDosStateValue(),
+    dosMessage: nodeDosState.getRawDosMessage(),
+  }));
 }
 
 
@@ -2256,15 +2161,6 @@ module.exports = {
   setStoredFluxBenchAllowed,
   getStoredFluxBenchAllowed,
   setLocalSocketAddress,
-  getDosMessage,
-  setDosMessage,
-  setDosStateValue,
-  getDosStateValue,
-  isNodeDos,
-  setStickyDosMessage,
-  getStickyDosMessage,
-  clearStickyDosMessage,
-  setStickyDosStateValue,
   fluxUptime,
   fluxSystemUptime,
   isCommunicationEstablished,
