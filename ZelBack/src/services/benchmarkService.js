@@ -309,17 +309,19 @@ async function unseal(params) {
   return executeCall(rpccall, rpcparameters);
 }
 
-// v2 transport methods use clean encoding: the object is passed directly in
-// params, not JSON.stringify'd (unlike v1 seal/unseal).
-async function transportPublicKey(params) {
-  const rpccall = 'v2transportpubkey';
-  const rpcparameters = [params];
+// v2 transport methods take a single string param over the benchmark RPC: a
+// query string for the public-key call, the JSON body for the open call (the
+// same string-param convention as v1 seal/unseal).
+async function transportPublicKey({ appName, fluxID }) {
+  const rpccall = 'v2transportpublickey';
+  const query = `appName=${encodeURIComponent(appName)}&fluxID=${encodeURIComponent(fluxID)}`;
+  const rpcparameters = [query];
   return executeCall(rpccall, rpcparameters);
 }
 
 async function transportOpen(params) {
   const rpccall = 'v2transportopen';
-  const rpcparameters = [params];
+  const rpcparameters = [JSON.stringify(params)];
   return executeCall(rpccall, rpcparameters);
 }
 
