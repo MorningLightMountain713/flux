@@ -6,7 +6,7 @@ describe('appTamperingBlocklistService tests', () => {
   let service;
   let serviceHelperStub;
   let dbHelperStub;
-  let fluxNetworkHelperStub;
+  let nodeDosStateStub;
   let generalServiceStub;
   let daemonMiscStub;
   let benchmarkServiceStub;
@@ -31,7 +31,7 @@ describe('appTamperingBlocklistService tests', () => {
       },
       './serviceHelper': serviceHelperStub,
       './dbHelper': dbHelperStub,
-      './fluxNetworkHelper': fluxNetworkHelperStub,
+      './nodeDosState': nodeDosStateStub,
       './generalService': generalServiceStub,
       './daemonService/daemonServiceMiscRpcs': daemonMiscStub,
       './benchmarkService': benchmarkServiceStub,
@@ -53,7 +53,7 @@ describe('appTamperingBlocklistService tests', () => {
       }),
     };
 
-    fluxNetworkHelperStub = {
+    nodeDosStateStub = {
       setStickyDosMessage: sinon.stub(),
       setStickyDosStateValue: sinon.stub(),
       clearStickyDosMessage: sinon.stub(),
@@ -180,8 +180,8 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
-      expect(fluxNetworkHelperStub.clearStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
     });
 
     it('skips when own txhash cannot be determined', async () => {
@@ -189,8 +189,8 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
-      expect(fluxNetworkHelperStub.clearStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
     });
 
     it('does nothing when txhash is not on the blocklist', async () => {
@@ -199,7 +199,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
     });
 
     it('does nothing when listed but events <= threshold', async () => {
@@ -208,7 +208,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
     });
 
     it('sets sticky DOS when listed AND events > threshold', async () => {
@@ -217,12 +217,12 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      sinon.assert.calledOnce(fluxNetworkHelperStub.setStickyDosMessage);
-      const msg = fluxNetworkHelperStub.setStickyDosMessage.firstCall.args[0];
+      sinon.assert.calledOnce(nodeDosStateStub.setStickyDosMessage);
+      const msg = nodeDosStateStub.setStickyDosMessage.firstCall.args[0];
       expect(msg).to.include(service.DOS_MESSAGE_PREFIX);
       expect(msg).to.include(MOCK_TXHASH);
       expect(msg).to.include('11');
-      sinon.assert.calledWith(fluxNetworkHelperStub.setStickyDosStateValue, 100);
+      sinon.assert.calledWith(nodeDosStateStub.setStickyDosStateValue, 100);
       expect(service.isDosActive()).to.be.true;
     });
 
@@ -237,7 +237,7 @@ describe('appTamperingBlocklistService tests', () => {
       serviceHelperStub.axiosGet.resolves({ data: [] });
       await service.enforceBlocklist();
 
-      sinon.assert.called(fluxNetworkHelperStub.clearStickyDosMessage);
+      sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
       expect(service.isDosActive()).to.be.false;
     });
 
@@ -250,31 +250,31 @@ describe('appTamperingBlocklistService tests', () => {
       setEventCount(5);
       await service.enforceBlocklist();
 
-      sinon.assert.called(fluxNetworkHelperStub.clearStickyDosMessage);
+      sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
       expect(service.isDosActive()).to.be.false;
     });
 
     it('clears an orphaned sticky DOS message owned by this service', async () => {
       // ourDosActive is false, but sticky owned by us (prefix match) from prior run
       const ours = `${service.DOS_MESSAGE_PREFIX}: 42 events, txhash xyz`;
-      fluxNetworkHelperStub.getStickyDosMessage = sinon.stub().returns(ours);
+      nodeDosStateStub.getStickyDosMessage = sinon.stub().returns(ours);
       serviceHelperStub.axiosGet.resolves({ data: [] });
       setEventCount(0);
 
       await service.enforceBlocklist();
 
-      sinon.assert.called(fluxNetworkHelperStub.clearStickyDosMessage);
+      sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
     });
 
     it('does NOT clear a sticky DOS set by a different module', async () => {
       // Some other module set sticky for an unrelated reason
-      fluxNetworkHelperStub.getStickyDosMessage = sinon.stub().returns('some other module sticky reason');
+      nodeDosStateStub.getStickyDosMessage = sinon.stub().returns('some other module sticky reason');
       serviceHelperStub.axiosGet.resolves({ data: [] });
       setEventCount(0);
 
       await service.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.clearStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
     });
   });
 
@@ -328,8 +328,8 @@ describe('appTamperingBlocklistService tests', () => {
 
       await arcaneService.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
-      expect(fluxNetworkHelperStub.setStickyDosStateValue.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosStateValue.called).to.be.false;
       expect(arcaneService.isDosActive()).to.be.false;
     });
 
@@ -361,7 +361,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await svc.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
       expect(serviceHelperStub.axiosGet.called).to.be.false;
     });
 
@@ -373,7 +373,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await svc.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
       expect(serviceHelperStub.axiosGet.called).to.be.false;
     });
 
@@ -388,7 +388,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await svc.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
     });
 
     it('FLUXOS_PATH env var alone does not skip enforcement (spoof guard)', async () => {
@@ -403,7 +403,7 @@ describe('appTamperingBlocklistService tests', () => {
 
         await svc.enforceBlocklist();
 
-        sinon.assert.calledOnce(fluxNetworkHelperStub.setStickyDosMessage);
+        sinon.assert.calledOnce(nodeDosStateStub.setStickyDosMessage);
       } finally {
         if (originalFluxOSPath !== undefined) process.env.FLUXOS_PATH = originalFluxOSPath;
         else delete process.env.FLUXOS_PATH;

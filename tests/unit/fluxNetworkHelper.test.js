@@ -31,6 +31,7 @@ const daemonServiceWalletRpcs = require('../../ZelBack/src/services/daemonServic
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
@@ -1429,8 +1430,8 @@ describe('fluxNetworkHelper tests', () => {
       isDaemonSyncedStub = sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced');
       deterministicFluxListStub = sinon.stub(fluxCommunicationUtils, 'deterministicFluxList');
       getFluxNodeStatusStub = sinon.stub(daemonServiceFluxnodeRpcs, 'getFluxNodeStatus');
-      fluxNetworkHelper.setDosMessage(null);
-      fluxNetworkHelper.setDosStateValue(0);
+      nodeDosState.setDosMessage(null);
+      nodeDosState.setDosStateValue(0);
     });
 
     afterEach(() => {
@@ -1458,8 +1459,8 @@ describe('fluxNetworkHelper tests', () => {
 
       await fluxNetworkHelper.checkDeterministicNodesCollisions();
 
-      expect(fluxNetworkHelper.getDosMessage()).to.be.null;
-      expect(fluxNetworkHelper.getDosStateValue()).to.equal(0);
+      expect(nodeDosState.getDosMessage()).to.be.null;
+      expect(nodeDosState.getDosStateValue()).to.equal(0);
     });
 
     it('should skip availability check when node status is not CONFIRMED', async () => {
@@ -1485,8 +1486,8 @@ describe('fluxNetworkHelper tests', () => {
       await fluxNetworkHelper.checkDeterministicNodesCollisions();
 
       // Node is expired and not in list — availability check is skipped, no DOS penalty
-      expect(fluxNetworkHelper.getDosMessage()).to.be.null;
-      expect(fluxNetworkHelper.getDosStateValue()).to.equal(0);
+      expect(nodeDosState.getDosMessage()).to.be.null;
+      expect(nodeDosState.getDosStateValue()).to.equal(0);
     });
 
     it('should skip availability check when IP is not in confirmed flux list', async () => {
@@ -1513,8 +1514,8 @@ describe('fluxNetworkHelper tests', () => {
       await fluxNetworkHelper.checkDeterministicNodesCollisions();
 
       // CONFIRMED but IP not in list — availability check is skipped, no DOS penalty
-      expect(fluxNetworkHelper.getDosMessage()).to.be.null;
-      expect(fluxNetworkHelper.getDosStateValue()).to.equal(0);
+      expect(nodeDosState.getDosMessage()).to.be.null;
+      expect(nodeDosState.getDosStateValue()).to.equal(0);
     });
 
     it('should find the same node instances and warn about earlier collision detection', async () => {
@@ -1558,8 +1559,8 @@ describe('fluxNetworkHelper tests', () => {
 
       await fluxNetworkHelper.checkDeterministicNodesCollisions();
 
-      expect(fluxNetworkHelper.getDosMessage()).to.equal('Flux earlier collision detection on ip:127.0.0.1:5050');
-      expect(fluxNetworkHelper.getDosStateValue()).to.equal(100);
+      expect(nodeDosState.getDosMessage()).to.equal('Flux earlier collision detection on ip:127.0.0.1:5050');
+      expect(nodeDosState.getDosStateValue()).to.equal(100);
     });
 
     it('should trigger collision detection if the collateral is not matching', async () => {
@@ -1582,8 +1583,8 @@ describe('fluxNetworkHelper tests', () => {
 
       await fluxNetworkHelper.checkDeterministicNodesCollisions();
 
-      expect(fluxNetworkHelper.getDosMessage()).to.equal('Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.');
-      expect(fluxNetworkHelper.getDosStateValue()).to.equal(100);
+      expect(nodeDosState.getDosMessage()).to.equal('Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.');
+      expect(nodeDosState.getDosStateValue()).to.equal(100);
     });
 
     it('should trigger collision detection when same collateral exists on different IP and other node is reachable', async () => {
@@ -1650,8 +1651,8 @@ describe('fluxNetworkHelper tests', () => {
 
       expect(axiosGetStub.calledOnce).to.be.true;
       expect(axiosGetStub.firstCall.args[0]).to.include('192.168.1.200:16127');
-      expect(fluxNetworkHelper.getDosMessage()).to.include('Node at 192.168.1.200:16127 is confirmed and reachable');
-      expect(fluxNetworkHelper.getDosStateValue()).to.equal(100);
+      expect(nodeDosState.getDosMessage()).to.include('Node at 192.168.1.200:16127 is confirmed and reachable');
+      expect(nodeDosState.getDosStateValue()).to.equal(100);
     });
 
     it('should take over collateral when same collateral exists on different IP and other node is unreachable after grace period', async () => {
@@ -1718,7 +1719,7 @@ describe('fluxNetworkHelper tests', () => {
 
       expect(axiosGetStub.calledTwice).to.be.true;
       // DOS state should remain clear since we successfully took over
-      expect(fluxNetworkHelper.getDosStateValue()).to.equal(0);
+      expect(nodeDosState.getDosStateValue()).to.equal(0);
     });
 
     it('should handle case when other node comes back online during grace period', async () => {
@@ -1787,7 +1788,7 @@ describe('fluxNetworkHelper tests', () => {
 
       expect(axiosGetStub.calledTwice).to.be.true;
       // DOS state should remain at 0 since this is not an error condition
-      expect(fluxNetworkHelper.getDosStateValue()).to.equal(0);
+      expect(nodeDosState.getDosStateValue()).to.equal(0);
     });
   });
 
@@ -1800,8 +1801,8 @@ describe('fluxNetworkHelper tests', () => {
     };
 
     beforeEach(() => {
-      fluxNetworkHelper.setDosMessage(null);
-      fluxNetworkHelper.setDosStateValue(null);
+      nodeDosState.setDosMessage(null);
+      nodeDosState.setDosStateValue(null);
     });
 
     afterEach(() => {
@@ -1841,8 +1842,8 @@ describe('fluxNetworkHelper tests', () => {
     it('should return a proper message if no response was passed', async () => {
       const newDosState = 150;
       const newDosMessage = 'Hi! this is the new massage';
-      fluxNetworkHelper.setDosMessage(newDosMessage);
-      fluxNetworkHelper.setDosStateValue(newDosState);
+      nodeDosState.setDosMessage(newDosMessage);
+      nodeDosState.setDosStateValue(newDosState);
       const expectedResult = {
         status: 'success',
         data: {
@@ -1860,8 +1861,8 @@ describe('fluxNetworkHelper tests', () => {
       const res = generateResponse();
       const newDosState = 150;
       const newDosMessage = 'Hi! this is the new massage';
-      fluxNetworkHelper.setDosMessage(newDosMessage);
-      fluxNetworkHelper.setDosStateValue(newDosState);
+      nodeDosState.setDosMessage(newDosMessage);
+      nodeDosState.setDosStateValue(newDosState);
       const expectedResult = {
         status: 'success',
         data: {
@@ -1879,64 +1880,64 @@ describe('fluxNetworkHelper tests', () => {
 
   describe('sticky DOS tests', () => {
     beforeEach(() => {
-      fluxNetworkHelper.setDosMessage(null);
-      fluxNetworkHelper.setDosStateValue(0);
-      fluxNetworkHelper.clearStickyDosMessage();
+      nodeDosState.setDosMessage(null);
+      nodeDosState.setDosStateValue(0);
+      nodeDosState.clearStickyDosMessage();
     });
 
     afterEach(() => {
-      fluxNetworkHelper.clearStickyDosMessage();
-      fluxNetworkHelper.setDosMessage(null);
-      fluxNetworkHelper.setDosStateValue(0);
+      nodeDosState.clearStickyDosMessage();
+      nodeDosState.setDosMessage(null);
+      nodeDosState.setDosStateValue(0);
     });
 
     it('getStickyDosMessage returns null when nothing set', () => {
-      expect(fluxNetworkHelper.getStickyDosMessage()).to.be.null;
+      expect(nodeDosState.getStickyDosMessage()).to.be.null;
     });
 
     it('setStickyDosMessage / getStickyDosMessage roundtrips', () => {
-      fluxNetworkHelper.setStickyDosMessage('tampering flag');
+      nodeDosState.setStickyDosMessage('tampering flag');
 
-      expect(fluxNetworkHelper.getStickyDosMessage()).to.equal('tampering flag');
+      expect(nodeDosState.getStickyDosMessage()).to.equal('tampering flag');
     });
 
     it('clearStickyDosMessage resets sticky state', () => {
-      fluxNetworkHelper.setStickyDosMessage('tampering flag');
-      fluxNetworkHelper.setStickyDosStateValue(100);
+      nodeDosState.setStickyDosMessage('tampering flag');
+      nodeDosState.setStickyDosStateValue(100);
 
-      fluxNetworkHelper.clearStickyDosMessage();
+      nodeDosState.clearStickyDosMessage();
 
-      expect(fluxNetworkHelper.getStickyDosMessage()).to.be.null;
+      expect(nodeDosState.getStickyDosMessage()).to.be.null;
     });
 
     it('getDosMessage returns regular when sticky is null', () => {
-      fluxNetworkHelper.setDosMessage('regular reason');
+      nodeDosState.setDosMessage('regular reason');
 
-      expect(fluxNetworkHelper.getDosMessage()).to.equal('regular reason');
+      expect(nodeDosState.getDosMessage()).to.equal('regular reason');
     });
 
     it('getDosMessage prefers sticky over regular', () => {
-      fluxNetworkHelper.setDosMessage('regular reason');
-      fluxNetworkHelper.setStickyDosMessage('sticky reason');
+      nodeDosState.setDosMessage('regular reason');
+      nodeDosState.setStickyDosMessage('sticky reason');
 
-      expect(fluxNetworkHelper.getDosMessage()).to.equal('sticky reason');
+      expect(nodeDosState.getDosMessage()).to.equal('sticky reason');
     });
 
     it('setDosMessage(null) does NOT clear sticky message', () => {
-      fluxNetworkHelper.setStickyDosMessage('sticky reason');
-      fluxNetworkHelper.setDosMessage('regular reason');
+      nodeDosState.setStickyDosMessage('sticky reason');
+      nodeDosState.setDosMessage('regular reason');
 
-      fluxNetworkHelper.setDosMessage(null);
+      nodeDosState.setDosMessage(null);
 
-      expect(fluxNetworkHelper.getStickyDosMessage()).to.equal('sticky reason');
-      expect(fluxNetworkHelper.getDosMessage()).to.equal('sticky reason');
+      expect(nodeDosState.getStickyDosMessage()).to.equal('sticky reason');
+      expect(nodeDosState.getDosMessage()).to.equal('sticky reason');
     });
 
     it('getDOSState returns sticky pair when sticky is set', () => {
-      fluxNetworkHelper.setDosMessage('regular reason');
-      fluxNetworkHelper.setDosStateValue(50);
-      fluxNetworkHelper.setStickyDosMessage('sticky reason');
-      fluxNetworkHelper.setStickyDosStateValue(100);
+      nodeDosState.setDosMessage('regular reason');
+      nodeDosState.setDosStateValue(50);
+      nodeDosState.setStickyDosMessage('sticky reason');
+      nodeDosState.setStickyDosStateValue(100);
 
       const result = fluxNetworkHelper.getDOSState();
 
@@ -1947,8 +1948,8 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('getDOSState returns regular pair when sticky is null', () => {
-      fluxNetworkHelper.setDosMessage('regular reason');
-      fluxNetworkHelper.setDosStateValue(50);
+      nodeDosState.setDosMessage('regular reason');
+      nodeDosState.setDosStateValue(50);
 
       const result = fluxNetworkHelper.getDOSState();
 
