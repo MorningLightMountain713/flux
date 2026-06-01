@@ -23,6 +23,7 @@ const generalService = require('./generalService');
 const explorerService = require('./explorerService');
 const fluxCommunication = require('./fluxCommunication');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
+const fluxNetworkMonitor = require('./fluxNetworkMonitor');
 const nodeDosState = require('./nodeDosState');
 const geolocationService = require('./geolocationService');
 const syncthingService = require('./syncthingService');
@@ -1388,7 +1389,7 @@ async function getFluxInfo(req, res) {
     // eslint-disable-next-line global-require
     info.flux.dosStaging = require('./residentialNodeDosService').getDosStaging();
     info.flux.upnp = upnpService.isUPNP();
-    info.flux.maxNumberOfIpChanges = fluxNetworkHelper.getMaxNumberOfIpChanges();
+    info.flux.maxNumberOfIpChanges = fluxNetworkMonitor.getMaxNumberOfIpChanges();
     const zelidRes = await getFluxZelID();
     if (zelidRes.status === 'error') {
       throw zelidRes.data;

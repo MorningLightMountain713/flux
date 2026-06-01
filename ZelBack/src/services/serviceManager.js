@@ -10,6 +10,7 @@ const explorerService = require('./explorerService');
 const fluxCommunication = require('./fluxCommunication');
 const networkStateService = require('./networkStateService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
+const fluxNetworkMonitor = require('./fluxNetworkMonitor');
 const nodeDosState = require('./nodeDosState');
 // App modular services - replacing appsService
 const appInstaller = require('./appLifecycle/appInstaller');
@@ -594,7 +595,7 @@ async function startFluxFunctions() {
     // the node's address moved, so every app that survived it has to come up on
     // the new one - asked for durably here rather than driven from the network
     // layer, which sits underneath the reconciler and cannot require it
-    fluxNetworkHelper.setOnAddressChanged((apps, reason) => appReconciler.requestRestartOf(apps, reason));
+    fluxNetworkMonitor.setOnAddressChanged((apps, reason) => appReconciler.requestRestartOf(apps, reason));
     log.info('App Spawner initialized');
 
     fluxNetworkHelper.adjustFirewall();
@@ -618,7 +619,7 @@ async function startFluxFunctions() {
         log.info('Native image update service started');
       }).catch((error) => log.error(`Image update service start error: ${error.message}`));
     }, bootDelay(10 * 60 * 1000)); // 10 minutes after startup
-    fluxNetworkHelper.checkDeterministicNodesCollisions();
+    fluxNetworkMonitor.checkDeterministicNodesCollisions();
     // STARTED ON THE POLICY, NOT ON BOOT. The blocklist this enforces is a document in the
     // signed bundle, and the bundle is not resolved by the time this line runs. Started
     // here, its first tick reads nothing - and reading nothing is correctly refused rather
