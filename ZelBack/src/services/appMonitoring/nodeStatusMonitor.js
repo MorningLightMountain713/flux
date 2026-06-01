@@ -3,7 +3,7 @@ const axios = require('axios');
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const serviceHelper = require('../serviceHelper');
-const fluxNetworkHelper = require('../fluxNetworkHelper');
+const nodeDosState = require('../nodeDosState');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const messageStore = require('../appMessaging/messageStore');
 const nodeConfirmationService = require('../nodeConfirmationService');
@@ -63,7 +63,7 @@ function initialize() {
 
 async function monitorNodeStatus() {
   try {
-    if (fluxNetworkHelper.isNodeDos()) {
+    if (nodeDosState.isNodeDos()) {
       await removeAllAppsLocally( 'DOS state >= 100');
       await serviceHelper.delay(config.fluxapps.nodeMonitorDosRecoveryDelayMs ?? 600000);
       return monitorNodeStatus();

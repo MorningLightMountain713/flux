@@ -6,7 +6,7 @@ describe('appTamperingBlocklistService tests', () => {
   let service;
   let serviceHelperStub;
   let dbHelperStub;
-  let fluxNetworkHelperStub;
+  let nodeDosStateStub;
   let generalServiceStub;
   let daemonMiscStub;
   let benchmarkServiceStub;
@@ -31,7 +31,7 @@ describe('appTamperingBlocklistService tests', () => {
       },
       './serviceHelper': serviceHelperStub,
       './dbHelper': dbHelperStub,
-      './fluxNetworkHelper': fluxNetworkHelperStub,
+      './nodeDosState': nodeDosStateStub,
       './generalService': generalServiceStub,
       './daemonService/daemonServiceMiscRpcs': daemonMiscStub,
       './benchmarkService': benchmarkServiceStub,
@@ -45,12 +45,15 @@ describe('appTamperingBlocklistService tests', () => {
 
     dbHelperStub = {
       databaseConnection: sinon.stub().returns({
-        db: sinon.stub().returns({ name: 'mockdb' }),
+        db: sinon.stub().returns({
+          collection: sinon.stub().returns({
+            countDocuments: sinon.stub().resolves(0),
+          }),
+        }),
       }),
-      aggregateInDatabase: sinon.stub().resolves([]),
     };
 
-    fluxNetworkHelperStub = {
+    nodeDosStateStub = {
       setStickyDosMessage: sinon.stub(),
       setStickyDosStateValue: sinon.stub(),
       clearStickyDosMessage: sinon.stub(),
@@ -77,13 +80,15 @@ describe('appTamperingBlocklistService tests', () => {
     sinon.restore();
   });
 
-  // Helper: make the incident aggregation return n severity-1 incidents,
-  // i.e. a tamper score of exactly n.
-  function setTamperScore(n) {
-    const incidents = Array.from({ length: n }, () => ({
-      eventType: 'mount_vanished', severity: 1,
-    }));
-    dbHelperStub.aggregateInDatabase = sinon.stub().resolves(incidents);
+  // Helper: set documents returned by the mongo countDocuments stub
+  function setEventCount(n) {
+    dbHelperStub.databaseConnection = sinon.stub().returns({
+      db: sinon.stub().returns({
+        collection: sinon.stub().returns({
+          countDocuments: sinon.stub().resolves(n),
+        }),
+      }),
+    });
   }
 
   describe('fetchBlocklist', () => {
@@ -113,64 +118,33 @@ describe('appTamperingBlocklistService tests', () => {
     });
   });
 
-  describe('computeTamperScore', () => {
-    it('scores only current-schema incident documents', async () => {
-      setTamperScore(1);
+  describe('countTamperingEvents', () => {
+    it('returns the count from mongo', async () => {
+      setEventCount(42);
 
-      await service.computeTamperScore();
+      const result = await service.countTamperingEvents();
 
-      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
-      expect(pipeline[0]).to.deep.equal({ $match: { schemaVersion: { $gte: 1 } } });
-    });
-
-    it('sums stored severities across incidents', async () => {
-      dbHelperStub.aggregateInDatabase = sinon.stub().resolves([
-        { eventType: 'container_vanished', severity: 3 },
-        { eventType: 'network_pruned', severity: 1 },
-        { eventType: 'network_detached', severity: 1 },
-        { eventType: 'recreation_failed', severity: 0 }, // operational
-      ]);
-
-      const result = await service.computeTamperScore();
-
-      expect(result).to.equal(5);
-    });
-
-    it('scores full weight regardless of stored duringBootStorm flags', async () => {
-      // Stored incidents may carry a duringBootStorm flag; it is inert —
-      // severities always sum in full.
-      dbHelperStub.aggregateInDatabase = sinon.stub().resolves([
-        { eventType: 'mount_vanished', severity: 1, duringBootStorm: true },
-        { eventType: 'container_vanished', severity: 3, duringBootStorm: true },
-      ]);
-
-      const result = await service.computeTamperScore();
-
-      expect(result).to.equal(4);
-    });
-
-    it('treats a missing severity as zero', async () => {
-      dbHelperStub.aggregateInDatabase = sinon.stub().resolves([
-        { eventType: 'mount_vanished' },
-      ]);
-
-      const result = await service.computeTamperScore();
-
-      expect(result).to.equal(0);
+      expect(result).to.equal(42);
     });
 
     it('returns 0 when DB is unavailable', async () => {
       dbHelperStub.databaseConnection = sinon.stub().returns(null);
 
-      const result = await service.computeTamperScore();
+      const result = await service.countTamperingEvents();
 
       expect(result).to.equal(0);
     });
 
     it('returns 0 on mongo errors', async () => {
-      dbHelperStub.aggregateInDatabase = sinon.stub().rejects(new Error('mongo boom'));
+      dbHelperStub.databaseConnection = sinon.stub().returns({
+        db: sinon.stub().returns({
+          collection: sinon.stub().returns({
+            countDocuments: sinon.stub().rejects(new Error('mongo boom')),
+          }),
+        }),
+      });
 
-      const result = await service.computeTamperScore();
+      const result = await service.countTamperingEvents();
 
       expect(result).to.equal(0);
     });
@@ -206,8 +180,8 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
-      expect(fluxNetworkHelperStub.clearStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
     });
 
     it('skips when own txhash cannot be determined', async () => {
@@ -215,47 +189,47 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
-      expect(fluxNetworkHelperStub.clearStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
     });
 
     it('does nothing when txhash is not on the blocklist', async () => {
       serviceHelperStub.axiosGet.resolves({ data: ['otherhash'] });
-      setTamperScore(100);
+      setEventCount(100);
 
       await service.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
     });
 
-    it('does nothing when listed but score <= threshold', async () => {
+    it('does nothing when listed but events <= threshold', async () => {
       serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setTamperScore(10); // threshold is >10, so exactly 10 should NOT trigger
+      setEventCount(10); // threshold is >10, so exactly 10 should NOT trigger
 
       await service.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
     });
 
-    it('sets sticky DOS when listed AND score > threshold', async () => {
+    it('sets sticky DOS when listed AND events > threshold', async () => {
       serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setTamperScore(11);
+      setEventCount(11);
 
       await service.enforceBlocklist();
 
-      sinon.assert.calledOnce(fluxNetworkHelperStub.setStickyDosMessage);
-      const msg = fluxNetworkHelperStub.setStickyDosMessage.firstCall.args[0];
+      sinon.assert.calledOnce(nodeDosStateStub.setStickyDosMessage);
+      const msg = nodeDosStateStub.setStickyDosMessage.firstCall.args[0];
       expect(msg).to.include(service.DOS_MESSAGE_PREFIX);
       expect(msg).to.include(MOCK_TXHASH);
       expect(msg).to.include('11');
-      sinon.assert.calledWith(fluxNetworkHelperStub.setStickyDosStateValue, 100);
+      sinon.assert.calledWith(nodeDosStateStub.setStickyDosStateValue, 100);
       expect(service.isDosActive()).to.be.true;
     });
 
     it('clears sticky DOS on next tick when condition no longer holds', async () => {
       // First tick: set DOS
       serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setTamperScore(15);
+      setEventCount(15);
       await service.enforceBlocklist();
       expect(service.isDosActive()).to.be.true;
 
@@ -263,44 +237,44 @@ describe('appTamperingBlocklistService tests', () => {
       serviceHelperStub.axiosGet.resolves({ data: [] });
       await service.enforceBlocklist();
 
-      sinon.assert.called(fluxNetworkHelperStub.clearStickyDosMessage);
+      sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
       expect(service.isDosActive()).to.be.false;
     });
 
-    it('clears sticky DOS when the score drops to <= threshold', async () => {
+    it('clears sticky DOS when events drop to <= threshold', async () => {
       serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setTamperScore(15);
+      setEventCount(15);
       await service.enforceBlocklist();
       expect(service.isDosActive()).to.be.true;
 
-      setTamperScore(5);
+      setEventCount(5);
       await service.enforceBlocklist();
 
-      sinon.assert.called(fluxNetworkHelperStub.clearStickyDosMessage);
+      sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
       expect(service.isDosActive()).to.be.false;
     });
 
     it('clears an orphaned sticky DOS message owned by this service', async () => {
       // ourDosActive is false, but sticky owned by us (prefix match) from prior run
-      const ours = `${service.DOS_MESSAGE_PREFIX}: tamper score 42, txhash xyz`;
-      fluxNetworkHelperStub.getStickyDosMessage = sinon.stub().returns(ours);
+      const ours = `${service.DOS_MESSAGE_PREFIX}: 42 events, txhash xyz`;
+      nodeDosStateStub.getStickyDosMessage = sinon.stub().returns(ours);
       serviceHelperStub.axiosGet.resolves({ data: [] });
-      setTamperScore(0);
+      setEventCount(0);
 
       await service.enforceBlocklist();
 
-      sinon.assert.called(fluxNetworkHelperStub.clearStickyDosMessage);
+      sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
     });
 
     it('does NOT clear a sticky DOS set by a different module', async () => {
       // Some other module set sticky for an unrelated reason
-      fluxNetworkHelperStub.getStickyDosMessage = sinon.stub().returns('some other module sticky reason');
+      nodeDosStateStub.getStickyDosMessage = sinon.stub().returns('some other module sticky reason');
       serviceHelperStub.axiosGet.resolves({ data: [] });
-      setTamperScore(0);
+      setEventCount(0);
 
       await service.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.clearStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
     });
   });
 
@@ -350,12 +324,12 @@ describe('appTamperingBlocklistService tests', () => {
     it('enforceBlocklist is a no-op when bench reports systemsecure=true', async () => {
       const arcaneService = makeArcaneService();
       serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setTamperScore(100);
+      setEventCount(100);
 
       await arcaneService.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
-      expect(fluxNetworkHelperStub.setStickyDosStateValue.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosStateValue.called).to.be.false;
       expect(arcaneService.isDosActive()).to.be.false;
     });
 
@@ -383,11 +357,11 @@ describe('appTamperingBlocklistService tests', () => {
       benchmarkServiceStub.getBenchmarks = sinon.stub().rejects(new Error('bench down'));
       const svc = loadService();
       serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setTamperScore(100);
+      setEventCount(100);
 
       await svc.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
       expect(serviceHelperStub.axiosGet.called).to.be.false;
     });
 
@@ -395,11 +369,11 @@ describe('appTamperingBlocklistService tests', () => {
       benchmarkServiceStub.getBenchmarks = sinon.stub().resolves({ status: 'error' });
       const svc = loadService();
       serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setTamperScore(100);
+      setEventCount(100);
 
       await svc.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
       expect(serviceHelperStub.axiosGet.called).to.be.false;
     });
 
@@ -410,11 +384,11 @@ describe('appTamperingBlocklistService tests', () => {
       });
       const svc = loadService();
       serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setTamperScore(100);
+      setEventCount(100);
 
       await svc.enforceBlocklist();
 
-      expect(fluxNetworkHelperStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
     });
 
     it('FLUXOS_PATH env var alone does not skip enforcement (spoof guard)', async () => {
@@ -424,12 +398,12 @@ describe('appTamperingBlocklistService tests', () => {
       process.env.FLUXOS_PATH = '/fake/arcane/path';
       try {
         serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-        setTamperScore(100);
+        setEventCount(100);
         const svc = loadService();
 
         await svc.enforceBlocklist();
 
-        sinon.assert.calledOnce(fluxNetworkHelperStub.setStickyDosMessage);
+        sinon.assert.calledOnce(nodeDosStateStub.setStickyDosMessage);
       } finally {
         if (originalFluxOSPath !== undefined) process.env.FLUXOS_PATH = originalFluxOSPath;
         else delete process.env.FLUXOS_PATH;
