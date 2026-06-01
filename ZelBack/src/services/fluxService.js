@@ -20,6 +20,7 @@ const generalService = require('./generalService');
 const explorerService = require('./explorerService');
 const fluxCommunication = require('./fluxCommunication');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
+const nodeDosState = require('./nodeDosState');
 const geolocationService = require('./geolocationService');
 const syncthingService = require('./syncthingService');
 const dockerService = require('./dockerService');
@@ -1259,11 +1260,7 @@ async function getFluxInfo(req, res) {
       throw timeResult.data;
     }
     info.flux.timezone = timeResult.data;
-    const dosResult = await fluxNetworkHelper.getDOSState();
-    if (dosResult.status === 'error') {
-      throw dosResult.data;
-    }
-    info.flux.dos = dosResult.data;
+    info.flux.dos = nodeDosState.getDosData();
     // eslint-disable-next-line global-require
     const appInspector = require('./appManagement/appInspector');
     const dosAppsResult = await appInspector.getAppsDOSState();
