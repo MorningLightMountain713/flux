@@ -10,6 +10,7 @@ const explorerService = require('./explorerService');
 const fluxCommunication = require('./fluxCommunication');
 const networkStateService = require('./networkStateService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
+const fluxNetworkMonitor = require('./fluxNetworkMonitor');
 const nodeDosState = require('./nodeDosState');
 // App modular services - replacing appsService
 const appInstaller = require('./appLifecycle/appInstaller');
@@ -352,7 +353,7 @@ async function startFluxFunctions() {
       imageUpdateService.startImageUpdateService();
       log.info('Native image update service started');
     }, bootDelay(10 * 60 * 1000)); // 10 minutes after startup
-    fluxNetworkHelper.checkDeterministicNodesCollisions();
+    fluxNetworkMonitor.checkDeterministicNodesCollisions();
     appTamperingBlocklistService.start().catch((err) => {
       log.error(`appTamperingBlocklist start error: ${err.message}`);
     });
