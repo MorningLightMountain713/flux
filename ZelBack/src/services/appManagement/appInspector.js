@@ -854,7 +854,7 @@ async function checkStorageSpaceForApps(appsStorageViolations) {
         } else {
           log.warn(`Application ${deployment.appName} is using ${totalSize} space which is more than allowed ${maxAllowedSize}. Soft redeploying...`);
           // eslint-disable-next-line no-await-in-loop, global-require
-          const { redeployApplication } = require('../../services/appLifecycle/advancedWorkflows');
+          const { redeployApplication } = require('../../services/appLifecycle/appOperations');
           // eslint-disable-next-line no-await-in-loop
           await redeployApplication(deployment.appName, { createVolumes: false }).catch((error) => {
             log.error(error);

@@ -80,7 +80,7 @@ describe('appUninstaller tests', () => {
       '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
         config: configStub,
       }),
-      './advancedWorkflows': {
+      './appOperations': {
         reindexGlobalAppsInformation: sinon.stub().resolves(),
         updateAppSpecsForRestoredNode: sinon.stub().resolves(),
         checkAndNotifyPeersOfRunningApps: sinon.stub().resolves(),

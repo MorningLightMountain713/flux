@@ -33,7 +33,7 @@ const appInspector = require('./services/appManagement/appInspector');
 const appController = require('./services/appManagement/appController');
 const appInstaller = require('./services/appLifecycle/appInstaller');
 const appUninstaller = require('./services/appLifecycle/appUninstaller');
-const advancedWorkflows = require('./services/appLifecycle/advancedWorkflows');
+const appOperations = require('./services/appLifecycle/appOperations');
 const imageManager = require('./services/appSecurity/imageManager');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
@@ -719,11 +719,11 @@ module.exports = (app) => {
     backupRestoreService.downloadLocalFile(req, res);
   });
   app.post('/apps/appendbackuptask', (req, res) => {
-    advancedWorkflows.appendBackupTask(req, res);
+    appOperations.appendBackupTask(req, res);
   });
 
   app.post('/apps/appendrestoretask', (req, res) => {
-    advancedWorkflows.appendRestoreTask(req, res);
+    appOperations.appendRestoreTask(req, res);
   });
 
   app.post('/ioutils/fileupload/:type?/:appname?/:component?/:folder?/:filename?', (req, res) => {
@@ -1246,10 +1246,10 @@ module.exports = (app) => {
     registryManager.reindexGlobalAppsLocationAPI(req, res);
   });
   app.get('/apps/redeploy/:appname?/:force?/:global?', (req, res) => {
-    advancedWorkflows.redeployApplicationAPI(req, res);
+    appOperations.redeployApplicationAPI(req, res);
   });
   app.get('/apps/redeploycomponent/:appname?/:component?/:force?', (req, res) => {
-    advancedWorkflows.redeployComponentAPI(req, res);
+    appOperations.redeployComponentAPI(req, res);
   });
   app.get('/apps/reconstructhashes', (req, res) => {
     registryManager.reconstructAppMessagesHashCollectionAPI(req, res);
@@ -1373,7 +1373,7 @@ module.exports = (app) => {
     appSubmission.registerAppGlobalyApi(req, res);
   });
   app.post('/apps/appupdate', (req, res) => {
-    advancedWorkflows.updateAppGlobalyApi(req, res);
+    appOperations.updateAppGlobalyApi(req, res);
   });
   app.post('/apps/getpublickey', (req, res) => {
     cryptographicKeys.getPublicKey(req, res);
