@@ -107,6 +107,7 @@ describe('messageStore tests', () => {
       deserializeTempMessage: sinon.stub().callsFake((msg) => Promise.resolve(makeMockAppEvent(msg))),
       deserializeMessage: sinon.stub().resolves({}),
       authorize: sinon.stub().resolves(),
+      verifyAttestation: sinon.stub().returns(true),
     };
 
     logStub = {
@@ -298,6 +299,101 @@ describe('messageStore tests', () => {
 
       expect(result).to.deep.equal({ rebroadcast: true });
       expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
+    });
+
+    describe('arcane attestation gate', () => {
+      // A v9 (envelope version 2) encrypted event. isEncrypted true drives the
+      // gate; the decrypt branch downstream is short-circuited by isSystemSecure
+      // resolving false, so these tests isolate the gate itself.
+      function makeEncryptedV9Event({ version = 2, attestation = 'att-sig' } = {}) {
+        const specs = { name: 'enc-app', owner: 'owner1', version: 9 };
+        return {
+          hash: 'enchash',
+          timestamp: Date.now(),
+          version,
+          isEncrypted: true,
+          isRegistration: true,
+          isUpdate: false,
+          spec: { ...specs, serialize: () => specs },
+          serialize: () => ({
+            type: 'fluxappregister',
+            version,
+            appSpecifications: specs,
+            hash: 'enchash',
+            timestamp: Date.now(),
+            signature: 'sig',
+            contentHash: 'deadbeef',
+            extend: false,
+            arcaneAttestation: attestation,
+          }),
+        };
+      }
+
+      const encryptedMessage = {
+        type: 'fluxappregister',
+        version: 2,
+        appSpecifications: { name: 'enc-app', cipher: 'xxx' },
+        hash: 'enchash',
+        timestamp: Date.now(),
+        signature: 'sig',
+      };
+
+      function buildWithSystemSecure(secure) {
+        return proxyquire(
+          '../../ZelBack/src/services/appMessaging/messageStore',
+          buildProxyquireStubs({
+            '../benchmarkService': { isSystemSecure: sinon.stub().resolves(secure) },
+          }),
+        );
+      }
+
+      beforeEach(() => {
+        appsRepositoryStub.getPermanentMessage.resolves(null);
+        appsRepositoryStub.getTempMessage.resolves(null);
+        const mockDb = { db: sinon.stub().returns('database') };
+        dbHelperStub.databaseConnection.returns(mockDb);
+        dbHelperStub.findOneInDatabase.resolves(null);
+        dbHelperStub.insertOneToDatabase.resolves();
+      });
+
+      it('rejects an encrypted v9 message with a missing or invalid attestation', async () => {
+        appEventVerifierStub.deserializeTempMessage.resolves(makeEncryptedV9Event());
+        appEventVerifierStub.verifyAttestation.returns(false);
+        messageStore = buildWithSystemSecure(false);
+
+        const result = await messageStore.storeAppTemporaryMessage(encryptedMessage);
+
+        expect(result).to.be.instanceOf(Error);
+        expect(result.message).to.include('arcane attestation');
+        expect(dbHelperStub.insertOneToDatabase.called).to.be.false;
+      });
+
+      it('stores an encrypted v9 message carrying a valid attestation', async () => {
+        appEventVerifierStub.deserializeTempMessage.resolves(makeEncryptedV9Event());
+        appEventVerifierStub.verifyAttestation.returns(true);
+        messageStore = buildWithSystemSecure(false);
+
+        const result = await messageStore.storeAppTemporaryMessage(encryptedMessage);
+
+        expect(result).to.deep.equal({ rebroadcast: true });
+        expect(appEventVerifierStub.verifyAttestation.calledOnce).to.be.true;
+        const stored = dbHelperStub.insertOneToDatabase.firstCall.args[2];
+        expect(stored.arcaneAttestation).to.equal('att-sig');
+      });
+
+      it('does not subject a v8 (envelope version 1) encrypted message to the gate', async () => {
+        // Legacy enterprise apps predate attestation and aren't born attested;
+        // AppEventLegacy has no verifyArcaneAttestation, so the gate must skip them.
+        appEventVerifierStub.deserializeTempMessage.resolves(makeEncryptedV9Event({ version: 1, attestation: undefined }));
+        appEventVerifierStub.verifyAttestation.returns(false);
+        messageStore = buildWithSystemSecure(false);
+
+        const result = await messageStore.storeAppTemporaryMessage({ ...encryptedMessage, version: 1 });
+
+        expect(result).to.deep.equal({ rebroadcast: true });
+        expect(appEventVerifierStub.verifyAttestation.called).to.be.false;
+        expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
+      });
     });
   });
 

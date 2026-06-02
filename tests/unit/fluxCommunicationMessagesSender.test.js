@@ -292,6 +292,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         signature,
         hash,
         arcaneSender: false,
+        arcaneAttestation: undefined,
       };
     });
     afterEach(() => {
