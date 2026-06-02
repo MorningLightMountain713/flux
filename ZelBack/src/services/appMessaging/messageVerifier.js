@@ -409,7 +409,13 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
     }
     if (confirmedEvent.isRegistration) {
       const requiredSats = await computeRegistrationFee(pricingSpec, height);
-      if (BigInt(valueSat) >= requiredSats) {
+      if (requiredSats === 0n) {
+        // Fail-closed: a registration always pays for its TTL, so a fee of 0 can
+        // only mean pricing isn't in force yet (no PriceMessage on chain for v9).
+        // Reject rather than mint a free app. Legacy (v1-v8) always has a minPrice
+        // floor, so this only ever catches the un-bootstrapped v9 case.
+        log.warn(`App ${hash} registration rejected: pricing not available at height ${height}`);
+      } else if (BigInt(valueSat) >= requiredSats) {
         await insertAppSpecifications(instantiated.serialize());
         await processPendingUpdates(instantiated.name);
       } else {
