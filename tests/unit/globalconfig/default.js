@@ -220,7 +220,7 @@ module.exports = {
     addressMultisig: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX',
     addressMultisigB: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX',
     addressDevelopment: 't1Mzja9iJcEYeW5B4m4s1tJG8M42odFZ16A',
-    oracleAddress: 't1KRvTTXmaYZmjpgEVbk7cAfu83uYJDoAn4',
+    messageAuthorityAddress: 't1eW962yoqbfCYKzFYaZJVYzeopSmhaKL4f',
     multisigAddressChange: 1670000,
     epochstart: 694000,
     publicepochstart: 705000,
