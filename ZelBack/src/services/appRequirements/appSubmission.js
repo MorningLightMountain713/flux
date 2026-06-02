@@ -19,8 +19,6 @@ const entitlementsState = require('../entitlementsState');
 const { peerManager } = require('../utils/peerState');
 const { Privilege, authOf } = require('../utils/privileges');
 
-const isArcane = Boolean(process.env.FLUXOS_PATH);
-
 /**
  * Resolve + validate a submission spec, class-first, across all v8/v9
  * cleartext and encrypted forms:
@@ -305,7 +303,6 @@ async function registerAppGlobalyApi(req, res) {
         timestamp,
         extend,
         signature,
-        arcaneSender: isArcane,
         arcaneAttestation,
       };
       await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
