@@ -117,6 +117,18 @@ async function storeAppTemporaryMessage(message, options = {}) {
   }
 
   if (furtherVerification) {
+    // A v9 encrypted spec must carry a valid arcane attestation (an Arcane
+    // node's signed receipt that a genuine SAS validated it), verified locally
+    // against the hardcoded network key so non-Arcane nodes reject too. Drop
+    // (do not relay) on a missing/invalid attestation.
+    //
+    // v9 only. v8 encrypted apps are intentionally never gated: they predate
+    // attestation and aren't born attested, so rejecting would partition legacy
+    // apps off the network — v8 stays accepted as-is, being phased out.
+    if (appEvent.version === 2 && appEvent.isEncrypted && !appEventVerifier.verifyAttestation(appEvent)) {
+      return new Error('Invalid or missing arcane attestation on encrypted Flux App message');
+    }
+
     let validationBlob;
     if (appEvent.isEncrypted) {
       if (await benchmarkService.isSystemSecure()) {
@@ -172,6 +184,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
     receivedAt: new Date(receivedAt),
     expireAt: new Date(validTill),
     arcaneSender: message.arcaneSender,
+    arcaneAttestation: serialized.arcaneAttestation,
   };
   if (serialized.contentHash !== undefined) {
     value.contentHash = serialized.contentHash;

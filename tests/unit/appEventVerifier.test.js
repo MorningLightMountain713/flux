@@ -11,6 +11,8 @@ describe('appEventVerifier', () => {
   let signatureVerifierStub;
   let chainUtilitiesStub;
   let configStub;
+  let benchmarkServiceStub;
+  let arcaneAttestationStub;
   let appEventVerifier;
 
   // Minimal AppEvent class double — just enough surface for authorize() to
@@ -79,7 +81,17 @@ describe('appEventVerifier', () => {
         ConfirmedAppEvent: FakeConfirmedAppEvent,
         computeMessageHash: sinon.stub().returns('v1-hash-abc'),
         computeMessageHashV2: sinon.stub().returns('v2-hash-xyz'),
+        buildArcaneAttestMessage: sinon.stub().callsFake((h) => `FLUX_ARCANE_ATTEST_v1${h}`),
       }),
+    };
+
+    benchmarkServiceStub = {
+      attest: sinon.stub(),
+    };
+
+    arcaneAttestationStub = {
+      ARCANE_ATTESTATION_PUBKEY: 'test-network-pubkey',
+      verifyAttestationSignature: sinon.stub(),
     };
 
     signatureVerifierStub = {
@@ -102,6 +114,8 @@ describe('appEventVerifier', () => {
         config: configStub,
         '../utils/specLibs': specLibsStub,
         '../signatureVerifier': signatureVerifierStub,
+        '../benchmarkService': benchmarkServiceStub,
+        '../utils/arcaneAttestation': arcaneAttestationStub,
         '../utils/chainUtilities': chainUtilitiesStub,
       },
     );
@@ -400,6 +414,50 @@ describe('appEventVerifier', () => {
         timestamp: 12345,
         signature: 'sig',
       })).to.be.rejectedWith(/envelope v2 requires contentHash/);
+    });
+  });
+
+  describe('requestAttestation', () => {
+    it('signs the domain-separated content hash via the local SAS and returns the signature', async () => {
+      benchmarkServiceStub.attest.resolves({ status: 'success', data: { signature: 'sas-signature-b64', status: 'ok' } });
+
+      const signature = await appEventVerifier.requestAttestation('deadbeef');
+
+      expect(signature).to.equal('sas-signature-b64');
+      expect(benchmarkServiceStub.attest.calledOnceWithExactly({ message: 'FLUX_ARCANE_ATTEST_v1deadbeef' })).to.be.true;
+    });
+
+    it('throws when the SAS call does not succeed', async () => {
+      benchmarkServiceStub.attest.resolves({ status: 'error', data: 'SAS unavailable' });
+
+      await expect(appEventVerifier.requestAttestation('deadbeef'))
+        .to.be.rejectedWith(/Failed to obtain arcane attestation/);
+    });
+
+    it('throws when the SAS response omits a signature', async () => {
+      benchmarkServiceStub.attest.resolves({ status: 'success', data: { status: 'ok' } });
+
+      await expect(appEventVerifier.requestAttestation('deadbeef'))
+        .to.be.rejectedWith(/Failed to obtain arcane attestation/);
+    });
+  });
+
+  describe('verifyAttestation', () => {
+    it('delegates to the event with the local verify primitive and the network key', () => {
+      const appEvent = { verifyArcaneAttestation: sinon.stub().returns(true) };
+
+      const result = appEventVerifier.verifyAttestation(appEvent);
+
+      expect(result).to.be.true;
+      expect(appEvent.verifyArcaneAttestation.calledOnceWithExactly(
+        arcaneAttestationStub.verifyAttestationSignature,
+        'test-network-pubkey',
+      )).to.be.true;
+    });
+
+    it('returns false when the event reports an invalid attestation', () => {
+      const appEvent = { verifyArcaneAttestation: sinon.stub().returns(false) };
+      expect(appEventVerifier.verifyAttestation(appEvent)).to.be.false;
     });
   });
 

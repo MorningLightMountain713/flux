@@ -1,6 +1,8 @@
 const config = require('config');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const signatureVerifier = require('../signatureVerifier');
+const benchmarkService = require('../benchmarkService');
+const { ARCANE_ATTESTATION_PUBKEY, verifyAttestationSignature } = require('../utils/arcaneAttestation');
 const { getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
 
 async function deserializeMessage(message) {
@@ -80,6 +82,42 @@ async function authorize({
   );
 }
 
+/**
+ * Request an arcane attestation from the local SAS for an encrypted spec.
+ *
+ * Signs the domain-separated attestation message over the spec's contentHash,
+ * proving a genuine SAS instance processed this content. Only the originating
+ * Arcane node calls this; relayers carry the attestation as-is. Throws on SAS
+ * failure — this is our own broadcast, so the submission should fail loudly
+ * rather than broadcast an unattested encrypted spec.
+ *
+ * @param {string} contentHash
+ * @returns {Promise<string>} base64 Ed25519 signature
+ */
+async function requestAttestation(contentHash) {
+  const backend = await getSpecBackend();
+  const message = backend.buildArcaneAttestMessage(contentHash);
+  const response = await benchmarkService.attest({ message });
+  if (response.status !== 'success' || !response.data || !response.data.signature) {
+    const detail = (response.data && response.data.message) || response.data || 'unknown error';
+    throw new Error(`Failed to obtain arcane attestation: ${detail}`);
+  }
+  return response.data.signature;
+}
+
+/**
+ * Verify an event's arcane attestation against the network attestation key.
+ *
+ * Local-only (hardcoded public key + node:crypto), so any node — Arcane or not —
+ * can verify without a SAS.
+ *
+ * @param {object} appEvent - SignedAppEvent or ConfirmedAppEvent
+ * @returns {boolean}
+ */
+function verifyAttestation(appEvent) {
+  return appEvent.verifyArcaneAttestation(verifyAttestationSignature, ARCANE_ATTESTATION_PUBKEY);
+}
+
 async function computeOutboundHash({
   type, envelopeVersion, specBlob, contentHash, timestamp, signature,
 }) {
@@ -100,6 +138,8 @@ module.exports = {
   deserializeMessage,
   deserializeTempMessage,
   authorize,
+  requestAttestation,
+  verifyAttestation,
   computeOutboundHash,
   _internal: {
     isMarketplaceApp,
