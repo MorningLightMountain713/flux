@@ -233,7 +233,14 @@ module.exports = {
     addressMultisig: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX',
     addressMultisigB: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX',
     addressDevelopment: 't1Mzja9iJcEYeW5B4m4s1tJG8M42odFZ16A',
-    oracleAddress: 't1KRvTTXmaYZmjpgEVbk7cAfu83uYJDoAn4',
+    // Authority for the v9 foundation soft-fork messages (PriceMessage,
+    // PriceModifierMessage, OracleKeyMessage, MarketplacePricingMessage,
+    // PolicyGroupMessage). Deliberately separate from the payment-collection
+    // multisig above. Empty = fail-closed (those messages are rejected).
+    // TEST VALUE (a key we control on the dev oracle server) — MUST be changed
+    // to the production foundation authority address before mainnet.
+    // See fluxModels PRICING_ORACLE / ROLLOUT docs.
+    messageAuthorityAddress: 't1eW962yoqbfCYKzFYaZJVYzeopSmhaKL4f',
     multisigAddressChange: 1670000,
     epochstart: 694000,
     publicepochstart: 705000,

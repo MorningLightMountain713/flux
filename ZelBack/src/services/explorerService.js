@@ -25,6 +25,7 @@ const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const { getSpecPolicy } = require('./utils/specLibs');
 const priceOracleState = require('./pricing/priceOracleState');
 const entitlementsState = require('./entitlementsState');
+const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
 
 const coinbaseFusionIndexCollection = config.database.daemon.collections.coinbaseFusionIndex; // fusion
 const utxoIndexCollection = config.database.daemon.collections.utxoIndex;
@@ -302,9 +303,31 @@ async function storeToCollection(collectionName, doc) {
   await dbHelper.updateOneInDatabase(database, collectionName, query, update, options);
 }
 
-function isOracleSigner(tx) {
-  const oracleAddr = config.fluxapps.oracleAddress;
-  if (!oracleAddr) return false;
+// Flux transparent (t1) P2PKH address version byte (0x1CB8).
+const FLUX_T1_PUBKEY_HASH = '1cb8';
+
+// Authority for the v9 foundation-signed soft-fork messages (PriceMessage,
+// PriceModifierMessage, OracleKeyMessage, MarketplacePricingMessage,
+// PolicyGroupMessage). Deliberately separate from the payment-collection
+// multisig (addressMultisig/B), which remains the legacy `p_` authority and the
+// app-payment receiver. None of these v9 message types exist on chain yet, so
+// keying them off a dedicated address breaks no history.
+function isMessageAuthority(tx) {
+  const authAddr = config.fluxapps.messageAuthorityAddress;
+  if (!authAddr) return false;
+  return tx.vin.some((vin) => vin.address === authAddr);
+}
+
+// A RateMessage (0x03) is authorised only if its transaction is signed by the
+// oracle key currently published on-chain via OracleKeyMessage (0x05): resolve the
+// effective oracle pubkey at this height, derive its t1 address, and require a
+// matching transaction input. No oracle key in force -> no RateMessage accepted.
+function isOracleSigner(tx, height) {
+  const history = priceOracleState.getOracleKeyHistory();
+  if (!history) return false;
+  const oracleKey = history.resolveAt(height);
+  if (!oracleKey || !oracleKey.pubkey) return false;
+  const oracleAddr = pubKeyToAddr(Buffer.from(oracleKey.pubkey).toString('hex'), FLUX_T1_PUBKEY_HASH);
   return tx.vin.some((vin) => vin.address === oracleAddr);
 }
 
@@ -332,7 +355,7 @@ async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
       break;
     }
     case 'price':
-      if (!isSenderFoundation) return;
+      if (!isMessageAuthority(tx)) return;
       log.info(`PriceMessage at height ${height}: ${txid}`);
       await storeToCollection(priceMessagesCollection, { txid, height, message });
       if (priceOracleState.getPriceMessageHistory()) {
@@ -340,7 +363,7 @@ async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
       }
       break;
     case 'rate':
-      if (!isOracleSigner(tx)) {
+      if (!isOracleSigner(tx, height)) {
         log.warn(`RateMessage rejected — wrong signer: ${txid} at height ${height}`);
         return;
       }
@@ -351,7 +374,7 @@ async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
       }
       break;
     case 'price-modifier':
-      if (!isSenderFoundation) return;
+      if (!isMessageAuthority(tx)) return;
       log.info(`PriceModifierMessage at height ${height}: ${txid}`);
       await storeToCollection(priceModifierMessagesCollection, { txid, height, message });
       if (priceOracleState.getPriceModifierHistory()) {
@@ -359,7 +382,7 @@ async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
       }
       break;
     case 'oracle-key':
-      if (!isSenderFoundation) return;
+      if (!isMessageAuthority(tx)) return;
       log.info(`OracleKeyMessage at height ${height}: ${txid}`);
       await storeToCollection(oracleKeyMessagesCollection, { txid, height, message });
       if (priceOracleState.getOracleKeyHistory()) {
@@ -367,7 +390,7 @@ async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
       }
       break;
     case 'marketplace-pricing':
-      if (!isSenderFoundation) return;
+      if (!isMessageAuthority(tx)) return;
       log.info(`MarketplacePricingMessage at height ${height}: ${txid}`);
       await storeToCollection(marketplacePricingMessagesCollection, { txid, height, message });
       if (priceOracleState.getMarketplacePricingHistory()) {
@@ -375,7 +398,7 @@ async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
       }
       break;
     case 'policy-group':
-      if (!isSenderFoundation) return;
+      if (!isMessageAuthority(tx)) return;
       log.info(`PolicyGroupMessage at height ${height}: ${txid}`);
       await storeToCollection(policyGroupMessagesCollection, { txid, height, message });
       if (entitlementsState.getPolicyGroupHistory()) {
@@ -2149,6 +2172,8 @@ module.exports = {
   setIsInInitiationOfBP,
   setZelAppSpecsMigrationDone,
   restoreDatabaseToBlockheightState,
+  isOracleSigner,
+  isMessageAuthority,
 
   isExplorerSynced,
 };
