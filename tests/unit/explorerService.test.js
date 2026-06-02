@@ -2454,4 +2454,50 @@ describe('explorerService tests', () => {
       sinon.assert.notCalled(updateOneStub);
     });
   });
+
+  describe('soft-fork message authority', () => {
+    const config = require('config');
+    const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
+    afterEach(() => sinon.restore());
+
+    describe('isMessageAuthority', () => {
+      it('accepts a tx with an input from the configured authority address', () => {
+        const addr = config.fluxapps.messageAuthorityAddress;
+        const tx = { vin: [{ address: 'tSomeoneElse' }, { address: addr }] };
+        expect(explorerService.isMessageAuthority(tx)).to.equal(true);
+      });
+      it('rejects a tx with no input from the authority address', () => {
+        const tx = { vin: [{ address: 'tSomeoneElse' }] };
+        expect(explorerService.isMessageAuthority(tx)).to.equal(false);
+      });
+    });
+
+    describe('isOracleSigner', () => {
+      // pubKeyToAddr(pubkeyHex, '1cb8') === oracleAddr (Flux t1 P2PKH derivation)
+      const pubkeyHex = '02c7f5b5e6e7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4';
+      const oracleAddr = 't1NfrwmYygJYwm4krB9KkhnBNLRffuCqvw8';
+
+      it('accepts a RateMessage tx signed by the on-chain oracle key', () => {
+        sinon.stub(priceOracleState, 'getOracleKeyHistory').returns({
+          resolveAt: () => ({ pubkey: Buffer.from(pubkeyHex, 'hex') }),
+        });
+        const tx = { vin: [{ address: oracleAddr }] };
+        expect(explorerService.isOracleSigner(tx, 100)).to.equal(true);
+      });
+
+      it('rejects when no oracle key is in force at the height', () => {
+        sinon.stub(priceOracleState, 'getOracleKeyHistory').returns({ resolveAt: () => null });
+        const tx = { vin: [{ address: oracleAddr }] };
+        expect(explorerService.isOracleSigner(tx, 100)).to.equal(false);
+      });
+
+      it('rejects a tx not signed by the oracle key', () => {
+        sinon.stub(priceOracleState, 'getOracleKeyHistory').returns({
+          resolveAt: () => ({ pubkey: Buffer.from(pubkeyHex, 'hex') }),
+        });
+        const tx = { vin: [{ address: 't1SomeoneElse' }] };
+        expect(explorerService.isOracleSigner(tx, 100)).to.equal(false);
+      });
+    });
+  });
 });
