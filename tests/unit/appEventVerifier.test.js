@@ -380,12 +380,13 @@ describe('appEventVerifier', () => {
       ]);
     });
 
-    it('delegates envelope v2 to computeMessageHashV2 with the content hash', async () => {
+    it('delegates envelope v2 to computeMessageHashV2 with the content hash and extend flag', async () => {
       const hash = await appEventVerifier.computeOutboundHash({
         type: 'fluxappregister',
         envelopeVersion: 2,
         contentHash: 'deadbeef',
         timestamp: 12345,
+        extend: true,
         signature: 'sig',
       });
       expect(hash).to.equal('v2-hash-xyz');
@@ -393,8 +394,10 @@ describe('appEventVerifier', () => {
       const backend = await specLibsStub.getSpecBackend();
       expect(backend.computeMessageHashV2.calledOnce).to.be.true;
       const args = backend.computeMessageHashV2.firstCall.args;
+      // extend must sit between timestamp and signature — its omission was a real
+      // hash-mismatch bug (signature landed in the extend slot).
       expect(args).to.deep.equal([
-        'fluxappregister', 2, 'deadbeef', 12345, 'sig',
+        'fluxappregister', 2, 'deadbeef', 12345, true, 'sig',
       ]);
     });
 

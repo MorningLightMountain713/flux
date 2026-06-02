@@ -295,6 +295,7 @@ async function registerAppGlobalyApi(req, res) {
         specBlob: broadcastBlob,
         contentHash,
         timestamp,
+        extend,
         signature,
       });
 
