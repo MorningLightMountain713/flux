@@ -3,7 +3,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
 const sinon = require('sinon');
-const advancedWorkflows = require('../../ZelBack/src/services/appLifecycle/advancedWorkflows');
+const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
 const appSpecHistory = require('../../ZelBack/src/services/appDatabase/appSpecHistory');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
@@ -11,7 +11,7 @@ const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUnins
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 
-describe('advancedWorkflows tests', () => {
+describe('appOperations tests', () => {
   afterEach(() => {
     sinon.restore();
   });
@@ -33,24 +33,24 @@ describe('advancedWorkflows tests', () => {
 
   describe('setInstallationInProgress and getInstallationInProgress tests', () => {
     it('should set installation in progress', () => {
-      advancedWorkflows.setInstallationInProgressTrue();
+      appOperations.setInstallationInProgressTrue();
 
-      const inProgress = advancedWorkflows.getInstallationInProgress();
+      const inProgress = appOperations.getInstallationInProgress();
       expect(inProgress).to.be.true;
     });
 
     it('should reset installation in progress', () => {
-      advancedWorkflows.setInstallationInProgressTrue();
-      advancedWorkflows.installationInProgressReset();
+      appOperations.setInstallationInProgressTrue();
+      appOperations.installationInProgressReset();
 
-      const inProgress = advancedWorkflows.getInstallationInProgress();
+      const inProgress = appOperations.getInstallationInProgress();
       expect(inProgress).to.be.false;
     });
 
     it('should set specific app installation in progress', () => {
-      advancedWorkflows.setInstallationInProgress('TestApp', true);
+      appOperations.setInstallationInProgress('TestApp', true);
 
-      const inProgress = advancedWorkflows.getInstallationInProgress();
+      const inProgress = appOperations.getInstallationInProgress();
       // When setting specific app, function returns the app name, not just true
       expect(inProgress).to.equal('TestApp');
     });
@@ -58,24 +58,24 @@ describe('advancedWorkflows tests', () => {
 
   describe('setRemovalInProgress and getRemovalInProgress tests', () => {
     it('should set removal in progress', () => {
-      advancedWorkflows.setRemovalInProgressToTrue();
+      appOperations.setRemovalInProgressToTrue();
 
-      const inProgress = advancedWorkflows.getRemovalInProgress();
+      const inProgress = appOperations.getRemovalInProgress();
       expect(inProgress).to.be.true;
     });
 
     it('should reset removal in progress', () => {
-      advancedWorkflows.setRemovalInProgressToTrue();
-      advancedWorkflows.removalInProgressReset();
+      appOperations.setRemovalInProgressToTrue();
+      appOperations.removalInProgressReset();
 
-      const inProgress = advancedWorkflows.getRemovalInProgress();
+      const inProgress = appOperations.getRemovalInProgress();
       expect(inProgress).to.be.false;
     });
 
     it('should set specific app removal in progress', () => {
-      advancedWorkflows.setRemovalInProgress('TestApp', true);
+      appOperations.setRemovalInProgress('TestApp', true);
 
-      const inProgress = advancedWorkflows.getRemovalInProgress();
+      const inProgress = appOperations.getRemovalInProgress();
       // When setting specific app, function returns the app name, not just true
       expect(inProgress).to.equal('TestApp');
     });
@@ -89,7 +89,7 @@ describe('advancedWorkflows tests', () => {
     });
 
     it('should add app to restore progress', () => {
-      advancedWorkflows.addToRestoreProgress('TestApp');
+      appOperations.addToRestoreProgress('TestApp');
 
       // eslint-disable-next-line global-require
       const globalState = require('../../ZelBack/src/services/utils/globalState');
@@ -97,8 +97,8 @@ describe('advancedWorkflows tests', () => {
     });
 
     it('should remove app from restore progress', () => {
-      advancedWorkflows.addToRestoreProgress('TestApp');
-      advancedWorkflows.removeFromRestoreProgress('TestApp');
+      appOperations.addToRestoreProgress('TestApp');
+      appOperations.removeFromRestoreProgress('TestApp');
 
       // eslint-disable-next-line global-require
       const globalState = require('../../ZelBack/src/services/utils/globalState');
@@ -106,8 +106,8 @@ describe('advancedWorkflows tests', () => {
     });
 
     it('should not duplicate apps in restore progress', () => {
-      advancedWorkflows.addToRestoreProgress('TestApp');
-      advancedWorkflows.addToRestoreProgress('TestApp');
+      appOperations.addToRestoreProgress('TestApp');
+      appOperations.addToRestoreProgress('TestApp');
 
       // eslint-disable-next-line global-require
       const globalState = require('../../ZelBack/src/services/utils/globalState');
@@ -150,7 +150,7 @@ describe('advancedWorkflows tests', () => {
     it('should return error if appname is not provided', async () => {
       req.params.component = 'frontend';
 
-      await advancedWorkflows.redeployComponentAPI(req, res);
+      await appOperations.redeployComponentAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       const response = res.json.firstCall.args[0];
@@ -161,7 +161,7 @@ describe('advancedWorkflows tests', () => {
     it('should return error if component is not provided', async () => {
       req.params.appname = 'myapp';
 
-      await advancedWorkflows.redeployComponentAPI(req, res);
+      await appOperations.redeployComponentAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       const response = res.json.firstCall.args[0];
@@ -173,7 +173,7 @@ describe('advancedWorkflows tests', () => {
       req.params.appname = 'frontend_myapp';
       req.params.component = 'frontend';
 
-      await advancedWorkflows.redeployComponentAPI(req, res);
+      await appOperations.redeployComponentAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       const response = res.json.firstCall.args[0];
@@ -186,11 +186,11 @@ describe('advancedWorkflows tests', () => {
       req.params.component = 'frontend';
 
       // Use the proper method to add to restore progress
-      advancedWorkflows.addToRestoreProgress('myapp');
+      appOperations.addToRestoreProgress('myapp');
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
 
-      await advancedWorkflows.redeployComponentAPI(req, res);
+      await appOperations.redeployComponentAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       const response = res.json.firstCall.args[0];
@@ -198,7 +198,7 @@ describe('advancedWorkflows tests', () => {
       expect(response.data.message).to.include('Restore is running');
 
       // Clean up
-      advancedWorkflows.removeFromRestoreProgress('myapp');
+      appOperations.removeFromRestoreProgress('myapp');
     });
 
     it('should return unauthorized error if not authorized', async () => {
@@ -207,7 +207,7 @@ describe('advancedWorkflows tests', () => {
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
 
-      await advancedWorkflows.redeployComponentAPI(req, res);
+      await appOperations.redeployComponentAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       expect(verificationHelper.verifyPrivilege.calledWith('appownerabove', req, 'myapp')).to.be.true;
@@ -224,7 +224,7 @@ describe('advancedWorkflows tests', () => {
       });
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
 
-      await advancedWorkflows.redeployComponentAPI(req, res);
+      await appOperations.redeployComponentAPI(req, res);
 
       // Should attempt to call hardRedeployComponent but will fail because app not found
       expect(res.json.calledOnce).to.be.true;
@@ -247,7 +247,7 @@ describe('advancedWorkflows tests', () => {
     it('should return early if removal is in progress', async () => {
       globalState.removalInProgress = true;
       const messages = [];
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
     });
@@ -255,7 +255,7 @@ describe('advancedWorkflows tests', () => {
     it('should return early if installation is in progress', async () => {
       globalState.installationInProgress = true;
       const messages = [];
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
     });
@@ -263,7 +263,7 @@ describe('advancedWorkflows tests', () => {
     it('should return early if soft redeploy is in progress', async () => {
       globalState.softRedeployInProgress = true;
       const messages = [];
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
     });
@@ -271,7 +271,7 @@ describe('advancedWorkflows tests', () => {
     it('should return early if hard redeploy is in progress', async () => {
       globalState.hardRedeployInProgress = true;
       const messages = [];
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
     });
@@ -280,7 +280,7 @@ describe('advancedWorkflows tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
       sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
       expect(globalState.softRedeployInProgress).to.be.false;
       expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
@@ -292,7 +292,7 @@ describe('advancedWorkflows tests', () => {
       });
       sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
       expect(globalState.softRedeployInProgress).to.be.false;
       expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
@@ -315,7 +315,7 @@ describe('advancedWorkflows tests', () => {
     it('should return early if removal is in progress', async () => {
       globalState.removalInProgress = true;
       const messages = [];
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
     });
@@ -323,7 +323,7 @@ describe('advancedWorkflows tests', () => {
     it('should return early if installation is in progress', async () => {
       globalState.installationInProgress = true;
       const messages = [];
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
     });
@@ -331,7 +331,7 @@ describe('advancedWorkflows tests', () => {
     it('should return early if soft redeploy is in progress', async () => {
       globalState.softRedeployInProgress = true;
       const messages = [];
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
     });
@@ -339,7 +339,7 @@ describe('advancedWorkflows tests', () => {
     it('should return early if hard redeploy is in progress', async () => {
       globalState.hardRedeployInProgress = true;
       const messages = [];
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
     });
@@ -348,7 +348,7 @@ describe('advancedWorkflows tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
       sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
       expect(globalState.hardRedeployInProgress).to.be.false;
       expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
@@ -360,7 +360,7 @@ describe('advancedWorkflows tests', () => {
       });
       sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
       expect(globalState.hardRedeployInProgress).to.be.false;
       expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
@@ -370,7 +370,7 @@ describe('advancedWorkflows tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
       sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
-      await advancedWorkflows.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
       expect(globalState.hardRedeployInProgress).to.be.false;
     });
@@ -532,7 +532,7 @@ describe('advancedWorkflows tests', () => {
     it('should skip execution if installation is in progress', async () => {
       globalStateRef.installationInProgress = true;
 
-      await advancedWorkflows.coordinateActiveStandbyApps();
+      await appOperations.coordinateActiveStandbyApps();
 
       expect(deploymentProviderStub.called).to.be.false;
     });
@@ -540,7 +540,7 @@ describe('advancedWorkflows tests', () => {
     it('should skip execution if removal is in progress', async () => {
       globalStateRef.removalInProgress = true;
 
-      await advancedWorkflows.coordinateActiveStandbyApps();
+      await appOperations.coordinateActiveStandbyApps();
 
       expect(deploymentProviderStub.called).to.be.false;
     });
@@ -561,7 +561,7 @@ describe('advancedWorkflows tests', () => {
       const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
       const axiosGetStub = sinon.stub(serviceHelper, 'axiosGet');
 
-      await advancedWorkflows.coordinateActiveStandbyApps();
+      await appOperations.coordinateActiveStandbyApps();
 
       expect(deploymentProviderStub.called).to.be.true;
       expect(axiosGetStub.called).to.be.false;
