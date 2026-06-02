@@ -183,7 +183,6 @@ async function storeAppTemporaryMessage(message, options = {}) {
     signature: serialized.signature,
     receivedAt: new Date(receivedAt),
     expireAt: new Date(validTill),
-    arcaneSender: message.arcaneSender,
     arcaneAttestation: serialized.arcaneAttestation,
   };
   if (serialized.contentHash !== undefined) {

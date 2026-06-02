@@ -98,12 +98,6 @@ async function respondWithAppMessage(msgObj, peer) {
           hash: appMessage.hash,
           timestamp: appMessage.timestamp,
           signature: appMessage.signature,
-          // Compatibility shim: pre-upgrade nodes still gate enterprise messages on
-          // arcaneSender being truthy. Permanent storage doesn't retain the field, so
-          // default to true when responding from permanent. Preserve the original value
-          // when responding from temp storage. Remove once all nodes have upgraded past
-          // the check removal in messageStore.js.
-          arcaneSender: appMessage.arcaneSender ?? true,
           arcaneAttestation: appMessage.arcaneAttestation,
         };
         sendSignedMessage(temporaryAppMessage, peer);
@@ -308,7 +302,6 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
         hash: msg.hash,
         timestamp: msg.timestamp,
         signature: msg.signature,
-        arcaneSender: msg.arcaneSender,
         arcaneAttestation: msg.arcaneAttestation,
       });
       if (batch.length >= batchSize) {
