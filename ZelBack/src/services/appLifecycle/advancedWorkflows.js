@@ -1356,6 +1356,11 @@ async function updateAppGlobaly(params) {
     signature: cleanSignature,
   });
 
+  let arcaneAttestation;
+  if (appEvent.isEncrypted) {
+    arcaneAttestation = await appEventVerifier.requestAttestation(cleanContentHash);
+  }
+
   const temporaryAppMessage = {
     type: cleanMessageType,
     version: cleanTypeVersion,
@@ -1366,6 +1371,7 @@ async function updateAppGlobaly(params) {
     extend: cleanExtend,
     signature: cleanSignature,
     arcaneSender: isArcane,
+    arcaneAttestation,
   };
 
   // eslint-disable-next-line global-require
