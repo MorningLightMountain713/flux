@@ -12,7 +12,7 @@ describe('appStartupManager tests', () => {
   let fluxNetworkHelperStub;
   let registryManagerStub;
   let appsRepositoryStub;
-  let advancedWorkflowsStub;
+  let appOperationsStub;
   let appUninstallerStub;
   let globalStateStub;
   let appQueryServiceStub;
@@ -43,7 +43,7 @@ describe('appStartupManager tests', () => {
       getGlobalAppInfo: sinon.stub(),
     };
 
-    advancedWorkflowsStub = {
+    appOperationsStub = {
       appDockerStart: sinon.stub().resolves(),
     };
 
@@ -83,7 +83,7 @@ describe('appStartupManager tests', () => {
       '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
-      './advancedWorkflows': advancedWorkflowsStub,
+      './appOperations': appOperationsStub,
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../appQuery/appQueryService': appQueryServiceStub,
@@ -226,7 +226,7 @@ describe('appStartupManager tests', () => {
 
       expect(results.appsStarted).to.deep.equal(['AppA']);
       expect(results.appsRemoved).to.deep.equal([]);
-      expect(advancedWorkflowsStub.appDockerStart.calledWith('AppA')).to.equal(true);
+      expect(appOperationsStub.appDockerStart.calledWith('AppA')).to.equal(true);
     });
 
     it('should remove app when location record has expired', async () => {
@@ -244,7 +244,7 @@ describe('appStartupManager tests', () => {
       expect(results.appsRemoved).to.deep.equal(['AppA']);
       expect(results.appsStarted).to.deep.equal([]);
       expect(appUninstallerStub.uninstallApplication.calledWith('AppA', { forceKill: true, skipGuard: true })).to.equal(true);
-      expect(advancedWorkflowsStub.appDockerStart.called).to.equal(false);
+      expect(appOperationsStub.appDockerStart.called).to.equal(false);
     });
 
     it('should remove app when location record is missing', async () => {
@@ -395,9 +395,9 @@ describe('appStartupManager tests', () => {
       expect(results.appsStarted).to.deep.equal([]);
       expect(results.appsSkippedGMode).to.deep.equal([]);
       // Non-g component started
-      expect(advancedWorkflowsStub.appDockerStart.calledWith('web_MixedApp')).to.equal(true);
+      expect(appOperationsStub.appDockerStart.calledWith('web_MixedApp')).to.equal(true);
       // g: component NOT started here (left for masterSlaveApps)
-      expect(advancedWorkflowsStub.appDockerStart.calledWith('db_MixedApp')).to.equal(false);
+      expect(appOperationsStub.appDockerStart.calledWith('db_MixedApp')).to.equal(false);
     });
 
     it('should skip a compose app where every component is g:', async () => {
@@ -425,7 +425,7 @@ describe('appStartupManager tests', () => {
       expect(results.appsSkippedGMode).to.deep.equal(['AllGApp']);
       expect(results.appsStarted).to.deep.equal([]);
       expect(results.appsPartiallyStarted).to.deep.equal([]);
-      expect(advancedWorkflowsStub.appDockerStart.called).to.equal(false);
+      expect(appOperationsStub.appDockerStart.called).to.equal(false);
     });
   });
 

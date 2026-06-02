@@ -1,3 +1,17 @@
+/*
+ * appOperations — operations performed on an already-deployed app: redeploy,
+ * global update broadcast, start/stop/restart, reconcile, force-removal,
+ * active/standby coordination, backup/restore task append, test-app-mount, and
+ * the installation/removal/restore in-progress state flags.
+ *
+ * WARNING: this is a grab-bag. It was inherited as "advancedWorkflows" and is a
+ * dumping ground of loosely-related concerns that happen to sit above the
+ * installer/uninstaller/docker primitives. It SHOULD be split along its real
+ * seams — e.g. lifecycle commands (start/stop/restart/redeploy), the global
+ * update intake, reconciliation, and the in-progress state tracker each belong
+ * in their own module. Renaming it to appOperations is only a holding action;
+ * do not keep adding to it.
+ */
 const config = require('config');
 const fs = require('node:fs/promises');
 const util = require('util');

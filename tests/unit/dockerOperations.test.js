@@ -53,8 +53,8 @@ function mockInstantiatedSpec(spec) {
   };
 }
 
-describe('advancedWorkflows application lifecycle tests', () => {
-  let advancedWorkflows;
+describe('appOperations application lifecycle tests', () => {
+  let appOperations;
   let dockerServiceStub;
   let registryManagerStub;
   let appsRepositoryStub;
@@ -97,7 +97,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       error: sinon.stub(),
     };
 
-    advancedWorkflows = proxyquire('../../ZelBack/src/services/appLifecycle/advancedWorkflows', {
+    appOperations = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
       '../dockerService': dockerServiceStub,
       '../appDatabase/registryManager': registryManagerStub,
       '../utils/specLibs': { getSpec: sinon.stub() },
@@ -125,7 +125,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
 
   describe('stopApplication', () => {
     it('should stop a single component directly when name contains underscore', async () => {
-      await advancedWorkflows.stopApplication('Component1_TestApp');
+      await appOperations.stopApplication('Component1_TestApp');
 
       sinon.assert.calledOnce(dockerServiceStub.appDockerStop);
       sinon.assert.calledWith(dockerServiceStub.appDockerStop, 'Component1_TestApp');
@@ -133,7 +133,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     });
 
     it('should not look up specs when stopping a single component', async () => {
-      await advancedWorkflows.stopApplication('Web_MyApp');
+      await appOperations.stopApplication('Web_MyApp');
 
       sinon.assert.notCalled(appsRepositoryStub.getGlobalAppInfo);
     });
@@ -141,7 +141,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     it('should log error when app specs not found for whole app', async () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
-      await advancedWorkflows.stopApplication('TestApp');
+      await appOperations.stopApplication('TestApp');
 
       sinon.assert.calledOnce(logStub.error);
       sinon.assert.notCalled(dockerServiceStub.appDockerStop);
@@ -159,7 +159,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       };
       buildDeploymentStub.resolves(mockDeployment);
 
-      await advancedWorkflows.stopApplication('TestApp');
+      await appOperations.stopApplication('TestApp');
 
       expect(dockerServiceStub.appDockerStop.callCount).to.equal(2);
       expect(dockerServiceStub.appDockerStop.firstCall.args[0]).to.equal('API_TestApp');
@@ -173,7 +173,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       const componentEntriesStub = sinon.stub().returns([]);
       buildDeploymentStub.resolves({ componentEntries: componentEntriesStub });
 
-      await advancedWorkflows.stopApplication('TestApp');
+      await appOperations.stopApplication('TestApp');
 
       sinon.assert.calledWith(componentEntriesStub, { reverse: true });
     });
@@ -181,7 +181,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     it('should handle docker stop errors gracefully', async () => {
       dockerServiceStub.appDockerStop.rejects(new Error('Docker stop failed'));
 
-      await advancedWorkflows.stopApplication('Component1_TestApp');
+      await appOperations.stopApplication('Component1_TestApp');
 
       sinon.assert.calledOnce(logStub.error);
     });
@@ -189,7 +189,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
 
   describe('startApplication', () => {
     it('should start a single component directly when name contains underscore', async () => {
-      await advancedWorkflows.startApplication('Component1_TestApp');
+      await appOperations.startApplication('Component1_TestApp');
 
       sinon.assert.calledOnce(dockerServiceStub.appDockerStart);
       sinon.assert.calledWith(dockerServiceStub.appDockerStart, 'Component1_TestApp');
@@ -207,7 +207,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       };
       buildDeploymentStub.resolves(mockDeployment);
 
-      await advancedWorkflows.startApplication('TestApp');
+      await appOperations.startApplication('TestApp');
 
       expect(dockerServiceStub.appDockerStart.callCount).to.equal(2);
       expect(dockerServiceStub.appDockerStart.firstCall.args[0]).to.equal('Web_TestApp');
@@ -218,7 +218,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     it('should log error when app not found', async () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
-      await advancedWorkflows.startApplication('TestApp');
+      await appOperations.startApplication('TestApp');
 
       sinon.assert.calledOnce(logStub.error);
       sinon.assert.notCalled(dockerServiceStub.appDockerStart);
@@ -232,7 +232,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       const mockDeployComp = { identifier: 'Web_TestApp', mounts: [{ Source: '/tmp' }] };
       buildDeploymentStub.resolves({ getComponent: () => mockDeployComp });
 
-      await advancedWorkflows.restartApplication('Web_TestApp');
+      await appOperations.restartApplication('Web_TestApp');
 
       sinon.assert.calledOnce(appVolumeServiceStub.ensureMountSourcesExist);
       sinon.assert.calledWith(appVolumeServiceStub.ensureMountSourcesExist, mockDeployComp);
@@ -247,7 +247,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       const mockDeployComp = { identifier: 'Web_TestApp', mounts: [] };
       buildDeploymentStub.resolves({ getComponent: () => mockDeployComp });
 
-      await advancedWorkflows.restartApplication('Web_TestApp');
+      await appOperations.restartApplication('Web_TestApp');
 
       sinon.assert.notCalled(appVolumeServiceStub.ensureMountSourcesExist);
       sinon.assert.calledOnce(dockerServiceStub.appDockerRestart);
@@ -266,7 +266,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       mockDeployment.getComponent.withArgs('API').returns(apiComp);
       buildDeploymentStub.resolves(mockDeployment);
 
-      await advancedWorkflows.restartApplication('TestApp');
+      await appOperations.restartApplication('TestApp');
 
       expect(dockerServiceStub.appDockerRestart.callCount).to.equal(2);
       expect(dockerServiceStub.appDockerRestart.firstCall.args[0]).to.equal('Web_TestApp');
@@ -277,7 +277,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
     it('should log error when app not found', async () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
-      await advancedWorkflows.restartApplication('TestApp');
+      await appOperations.restartApplication('TestApp');
 
       sinon.assert.calledOnce(logStub.error);
       sinon.assert.notCalled(dockerServiceStub.appDockerRestart);
@@ -290,7 +290,7 @@ describe('advancedWorkflows application lifecycle tests', () => {
       });
       dockerServiceStub.appDockerRestart.rejects(new Error('Docker restart failed'));
 
-      await advancedWorkflows.restartApplication('TestApp');
+      await appOperations.restartApplication('TestApp');
 
       sinon.assert.calledOnce(logStub.error);
     });

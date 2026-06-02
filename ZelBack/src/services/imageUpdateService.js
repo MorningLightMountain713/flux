@@ -9,7 +9,7 @@
 const config = require('config');
 const log = require('../lib/log');
 const dockerService = require('./dockerService');
-const advancedWorkflows = require('./appLifecycle/advancedWorkflows');
+const appOperations = require('./appLifecycle/appOperations');
 const registryCredentialHelper = require('./utils/registryCredentialHelper');
 const { ImageVerifier } = require('./utils/imageVerifier');
 const serviceHelper = require('./serviceHelper');
@@ -274,7 +274,7 @@ async function triggerAppUpdate(appName) {
     log.info(`Triggering soft redeploy for ${appName}`);
     fluxEventBus.publish('imageUpdate:redeployTriggered', { appName });
 
-    await advancedWorkflows.redeployApplication(appName, { createVolumes: false });
+    await appOperations.redeployApplication(appName, { createVolumes: false });
 
     fluxEventBus.publish('imageUpdate:redeployComplete', { appName });
 

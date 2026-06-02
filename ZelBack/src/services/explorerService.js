@@ -16,7 +16,7 @@ const chainUtilities = require('./utils/chainUtilities');
 const messageVerifier = require('./appMessaging/messageVerifier');
 const registryManager = require('./appDatabase/registryManager');
 const { appPaymentPositions } = require('./appPaymentPositions');
-const advancedWorkflows = require('./appLifecycle/advancedWorkflows');
+const appOperations = require('./appLifecycle/appOperations');
 const benchmarkService = require('./benchmarkService');
 const fluxNetworkhelper = require('./fluxNetworkHelper');
 const { extractIp } = require('./utils/socketAddressUtils');
@@ -833,7 +833,7 @@ async function processBlock(blockHeight, isInsightExplorer) {
           await registryManager.expireGlobalApplications();
         }
         if (blockWorkDue('reinstallOldApplications', blockHeight, updateFluxAppsPeriod * speedMultiplier)) {
-          advancedWorkflows.reconcileInstalledApps();
+          appOperations.reconcileInstalledApps();
           updateFluxAppsPeriod = Math.floor(Math.random() * 6 + 4);
         }
       }

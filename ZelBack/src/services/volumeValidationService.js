@@ -204,7 +204,7 @@ async function hardRedeployApp(appName) {
     log.info(`Attempting to hard redeploy app ${appName} due to incorrect volume mount`);
 
     // eslint-disable-next-line global-require
-    const { redeployApplication } = require('./appLifecycle/advancedWorkflows');
+    const { redeployApplication } = require('./appLifecycle/appOperations');
     await redeployApplication(appName, { createVolumes: true });
 
     log.info(`Successfully redeployed app ${appName} with correct volume paths`);
