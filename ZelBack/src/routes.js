@@ -37,7 +37,7 @@ const appInspector = require('./services/appManagement/appInspector');
 const appController = require('./services/appManagement/appController');
 const appInstaller = require('./services/appLifecycle/appInstaller');
 const appUninstaller = require('./services/appLifecycle/appUninstaller');
-const advancedWorkflows = require('./services/appLifecycle/advancedWorkflows');
+const appOperations = require('./services/appLifecycle/appOperations');
 const imageManager = require('./services/appSecurity/imageManager');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
@@ -623,11 +623,11 @@ module.exports = (app) => {
     return backupRestoreService.downloadLocalFile(req, res);
   }));
   app.post('/apps/appendbackuptask', asyncRoute((req, res) => {
-    return advancedWorkflows.appendBackupTask(req, res);
+    return appOperations.appendBackupTask(req, res);
   }));
 
   app.post('/apps/appendrestoretask', asyncRoute((req, res) => {
-    return advancedWorkflows.appendRestoreTask(req, res);
+    return appOperations.appendRestoreTask(req, res);
   }));
 
   app.post('/ioutils/fileupload/:type?/:appname?/:component?/:folder?/:filename?', requireBootSettled, asyncRoute((req, res) => {
@@ -1001,10 +1001,10 @@ module.exports = (app) => {
     return registryManager.reindexGlobalAppsLocationAPI(req, res);
   }));
   app.get('/apps/redeploy/:appname?/:force?/:global?', alwaysRespond, requireBootSettled, requirePolicyReady, asyncRoute((req, res) => {
-    return advancedWorkflows.redeployApplicationAPI(req, res);
+    return appOperations.redeployApplicationAPI(req, res);
   }));
   app.get('/apps/redeploycomponent/:appname?/:component?/:force?', alwaysRespond, requireBootSettled, requirePolicyReady, asyncRoute((req, res) => {
-    return advancedWorkflows.redeployComponentAPI(req, res);
+    return appOperations.redeployComponentAPI(req, res);
   }));
   app.get('/apps/reconstructhashes', asyncRoute((req, res) => {
     return registryManager.reconstructAppMessagesHashCollectionAPI(req, res);
@@ -1133,7 +1133,7 @@ module.exports = (app) => {
     return appSubmission.registerAppGlobalyApi(req, res);
   }));
   app.post('/apps/appupdate', asyncRoute((req, res) => {
-    return advancedWorkflows.updateAppGlobalyApi(req, res);
+    return appOperations.updateAppGlobalyApi(req, res);
   }));
   app.post('/apps/getpublickey', asyncRoute((req, res) => {
     return cryptographicKeys.getPublicKey(req, res);

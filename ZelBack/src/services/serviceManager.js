@@ -26,7 +26,7 @@ const syncthingMonitor = require('./appMonitoring/syncthingMonitor');
 const daemonHealthMonitor = require('./appMonitoring/daemonHealthMonitor');
 const containerCrashRecovery = require('./appMonitoring/containerCrashRecovery');
 const appReconciler = require('./appMonitoring/appReconciler');
-const advancedWorkflows = require('./appLifecycle/advancedWorkflows');
+const appOperations = require('./appLifecycle/appOperations');
 const imageManager = require('./appSecurity/imageManager');
 const appSpawner = require('./appLifecycle/appSpawner');
 const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
@@ -638,7 +638,7 @@ async function startFluxFunctions() {
     // app list is read from a query service deep enough in the lifecycle graph
     // that requiring it here would put geolocation and the network helper on
     // that load path. Removing the app is not this service's job - the single
-    // give-up-an-app pass in advancedWorkflows does that.
+    // give-up-an-app pass in appOperations does that.
     residentialNodeDosService.start({
       installedAppsFn: appQueryService.installedApps,
     }).catch((err) => {
@@ -759,7 +759,7 @@ async function startFluxFunctions() {
       // keeping clear of the rebuild that just finished. Detached; placement
       // degrades to /16 arithmetic without a table.
       ipLocationSync.startSync().catch((err) => log.error(`ipLocationSync start error: ${err.message}`));
-      advancedWorkflows.reconcileInstalledApps();
+      appOperations.reconcileInstalledApps();
       await identityReady;
       try {
         await enterpriseNetwork.cleanupOwnershipViolations();
@@ -819,7 +819,7 @@ async function startFluxFunctions() {
         () => globalState,
       ); // rechecks syncthing configuration each cycle
       setTimeout(() => {
-        advancedWorkflows.coordinateActiveStandbyApps();
+        appOperations.coordinateActiveStandbyApps();
       }, 30 * 1000);
       setTimeout(() => {
         appInspector.monitorSharedDBApps(globalState);
@@ -829,9 +829,9 @@ async function startFluxFunctions() {
     orchestrator.start(bootContext);
     log.info('AppSyncOrchestrator started');
     setTimeout(() => {
-      advancedWorkflows.forceAppRemovals();
+      appOperations.forceAppRemovals();
       setInterval(() => {
-        advancedWorkflows.forceAppRemovals();
+        appOperations.forceAppRemovals();
       }, forceRemovalIntervalMs);
     }, bootDelay(30 * 60 * 1000));
     setTimeout(() => {
