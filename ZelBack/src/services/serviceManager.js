@@ -26,7 +26,7 @@ const peerNotification = require('./appMessaging/peerNotification');
 const syncthingMonitor = require('./appMonitoring/syncthingMonitor');
 const daemonHealthMonitor = require('./appMonitoring/daemonHealthMonitor');
 const containerCrashRecovery = require('./appMonitoring/containerCrashRecovery');
-const advancedWorkflows = require('./appLifecycle/advancedWorkflows');
+const appOperations = require('./appLifecycle/appOperations');
 const imageManager = require('./appSecurity/imageManager');
 const appSpawner = require('./appLifecycle/appSpawner');
 const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
@@ -394,7 +394,7 @@ async function startFluxFunctions() {
       await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces);
       log.info('Rechecking firewall app rules');
       await fluxNetworkHelper.purgeUFW();
-      advancedWorkflows.testAppMount(); // test if our node can mount a volume
+      appOperations.testAppMount(); // test if our node can mount a volume
     }, bootDelay(30 * 1000));
     setTimeout(() => {
       appController.stopAllNonFluxRunningApps();
@@ -412,7 +412,7 @@ async function startFluxFunctions() {
     async function startDbDependentServices() {
       await globalState.waitForDbReady();
       log.info('DB ready - starting db-dependent services');
-      advancedWorkflows.reconcileInstalledApps();
+      appOperations.reconcileInstalledApps();
       await identityReady;
       try {
         await enterpriseNetwork.cleanupOwnershipViolations();
@@ -467,7 +467,7 @@ async function startFluxFunctions() {
         dockerOperations.appDeleteDataInMountPoint,
       );
       setTimeout(() => {
-        advancedWorkflows.coordinateActiveStandbyApps();
+        appOperations.coordinateActiveStandbyApps();
       }, 30 * 1000);
       setTimeout(() => {
         appInspector.monitorSharedDBApps(globalState);
@@ -479,9 +479,9 @@ async function startFluxFunctions() {
       imageManager.checkApplicationsCompliance();
     }, imageComplianceIntervalMs);
     setTimeout(() => {
-      advancedWorkflows.forceAppRemovals();
+      appOperations.forceAppRemovals();
       setInterval(() => {
-        advancedWorkflows.forceAppRemovals();
+        appOperations.forceAppRemovals();
       }, forceRemovalIntervalMs);
     }, bootDelay(30 * 60 * 1000));
     setTimeout(() => {
