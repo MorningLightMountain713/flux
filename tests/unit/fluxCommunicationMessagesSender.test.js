@@ -291,7 +291,6 @@ describe('fluxCommunicationMessagesSender tests', () => {
         timestamp,
         signature,
         hash,
-        arcaneSender: false,
         arcaneAttestation: undefined,
       };
     });

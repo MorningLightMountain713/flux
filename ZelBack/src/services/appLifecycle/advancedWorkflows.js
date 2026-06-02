@@ -1376,7 +1376,6 @@ async function updateAppGlobaly(params) {
     timestamp: cleanTimestamp,
     extend: cleanExtend,
     signature: cleanSignature,
-    arcaneSender: isArcane,
     arcaneAttestation,
   };
 
