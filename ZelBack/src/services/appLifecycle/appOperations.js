@@ -1376,8 +1376,11 @@ async function updateAppGlobaly(params) {
     signature: cleanSignature,
   });
 
+  // v9 only (envelope version 2). v8 enterprise messages are envelope version 1,
+  // which old nodes still parse — they must not carry an unknown arcaneAttestation
+  // key. v9 messages are rejected by old nodes before parsing.
   let arcaneAttestation;
-  if (appEvent.isEncrypted) {
+  if (cleanTypeVersion === 2 && appEvent.isEncrypted) {
     arcaneAttestation = await appEventVerifier.requestAttestation(cleanContentHash);
   }
 
