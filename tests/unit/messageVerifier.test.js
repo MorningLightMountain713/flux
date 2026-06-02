@@ -471,6 +471,55 @@ describe('messageVerifier tests', () => {
       expect(storePermanentStub.calledOnce).to.be.true;
     });
 
+    it('fail-closed: rejects a v9 registration priced at 0 (no PriceMessage in force) without inserting specs', async () => {
+      const insertStub = sinon.stub().resolves();
+      const serializedEvent = {
+        type: 'fluxappregister',
+        appSpecifications: { name: 'v9app', version: 9, owner: 'owner1' },
+        hash: 'v9reg',
+      };
+      const mockConfirmedEvent = {
+        isRegistration: true,
+        isUpdate: false,
+        spec: { name: 'v9app', version: 9 },
+        serialize: sinon.stub().returns(serializedEvent),
+        toInstantiatedSpec: sinon.stub().returns({}),
+      };
+      const mockInstantiated = {
+        name: 'v9app',
+        spec: { name: 'v9app', version: 9 },
+        isExpired: sinon.stub().returns(false),
+        serialize: sinon.stub().returns(serializedEvent),
+      };
+
+      const { stubs } = makeBaseStubs();
+      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
+        type: 'fluxappregister',
+        version: 2,
+        appSpecifications: { name: 'v9app', version: 9, owner: 'owner1' },
+        hash: 'v9reg',
+        timestamp: Date.now(),
+        signature: 'sig',
+      });
+      stubs['../appDatabase/registryManager'].insertAppSpecifications = insertStub;
+      stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
+        AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
+        ConfirmedAppEvent: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
+        InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
+        deserializeSpec: sinon.stub().returnsArg(0),
+      });
+      stubs['../pricing/buildPricingEngine'].buildPricingEngine = sinon.stub().resolves({
+        price: sinon.stub().resolves({ total: 0 }),
+      });
+
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      // valueSat 0 would satisfy the old `valueSat >= 0` check and mint a free app.
+      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 0, null, 2);
+      expect(result).to.be.true;
+      expect(insertStub.called).to.be.false;
+    });
+
     it('should return false and log error when an exception occurs', async () => {
       const { stubs, logStub } = makeBaseStubs();
       stubs['../appDatabase/appsRepository'].getPermanentMessage = sinon.stub().rejects(new Error('DB crash'));

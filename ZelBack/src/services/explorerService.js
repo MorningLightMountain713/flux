@@ -1037,6 +1037,13 @@ async function restoreDatabaseToBlockheightState(height) {
   // query keeps blocks <= height, so the history drops >= height + 1).
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, policyGroupMessagesCollection, query);
   entitlementsState.removeAtHeight(height + 1);
+  // Same rollback for the price-oracle chain state.
+  await dbHelper.removeDocumentsFromCollection(databaseUpdates, priceMessagesCollection, query);
+  await dbHelper.removeDocumentsFromCollection(databaseUpdates, rateMessagesCollection, query);
+  await dbHelper.removeDocumentsFromCollection(databaseUpdates, priceModifierMessagesCollection, query);
+  await dbHelper.removeDocumentsFromCollection(databaseUpdates, oracleKeyMessagesCollection, query);
+  await dbHelper.removeDocumentsFromCollection(databaseUpdates, marketplacePricingMessagesCollection, query);
+  priceOracleState.removeAtHeight(height + 1);
   log.info('Rescan completed');
   return true;
 }
@@ -1491,10 +1498,10 @@ async function initiateBlockProcessor(restoreDatabase, deepRestore) {
       }
     }
     // Rebuild in-memory chain-message state from persisted messages before the
-    // scan resumes adding to it. The symmetric rebuildPriceOracleState() belongs
-    // here too but is left to the pricing workstream (its state is still
-    // unconsumed) — see fluxos/FLUXOS_PRICING_WORKSTREAM.md.
+    // scan resumes adding to it (otherwise the incremental history.add() calls in
+    // processSoftFork are no-ops and nothing reads the chain-derived state).
     await entitlementsState.rebuildPolicyGroupState();
+    await priceOracleState.rebuildPriceOracleState();
 
     let scannedBlockHeight = await getScannedBlockHeightFromDb(database);
 
