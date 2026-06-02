@@ -2,7 +2,7 @@ const sinon = require('sinon');
 const explorerService = require('../../ZelBack/src/services/explorerService');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-const advancedWorkflows = require('../../ZelBack/src/services/appLifecycle/advancedWorkflows');
+const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
 const daemonServiceTransactionRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceTransactionRpcs');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
@@ -755,7 +755,7 @@ describe('explorerService tests', () => {
       dbStubUpdate = sinon.stub(dbHelper, 'updateOneInDatabase');
       dbStubCollectionStats = sinon.stub(dbHelper, 'collectionStats');
       expireGlobalApplicationsStub = sinon.stub(registryManager, 'expireGlobalApplications');
-      reconcileInstalledAppsStub = sinon.stub(advancedWorkflows, 'reconcileInstalledApps');
+      reconcileInstalledAppsStub = sinon.stub(appOperations, 'reconcileInstalledApps');
       restorePortsSupportStub = sinon.stub(portManager, 'restorePortsSupport');
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
@@ -1713,7 +1713,7 @@ describe('explorerService tests', () => {
         avgObjSize: 1111,
       });
       sinon.stub(registryManager, 'expireGlobalApplications').returns(true);
-      sinon.stub(advancedWorkflows, 'reconcileInstalledApps').returns(true);
+      sinon.stub(appOperations, 'reconcileInstalledApps').returns(true);
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').returns({
         status: 'success',
         data: {
