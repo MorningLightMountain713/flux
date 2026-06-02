@@ -290,6 +290,11 @@ async function registerAppGlobalyApi(req, res) {
         signature,
       });
 
+      let arcaneAttestation;
+      if (signedEvent.isEncrypted) {
+        arcaneAttestation = await appEventVerifier.requestAttestation(contentHash);
+      }
+
       const temporaryAppMessage = {
         type: messageType,
         version: typeVersion,
@@ -300,6 +305,7 @@ async function registerAppGlobalyApi(req, res) {
         extend,
         signature,
         arcaneSender: isArcane,
+        arcaneAttestation,
       };
       await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
       await serviceHelper.delay(1200);
