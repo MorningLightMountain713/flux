@@ -227,7 +227,7 @@ async function constructConfirmedEvent(tempMessage, txid, height, valueSat, bloc
       contentHash: tempMessage.contentHash,
       hash: tempMessage.hash,
       timestamp: tempMessage.timestamp,
-      extend: tempMessage.extend ?? true,
+      extend: tempMessage.extend ?? false,
       signature: tempMessage.signature,
       txid: serviceHelper.ensureString(txid),
       height: serviceHelper.ensureNumber(height),
