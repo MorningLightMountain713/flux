@@ -47,6 +47,7 @@ const https = require('https');
 const { deserializeSpec } = require('../utils/specCutover');
 const { getSpec, assertUpdateInvariants } = require('../utils/specLibs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
+const messageVerifier = require('../appMessaging/messageVerifier');
 const appQueryService = require('../appQuery/appQueryService');
 const { listRunningContainers } = appQueryService;
 const { startAppMonitoring, stopAppMonitoring } = require('../appManagement/appInspector');
@@ -56,6 +57,7 @@ const appUninstaller = require('./appUninstaller');
 const appInstaller = require('./appInstaller');
 const appNetworkLinker = require('./appNetworkLinker');
 const hwRequirements = require('../appRequirements/hwRequirements');
+const { resolveSubmission, assertSecretsNotConflicting } = require('../appRequirements/appSubmission');
 const globalState = require('../utils/globalState');
 
 const isArcane = Boolean(process.env.FLUXOS_PATH);
@@ -1314,8 +1316,6 @@ async function updateAppGlobaly(params) {
   const cleanContentHash = params.contentHash;
   const cleanExtend = params.extend;
 
-  // eslint-disable-next-line global-require
-  const { resolveSubmission, assertSecretsNotConflicting } = require('../appRequirements/appSubmission');
   const { spec, broadcastBlob } = await resolveSubmission(appSpecObj, {
     contentHash: cleanContentHash, timestamp: cleanTimestamp, type: cleanMessageType, daemonHeight,
   });
@@ -1387,12 +1387,12 @@ async function updateAppGlobaly(params) {
     arcaneAttestation,
   };
 
+  // fluxCommunicationMessagesSender stays a lazy require: it forms a load-time
+  // cycle back to this module (via dockerService -> ... -> appInspector).
   // eslint-disable-next-line global-require
   const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
   await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
   await serviceHelper.delay(1200);
-  // eslint-disable-next-line global-require
-  const messageVerifier = require('../appMessaging/messageVerifier');
   await messageVerifier.requestAppMessage(messageHASH);
   await serviceHelper.delay(1200);
 
