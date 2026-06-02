@@ -288,8 +288,12 @@ async function registerAppGlobalyApi(req, res) {
         signature,
       });
 
+      // v9 only (envelope version 2). v8 enterprise messages are envelope
+      // version 1, which old nodes still parse — they must not carry an unknown
+      // arcaneAttestation key. v9 messages (version 2) are rejected by old nodes
+      // before parsing, so the field only ever rides messages they ignore.
       let arcaneAttestation;
-      if (signedEvent.isEncrypted) {
+      if (typeVersion === 2 && signedEvent.isEncrypted) {
         arcaneAttestation = await appEventVerifier.requestAttestation(contentHash);
       }
 
