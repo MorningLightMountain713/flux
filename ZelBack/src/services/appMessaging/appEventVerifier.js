@@ -119,14 +119,14 @@ function verifyAttestation(appEvent) {
 }
 
 async function computeOutboundHash({
-  type, envelopeVersion, specBlob, contentHash, timestamp, signature,
+  type, envelopeVersion, specBlob, contentHash, timestamp, extend, signature,
 }) {
   const backend = await getSpecBackend();
   if (envelopeVersion === 2) {
     if (!contentHash) {
       throw new Error('computeOutboundHash: envelope v2 requires contentHash');
     }
-    return backend.computeMessageHashV2(type, envelopeVersion, contentHash, timestamp, signature);
+    return backend.computeMessageHashV2(type, envelopeVersion, contentHash, timestamp, extend, signature);
   }
   if (!specBlob) {
     throw new Error('computeOutboundHash: envelope v1 requires specBlob');

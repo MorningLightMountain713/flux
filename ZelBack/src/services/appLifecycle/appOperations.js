@@ -1367,6 +1367,7 @@ async function updateAppGlobaly(params) {
     specBlob: broadcastBlob,
     contentHash: cleanContentHash,
     timestamp: cleanTimestamp,
+    extend: cleanExtend,
     signature: cleanSignature,
   });
 
