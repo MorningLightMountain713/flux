@@ -14,7 +14,7 @@ const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const nodeDosState = require('../nodeDosState');
 const appsRepository = require('../appDatabase/appsRepository');
-const advancedWorkflows = require('./advancedWorkflows');
+const appOperations = require('./appOperations');
 const appUninstaller = require('./appUninstaller');
 const appNetworkLinker = require('./appNetworkLinker');
 const globalState = require('../utils/globalState');
@@ -215,7 +215,7 @@ async function reconcileAppsOnBoot() {
       for (const identifier of componentsToStart) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          await advancedWorkflows.appDockerStart(identifier);
+          await appOperations.appDockerStart(identifier);
           log.info(`appStartupManager - Successfully started ${identifier}`);
           // Add small delay between starts to avoid overwhelming the system
           // eslint-disable-next-line no-await-in-loop
