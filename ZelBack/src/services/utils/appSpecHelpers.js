@@ -4,10 +4,8 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { resolveSpec } = require('./specCutover');
-const { appPricePerMonth } = require('./appUtilities');
-const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const appsRepository = require('../appDatabase/appsRepository');
-const { buildPricingEngine } = require('../pricing/buildPricingEngine');
+const { buildPricingEngine, resolveMarketplaceMultiplier } = require('../pricing/buildPricingEngine');
 const priceOracleState = require('../pricing/priceOracleState');
 const { legacyGetAppFiatAndFluxPrice, legacyGetAppFluxOnChainPrice } = require('../pricing/legacyDisplayPricing');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -58,17 +56,23 @@ function getFiatMarkupPct() {
 }
 
 /**
- * Get app Flux on-chain price. v9 specs use PricingEngine; v1-v8 use
- * appPricePerMonth with chain rates.
+ * Get app Flux on-chain price (FLUX, decimal). Version-island: v1-v8 use the
+ * legacy on-chain pricing; v9 uses PricingEngine. A v9 query before on-chain
+ * pricing is bootstrapped throws (rather than returning a misleading 0) — the
+ * displayed price is what the customer pays, so a missing rate must fail loudly.
  * @param {object} appSpecification - Application specification
  * @returns {Promise<number>} Price in FLUX (decimal)
  */
 async function getAppFluxOnChainPrice(appSpecification) {
-  if (!isOnChainPricingActive()) {
+  const spec = await resolveSpec(appSpecification);
+
+  if (spec.version < 9) {
     return legacyGetAppFluxOnChainPrice(appSpecification);
   }
 
-  const spec = await resolveSpec(appSpecification);
+  if (!isOnChainPricingActive()) {
+    throw new Error('On-chain pricing is not yet active (no PriceMessage in force).');
+  }
 
   const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
   if (!syncStatus.data.synced) {
@@ -76,27 +80,13 @@ async function getAppFluxOnChainPrice(appSpecification) {
   }
   const daemonHeight = syncStatus.data.height;
 
-  if (spec.version >= 9) {
-    const engine = await buildPricingEngine(daemonHeight);
-    const breakdown = await engine.price(spec, { height: daemonHeight, duration: spec.ttl || 0 });
-    return breakdown.total / 1e8;
-  }
-
-  const appPrices = await getChainParamsPriceUpdates();
-  const intervals = appPrices.filter((i) => i.height < daemonHeight);
-  const priceSpecifications = intervals[intervals.length - 1];
-
-  const blockHeightMultiplier = daemonHeight >= config.fluxapps.daemonPONFork ? 4 : 1;
-  const defaultExpire = config.fluxapps.blocksLasting * blockHeightMultiplier;
-
-  let appPrice = await appPricePerMonth(spec, daemonHeight, appPrices);
-  const expireIn = spec.expire || defaultExpire;
-  appPrice *= expireIn / defaultExpire;
-  appPrice = Math.ceil(appPrice * 100) / 100;
-  if (appPrice < priceSpecifications.minPrice) {
-    appPrice = priceSpecifications.minPrice;
-  }
-  return appPrice;
+  const engine = await buildPricingEngine(daemonHeight);
+  const breakdown = await engine.price(spec, {
+    height: daemonHeight,
+    duration: spec.ttl || 0,
+    marketplaceMultiplier: resolveMarketplaceMultiplier(spec, daemonHeight),
+  });
+  return breakdown.total / 1e8;
 }
 
 function countEnterprisePortsOn(component) {
@@ -206,23 +196,57 @@ async function checkFreeAppUpdate(spec, daemonHeight) {
 }
 
 /**
- * Get app price with Fiat and Flux pricing.
- *
- * When on-chain pricing is active (PriceMessage published): FLUX price
- * from PricingEngine (v9) or chain rates (v1-v8), USD from oracle.
- *
- * Before activation: falls back to the legacy pipeline
- * (stats.runonflux.io USD rates + viprates FLUX/USD conversion).
- *
- * @param {object} req - Request object
- * @param {object} res - Response object
- * @returns {Promise<void>} Price response
+ * Compute app price (USD + FLUX). Version-island: v1-v8 use the legacy display
+ * pricing (with marketplace premium); v9 uses PricingEngine + the on-chain oracle.
+ * Pure business logic: takes the parsed appSpecification, returns the price
+ * object, throws on error (the *Api handler formats the response).
+ * @param {object} appSpecification - parsed application specification
+ * @returns {Promise<{usd: number|null, flux: number, fluxDiscount: number|string, fiatMarkupPct?: number}>}
  */
-async function getAppFiatAndFluxPrice(req, res) {
-  if (!isOnChainPricingActive()) {
-    return legacyGetAppFiatAndFluxPrice(req, res, { resolveSpecFn: resolveSpec, checkFreeAppUpdateFn: checkFreeAppUpdate });
+async function getAppFiatAndFluxPrice(appSpecification) {
+  if (!appSpecification) {
+    throw new Error('Invalid application specification provided.');
   }
 
+  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  if (!syncStatus.data.synced) {
+    throw new Error('Daemon not yet synced.');
+  }
+  const daemonHeight = syncStatus.data.height;
+  const spec = await resolveSpec(appSpecification);
+
+  if (spec.version < 9) {
+    return legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn: resolveSpec, checkFreeAppUpdateFn: checkFreeAppUpdate });
+  }
+
+  if (await checkFreeAppUpdate(spec, daemonHeight)) {
+    return { usd: 0, flux: 0, fluxDiscount: 0 };
+  }
+
+  const fluxPrice = await getAppFluxOnChainPrice(appSpecification);
+  const fluxUsdRate = getOracleFluxUsdRate();
+  const fiatMarkupPct = getFiatMarkupPct();
+  const fluxUsd = fluxUsdRate != null ? fluxPrice * fluxUsdRate : null;
+  const usd = fluxUsd != null
+    ? Number((fluxUsd * (1 + fiatMarkupPct / 100)).toFixed(2))
+    : null;
+
+  return {
+    usd,
+    flux: Number(Number(fluxPrice).toFixed(2)),
+    fluxDiscount: fiatMarkupPct,
+    fiatMarkupPct,
+  };
+}
+
+/**
+ * Express handler for the fiat+flux price quote. Reads/parses the request body
+ * and formats the response; delegates pricing to getAppFiatAndFluxPrice.
+ * @param {object} req - Request object
+ * @param {object} res - Response object
+ * @returns {Promise<void>}
+ */
+async function getAppFiatAndFluxPriceApi(req, res) {
   let body = '';
   req.on('data', (data) => {
     body += data;
@@ -230,37 +254,8 @@ async function getAppFiatAndFluxPrice(req, res) {
   req.on('end', async () => {
     try {
       const appSpecification = serviceHelper.ensureObject(serviceHelper.ensureObject(body));
-      if (!appSpecification) {
-        throw new Error('Invalid application specification provided.');
-      }
-
-      const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-      if (!syncStatus.data.synced) {
-        throw new Error('Daemon not yet synced.');
-      }
-      const daemonHeight = syncStatus.data.height;
-      const spec = await resolveSpec(appSpecification);
-
-      if (await checkFreeAppUpdate(spec, daemonHeight)) {
-        const price = { usd: 0, flux: 0, fluxDiscount: 0 };
-        return res.json(messageHelper.createDataMessage(price));
-      }
-
-      const fluxPrice = await getAppFluxOnChainPrice(appSpecification);
-      const fluxUsdRate = getOracleFluxUsdRate();
-      const fiatMarkupPct = getFiatMarkupPct();
-      const fluxUsd = fluxUsdRate != null ? fluxPrice * fluxUsdRate : null;
-      const usd = fluxUsd != null
-        ? Number((fluxUsd * (1 + fiatMarkupPct / 100)).toFixed(2))
-        : null;
-
-      const price = {
-        usd,
-        flux: Number(Number(fluxPrice).toFixed(2)),
-        fluxDiscount: fiatMarkupPct,
-        fiatMarkupPct,
-      };
-      return res.json(messageHelper.createDataMessage(price));
+      const price = await getAppFiatAndFluxPrice(appSpecification);
+      res.json(messageHelper.createDataMessage(price));
     } catch (error) {
       log.warn(error);
       const errorResponse = messageHelper.createErrorMessage(
@@ -268,24 +263,25 @@ async function getAppFiatAndFluxPrice(req, res) {
         error.name,
         error.code,
       );
-      return res.json(errorResponse);
+      res.json(errorResponse);
     }
   });
 }
 
 /**
- * Get app price (simplified wrapper)
+ * Express handler alias for the price quote.
  * @param {object} req - Request object
  * @param {object} res - Response object
- * @returns {Promise<void>} Price response
+ * @returns {Promise<void>}
  */
-async function getAppPrice(req, res) {
-  return getAppFiatAndFluxPrice(req, res);
+async function getAppPriceApi(req, res) {
+  return getAppFiatAndFluxPriceApi(req, res);
 }
 
 module.exports = {
   getAppFiatAndFluxPrice,
-  getAppPrice,
+  getAppFiatAndFluxPriceApi,
+  getAppPriceApi,
   getAppFluxOnChainPrice,
   checkFreeAppUpdate,
 };

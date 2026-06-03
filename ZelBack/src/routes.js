@@ -434,10 +434,10 @@ module.exports = (app) => {
     registryManager.getAppsInstallingErrorsLocations(req, res);
   });
   app.post('/apps/calculateprice', (req, res) => { // returns price in flux for both new registration of app and update of app
-    appSpecHelpers.getAppPrice(req, res);
+    appSpecHelpers.getAppPriceApi(req, res);
   });
   app.post('/apps/calculatefiatandfluxprice', (req, res) => { // returns price in usd and flux for both new registration of app and update of app
-    appSpecHelpers.getAppFiatAndFluxPrice(req, res);
+    appSpecHelpers.getAppFiatAndFluxPriceApi(req, res);
   });
   app.get('/apps/whitelistedrepositories', cache('30 seconds'), (req, res) => {
     generalService.whitelistedRepositories(req, res);

@@ -693,9 +693,14 @@ describe('appSpecHelpers tests', () => {
       expect(appSpecHelpers.getAppFiatAndFluxPrice).to.be.a('function');
     });
 
-    it('should export getAppPrice', () => {
+    it('should export getAppFiatAndFluxPriceApi', () => {
       const appSpecHelpers = require('../../ZelBack/src/services/utils/appSpecHelpers');
-      expect(appSpecHelpers.getAppPrice).to.be.a('function');
+      expect(appSpecHelpers.getAppFiatAndFluxPriceApi).to.be.a('function');
+    });
+
+    it('should export getAppPriceApi', () => {
+      const appSpecHelpers = require('../../ZelBack/src/services/utils/appSpecHelpers');
+      expect(appSpecHelpers.getAppPriceApi).to.be.a('function');
     });
 
     it('should export getAppFluxOnChainPrice', () => {
