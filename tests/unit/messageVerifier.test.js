@@ -80,6 +80,7 @@ function makeBaseStubs(overrides = {}) {
         price: sinon.stub().resolves({ total: 100000000 }),
         priceUpdate: sinon.stub().resolves({ total: 100000000, free: false }),
       }),
+      resolveMarketplaceMultiplier: sinon.stub().returns(10000),
     },
     '../utils/specLibs': {
       getSpec: sinon.stub().resolves({}),
