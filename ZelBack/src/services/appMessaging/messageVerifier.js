@@ -9,7 +9,7 @@ const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
-const { buildPricingEngine } = require('../pricing/buildPricingEngine');
+const { buildPricingEngine, resolveMarketplaceMultiplier } = require('../pricing/buildPricingEngine');
 const { getSpecBackend } = require('../utils/specLibs');
 const { resolveSpec } = require('../utils/specCutover');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -254,7 +254,11 @@ async function constructConfirmedEvent(tempMessage, txid, height, valueSat, bloc
 async function computeRegistrationFee(spec, height) {
   if (spec.version >= 9) {
     const engine = await buildPricingEngine(height);
-    const breakdown = await engine.price(spec, { height, duration: spec.ttl || 0 });
+    const breakdown = await engine.price(spec, {
+      height,
+      duration: spec.ttl || 0,
+      marketplaceMultiplier: resolveMarketplaceMultiplier(spec, height),
+    });
     return BigInt(breakdown.total);
   }
   const appPrices = await getChainParamsPriceUpdates();
@@ -277,6 +281,7 @@ async function computeUpdateFee(spec, prevSpec, height, prevHeight) {
       duration: spec.ttl || 0,
       now: Date.now(),
       recentEvents: [],
+      marketplaceMultiplier: resolveMarketplaceMultiplier(spec, height),
     });
     return (result && result.free) ? 0n : BigInt(result.total);
   }
