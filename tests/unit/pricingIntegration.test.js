@@ -8,18 +8,20 @@ const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracle
 describe('pricing integration — chain messages through PricingEngine', () => {
   let PriceMessage, RateMessage, PriceModifierMessage, dispatch;
   let PriceMessageHistory, RateMessageHistory, PriceModifierHistory;
+  let MarketplacePricingMessage, MarketplacePricingHistory;
   let SOFT_FORK_EFFECTIVE_DEPTH;
-  let buildPricingEngine;
+  let buildPricingEngine, resolveMarketplaceMultiplier;
   let convertMicrodollarsToSats;
 
   before(async () => {
     ({
       PriceMessage, RateMessage, PriceModifierMessage, dispatch,
       PriceMessageHistory, RateMessageHistory, PriceModifierHistory,
+      MarketplacePricingMessage, MarketplacePricingHistory,
       SOFT_FORK_EFFECTIVE_DEPTH,
       convertMicrodollarsToSats,
     } = await import('@runonflux/flux-spec-policy'));
-    ({ buildPricingEngine } = require('../../ZelBack/src/services/pricing/buildPricingEngine'));
+    ({ buildPricingEngine, resolveMarketplaceMultiplier } = require('../../ZelBack/src/services/pricing/buildPricingEngine'));
   });
 
   afterEach(() => {
@@ -116,6 +118,53 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     sinon.stub(priceOracleState, 'getOracleKeyHistory').returns(null);
     sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(null);
   }
+
+  describe('marketplace per-template multiplier (FluxOS resolver)', () => {
+    const TEMPLATE_UUID = 'e96eccbb-6cf3-4631-aac4-4edfcacedcda';
+    const templateUuidBytes = () => Buffer.from(TEMPLATE_UUID.replace(/-/g, ''), 'hex');
+
+    function buildMarketplaceHistory(chainHeight, multiplier) {
+      const bytes = MarketplacePricingMessage.encode({ templateUuid: templateUuidBytes(), multiplier });
+      const result = dispatch(bytes);
+      const history = new MarketplacePricingHistory();
+      history.add(result.message, chainHeight);
+      return history;
+    }
+
+    it('resolves the per-template multiplier from MarketplacePricingHistory', () => {
+      const chainHeight = 100;
+      const queryHeight = chainHeight + SOFT_FORK_EFFECTIVE_DEPTH;
+      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(buildMarketplaceHistory(chainHeight, 12000));
+      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns(null);
+
+      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1 } };
+      expect(resolveMarketplaceMultiplier(spec, queryHeight)).to.equal(12000);
+    });
+
+    it('falls back to marketplaceMultiplierBase when no per-template message exists', () => {
+      const chainHeight = 100;
+      const histories = buildTestHistories({ chainHeight, modifierFields: { marketplaceMultiplierBase: 8000 } });
+      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(new MarketplacePricingHistory());
+      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns(histories.modifierHistory);
+
+      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1 } };
+      expect(resolveMarketplaceMultiplier(spec, histories.queryHeight)).to.equal(8000);
+    });
+
+    it('defaults to 1.0x (10000) for a non-marketplace spec', () => {
+      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(new MarketplacePricingHistory());
+      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns(null);
+      const spec = { ...testSpec, marketplace: null };
+      expect(resolveMarketplaceMultiplier(spec, 200)).to.equal(10000);
+    });
+
+    it('defaults to 1.0x when neither a per-template nor base multiplier is set', () => {
+      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(new MarketplacePricingHistory());
+      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns(null);
+      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1 } };
+      expect(resolveMarketplaceMultiplier(spec, 200)).to.equal(10000);
+    });
+  });
 
   describe('dispatch round-trip', () => {
     it('dispatches encoded PriceMessage to kind=price with parsed fields', () => {
@@ -314,7 +363,8 @@ describe('pricing integration — chain messages through PricingEngine', () => {
 
       expect(breakdown).to.have.all.keys(
         'commodity', 'features', 'surcharges', 'discounts',
-        'grossMicrodollars', 'adjustedMicrodollars', 'minPriceMicrodollars',
+        'grossMicrodollars', 'marketplaceMultiplier', 'marketplaceAdjustedMicrodollars',
+        'adjustedMicrodollars', 'minPriceMicrodollars',
         'total', 'minPriceFluxSats',
         'fluxUsdPriceE4', 'ratesHeight',
       );
