@@ -61,6 +61,7 @@ const imageUpdateService = require('./imageUpdateService');
 const appsMaintenance = require('./appDatabase/appsMaintenance');
 const appsRepository = require('./appDatabase/appsRepository');
 const { rebuildPriceOracleState } = require('./pricing/priceOracleState');
+const marketplaceTemplateCache = require('./marketplace/marketplaceTemplateCache');
 const telemetryIdentityService = require('./telemetryIdentityService');
 const { version: fluxVersion } = require('../../../package.json');
 // const throughputLogger = require('./utils/throughputLogger');
@@ -453,6 +454,8 @@ async function startFluxFunctions() {
     const startDbDependentServices = async () => {
       await globalState.waitForDbReady();
       log.info('DB ready - starting db-dependent services');
+      // Warm the marketplace template cache (best-effort; cache-miss fetch covers any gaps).
+      marketplaceTemplateCache.bootstrapCache().catch((error) => log.error(error));
       appOperations.reconcileInstalledApps();
       await identityReady;
       try {
