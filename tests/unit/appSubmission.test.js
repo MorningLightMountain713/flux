@@ -27,6 +27,7 @@ describe('appSubmission tests', () => {
       '../utils/specLibs': stubs.specLibs,
       '../appSecurity/imageArchitectureValidator': stubs.imageArchitectureValidator,
       '../entitlementsState': stubs.entitlementsState,
+      '../marketplace/marketplaceTemplateCache': stubs.marketplaceTemplateCache,
       '../providers/FluxOSCryptoProvider': stubs.cryptoProvider,
       '../appDatabase/registryManager': stubs.registryManager,
       '../daemonService/daemonServiceMiscRpcs': stubs.daemonServiceMiscRpcs,
@@ -47,11 +48,13 @@ describe('appSubmission tests', () => {
       specCutover: { deserializeSpec: sinon.stub() },
       specLibs: {
         validateSubmissionSpec: sinon.stub(),
+        getSpec: sinon.stub().resolves({ FluxAppSpecV9: { fromSubmission: sinon.stub().returns({ templateSpec: true }) } }),
         getSpecBackend: sinon.stub(),
         assertUpdateInvariants: sinon.stub().resolves(),
       },
       imageArchitectureValidator: { verifyImageRegistryAndArchitectures: sinon.stub().resolves() },
       entitlementsState: { assertSpecEntitled: sinon.stub().resolves() },
+      marketplaceTemplateCache: { getTemplate: sinon.stub().resolves({ spec: { version: 9 }, userConfigurable: [] }) },
       cryptoProvider: { create: sinon.stub().resolves({ provider: true }) },
       registryManager: { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
       daemonServiceMiscRpcs: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
@@ -223,6 +226,58 @@ describe('appSubmission tests', () => {
       } catch (err) {
         expect(err.message).to.include('Version changes are only allowed');
       }
+    });
+  });
+
+  describe('marketplace template verification', () => {
+    function marketplaceSpec(matchesResult) {
+      return v9Spec({
+        marketplace: { templateId: 'uuid-1', templateVersion: 2 },
+        matchesTemplate: sinon.stub().returns(matchesResult),
+        toCanonical: sinon.stub().returns({ name: 'myapp', owner: 'owner1', contacts: { email: ['a@b.co'] } }),
+      });
+    }
+
+    async function submit(spec, submission = { version: 9, name: 'myapp', owner: 'owner1' }) {
+      appSubmission = load();
+      stubs.transportHelper.openTransportEnvelope.resolves(submission);
+      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+      return appSubmission.resolveSubmission(submission, {
+        contentHash: 'HASH123', timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
+      });
+    }
+
+    it('accepts a marketplace app whose spec matches the template', async () => {
+      const spec = marketplaceSpec({ matches: true, mismatches: [] });
+      const result = await submit(spec);
+      sinon.assert.calledWith(stubs.marketplaceTemplateCache.getTemplate, 'uuid-1', 2);
+      sinon.assert.calledOnce(spec.matchesTemplate);
+      expect(result.spec).to.equal(spec);
+    });
+
+    it('hard-rejects when the spec does not match the template', async () => {
+      const spec = marketplaceSpec({ matches: false, mismatches: ['components.web.cpu'] });
+      let err;
+      try { await submit(spec); } catch (e) { err = e; }
+      expect(err).to.exist;
+      expect(err.message).to.match(/does not match marketplace template/);
+      expect(err.message).to.include('components.web.cpu');
+    });
+
+    it('rejects (retry) when the template is unavailable', async () => {
+      const spec = marketplaceSpec({ matches: true, mismatches: [] });
+      stubs.marketplaceTemplateCache.getTemplate = sinon.stub().rejects(new Error('Marketplace template uuid-1 v2 not available, try again later'));
+      let err;
+      try { await submit(spec); } catch (e) { err = e; }
+      expect(err).to.exist;
+      expect(err.message).to.match(/not available/);
+    });
+
+    it('skips verification for a non-marketplace app', async () => {
+      const spec = v9Spec();
+      await submit(spec);
+      sinon.assert.notCalled(stubs.marketplaceTemplateCache.getTemplate);
     });
   });
 });
