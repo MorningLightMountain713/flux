@@ -497,10 +497,10 @@ module.exports = (app) => {
     return registryManager.getAppsInstallingErrorsLocations(req, res);
   }));
   app.post('/apps/calculateprice', asyncRoute((req, res) => { // returns price in flux for both new registration of app and update of app
-    return appSpecHelpers.getAppPrice(req, res);
+    return appSpecHelpers.getAppPriceApi(req, res);
   }));
   app.post('/apps/calculatefiatandfluxprice', asyncRoute((req, res) => { // returns price in usd and flux for both new registration of app and update of app
-    return appSpecHelpers.getAppFiatAndFluxPrice(req, res);
+    return appSpecHelpers.getAppFiatAndFluxPriceApi(req, res);
   }));
   app.get('/apps/whitelistedrepositories', cache('30 seconds'), asyncRoute((req, res) => { // deprecated: whitelist retired, always returns []
     return generalService.whitelistedRepositories(req, res);
