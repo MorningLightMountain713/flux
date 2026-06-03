@@ -10,13 +10,52 @@ const registryManager = require('../appDatabase/registryManager');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
-const { validateSubmissionSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
+const { validateSubmissionSpec, getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
 const { deserializeSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
 const cryptoProvider = require('../providers/FluxOSCryptoProvider');
 const appsRepository = require('../appDatabase/appsRepository');
 const entitlementsState = require('../entitlementsState');
+const marketplaceTemplateCache = require('../marketplace/marketplaceTemplateCache');
 const { peerManager } = require('../utils/peerState');
+
+/**
+ * v9 marketplace template verification. If the spec claims a marketplace template
+ * (marketplace != null), fetch that template version and assert the spec matches it
+ * — non-configurable fields must be unchanged. Hard-reject on mismatch; the cache
+ * throws "unavailable" if the template can't be fetched, so a registration is never
+ * silently accepted. No-op when marketplace is null (custom registration).
+ *
+ * @param {object} spec - validated v9 FluxAppSpecV9 instance (exposes matchesTemplate/toCanonical)
+ */
+async function assertMatchesMarketplaceTemplate(spec) {
+  const { marketplace } = spec;
+  if (!marketplace || !marketplace.templateId) return;
+
+  const template = await marketplaceTemplateCache.getTemplate(
+    marketplace.templateId, marketplace.templateVersion,
+  );
+
+  const { FluxAppSpecV9 } = await getSpec();
+  // Build a comparable template-spec instance. The template stores owner:null and
+  // no contacts; matchesTemplate ignores name/owner and contacts is user-configurable,
+  // so injecting the deployed spec's name/owner/contacts only satisfies construction —
+  // it does not affect the comparison.
+  const canonical = spec.toCanonical();
+  const templateSpec = FluxAppSpecV9.fromSubmission({
+    ...template.spec,
+    name: canonical.name,
+    owner: canonical.owner,
+    contacts: canonical.contacts,
+  });
+
+  const { matches, mismatches } = spec.matchesTemplate(templateSpec, template.userConfigurable || []);
+  if (!matches) {
+    const err = new Error(`Spec does not match marketplace template ${marketplace.templateId} v${marketplace.templateVersion}: ${mismatches.join(', ')}`);
+    err.code = 'TEMPLATE_MISMATCH';
+    throw err;
+  }
+}
 
 /**
  * Resolve + validate a submission spec, class-first, across all v8/v9
@@ -79,6 +118,7 @@ async function resolveSubmission(appSpecification, {
   const cleartextSpec = spec.spec || spec;
   if (cleartextSpec.version === 9 && typeof cleartextSpec.toCanonical === 'function') {
     await entitlementsState.assertSpecEntitled(cleartextSpec, spec.owner, daemonHeight);
+    await assertMatchesMarketplaceTemplate(cleartextSpec);
   }
 
   // STAGE 5 — wire form for broadcast/storage; never cleartext for encrypted apps
