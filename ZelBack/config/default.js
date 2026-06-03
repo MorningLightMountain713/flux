@@ -78,6 +78,12 @@ module.exports = {
         appsInstallingErrorsBroadcasts: 'fluxappinstallingerrorsbroadcasts', // stores signed appinstalling error broadcasts for sync
       },
     },
+    marketplace: {
+      database: `${dbPrefix}marketplace`,
+      collections: {
+        templates: 'marketplacetemplates', // local cache of v9 marketplace templates (keyed by uuid+templateVersion), fetched from the marketplace v2 API
+      },
+    },
     chainparams: {
       database: `${dbPrefix}chainparams`,
       collections: {
@@ -452,5 +458,9 @@ module.exports = {
   },
   analytics: {
     url: 'https://cloudaudit.runonflux.io', // analytics server URL (e.g. 'https://analytics.runonflux.io'). Empty = disabled.
+  },
+  marketplace: {
+    // v2 marketplace API (versioned v9 templates). Dev/prod switched by the development flag.
+    apiBaseUrl: isDevelopment ? 'https://api-dev.marketplace.runonflux.io' : 'https://api.marketplace.runonflux.io',
   },
 };
