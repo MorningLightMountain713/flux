@@ -9,7 +9,7 @@ const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
-const { buildPricingEngine, resolveMarketplaceMultiplier } = require('../pricing/buildPricingEngine');
+const { buildPricingEngine, resolveMarketplacePricingCtx } = require('../pricing/buildPricingEngine');
 const { getSpecBackend } = require('../utils/specLibs');
 const { resolveSpec } = require('../utils/specCutover');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -256,7 +256,7 @@ async function computeRegistrationFee(spec, height) {
     const breakdown = await engine.price(spec, {
       height,
       duration: spec.ttl || 0,
-      marketplaceMultiplier: resolveMarketplaceMultiplier(spec, height),
+      ...resolveMarketplacePricingCtx(spec, height),
     });
     return BigInt(breakdown.total);
   }
@@ -280,7 +280,7 @@ async function computeUpdateFee(spec, prevSpec, height, prevHeight) {
       duration: spec.ttl || 0,
       now: Date.now(),
       recentEvents: [],
-      marketplaceMultiplier: resolveMarketplaceMultiplier(spec, height),
+      ...resolveMarketplacePricingCtx(spec, height),
     });
     return (result && result.free) ? 0n : BigInt(result.total);
   }
