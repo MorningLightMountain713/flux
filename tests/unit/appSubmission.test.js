@@ -279,5 +279,69 @@ describe('appSubmission tests', () => {
       await submit(spec);
       sinon.assert.notCalled(stubs.marketplaceTemplateCache.getTemplate);
     });
+
+    describe('tiered templates (configs)', () => {
+      function tieredTemplate(extra = {}) {
+        return {
+          spec: { version: 9 },
+          useConfig: true,
+          configs: [{ id: 'tier-heavy', overrides: { instances: 2 } }],
+          userConfigurable: [],
+          ...extra,
+        };
+      }
+
+      function configuredSpec(configId, matchesResult) {
+        return v9Spec({
+          marketplace: { templateId: 'uuid-1', templateVersion: 2, configId },
+          matchesTemplate: sinon.stub().returns(matchesResult),
+          toCanonical: sinon.stub().returns({ name: 'myapp', owner: 'owner1', contacts: { email: ['a@b.co'] } }),
+        });
+      }
+
+      it('verifies against the merged base+override spec for the deployed tier', async () => {
+        const deepMerge = sinon.stub().returns({ version: 9, merged: true });
+        const fromSubmission = sinon.stub().returns({ templateSpec: true });
+        stubs.specLibs.getSpec = sinon.stub().resolves({ FluxAppSpecV9: { fromSubmission }, deepMerge });
+        stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves(tieredTemplate());
+
+        const spec = configuredSpec('tier-heavy', { matches: true, mismatches: [] });
+        const result = await submit(spec);
+
+        sinon.assert.calledWith(deepMerge, { version: 9 }, { instances: 2 });
+        sinon.assert.calledOnce(spec.matchesTemplate);
+        expect(result.spec).to.equal(spec);
+      });
+
+      it('hard-rejects a tiered template deploy with no configId', async () => {
+        stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves(tieredTemplate());
+        const spec = configuredSpec(null, { matches: true, mismatches: [] });
+        let err;
+        try { await submit(spec); } catch (e) { err = e; }
+        expect(err).to.exist;
+        expect(err.code).to.equal('TEMPLATE_MISMATCH');
+        expect(err.message).to.match(/configId is required/);
+      });
+
+      it('hard-rejects an unknown configId', async () => {
+        stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves(tieredTemplate());
+        const spec = configuredSpec('tier-nope', { matches: true, mismatches: [] });
+        let err;
+        try { await submit(spec); } catch (e) { err = e; }
+        expect(err).to.exist;
+        expect(err.code).to.equal('TEMPLATE_MISMATCH');
+        expect(err.message).to.match(/no config tier-nope/);
+      });
+
+      it('hard-rejects a configId on a non-tiered template', async () => {
+        stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves({ spec: { version: 9 }, useConfig: false, userConfigurable: [] });
+        const spec = configuredSpec('tier-heavy', { matches: true, mismatches: [] });
+        let err;
+        try { await submit(spec); } catch (e) { err = e; }
+        expect(err).to.exist;
+        expect(err.code).to.equal('TEMPLATE_MISMATCH');
+        expect(err.message).to.match(/not tiered/);
+      });
+    });
   });
 });
