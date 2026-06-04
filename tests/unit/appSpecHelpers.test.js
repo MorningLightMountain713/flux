@@ -687,6 +687,67 @@ describe('appSpecHelpers tests', () => {
     });
   });
 
+  describe('getAppFiatAndFluxPrice — v9 fiat markup (basis points)', () => {
+    const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
+    let appSpecHelpers;
+
+    const v9Spec = {
+      version: 9,
+      name: 'markuptest',
+      instances: 3,
+      ttl: 2592000,
+      placement: { staticIp: false, dataCenter: false, geoAllow: null, geoDeny: null },
+      network: { mesh: false },
+      telemetry: null,
+      components: {
+        web: {
+          cpu: 0.5, memory: 512, imageReserveGb: 1, swapGb: 0,
+          persistentStorage: { sizeGb: 5, sync: null, mounts: {} },
+          ports: { http: { hostPort: 31000, containerPort: 80, protocol: 'tcp' } },
+          loadBalancing: null, shutdown: null, preStop: null, imageAuth: null,
+        },
+      },
+    };
+
+    // PriceMessage rates so the engine prices the spec to a non-zero FLUX figure.
+    const priceFields = {
+      cpuRate: 150000, memoryRate: 50000, storageRate: 20000,
+      stdPortRate: 0, premPortRate: 2000000, staticIpRate: 2000000,
+      minPrice: 990000, minPriceFluxSats: 1000000,
+    };
+
+    beforeEach(() => {
+      appSpecHelpers = proxyquire('../../ZelBack/src/services/utils/appSpecHelpers', {
+        './specCutover': { resolveSpec: sinon.stub().resolves(v9Spec) },
+      });
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 200 } });
+      // No existing global app -> checkFreeAppUpdate returns false, so the markup path runs.
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
+      sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ resolveAt: () => priceFields });
+      // fluxUsdPriceE4 = 10000 -> $1.00 / FLUX, so usd/flux isolates the markup factor.
+      sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 10000 }) });
+      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => ({ fiatMarkupBp: 500 }) });
+      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(null);
+    });
+
+    it('applies fiatMarkupBp as a basis-points markup (500 -> +5%) and returns fluxDiscount as a percent', async () => {
+      const result = await appSpecHelpers.getAppFiatAndFluxPrice(v9Spec);
+      expect(result.fiatMarkupBp).to.equal(500);
+      expect(result.fluxDiscount).to.equal(5); // 500 / 100, display percent
+      expect(result.flux).to.be.greaterThan(0);
+      expect(result.usd / result.flux).to.be.closeTo(1.05, 0.01); // 1 + 500/10000
+    });
+
+    it('applies no markup when fiatMarkupBp is absent (usd == flux at $1/FLUX)', async () => {
+      priceOracleState.getPriceModifierHistory.restore();
+      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => ({}) });
+      const result = await appSpecHelpers.getAppFiatAndFluxPrice(v9Spec);
+      expect(result.fiatMarkupBp).to.equal(0);
+      expect(result.fluxDiscount).to.equal(0);
+      expect(result.usd / result.flux).to.be.closeTo(1.0, 0.01);
+    });
+  });
+
   describe('module exports tests', () => {
     it('should export getAppFiatAndFluxPrice', () => {
       const appSpecHelpers = require('../../ZelBack/src/services/utils/appSpecHelpers');
