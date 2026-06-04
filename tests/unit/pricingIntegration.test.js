@@ -88,18 +88,18 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     // PriceModifierMessage: duration discounts + instance surcharges
     const modifierFields = {
       durationBucket1MinSeconds: 7_776_000,  // 90 days
-      durationBucket1DiscountPct: 3,
+      durationBucket1DiscountBp: 300,
       durationBucket2MinSeconds: 15_552_000, // 180 days
-      durationBucket2DiscountPct: 6,
+      durationBucket2DiscountBp: 600,
       durationBucket3MinSeconds: 31_536_000, // 365 days
-      durationBucket3DiscountPct: 12,
+      durationBucket3DiscountBp: 1200,
       instanceTier1Breakpoint: 10,
-      instanceTier1Multiplier: 5,  // 5% surcharge
+      instanceTier1SurchargeBp: 500,  // 5% surcharge
       instanceTier2Breakpoint: 25,
-      instanceTier2Multiplier: 10,
+      instanceTier2SurchargeBp: 1000,
       instanceTier3Breakpoint: 50,
-      instanceTier3Multiplier: 15,
-      fiatMarkupPct: 5,
+      instanceTier3SurchargeBp: 1500,
+      fiatMarkupBp: 500,
       ...(opts.modifierFields || {}),
     };
     const modifierBytes = PriceModifierMessage.encode(modifierFields);
@@ -187,7 +187,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     });
 
     it('dispatches encoded PriceModifierMessage to kind=price-modifier', () => {
-      const bytes = PriceModifierMessage.encode({ durationBucket1MinSeconds: 7_776_000, durationBucket1DiscountPct: 3 });
+      const bytes = PriceModifierMessage.encode({ durationBucket1MinSeconds: 7_776_000, durationBucket1DiscountBp: 300 });
       const result = dispatch(bytes);
       expect(result.kind).to.equal('price-modifier');
       expect(result.message.fields.durationBucket1MinSeconds).to.equal(7_776_000);
@@ -319,7 +319,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
 
       expect(breakdown.discounts).to.have.lengthOf(1);
       expect(breakdown.discounts[0].label).to.equal('duration-90d');
-      expect(breakdown.discounts[0].value).to.equal(3);
+      expect(breakdown.discounts[0].value).to.equal(300);
     });
 
     it('applies 12% discount for 365-day duration', async () => {
@@ -334,26 +334,26 @@ describe('pricing integration — chain messages through PricingEngine', () => {
 
       expect(breakdown.discounts).to.have.lengthOf(1);
       expect(breakdown.discounts[0].label).to.equal('duration-365d');
-      expect(breakdown.discounts[0].value).to.equal(12);
+      expect(breakdown.discounts[0].value).to.equal(1200);
     });
   });
 
-  describe('fiatMarkupPct', () => {
-    it('resolves fiatMarkupPct from PriceModifierHistory', () => {
+  describe('fiatMarkupBp', () => {
+    it('resolves fiatMarkupBp from PriceModifierHistory', () => {
       const h = buildTestHistories();
       const resolved = h.modifierHistory.resolveAt(h.queryHeight);
-      expect(resolved.fiatMarkupPct).to.equal(5);
+      expect(resolved.fiatMarkupBp).to.equal(500);
     });
 
-    it('defaults to 0 when no fiatMarkupPct is in the message', () => {
+    it('defaults to 0 when no fiatMarkupBp is in the message', () => {
       const chainHeight = 100;
       const queryHeight = chainHeight + SOFT_FORK_EFFECTIVE_DEPTH;
-      const bytes = PriceModifierMessage.encode({ durationBucket1DiscountPct: 3 });
+      const bytes = PriceModifierMessage.encode({ durationBucket1DiscountBp: 300 });
       const result = dispatch(bytes);
       const history = new PriceModifierHistory();
       history.add(result.message, chainHeight);
       const resolved = history.resolveAt(queryHeight);
-      expect(resolved.fiatMarkupPct || 0).to.equal(0);
+      expect(resolved.fiatMarkupBp || 0).to.equal(0);
     });
   });
 

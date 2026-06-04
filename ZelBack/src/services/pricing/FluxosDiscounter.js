@@ -11,11 +11,11 @@ class FluxosDiscounter {
     const duration = ctx.duration || 0;
 
     if (params.durationBucket3MinSeconds && duration >= params.durationBucket3MinSeconds) {
-      entries.push({ type: 'percent', value: params.durationBucket3DiscountPct, label: 'duration-365d', target: 'total' });
+      entries.push({ type: 'basisPoints', value: params.durationBucket3DiscountBp, label: 'duration-365d', target: 'total' });
     } else if (params.durationBucket2MinSeconds && duration >= params.durationBucket2MinSeconds) {
-      entries.push({ type: 'percent', value: params.durationBucket2DiscountPct, label: 'duration-180d', target: 'total' });
+      entries.push({ type: 'basisPoints', value: params.durationBucket2DiscountBp, label: 'duration-180d', target: 'total' });
     } else if (params.durationBucket1MinSeconds && duration >= params.durationBucket1MinSeconds) {
-      entries.push({ type: 'percent', value: params.durationBucket1DiscountPct, label: 'duration-90d', target: 'total' });
+      entries.push({ type: 'basisPoints', value: params.durationBucket1DiscountBp, label: 'duration-90d', target: 'total' });
     }
 
     return entries;
