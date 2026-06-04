@@ -11,11 +11,11 @@ class FluxosSurcharger {
     const entries = [];
 
     if (params.instanceTier3Breakpoint && instances >= params.instanceTier3Breakpoint) {
-      entries.push({ type: 'percent', value: params.instanceTier3Multiplier, label: 'instance-tier-3', target: 'commodity' });
+      entries.push({ type: 'basisPoints', value: params.instanceTier3SurchargeBp, label: 'instance-tier-3', target: 'commodity' });
     } else if (params.instanceTier2Breakpoint && instances >= params.instanceTier2Breakpoint) {
-      entries.push({ type: 'percent', value: params.instanceTier2Multiplier, label: 'instance-tier-2', target: 'commodity' });
+      entries.push({ type: 'basisPoints', value: params.instanceTier2SurchargeBp, label: 'instance-tier-2', target: 'commodity' });
     } else if (params.instanceTier1Breakpoint && instances >= params.instanceTier1Breakpoint) {
-      entries.push({ type: 'percent', value: params.instanceTier1Multiplier, label: 'instance-tier-1', target: 'commodity' });
+      entries.push({ type: 'basisPoints', value: params.instanceTier1SurchargeBp, label: 'instance-tier-1', target: 'commodity' });
     }
 
     return entries;

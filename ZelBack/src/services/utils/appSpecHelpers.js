@@ -42,17 +42,17 @@ function getOracleFluxUsdRate() {
 }
 
 /**
- * Get the current fiat markup percentage from PriceModifierHistory.
+ * Get the current fiat markup in basis points from PriceModifierHistory.
  * Returns 0 if no PriceModifierMessage has set the field.
  * @returns {number}
  */
-function getFiatMarkupPct() {
+function getFiatMarkupBp() {
   const modifierHistory = priceOracleState.getPriceModifierHistory();
   if (!modifierHistory) return 0;
   const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
   if (!syncStatus.data.synced) return 0;
   const resolved = modifierHistory.resolveAt(syncStatus.data.height);
-  return resolved.fiatMarkupPct || 0;
+  return resolved.fiatMarkupBp || 0;
 }
 
 /**
@@ -201,7 +201,7 @@ async function checkFreeAppUpdate(spec, daemonHeight) {
  * Pure business logic: takes the parsed appSpecification, returns the price
  * object, throws on error (the *Api handler formats the response).
  * @param {object} appSpecification - parsed application specification
- * @returns {Promise<{usd: number|null, flux: number, fluxDiscount: number|string, fiatMarkupPct?: number}>}
+ * @returns {Promise<{usd: number|null, flux: number, fluxDiscount: number|string, fiatMarkupBp?: number}>}
  */
 async function getAppFiatAndFluxPrice(appSpecification) {
   if (!appSpecification) {
@@ -225,17 +225,18 @@ async function getAppFiatAndFluxPrice(appSpecification) {
 
   const fluxPrice = await getAppFluxOnChainPrice(appSpecification);
   const fluxUsdRate = getOracleFluxUsdRate();
-  const fiatMarkupPct = getFiatMarkupPct();
+  const fiatMarkupBp = getFiatMarkupBp();
   const fluxUsd = fluxUsdRate != null ? fluxPrice * fluxUsdRate : null;
   const usd = fluxUsd != null
-    ? Number((fluxUsd * (1 + fiatMarkupPct / 100)).toFixed(2))
+    ? Number((fluxUsd * (1 + fiatMarkupBp / 10000)).toFixed(2))
     : null;
 
   return {
     usd,
     flux: Number(Number(fluxPrice).toFixed(2)),
-    fluxDiscount: fiatMarkupPct,
-    fiatMarkupPct,
+    // fluxDiscount is a display percent (UI shows "-N%"); fiatMarkupBp is the raw value.
+    fluxDiscount: fiatMarkupBp / 100,
+    fiatMarkupBp,
   };
 }
 
