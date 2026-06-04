@@ -21,30 +21,40 @@ async function buildPricingEngine(height) {
   });
 }
 
+function uuidToBytes(uuid) {
+  return Buffer.from(uuid.replace(/-/g, ''), 'hex');
+}
+
 /**
- * Resolve the effective marketplace per-template multiplier (basis points,
- * 10000 = 1.0x) for a spec at a given height, to pass via the PricingEngine
- * ctx. Resolution order: per-template MarketplacePricingMessage -> the
- * PriceModifierMessage marketplaceMultiplierBase default -> 1.0x. Non-v9 or
- * non-marketplace specs always resolve to 1.0x (no effect).
+ * Resolve the effective marketplace pricing for a v9 spec at a height and
+ * return the PricingEngine ctx fragment that applies it. The chain prices a
+ * marketplace app either by a multiplier (per-tier -> per-template -> global
+ * default cascade) or by a per-tier fixed USD price; the two are mutually
+ * exclusive, so this sets at most one of marketplaceMultiplier /
+ * marketplaceFixedPriceMicrodollars. configId (the deployed tier) selects the
+ * most-specific entry. Non-v9 or non-marketplace specs return an empty fragment
+ * (pure resource pricing, 1.0x).
  *
  * @param {object} spec - v9 spec instance (exposes .version and .marketplace)
  * @param {number} height - chain height to resolve at
- * @returns {number} basis points (10000 = 1.0x)
+ * @returns {{marketplaceMultiplier?: number, marketplaceFixedPriceMicrodollars?: number}}
  */
-function resolveMarketplaceMultiplier(spec, height) {
-  if (!spec || spec.version < 9) return 10000;
+function resolveMarketplacePricingCtx(spec, height) {
+  if (!spec || spec.version < 9) return {};
   const { marketplace } = spec;
-  if (!marketplace || !marketplace.templateId) return 10000;
+  if (!marketplace || !marketplace.templateId) return {};
 
-  const uuidBytes = Buffer.from(marketplace.templateId.replace(/-/g, ''), 'hex');
   const mpHistory = priceOracleState.getMarketplacePricingHistory();
-  const perTemplate = mpHistory ? mpHistory.resolveAt(uuidBytes, height) : null;
-  if (perTemplate != null) return perTemplate;
+  if (!mpHistory) return {};
 
-  const modifierHistory = priceOracleState.getPriceModifierHistory();
-  const params = modifierHistory ? modifierHistory.resolveAt(height) : null;
-  return params?.marketplaceMultiplierBase ?? 10000;
+  const templateBytes = uuidToBytes(marketplace.templateId);
+  const configBytes = marketplace.configId ? uuidToBytes(marketplace.configId) : null;
+  const eff = mpHistory.resolveEffective(templateBytes, configBytes, height);
+  if (!eff) return {};
+
+  return eff.kind === 'fixed'
+    ? { marketplaceFixedPriceMicrodollars: eff.microdollars }
+    : { marketplaceMultiplier: eff.basisPoints };
 }
 
-module.exports = { buildPricingEngine, resolveMarketplaceMultiplier };
+module.exports = { buildPricingEngine, resolveMarketplacePricingCtx };

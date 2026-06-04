@@ -10,7 +10,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
   let PriceMessageHistory, RateMessageHistory, PriceModifierHistory;
   let MarketplacePricingMessage, MarketplacePricingHistory;
   let SOFT_FORK_EFFECTIVE_DEPTH;
-  let buildPricingEngine, resolveMarketplaceMultiplier;
+  let buildPricingEngine, resolveMarketplacePricingCtx;
   let convertMicrodollarsToSats;
 
   before(async () => {
@@ -21,7 +21,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       SOFT_FORK_EFFECTIVE_DEPTH,
       convertMicrodollarsToSats,
     } = await import('@runonflux/flux-spec-policy'));
-    ({ buildPricingEngine, resolveMarketplaceMultiplier } = require('../../ZelBack/src/services/pricing/buildPricingEngine'));
+    ({ buildPricingEngine, resolveMarketplacePricingCtx } = require('../../ZelBack/src/services/pricing/buildPricingEngine'));
   });
 
   afterEach(() => {
@@ -131,38 +131,42 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       return history;
     }
 
+    function buildGlobalDefaultHistory(chainHeight, multiplier) {
+      const bytes = MarketplacePricingMessage.encode({ multiplier });
+      const result = dispatch(bytes);
+      const history = new MarketplacePricingHistory();
+      history.add(result.message, chainHeight);
+      return history;
+    }
+
     it('resolves the per-template multiplier from MarketplacePricingHistory', () => {
       const chainHeight = 100;
       const queryHeight = chainHeight + SOFT_FORK_EFFECTIVE_DEPTH;
       sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(buildMarketplaceHistory(chainHeight, 12000));
-      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns(null);
 
-      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1 } };
-      expect(resolveMarketplaceMultiplier(spec, queryHeight)).to.equal(12000);
+      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1, configId: null } };
+      expect(resolveMarketplacePricingCtx(spec, queryHeight)).to.deep.equal({ marketplaceMultiplier: 12000 });
     });
 
-    it('falls back to marketplaceMultiplierBase when no per-template message exists', () => {
+    it('cascades to the global-default entry when no per-template message exists', () => {
       const chainHeight = 100;
-      const histories = buildTestHistories({ chainHeight, modifierFields: { marketplaceMultiplierBase: 8000 } });
-      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(new MarketplacePricingHistory());
-      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns(histories.modifierHistory);
+      const queryHeight = chainHeight + SOFT_FORK_EFFECTIVE_DEPTH;
+      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(buildGlobalDefaultHistory(chainHeight, 8000));
 
-      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1 } };
-      expect(resolveMarketplaceMultiplier(spec, histories.queryHeight)).to.equal(8000);
+      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1, configId: null } };
+      expect(resolveMarketplacePricingCtx(spec, queryHeight)).to.deep.equal({ marketplaceMultiplier: 8000 });
     });
 
-    it('defaults to 1.0x (10000) for a non-marketplace spec', () => {
+    it('returns an empty fragment for a non-marketplace spec', () => {
       sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(new MarketplacePricingHistory());
-      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns(null);
       const spec = { ...testSpec, marketplace: null };
-      expect(resolveMarketplaceMultiplier(spec, 200)).to.equal(10000);
+      expect(resolveMarketplacePricingCtx(spec, 200)).to.deep.equal({});
     });
 
-    it('defaults to 1.0x when neither a per-template nor base multiplier is set', () => {
+    it('returns an empty fragment when no entry matches the marketplace spec', () => {
       sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(new MarketplacePricingHistory());
-      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns(null);
-      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1 } };
-      expect(resolveMarketplaceMultiplier(spec, 200)).to.equal(10000);
+      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1, configId: null } };
+      expect(resolveMarketplacePricingCtx(spec, 200)).to.deep.equal({});
     });
   });
 
@@ -363,7 +367,8 @@ describe('pricing integration — chain messages through PricingEngine', () => {
 
       expect(breakdown).to.have.all.keys(
         'commodity', 'features', 'surcharges', 'discounts',
-        'grossMicrodollars', 'marketplaceMultiplier', 'marketplaceAdjustedMicrodollars',
+        'grossMicrodollars', 'marketplaceMultiplier', 'marketplaceFixedPriceMicrodollars',
+        'marketplaceAdjustedMicrodollars',
         'adjustedMicrodollars', 'minPriceMicrodollars',
         'total', 'minPriceFluxSats',
         'fluxUsdPriceE4', 'ratesHeight',

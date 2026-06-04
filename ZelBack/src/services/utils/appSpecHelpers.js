@@ -5,7 +5,7 @@ const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { resolveSpec } = require('./specCutover');
 const appsRepository = require('../appDatabase/appsRepository');
-const { buildPricingEngine, resolveMarketplaceMultiplier } = require('../pricing/buildPricingEngine');
+const { buildPricingEngine, resolveMarketplacePricingCtx } = require('../pricing/buildPricingEngine');
 const priceOracleState = require('../pricing/priceOracleState');
 const { legacyGetAppFiatAndFluxPrice, legacyGetAppFluxOnChainPrice } = require('../pricing/legacyDisplayPricing');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -84,7 +84,7 @@ async function getAppFluxOnChainPrice(appSpecification) {
   const breakdown = await engine.price(spec, {
     height: daemonHeight,
     duration: spec.ttl || 0,
-    marketplaceMultiplier: resolveMarketplaceMultiplier(spec, daemonHeight),
+    ...resolveMarketplacePricingCtx(spec, daemonHeight),
   });
   return breakdown.total / 1e8;
 }
