@@ -20,11 +20,51 @@ const marketplaceTemplateCache = require('../marketplace/marketplaceTemplateCach
 const { peerManager } = require('../utils/peerState');
 
 /**
+ * Resolve the effective template submission spec for the tier the deploy claims.
+ * A tiered template (useConfig) is a base spec plus per-config overrides; the
+ * deployed spec selects its tier via marketplace.configId, and the effective
+ * template is deepMerge(base, configs[configId].overrides). The "required iff
+ * useConfig" rule is a consensus check enforced here, against the fetched
+ * template — the schema can't know whether a template is tiered. Merging happens
+ * on the sparse submission form (before canonicalization) so the bytes line up
+ * with how the frontend builds the deploy spec. Rejections carry TEMPLATE_MISMATCH.
+ *
+ * @param {object} template - fetched marketplace template ({ spec, useConfig, configs })
+ * @param {string|null} configId - deployed tier id from spec.marketplace.configId
+ * @param {Function} deepMerge - flux-spec base+override merge
+ * @returns {object} the effective template submission spec
+ */
+function resolveEffectiveTemplateSpec(template, configId, deepMerge) {
+  if (!template.useConfig) {
+    if (configId) {
+      const err = new Error('Marketplace template is not tiered; configId must be null');
+      err.code = 'TEMPLATE_MISMATCH';
+      throw err;
+    }
+    return template.spec;
+  }
+
+  if (!configId) {
+    const err = new Error('Marketplace template is tiered; a configId is required');
+    err.code = 'TEMPLATE_MISMATCH';
+    throw err;
+  }
+  const tier = (template.configs || []).find((c) => c.id === configId);
+  if (!tier) {
+    const err = new Error(`Marketplace template has no config ${configId}`);
+    err.code = 'TEMPLATE_MISMATCH';
+    throw err;
+  }
+  return deepMerge(template.spec, tier.overrides || {});
+}
+
+/**
  * v9 marketplace template verification. If the spec claims a marketplace template
- * (marketplace != null), fetch that template version and assert the spec matches it
- * — non-configurable fields must be unchanged. Hard-reject on mismatch; the cache
- * throws "unavailable" if the template can't be fetched, so a registration is never
- * silently accepted. No-op when marketplace is null (custom registration).
+ * (marketplace != null), fetch that template version, resolve the effective spec
+ * for the deployed tier, and assert the spec matches it — non-configurable fields
+ * must be unchanged. Hard-reject on mismatch (incl. a bad/missing configId); the
+ * cache throws "unavailable" if the template can't be fetched, so a registration
+ * is never silently accepted. No-op when marketplace is null (custom registration).
  *
  * @param {object} spec - validated v9 FluxAppSpecV9 instance (exposes matchesTemplate/toCanonical)
  */
@@ -36,14 +76,16 @@ async function assertMatchesMarketplaceTemplate(spec) {
     marketplace.templateId, marketplace.templateVersion,
   );
 
-  const { FluxAppSpecV9 } = await getSpec();
+  const { FluxAppSpecV9, deepMerge } = await getSpec();
+  const effectiveSpec = resolveEffectiveTemplateSpec(template, marketplace.configId, deepMerge);
+
   // Build a comparable template-spec instance. The template stores owner:null and
   // no contacts; matchesTemplate ignores name/owner and contacts is user-configurable,
   // so injecting the deployed spec's name/owner/contacts only satisfies construction —
   // it does not affect the comparison.
   const canonical = spec.toCanonical();
   const templateSpec = FluxAppSpecV9.fromSubmission({
-    ...template.spec,
+    ...effectiveSpec,
     name: canonical.name,
     owner: canonical.owner,
     contacts: canonical.contacts,
