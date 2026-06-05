@@ -80,6 +80,15 @@ async function getAppFluxOnChainPrice(appSpecification) {
   }
   const daemonHeight = syncStatus.data.height;
 
+  // Display == consensus: if an app of this name already exists, this preview
+  // is an update, so price it through priceUpdate (with the unused-time credit)
+  // exactly as messageVerifier.computeUpdateFee will. Otherwise it's a
+  // registration and prices via price().
+  const existing = await appsRepository.getGlobalAppInfo(spec.name);
+  if (existing) {
+    return getAppFluxOnChainUpdatePrice(spec, existing, daemonHeight);
+  }
+
   const engine = await buildPricingEngine(daemonHeight);
   const breakdown = await engine.price(spec, {
     height: daemonHeight,
@@ -87,6 +96,56 @@ async function getAppFluxOnChainPrice(appSpecification) {
     ...resolveMarketplacePricingCtx(spec, daemonHeight),
   });
   return breakdown.total / 1e8;
+}
+
+/**
+ * Price a v9 update for display, mirroring messageVerifier.computeUpdateFee so
+ * the displayed figure equals the consensus fee. The previous spec is priced at
+ * its own registration-height rates for the unused-time credit. The one
+ * unavoidable difference from consensus: "now" is the current wall clock (the
+ * update is not yet in a block), as the existing free-update preview already
+ * does — the confirming block time is unknown at preview time.
+ *
+ * @param {object} spec - resolved new v9 spec
+ * @param {object} existing - InstantiatedSpec of the prior registration
+ * @param {number} daemonHeight - current chain height
+ * @returns {Promise<number>} price in FLUX (decimal)
+ */
+async function getAppFluxOnChainUpdatePrice(spec, existing, daemonHeight) {
+  const prevSpec = existing.isEncrypted
+    ? await resolveSpec(existing.serialize())
+    : existing.spec;
+  const prevHeight = existing.height;
+
+  const oldEngine = await buildPricingEngine(prevHeight);
+  const oldBreakdown = await oldEngine.price(prevSpec, {
+    height: prevHeight,
+    duration: prevSpec.ttl || 0,
+    ...resolveMarketplacePricingCtx(prevSpec, prevHeight),
+  });
+  const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const remainingSeconds = Math.max(0, (existing.registeredAt + (prevSpec.ttl || 0)) - nowSeconds);
+
+  const modifierHistory = priceOracleState.getPriceModifierHistory();
+  const modParams = modifierHistory ? modifierHistory.resolveAt(daemonHeight) : null;
+  const updateDiscountBp = (modParams && modParams.updateDiscountBp) || 0;
+
+  const engine = await buildPricingEngine(daemonHeight);
+  const result = await engine.priceUpdate(prevSpec, spec, {
+    height: daemonHeight,
+    duration: spec.ttl || 0,
+    now: Date.now(),
+    recentEvents: [],
+    oldScaledPriceMicrodollars,
+    remainingSeconds,
+    oldTtl: prevSpec.ttl || 0,
+    updateDiscountBp,
+    ...resolveMarketplacePricingCtx(spec, daemonHeight),
+  });
+  if (result && result.free) return 0;
+  return result.total / 1e8;
 }
 
 function countEnterprisePortsOn(component) {
