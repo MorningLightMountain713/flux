@@ -10,6 +10,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
 const { buildPricingEngine, resolveMarketplacePricingCtx } = require('../pricing/buildPricingEngine');
+const priceOracleState = require('../pricing/priceOracleState');
 const { getSpecBackend } = require('../utils/specLibs');
 const { resolveSpec } = require('../utils/specCutover');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -272,14 +273,39 @@ async function computeRegistrationFee(spec, height) {
   return BigInt(Math.round(appPrice * 1e8));
 }
 
-async function computeUpdateFee(spec, prevSpec, height, prevHeight) {
+async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime) {
   if (spec.version >= 9) {
     const engine = await buildPricingEngine(height);
+
+    // Price the previous spec at its OWN registration-height rates, scaled to
+    // its ttl: the basis for the unused-time credit refunds what was paid, at
+    // the rates in force then. The pre-floor figure (marketplaceAdjusted) is
+    // used so the credit is never itself raised to minPrice.
+    const oldEngine = await buildPricingEngine(prevHeight);
+    const oldBreakdown = await oldEngine.price(prevSpec, {
+      height: prevHeight,
+      duration: prevSpec.ttl || 0,
+      ...resolveMarketplacePricingCtx(prevSpec, prevHeight),
+    });
+    const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
+
+    // Unused wall-clock seconds left on the prior registration.
+    const remainingSeconds = Math.max(0, (prevRegisteredAt + (prevSpec.ttl || 0)) - nowBlockTime);
+
+    // Flat update discount (0x04 tag 9) resolved at the current height; absent => 0.
+    const modifierHistory = priceOracleState.getPriceModifierHistory();
+    const modParams = modifierHistory ? modifierHistory.resolveAt(height) : null;
+    const updateDiscountBp = (modParams && modParams.updateDiscountBp) || 0;
+
     const result = await engine.priceUpdate(prevSpec, spec, {
       height,
       duration: spec.ttl || 0,
       now: Date.now(),
       recentEvents: [],
+      oldScaledPriceMicrodollars,
+      remainingSeconds,
+      oldTtl: prevSpec.ttl || 0,
+      updateDiscountBp,
       ...resolveMarketplacePricingCtx(spec, height),
     });
     return (result && result.free) ? 0n : BigInt(result.total);
@@ -442,7 +468,10 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         log.error(`checkAndRequestApp - could not resolve previous spec for ${spec.name} to compute update fee`);
         return true;
       }
-      const requiredSats = await computeUpdateFee(pricingSpec, prevSpec, height, prevMessage.height);
+      const requiredSats = await computeUpdateFee(
+        pricingSpec, prevSpec, height, prevMessage.height,
+        prevMessage.registeredAt || 0, blockTime,
+      );
       if (BigInt(valueSat) >= requiredSats) {
         await updateAppSpecifications(instantiated.serialize());
       } else {
