@@ -367,7 +367,9 @@ describe('pricing integration — chain messages through PricingEngine', () => {
 
       expect(breakdown).to.have.all.keys(
         'commodity', 'features', 'surcharges', 'discounts',
-        'grossMicrodollars', 'marketplaceMultiplier', 'marketplaceFixedPriceMicrodollars',
+        'grossMicrodollars', 'durationSeconds', 'standardPeriodSeconds',
+        'scaledCommodityMicrodollars', 'scaledFeatureMicrodollars', 'scaledGrossMicrodollars',
+        'marketplaceMultiplier', 'marketplaceFixedPriceMicrodollars',
         'marketplaceAdjustedMicrodollars',
         'adjustedMicrodollars', 'minPriceMicrodollars',
         'total', 'minPriceFluxSats',
@@ -396,6 +398,44 @@ describe('pricing integration — chain messages through PricingEngine', () => {
 
       expect(premBreakdown.commodity.ports.premium.count).to.equal(3);
       expect(premBreakdown.total).to.be.above(stdBreakdown.total);
+    });
+  });
+
+  describe('duration scaling + update proration (new 0x02/0x04 tags)', () => {
+    const ONE_PERIOD = 2_640_000;
+
+    it('scales a registration by duration — a year costs more than a month', async () => {
+      const h = buildTestHistories();
+      stubHistories(h);
+      const engine = await buildPricingEngine(h.queryHeight);
+      const month = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD });
+      const year = await engine.price(testSpec, { height: h.queryHeight, duration: 31_536_000 });
+      // Even with the 12% 365-day bucket discount, a year dwarfs a month.
+      expect(year.total).to.be.above(month.total);
+    });
+
+    it('round-trips standardPeriodSeconds through the price message and scales by it', async () => {
+      const h = buildTestHistories({ priceFields: { standardPeriodSeconds: ONE_PERIOD } });
+      stubHistories(h);
+      expect(h.priceHistory.resolveAt(h.queryHeight).standardPeriodSeconds).to.equal(ONE_PERIOD);
+
+      const engine = await buildPricingEngine(h.queryHeight);
+      const onePeriod = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD });
+      const twoPeriods = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD * 2 });
+      expect(onePeriod.standardPeriodSeconds).to.equal(ONE_PERIOD);
+      expect(onePeriod.scaledGrossMicrodollars).to.equal(onePeriod.grossMicrodollars);
+      expect(twoPeriods.scaledGrossMicrodollars).to.equal(2 * onePeriod.scaledGrossMicrodollars);
+    });
+
+    it('round-trips updateDiscountBp through the modifier message (encode -> dispatch -> history)', async () => {
+      // The proration math itself is covered exhaustively in spec-policy; here we
+      // verify the new 0x04 tag survives the FluxOS chain-message pipeline so
+      // computeUpdateFee can resolve it.
+      const withDiscount = buildTestHistories({ modifierFields: { updateDiscountBp: 1000 } });
+      expect(withDiscount.modifierHistory.resolveAt(withDiscount.queryHeight).updateDiscountBp).to.equal(1000);
+
+      const without = buildTestHistories();
+      expect(without.modifierHistory.resolveAt(without.queryHeight).updateDiscountBp).to.equal(undefined);
     });
   });
 });
