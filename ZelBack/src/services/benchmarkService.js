@@ -297,48 +297,48 @@ async function getPublicKey(message) {
   return executeCall(rpccall, rpcparameters);
 }
 
-// v2 backend spec encryption (AES-256-GCM, key derived per app+owner). The
-// RPC takes the request object as a single JSON string param.
+// App-secret encryption (AES-256-GCM, key derived per app+owner). The RPC
+// takes the request object as a single JSON string param.
 async function seal(params) {
-  const rpccall = 'v2encrypt';
+  const rpccall = 'appencrypt';
   const rpcparameters = [JSON.stringify(params)];
   return executeCall(rpccall, rpcparameters);
 }
 
 async function unseal(params) {
-  const rpccall = 'v2decrypt';
+  const rpccall = 'appdecrypt';
   const rpcparameters = [JSON.stringify(params)];
   return executeCall(rpccall, rpcparameters);
 }
 
-// v2 transport methods take a single string param over the benchmark RPC: a
+// Transport methods take a single string param over the benchmark RPC: a
 // query string for the public-key call, the JSON body for the open call (the
-// same string-param convention as v1 seal/unseal).
+// same opaque string-param convention as the other proxy methods).
 async function transportPublicKey({ appName, fluxID }) {
-  const rpccall = 'v2transportpublickey';
+  const rpccall = 'transportpublickey';
   const query = `appName=${encodeURIComponent(appName)}&fluxID=${encodeURIComponent(fluxID)}`;
   const rpcparameters = [query];
   return executeCall(rpccall, rpcparameters);
 }
 
 async function transportOpen(params) {
-  const rpccall = 'v2transportopen';
+  const rpccall = 'transportopen';
   const rpcparameters = [JSON.stringify(params)];
   return executeCall(rpccall, rpcparameters);
 }
 
-// v2 arcane attestation: sign a message proving a genuine SAS instance
-// processed an encrypted spec. The sign call takes the JSON body as a single
-// string param (same convention as seal/transportOpen); the public-key call
-// takes no params.
+// Arcane attestation: sign a message proving an encrypted spec was processed
+// by a genuine instance. The sign call takes the JSON body as a single string
+// param (same convention as seal/transportOpen); the public-key call takes no
+// params.
 async function attest(params) {
-  const rpccall = 'v2attest';
+  const rpccall = 'attest';
   const rpcparameters = [JSON.stringify(params)];
   return executeCall(rpccall, rpcparameters);
 }
 
 async function attestationPublicKey() {
-  const rpccall = 'v2attestationpublickey';
+  const rpccall = 'attestationpublickey';
   return executeCall(rpccall);
 }
 
