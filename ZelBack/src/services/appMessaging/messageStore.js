@@ -118,7 +118,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
 
   if (furtherVerification) {
     // A v9 encrypted spec must carry a valid arcane attestation (an Arcane
-    // node's signed receipt that a genuine SAS validated it), verified locally
+    // node's signed receipt that a genuine secure backend validated it), verified locally
     // against the hardcoded network key so non-Arcane nodes reject too. Drop
     // (do not relay) on a missing/invalid attestation.
     //
