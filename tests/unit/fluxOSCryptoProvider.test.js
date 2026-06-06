@@ -112,7 +112,7 @@ describe('FluxOSCryptoProvider', () => {
         .to.be.rejectedWith(/seal RPC failed/);
     });
 
-    it('throws when SAS rejects the seal request', async () => {
+    it('throws when the backend rejects the seal request', async () => {
       benchmarkServiceStub.seal.resolves({
         status: 'success',
         data: { status: 'bad_request' },
@@ -167,7 +167,7 @@ describe('FluxOSCryptoProvider', () => {
       expect(params.aad).to.equal(Buffer.from('metadata').toString('base64'));
     });
 
-    it('throws when SAS rejects the unseal request', async () => {
+    it('throws when the backend rejects the unseal request', async () => {
       benchmarkServiceStub.unseal.resolves({
         status: 'success',
         data: { status: 'DECRYPT_FAILED' },

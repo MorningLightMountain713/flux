@@ -3,9 +3,9 @@ const crypto = require('node:crypto');
 /**
  * Network arcane-attestation public key (base64, raw 32-byte Ed25519).
  *
- * Every genuine SAS instance derives the same attestation keypair from the
+ * Every genuine Arcane node derives the same attestation keypair from the
  * network-wide salt, so there is exactly one public key for the whole network.
- * It is hardcoded here so any node — with or without a local SAS — can verify
+ * It is hardcoded here so any node — with or without a local secure backend — can verify
  * an attestation locally, without an RPC.
  *
  * Rotation: bump the attestation domain version (FLUX_ARCANE_ATTEST_v1 -> v2)
@@ -35,7 +35,7 @@ function publicKeyFromBase64(publicKeyB64) {
  * input (bad key length, bad base64) verifies as false rather than throwing — an
  * unverifiable attestation is simply invalid.
  *
- * @param {string} message - the exact bytes SAS signed
+ * @param {string} message - the exact bytes that were signed
  * @param {string} publicKeyB64 - base64 raw 32-byte Ed25519 public key
  * @param {string} signatureB64 - base64 Ed25519 signature
  * @returns {boolean}
