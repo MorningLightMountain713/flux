@@ -109,13 +109,13 @@ async function getTransportPublicKey(req, res) {
       return res.json(rpcResult);
     }
 
-    const sasResponse = typeof rpcResult.data === 'string'
+    const transportResponse = typeof rpcResult.data === 'string'
       ? JSON.parse(rpcResult.data) : rpcResult.data;
-    if (!sasResponse || sasResponse.status !== 'ok') {
-      throw new Error(`Error getting transport public key: ${(sasResponse && sasResponse.message) || 'unknown'}`);
+    if (!transportResponse || transportResponse.status !== 'ok') {
+      throw new Error(`Error getting transport public key: ${(transportResponse && transportResponse.message) || 'unknown'}`);
     }
 
-    return res.json(messageHelper.createDataMessage(sasResponse));
+    return res.json(messageHelper.createDataMessage(transportResponse));
   } catch (error) {
     log.error(error);
     const errorResponse = messageHelper.createErrorMessage(
