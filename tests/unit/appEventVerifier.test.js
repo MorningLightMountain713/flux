@@ -421,23 +421,23 @@ describe('appEventVerifier', () => {
   });
 
   describe('requestAttestation', () => {
-    it('signs the domain-separated content hash via the local SAS and returns the signature', async () => {
-      benchmarkServiceStub.attest.resolves({ status: 'success', data: { signature: 'sas-signature-b64', status: 'ok' } });
+    it('signs the domain-separated content hash via the local secure backend and returns the signature', async () => {
+      benchmarkServiceStub.attest.resolves({ status: 'success', data: { signature: 'attest-signature-b64', status: 'ok' } });
 
       const signature = await appEventVerifier.requestAttestation('deadbeef');
 
-      expect(signature).to.equal('sas-signature-b64');
+      expect(signature).to.equal('attest-signature-b64');
       expect(benchmarkServiceStub.attest.calledOnceWithExactly({ message: 'FLUX_ARCANE_ATTEST_v1deadbeef' })).to.be.true;
     });
 
-    it('throws when the SAS call does not succeed', async () => {
-      benchmarkServiceStub.attest.resolves({ status: 'error', data: 'SAS unavailable' });
+    it('throws when the attestation call does not succeed', async () => {
+      benchmarkServiceStub.attest.resolves({ status: 'error', data: 'attestation unavailable' });
 
       await expect(appEventVerifier.requestAttestation('deadbeef'))
         .to.be.rejectedWith(/Failed to obtain arcane attestation/);
     });
 
-    it('throws when the SAS response omits a signature', async () => {
+    it('throws when the attestation response omits a signature', async () => {
       benchmarkServiceStub.attest.resolves({ status: 'success', data: { status: 'ok' } });
 
       await expect(appEventVerifier.requestAttestation('deadbeef'))

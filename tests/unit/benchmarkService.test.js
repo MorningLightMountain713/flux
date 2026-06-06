@@ -78,7 +78,7 @@ describe('benchmarkService tests', () => {
     });
   });
 
-  describe('v2 transport methods', () => {
+  describe('transport methods', () => {
     let benchmarkStub;
 
     beforeEach(() => {
@@ -93,7 +93,7 @@ describe('benchmarkService tests', () => {
     it('should request the transport public key as a url-encoded query string', async () => {
       await benchmarkService.transportPublicKey({ appName: 'my app', fluxID: '1abc/def' });
 
-      sinon.assert.calledOnceWithExactly(benchmarkStub, 'v2transportpublickey', {
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'transportpublickey', {
         params: ['appName=my%20app&fluxID=1abc%2Fdef'],
       });
     });
@@ -105,13 +105,13 @@ describe('benchmarkService tests', () => {
 
       await benchmarkService.transportOpen(payload);
 
-      sinon.assert.calledOnceWithExactly(benchmarkStub, 'v2transportopen', {
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'transportopen', {
         params: [JSON.stringify(payload)],
       });
     });
   });
 
-  describe('v2 attestation methods', () => {
+  describe('attestation methods', () => {
     let benchmarkStub;
 
     beforeEach(() => {
@@ -128,7 +128,7 @@ describe('benchmarkService tests', () => {
 
       await benchmarkService.attest(payload);
 
-      sinon.assert.calledOnceWithExactly(benchmarkStub, 'v2attest', {
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'attest', {
         params: [JSON.stringify(payload)],
       });
     });
@@ -136,7 +136,7 @@ describe('benchmarkService tests', () => {
     it('should request the attestation public key with no params', async () => {
       await benchmarkService.attestationPublicKey();
 
-      sinon.assert.calledOnceWithExactly(benchmarkStub, 'v2attestationpublickey', {
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'attestationpublickey', {
         params: [],
       });
     });
