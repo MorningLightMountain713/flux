@@ -97,7 +97,7 @@ describe('transportHelper tests', () => {
     }
   });
 
-  it('throws with the SAS-reported code when the open fails', async () => {
+  it('throws with the backend-reported code when the open fails', async () => {
     benchmarkServiceStub.transportOpen.resolves({
       status: 'success',
       data: { status: 'error', message: 'DECRYPT_FAILED' },

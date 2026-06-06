@@ -83,11 +83,11 @@ async function authorize({
 }
 
 /**
- * Request an arcane attestation from the local SAS for an encrypted spec.
+ * Request an arcane attestation from the local secure backend for an encrypted spec.
  *
  * Signs the domain-separated attestation message over the spec's contentHash,
- * proving a genuine SAS instance processed this content. Only the originating
- * Arcane node calls this; relayers carry the attestation as-is. Throws on SAS
+ * proving a genuine secure backend processed this content. Only the originating
+ * Arcane node calls this; relayers carry the attestation as-is. Throws on backend
  * failure — this is our own broadcast, so the submission should fail loudly
  * rather than broadcast an unattested encrypted spec.
  *
@@ -109,7 +109,7 @@ async function requestAttestation(contentHash) {
  * Verify an event's arcane attestation against the network attestation key.
  *
  * Local-only (hardcoded public key + node:crypto), so any node — Arcane or not —
- * can verify without a SAS.
+ * can verify without a secure backend.
  *
  * @param {object} appEvent - SignedAppEvent or ConfirmedAppEvent
  * @returns {boolean}

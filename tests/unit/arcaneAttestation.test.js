@@ -5,7 +5,7 @@ const arcaneAttestation = require('../../ZelBack/src/services/utils/arcaneAttest
 
 const { ARCANE_ATTESTATION_PUBKEY, verifyAttestationSignature } = arcaneAttestation;
 
-// Export an Ed25519 KeyObject as the raw 32-byte base64 form SAS returns.
+// Export an Ed25519 KeyObject as the raw 32-byte base64 form the backend returns.
 function rawPubBase64(publicKey) {
   const der = publicKey.export({ format: 'der', type: 'spki' });
   return der.subarray(der.length - 32).toString('base64');
@@ -41,9 +41,9 @@ describe('arcaneAttestation verify primitive', () => {
     expect(verifyAttestationSignature('msg', 'not-a-32-byte-key', 'c2ln')).to.equal(false);
   });
 
-  it('verifies a real SAS attestation against the hardcoded network public key', () => {
-    // Captured live from a production SAS via fluxbenchd v2attest:
-    //   v2attest {"message":"FLUX_ARCANE_ATTEST_v1deadbeefcafe"}
+  it('verifies a real attestation against the hardcoded network public key', () => {
+    // Captured live from a production node via fluxbenchd attest:
+    //   attest {"message":"FLUX_ARCANE_ATTEST_v1deadbeefcafe"}
     const message = 'FLUX_ARCANE_ATTEST_v1deadbeefcafe';
     const signature = 'qs9kQxwJCcLpk9ps7SuIlokTBqrZ7PSZL8pRQFze8oqlAaT5LyrY3qHGvZztzRkZSXc+YB1IV5WyXNcjzp+xBw==';
 
