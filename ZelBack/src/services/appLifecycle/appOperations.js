@@ -1450,6 +1450,10 @@ async function updateAppGlobalyApi(req, res) {
         signature: processedBody.signature,
         type: processedBody.type,
         version: processedBody.version,
+        // v9 (envelope version 2) signs over contentHash and carries the extend
+        // flag; both are required to reconstruct the signed message and verify it.
+        contentHash: processedBody.contentHash,
+        extend: processedBody.extend,
       });
 
       const responseHash = messageHelper.createDataMessage(hash);
