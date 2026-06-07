@@ -403,6 +403,9 @@ module.exports = (app) => {
   app.get('/apps/appspecifications/:appname/:decrypt?', (req, res) => {
     registryManager.getApplicationSpecificationAPI(req, res);
   });
+  app.get('/apps/appconvert/:appname', (req, res) => {
+    registryManager.appConvertApi(req, res);
+  });
   app.get('/apps/appowner/:appname?', cache('30 seconds'), (req, res) => {
     registryManager.getApplicationOwnerAPI(req, res);
   });
