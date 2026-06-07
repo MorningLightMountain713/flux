@@ -916,6 +916,9 @@ module.exports = (app) => {
     return explorerService.rescanExplorer(req, res);
   }));
 
+  app.get('/apps/appconvert/:appname', asyncRoute((req, res) => {
+    return registryManager.appConvertApi(req, res);
+  }));
   app.get('/apps/checkhashes', asyncRoute((req, res) => {
     return appHashSyncService.triggerAppHashesCheckAPI(req, res);
   }));
