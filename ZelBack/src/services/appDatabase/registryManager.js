@@ -11,8 +11,10 @@ const appEventVerifier = require('../appMessaging/appEventVerifier');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
-const { validateSubmissionSpec } = require('../utils/specLibs');
+const { validateSubmissionSpec, getSpec, getSpecBackend } = require('../utils/specLibs');
 const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
+const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
+const { resolveStorageRefs } = require('../utils/fluxStorageRefs');
 const fluxEventBus = require('../utils/fluxEventBus');
 const {
   SIGTERM_EXPIRY_MS,
@@ -411,6 +413,117 @@ async function getApplicationSpecificationAPI(req, res) {
       error.code,
     );
 
+    res.json(errorResponse);
+  }
+
+  return null;
+}
+
+/**
+ * Convert an existing on-chain v1-v8 app spec to v9.
+ *
+ * Loads the stored spec (decrypting an enterprise spec node-side first),
+ * resolves and inlines any F_S_ENV/F_S_CMD storage references — fail-hard, v9
+ * has no storage-ref convention — then runs fromLegacy. When the source was
+ * encrypted, or any sensitive value was inlined, the v9 spec is sealed toward
+ * the frontend's ephemeral pubkey (view direction) so cleartext never crosses
+ * the wire. The owner reviews and signs the returned spec, then submits it as a
+ * normal v9 update (priced as a free version-only upgrade).
+ *
+ * @param {string} appname
+ * @param {{ recipientPubkeyBase64?: string }} opts
+ * @returns {Promise<object>} cleartext { encrypted:false, spec, warnings } or
+ *   sealed { encrypted:true, appName, timestamp, transportEncrypted, warnings }
+ */
+async function convertApplicationSpecification(appname, opts = {}) {
+  const { recipientPubkeyBase64 } = opts;
+
+  const instantiated = await appsRepository.getGlobalAppInfo(appname);
+  if (!instantiated) {
+    throw new Error(`Application: ${appname} not found`);
+  }
+  if (instantiated.version >= 9) {
+    throw new Error(`Application ${appname} is already on spec version 9`);
+  }
+
+  // The node can decrypt a stored enterprise spec via its own provider; the
+  // cleartext legacy instance is what fromLegacy converts.
+  let legacySpec = instantiated.spec;
+  if (instantiated.isEncrypted) {
+    const backendProvider = await legacyCryptoProvider.create(instantiated.name, instantiated.owner);
+    const decrypted = await instantiated.spec.decrypt(backendProvider);
+    legacySpec = decrypted.spec;
+  }
+
+  const { fromLegacy } = await getSpecBackend();
+  const { FluxAppSpecV9, buildSpecViewAad } = await getSpec();
+
+  const { spec: v9Blob, warnings } = fromLegacy(legacySpec, { confirmationHeight: instantiated.height });
+
+  const inlinedSensitive = await resolveStorageRefs(v9Blob.components, instantiated.name);
+
+  // Validate + canonicalize the converted spec through the v9 class.
+  const v9Spec = FluxAppSpecV9.fromSubmission(v9Blob);
+
+  const mustEncrypt = instantiated.isEncrypted || inlinedSensitive;
+  if (!mustEncrypt) {
+    return { encrypted: false, spec: v9Spec.toCanonical(), warnings };
+  }
+
+  if (!recipientPubkeyBase64) {
+    throw new Error('Header flux-transport-pubkey is mandatory to convert an encrypted application.');
+  }
+  const timestamp = Date.now();
+  const aad = buildSpecViewAad({ appName: v9Spec.name, timestamp });
+  const provider = await transportCryptoProvider.create(v9Spec.name, v9Spec.owner, recipientPubkeyBase64);
+  const plaintext = Buffer.from(JSON.stringify(v9Spec.toCanonical()), 'utf8');
+  const transportEncrypted = await provider.encrypt(plaintext, aad);
+  return {
+    encrypted: true, appName: v9Spec.name, timestamp, transportEncrypted, warnings,
+  };
+}
+
+/**
+ * API endpoint: convert an existing app's spec to v9 for owner review.
+ * @param {object} req - Request object
+ * @param {object} res - Response object
+ */
+async function appConvertApi(req, res) {
+  try {
+    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    if (!syncStatus.data.synced) {
+      throw new Error('Daemon not yet synced.');
+    }
+
+    let { appname } = req.params;
+    appname = appname || req.query.appname;
+    if (!appname) {
+      throw new Error('No Application Name specified');
+    }
+
+    // Conversion can expose secrets (a decrypted enterprise spec or inlined
+    // storage-ref values), so gate it to the app owner / flux team, mirroring
+    // the encrypted spec-view endpoint.
+    const mainAppName = appname.split('_')[1] || appname;
+    const ownerAuthorized = await verificationHelper.verifyPrivilege('appowner', req, mainAppName);
+    const fluxTeamAuthorized = ownerAuthorized === true
+      ? false
+      : await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
+    if (ownerAuthorized !== true && fluxTeamAuthorized !== true) {
+      res.json(messageHelper.errUnauthorizedMessage());
+      return null;
+    }
+
+    const recipientPubkeyBase64 = req.headers['flux-transport-pubkey'];
+    const result = await convertApplicationSpecification(appname, { recipientPubkeyBase64 });
+    res.json(messageHelper.createDataMessage(result));
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
     res.json(errorResponse);
   }
 
@@ -1262,6 +1375,8 @@ module.exports = {
   getAppInstallingErrorsLocation,
   getAppsInstallingErrorsLocations,
   getApplicationSpecificationAPI,
+  convertApplicationSpecification,
+  appConvertApi,
   getApplicationOwner,
   getApplicationOwnerAPI,
   getGlobalAppsSpecifications,
