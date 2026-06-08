@@ -1,18 +1,23 @@
 const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
-const config = require('config');
 
 const log = require('../lib/log');
 const dockerService = require('./dockerService');
-const dbHelper = require('./dbHelper');
+const serviceHelper = require('./serviceHelper');
 const geolocationService = require('./geolocationService');
-const appConstants = require('./utils/appConstants');
+const telemetrySinkCache = require('./telemetrySinkCache');
 
 const SOCKET_DIR = '/run/flux/telemetry';
 const SOCKET_PATH = path.join(SOCKET_DIR, 'identity.sock');
 
 const CONTAINER_ID_RE = /^[0-9a-f]{64}$/;
+
+// flux-telemetryd reads each container's json-log via POSIX ACLs we set at
+// announce time. ArcaneOS sets the Docker data-root to /dat/var/lib/docker.
+const TELEMETRY_USER = 'flux-telemetry';
+const DOCKER_ROOT = '/dat/var/lib/docker';
+const DOCKER_CONTAINERS = `${DOCKER_ROOT}/containers`;
 
 const TAG_ALLOWLIST = new Set([
   'region',
@@ -21,7 +26,13 @@ const TAG_ALLOWLIST = new Set([
   'container_name',
 ]);
 
+// The unix-socket server, and the set of connected daemon sockets we push to.
 let server = null;
+const sockets = new Set();
+
+// Docker event subscription state (container start/die -> announce/stop).
+let eventStream = null;
+let stopped = false;
 
 function parseContainerName(name) {
   if (!name) return null;
@@ -44,57 +55,209 @@ function parseContainerName(name) {
   return null;
 }
 
-async function resolveIdentity(containerId) {
-  const containers = await dockerService.dockerListContainers(false);
-  const container = containers.find((c) => c.Id === containerId);
-  if (!container) return null;
+async function nodeRegion() {
+  try {
+    const geo = await geolocationService.getNodeGeolocation();
+    if (geo && geo.continentCode) return geo.continentCode;
+  } catch (err) {
+    log.warn(`telemetry identity: geolocation unavailable: ${err.message}`);
+  }
+  return null;
+}
 
-  const rawName = container.Names && container.Names[0];
+/**
+ * Build the identity a telemetry app's container is announced with. Returns
+ * null when the container is not a telemetry app (no cached sink) — the
+ * scoping gate that keeps non-telemetry containers off the wire entirely.
+ */
+function buildIdentity(rawName, image, region) {
   if (!rawName) return null;
-
   const dockerName = rawName.startsWith('/') ? rawName.slice(1) : rawName;
   const parsed = parseContainerName(dockerName);
   if (!parsed) return null;
 
   const { appName, componentName } = parsed;
-
-  const dbopen = dbHelper.databaseConnection();
-  const appsDatabase = dbopen.db(config.database.appslocal.database);
-  const appSpec = await dbHelper.findOneInDatabase(
-    appsDatabase,
-    appConstants.localAppsInformation,
-    { name: appName },
-    { projection: { _id: 0, name: 1, version: 1, compose: 1 } },
-  );
-
-  if (!appSpec) return null;
+  const sink = telemetrySinkCache.getSink(appName);
+  if (!sink) return null;
 
   const tags = {};
-
-  if (componentName) {
-    tags.component = componentName;
-  }
-
-  if (container.Image) {
-    tags.image_name = container.Image;
-  }
+  if (componentName) tags.component = componentName;
+  if (image) tags.image_name = image;
   tags.container_name = dockerName;
+  if (region) tags.region = region;
 
-  try {
-    const geo = await geolocationService.getNodeGeolocation();
-    if (geo && geo.continentCode) {
-      tags.region = geo.continentCode;
-    }
-  } catch (err) {
-    log.warn(`telemetry identity: geolocation unavailable: ${err.message}`);
-  }
-
-  return {
-    app_name: appName,
-    tags,
-  };
+  return { app_name: appName, tags, sink };
 }
 
+async function resolveIdentity(containerId) {
+  const inspect = await dockerService.dockerContainerInspect(containerId);
+  if (!inspect) return null;
+  const region = await nodeRegion();
+  const image = inspect.Config && inspect.Config.Image;
+  return buildIdentity(inspect.Name, image, region);
+}
+
+function writeMessage(socket, obj) {
+  if (socket.destroyed) return;
+  try {
+    socket.write(`${JSON.stringify(obj)}\n`);
+  } catch (err) {
+    log.warn(`telemetry identity: socket write failed: ${err.message}`);
+  }
+}
+
+function broadcast(obj) {
+  for (const socket of sockets) writeMessage(socket, obj);
+}
+
+function notifyStarted(containerId, identity) {
+  broadcast({ op: 'started', container_id: containerId, identity });
+}
+
+function notifyStopped(containerId) {
+  broadcast({ op: 'stopped', container_id: containerId });
+}
+
+/** Send a daemon a full snapshot of every running telemetry-app container. */
+async function sendSync(socket) {
+  const containers = await dockerService.dockerListContainers(false);
+  const region = await nodeRegion();
+  const entries = [];
+  for (const container of containers) {
+    const rawName = container.Names && container.Names[0];
+    const identity = buildIdentity(rawName, container.Image, region);
+    if (identity) entries.push({ container_id: container.Id, identity });
+  }
+  writeMessage(socket, { op: 'sync', containers: entries });
+}
+
+/** Re-send a full sync to every connected daemon (after a boot reconcile). */
+function resyncAll() {
+  for (const socket of sockets) {
+    sendSync(socket).catch((err) => log.error(`telemetry identity: resync failed: ${err.message}`));
+  }
+}
+
+async function setfacl(spec, target) {
+  const result = await serviceHelper.runCommand('setfacl', {
+    runAsRoot: true,
+    params: ['-m', spec, target],
+    logError: false,
+  });
+  if (result.error) {
+    log.warn(`telemetry identity: setfacl ${spec} ${target} failed: ${result.error.message}`);
+  }
+}
+
+// The data-root and containers dir grants are set once (they persist); the
+// daemon only needs traverse + read-dir there, and read on each json-log.
+async function setBaseAcls() {
+  await setfacl(`u:${TELEMETRY_USER}:x`, `${DOCKER_ROOT}/`);
+  await setfacl(`u:${TELEMETRY_USER}:rX`, `${DOCKER_CONTAINERS}/`);
+}
+
+async function setContainerAcls(containerId) {
+  const dir = `${DOCKER_CONTAINERS}/${containerId}`;
+  await setfacl(`u:${TELEMETRY_USER}:rX`, dir);
+  await setfacl(`u:${TELEMETRY_USER}:r`, `${dir}/${containerId}-json.log`);
+}
+
+/**
+ * Set the container's log ACL and push its identity (with sink) to the
+ * daemon. Idempotent on the daemon side, so it is safe to call both from the
+ * install hook (before start) and from the docker `start` event (restarts).
+ * A no-op on non-Arcane nodes (no socket server) and for non-telemetry apps.
+ */
+async function announce(idOrName) {
+  if (!server) return;
+  const inspect = await dockerService.dockerContainerInspect(idOrName);
+  if (!inspect || !inspect.Id) return;
+
+  const region = await nodeRegion();
+  const image = inspect.Config && inspect.Config.Image;
+  const identity = buildIdentity(inspect.Name, image, region);
+  if (!identity) return;
+
+  await setContainerAcls(inspect.Id);
+  notifyStarted(inspect.Id, identity);
+}
+
+/**
+ * Called from the install path right after the container is created and
+ * before it is started, giving the daemon identity + log access before any
+ * line is written.
+ */
+async function onComponentCreated(component) {
+  if (!server) return;
+  try {
+    await announce(component.identifier);
+  } catch (err) {
+    log.warn(`telemetry identity: announce failed for ${component.identifier}: ${err.message}`);
+  }
+}
+
+async function handleDockerEvent(event) {
+  const action = event.Action || event.status;
+  const containerId = (event.Actor && event.Actor.ID) || event.id;
+  if (!containerId) return;
+  if (action === 'start') {
+    await announce(containerId);
+  } else {
+    // die / destroy — the daemon untracks; an unknown id is a harmless no-op.
+    notifyStopped(containerId);
+  }
+}
+
+async function subscribeEvents() {
+  if (eventStream) return;
+  let lineBuf = '';
+
+  try {
+    eventStream = await dockerService.dockerGetEvents({
+      filters: { type: ['container'], event: ['start', 'die', 'destroy'] },
+    });
+
+    eventStream.on('data', (buf) => {
+      if (stopped) return;
+      lineBuf += buf.toString();
+      const lines = lineBuf.split('\n');
+      lineBuf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let event;
+        try {
+          event = JSON.parse(line);
+        } catch (parseErr) {
+          log.error(`telemetry identity: failed to parse docker event: ${parseErr.message}`);
+          continue;
+        }
+        handleDockerEvent(event).catch((err) => {
+          log.error(`telemetry identity: event handler error: ${err.message}`);
+        });
+      }
+    });
+
+    eventStream.on('error', (err) => {
+      log.error(`telemetry identity: event stream error: ${err.message}`);
+      eventStream = null;
+      if (!stopped) setTimeout(() => subscribeEvents(), 10000);
+    });
+
+    eventStream.on('end', () => {
+      log.warn('telemetry identity: event stream ended');
+      eventStream = null;
+      if (!stopped) setTimeout(() => subscribeEvents(), 10000);
+    });
+
+    log.info('telemetry identity: listening for container start/stop events');
+  } catch (err) {
+    log.error(`telemetry identity: failed to subscribe to docker events: ${err.message}`);
+    eventStream = null;
+    if (!stopped) setTimeout(() => subscribeEvents(), 10000);
+  }
+}
+
+// Kept for forward-compat: the daemon may issue ad-hoc lookups.
 async function handleRequest(line) {
   let req;
   try {
@@ -121,6 +284,9 @@ async function handleRequest(line) {
 }
 
 function handleConnection(socket) {
+  sockets.add(socket);
+  sendSync(socket).catch((err) => log.error(`telemetry identity: initial sync failed: ${err.message}`));
+
   let buffer = '';
 
   socket.on('data', (chunk) => {
@@ -134,15 +300,10 @@ function handleConnection(socket) {
       if (line.length > 0) {
         handleRequest(line)
           .then((response) => {
-            if (!socket.destroyed) {
-              socket.write(`${response}\n`);
-            }
+            if (response && !socket.destroyed) socket.write(`${response}\n`);
           })
           .catch((err) => {
             log.error(`telemetry identity: unhandled error: ${err.message}`);
-            if (!socket.destroyed) {
-              socket.write(`${JSON.stringify({ ok: false, error: 'internal error' })}\n`);
-            }
           });
       }
 
@@ -156,9 +317,14 @@ function handleConnection(socket) {
   });
 
   socket.on('error', (err) => {
+    sockets.delete(socket);
     if (err.code !== 'EPIPE' && err.code !== 'ECONNRESET') {
       log.error(`telemetry identity socket error: ${err.message}`);
     }
+  });
+
+  socket.on('close', () => {
+    sockets.delete(socket);
   });
 }
 
@@ -168,6 +334,8 @@ async function start() {
     return;
   }
 
+  // The runtime dir exists only on Arcane nodes (created by the daemon's
+  // package); this write probe is the Arcane gate — non-Arcane nodes no-op.
   try {
     await fs.promises.access(SOCKET_DIR, fs.constants.W_OK);
   } catch (err) {
@@ -184,6 +352,7 @@ async function start() {
     }
   }
 
+  stopped = false;
   server = net.createServer(handleConnection);
 
   server.on('error', (err) => {
@@ -198,9 +367,22 @@ async function start() {
   });
 
   log.info(`telemetry identity server listening on ${SOCKET_PATH}`);
+
+  await setBaseAcls();
+  await subscribeEvents();
 }
 
 async function stop() {
+  stopped = true;
+
+  if (eventStream) {
+    eventStream.destroy();
+    eventStream = null;
+  }
+
+  for (const socket of sockets) socket.destroy();
+  sockets.clear();
+
   if (!server) return;
 
   await new Promise((resolve) => {
@@ -223,8 +405,14 @@ module.exports = {
   start,
   stop,
   parseContainerName,
+  buildIdentity,
   resolveIdentity,
+  sendSync,
   handleRequest,
+  notifyStarted,
+  notifyStopped,
+  onComponentCreated,
+  resyncAll,
   SOCKET_PATH,
   TAG_ALLOWLIST,
 };
