@@ -17,6 +17,9 @@ const appsRepository = require('../appDatabase/appsRepository');
 const appOperations = require('./appOperations');
 const appUninstaller = require('./appUninstaller');
 const appNetworkLinker = require('./appNetworkLinker');
+const telemetrySinkCache = require('../telemetrySinkCache');
+const telemetryConfigService = require('../telemetryConfigService');
+const telemetryIdentityService = require('../telemetryIdentityService');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const nodeConfirmationService = require('../nodeConfirmationService');
@@ -254,6 +257,15 @@ async function reconcileAppsOnBoot() {
     // Idempotent and best-effort — defensive in case docker did not restore a
     // secondary network membership across the reboot.
     await appNetworkLinker.reconcileAllAppNetworkLinks();
+
+    // Rebuild per-app telemetry routing from installed apps, (re)start the
+    // daemon if any telemetry apps exist, and re-sync connected daemons.
+    // Arcane-only; a no-op elsewhere.
+    await telemetrySinkCache.reconcileFromInstalled();
+    if (telemetrySinkCache.hasAnyTelemetryApps()) {
+      await telemetryConfigService.ensureNode();
+    }
+    telemetryIdentityService.resyncAll();
 
     return results;
   } catch (error) {
