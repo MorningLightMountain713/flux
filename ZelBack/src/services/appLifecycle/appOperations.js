@@ -57,6 +57,7 @@ const appVolumeService = require('./appVolumeService');
 const appUninstaller = require('./appUninstaller');
 const appInstaller = require('./appInstaller');
 const appNetworkLinker = require('./appNetworkLinker');
+const telemetrySinkCache = require('../telemetrySinkCache');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const { resolveSubmission, assertSecretsNotConflicting } = require('../appRequirements/appSubmission');
 const globalState = require('../utils/globalState');
@@ -373,6 +374,10 @@ async function redeployApplication(appName, options = {}) {
       throw new Error(`Application ${appName} deployment not found after requirement check`);
     }
     await hwRequirements.checkNodeResources(freshDeployment);
+
+    // Re-seed telemetry routing before recreating containers, in case the
+    // redeploy carries a rotated sink (or dropped telemetry entirely).
+    telemetrySinkCache.setSink(appName, telemetrySinkCache.extractSink(freshDeployment));
 
     // Re-verify shared-network links before recreating containers.
     await appNetworkLinker.checkAppNetworkRequirements(instantiated);
