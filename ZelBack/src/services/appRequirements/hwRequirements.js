@@ -7,8 +7,7 @@ const geolocationRule = require('../appPlacement/geolocationRule');
 const benchmarkService = require('../benchmarkService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
-
-const { collateralOutpoint, nodesNameThisNode } = require('../utils/nodePinning');
+const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const log = require('../../lib/log');
 
 // Node specifications (shared state)
@@ -83,6 +82,12 @@ function checkStaticIp(spec) {
 
 function checkDataCenter(spec) {
   if (spec.placement.dataCenter) {
+    // Datacenter placement is restricted to enterprise app owners. Checked at runtime
+    // (the owner allowlist is github-synced via enterpriseConfig and can change), not at
+    // submission. Applies to v8 and v9 via the version-agnostic placement.dataCenter getter.
+    if (!enterpriseNetwork.isEnterpriseAppOwner(spec.owner)) {
+      throw new Error('Datacenter requirement is only available for enterprise app owners.');
+    }
     if (!geolocationService.isDataCenter()) {
       throw new Error(`Application ${spec.name} requires data center node to run. Aborting.`);
     }
