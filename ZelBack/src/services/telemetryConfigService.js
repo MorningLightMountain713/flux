@@ -10,6 +10,10 @@ const RUNTIME_DIR = '/run/flux/telemetry';
 const CONFIG_PATH = path.join(RUNTIME_DIR, 'config.toml');
 const SERVICE_NAME = 'flux-telemetryd.service';
 
+// The daemon runs as this unprivileged user; root-created runtime files are
+// group-owned by it so the daemon can read them via group membership.
+const RUNTIME_GROUP = 'flux-telemetry';
+
 const OPAQUE_ID_SALT = 'flux-telemetry-v1';
 
 async function deriveOpaqueId() {
@@ -38,6 +42,30 @@ function buildToml(opaqueId) {
   ];
 
   return lines.join('\n');
+}
+
+// chgrp the target to the daemon's group and set its mode, so the
+// unprivileged daemon can reach it. Best-effort; only called on Arcane,
+// where the group exists and FluxOS can elevate.
+async function chownGroup(target, mode) {
+  const grp = await serviceHelper.runCommand('chgrp', {
+    runAsRoot: true,
+    params: [RUNTIME_GROUP, target],
+    logError: false,
+  });
+  if (grp.error) {
+    log.warn(`telemetry: chgrp ${RUNTIME_GROUP} ${target} failed: ${grp.error.message}`);
+  }
+  if (mode) {
+    const chm = await serviceHelper.runCommand('chmod', {
+      runAsRoot: true,
+      params: [mode, target],
+      logError: false,
+    });
+    if (chm.error) {
+      log.warn(`telemetry: chmod ${mode} ${target} failed: ${chm.error.message}`);
+    }
+  }
 }
 
 async function systemctl(action) {
@@ -79,6 +107,10 @@ async function ensureNode() {
 
   log.info(`telemetry config written to ${CONFIG_PATH}`);
 
+  // The daemon (flux-telemetry) must traverse the dir and read the config.
+  await chownGroup(RUNTIME_DIR, '0750');
+  await chownGroup(CONFIG_PATH, '0440');
+
   const status = await serviceHelper.runCommand('systemctl', {
     runAsRoot: true,
     params: ['is-active', SERVICE_NAME],
@@ -109,6 +141,7 @@ async function remove() {
 module.exports = {
   ensureNode,
   remove,
+  chownGroup,
   deriveOpaqueId,
   buildToml,
   CONFIG_PATH,
