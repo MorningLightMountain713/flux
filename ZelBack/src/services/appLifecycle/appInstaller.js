@@ -23,6 +23,7 @@ const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const telemetrySinkCache = require('../telemetrySinkCache');
 const appVolumeService = require('./appVolumeService');
 const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
@@ -355,6 +356,12 @@ async function installApplication(instantiated, options = {}) {
 
       const deployment = await deploymentProvider.getInstalledDeployment(appName);
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
+
+      // Record this app's telemetry sink (Arcane-only; null/no-op otherwise)
+      // so the identity socket can route its containers to its own backend.
+      if (!test) {
+        telemetrySinkCache.setSink(appName, telemetrySinkCache.extractSink(deployment));
+      }
 
       const blockResult = await isImageBlocked(appName, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
       if (blockResult.blocked) throw new Error(blockResult.reason);
