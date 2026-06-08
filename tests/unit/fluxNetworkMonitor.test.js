@@ -26,7 +26,7 @@ describe('fluxNetworkMonitor tests', () => {
     before(requireMongo);
 
     beforeEach(() => {
-      fluxNetworkHelper.setStoredFluxBenchAllowed('5.0.0');
+      fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
       const deterministicFluxnodeListResponse = [
         {
@@ -301,7 +301,7 @@ describe('fluxNetworkMonitor tests', () => {
       sinon.stub(serviceHelper, 'delay').resolves();
 
       // Stub fluxNetworkHelper internal functions
-      fluxNetworkHelper.setStoredFluxBenchAllowed('5.0.0');
+      fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('127.0.0.1');
     });
 
@@ -583,7 +583,7 @@ describe('fluxNetworkMonitor tests', () => {
     let deterministicFluxnodeListResponse;
 
     beforeEach(() => {
-      fluxNetworkHelper.setStoredFluxBenchAllowed('5.0.0');
+      fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
       sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').returns(true);
       sinon.stub(serviceHelper, 'delay').returns(true);
