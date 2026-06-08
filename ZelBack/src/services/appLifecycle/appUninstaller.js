@@ -8,6 +8,7 @@ const dockerService = require('../dockerService');
 const dbHelper = require('../dbHelper');
 const globalState = require('../utils/globalState');
 const telemetrySinkCache = require('../telemetrySinkCache');
+const telemetryConfigService = require('../telemetryConfigService');
 const log = require('../../lib/log');
 const {
   localAppsInformation, globalAppsInformation, globalAppsMessages, ANNOUNCE_CYCLE_WAIT_MS,
@@ -1027,8 +1028,12 @@ async function uninstallApplication(appName, options = {}) {
 
     if (!isComponent) {
       // Drop telemetry routing for the whole app; its containers' die events
-      // separately evict the daemon-side exporter.
+      // separately evict the daemon-side exporter. Stop the daemon when the
+      // last telemetry app is gone.
       telemetrySinkCache.deleteSink(resolvedAppName);
+      if (!telemetrySinkCache.hasAnyTelemetryApps()) {
+        await telemetryConfigService.remove();
+      }
 
       status('Cleaning up docker network...');
 
