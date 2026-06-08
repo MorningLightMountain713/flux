@@ -1928,9 +1928,9 @@ async function coordinateActiveStandbyApps() {
                       const response = await axios.get(`http://${ipToCheck}:${portToCheck}/apps/listrunningapps`, { timeout, cancelToken: source.token });
                       isResolved = true;
                       const appsRunning = response.data.data;
-                      // Match on the g: component identifier, not the app name: non-g siblings
-                      // (e.g. a DB cluster component) run on every node and must not be mistaken
-                      // for the master/slave component being active there.
+                      // Match on the active-standby component identifier, not the app name: sibling
+                      // components (e.g. a DB cluster component) run on every node and must not be
+                      // mistaken for the active-standby component being active there.
                       if (appsRunning.find((app) => app.Names[0].includes(identifier))) {
                         log.info(`activeStandby: component:${identifier} is running on lower-index node (index ${i}) at ${ipToCheck}, will not start`);
                         return true;
@@ -1970,9 +1970,9 @@ async function coordinateActiveStandbyApps() {
                     const response = await axios.get(`http://${ipToCheckAppRunning}:${portToCheckAppRunning}/apps/listrunningapps`, { timeout, cancelToken: source.token });
                     isResolved = true;
                     const appsRunning = response.data.data;
-                    // Match on the g: component identifier, not the app name: non-g siblings
-                    // running on the previous master must not be mistaken for the master/slave
-                    // component still being active there.
+                    // Match on the active-standby component identifier, not the app name: sibling
+                    // components running on the previous primary must not be mistaken for the
+                    // active-standby component still being active there.
                     if (appsRunning.find((app) => app.Names[0].includes(identifier))) {
                       log.info(`activeStandby: component:${identifier} is not on fdm but previous master is running it at: ${ipToCheckAppRunning}:${portToCheckAppRunning}`);
                       previousMasterStillRunning = true;
@@ -2043,8 +2043,8 @@ async function coordinateActiveStandbyApps() {
                 scheduledPrimaryStart.delete(identifier);
               }
               if (!ipsMatch(localSocketAddr, ip) && runningAppsNames.includes(identifier)) {
-                // Stop only the g: component on this standby node. Non-g siblings (e.g. a DB
-                // cluster component that needs all instances running) must keep running.
+                // Stop only the active-standby component on this standby node. Sibling components
+                // (e.g. a DB cluster component that needs all instances running) must keep running.
                 stopApplication(identifier);
                 log.info(`activeStandby: stopping docker component:${identifier} it's running on ip:${ip} and localSocketAddr is: ${localSocketAddr}`);
               } else if (ipsMatch(localSocketAddr, ip) && !runningAppsNames.includes(identifier)) {
