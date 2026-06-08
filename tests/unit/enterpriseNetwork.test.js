@@ -378,7 +378,7 @@ describe('enterpriseNetwork', () => {
       // pubA is mapped to ['ownerA'] only. ownerB is a valid enterprise owner
       // (in the global union) but is NOT allowed on this node, so its app must be
       // removed — this is the PR's core per-node scoping behavior.
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
         fluxNetworkHelper: { getFluxNodePublicKey: sinon.stub().resolves('pubA') },
         dbHelper: installedAppsStub([
@@ -386,14 +386,14 @@ describe('enterpriseNetwork', () => {
           { name: 'dropOtherEnterprise', owner: 'ownerB' }, // valid enterprise owner, not on pubA -> removed
           { name: 'dropStranger', owner: 'stranger' }, // not enterprise at all -> removed
         ]),
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication },
       });
 
       await m.cleanupOwnershipViolations();
 
-      const names = removeAppLocally.getCalls().map((c) => c.args[0]).sort();
+      const names = uninstallApplication.getCalls().map((c) => c.args[0]).sort();
       expect(names).to.deep.equal(['dropOtherEnterprise', 'dropStranger']);
-      expect(removeAppLocally.firstCall.args[4]).to.equal(true);
+      expect(uninstallApplication.firstCall.args[1].broadcastRemoval).to.equal(true);
     });
 
     it('non-enterprise-network node: uninstalls apps whose owner IS in enterpriseAppOwners', async () => {
