@@ -292,6 +292,12 @@ async function startFluxFunctions() {
     });
     containerCrashRecovery.start();
 
+    // Telemetry identity socket for flux-telemetryd (Arcane-only; self-skips
+    // elsewhere). The boot reconcile in appStartupManager repopulates routing.
+    telemetryIdentityService.start().catch((error) => {
+      log.error(`telemetry identity service failed to start: ${error.message}`);
+    });
+
     // Read boot context early — determines startup behavior for container management.
     const bootContext = await AppSyncOrchestrator.readBootContext();
 
