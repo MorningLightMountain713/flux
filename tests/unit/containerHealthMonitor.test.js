@@ -77,4 +77,115 @@ describe('containerHealthMonitor tests', () => {
       expect(result).to.have.property('startedApps');
     });
   });
+
+  describe('monitorAndRecoverApps - per-component syncthing handling', () => {
+    const MINUTE = 60 * 1000;
+
+    // Build a containerHealthMonitor with individually controllable stubs.
+    function load({ getGlobalAppInfo, getDockerContainer, findOneInDatabase, stoppedAppsCache } = {}) {
+      const appDockerStart = sinon.stub().resolves();
+      const gs = {
+        waitForBootContainerStateSettled: sinon.stub().resolves(),
+        isOperationInProgress: sinon.stub().returns(false),
+        backupInProgress: [],
+        restoreInProgress: [],
+        appsMonitored: new Map(),
+      };
+      const chm = proxyquire('../../ZelBack/src/services/appMonitoring/containerHealthMonitor', {
+        '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+        '../dbHelper': {
+          databaseConnection: sinon.stub().returns({ db: () => ({}) }),
+          findInDatabase: sinon.stub(),
+          findOneInDatabase: findOneInDatabase || sinon.stub().resolves(null),
+        },
+        '../dockerService': { getDockerContainer: getDockerContainer || sinon.stub().resolves(null), appDockerStart, dockerListContainers: sinon.stub() },
+        '../appDatabase/appsRepository': { getGlobalAppInfo: getGlobalAppInfo || sinon.stub().resolves(undefined) },
+        '../appLifecycle/appInstaller': { installComponent: sinon.stub().resolves() },
+        '../appLifecycle/appUninstaller': { uninstallApplication: sinon.stub().resolves() },
+        '../appRuntime/deploymentProvider': { buildDeployment: sinon.stub() },
+        '../appManagement/appInspector': { startAppMonitoring: sinon.stub() },
+        '../appTamperingDetectionService': { recordEvent: sinon.stub().resolves(), isNetworkMissingError: sinon.stub().returns(false) },
+        '../utils/globalState': gs,
+        '../utils/cacheManager': { default: { stoppedAppsCache: stoppedAppsCache || new Map() } },
+        '../utils/volumeService': { verifyAppVolumeMount: sinon.stub().resolves(true) },
+      });
+      return { chm, appDockerStart };
+    }
+
+    // Per-component sync classification the resolved view's getComponent returns.
+    const comp = (sync, activeStandby) => ({ hasSyncthing: () => sync, hasActiveStandbySyncthing: () => activeStandby });
+
+    it('auto-starts a stopped non-syncthing component of a mixed app and leaves the active-standby sibling to election', async () => {
+      const components = { web: comp(false, false), db: comp(true, true) };
+      const view = {
+        componentNames: () => ['web', 'db'],
+        hasSyncthing: () => true, // app-level: app has a syncthing component
+        hasActiveStandbySyncthing: () => true,
+        getComponent: (n) => components[n],
+      };
+      const inst = { name: 'mix', version: 8, hash: 'h', spec: {} };
+      const { chm, appDockerStart } = load({
+        getGlobalAppInfo: sinon.stub().resolves({ name: 'mix' }),
+        getDockerContainer: sinon.stub().resolves(true), // containers exist but stopped
+        stoppedAppsCache: new Map([['web_mix', '']]), // seen before -> start this cycle
+      });
+
+      await chm.monitorAndRecoverApps('1.2.3.4', [inst], [], new Map([['mix', view]]));
+
+      expect(appDockerStart.calledWith('web_mix'), 'non-syncthing sibling auto-started').to.be.true;
+      expect(appDockerStart.neverCalledWith('db_mix'), 'active-standby component left to election').to.be.true;
+    });
+
+    it('applies the 30-minute install grace to a stopped syncthing component installed less than 30m ago', async () => {
+      const components = { data: comp(true, false) }; // syncthing, not active-standby
+      const view = {
+        componentNames: () => ['data'], hasSyncthing: () => true, hasActiveStandbySyncthing: () => false, getComponent: (n) => components[n],
+      };
+      const inst = { name: 'rapp', version: 8, hash: 'h', spec: {} };
+      const { chm, appDockerStart } = load({
+        getGlobalAppInfo: sinon.stub().resolves({ name: 'rapp' }),
+        getDockerContainer: sinon.stub().resolves(true),
+        findOneInDatabase: sinon.stub().resolves({ runningSince: new Date(Date.now() - 10 * MINUTE).toISOString() }),
+        stoppedAppsCache: new Map([['data_rapp', '']]),
+      });
+
+      await chm.monitorAndRecoverApps('1.2.3.4', [inst], [], new Map([['rapp', view]]));
+
+      expect(appDockerStart.called, 'within grace window -> not started').to.be.false;
+    });
+
+    it('starts a stopped syncthing component once the 30-minute grace has passed', async () => {
+      const components = { data: comp(true, false) };
+      const view = {
+        componentNames: () => ['data'], hasSyncthing: () => true, hasActiveStandbySyncthing: () => false, getComponent: (n) => components[n],
+      };
+      const inst = { name: 'rapp', version: 8, hash: 'h', spec: {} };
+      const { chm, appDockerStart } = load({
+        getGlobalAppInfo: sinon.stub().resolves({ name: 'rapp' }),
+        getDockerContainer: sinon.stub().resolves(true),
+        findOneInDatabase: sinon.stub().resolves({ runningSince: new Date(Date.now() - 40 * MINUTE).toISOString() }),
+        stoppedAppsCache: new Map([['data_rapp', '']]),
+      });
+
+      await chm.monitorAndRecoverApps('1.2.3.4', [inst], [], new Map([['rapp', view]]));
+
+      expect(appDockerStart.calledWith('data_rapp'), 'grace passed -> started').to.be.true;
+    });
+
+    it('includes a syncthing app in masterSlaveAppsInstalled for broadcast even when a component is stopped', async () => {
+      const components = { db: comp(true, true) };
+      const view = {
+        componentNames: () => ['db'], hasSyncthing: () => true, hasActiveStandbySyncthing: () => true, getComponent: (n) => components[n],
+      };
+      const inst = { name: 'gapp', version: 8, hash: 'h', spec: {} };
+      const { chm } = load({
+        getGlobalAppInfo: sinon.stub().resolves({ name: 'gapp' }),
+        getDockerContainer: sinon.stub().resolves(true),
+      });
+
+      const result = await chm.monitorAndRecoverApps('1.2.3.4', [inst], [], new Map([['gapp', view]]));
+
+      expect(result.masterSlaveAppsInstalled).to.include(inst);
+    });
+  });
 });

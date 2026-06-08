@@ -104,12 +104,21 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
       const appDetails = await appsRepository.getGlobalAppInfo(mainAppName);
       const inst = appsInstalled.find((app) => app.name === mainAppName);
       const view = inst && resolvedViews.get(inst.name);
+      // App-level: an app with any syncthing component is included in the broadcast bucket even
+      // when some of its components are stopped (stopped standbys are expected).
       const hasSyncthing = view?.hasSyncthing();
-      const hasActiveStandby = view?.hasActiveStandbySyncthing();
+      // Per-component: classify the SPECIFIC stopped component (stoppedApp is `comp_app`) so a
+      // non-syncthing sibling of a syncthing app auto-restarts instead of being routed to
+      // active-standby election, and the 30-minute syncthing install grace applies only to the
+      // syncthing component itself.
+      const componentName = stoppedApp.split('_')[0];
+      const stoppedComp = view?.getComponent?.(componentName);
+      const stoppedCompIsActiveStandby = stoppedComp ? stoppedComp.hasActiveStandbySyncthing() : false;
+      const stoppedCompHasSyncthing = stoppedComp ? stoppedComp.hasSyncthing() : false;
       if (hasSyncthing) {
         masterSlaveAppsInstalled.push(inst);
       }
-      if (hasActiveStandby && appDetails) {
+      if (stoppedCompIsActiveStandby && appDetails) {
         const backupSkip = backupInProgress.some((backupItem) => stoppedApp === backupItem);
         const restoreSkip = restoreInProgress.some((backupItem) => stoppedApp === backupItem);
         if (!backupSkip && !restoreSkip) {
@@ -127,7 +136,7 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
           // eslint-disable-next-line no-await-in-loop
           const containerExists = await dockerService.getDockerContainer(stoppedApp);
 
-          if (containerExists && hasSyncthing) {
+          if (containerExists && stoppedCompHasSyncthing) {
             const db = dbHelper.databaseConnection();
             const database = db.db(config.database.appsglobal.database);
             const queryFind = { name: mainAppName, ip: localSocketAddr };
