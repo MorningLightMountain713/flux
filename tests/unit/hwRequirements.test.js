@@ -56,6 +56,7 @@ function buildHw(opts = {}) {
     localSocketAddr = '1.2.3.4:16127',
     collateral = { txhash: 'abc123', txindex: 0 },
     operatorPubKey = 'pubkey123',
+    isEnterpriseAppOwner = true,
   } = opts;
 
   return proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
@@ -77,6 +78,9 @@ function buildHw(opts = {}) {
     '../fluxNetworkHelper': {
       getLocalSocketAddress: sinon.stub().resolves(localSocketAddr),
       getFluxNodePublicKey: sinon.stub().resolves(operatorPubKey),
+    },
+    '../utils/enterpriseNetwork': {
+      isEnterpriseAppOwner: sinon.stub().returns(isEnterpriseAppOwner),
     },
     '../utils/socketAddressUtils': {
       socketAddressesMatch: (a, b) => a === b,
@@ -151,6 +155,19 @@ describe('hwRequirements', () => {
           expect.fail('expected throw');
         } catch (err) {
           expect(err.message).to.include('data center');
+        }
+      });
+
+      it('throws when datacenter is requested by a non-enterprise app owner', async () => {
+        // Runtime authorization: datacenter placement is restricted to enterprise app owners,
+        // checked before the node-eligibility check.
+        const hw = buildHw({ isEnterpriseAppOwner: false });
+        const spec = mockSpec({ placement: mockPlacement({ dataCenter: true }) });
+        try {
+          await hw.checkPlacement(spec);
+          expect.fail('expected throw');
+        } catch (err) {
+          expect(err.message).to.include('enterprise app owners');
         }
       });
     });
