@@ -24,7 +24,10 @@ async function deriveOpaqueId() {
     .digest('hex');
 }
 
-function buildToml(opaqueId, telemetry) {
+// The config carries only the node's opaque id now. Per-app Datadog sinks
+// travel on the identity socket (see telemetryIdentityService), so a single
+// node config routes many co-located apps to their own backends.
+function buildToml(opaqueId) {
   const lines = [
     '# Written by fluxos — do not edit by hand.',
     `# Generated ${new Date().toISOString()}`,
@@ -32,16 +35,8 @@ function buildToml(opaqueId, telemetry) {
     '[node]',
     `opaqueId = ${JSON.stringify(opaqueId)}`,
     '',
-    '[telemetry]',
   ];
 
-  for (const [key, value] of Object.entries(telemetry)) {
-    if (value !== undefined && value !== null) {
-      lines.push(`${key} = ${JSON.stringify(String(value))}`);
-    }
-  }
-
-  lines.push('');
   return lines.join('\n');
 }
 
@@ -57,19 +52,21 @@ async function systemctl(action) {
   return result;
 }
 
-async function apply(telemetryConfig) {
-  if (!telemetryConfig || !telemetryConfig.provider) {
-    throw new Error('telemetryConfig must include at least a provider');
-  }
-
+/**
+ * Ensure the node config exists and the daemon is running. Idempotent — safe
+ * to call on every telemetry-app install and at boot. A no-op on non-Arcane
+ * nodes (no runtime dir). No restart needed: the config only ever holds the
+ * opaque id, which does not change.
+ */
+async function ensureNode() {
   try {
     await fs.promises.access(RUNTIME_DIR, fs.constants.W_OK);
   } catch (err) {
-    throw new Error(`runtime directory ${RUNTIME_DIR} not available (${err.code})`);
+    return;
   }
 
   const opaqueId = await deriveOpaqueId();
-  const toml = buildToml(opaqueId, telemetryConfig);
+  const toml = buildToml(opaqueId);
 
   const tmpPath = path.join(RUNTIME_DIR, `.config.toml.${process.pid}.tmp`);
   try {
@@ -90,10 +87,7 @@ async function apply(telemetryConfig) {
   });
 
   const isRunning = status.stdout && status.stdout.trim() === 'active';
-  if (isRunning) {
-    await systemctl('restart');
-    log.info(`${SERVICE_NAME} restarted`);
-  } else {
+  if (!isRunning) {
     await systemctl('start');
     log.info(`${SERVICE_NAME} started`);
   }
@@ -113,7 +107,7 @@ async function remove() {
 }
 
 module.exports = {
-  apply,
+  ensureNode,
   remove,
   deriveOpaqueId,
   buildToml,

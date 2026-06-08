@@ -25,6 +25,7 @@ const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryIdentityService = require('../telemetryIdentityService');
+const telemetryConfigService = require('../telemetryConfigService');
 const appVolumeService = require('./appVolumeService');
 const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
@@ -359,9 +360,12 @@ async function installApplication(instantiated, options = {}) {
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
 
       // Record this app's telemetry sink (Arcane-only; null/no-op otherwise)
-      // so the identity socket can route its containers to its own backend.
+      // so the identity socket can route its containers to its own backend,
+      // and make sure the daemon is running before its containers are created.
       if (!test) {
-        telemetrySinkCache.setSink(appName, telemetrySinkCache.extractSink(deployment));
+        const telemetrySink = telemetrySinkCache.extractSink(deployment);
+        telemetrySinkCache.setSink(appName, telemetrySink);
+        if (telemetrySink) await telemetryConfigService.ensureNode();
       }
 
       const blockResult = await isImageBlocked(appName, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
