@@ -24,6 +24,7 @@ const globalState = require('../utils/globalState');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const telemetrySinkCache = require('../telemetrySinkCache');
+const telemetryIdentityService = require('../telemetryIdentityService');
 const appVolumeService = require('./appVolumeService');
 const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
@@ -544,6 +545,12 @@ async function installComponent(component, options = {}) {
     syslogTarget,
     crossAppLogCollector,
   });
+
+  // Set the log ACL and announce identity to flux-telemetryd before the
+  // container starts (Arcane-only; no-op for non-telemetry apps).
+  if (!test) {
+    await telemetryIdentityService.onComponentCreated(component);
+  }
 
   if (test || !component.hasActiveStandbySyncthing()) {
     status(`Starting ${id}...`);
