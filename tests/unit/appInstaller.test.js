@@ -478,4 +478,112 @@ describe('appInstaller tests', () => {
       expect(pruneContainersStub.called).to.be.false;
     });
   });
+
+  describe('post-install broadcast ordering (PR #1747)', () => {
+    it('runs onInstallComplete/app:installed only after the install lock is released', async () => {
+      const gs = { removalInProgress: false, installationInProgress: false, isOperationInProgress: () => false };
+      let lockHeldWhenBroadcasting = null;
+      const onInstallComplete = sinon.stub().callsFake(() => { lockHeldWhenBroadcasting = gs.installationInProgress; });
+      const fluxEventBusPublish = sinon.stub();
+
+      const appInstallerFresh = proxyquire.noCallThru().load('../../ZelBack/src/services/appLifecycle/appInstaller', {
+        config: configStub,
+        '../verificationHelper': verificationHelperStub,
+        '../messageHelper': messageHelperStub,
+        '../dbHelper': {
+          databaseConnection: sinon.stub().returns({ db: sinon.stub().returns({}) }),
+          findInDatabase: sinon.stub().resolves([]),
+          findOneInDatabase: sinon.stub().resolves(null),
+          insertOneToDatabase: sinon.stub().resolves(),
+        },
+        '../serviceHelper': { ensureString: sinon.stub().returnsArg(0), ensureNumber: sinon.stub().returnsArg(0), delay: sinon.stub().resolves() },
+        '../generalService': { nodeTier: sinon.stub().resolves('cumulus'), checkSynced: sinon.stub().resolves(true) },
+        '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'), getNumberOfPeers: sinon.stub().returns(15), isFirewallActive: sinon.stub().resolves(false), allowPort: sinon.stub().resolves({ status: true }), removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true) },
+        '../geolocationService': { isStaticIP: sinon.stub().returns(true) },
+        '../dockerService': {
+          dockerListContainers: sinon.stub().resolves([]),
+          pruneContainers: sinon.stub().resolves(),
+          pruneNetworks: sinon.stub().resolves(),
+          pruneVolumes: sinon.stub().resolves(),
+          pruneImages: sinon.stub().resolves(),
+          createFluxAppDockerNetwork: sinon.stub().resolves('net'),
+          getFluxDockerNetworkPhysicalInterfaceNames: sinon.stub().resolves([]),
+          appDockerCreate: sinon.stub().resolves(),
+          appDockerStart: sinon.stub().resolves('ok'),
+          getAppIdentifier: sinon.stub().returns('newapp'),
+          dockerPullStream: sinon.stub().yields(null, 'pulled'),
+        },
+        './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
+        // appNetworkLinker.reconnectLinkedApps runs on the success path (the call kept during
+        // the rebase); without this stub the install throws before reaching the broadcast.
+        './appNetworkLinker': { reconnectLinkedApps: sinon.stub().resolves(), checkAppNetworkRequirements: sinon.stub().resolves(), connectComponentToLinkedApps: sinon.stub().resolves(), findLinkedAppLogCollector: sinon.stub().returns(null) },
+        '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves(), broadcastMessageToAll: sinon.stub().resolves() },
+        '../appMessaging/messageStore': { storeAppInstallingErrorMessage: sinon.stub().resolves(), storeAppRunningMessage: sinon.stub().resolves() },
+        '../appSecurity/imageManager': { isImageBlocked: sinon.stub().resolves(false), verifyRepository: sinon.stub().resolves({ verified: true, supportedArchitectures: ['amd64'] }) },
+        '../appManagement/appInspector': { startAppMonitoring: sinon.stub() },
+        '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
+        '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
+        '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
+        '../utils/globalState': gs,
+        '../../lib/log': logStub,
+        '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', { config: configStub }),
+        '../appDatabase/appsRepository': {
+          getGlobalAppInfo: sinon.stub().resolves(null),
+          // exists is false before insert (no stale entry) and true after (insert validated).
+          existsInstalledApp: (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
+          insertInstalledApp: sinon.stub().resolves({ insertedId: 'id1' }),
+          removeInstalledApp: sinon.stub().resolves(),
+          getTempMessageByName: sinon.stub().resolves(null),
+        },
+        '../appRuntime/deploymentProvider': {
+          listInstalledDeployments: sinon.stub().resolves([]),
+          getInstalledDeployment: sinon.stub().resolves({
+            totalResources: () => ({ cpu: 1, memory: 500, storage: 10 }),
+            allHostPorts: () => [],
+            allImages: () => [],
+            componentEntries: () => [],
+          }),
+          buildDeployment: sinon.stub().resolves({
+            totalResources: () => ({ cpu: 1, memory: 500, storage: 10 }),
+            allHostPorts: () => [],
+            allImages: () => [],
+            componentEntries: () => [],
+          }),
+        },
+        './appVolumeService': { createAppVolume: sinon.stub().resolves() },
+        '../utils/specLibs': { getSpecBackend: sinon.stub().resolves({}) },
+        '../utils/appUtilities': { findCommonArchitectures: sinon.stub().returns(['amd64']) },
+        '../utils/fluxEventBus': { publish: fluxEventBusPublish },
+        '../utils/cpuBurstHelper': { getCpuBurstAllowance: sinon.stub().returns(0), isEnterpriseOwner: sinon.stub().returns(false), isCpuBurstSupported: sinon.stub().resolves(false) },
+        '../utils/volumeService': { verifyAppVolumeMount: sinon.stub().resolves() },
+        '../appRequirements/hwRequirements': hwRequirementsStub,
+        '../appQuery/appQueryService': { listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }) },
+        '../utils/registryCredentialHelper': { getCredentials: sinon.stub().resolves(null) },
+        util: { promisify: (fn) => fn },
+      });
+
+      appInstallerFresh.setOnInstallComplete(onInstallComplete);
+
+      const mockPlacement = {
+        staticIp: false, dataCenter: false, hasGeoRestrictions: () => false, hasTargets: () => false,
+      };
+      const mockInstantiated = {
+        name: 'newapp',
+        version: 2,
+        hash: 'hash1',
+        owner: 'owner1',
+        placement: mockPlacement,
+        spec: { version: 2, name: 'newapp', placement: mockPlacement, componentEntries: () => [] },
+        isEncrypted: false,
+        serialize: () => ({ version: 2, name: 'newapp' }),
+      };
+
+      const result = await appInstallerFresh.installApplication(mockInstantiated, {});
+
+      expect(result, 'install succeeded').to.equal(true);
+      expect(onInstallComplete.calledOnce, 'post-install broadcast fired').to.be.true;
+      expect(lockHeldWhenBroadcasting, 'install lock released BEFORE broadcasting').to.equal(false);
+      expect(fluxEventBusPublish.calledWith('app:installed'), 'app:installed event published').to.be.true;
+    });
+  });
 });
