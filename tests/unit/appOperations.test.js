@@ -568,215 +568,91 @@ describe('appOperations tests', () => {
       globalStateRef.backupInProgress.length = 0;
     });
 
-    it('stops only the g: component on a standby node, leaving non-g siblings running', async () => {
-      const appName = 'n8napp';
+    it('stops only the active-standby component identifier on a standby node when FDM names a different primary', async () => {
+      // Mixed app: 'n8n' is the active-standby component; the coordinator must act on the
+      // component identifier (n8n_n8napp), never the app name or a sibling component.
+      const identifier = 'n8n_n8napp';
+      // coordinateActiveStandbyApps destructures listRunningContainers at module load, so it
+      // can't be sinon-stubbed on the module object; proxyquire (callThru) overrides just that
+      // one dependency while every other dep (delay, axiosGet, getLocalSocketAddress, docker,
+      // deploymentProvider) is object-accessed and so is controlled by the sinon stubs below.
+      const proxyquire = require('proxyquire');
+      const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
+      // The active-standby component is currently running on THIS node.
+      const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
+      const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
+        '../appQuery/appQueryService': { ...appQueryService, listRunningContainers },
+      });
+
+      const mockDeployment = {
+        appName: 'n8napp',
+        componentEntries: () => [['n8n', {
+          identifier,
+          hasActiveStandbySyncthing: () => true,
+          hasSyncthing: () => true,
+        }]],
+      };
+      deploymentProviderStub.resolves([mockDeployment]);
+
+      const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+      // FDM reports the primary lives on a DIFFERENT node -> this node is a standby.
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: ['203.0.113.99'] } } });
+
+      const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
+
       const dockerService = require('../../ZelBack/src/services/dockerService');
-      dockerServiceStub.returns('fluxn8n_n8napp');
+      sinon.stub(dockerService, 'getAppIdentifier').returns('appid');
       const appDockerStopStub = sinon.stub(dockerService, 'appDockerStop').resolves();
 
-      // Mixed compose app: n8n uses g: master/slave, pgcluster needs all instances running
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: appName,
-            version: 8,
-            compose: [
-              { name: 'n8n', containerData: 'g:/home/node/.n8n' },
-              { name: 'pgcluster', containerData: '/var/lib/postgresql/data' },
-            ],
-          },
-        ],
-      });
-      // Both components currently running on this node
-      const listRunningApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          { Names: ['/fluxn8n_n8napp'] },
-          { Names: ['/fluxpgcluster_n8napp'] },
-        ],
-      });
+      await appOps.coordinateActiveStandbyApps();
+      await new Promise((r) => { setImmediate(r); }); // flush the fire-and-forget stopApplication
 
-      const receiveOnlyCache = new Map();
-      const https = require('https');
-
-      // FDM reports the primary is another node
-      serviceHelperStub.resolves({ data: { status: 'success', data: { ips: ['192.168.1.99'] } } });
-      // This node's address differs from the FDM primary -> we are a standby
-      fluxNetworkHelperStub.resolves('192.168.1.5:16127');
-
-      await advancedWorkflows.masterSlaveApps(
-        globalState,
-        installedApps,
-        listRunningApps,
-        receiveOnlyCache,
-        [],
-        [],
-        https,
-      );
-
-      // Only the g: component must be stopped - not the whole app, not the pgcluster sibling
-      expect(appDockerStopStub.calledWith('n8n_n8napp')).to.be.true;
-      expect(appDockerStopStub.neverCalledWith('pgcluster_n8napp')).to.be.true;
-      expect(appDockerStopStub.neverCalledWith(appName)).to.be.true;
+      // IP-granular standby stop acts on the active-standby component identifier only.
+      expect(appDockerStopStub.calledWith(identifier), 'active-standby component stopped on standby node').to.be.true;
+      expect(appDockerStopStub.neverCalledWith('n8napp'), 'never stops by app name').to.be.true;
     });
 
-    it('does not stop anything on a standby node when the g: component is already stopped', async () => {
-      const appName = 'n8napp';
+    it('does not stop its own container when it is the primary on a non-default (UPnP) port', async () => {
+      // FDM returns a bare IP (no port); this node's socket has a non-default UPnP port. The
+      // IP-granular ipsMatch must still recognise this node as the primary, so it must NOT stop
+      // its own running container. (Port-sensitive matching would wrongly stop it.)
+      const identifier = 'n8n_n8napp';
+      const proxyquire = require('proxyquire');
+      const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
+      const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
+      const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
+        '../appQuery/appQueryService': { ...appQueryService, listRunningContainers },
+      });
+
+      const mockDeployment = {
+        appName: 'n8napp',
+        componentEntries: () => [['n8n', {
+          identifier,
+          hasActiveStandbySyncthing: () => true,
+          hasSyncthing: () => true,
+        }]],
+      };
+      deploymentProviderStub.resolves([mockDeployment]);
+
+      const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+      // FDM names THIS node as primary, returned as a bare IP (production format).
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: ['192.168.1.5'] } } });
+
+      const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+      // Same IP but a non-default (UPnP) port — ipsMatch ignores the port.
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
+
       const dockerService = require('../../ZelBack/src/services/dockerService');
-      dockerServiceStub.returns('fluxn8n_n8napp');
+      sinon.stub(dockerService, 'getAppIdentifier').returns('appid');
       const appDockerStopStub = sinon.stub(dockerService, 'appDockerStop').resolves();
 
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: appName,
-            version: 8,
-            compose: [
-              { name: 'n8n', containerData: 'g:/home/node/.n8n' },
-              { name: 'pgcluster', containerData: '/var/lib/postgresql/data' },
-            ],
-          },
-        ],
-      });
-      // Steady state on a standby: only the non-g component is running
-      const listRunningApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          { Names: ['/fluxpgcluster_n8napp'] },
-        ],
-      });
+      await appOps.coordinateActiveStandbyApps();
+      await new Promise((r) => { setImmediate(r); });
 
-      const receiveOnlyCache = new Map();
-      const https = require('https');
-
-      // FDM reports the primary is another node
-      serviceHelperStub.resolves({ data: { status: 'success', data: { ips: ['192.168.1.99'] } } });
-      fluxNetworkHelperStub.resolves('192.168.1.5:16127');
-
-      await advancedWorkflows.masterSlaveApps(
-        globalState,
-        installedApps,
-        listRunningApps,
-        receiveOnlyCache,
-        [],
-        [],
-        https,
-      );
-
-      // The g: component is not running here and we are not primary - nothing to stop.
-      // The running pgcluster sibling must be left alone.
-      expect(appDockerStopStub.called).to.be.false;
+      expect(appDockerStopStub.called, 'primary node must not stop its own container').to.be.false;
     });
 
-    it('does NOT stop its own container when it is the primary on a UPnP (non-default) port', async () => {
-      // Regression: FDM returns a bare master IP (production format). A UPnP node (e.g.
-      // :16157) that IS the primary must recognise itself and keep running. The pre-fix
-      // code compared with socketAddressesMatch, which normalized the bare IP to :16127,
-      // failed to match its own :16157 socket, and repeatedly stopped its own container
-      // (start/stop flap loop). ipsMatch compares on IP only, so it matches.
-      const appName = 'valheim1777035136949';
-      const dockerService = require('../../ZelBack/src/services/dockerService');
-      dockerServiceStub.returns('fluxvalheim_valheim1777035136949');
-      const appDockerStopStub = sinon.stub(dockerService, 'appDockerStop').resolves();
-
-      // Compose app with a g: component so the identifier is component_app: this makes the
-      // (mistaken) stop call hit dockerService.appDockerStop directly, so the assertion
-      // actually observes the bug if it regresses.
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: appName,
-            version: 8,
-            compose: [
-              { name: 'valheim', containerData: 'g:/root/.config/valheim' },
-            ],
-          },
-        ],
-      });
-      // The g: component is currently running on this node (it is the primary).
-      const listRunningApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          { Names: ['/fluxvalheim_valheim1777035136949'] },
-        ],
-      });
-
-      const receiveOnlyCache = new Map();
-      const https = require('https');
-
-      // FDM returns a bare IP (current production behavior - no FDM change required).
-      serviceHelperStub.resolves({ data: { status: 'success', data: { ips: ['90.228.196.203'] } } });
-      // This node's API socket is on a non-default UPnP port at the same IP -> we are the primary.
-      fluxNetworkHelperStub.resolves('90.228.196.203:16157');
-
-      await advancedWorkflows.masterSlaveApps(
-        globalState,
-        installedApps,
-        listRunningApps,
-        receiveOnlyCache,
-        [],
-        [],
-        https,
-      );
-
-      // We are the primary - the container must be left running, never stopped.
-      expect(appDockerStopStub.called).to.be.false;
-    });
-
-    it('stops the g: component on a UPnP standby when FDM names a different primary IP', async () => {
-      // Guards the inverse: a genuine standby (different IP, itself on a non-default port)
-      // must still be detected and stopped - ipsMatch must not over-match across IPs.
-      const appName = 'n8napp';
-      const dockerService = require('../../ZelBack/src/services/dockerService');
-      dockerServiceStub.returns('fluxn8n_n8napp');
-      const appDockerStopStub = sinon.stub(dockerService, 'appDockerStop').resolves();
-
-      const installedApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          {
-            name: appName,
-            version: 8,
-            compose: [
-              { name: 'n8n', containerData: 'g:/home/node/.n8n' },
-              { name: 'pgcluster', containerData: '/var/lib/postgresql/data' },
-            ],
-          },
-        ],
-      });
-      const listRunningApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          { Names: ['/fluxn8n_n8napp'] },
-          { Names: ['/fluxpgcluster_n8napp'] },
-        ],
-      });
-
-      const receiveOnlyCache = new Map();
-      const https = require('https');
-
-      // FDM primary is a different node, returned as a bare IP (production format).
-      serviceHelperStub.resolves({ data: { status: 'success', data: { ips: ['192.168.1.99'] } } });
-      // This node has a different IP (and its own non-default port) -> we are a standby.
-      fluxNetworkHelperStub.resolves('192.168.1.5:16137');
-
-      await advancedWorkflows.masterSlaveApps(
-        globalState,
-        installedApps,
-        listRunningApps,
-        receiveOnlyCache,
-        [],
-        [],
-        https,
-      );
-
-      // Only the g: component is stopped; the non-g sibling is left running.
-      expect(appDockerStopStub.calledWith('n8n_n8napp')).to.be.true;
-      expect(appDockerStopStub.neverCalledWith('pgcluster_n8napp')).to.be.true;
-    });
   });
 
   // Note: verifyAppUpdateParameters, createAppVolume,
