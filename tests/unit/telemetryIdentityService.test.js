@@ -36,6 +36,7 @@ describe('telemetryIdentityService tests', () => {
       './serviceHelper': { runCommand: sinon.stub().resolves({ error: null, stdout: '', stderr: '' }) },
       './geolocationService': geolocationServiceStub,
       './telemetrySinkCache': sinkCacheStub,
+      './telemetryConfigService': { chownGroup: sinon.stub().resolves() },
     });
   });
 

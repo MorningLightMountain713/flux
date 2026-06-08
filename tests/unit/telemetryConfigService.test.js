@@ -115,6 +115,11 @@ describe('telemetryConfigService tests', () => {
       const actions = serviceHelperStub.runCommand.getCalls().map((c) => c.args[1].params.join(' '));
       expect(actions).to.include(`is-active ${service.SERVICE_NAME}`);
       expect(actions).to.include(`start ${service.SERVICE_NAME}`);
+
+      // The config is group-owned to flux-telemetry so the daemon can read it.
+      const chgrpCalls = serviceHelperStub.runCommand.getCalls().filter((c) => c.args[0] === 'chgrp');
+      expect(chgrpCalls.some((c) => c.args[1].params.includes(service.CONFIG_PATH))).to.be.true;
+      expect(chgrpCalls.every((c) => c.args[1].params[0] === 'flux-telemetry')).to.be.true;
     });
 
     it('does not restart when the daemon is already running', async () => {
