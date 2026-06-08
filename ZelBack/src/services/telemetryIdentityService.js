@@ -139,28 +139,32 @@ function resyncAll() {
   }
 }
 
-async function setfacl(spec, target) {
+async function setfacl(params) {
   const result = await serviceHelper.runCommand('setfacl', {
     runAsRoot: true,
-    params: ['-m', spec, target],
+    params,
     logError: false,
   });
   if (result.error) {
-    log.warn(`telemetry identity: setfacl ${spec} ${target} failed: ${result.error.message}`);
+    log.warn(`telemetry identity: setfacl ${params.join(' ')} failed: ${result.error.message}`);
   }
 }
 
 // The data-root and containers dir grants are set once (they persist); the
 // daemon only needs traverse + read-dir there, and read on each json-log.
 async function setBaseAcls() {
-  await setfacl(`u:${TELEMETRY_USER}:x`, `${DOCKER_ROOT}/`);
-  await setfacl(`u:${TELEMETRY_USER}:rX`, `${DOCKER_CONTAINERS}/`);
+  await setfacl(['-m', `u:${TELEMETRY_USER}:x`, `${DOCKER_ROOT}/`]);
+  await setfacl(['-m', `u:${TELEMETRY_USER}:rX`, `${DOCKER_CONTAINERS}/`]);
 }
 
 async function setContainerAcls(containerId) {
   const dir = `${DOCKER_CONTAINERS}/${containerId}`;
-  await setfacl(`u:${TELEMETRY_USER}:rX`, dir);
-  await setfacl(`u:${TELEMETRY_USER}:r`, `${dir}/${containerId}-json.log`);
+  const user = `u:${TELEMETRY_USER}`;
+  // Read the current log file, traverse the dir, and a DEFAULT ACL so the
+  // log files Docker creates on rotation inherit read access automatically.
+  await setfacl(['-m', `${user}:rX`, dir]);
+  await setfacl(['-d', '-m', `${user}:r`, dir]);
+  await setfacl(['-m', `${user}:r`, `${dir}/${containerId}-json.log`]);
 }
 
 /**
