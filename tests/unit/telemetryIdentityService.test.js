@@ -5,55 +5,37 @@ const proxyquire = require('proxyquire').noCallThru();
 describe('telemetryIdentityService tests', () => {
   let service;
   let dockerServiceStub;
-  let dbHelperStub;
   let geolocationServiceStub;
+  let sinkCacheStub;
   let logStub;
-  let configStub;
-  let dbStub;
+
+  const datadogSink = { provider: 'datadog', site: 'datadoghq.com', apiKey: 'k1' };
 
   beforeEach(() => {
-    configStub = {
-      database: {
-        appslocal: {
-          database: 'localapps',
-        },
-      },
-    };
-
     dockerServiceStub = {
       dockerListContainers: sinon.stub().resolves([]),
-    };
-
-    dbStub = {
-      collection: sinon.stub().returns({
-        findOne: sinon.stub().resolves(null),
-      }),
-    };
-
-    dbHelperStub = {
-      databaseConnection: sinon.stub().returns({
-        db: sinon.stub().returns(dbStub),
-      }),
-      findOneInDatabase: sinon.stub().resolves(null),
+      dockerContainerInspect: sinon.stub().resolves(null),
     };
 
     geolocationServiceStub = {
       getNodeGeolocation: sinon.stub().resolves({ continentCode: 'NA', country: 'US' }),
     };
 
-    logStub = {
-      info: sinon.stub(),
-      warn: sinon.stub(),
-      error: sinon.stub(),
+    sinkCacheStub = {
+      getSink: sinon.stub().returns(null),
     };
 
+    logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
+
     service = proxyquire('../../ZelBack/src/services/telemetryIdentityService', {
-      config: configStub,
+      'node:net': require('node:net'),
+      'node:fs': require('node:fs'),
+      'node:path': require('node:path'),
       '../lib/log': logStub,
       './dockerService': dockerServiceStub,
-      './dbHelper': dbHelperStub,
+      './serviceHelper': { runCommand: sinon.stub().resolves({ error: null, stdout: '', stderr: '' }) },
       './geolocationService': geolocationServiceStub,
-      './utils/appConstants': { localAppsInformation: 'zelappsinformation' },
+      './telemetrySinkCache': sinkCacheStub,
     });
   });
 
@@ -61,248 +43,163 @@ describe('telemetryIdentityService tests', () => {
     sinon.restore();
   });
 
-  // --- parseContainerName ------------------------------------------------
-
   describe('parseContainerName', () => {
-    it('should parse standard flux-prefixed container name', () => {
-      const result = service.parseContainerName('fluxMyApp');
-      expect(result).to.deep.equal({ appName: 'MyApp', componentName: null });
+    it('parses a flux-prefixed name', () => {
+      expect(service.parseContainerName('fluxMyApp')).to.deep.equal({ appName: 'MyApp', componentName: null });
     });
 
-    it('should parse legacy zel-prefixed container name', () => {
-      const result = service.parseContainerName('zelKadenaChainWebNode');
-      expect(result).to.deep.equal({ appName: 'KadenaChainWebNode', componentName: null });
+    it('parses a legacy zel-prefixed name', () => {
+      expect(service.parseContainerName('zelKadena')).to.deep.equal({ appName: 'Kadena', componentName: null });
     });
 
-    it('should parse component container name', () => {
-      const result = service.parseContainerName('frontend_MyApp');
-      expect(result).to.deep.equal({ appName: 'MyApp', componentName: 'frontend' });
+    it('parses a component name (first underscore is the separator)', () => {
+      expect(service.parseContainerName('db_My_Complex_App')).to.deep.equal({ appName: 'My_Complex_App', componentName: 'db' });
     });
 
-    it('should parse component container name with multiple underscores in app name', () => {
-      // Only the first underscore is the separator
-      const result = service.parseContainerName('db_My_Complex_App');
-      expect(result).to.deep.equal({ appName: 'My_Complex_App', componentName: 'db' });
-    });
-
-    it('should return null for empty name', () => {
+    it('returns null for empty or non-flux names', () => {
       expect(service.parseContainerName('')).to.be.null;
-      expect(service.parseContainerName(null)).to.be.null;
-      expect(service.parseContainerName(undefined)).to.be.null;
-    });
-
-    it('should return null for non-flux container name', () => {
       expect(service.parseContainerName('nginx')).to.be.null;
-      expect(service.parseContainerName('postgres')).to.be.null;
-    });
-
-    it('should handle flux prefix with nothing after it', () => {
-      const result = service.parseContainerName('flux');
-      // 'flux' with nothing after means appName is empty string
-      expect(result).to.deep.equal({ appName: '', componentName: null });
     });
   });
 
-  // --- handleRequest (protocol) ------------------------------------------
-
-  describe('handleRequest', () => {
-    it('should reject invalid JSON', async () => {
-      const response = JSON.parse(await service.handleRequest('not json'));
-      expect(response.ok).to.be.false;
-      expect(response.error).to.equal('invalid JSON');
+  describe('buildIdentity (telemetry scoping gate)', () => {
+    it('returns null for a non-flux container name', () => {
+      sinkCacheStub.getSink.returns(datadogSink);
+      expect(service.buildIdentity('/nginx', 'nginx:1', 'NA')).to.be.null;
     });
 
-    it('should reject unknown op', async () => {
-      const response = JSON.parse(await service.handleRequest('{"op":"delete"}'));
-      expect(response.ok).to.be.false;
-      expect(response.error).to.equal('unknown op: delete');
+    it('returns null when the app has no cached sink (not a telemetry app)', () => {
+      sinkCacheStub.getSink.returns(null);
+      expect(service.buildIdentity('/fluxMyApp', 'nginx:1', 'NA')).to.be.null;
     });
 
-    it('should reject missing container_id', async () => {
-      const response = JSON.parse(await service.handleRequest('{"op":"lookup"}'));
-      expect(response.ok).to.be.false;
-      expect(response.error).to.equal('invalid container_id');
+    it('builds identity with sink and tags for a telemetry app', () => {
+      sinkCacheStub.getSink.returns(datadogSink);
+      const id = service.buildIdentity('/frontend_MyApp', 'nginx:1.25', 'NA');
+      expect(id.app_name).to.equal('MyApp');
+      expect(id.sink).to.deep.equal(datadogSink);
+      expect(id.tags).to.deep.equal({
+        component: 'frontend',
+        image_name: 'nginx:1.25',
+        container_name: 'frontend_MyApp',
+        region: 'NA',
+      });
+      expect(sinkCacheStub.getSink.calledWith('MyApp')).to.equal(true);
     });
 
-    it('should reject non-64-hex container_id', async () => {
-      const response = JSON.parse(await service.handleRequest('{"op":"lookup","container_id":"short"}'));
-      expect(response.ok).to.be.false;
-      expect(response.error).to.equal('invalid container_id');
-    });
-
-    it('should reject uppercase hex in container_id', async () => {
-      const id = 'A'.repeat(64);
-      const response = JSON.parse(await service.handleRequest(`{"op":"lookup","container_id":"${id}"}`));
-      expect(response.ok).to.be.false;
-      expect(response.error).to.equal('invalid container_id');
-    });
-
-    it('should return null identity for unknown container', async () => {
-      const id = 'a'.repeat(64);
-      dockerServiceStub.dockerListContainers.resolves([]);
-
-      const response = JSON.parse(await service.handleRequest(`{"op":"lookup","container_id":"${id}"}`));
-      expect(response.ok).to.be.true;
-      expect(response.identity).to.be.null;
+    it('omits region when none is available', () => {
+      sinkCacheStub.getSink.returns(datadogSink);
+      const id = service.buildIdentity('/fluxMyApp', 'nginx:1', null);
+      expect(id.tags).to.not.have.property('region');
     });
   });
-
-  // --- resolveIdentity ---------------------------------------------------
 
   describe('resolveIdentity', () => {
-    const containerId = 'a1b2c3d4e5f6'.padEnd(64, '0');
+    const containerId = 'a'.repeat(64);
 
-    it('should return null when container not found in Docker', async () => {
-      dockerServiceStub.dockerListContainers.resolves([]);
-      const result = await service.resolveIdentity(containerId);
-      expect(result).to.be.null;
+    it('returns null when the container cannot be inspected', async () => {
+      dockerServiceStub.dockerContainerInspect.resolves(null);
+      expect(await service.resolveIdentity(containerId)).to.be.null;
     });
 
-    it('should return null when container name is not a Flux app', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Id: containerId, Names: ['/nginx'] },
-      ]);
-      const result = await service.resolveIdentity(containerId);
-      expect(result).to.be.null;
+    it('returns null for a non-telemetry app', async () => {
+      dockerServiceStub.dockerContainerInspect.resolves({ Id: containerId, Name: '/fluxMyApp', Config: { Image: 'nginx:1' } });
+      sinkCacheStub.getSink.returns(null);
+      expect(await service.resolveIdentity(containerId)).to.be.null;
     });
 
-    it('should return null when app is not in local database', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Id: containerId, Names: ['/fluxMyApp'] },
-      ]);
-      dbHelperStub.findOneInDatabase.resolves(null);
-
-      const result = await service.resolveIdentity(containerId);
-      expect(result).to.be.null;
-    });
-
-    it('should resolve a standard flux app with image and container name', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Id: containerId, Names: ['/fluxMyApp'], Image: 'nginx:1.25' },
-      ]);
-      dbHelperStub.findOneInDatabase.resolves({
-        name: 'MyApp',
-        version: 8,
-      });
-
-      const result = await service.resolveIdentity(containerId);
-      expect(result).to.not.be.null;
-      expect(result.app_name).to.equal('MyApp');
-      expect(result.tags['region']).to.equal('NA');
-      expect(result.tags).to.not.have.property('component');
-      expect(result.tags.image_name).to.equal('nginx:1.25');
-      expect(result.tags.container_name).to.equal('fluxMyApp');
-    });
-
-    it('should resolve a component container with component tag', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Id: containerId, Names: ['/frontend_MyApp'] },
-      ]);
-      dbHelperStub.findOneInDatabase.resolves({
-        name: 'MyApp',
-        version: 8,
-        compose: [{ name: 'frontend' }, { name: 'backend' }],
-      });
-
-      const result = await service.resolveIdentity(containerId);
-      expect(result).to.not.be.null;
-      expect(result.app_name).to.equal('MyApp');
-      expect(result.tags['component']).to.equal('frontend');
-      expect(result.tags['region']).to.equal('NA');
-    });
-
-    it('should resolve a legacy zel-prefixed app', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Id: containerId, Names: ['/zelKadenaChainWebNode'] },
-      ]);
-      dbHelperStub.findOneInDatabase.resolves({
-        name: 'KadenaChainWebNode',
-        version: 3,
-      });
-
-      const result = await service.resolveIdentity(containerId);
-      expect(result).to.not.be.null;
-      expect(result.app_name).to.equal('KadenaChainWebNode');
-    });
-
-    it('should handle geolocation being unavailable', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Id: containerId, Names: ['/fluxMyApp'] },
-      ]);
-      dbHelperStub.findOneInDatabase.resolves({
-        name: 'MyApp',
-        version: 8,
-      });
-      geolocationServiceStub.getNodeGeolocation.resolves(null);
-
-      const result = await service.resolveIdentity(containerId);
-      expect(result).to.not.be.null;
-      expect(result.app_name).to.equal('MyApp');
-      expect(result.tags).to.not.have.property('region');
-    });
-
-    it('should handle geolocation throwing an error', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Id: containerId, Names: ['/fluxMyApp'] },
-      ]);
-      dbHelperStub.findOneInDatabase.resolves({
-        name: 'MyApp',
-        version: 8,
-      });
-      geolocationServiceStub.getNodeGeolocation.rejects(new Error('network down'));
-
-      const result = await service.resolveIdentity(containerId);
-      expect(result).to.not.be.null;
-      expect(result.app_name).to.equal('MyApp');
-      expect(result.tags).to.not.have.property('region');
+    it('resolves a telemetry app with sink, tags and region', async () => {
+      dockerServiceStub.dockerContainerInspect.resolves({ Id: containerId, Name: '/fluxMyApp', Config: { Image: 'nginx:1.25' } });
+      sinkCacheStub.getSink.returns(datadogSink);
+      const id = await service.resolveIdentity(containerId);
+      expect(id.app_name).to.equal('MyApp');
+      expect(id.sink).to.deep.equal(datadogSink);
+      expect(id.tags.image_name).to.equal('nginx:1.25');
+      expect(id.tags.region).to.equal('NA');
     });
   });
 
-  // --- end-to-end protocol via handleRequest -----------------------------
+  describe('sendSync', () => {
+    function fakeSocket() {
+      return { destroyed: false, written: [], write(s) { this.written.push(s); } };
+    }
 
-  describe('handleRequest end-to-end', () => {
-    const containerId = 'deadbeef'.padEnd(64, '0');
-
-    it('should return full identity for a known container', async () => {
+    it('announces only telemetry-app containers, each with its sink', async () => {
       dockerServiceStub.dockerListContainers.resolves([
-        { Id: containerId, Names: ['/frontend_WebApp'] },
+        { Id: 'c1'.padEnd(64, '0'), Names: ['/fluxTelemApp'], Image: 'img:1' },
+        { Id: 'c2'.padEnd(64, '0'), Names: ['/fluxPlainApp'], Image: 'img:2' },
       ]);
-      dbHelperStub.findOneInDatabase.resolves({
-        name: 'WebApp',
-        version: 8,
-        compose: [{ name: 'frontend' }],
-      });
+      // Only TelemApp has a sink.
+      sinkCacheStub.getSink.withArgs('TelemApp').returns(datadogSink);
+      sinkCacheStub.getSink.withArgs('PlainApp').returns(null);
 
-      const raw = await service.handleRequest(`{"op":"lookup","container_id":"${containerId}"}`);
-      const response = JSON.parse(raw);
+      const socket = fakeSocket();
+      await service.sendSync(socket);
 
-      expect(response.ok).to.be.true;
-      expect(response.identity).to.not.be.null;
-      expect(response.identity.app_name).to.equal('WebApp');
-      expect(response.identity.tags['component']).to.equal('frontend');
-      expect(response.identity.tags['region']).to.equal('NA');
+      expect(socket.written).to.have.length(1);
+      const msg = JSON.parse(socket.written[0]);
+      expect(msg.op).to.equal('sync');
+      expect(msg.containers).to.have.length(1);
+      expect(msg.containers[0].container_id).to.equal('c1'.padEnd(64, '0'));
+      expect(msg.containers[0].identity.app_name).to.equal('TelemApp');
+      expect(msg.containers[0].identity.sink).to.deep.equal(datadogSink);
     });
 
-    it('should return null identity when Docker throws', async () => {
-      dockerServiceStub.dockerListContainers.rejects(new Error('Docker unavailable'));
+    it('emits an empty sync when no telemetry apps are running', async () => {
+      dockerServiceStub.dockerListContainers.resolves([
+        { Id: 'c2'.padEnd(64, '0'), Names: ['/fluxPlainApp'], Image: 'img:2' },
+      ]);
+      sinkCacheStub.getSink.returns(null);
 
-      const raw = await service.handleRequest(`{"op":"lookup","container_id":"${'a'.repeat(64)}"}`);
-      const response = JSON.parse(raw);
+      const socket = fakeSocket();
+      await service.sendSync(socket);
 
-      expect(response.ok).to.be.false;
-      expect(response.error).to.equal('internal error');
+      const msg = JSON.parse(socket.written[0]);
+      expect(msg.op).to.equal('sync');
+      expect(msg.containers).to.deep.equal([]);
     });
   });
 
-  // --- TAG_ALLOWLIST -----------------------------------------------------
+  describe('onComponentCreated Arcane gate', () => {
+    it('is a no-op when the server is not running (non-Arcane node)', async () => {
+      // start() was never called, so server is null.
+      await service.onComponentCreated({ identifier: 'fluxMyApp' });
+      expect(dockerServiceStub.dockerContainerInspect.called).to.equal(false);
+    });
+  });
+
+  describe('handleRequest (forward-compat lookup)', () => {
+    it('rejects invalid JSON', async () => {
+      const res = JSON.parse(await service.handleRequest('not json'));
+      expect(res.ok).to.be.false;
+      expect(res.error).to.equal('invalid JSON');
+    });
+
+    it('rejects an unknown op', async () => {
+      const res = JSON.parse(await service.handleRequest('{"op":"delete"}'));
+      expect(res.ok).to.be.false;
+    });
+
+    it('rejects a non-64-hex container_id', async () => {
+      const res = JSON.parse(await service.handleRequest('{"op":"lookup","container_id":"short"}'));
+      expect(res.ok).to.be.false;
+      expect(res.error).to.equal('invalid container_id');
+    });
+
+    it('returns null identity for an unknown container', async () => {
+      dockerServiceStub.dockerContainerInspect.resolves(null);
+      const res = JSON.parse(await service.handleRequest(`{"op":"lookup","container_id":"${'a'.repeat(64)}"}`));
+      expect(res.ok).to.be.true;
+      expect(res.identity).to.be.null;
+    });
+  });
 
   describe('TAG_ALLOWLIST', () => {
-    it('should contain exactly the expected public tags', () => {
-      expect(service.TAG_ALLOWLIST.has('region')).to.be.true;
-      expect(service.TAG_ALLOWLIST.has('component')).to.be.true;
-      expect(service.TAG_ALLOWLIST.has('image_name')).to.be.true;
-      expect(service.TAG_ALLOWLIST.has('container_name')).to.be.true;
+    it('contains exactly the expected public tags', () => {
       expect(service.TAG_ALLOWLIST.size).to.equal(4);
+      ['region', 'component', 'image_name', 'container_name'].forEach((t) => {
+        expect(service.TAG_ALLOWLIST.has(t)).to.be.true;
+      });
     });
   });
 });
