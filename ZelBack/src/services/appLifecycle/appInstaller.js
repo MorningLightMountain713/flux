@@ -320,11 +320,10 @@ async function installApplication(instantiated, options = {}) {
 
     log.info(`Flux App: ${appName} is test install: ${test}`);
 
-    // Reconnect any locally installed apps that are networked with this app —
-    // its private network was (re)created during this install. Guarded on
-    // appComponent (the unmutated entry value) since isComponent is flipped to
-    // true inside the component install loop above.
-    if (!appComponent && !test) {
+    // Reconnect any locally installed apps that are networked with this app — its private
+    // network was (re)created during this install. installApplication is always app-level
+    // (per-component installs go through installComponent), so run it on any non-test install.
+    if (!test) {
       await appNetworkLinker.reconnectLinkedApps(appName);
     }
 
