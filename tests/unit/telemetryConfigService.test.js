@@ -90,55 +90,34 @@ describe('telemetryConfigService tests', () => {
   // --- buildToml ---------------------------------------------------------
 
   describe('buildToml', () => {
-    it('should produce valid TOML with node and telemetry sections', () => {
-      const toml = service.buildToml('opaque123', {
-        provider: 'datadog',
-        site: 'datadoghq.com',
-        apiKey: 'dd-key-here',
-      });
+    it('produces TOML with only the node section', () => {
+      const toml = service.buildToml('opaque123');
 
       expect(toml).to.include('[node]');
       expect(toml).to.include('opaqueId = "opaque123"');
-      expect(toml).to.include('[telemetry]');
-      expect(toml).to.include('provider = "datadog"');
-      expect(toml).to.include('site = "datadoghq.com"');
-      expect(toml).to.include('apiKey = "dd-key-here"');
-    });
-
-    it('should omit null/undefined values', () => {
-      const toml = service.buildToml('id', {
-        provider: 'datadog',
-        site: null,
-        apiKey: 'key',
-      });
-
-      expect(toml).to.include('provider = "datadog"');
-      expect(toml).to.include('apiKey = "key"');
-      expect(toml).to.not.include('site');
+      // Per-app sinks travel on the identity socket, not in config.toml.
+      expect(toml).to.not.include('[telemetry]');
+      expect(toml).to.not.include('apiKey');
     });
   });
 
-  // --- apply -------------------------------------------------------------
+  // --- ensureNode --------------------------------------------------------
 
-  describe('apply', () => {
-    it('should write config and start the daemon when not running', async () => {
-      // is-active returns 'inactive'
+  describe('ensureNode', () => {
+    it('writes config and starts the daemon when not running', async () => {
       serviceHelperStub.runCommand.resolves({ error: null, stdout: 'inactive\n', stderr: '' });
 
-      await service.apply({ provider: 'datadog', site: 'datadoghq.com', apiKey: 'key' });
+      await service.ensureNode();
 
-      // Should have written a temp file and renamed it
       expect(fsStub.promises.writeFile.calledOnce).to.be.true;
       expect(fsStub.promises.rename.calledOnce).to.be.true;
 
-      // Should have called systemctl is-active, then start
-      const calls = serviceHelperStub.runCommand.getCalls();
-      const actions = calls.map((c) => c.args[1].params.join(' '));
+      const actions = serviceHelperStub.runCommand.getCalls().map((c) => c.args[1].params.join(' '));
       expect(actions).to.include(`is-active ${service.SERVICE_NAME}`);
       expect(actions).to.include(`start ${service.SERVICE_NAME}`);
     });
 
-    it('should restart the daemon when already running', async () => {
+    it('does not restart when the daemon is already running', async () => {
       serviceHelperStub.runCommand.callsFake((cmd, opts) => {
         if (opts.params[0] === 'is-active') {
           return Promise.resolve({ error: null, stdout: 'active\n', stderr: '' });
@@ -146,40 +125,28 @@ describe('telemetryConfigService tests', () => {
         return Promise.resolve({ error: null, stdout: '', stderr: '' });
       });
 
-      await service.apply({ provider: 'datadog', site: 'datadoghq.com', apiKey: 'key' });
+      await service.ensureNode();
 
-      const calls = serviceHelperStub.runCommand.getCalls();
-      const actions = calls.map((c) => c.args[1].params.join(' '));
-      expect(actions).to.include(`restart ${service.SERVICE_NAME}`);
+      const actions = serviceHelperStub.runCommand.getCalls().map((c) => c.args[1].params.join(' '));
       expect(actions).to.not.include(`start ${service.SERVICE_NAME}`);
+      expect(actions).to.not.include(`restart ${service.SERVICE_NAME}`);
     });
 
-    it('should reject when no provider given', async () => {
-      try {
-        await service.apply({});
-        expect.fail('should have thrown');
-      } catch (err) {
-        expect(err.message).to.include('provider');
-      }
-    });
-
-    it('should reject when runtime dir not available', async () => {
+    it('is a no-op when the runtime dir is not available (non-Arcane)', async () => {
       fsStub.promises.access.rejects(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-      try {
-        await service.apply({ provider: 'datadog', apiKey: 'key' });
-        expect.fail('should have thrown');
-      } catch (err) {
-        expect(err.message).to.include('not available');
-      }
+
+      await service.ensureNode();
+
+      expect(fsStub.promises.writeFile.called).to.be.false;
+      expect(serviceHelperStub.runCommand.called).to.be.false;
     });
 
-    it('should clean up temp file on write failure', async () => {
+    it('cleans up the temp file on write failure', async () => {
       fsStub.promises.writeFile.rejects(new Error('disk full'));
       try {
-        await service.apply({ provider: 'datadog', apiKey: 'key' });
+        await service.ensureNode();
         expect.fail('should have thrown');
       } catch {
-        // unlink should have been called to clean up
         expect(fsStub.promises.unlink.called).to.be.true;
       }
     });
