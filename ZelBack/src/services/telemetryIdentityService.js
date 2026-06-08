@@ -7,6 +7,7 @@ const dockerService = require('./dockerService');
 const serviceHelper = require('./serviceHelper');
 const geolocationService = require('./geolocationService');
 const telemetrySinkCache = require('./telemetrySinkCache');
+const telemetryConfigService = require('./telemetryConfigService');
 
 const SOCKET_DIR = '/run/flux/telemetry';
 const SOCKET_PATH = path.join(SOCKET_DIR, 'identity.sock');
@@ -367,6 +368,11 @@ async function start() {
   });
 
   log.info(`telemetry identity server listening on ${SOCKET_PATH}`);
+
+  // The unprivileged daemon must traverse the dir and connect to the socket
+  // (connect needs write), so group-own both to flux-telemetry.
+  await telemetryConfigService.chownGroup(SOCKET_DIR, '0750');
+  await telemetryConfigService.chownGroup(SOCKET_PATH, '0660');
 
   await setBaseAcls();
   await subscribeEvents();
