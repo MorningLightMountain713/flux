@@ -441,6 +441,9 @@ async function startFluxFunctions() {
       // Warm the marketplace template cache (best-effort; cache-miss fetch covers any gaps).
       marketplaceTemplateCache.bootstrapCache().catch((error) => log.error(error));
       appOperations.reconcileInstalledApps();
+      // Backstop the flux-shutdownd plan store against anything missed while
+      // fluxos was down (Arcane-only, best-effort).
+      appOperations.shutdownPlanResync().catch((error) => log.error(error));
       await identityReady;
       try {
         await enterpriseNetwork.cleanupOwnershipViolations();
