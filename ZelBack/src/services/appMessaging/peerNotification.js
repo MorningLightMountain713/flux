@@ -113,7 +113,7 @@ async function checkAndNotifyPeersOfRunningApps() {
           name: appName,
           hash: application.hash || '',
           runningSince: runningOnMyNodeSince,
-          state: globalState.drainingApps.get(appName) ?? 'active',
+          state: globalState.getAppLbState(appName) ?? 'active',
         });
       }
       // An empty snapshot is NEVER broadcast: the receive side treats an empty
