@@ -10,7 +10,6 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const appUninstaller = require('../appLifecycle/appUninstaller');
-const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const { validateSubmissionSpec, getSpec, getSpecBackend } = require('../utils/specLibs');
 const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
@@ -347,9 +346,7 @@ async function getApplicationSpecification(appname, encryptedEnterpriseKey) {
     return instantiated.spec.serialize();
   }
 
-  const backendProvider = await legacyCryptoProvider.create(
-    instantiated.name, instantiated.owner,
-  );
+  const backendProvider = await instantiated.spec.createProvider();
   const decrypted = await instantiated.spec.decrypt(backendProvider);
   const transportProvider = await legacyTransportProvider.create(
     instantiated.name, instantiated.owner, encryptedEnterpriseKey,
@@ -450,7 +447,7 @@ async function convertApplicationSpecification(appname, opts = {}) {
   // cleartext legacy instance is what fromLegacy converts.
   let legacySpec = instantiated.spec;
   if (instantiated.isEncrypted) {
-    const backendProvider = await legacyCryptoProvider.create(instantiated.name, instantiated.owner);
+    const backendProvider = await instantiated.spec.createProvider();
     const decrypted = await instantiated.spec.decrypt(backendProvider);
     legacySpec = decrypted.spec;
   }
