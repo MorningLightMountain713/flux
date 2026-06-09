@@ -264,8 +264,9 @@ async function cleanupDeploymentPorts(deployComp, appName, res, entityName) {
 }
 
 /**
- * Uninstall a single component. Unified replacement for softUninstallComponent
- * and hardUninstallComponent.
+ * Uninstall a single component: stop (or kill) and remove its container, deny
+ * its ports, optionally tear down volumes/syncthing/crontab, then remove the
+ * image. Driven off the normalized DeploymentSpec component.
  *
  * @param {import('@runonflux/flux-spec-backend').DeploymentComponent} component
  * @param {object} [options]
