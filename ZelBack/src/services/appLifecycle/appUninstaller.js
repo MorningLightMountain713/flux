@@ -43,6 +43,7 @@ class AppNotFoundError extends Error {
     super('Flux App not found');
   }
 }
+const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
@@ -1088,6 +1089,9 @@ async function uninstallApplication(appName, options = {}) {
       // what stops a teardown that fails part way being read as tampering.
       dockerService.clearFluxRemovedContainers(resolvedAppName);
       status('Database cleaned');
+
+      // Drop the app's shutdown plan from flux-shutdownd (best-effort).
+      await fluxShutdowndClient.deleteAppPlanBestEffort(resolvedAppName, spec.owner);
     }
 
     status(`Removal step done. Result: Flux App ${resolvedAppName} was successfully removed`);
