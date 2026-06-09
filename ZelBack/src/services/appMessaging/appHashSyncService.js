@@ -8,7 +8,6 @@ const serviceHelper = require('../serviceHelper');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
 const { deserializeSpec } = require('../utils/specCutover');
-const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const { validateGossipSpec, getSpec } = require('../utils/specLibs');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
@@ -374,7 +373,7 @@ async function processMessages(messages, records, onProgress) {
         let validationBlob;
         if (wireSpec && wireSpec.isEncrypted) {
           try {
-            const provider = await legacyCryptoProvider.create(wireSpec.name, wireSpec.owner);
+            const provider = await wireSpec.createProvider();
             const decrypted = await wireSpec.decrypt(provider);
             validationBlob = decrypted.spec.serialize();
           } catch (err) {
