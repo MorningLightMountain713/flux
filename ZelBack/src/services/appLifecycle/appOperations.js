@@ -1605,6 +1605,64 @@ async function reconcileApp(installed, registrySpec) {
   }
 }
 
+/**
+ * Reconcile flux-shutdownd's plan store against the installed apps on boot.
+ * The self-healing backstop for any plan upsert/delete missed while fluxos was
+ * down: re-push plans whose spec_hash drifted (or are absent) and delete
+ * orphans for apps no longer installed. Best-effort and Arcane-only — the
+ * daemon socket is absent elsewhere, so a list failure just ends the resync.
+ */
+async function shutdownPlanResync() {
+  if (!isArcane) return;
+
+  let summaries;
+  try {
+    summaries = await fluxShutdowndClient.listAppPlans();
+  } catch (error) {
+    log.warn(`shutdown plan resync skipped: ${error.message}`);
+    return;
+  }
+
+  try {
+    const installedApps = await appsRepository.listInstalledApps();
+    const planKey = (owner, name) => `${owner}:${name}`;
+    const stored = new Map(summaries.map((s) => [planKey(s.owner_flux_id, s.app_name), s]));
+    const live = new Set();
+    let pushed = 0;
+    let deleted = 0;
+
+    for (const installed of installedApps) {
+      const key = planKey(installed.owner, installed.name);
+      live.add(key);
+      const summary = stored.get(key);
+      if (summary && summary.spec_hash === installed.hash) continue;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const deployment = await deploymentProvider.buildDeployment(installed);
+        if (!deployment) continue;
+        // eslint-disable-next-line no-await-in-loop
+        await fluxShutdowndClient.upsertAppPlanBestEffort(
+          shutdownPlan.buildShutdownPlan(installed, deployment),
+        );
+        pushed += 1;
+      } catch (error) {
+        log.warn(`shutdown plan resync upsert failed for ${installed.name}: ${error.message}`);
+      }
+    }
+
+    for (const [key, summary] of stored) {
+      if (live.has(key)) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await fluxShutdowndClient.deleteAppPlanBestEffort(summary.app_name, summary.owner_flux_id);
+      deleted += 1;
+    }
+
+    if (pushed || deleted) log.info(`shutdown plan resync: ${pushed} re-pushed, ${deleted} orphans removed`);
+  } catch (error) {
+    log.error(`shutdown plan resync failed: ${error.message}`);
+  }
+}
+
 async function reconcileInstalledApps() {
   try {
     const synced = await generalService.checkSynced();
@@ -2221,6 +2279,7 @@ module.exports = {
   installationInProgressReset,
   setInstallationInProgressTrue,
   reconcileInstalledApps,
+  shutdownPlanResync,
   forceAppRemovals,
   coordinateActiveStandbyApps,
   getPeerAppsInstallingErrorMessages,
