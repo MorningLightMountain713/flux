@@ -655,6 +655,68 @@ describe('appOperations tests', () => {
 
   });
 
+  describe('shutdownPlanResync tests', () => {
+    let proxyquire;
+    let savedFluxosPath;
+
+    beforeEach(() => {
+      proxyquire = require('proxyquire');
+      savedFluxosPath = process.env.FLUXOS_PATH;
+    });
+
+    afterEach(() => {
+      if (savedFluxosPath === undefined) delete process.env.FLUXOS_PATH;
+      else process.env.FLUXOS_PATH = savedFluxosPath;
+    });
+
+    function loadWith({ arcane = true, installed = [], plans = [], deployment = {} } = {}) {
+      if (arcane) process.env.FLUXOS_PATH = '/tmp/flux';
+      else delete process.env.FLUXOS_PATH;
+      const client = {
+        listAppPlans: sinon.stub().resolves(plans),
+        upsertAppPlanBestEffort: sinon.stub().resolves(),
+        deleteAppPlanBestEffort: sinon.stub().resolves(),
+      };
+      const mod = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
+        '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+        '../appDatabase/appsRepository': { listInstalledApps: sinon.stub().resolves(installed) },
+        '../appRuntime/deploymentProvider': { buildDeployment: sinon.stub().resolves(deployment) },
+        './shutdownPlan': { buildShutdownPlan: sinon.stub().returns({ app_name: 'plan' }) },
+        '../utils/fluxShutdowndClient': client,
+      });
+      return { mod, client };
+    }
+
+    it('re-pushes a drifted plan and removes an orphan', async () => {
+      const { mod, client } = loadWith({
+        installed: [{ name: 'app1', owner: '1own', hash: 'hashNEW' }],
+        plans: [
+          { app_name: 'app1', owner_flux_id: '1own', spec_hash: 'hashOLD' },
+          { app_name: 'gone', owner_flux_id: '1own', spec_hash: 'x' },
+        ],
+      });
+      await mod.shutdownPlanResync();
+      expect(client.upsertAppPlanBestEffort.calledOnce).to.be.true;
+      expect(client.deleteAppPlanBestEffort.calledOnceWith('gone', '1own')).to.be.true;
+    });
+
+    it('leaves a plan untouched when its hash already matches', async () => {
+      const { mod, client } = loadWith({
+        installed: [{ name: 'app1', owner: '1own', hash: 'h' }],
+        plans: [{ app_name: 'app1', owner_flux_id: '1own', spec_hash: 'h' }],
+      });
+      await mod.shutdownPlanResync();
+      expect(client.upsertAppPlanBestEffort.called).to.be.false;
+      expect(client.deleteAppPlanBestEffort.called).to.be.false;
+    });
+
+    it('does nothing on a non-Arcane node', async () => {
+      const { mod, client } = loadWith({ arcane: false });
+      await mod.shutdownPlanResync();
+      expect(client.listAppPlans.called).to.be.false;
+    });
+  });
+
   // Note: verifyAppUpdateParameters, createAppVolume,
   // getPeerAppsInstallingErrorMessages, and stopSyncthingApp are
   // complex integration functions or HTTP request handlers that require extensive

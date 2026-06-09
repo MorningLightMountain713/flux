@@ -98,7 +98,7 @@ async function deleteAppPlan(appName, ownerFluxId) {
 
 /**
  * List the plan summaries the daemon currently holds, for resync-on-boot.
- * @returns {Promise<Array<{app_name: string, owner_flux_id: string, content_hash: string}>>}
+ * @returns {Promise<Array<{app_name: string, owner_flux_id: string, spec_hash: string}>>}
  */
 async function listAppPlans() {
   return callRpc('list_app_plans', {});
