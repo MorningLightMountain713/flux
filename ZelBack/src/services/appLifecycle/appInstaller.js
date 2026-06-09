@@ -568,7 +568,7 @@ async function checkOrbitAppHealth(component, onStatus) {
 /**
  * Install a single app component (pull image, create volume, create + start container).
  * @param {object} component - DeploymentComponent to install
- * @param {object} options - { onStatus, test, createVolumes, burstEligible, restartPolicy, extraEnv, syslogTarget, crossAppLogCollector }
+ * @param {object} options - { owner, onStatus, test, createVolumes, burstEligible, restartPolicy, extraEnv, syslogTarget, crossAppLogCollector }
  * @returns {Promise<void>}
  */
 async function installComponent(component, options = {}) {
@@ -580,6 +580,15 @@ async function installComponent(component, options = {}) {
   const extraEnv = options.extraEnv || [];
   const syslogTarget = options.syslogTarget || null;
   const crossAppLogCollector = options.crossAppLogCollector || null;
+  const { owner } = options;
+
+  // owner is load-bearing: flux-shutdownd keys each app's shutdown plan on it,
+  // so a blank runonflux.owner label silently breaks drain/preStop at node
+  // shutdown. Refuse rather than stamp an empty owner. Test installs are
+  // ephemeral and carry no plan, so they are exempt.
+  if (!test && !owner) {
+    throw new Error(`installComponent: owner required for ${component.identifier}`);
+  }
 
   const id = component.identifier;
   const appName = component.appName;
@@ -665,7 +674,7 @@ async function installComponent(component, options = {}) {
     extraEnv,
     syslogTarget,
     crossAppLogCollector,
-    owner: options.owner,
+    owner,
   });
 
   // Set the log ACL and announce identity to flux-telemetryd before the
