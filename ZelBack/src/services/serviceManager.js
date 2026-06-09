@@ -23,6 +23,7 @@ const appInspector = require('./appManagement/appInspector');
 const availabilityChecker = require('./appMonitoring/availabilityChecker');
 const nodeStatusMonitor = require('./appMonitoring/nodeStatusMonitor');
 const peerNotification = require('./appMessaging/peerNotification');
+const drainServer = require('./appMessaging/drainServer');
 const syncthingMonitor = require('./appMonitoring/syncthingMonitor');
 const daemonHealthMonitor = require('./appMonitoring/daemonHealthMonitor');
 const containerCrashRecovery = require('./appMonitoring/containerCrashRecovery');
@@ -323,6 +324,8 @@ async function startFluxFunctions() {
     });
     nodeConfirmationService.onMessageCapabilityChange((capable) => orchestrator.onMessageCapabilityChange(capable));
     peerNotification.initialize();
+    // Serve the flux-shutdownd drain socket (Arcane-only, best-effort).
+    drainServer.start();
     appSpawner.initialize();
     appInstaller.setOnInstallComplete(() => peerNotification.checkAndNotifyPeersOfRunningApps());
     log.info('App Spawner initialized');
