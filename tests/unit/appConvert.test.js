@@ -14,8 +14,7 @@ describe('appConvert (registryManager) tests', () => {
   let fromSubmission;
   let transportCreate;
   let encrypt;
-  let legacyDecrypt;
-  let legacyCryptoCreate;
+  let specDecrypt;
   let registryManager;
 
   function loadWith() {
@@ -30,7 +29,6 @@ describe('appConvert (registryManager) tests', () => {
           buildSpecViewAad: () => Buffer.from('aad'),
         }),
       },
-      '../providers/FluxOSLegacyCryptoProvider': { create: legacyCryptoCreate },
       '../providers/FluxOSTransportProvider': { create: transportCreate },
     });
   }
@@ -46,8 +44,7 @@ describe('appConvert (registryManager) tests', () => {
     });
     encrypt = sinon.stub().resolves({ algorithm: 'HPKE', encapsulatedKey: 'ek', ciphertext: 'ct' });
     transportCreate = sinon.stub().resolves({ encrypt });
-    legacyDecrypt = sinon.stub().resolves({ spec: { v8cleartext: true } });
-    legacyCryptoCreate = sinon.stub().resolves({});
+    specDecrypt = sinon.stub().resolves({ spec: { v8cleartext: true } });
     registryManager = loadWith();
   });
 
@@ -104,16 +101,18 @@ describe('appConvert (registryManager) tests', () => {
   });
 
   it('decrypts an encrypted source before converting, then seals', async () => {
+    const backendProvider = {};
+    const createProvider = sinon.stub().resolves(backendProvider);
     const encApp = cleartextApp({
       isEncrypted: true,
-      spec: { decrypt: legacyDecrypt },
+      spec: { createProvider, decrypt: specDecrypt },
     });
     getGlobalAppInfo.resolves(encApp);
 
     const result = await registryManager.convertApplicationSpecification('myapp', { recipientPubkeyBase64: 'PUB' });
 
-    expect(legacyCryptoCreate.calledOnceWith('myapp', 'owner1')).to.equal(true);
-    expect(legacyDecrypt.calledOnce).to.equal(true);
+    expect(createProvider.calledOnce).to.equal(true);
+    expect(specDecrypt.calledOnceWith(backendProvider)).to.equal(true);
     // fromLegacy got the decrypted cleartext spec.
     expect(fromLegacy.firstCall.args[0]).to.deep.equal({ v8cleartext: true });
     expect(result.encrypted).to.equal(true);
