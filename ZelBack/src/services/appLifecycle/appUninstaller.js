@@ -17,7 +17,6 @@ const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const appsRepository = require('../appDatabase/appsRepository');
-const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -881,7 +880,7 @@ async function uninstallApplication(appName, options = {}) {
     }
 
     if (spec.isEncrypted) {
-      const provider = await legacyCryptoProvider.create(spec.name, spec.owner);
+      const provider = await spec.createProvider();
       spec = (await spec.decrypt(provider)).spec;
     }
 
