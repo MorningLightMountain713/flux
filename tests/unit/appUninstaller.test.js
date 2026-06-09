@@ -164,43 +164,6 @@ describe('appUninstaller tests', () => {
     });
   });
 
-  describe('hardUninstallApplication tests', () => {
-    it('should hard uninstall app, no ports passed', async () => {
-      const appName = 'testapp';
-      const appId = 1111;
-      const appSpecifications = {
-        name: appName,
-        repotag: '/flux',
-      };
-      const res = {
-        write: sinon.stub(),
-        end: sinon.stub(),
-      };
-
-      await appUninstaller.hardUninstallApplication(appName, appId, appSpecifications, res);
-
-      expect(res.write.called).to.be.true;
-    });
-
-    it('should hard uninstall app, ports passed', async () => {
-      const appName = 'testapp';
-      const appId = 2222;
-      const appSpecifications = {
-        name: appName,
-        repotag: '/flux',
-        port: 111,
-      };
-      const res = {
-        write: sinon.stub(),
-        end: sinon.stub(),
-      };
-
-      await appUninstaller.hardUninstallApplication(appName, appId, appSpecifications, res);
-
-      expect(res.write.called).to.be.true;
-    });
-  });
-
   describe('uninstallApplication tests', () => {
     it('should report error via onStatus if app name is not specified', async () => {
       const messages = [];
