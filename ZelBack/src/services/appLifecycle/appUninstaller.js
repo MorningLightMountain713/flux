@@ -26,6 +26,7 @@ const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const volumeService = require('../utils/volumeService');
 const imageManager = require('../appSecurity/imageManager');
 const fluxEventBus = require('../utils/fluxEventBus');
+const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
@@ -1012,6 +1013,9 @@ async function uninstallApplication(appName, options = {}) {
         appsDatabase, localAppsInformation, { name: resolvedAppName }, {},
       );
       status('Database cleaned');
+
+      // Drop the app's shutdown plan from flux-shutdownd (best-effort).
+      await fluxShutdowndClient.deleteAppPlanBestEffort(resolvedAppName, spec.owner);
     }
 
     status(`Removal step done. Result: Flux App ${resolvedAppName} was successfully removed`);
