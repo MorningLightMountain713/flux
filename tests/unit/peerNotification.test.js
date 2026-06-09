@@ -33,6 +33,9 @@ describe('peerNotification tests', () => {
   let getAppLocationStub;
   let resolveSpecStub;
   let listInstalledAppsStub;
+  let broadcastAllStub;
+  let listRunningAppsStub;
+  let drainingAppsMap;
 
   beforeEach(() => {
     logStub = {
@@ -47,6 +50,12 @@ describe('peerNotification tests', () => {
     listInstalledAppsStub = sinon.stub().resolves([
       mockInstantiatedSpec({ name: 'app1', version: 4, hash: 'abc123', componentNames: ['c1'] }),
     ]);
+    broadcastAllStub = sinon.stub().resolves();
+    listRunningAppsStub = sinon.stub().resolves({
+      status: 'success',
+      data: [{ Names: ['/fluxc1_app1'] }],
+    });
+    drainingAppsMap = new Map();
 
     peerNotification = proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', {
       config: {
@@ -63,7 +72,7 @@ describe('peerNotification tests', () => {
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),
         broadcastMessageToIncoming: sinon.stub().resolves(),
-        broadcastMessageToAll: sinon.stub().resolves(),
+        broadcastMessageToAll: broadcastAllStub,
       },
       './messageStore': {
         storeAppRunningMessage: sinon.stub().resolves(),
@@ -81,10 +90,7 @@ describe('peerNotification tests', () => {
         resolveSpec: resolveSpecStub,
       },
       '../appQuery/appQueryService': {
-        listRunningApps: sinon.stub().resolves({
-          status: 'success',
-          data: [{ Names: ['/fluxc1_app1'] }],
-        }),
+        listRunningApps: listRunningAppsStub,
       },
       '../nodeConfirmationService': {
         canSendMessages: sinon.stub().returns(true),
@@ -94,6 +100,7 @@ describe('peerNotification tests', () => {
         backupInProgress: [],
         restoreInProgress: [],
         runningAppsCache: new Set(),
+        drainingApps: drainingAppsMap,
       },
       '../utils/fluxEventBus': {
         publish: sinon.stub(),
@@ -155,6 +162,27 @@ describe('peerNotification tests', () => {
 
       expect(getAppLocationStub.calledOnce).to.be.true;
       expect(getAppLocationStub.firstCall.args).to.deep.equal(['app1', '192.168.1.1:16127']);
+    });
+
+    it('broadcasts an installed app as present even when no container is running', async () => {
+      // Container is down: nothing running. Presence is assignment, not liveness.
+      listRunningAppsStub.resolves({ status: 'success', data: [] });
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      const message = broadcastAllStub.firstCall.args[0];
+      expect(message.apps.map((a) => a.name)).to.deep.equal(['app1']);
+      expect(message.apps[0].state).to.equal('active');
+    });
+
+    it('stamps the draining state on an app the node is draining', async () => {
+      drainingAppsMap.set('app1', 'draining');
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      const message = broadcastAllStub.firstCall.args[0];
+      expect(message.apps[0].name).to.equal('app1');
+      expect(message.apps[0].state).to.equal('draining');
     });
   });
 });
