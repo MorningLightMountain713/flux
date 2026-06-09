@@ -27,6 +27,8 @@ const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const telemetryConfigService = require('../telemetryConfigService');
 const appVolumeService = require('./appVolumeService');
+const shutdownPlan = require('./shutdownPlan');
+const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
@@ -300,11 +302,27 @@ async function installApplication(instantiated, options = {}) {
           restartPolicy,
           syslogTarget,
           crossAppLogCollector,
+          owner: instantiated.owner,
         });
         // Attach the freshly created container to every linked app's network.
         if (!test) {
           // eslint-disable-next-line no-await-in-loop
           await appNetworkLinker.connectComponentToLinkedApps(component.identifier, instantiated);
+        }
+      }
+
+      // Hand the full shutdown plan to flux-shutdownd (best-effort; Arcane-only
+      // — the socket is absent elsewhere and the call no-ops). Per-container
+      // labels were stamped at docker-create; this carries the richer plan
+      // (preStop argv, drain config) the labels can't hold. The whole handoff is
+      // guarded — building or pushing the plan must never break an install.
+      if (!test) {
+        try {
+          await fluxShutdowndClient.upsertAppPlanBestEffort(
+            shutdownPlan.buildShutdownPlan(instantiated, deployment),
+          );
+        } catch (error) {
+          log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
         }
       }
     } catch (error) {
@@ -548,6 +566,7 @@ async function installComponent(component, options = {}) {
     extraEnv,
     syslogTarget,
     crossAppLogCollector,
+    owner: options.owner,
   });
 
   // Set the log ACL and announce identity to flux-telemetryd before the
