@@ -29,7 +29,7 @@ async function recreateMissingContainers(componentIdentifier) {
     } catch {
       // volume not mounted
     }
-    await appInstaller.installComponent(deployComp, { createVolumes: !volumeMounted });
+    await appInstaller.installComponent(deployComp, { createVolumes: !volumeMounted, owner: instantiated.owner });
   }
 
   log.info(`Successfully recreated missing containers for ${componentIdentifier}`);
