@@ -19,7 +19,6 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
-const { getSpecBackend } = require('../utils/specLibs');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const volumeService = require('../utils/volumeService');
@@ -885,53 +884,43 @@ async function uninstallApplication(appName, options = {}) {
       throw new Error('Flux App not found');
     }
 
-    const { InstantiatedSpec } = await getSpecBackend();
-    if (spec instanceof InstantiatedSpec) {
-      spec = spec.spec;
-    }
-
-    if (spec.isEncrypted) {
-      const provider = await spec.createProvider();
-      spec = (await spec.decrypt(provider)).spec;
-    }
+    // Tear down components via the normalized DeploymentSpec (mirrors
+    // installApplication -> installComponent; the deployment resolves images
+    // and host ports across spec versions). Fall back to best-effort container
+    // removal if the deployment can't be built (orphaned app / missing record).
+    const deployment = await deploymentProvider.getInstalledDeployment(resolvedAppName);
 
     // clear node-local runtime state (operator stop lock, crash backoff) for the
     // removed component(s) so a later reinstall starts from a clean slate
-    let removedIdentifiers;
-    if (spec.version >= 4) {
-      removedIdentifiers = isComponent
-        ? [`${appComponent}_${spec.name}`]
-        : spec.componentEntries().map(([, c]) => `${c.name}_${spec.name}`);
-    } else {
-      removedIdentifiers = [appName];
-    }
+    const removedIdentifiers = (deployment && !isComponent)
+      ? deployment.componentEntries().map(([, c]) => c.identifier)
+      : [appName];
     // eslint-disable-next-line no-restricted-syntax
     for (const identifier of removedIdentifiers) {
       // eslint-disable-next-line no-await-in-loop
       await appsRuntimeState.remove(identifier);
       if (onComponentRemoved) onComponentRemoved(identifier);
     }
-
-    fluxEventBus.publish('app:removed', { name: appName });
-
-    let appId = dockerService.getAppIdentifier(appName);
-
-    if (spec.version >= 4 && !isComponent) {
-      const componentsReversed = spec.componentEntries().map(([, c]) => c).reverse();
-      for (const component of componentsReversed) {
-        appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
-        // eslint-disable-next-line no-await-in-loop
-        await hardUninstallComponent(resolvedAppName, appId, component.toCanonical(), null, stopAppMonitoring, forceKill);
-      }
-    } else if (isComponent) {
-      const component = spec.getComponent(appComponent);
+    if (deployment && isComponent) {
+      const component = deployment.getComponent(appComponent);
       if (!component) {
         throw new Error(`Flux App component ${appComponent} not found in ${resolvedAppName}`);
       }
-      appId = dockerService.getAppIdentifier(`${component.name}_${spec.name}`);
-      await hardUninstallComponent(resolvedAppName, appId, component.toCanonical(), null, stopAppMonitoring, forceKill);
+      await uninstallComponent(component, { removeVolumes: true, forceKill, onStatus });
+    } else if (deployment) {
+      for (const [, component] of deployment.componentEntries({ reverse: true })) {
+        // eslint-disable-next-line no-await-in-loop
+        await uninstallComponent(component, { removeVolumes: true, forceKill, onStatus });
+      }
     } else {
-      await hardUninstallApplication(resolvedAppName, appId, spec.serialize(), null, stopAppMonitoring, forceKill);
+      status(`No deployment for ${resolvedAppName}; best-effort container removal`);
+      const appId = dockerService.getAppIdentifier(appName);
+      if (forceKill) {
+        await dockerService.appDockerForceRemove(appId).catch((e) => log.warn(`force remove ${appId}: ${e.message}`));
+      } else {
+        await dockerService.appDockerStop(appId).catch(() => {});
+        await dockerService.appDockerRemove(appId).catch((e) => log.warn(`remove ${appId}: ${e.message}`));
+      }
     }
 
     fluxEventBus.publish('app:removed', { name: resolvedAppName });
