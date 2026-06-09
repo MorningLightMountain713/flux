@@ -55,6 +55,8 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
 const appUninstaller = require('./appUninstaller');
 const appInstaller = require('./appInstaller');
+const shutdownPlan = require('./shutdownPlan');
+const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const appNetworkLinker = require('./appNetworkLinker');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const hwRequirements = require('../appRequirements/hwRequirements');
@@ -285,6 +287,7 @@ async function redeployComponent(appName, componentName, options = {}) {
     await appInstaller.installComponent(deployComp, {
       createVolumes,
       specVersion: instantiated.version,
+      owner: instantiated.owner,
     });
 
     status(`Component ${deployComp.identifier} ${label} complete`);
@@ -376,12 +379,24 @@ async function redeployApplication(appName, options = {}) {
       await appInstaller.installComponent(deployComp, {
         createVolumes,
         specVersion: instantiated.version,
+        owner: instantiated.owner,
       });
       // Re-attach the recreated container to every linked app's network.
       // eslint-disable-next-line no-await-in-loop
       await appNetworkLinker.connectComponentToLinkedApps(deployComp.identifier, instantiated);
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+    }
+
+    // Refresh the shutdown plan: a redeploy may carry an updated spec (new
+    // hash, components, or timeouts). Guarded — the handoff must never break
+    // a redeploy. Per-container labels were already restamped at docker-create.
+    try {
+      await fluxShutdowndClient.upsertAppPlanBestEffort(
+        shutdownPlan.buildShutdownPlan(instantiated, freshDeployment),
+      );
+    } catch (error) {
+      log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
     }
 
     status(`Application ${appName} ${label} complete`);
@@ -1544,9 +1559,23 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       await appInstaller.installComponent(deployComp, {
         createVolumes,
         specVersion: registrySpec.version,
+        owner: registrySpec.owner,
       });
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+    }
+  }
+
+  // The applied spec changed, so the app-wide shutdown plan (hash, components,
+  // timeouts) may differ. Push the full refreshed plan. Guarded — must never
+  // break the update.
+  if (freshDeployment) {
+    try {
+      await fluxShutdowndClient.upsertAppPlanBestEffort(
+        shutdownPlan.buildShutdownPlan(registrySpec, freshDeployment),
+      );
+    } catch (error) {
+      log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
     }
   }
 }
