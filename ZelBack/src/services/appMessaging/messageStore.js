@@ -315,6 +315,10 @@ async function storeAppRunningMessage(message) {
       osUptime: message.osUptime,
       staticIp: message.staticIp,
       runningSince,
+      // Normalize the LB lifecycle state at ingest so every row carries a valid
+      // value and no reader branches on absence: only explicit draining/stopping
+      // survive; absent (old nodes) or anything else defaults to active.
+      state: ['draining', 'stopping'].includes(app.state) ? app.state : 'active',
     };
     const conditionalSet = Object.fromEntries(
       Object.entries(incoming).map(([k, v]) => [k, { $cond: [isNewer, v, { $ifNull: [`$${k}`, v] }] }]),
@@ -600,6 +604,9 @@ async function storeBatchAppRunningMessages(verifiedBroadcasts) {
     const incomingExpiry = new Date(validTill);
     const isNewer = { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] };
     for (const app of apps) {
+      // Normalize the LB lifecycle state at ingest (see storeAppRunningMessage):
+      // only explicit draining/stopping survive; absent/other defaults to active.
+      const normalizedState = ['draining', 'stopping'].includes(app.state) ? app.state : 'active';
       const setFields = {
         name: app.name,
         ip: data.ip,
@@ -608,6 +615,7 @@ async function storeBatchAppRunningMessages(verifiedBroadcasts) {
         expireAt: { $cond: [isNewer, incomingExpiry, '$expireAt'] },
         osUptime: { $cond: [isNewer, data.osUptime, { $ifNull: ['$osUptime', data.osUptime] }] },
         staticIp: { $cond: [isNewer, data.staticIp ?? null, { $ifNull: ['$staticIp', data.staticIp ?? null] }] },
+        state: { $cond: [isNewer, normalizedState, { $ifNull: ['$state', normalizedState] }] },
       };
       const runningSince = data.runningSince ? new Date(data.runningSince) : (app.runningSince ? new Date(app.runningSince) : null);
       if (runningSince) {
