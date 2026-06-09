@@ -176,6 +176,10 @@ const fluxRemovedContainers = new Set();
 // immediate, and a fleet-wide restart puts every holder of an app in the state at
 // once. Same null-is-no-opinion convention appReconciler's controllerDesired uses.
 let promotedFolderIds = null;
+// Apps this node is draining for graceful shutdown — appName -> 'draining'|'stopping'.
+// Written by the flux-shutdownd drain socket, read when stamping the LB lifecycle
+// state onto each fluxapprunning entry.
+const drainingApps = new Map();
 
 // Where each receive-only folder of an installed app stands in telling peers what this
 // node holds of it: folderId -> a state from appMonitoring/folderStates. Peers read it
@@ -377,6 +381,7 @@ module.exports = {
   get announceCycle() { return announceCycle; },
   get stoppingContainers() { return stoppingContainers; },
   get fluxRemovedContainers() { return fluxRemovedContainers; },
+  get drainingApps() { return drainingApps; },
 
   get spawnErrorsLongerAppCache() { return spawnErrorsLongerAppCache; },
   set spawnErrorsLongerAppCache(value) { spawnErrorsLongerAppCache = value; },
