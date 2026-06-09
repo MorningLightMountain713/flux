@@ -91,43 +91,33 @@ async function checkAndNotifyPeersOfRunningApps() {
       return app.Names[0].slice(5);
     });
 
-    const { masterSlaveAppsInstalled, startedApps } = await containerHealthMonitor.monitorAndRecoverApps(localSocketAddr, installedSpecs, runningAppsNames, resolvedViews);
-    runningAppsNames.push(...startedApps);
+    // Recover crashed containers (a local health concern); its result no longer
+    // gates what we broadcast.
+    await containerHealthMonitor.monitorAndRecoverApps(localSocketAddr, installedSpecs, runningAppsNames, resolvedViews);
 
-    const installedAndRunning = [];
-    installedSpecs.forEach((inst) => {
-      const view = resolvedViews.get(inst.name);
-      if (!view) return; // unresolved (decrypt failure) — skip this cycle
-      if (inst.version >= 4) {
-        const allRunning = view.componentNames().every(
-          (compName) => runningAppsNames.includes(`${compName}_${inst.name}`),
-        );
-        if (allRunning) {
-          installedAndRunning.push(inst);
-        }
-      } else if (runningAppsNames.includes(inst.name)) {
-        installedAndRunning.push(inst);
-      }
-    });
-    installedAndRunning.push(...masterSlaveAppsInstalled);
-    const applicationsToBroadcast = [...new Set(installedAndRunning)];
+    // Broadcast presence: every app installed on this node, irrespective of
+    // container liveness. A fluxapprunning entry means "assigned here", not
+    // "containers up" — a crashed container is recovered locally, not relocated,
+    // and liveness is handled at the routing layer. Each entry's `state`
+    // (active/draining/stopping) carries the LB lifecycle. Undecryptable specs
+    // can't be introspected, so skip them this cycle.
+    const applicationsToBroadcast = installedSpecs.filter((inst) => resolvedViews.has(inst.name));
     const apps = [];
     try {
       // eslint-disable-next-line no-restricted-syntax
       for (const application of applicationsToBroadcast) {
-        const appName = application.name || application;
+        const appName = application.name;
         // eslint-disable-next-line no-await-in-loop
         const result = await appsRepository.getAppLocation(appName, localSocketAddr);
         let runningOnMyNodeSince = new Date().toISOString();
         if (result && result.runningSince) {
           runningOnMyNodeSince = result.runningSince;
         }
-        const appHash = application.hash || '';
-        log.info(`${appName} is running/installed properly. Broadcasting status.`);
         apps.push({
           name: appName,
-          hash: appHash,
+          hash: application.hash || '',
           runningSince: runningOnMyNodeSince,
+          state: globalState.drainingApps.get(appName) ?? 'active',
         });
       }
       if (apps.length === 0 && !checkAndNotifyPeersOfRunningAppsFirstRun) {

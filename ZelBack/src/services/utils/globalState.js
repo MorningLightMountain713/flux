@@ -42,6 +42,11 @@ const runningAppsCache = new Set();
 // Containers intentionally stopped by FluxOS — crash recovery skips die events for these
 const stoppingContainers = new Set();
 
+// Apps this node is draining for graceful shutdown — appName -> 'draining'|'stopping'.
+// Written by the flux-shutdownd drain socket, read when stamping the LB lifecycle
+// state onto each fluxapprunning entry.
+const drainingApps = new Map();
+
 
 // Cache references - these will be initialized from cacheManager
 let spawnErrorsLongerAppCache = null;
@@ -124,6 +129,7 @@ module.exports = {
   get folderHealthCache() { return folderHealthCache; },
   get runningAppsCache() { return runningAppsCache; },
   get stoppingContainers() { return stoppingContainers; },
+  get drainingApps() { return drainingApps; },
 
   get spawnErrorsLongerAppCache() { return spawnErrorsLongerAppCache; },
   set spawnErrorsLongerAppCache(value) { spawnErrorsLongerAppCache = value; },
