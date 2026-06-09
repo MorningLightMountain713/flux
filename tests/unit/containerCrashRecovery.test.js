@@ -16,7 +16,7 @@ describe('containerCrashRecovery tests', () => {
       appDockerStart: sinon.stub().resolves('started'),
       dockerGetEvents: sinon.stub(),
       // default: container exists and is exited, so the restart path proceeds
-      getDockerContainerOnly: sinon.stub().resolves({ State: 'exited' }),
+      dockerContainerInspect: sinon.stub().resolves({ State: { Running: false } }),
     };
     globalStateStub = {
       bootContainerStateSettled: true,
@@ -259,7 +259,7 @@ describe('containerCrashRecovery tests', () => {
       await clock.tickAsync(0);
       expect(dockerServiceStub.appDockerStart.callCount).to.equal(1);
 
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'exited' });
+      dockerServiceStub.dockerContainerInspect = sinon.stub().resolves({ State: { Running: false } });
       emitDie('fluxwww_Osmosis', 1);
       await clock.tickAsync(0);
       expect(dockerServiceStub.appDockerStart.callCount).to.equal(1);
@@ -277,7 +277,7 @@ describe('containerCrashRecovery tests', () => {
       emitDie('fluxwww_Osmosis', 1);
       await clock.tickAsync(0);
 
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'running' });
+      dockerServiceStub.dockerContainerInspect = sinon.stub().resolves({ State: { Running: true } });
       emitDie('fluxwww_Osmosis', 1);
       await clock.tickAsync(0);
 
@@ -297,7 +297,7 @@ describe('containerCrashRecovery tests', () => {
       expect(dockerServiceStub.appDockerStart.callCount).to.equal(1);
 
       // Second crash — 30s backoff
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'exited' });
+      dockerServiceStub.dockerContainerInspect = sinon.stub().resolves({ State: { Running: false } });
       emitDie('fluxwww_Osmosis', 1);
       await clock.tickAsync(30000);
       expect(dockerServiceStub.appDockerStart.callCount).to.equal(2);
@@ -316,7 +316,7 @@ describe('containerCrashRecovery tests', () => {
 
     it('should pin backoff at the 30m cap and keep restartHistory bounded', async () => {
       const clock = sinon.useFakeTimers({ shouldAdvanceTime: true });
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'exited' });
+      dockerServiceStub.dockerContainerInspect = sinon.stub().resolves({ State: { Running: false } });
 
       // first crash restarts immediately
       emitDie('fluxwww_Osmosis', 1);
@@ -354,7 +354,7 @@ describe('containerCrashRecovery tests', () => {
     });
 
     it('should skip restart when the container no longer exists (removed outside appDockerStop)', async () => {
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves(null);
+      dockerServiceStub.dockerContainerInspect = sinon.stub().resolves(null);
 
       emitDie('fluxwww_Osmosis', 0);
       await new Promise((r) => setImmediate(r));
@@ -364,7 +364,7 @@ describe('containerCrashRecovery tests', () => {
     });
 
     it('should skip restart when the container is already running again', async () => {
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'running' });
+      dockerServiceStub.dockerContainerInspect = sinon.stub().resolves({ State: { Running: true } });
 
       emitDie('fluxwww_Osmosis', 1);
       await new Promise((r) => setImmediate(r));

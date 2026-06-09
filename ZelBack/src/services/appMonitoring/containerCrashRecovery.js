@@ -82,8 +82,8 @@ async function handleContainerDie(event) {
     log.warn(`containerCrashRecovery - ${containerName} crashed (exit ${exitCode}), waiting ${delay / 1000}s before restarting`);
     await new Promise((resolve) => { setTimeout(resolve, delay); });
     if (stopped) return;
-    const container = await dockerService.getDockerContainerOnly(identifier);
-    if (!container || container.State === 'running') {
+    const container = await dockerService.dockerContainerInspect(identifier);
+    if (!container || container.State.Running) {
       log.info(`containerCrashRecovery - ${containerName} already handled during backoff, skipping`);
       return;
     }
@@ -91,8 +91,8 @@ async function handleContainerDie(event) {
     // confirm the container still exists and is not already running before restarting.
     // covers a container stopped+removed outside the appDockerStop chokepoint (its die
     // event would otherwise trigger a doomed appDockerStart and a misleading error log).
-    const container = await dockerService.getDockerContainerOnly(identifier);
-    if (!container || container.State === 'running') {
+    const container = await dockerService.dockerContainerInspect(identifier);
+    if (!container || container.State.Running) {
       log.info(`containerCrashRecovery - ${containerName} no longer exists or already running, skipping`);
       return;
     }
