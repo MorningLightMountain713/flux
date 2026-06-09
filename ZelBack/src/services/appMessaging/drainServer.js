@@ -22,20 +22,82 @@ const peerNotification = require('./peerNotification');
 const SOCKET_PATH = process.env.FLUX_DRAIN_SOCKET || '/run/fluxos/drain.sock';
 const isArcane = Boolean(process.env.FLUXOS_PATH);
 
+// An entry outlives the pipeline deadline by this much before self-expiring:
+// the post-deadline tail (SIGKILL sweep, fs sync, unit ordering) is alive-but-
+// going-down, and reverting to active during it would flap the network state.
+const DEADLINE_SLACK_MS = 120 * 1000;
+// Expiry for a call with a missing/invalid deadline (test tooling, buggy
+// caller): the schema's max per-port drain timeout, so a botched deadline
+// field alone can never cut a legitimate drain short.
+const FALLBACK_TTL_MS = 30 * 60 * 1000;
+const SWEEP_INTERVAL_MS = 60 * 1000;
+
 let server = null;
+let sweepTimer = null;
 
 /**
- * Mark an app draining and trigger an immediate presence rebroadcast so peers
- * (and FDM) pull the backend from rotation well inside the drain budget. The
- * rebroadcast debounces internally, so the daemon's burst of per-component
- * calls collapses to a bounded number of broadcasts.
+ * Entries must self-expire rather than wait on an explicit clear: the one case
+ * that wedges the node is the daemon dying mid-pipeline, and a dead daemon
+ * clears nothing. Past deadline+slack the shutdown demonstrably failed, so the
+ * sweep reverts the app to active and rebroadcasts; the same cycle's recovery
+ * pass restarts its containers (they were cache-armed while the state held).
  */
-function handleDrainApp(params) {
+function expiryFromDeadline(deadlineUnixSeconds) {
+  const now = Date.now();
+  const deadlineMs = Number(deadlineUnixSeconds) * 1000;
+  if (!Number.isFinite(deadlineMs) || deadlineMs <= now) return now + FALLBACK_TTL_MS;
+  return deadlineMs + DEADLINE_SLACK_MS;
+}
+
+function stopSweepTimer() {
+  if (sweepTimer) {
+    clearInterval(sweepTimer);
+    sweepTimer = null;
+  }
+}
+
+function sweepExpiredStates() {
+  const expired = globalState.sweepExpiredAppLbStates();
+  if (expired.length) {
+    log.warn(`drain state expired for ${expired.join(', ')} - shutdown pipeline did not complete, reverting to active`);
+    peerNotification.checkAndNotifyPeersOfRunningApps();
+  }
+  if (!globalState.hasAppLbStates()) stopSweepTimer();
+  return expired;
+}
+
+function ensureSweepTimer() {
+  if (sweepTimer) return;
+  sweepTimer = setInterval(sweepExpiredStates, SWEEP_INTERVAL_MS);
+  sweepTimer.unref();
+}
+
+/**
+ * Mark an app draining/stopping and trigger an immediate presence rebroadcast
+ * so peers (and FDM) pull the backend from rotation well inside the drain
+ * budget. The rebroadcast debounces internally, so the daemon's burst of
+ * per-component calls collapses to a bounded number of broadcasts.
+ */
+function handleSetState(method, state, params) {
   const appName = params && params.app_name;
-  if (!appName) throw new Error('drain_app: app_name required');
-  globalState.drainingApps.set(appName, 'draining');
+  if (!appName) throw new Error(`${method}: app_name required`);
+  globalState.setAppLbState(appName, state, expiryFromDeadline(params.deadline));
+  ensureSweepTimer();
   peerNotification.checkAndNotifyPeersOfRunningApps();
   return { ok: true };
+}
+
+/**
+ * Drop an app's drain/stop state (pipeline aborted): the app reverts to
+ * active on the next broadcast, and container recovery resumes.
+ */
+function handleClearApp(params) {
+  const appName = params && params.app_name;
+  if (!appName) throw new Error('clear_app: app_name required');
+  const existed = globalState.clearAppLbState(appName);
+  if (!globalState.hasAppLbStates()) stopSweepTimer();
+  if (existed) peerNotification.checkAndNotifyPeersOfRunningApps();
+  return { ok: true, existed };
 }
 
 /**
@@ -51,7 +113,13 @@ function handleRequest(line) {
   const { id = null, method, params } = req;
   try {
     if (method === 'drain_app') {
-      return { jsonrpc: '2.0', id, result: handleDrainApp(params) };
+      return { jsonrpc: '2.0', id, result: handleSetState(method, 'draining', params) };
+    }
+    if (method === 'stop_app') {
+      return { jsonrpc: '2.0', id, result: handleSetState(method, 'stopping', params) };
+    }
+    if (method === 'clear_app') {
+      return { jsonrpc: '2.0', id, result: handleClearApp(params) };
     }
     return { jsonrpc: '2.0', id, error: { code: -32601, message: `unknown method ${method}` } };
   } catch (error) {
@@ -100,6 +168,7 @@ async function start() {
 }
 
 function stop() {
+  stopSweepTimer();
   if (server) {
     server.close();
     server = null;
@@ -110,5 +179,6 @@ module.exports = {
   start,
   stop,
   handleRequest,
+  sweepExpiredStates,
   SOCKET_PATH,
 };

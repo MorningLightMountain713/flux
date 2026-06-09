@@ -22,6 +22,7 @@ describe('containerCrashRecovery tests', () => {
       bootContainerStateSettled: true,
       appsMonitored: {},
       stoppingContainers: new Set(),
+      getAppLbState: sinon.stub().returns(null),
     };
     appInspectorStub = { startAppMonitoring: sinon.stub() };
 
@@ -370,6 +371,35 @@ describe('containerCrashRecovery tests', () => {
       await new Promise((r) => setImmediate(r));
 
       expect(dockerServiceStub.appDockerStart.called).to.be.false;
+    });
+
+    it('should skip restart while the app is draining or stopping (shutdown pipeline)', async () => {
+      globalStateStub.getAppLbState.withArgs('Osmosis').returns('draining');
+
+      emitDie('fluxwww_Osmosis', 137);
+      await new Promise((r) => setImmediate(r));
+
+      expect(dockerServiceStub.appDockerStart.called).to.be.false;
+      expect(logStub.info.calledWithMatch(/skipping restart/)).to.be.true;
+    });
+
+    it('should skip restart when the app enters the shutdown pipeline during backoff', async () => {
+      const clock = sinon.useFakeTimers({ shouldAdvanceTime: true });
+
+      // first crash restarts immediately and seeds the backoff history
+      emitDie('fluxwww_Osmosis', 1);
+      await clock.tickAsync(0);
+      expect(dockerServiceStub.appDockerStart.callCount).to.equal(1);
+
+      // second crash waits 30s; the pipeline begins during the wait
+      emitDie('fluxwww_Osmosis', 1);
+      globalStateStub.getAppLbState.withArgs('Osmosis').returns('stopping');
+      await clock.tickAsync(30 * 1000);
+
+      expect(dockerServiceStub.appDockerStart.callCount).to.equal(1);
+      expect(logStub.info.calledWithMatch(/entered shutdown pipeline during backoff/)).to.be.true;
+
+      clock.restore();
     });
 
     it('should not apply backoff of one container to another', async () => {

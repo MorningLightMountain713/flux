@@ -117,7 +117,7 @@ async function checkAndNotifyPeersOfRunningApps() {
           name: appName,
           hash: application.hash || '',
           runningSince: runningOnMyNodeSince,
-          state: globalState.drainingApps.get(appName) ?? 'active',
+          state: globalState.getAppLbState(appName) ?? 'active',
         });
       }
       if (apps.length === 0 && !checkAndNotifyPeersOfRunningAppsFirstRun) {

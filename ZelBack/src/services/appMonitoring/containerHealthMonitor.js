@@ -100,6 +100,16 @@ async function monitorAndRecoverApps(localSocketAddr, appsInstalled, runningApps
   for (const stoppedApp of stoppedApps) {
     try {
       const mainAppName = stoppedApp.split('_')[1] || stoppedApp;
+      // The shutdown pipeline is taking this app down deliberately -- don't
+      // recover. Still arm the two-strike cache so the cycle that sees the
+      // state cleared/expired restarts the containers immediately.
+      const lbState = globalState.getAppLbState(mainAppName);
+      if (lbState) {
+        if (!appsStoppedCache.has(stoppedApp)) appsStoppedCache.set(stoppedApp, '');
+        log.info(`${stoppedApp} is stopped while app is ${lbState} (shutdown pipeline), not recovering`);
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop
       const appDetails = await appsRepository.getGlobalAppInfo(mainAppName);
       const inst = appsInstalled.find((app) => app.name === mainAppName);

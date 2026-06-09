@@ -76,12 +76,26 @@ async function handleContainerDie(event) {
   }
 
   const identifier = getComponentIdentifier(containerName);
+  const appName = identifier.split('_')[1] || identifier;
+
+  // A draining/stopping app's containers are being taken down by the shutdown
+  // pipeline -- restarting them here would fight the daemon.
+  const lbState = globalState.getAppLbState(appName);
+  if (lbState) {
+    log.info(`containerCrashRecovery - ${containerName} died while app is ${lbState} (shutdown pipeline), skipping restart`);
+    return;
+  }
+
   const delay = getBackoffDelay(containerName);
 
   if (delay > 0) {
     log.warn(`containerCrashRecovery - ${containerName} crashed (exit ${exitCode}), waiting ${delay / 1000}s before restarting`);
     await new Promise((resolve) => { setTimeout(resolve, delay); });
     if (stopped) return;
+    if (globalState.getAppLbState(appName)) {
+      log.info(`containerCrashRecovery - ${containerName} app entered shutdown pipeline during backoff, skipping restart`);
+      return;
+    }
     const container = await dockerService.dockerContainerInspect(identifier);
     if (!container || container.State.Running) {
       log.info(`containerCrashRecovery - ${containerName} already handled during backoff, skipping`);

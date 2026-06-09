@@ -13,6 +13,7 @@ describe('containerHealthMonitor tests', () => {
       backupInProgress: [],
       restoreInProgress: [],
       appsMonitored: new Map(),
+      getAppLbState: sinon.stub().returns(null),
     };
 
     containerHealthMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/containerHealthMonitor', {
@@ -82,7 +83,7 @@ describe('containerHealthMonitor tests', () => {
     const MINUTE = 60 * 1000;
 
     // Build a containerHealthMonitor with individually controllable stubs.
-    function load({ getGlobalAppInfo, getDockerContainer, findOneInDatabase, stoppedAppsCache } = {}) {
+    function load({ getGlobalAppInfo, getDockerContainer, findOneInDatabase, stoppedAppsCache, getAppLbState } = {}) {
       const appDockerStart = sinon.stub().resolves();
       const gs = {
         waitForBootContainerStateSettled: sinon.stub().resolves(),
@@ -90,6 +91,7 @@ describe('containerHealthMonitor tests', () => {
         backupInProgress: [],
         restoreInProgress: [],
         appsMonitored: new Map(),
+        getAppLbState: getAppLbState || sinon.stub().returns(null),
       };
       const chm = proxyquire('../../ZelBack/src/services/appMonitoring/containerHealthMonitor', {
         '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
@@ -134,6 +136,32 @@ describe('containerHealthMonitor tests', () => {
 
       expect(appDockerStart.calledWith('web_mix'), 'non-syncthing sibling auto-started').to.be.true;
       expect(appDockerStart.neverCalledWith('db_mix'), 'active-standby component left to election').to.be.true;
+    });
+
+    it('does not recover a draining/stopping app but arms the cache so recovery is immediate once the state clears', async () => {
+      const components = { web: comp(false, false) };
+      const view = {
+        componentNames: () => ['web'], hasSyncthing: () => false, hasActiveStandbySyncthing: () => false, getComponent: (n) => components[n],
+      };
+      const inst = { name: 'gone', version: 8, hash: 'h', spec: {} };
+      const getAppLbState = sinon.stub().returns('stopping');
+      const stoppedAppsCache = new Map();
+      const { chm, appDockerStart } = load({
+        getGlobalAppInfo: sinon.stub().resolves({ name: 'gone' }),
+        getDockerContainer: sinon.stub().resolves(true),
+        stoppedAppsCache,
+        getAppLbState,
+      });
+
+      // pipeline holds the app: no start, but the two-strike cache gets armed
+      await chm.monitorAndRecoverApps('1.2.3.4', [inst], [], new Map([['gone', view]]));
+      expect(appDockerStart.called, 'held by the shutdown pipeline').to.be.false;
+      expect(stoppedAppsCache.has('web_gone'), 'two-strike cache armed during the pipeline').to.be.true;
+
+      // state cleared/expired: the very next cycle starts the container
+      getAppLbState.returns(null);
+      await chm.monitorAndRecoverApps('1.2.3.4', [inst], [], new Map([['gone', view]]));
+      expect(appDockerStart.calledWith('web_gone'), 'started on the first post-clear cycle').to.be.true;
     });
 
     it('applies the 30-minute install grace to a stopped syncthing component installed less than 30m ago', async () => {
