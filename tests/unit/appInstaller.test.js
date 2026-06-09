@@ -374,6 +374,35 @@ describe('appInstaller tests', () => {
     });
   });
 
+  describe('installComponent owner guard', () => {
+    const component = { identifier: 'web_testapp', appName: 'testapp' };
+
+    it('rejects a real install missing the owner', async () => {
+      let threw;
+      try {
+        await appInstaller.installComponent(component, { createVolumes: false });
+        threw = null;
+      } catch (error) {
+        threw = error;
+      }
+      expect(threw).to.be.an('error');
+      expect(threw.message).to.contain('owner required');
+    });
+
+    it('exempts test installs from the owner requirement', async () => {
+      // A test install carries no shutdown plan, so it may proceed without an
+      // owner; it should get past the guard (and fail later, if at all, on the
+      // unstubbed install machinery rather than the guard).
+      let guardError = null;
+      try {
+        await appInstaller.installComponent(component, { test: true });
+      } catch (error) {
+        if (error.message.includes('owner required')) guardError = error;
+      }
+      expect(guardError).to.be.null;
+    });
+  });
+
   describe('prune guard with stopped apps', () => {
     it('should not prune containers when stopped apps exist', async () => {
       const pruneContainersStub = sinon.stub().resolves();
