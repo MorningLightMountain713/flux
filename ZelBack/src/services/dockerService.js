@@ -14,6 +14,7 @@ const { storageLinkOf } = require('./utils/fluxStorage');
 const { obtainPayloadFromStorage } = require('./utils/fluxStorageRefs');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
 const LogFrameDecoder = require('./utils/logFrameDecoder');
+const shutdownPlan = require('./appLifecycle/shutdownPlan');
 
 const globalState = require('./utils/globalState');
 
@@ -1001,9 +1002,12 @@ async function appDockerCreate(deployComp, options = {}) {
       'flux.burst.cores': String(effectiveCpu),
     }
     : null;
-  const containerLabels = (labels || burstLabels)
-    ? { ...(labels || {}), ...(burstLabels || {}) }
-    : null;
+  // Stamp the graceful-shutdown labels on every flux container at this single
+  // create chokepoint, so flux-shutdownd can find it and read its budget
+  // without consulting FluxOS at shutdown time. owner is provenance threaded
+  // in from the orchestrator (it isn't on DeploymentComponent).
+  const shutdownLabels = shutdownPlan.componentShutdownLabels(deployComp, options.owner || null);
+  const containerLabels = { ...shutdownLabels, ...(labels || {}), ...(burstLabels || {}) };
   if (burstEligible) {
     log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${effectiveCpu})`);
   }
