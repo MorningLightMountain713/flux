@@ -100,7 +100,7 @@ describe('peerNotification tests', () => {
         backupInProgress: [],
         restoreInProgress: [],
         runningAppsCache: new Set(),
-        drainingApps: drainingAppsMap,
+        getAppLbState: (appName) => drainingAppsMap.get(appName) ?? null,
       },
       '../utils/fluxEventBus': {
         publish: sinon.stub(),

@@ -162,10 +162,14 @@ const fluxRemovedContainers = new Set();
 // immediate, and a fleet-wide restart puts every holder of an app in the state at
 // once. Same null-is-no-opinion convention appReconciler's controllerDesired uses.
 let promotedFolderIds = null;
-// Apps this node is draining for graceful shutdown — appName -> 'draining'|'stopping'.
-// Written by the flux-shutdownd drain socket, read when stamping the LB lifecycle
-// state onto each fluxapprunning entry.
-const drainingApps = new Map();
+// Apps this node is draining/stopping for graceful shutdown — appName ->
+// { state: 'draining'|'stopping', expiresAt: epoch ms }. Written by the
+// flux-shutdownd drain socket; read when stamping the LB lifecycle state onto
+// fluxapprunning entries and by container recovery (a draining/stopping app's
+// containers are being taken down deliberately — don't restart them). Entries
+// carry an expiry derived from the pipeline deadline so a failed shutdown
+// can't wedge the node in a draining state.
+const appLbStates = new Map();
 
 // What each receive-only folder on this node holds that the cluster's index does not:
 // folderId -> { bytes, newestModified }. Peers ask for it before promoting one of their
@@ -348,7 +352,59 @@ module.exports = {
   get announceCycle() { return announceCycle; },
   get stoppingContainers() { return stoppingContainers; },
   get fluxRemovedContainers() { return fluxRemovedContainers; },
-  get drainingApps() { return drainingApps; },
+
+  /**
+   * Record an app's load-balancer lifecycle state with an expiry.
+   * @param {string} appName
+   * @param {'draining'|'stopping'} state
+   * @param {number} expiresAt epoch ms after which the entry no longer applies
+   */
+  setAppLbState(appName, state, expiresAt) {
+    appLbStates.set(appName, { state, expiresAt });
+  },
+
+  /**
+   * The app's current LB lifecycle state, or null when none/expired.
+   * Expired entries are removed on read.
+   * @param {string} appName
+   * @returns {'draining'|'stopping'|null}
+   */
+  getAppLbState(appName) {
+    const entry = appLbStates.get(appName);
+    if (!entry) return null;
+    if (entry.expiresAt <= Date.now()) {
+      appLbStates.delete(appName);
+      return null;
+    }
+    return entry.state;
+  },
+
+  /**
+   * Remove an app's LB state (drain cancelled / pipeline aborted).
+   * @param {string} appName
+   * @returns {boolean} whether an entry existed
+   */
+  clearAppLbState(appName) {
+    return appLbStates.delete(appName);
+  },
+
+  /**
+   * Drop every expired LB state entry.
+   * @returns {string[]} the app names whose entries expired
+   */
+  sweepExpiredAppLbStates() {
+    const now = Date.now();
+    const expired = [];
+    appLbStates.forEach((entry, appName) => {
+      if (entry.expiresAt <= now) expired.push(appName);
+    });
+    expired.forEach((appName) => appLbStates.delete(appName));
+    return expired;
+  },
+
+  hasAppLbStates() {
+    return appLbStates.size > 0;
+  },
 
   get spawnErrorsLongerAppCache() { return spawnErrorsLongerAppCache; },
   set spawnErrorsLongerAppCache(value) { spawnErrorsLongerAppCache = value; },
