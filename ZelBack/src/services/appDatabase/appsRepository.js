@@ -346,7 +346,7 @@ const locationProjection = {
   projection: {
     _id: 0, name: 1, hash: 1, ip: 1,
     broadcastedAt: 1, expireAt: 1, runningSince: 1,
-    osUptime: 1, staticIp: 1,
+    osUptime: 1, staticIp: 1, state: 1,
   },
 };
 
