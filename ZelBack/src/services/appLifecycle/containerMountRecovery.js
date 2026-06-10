@@ -101,8 +101,7 @@ async function getContainersNeedingRestart() {
     // Filter for Flux app containers
     const fluxContainers = containers.filter((container) => {
       const name = container.Names && container.Names[0] ? container.Names[0] : '';
-      // Flux containers start with /flux or /zel
-      return name.startsWith('/flux') || name.startsWith('/zel');
+      return name.startsWith('/flux');
     });
 
     log.info(`containerMountRecovery - Found ${fluxContainers.length} running Flux containers, checking which need restart`);

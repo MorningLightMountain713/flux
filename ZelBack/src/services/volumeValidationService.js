@@ -45,9 +45,6 @@ function extractAppNameFromCrontabCommand(command) {
     if (appName.startsWith('flux')) {
       return appName.substring(4);
     }
-    if (appName.startsWith('zel')) {
-      return appName.substring(3);
-    }
     return appName;
   } catch (error) {
     log.error(`Error extracting app name from command: ${error.message}`);
