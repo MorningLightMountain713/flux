@@ -37,6 +37,10 @@ COPY package.json ./
 # runtime as "Cannot find module". Provide a flux-spec checkout at the repo
 # root (gitignored) before building.
 COPY flux-spec /flux-spec
+# The file: deps are symlinks, and Node resolves their imports from the REAL
+# path (/flux-spec/...), never reaching /flux/node_modules - flux-spec needs
+# its own workspace install, same as the sibling checkout has on a dev box.
+RUN cd /flux-spec && npm install --omit=dev
 RUN npm install --production
 
 COPY . .
