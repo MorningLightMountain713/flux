@@ -103,10 +103,7 @@ module.exports = {
     portTestPeerTimeoutMs: 3000,
     portTestMaxAttempts: 2,
     spawnReconfirmDelayMs: 30000,
-    // v9 rename of nonEnterpriseSpawnDelayMs (the gate tests isEncrypted, not
-    // enterprise-ness). Harness nodes set FLUXOS_PATH (the Arcane marker), so
-    // the spawner defers every unencrypted app by this much - keep it
-    // compressed or plain test apps lose the suites' install timeout
+    // harness nodes look Arcane (FLUXOS_PATH set), so unencrypted spawns defer by this
     unencryptedSpawnDelayMs: 500,
     globalCmdDelayMs: 100,
     discoveryAutostart: false,
