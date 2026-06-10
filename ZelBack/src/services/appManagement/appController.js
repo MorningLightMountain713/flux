@@ -596,7 +596,7 @@ async function stopAllNonFluxRunningApps() {
   try {
     log.info('Running non Flux apps check...');
     let apps = await dockerService.dockerListContainers(false);
-    apps = apps.filter((app) => (app.Names[0].slice(1, 4) !== 'zel' && app.Names[0].slice(1, 5) !== 'flux'));
+    apps = apps.filter((app) => app.Names[0].slice(1, 5) !== 'flux');
     if (apps.length > 0) {
       log.info(`Found ${apps.length} apps to be stopped...`);
       // eslint-disable-next-line no-restricted-syntax

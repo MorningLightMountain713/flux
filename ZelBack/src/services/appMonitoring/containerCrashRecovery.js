@@ -17,12 +17,11 @@ let lineBuf = '';
 let hasConnected = false;
 
 function isFluxContainer(name) {
-  return name.startsWith('flux') || name.startsWith('zel');
+  return name.startsWith('flux');
 }
 
 function getComponentIdentifier(containerName) {
   if (containerName.startsWith('flux')) return containerName.substring(4);
-  if (containerName.startsWith('zel')) return containerName.substring(3);
   return containerName;
 }
 

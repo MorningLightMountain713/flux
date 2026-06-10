@@ -1769,12 +1769,7 @@ async function forceAppRemovals() {
     const dockerApps = dockerAppsReported.data;
     const installedAppsRes = await appQueryService.installedApps();
     const appsInstalled = installedAppsRes.data;
-    const dockerAppsNames = dockerApps.map((app) => {
-      if (app.Names[0].startsWith('/zel')) {
-        return app.Names[0].slice(4);
-      }
-      return app.Names[0].slice(5);
-    });
+    const dockerAppsNames = dockerApps.map((app) => app.Names[0].slice(5));
     const dockerAppsTrueNames = [];
     dockerAppsNames.forEach((appName) => {
       const name = appName.split('_')[1] || appName;
@@ -1863,10 +1858,7 @@ async function coordinateActiveStandbyApps() {
     const deployments = await deploymentProvider.listInstalledDeployments();
     const runningContainers = await listRunningContainers();
 
-    const runningAppsNames = runningContainers.map((app) => {
-      if (app.Names[0].startsWith('/zel')) return app.Names[0].slice(4);
-      return app.Names[0].slice(5);
-    });
+    const runningAppsNames = runningContainers.map((app) => app.Names[0].slice(5));
     const agent = new https.Agent({ rejectUnauthorized: false });
     const axiosOptions = { timeout: 10000, httpsAgent: agent };
 

@@ -194,12 +194,7 @@ async function installApplication(instantiated, options = {}) {
         installedAppComponentNames.push(comp.identifier);
       });
     });
-    const runningAppsNames = runningApps.map((app) => {
-      if (app.Names[0].startsWith('/zel')) {
-        return app.Names[0].slice(4);
-      }
-      return app.Names[0].slice(5);
-    });
+    const runningAppsNames = runningApps.map((app) => app.Names[0].slice(5));
     const runningSet = new Set(runningAppsNames);
     const stoppedApps = installedAppComponentNames.filter((installedApp) => !runningSet.has(installedApp));
     if (stoppedApps.length === 0 && !globalState.activeStandbyCoordinationRunning) {
