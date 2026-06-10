@@ -919,6 +919,12 @@ module.exports = (app) => {
   app.get('/apps/appconvert/:appname', asyncRoute((req, res) => {
     return registryManager.appConvertApi(req, res);
   }));
+  app.get('/flux/startdiscovery', asyncRoute((req, res) => {
+    return fluxCommunication.startDiscoveryApi(req, res);
+  }));
+  app.get('/flux/eventstream', asyncRoute((req, res) => {
+    return fluxEventBus.sseHandler(req, res);
+  }));
   app.get('/apps/checkhashes', asyncRoute((req, res) => {
     return appHashSyncService.triggerAppHashesCheckAPI(req, res);
   }));
