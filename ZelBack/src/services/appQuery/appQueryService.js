@@ -6,70 +6,10 @@ const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
 const appConstants = require('../utils/appConstants');
-// decryptEnterpriseApps survives this migration: the reconciler depends on it
-// (throwOnError) until the decrypt path is re-routed through the domain provider
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { specificationFormatter } = require('../utils/appSpecHelpers');
-const fluxCaching = require('../utils/cacheManager');
 const log = require('../../lib/log');
 
 // Database collections
 const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
-
-/**
- * Decrypt enterprise apps from a list of apps
- * @param {Array} apps - Array of app specifications
- * @param {Object} options - Options for decryption
- * @param {boolean} options.formatSpecs - Whether to format specs (strips metadata like hash, height). Default: true
- * @returns {Promise<Array>} Array of decrypted app specifications
- */
-async function decryptEnterpriseApps(apps, options = {}) {
-  const { formatSpecs = true, throwOnError = false } = options;
-  const decryptedApps = [];
-  const cache = fluxCaching.default.enterpriseAppDecryptionCache;
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const spec of apps) {
-    const isEnterprise = Boolean(
-      spec.version >= 8 && spec.enterprise,
-    );
-    if (isEnterprise) {
-      try {
-        // Use app hash as cache key
-        const cacheKey = spec.hash;
-
-        // Check if decrypted app is in cache
-        let decrypted = cache.get(cacheKey);
-        if (decrypted) {
-          log.info(`Using cached decrypted app for ${spec.name} (${cacheKey})`);
-        } else {
-          // Decrypt and cache the app (unformatted)
-          // eslint-disable-next-line no-await-in-loop
-          decrypted = await checkAndDecryptAppSpecs(spec);
-
-          // Store unformatted in cache with 7-day TTL (configured in cacheManager)
-          cache.set(cacheKey, decrypted);
-          log.info(`Cached decrypted app for ${spec.name} (${cacheKey})`);
-        }
-
-        // Apply formatting if requested
-        const result = formatSpecs ? specificationFormatter(decrypted) : decrypted;
-        decryptedApps.push(result);
-      } catch (error) {
-        log.error(`Failed to decrypt enterprise app ${spec.name}: ${error.message}`);
-        // Display/listing callers (default) keep the lenient behavior: include the
-        // still-encrypted spec so the rest of the list isn't lost. Callers that act
-        // on the spec (the reconciler) pass throwOnError so they can defer rather
-        // than operate on undecrypted data (wrong containerData, mis-typed g:/r:).
-        if (throwOnError) throw error;
-        decryptedApps.push(spec);
-      }
-    } else {
-      decryptedApps.push(spec);
-    }
-  }
-  return decryptedApps;
-}
 
 /**
  * To list installed apps. Returns apps from local database.
@@ -307,7 +247,6 @@ async function getAppsMessagesCount(req, res) {
 }
 
 module.exports = {
-  decryptEnterpriseApps,
   installedApps,
   listRunningContainers,
   listRunningApps,

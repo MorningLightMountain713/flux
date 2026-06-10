@@ -11,7 +11,6 @@ describe('appQueryService tests', () => {
 
   let appSpecHelpersStub;
   let appsRepositoryStub;
-  let enterpriseHelperStub;
   let logStub;
   let configStub;
 
@@ -74,10 +73,6 @@ describe('appQueryService tests', () => {
       specificationFormatter: sinon.stub().returnsArg(0),
     };
 
-    enterpriseHelperStub = {
-      checkAndDecryptAppSpecs: sinon.stub().returnsArg(0),
-    };
-
     appsRepositoryStub = {
       listInstalledApps: sinon.stub(),
     };
@@ -97,8 +92,6 @@ describe('appQueryService tests', () => {
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../utils/appSpecHelpers': appSpecHelpersStub,
-      '../utils/enterpriseHelper': enterpriseHelperStub,
-      '../utils/cacheManager': { default: { enterpriseAppDecryptionCache: new Map() } },
       '../../lib/log': logStub,
       '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
         config: configStub,
@@ -108,41 +101,6 @@ describe('appQueryService tests', () => {
 
   afterEach(() => {
     sinon.restore();
-  });
-
-  describe('decryptEnterpriseApps', () => {
-    const enterpriseApp = {
-      name: 'entApp', version: 8, enterprise: 'CIPHERTEXT', hash: 'h1',
-    };
-
-    it('returns non-enterprise apps unchanged without decrypting', async () => {
-      const apps = [{ name: 'plain', version: 4 }];
-      const result = await appQueryService.decryptEnterpriseApps(apps, { formatSpecs: false });
-      expect(result).to.deep.equal(apps);
-      expect(enterpriseHelperStub.checkAndDecryptAppSpecs.called).to.be.false;
-    });
-
-    it('swallows a decryption failure and returns the encrypted spec by default (lenient)', async () => {
-      // resetBehavior first: a stub's returnsArg(0) (set in beforeEach) otherwise wins over rejects()
-      enterpriseHelperStub.checkAndDecryptAppSpecs.resetBehavior();
-      enterpriseHelperStub.checkAndDecryptAppSpecs.rejects(new Error('enterpriseKey is mandatory'));
-      const result = await appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false });
-      // display/listing callers keep the whole list; the failed one stays encrypted
-      expect(result).to.deep.equal([enterpriseApp]);
-    });
-
-    it('rethrows a decryption failure when throwOnError is set', async () => {
-      enterpriseHelperStub.checkAndDecryptAppSpecs.resetBehavior();
-      enterpriseHelperStub.checkAndDecryptAppSpecs.rejects(new Error('enterpriseKey is mandatory'));
-      let threw = false;
-      try {
-        await appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false, throwOnError: true });
-      } catch (err) {
-        threw = true;
-        expect(err.message).to.match(/enterpriseKey is mandatory/);
-      }
-      expect(threw, 'should propagate the decrypt error so the caller can defer, not act on ciphertext').to.be.true;
-    });
   });
 
   describe('installedApps', () => {

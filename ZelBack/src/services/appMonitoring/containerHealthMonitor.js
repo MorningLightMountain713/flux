@@ -9,7 +9,6 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appInspector = require('../appManagement/appInspector');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const globalState = require('../utils/globalState');
-const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
 const { localAppsInformation } = require('../utils/appConstants');
 const { verifyAppVolumeMount } = require('../utils/volumeService');
 
