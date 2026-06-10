@@ -218,7 +218,7 @@ async function reconcileAppsOnBoot() {
       for (const identifier of componentsToStart) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          await appOperations.appDockerStart(identifier);
+          await appOperations.startApplication(identifier);
           log.info(`appStartupManager - Successfully started ${identifier}`);
           // Add small delay between starts to avoid overwhelming the system
           // eslint-disable-next-line no-await-in-loop
