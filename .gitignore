@@ -384,3 +384,7 @@ test-infra/test-app/test-app
 
 # per-node logs written by the integration harness on test failure
 test-infra/runner/test-logs/
+
+# flux-spec sibling checkout vendored at the repo root for harness image
+# builds (package.json file:../flux-spec deps) - never commit it
+/flux-spec/
