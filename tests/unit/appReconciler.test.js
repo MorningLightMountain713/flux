@@ -38,6 +38,7 @@ describe('appReconciler tests', () => {
         isOperationInProgress: () => false,
         bootContainerStateSettled: true,
         waitForBootContainerStateSettled: () => Promise.resolve(),
+        getAppLbState: sinon.stub().returns(null),
       },
       appInspector: { startAppMonitoring: sinon.stub() },
       volumeService: { ensureMountPathsExist: sinon.stub().resolves() },
@@ -85,6 +86,28 @@ describe('appReconciler tests', () => {
     const promise = new Promise((res) => { resolve = res; });
     return { promise, resolve };
   };
+
+  describe('shutdown pipeline holds (LB drain state)', () => {
+    it('takes no action on a stopped component while its app is stopping', async () => {
+      stubs.globalState.getAppLbState.returns('stopping');
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+      expect(stubs.dockerService.appDockerStop.called).to.be.false;
+    });
+
+    it('does not stop a still-running component while its app is draining', async () => {
+      stubs.globalState.getAppLbState.returns('draining');
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStop.called).to.be.false;
+    });
+
+    it('restarts the stopped component on the first reconcile after the state clears', async () => {
+      stubs.globalState.getAppLbState.returns(null);
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.calledWith('www_App')).to.be.true;
+    });
+  });
 
   describe('policyAllowsRun', () => {
     it('always restarts under the default policy regardless of exit code', () => {
