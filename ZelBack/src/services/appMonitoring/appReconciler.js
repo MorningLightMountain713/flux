@@ -318,7 +318,7 @@ async function recreateMissing(identifier) {
       await appTamperingDetectionService.recordEvent(mainAppName, 'network_pruned', `Docker network missing during recreation: ${err.message}`);
     }
     log.warn(`REMOVAL REASON: Container recreation failure - ${mainAppName} (appReconciler)`);
-    await appUninstaller.removeAppLocally(mainAppName, null, false, true, true);
+    await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
   }
 }
 
