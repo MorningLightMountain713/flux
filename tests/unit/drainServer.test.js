@@ -9,6 +9,7 @@ const globalState = require('../../ZelBack/src/services/utils/globalState');
 describe('drainServer tests', () => {
   let drainServer;
   let rebroadcastStub;
+  let enqueueAllStub;
   let clock;
 
   const TEST_APPS = ['myapp', 'otherapp'];
@@ -16,8 +17,10 @@ describe('drainServer tests', () => {
   beforeEach(() => {
     clock = sinon.useFakeTimers({ now: 1_000_000_000_000 });
     rebroadcastStub = sinon.stub();
+    enqueueAllStub = sinon.stub().resolves();
     drainServer = proxyquire('../../ZelBack/src/services/appMessaging/drainServer', {
       './peerNotification': { checkAndNotifyPeersOfRunningApps: rebroadcastStub },
+      '../appMonitoring/appReconciler': { enqueueAll: enqueueAllStub },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     });
   });
@@ -74,6 +77,8 @@ describe('drainServer tests', () => {
       expect(response.result).to.deep.equal({ ok: true, existed: true });
       expect(globalState.getAppLbState('myapp')).to.equal(null);
       expect(rebroadcastStub.calledOnce).to.be.true;
+      // recovery is reconciler-driven: the clear sweeps the app back to life
+      expect(enqueueAllStub.calledOnceWith('drain-cleared')).to.be.true;
     });
 
     it('clear_app of an unknown app reports existed false and stays quiet', () => {
@@ -139,6 +144,7 @@ describe('drainServer tests', () => {
       // gone and the reversion was broadcast
       expect(globalState.hasAppLbStates()).to.be.false;
       expect(rebroadcastStub.called).to.be.true;
+      expect(enqueueAllStub.calledWith('drain-expired')).to.be.true;
     });
 
     it('the sweep stays quiet while states are still live', () => {
