@@ -6,9 +6,10 @@ import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // On a FluxOS restart the inner dockerd's app containers come back exited.
-// appStartupManager enqueues each installed component once the boot gate opens,
-// and the reconciler restarts the ones that should run (default always policy).
-// (No reconciler:swept{boot} event — boot uses per-component enqueue.)
+// appStartupManager enqueues each installed app once the boot gate opens; the
+// reconciler expands the app to its component identifiers and restarts the
+// ones that should run (default always policy).
+// (No reconciler:swept{boot} event — boot enqueues apps directly.)
 
 describe('reconciler restarts app containers on FluxOS boot', function () {
   let env;
