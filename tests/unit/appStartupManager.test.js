@@ -9,9 +9,6 @@ describe('appStartupManager tests', () => {
   let dbHelperStub;
   let dockerServiceStub;
   let fluxNetworkHelperStub;
-  let registryManagerStub;
-  let appsRepositoryStub;
-  let appOperationsStub;
   let appReconcilerStub;
   let appUninstallerStub;
   let globalStateStub;
@@ -35,16 +32,6 @@ describe('appStartupManager tests', () => {
 
     fluxNetworkHelperStub = {
       getLocalSocketAddress: sinon.stub(),
-    };
-
-    registryManagerStub = {};
-
-    appsRepositoryStub = {
-      getGlobalAppInfo: sinon.stub(),
-    };
-
-    appOperationsStub = {
-      appDockerStart: sinon.stub().resolves(),
     };
 
     appReconcilerStub = {
@@ -87,9 +74,6 @@ describe('appStartupManager tests', () => {
       '../serviceHelper': { delay: sinon.stub().resolves() },
       '../fluxNetworkHelper': fluxNetworkHelperStub,
       '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
-      '../appDatabase/registryManager': registryManagerStub,
-      '../appDatabase/appsRepository': appsRepositoryStub,
-      './appOperations': appOperationsStub,
       '../appMonitoring/appReconciler': appReconcilerStub,
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
@@ -211,9 +195,6 @@ describe('appStartupManager tests', () => {
       // Default: stopped containers
       dockerServiceStub.dockerListContainers.resolves(stoppedFluxContainers);
 
-      // Default: no g: syncthing mode
-      appsRepositoryStub.getGlobalAppInfo.resolves({ spec: { serialize: () => ({ version: 3, containerData: '' }) } });
-
       // Default: node IP available
       fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
     });
@@ -231,7 +212,7 @@ describe('appStartupManager tests', () => {
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
-      expect(results.appsStarted).to.deep.equal(['AppA']);
+      expect(results.appsEnqueued).to.deep.equal(['AppA']);
       expect(results.appsRemoved).to.deep.equal([]);
       expect(appReconcilerStub.enqueue.calledWith('AppA')).to.equal(true);
     });
@@ -249,9 +230,9 @@ describe('appStartupManager tests', () => {
       const results = await appStartupManager.reconcileAppsOnBoot();
 
       expect(results.appsRemoved).to.deep.equal(['AppA']);
-      expect(results.appsStarted).to.deep.equal([]);
+      expect(results.appsEnqueued).to.deep.equal([]);
       expect(appUninstallerStub.uninstallApplication.calledWith('AppA', { forceKill: true, skipGuard: true })).to.equal(true);
-      expect(appOperationsStub.appDockerStart.called).to.equal(false);
+      expect(appReconcilerStub.enqueue.called).to.equal(false);
     });
 
     it('should remove app when location record is missing', async () => {
@@ -266,7 +247,7 @@ describe('appStartupManager tests', () => {
       const results = await appStartupManager.reconcileAppsOnBoot();
 
       expect(results.appsRemoved).to.deep.equal(['AppA']);
-      expect(results.appsStarted).to.deep.equal([]);
+      expect(results.appsEnqueued).to.deep.equal([]);
       expect(appUninstallerStub.uninstallApplication.called).to.equal(true);
     });
 
@@ -280,11 +261,11 @@ describe('appStartupManager tests', () => {
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
-      expect(results.appsStarted).to.deep.equal(['AppA']);
+      expect(results.appsEnqueued).to.deep.equal(['AppA']);
       expect(results.appsRemoved).to.deep.equal([]);
     });
 
-    it('should handle mixed apps: start valid, remove expired', async () => {
+    it('should handle mixed apps: enqueue valid, remove expired', async () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/fluxAppA'], State: 'exited' },
         { Names: ['/fluxAppB'], State: 'exited' },
@@ -304,7 +285,7 @@ describe('appStartupManager tests', () => {
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
-      expect(results.appsStarted).to.deep.equal(['AppA']);
+      expect(results.appsEnqueued).to.deep.equal(['AppA']);
       expect(results.appsRemoved).to.deep.equal(['AppB']);
     });
 
@@ -338,11 +319,11 @@ describe('appStartupManager tests', () => {
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
-      expect(results.appsStarted).to.deep.equal(['AppA']);
+      expect(results.appsEnqueued).to.deep.equal(['AppA']);
       expect(results.appsRemoved).to.deep.equal([]);
     });
 
-    it('should check location after g: syncthing check', async () => {
+    it('enqueues apps with replicated components like any other (gating lives in the reconciler)', async () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/fluxSyncApp'], State: 'exited' },
         { Names: ['/fluxNormalApp'], State: 'exited' },
@@ -352,45 +333,24 @@ describe('appStartupManager tests', () => {
         { name: 'NormalApp' },
       ]);
 
-      appsRepositoryStub.getGlobalAppInfo.withArgs('SyncApp').resolves({
-        spec: { serialize: () => ({ version: 3, containerData: 'g:/data' }) },
-      });
-      appsRepositoryStub.getGlobalAppInfo.withArgs('NormalApp').resolves({
-        spec: { serialize: () => ({ version: 3, containerData: '' }) },
-      });
-
-      // NormalApp has expired location
-      dbHelperStub.findInDatabase.onSecondCall().resolves([]);
+      // SyncApp has a valid location, NormalApp's has expired
+      const futureExpiry = new Date(Date.now() + (300 * 1000));
+      dbHelperStub.findInDatabase.onSecondCall().resolves([{ expireAt: futureExpiry }]);
+      dbHelperStub.findInDatabase.onThirdCall().resolves([]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
-      // SyncApp skipped by g: mode check (before location check)
-      expect(results.appsSkippedGMode).to.deep.equal(['SyncApp']);
-      // NormalApp removed because location expired
+      expect(results.appsEnqueued).to.deep.equal(['SyncApp']);
       expect(results.appsRemoved).to.deep.equal(['NormalApp']);
-      expect(results.appsStarted).to.deep.equal([]);
+      expect(appReconcilerStub.enqueue.calledOnceWith('SyncApp')).to.equal(true);
     });
 
-    it('should partially start mixed compose: non-g components only, g: component left for masterSlaveApps', async () => {
-      // Mixed compose app: web (no g:) + db (g:) — both stopped at boot
+    it('enqueues a multi-component app once, by app name (the reconciler expands components)', async () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/fluxweb_MixedApp'], State: 'exited' },
         { Names: ['/fluxdb_MixedApp'], State: 'exited' },
       ]);
       dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'MixedApp' }]);
-
-      appsRepositoryStub.getGlobalAppInfo.withArgs('MixedApp').resolves({
-        spec: {
-          serialize: () => ({
-            version: 8,
-            name: 'MixedApp',
-            compose: [
-              { name: 'web', containerData: '' },
-              { name: 'db', containerData: 'g:/data' },
-            ],
-          }),
-        },
-      });
 
       // Valid location
       const futureExpiry = new Date(Date.now() + (300 * 1000));
@@ -398,105 +358,8 @@ describe('appStartupManager tests', () => {
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
-      expect(results.appsPartiallyStarted).to.deep.equal(['MixedApp']);
-      expect(results.appsStarted).to.deep.equal([]);
-      expect(results.appsSkippedGMode).to.deep.equal([]);
-      // Non-g component handed to the reconciler
-      expect(appReconcilerStub.enqueue.calledWith('web_MixedApp')).to.equal(true);
-      // g: component NOT started here (left for masterSlaveApps)
-      expect(appReconcilerStub.enqueue.calledWith('db_MixedApp')).to.equal(false);
-    });
-
-    it('should skip a compose app where every component is g:', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Names: ['/fluxa_AllGApp'], State: 'exited' },
-        { Names: ['/fluxb_AllGApp'], State: 'exited' },
-      ]);
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'AllGApp' }]);
-
-      appsRepositoryStub.getGlobalAppInfo.withArgs('AllGApp').resolves({
-        spec: {
-          serialize: () => ({
-            version: 8,
-            name: 'AllGApp',
-            compose: [
-              { name: 'a', containerData: 'g:/x' },
-              { name: 'b', containerData: 'g:/y' },
-            ],
-          }),
-        },
-      });
-
-      const results = await appStartupManager.reconcileAppsOnBoot();
-
-      expect(results.appsSkippedGMode).to.deep.equal(['AllGApp']);
-      expect(results.appsStarted).to.deep.equal([]);
-      expect(results.appsPartiallyStarted).to.deep.equal([]);
-      expect(appOperationsStub.appDockerStart.called).to.equal(false);
-    });
-  });
-
-  describe('getNonGComponentIdentifiers', () => {
-    it('should return empty array when appSpec is null', () => {
-      expect(appUtilities.getNonGComponentIdentifiers(null, 'AppA')).to.deep.equal([]);
-    });
-
-    it('should return [appName] for a v<=3 app with no g:', () => {
-      const spec = { version: 3, containerData: '' };
-      expect(appUtilities.getNonGComponentIdentifiers(spec, 'AppA')).to.deep.equal(['AppA']);
-    });
-
-    it('should return [] for a v<=3 app with g:', () => {
-      const spec = { version: 3, containerData: 'g:/data' };
-      expect(appUtilities.getNonGComponentIdentifiers(spec, 'AppA')).to.deep.equal([]);
-    });
-
-    it('should return all component identifiers for a compose app with no g:', () => {
-      const spec = {
-        version: 8,
-        name: 'AppA',
-        compose: [
-          { name: 'web', containerData: '' },
-          { name: 'cache', containerData: 'r:/data' },
-        ],
-      };
-      expect(appUtilities.getNonGComponentIdentifiers(spec, 'AppA'))
-        .to.deep.equal(['web_AppA', 'cache_AppA']);
-    });
-
-    it('should return [] for a compose app where every component is g:', () => {
-      const spec = {
-        version: 8,
-        name: 'AppA',
-        compose: [
-          { name: 'a', containerData: 'g:/x' },
-          { name: 'b', containerData: 'g:/y' },
-        ],
-      };
-      expect(appUtilities.getNonGComponentIdentifiers(spec, 'AppA')).to.deep.equal([]);
-    });
-
-    it('should return only the non-g identifiers for a mixed compose app', () => {
-      const spec = {
-        version: 8,
-        name: 'AppA',
-        compose: [
-          { name: 'web', containerData: '' },
-          { name: 'db', containerData: 'g:/data' },
-          { name: 'worker', containerData: 'r:/q' },
-        ],
-      };
-      expect(appUtilities.getNonGComponentIdentifiers(spec, 'AppA'))
-        .to.deep.equal(['web_AppA', 'worker_AppA']);
-    });
-
-    it('should fall back to the supplied appName when appSpec.name is missing', () => {
-      const spec = {
-        version: 8,
-        compose: [{ name: 'web', containerData: '' }],
-      };
-      expect(appUtilities.getNonGComponentIdentifiers(spec, 'AppA'))
-        .to.deep.equal(['web_AppA']);
+      expect(results.appsEnqueued).to.deep.equal(['MixedApp']);
+      expect(appReconcilerStub.enqueue.calledOnceWith('MixedApp')).to.equal(true);
     });
   });
 

@@ -7,7 +7,6 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const dbHelper = require('../dbHelper');
 const { getChainParamsPriceUpdates } = require('./chainUtilities');
-const mountParser = require('./mountParser');
 const { getSpecBackend, getSpecPolicy } = require('./specLibs');
 const { appsFolder } = require('./appConstants');
 
@@ -224,38 +223,11 @@ function isNewestInstance(locations, myIP) {
   return newest.ip === myIP;
 }
 
-function appUsesGSyncthingMode(appSpec) {
-  if (!appSpec) return false;
-  if (appSpec.compose && appSpec.compose.length > 0) {
-    return appSpec.compose.some((comp) => comp.containerData && mountParser.isGComponent(comp.containerData));
-  }
-  if (appSpec.containerData) {
-    return mountParser.isGComponent(appSpec.containerData);
-  }
-  return false;
-}
-
-function getNonGComponentIdentifiers(appSpec, appName) {
-  if (!appSpec) return [];
-  const resolvedName = appSpec.name || appName;
-  if (appSpec.compose && appSpec.compose.length > 0) {
-    return appSpec.compose
-      .filter((comp) => !(comp.containerData && mountParser.isGComponent(comp.containerData)))
-      .map((comp) => `${comp.name}_${resolvedName}`);
-  }
-  if (appSpec.containerData && mountParser.isGComponent(appSpec.containerData)) {
-    return [];
-  }
-  return [resolvedName];
-}
-
 function parseContainerName(containerName) {
   const name = containerName.replace(/^\//, '');
   let cleanName = name;
   if (name.startsWith('flux')) {
     cleanName = name.substring(4);
-  } else if (name.startsWith('zel')) {
-    cleanName = name.substring(3);
   }
   const underscoreIndex = cleanName.indexOf('_');
   if (underscoreIndex > 0) {
@@ -294,11 +266,9 @@ async function appHasValidLocationOnNode(appName, localSocketAddr) {
 module.exports = {
   appHasValidLocationOnNode,
   appPricePerMonth,
-  appUsesGSyncthingMode,
   findCommonArchitectures,
   getAppFolderSize,
   getContainerStorage,
-  getNonGComponentIdentifiers,
   parseContainerName,
   isNewestInstance,
 };
