@@ -133,18 +133,39 @@ describe('appReconciler tests', () => {
       expect(appReconciler.policyAllowsRun('always', 0)).to.be.true;
       expect(appReconciler.policyAllowsRun('always', 1)).to.be.true;
     });
-    it('on-failure restarts only on non-zero exit', () => {
-      expect(appReconciler.policyAllowsRun('on-failure', 0)).to.be.false;
-      expect(appReconciler.policyAllowsRun('on-failure', 1)).to.be.true;
-      expect(appReconciler.policyAllowsRun('on-failure', null)).to.be.true; // never ran -> initial start
+    it('onFailure restarts only on non-zero exit', () => {
+      expect(appReconciler.policyAllowsRun('onFailure', 0)).to.be.false;
+      expect(appReconciler.policyAllowsRun('onFailure', 1)).to.be.true;
+      expect(appReconciler.policyAllowsRun('onFailure', null)).to.be.true; // never ran -> initial start
     });
-    it('no only allows an initial start, never a restart after an exit', () => {
-      expect(appReconciler.policyAllowsRun('no', null)).to.be.true;
-      expect(appReconciler.policyAllowsRun('no', 0)).to.be.false;
-      expect(appReconciler.policyAllowsRun('no', 5)).to.be.false;
+    it('never only allows an initial start, never a restart after an exit', () => {
+      expect(appReconciler.policyAllowsRun('never', null)).to.be.true;
+      expect(appReconciler.policyAllowsRun('never', 0)).to.be.false;
+      expect(appReconciler.policyAllowsRun('never', 5)).to.be.false;
     });
-    it('defaults to always (the current resolver value)', () => {
-      expect(appReconciler.getRestartPolicy({})).to.equal('always');
+    it('reads the per-component spec field', () => {
+      expect(appReconciler.getRestartPolicy({ comp: { restartPolicy: 'onFailure' } })).to.equal('onFailure');
+    });
+
+    it('does not restart a completed run-once component (onFailure, exit 0)', async () => {
+      localSpec = { name: 'App', version: 9, compose: [{ name: 'init', containerData: '/data', restartPolicy: 'onFailure' }] };
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
+      await appReconciler.reconcile('init_App');
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
+    it('restarts a failed onFailure component (non-zero exit)', async () => {
+      localSpec = { name: 'App', version: 9, compose: [{ name: 'init', containerData: '/data', restartPolicy: 'onFailure' }] };
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 1 } });
+      await appReconciler.reconcile('init_App');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('init_App')).to.be.true;
+    });
+
+    it('never restarts a never-policy component after it has run', async () => {
+      localSpec = { name: 'App', version: 9, compose: [{ name: 'job', containerData: '/data', restartPolicy: 'never' }] };
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 137 } });
+      await appReconciler.reconcile('job_App');
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
   });
 
