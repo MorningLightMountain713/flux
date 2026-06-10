@@ -153,7 +153,7 @@ async function listRunningContainers() {
 
   let apps = await dockerService.dockerListContainers(false);
   if (apps.length > 0) {
-    apps = apps.filter((app) => (app.Names[0].slice(1, 4) === 'zel' || app.Names[0].slice(1, 5) === 'flux'));
+    apps = apps.filter((app) => app.Names[0].slice(1, 5) === 'flux');
   }
 
   const backupInProgress = globalState.backupInProgress || [];
@@ -162,11 +162,11 @@ async function listRunningContainers() {
 
   if (appsInBackupRestore.length > 0) {
     const allContainers = await dockerService.dockerListContainers(true);
-    const fluxContainers = allContainers.filter((app) => (app.Names[0].slice(1, 4) === 'zel' || app.Names[0].slice(1, 5) === 'flux'));
+    const fluxContainers = allContainers.filter((app) => app.Names[0].slice(1, 5) === 'flux');
 
     fluxContainers.forEach((container) => {
       const containerName = container.Names[0].slice(1);
-      const appName = containerName.replace(/^(zel|flux)/, '');
+      const appName = containerName.replace(/^flux/, '');
 
       if (appsInBackupRestore.includes(appName)) {
         const alreadyIncluded = apps.some((app) => app.Names[0] === container.Names[0]);
@@ -245,7 +245,7 @@ async function listAllApps(req, res) {
   try {
     let apps = await dockerService.dockerListContainers(true);
     if (apps.length > 0) {
-      apps = apps.filter((app) => (app.Names[0].slice(1, 4) === 'zel' || app.Names[0].slice(1, 5) === 'flux'));
+      apps = apps.filter((app) => app.Names[0].slice(1, 5) === 'flux');
     }
     const modifiedApps = [];
     apps.forEach((app) => {

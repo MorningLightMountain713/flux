@@ -270,15 +270,11 @@ describe('containerMountRecovery tests', () => {
       expect(logStub.info.calledWith('containerMountRecovery - No running containers found')).to.equal(true);
     });
 
-    it('should filter only Flux containers (starting with /flux or /zel)', async () => {
+    it('should filter only Flux containers (starting with /flux)', async () => {
       const containers = [
         {
           Id: 'abc123',
           Names: ['/fluxApp1'],
-        },
-        {
-          Id: 'def456',
-          Names: ['/zelApp2'],
         },
         {
           Id: 'ghi789',
@@ -300,8 +296,8 @@ describe('containerMountRecovery tests', () => {
 
       await containerMountRecovery.getContainersNeedingRestart();
 
-      // Should only check flux and zel containers (2 calls)
-      expect(dockerServiceStub.dockerContainerInspect.callCount).to.equal(2);
+      // Should only check the flux container (1 call)
+      expect(dockerServiceStub.dockerContainerInspect.callCount).to.equal(1);
     });
 
     it('should return containers that need restart', async () => {
