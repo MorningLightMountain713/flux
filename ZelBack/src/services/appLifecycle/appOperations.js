@@ -2209,7 +2209,7 @@ async function coordinateActiveStandbyApps() {
     log.error(`activeStandby: ${error}`);
   } finally {
     globalState.activeStandbyCoordinationRunning = false;
-    await serviceHelper.delay(30 * 1000);
+    await serviceHelper.delay(config.fluxapps.masterSlaveIntervalMs ?? 30 * 1000);
     coordinateActiveStandbyApps();
   }
 }
