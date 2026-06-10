@@ -44,17 +44,12 @@ function parseContainerName(name) {
     // component name, so strip the docker prefix (container_name keeps it).
     let componentName = name.slice(0, underscoreIdx);
     if (componentName.startsWith('flux')) componentName = componentName.slice(4);
-    else if (componentName.startsWith('zel')) componentName = componentName.slice(3);
     const appName = name.slice(underscoreIdx + 1);
     return { appName, componentName: componentName || null };
   }
 
   if (name.startsWith('flux')) {
     return { appName: name.slice(4), componentName: null };
-  }
-
-  if (name.startsWith('zel')) {
-    return { appName: name.slice(3), componentName: null };
   }
 
   return null;

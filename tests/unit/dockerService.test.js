@@ -33,32 +33,6 @@ describe('dockerService tests', () => {
       expect(result).to.equal(appName);
     });
 
-    it('should return the same name if starts with "zel"', async () => {
-      const appName = 'zelTesting';
-
-      const result = dockerService.getAppIdentifier(appName);
-
-      expect(result).to.equal(appName);
-    });
-
-    it('should add "zel" to app identifier if it is KadenaChainWebNode', async () => {
-      const appName = 'KadenaChainWebNode';
-      const expected = 'zelKadenaChainWebNode';
-
-      const result = dockerService.getAppIdentifier(appName);
-
-      expect(result).to.equal(expected);
-    });
-
-    it('should add "zel" to app identifier if it is FoldingAtHomeB', async () => {
-      const appName = 'FoldingAtHomeB';
-      const expected = 'zelFoldingAtHomeB';
-
-      const result = dockerService.getAppIdentifier(appName);
-
-      expect(result).to.equal(expected);
-    });
-
     it('should add "flux" to app identifier with any other name', async () => {
       const appName = 'testing1234';
       const expected = 'fluxtesting1234';
@@ -83,16 +57,12 @@ describe('dockerService tests', () => {
       expect(dockerService.getBaseAppName('fluxdb_App')).to.equal('db_App');
     });
 
-    it('should strip the "zel" prefix', async () => {
-      expect(dockerService.getBaseAppName('zelKadenaChainWebNode')).to.equal('KadenaChainWebNode');
-    });
-
     it('should return a bare identifier unchanged', async () => {
       expect(dockerService.getBaseAppName('db_App')).to.equal('db_App');
     });
 
-    it('should round-trip getAppIdentifier for compose and zel-legacy names', async () => {
-      ['db_App', 'testing1234', 'KadenaChainWebNode', 'FoldingAtHomeB'].forEach((bare) => {
+    it('should round-trip getAppIdentifier for compose and single-component names', async () => {
+      ['db_App', 'testing1234', 'KadenaChainWebNode'].forEach((bare) => {
         expect(dockerService.getBaseAppName(dockerService.getAppIdentifier(bare))).to.equal(bare);
       });
     });
@@ -856,14 +826,13 @@ describe('dockerService tests', () => {
       sinon.restore();
     });
 
-    it('returns multi-component and legacy single-component containers, anchored to flux/zel', async () => {
+    it('returns multi-component and legacy single-component containers, anchored to flux', async () => {
       sinon.stub(Dockerode.prototype, 'listContainers').resolves([
         { Names: ['/fluxweb_myapp'] },
         { Names: ['/fluxapi_myapp'] },
         { Names: ['/fluxother_differentapp'] },
         { Names: ['/fluxmyapp'] },
-        { Names: ['/zelmyapp'] },
-        { Names: ['/someoneelse_myapp'] }, // missing flux/zel prefix — must NOT match
+        { Names: ['/someoneelse_myapp'] }, // missing flux prefix — must NOT match
       ]);
 
       const names = await dockerService.getAppContainerNames('myapp');
