@@ -7,6 +7,25 @@ describe('appReconciler tests', () => {
   let stubs;
   let localSpec; // the app spec getLocalComponentSpec will resolve
 
+  const fakeDeployment = (spec) => {
+    const entries = (spec.version >= 4 && Array.isArray(spec.compose))
+      ? spec.compose
+      : [{ name: spec.name, containerData: spec.containerData }];
+    const comps = entries.map((c) => {
+      const primary = (c.containerData || '').split('|')[0];
+      const isG = primary.startsWith('g:');
+      const isSync = isG || primary.startsWith('r:') || primary.startsWith('s:');
+      return {
+        name: c.name,
+        identifier: (spec.version >= 4) ? `${c.name}_${spec.name}` : spec.name,
+        hasActiveStandbySyncthing: () => isG,
+        hasSyncthing: () => isSync,
+        restartPolicy: c.restartPolicy ?? 'always',
+      };
+    });
+    return { getComponent: (n) => comps.find((c) => c.name === n) || null };
+  };
+
   beforeEach(() => {
     localSpec = {
       name: 'App', version: 4, compose: [{ name: 'www', containerData: '/data' }],
@@ -14,10 +33,17 @@ describe('appReconciler tests', () => {
 
     stubs = {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
-      dbHelper: {
-        databaseConnection: () => ({ db: () => ({}) }),
-        findOneInDatabase: sinon.stub().callsFake(async () => localSpec),
+      appsRepository: {
+        getInstalledApp: sinon.stub().callsFake(async () => (localSpec
+          ? { name: localSpec.name, isEncrypted: Boolean(localSpec.enterprise) }
+          : null)),
       },
+      // mirrors the deployment view the reconciler reads: primary-mount g: =>
+      // activeStandby, r:/s: => replicated sync (full parsing lives in flux-spec)
+      deploymentProvider: {
+        buildDeployment: sinon.stub().callsFake(async () => fakeDeployment(localSpec)),
+      },
+      appVolumeService: { ensureMountSourcesExist: sinon.stub().resolves() },
       dockerService: {
         dockerContainerInspect: sinon.stub().resolves({ State: { Running: false, Status: 'exited', ExitCode: 1 } }),
         // reachability probe used by dockerActual on an inspect failure; resolves => docker up
@@ -38,7 +64,6 @@ describe('appReconciler tests', () => {
         getAppLbState: sinon.stub().returns(null),
       },
       appInspector: { startAppMonitoring: sinon.stub() },
-      volumeService: { ensureMountPathsExist: sinon.stub().resolves() },
       appsRuntimeState: {
         isOperatorStopped: sinon.stub().resolves(false),
         restartWaitMs: sinon.stub().resolves(0),
@@ -56,11 +81,12 @@ describe('appReconciler tests', () => {
 
     appReconciler = proxyquire('../../ZelBack/src/services/appMonitoring/appReconciler', {
       '../../lib/log': stubs.log,
-      '../dbHelper': stubs.dbHelper,
       '../dockerService': stubs.dockerService,
       '../utils/globalState': stubs.globalState,
       '../appManagement/appInspector': stubs.appInspector,
-      '../utils/volumeService': stubs.volumeService,
+      '../appDatabase/appsRepository': stubs.appsRepository,
+      '../appRuntime/deploymentProvider': stubs.deploymentProvider,
+      '../appLifecycle/appVolumeService': stubs.appVolumeService,
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
       '../appQuery/appQueryService': stubs.appQueryService,
       './containerHealthMonitor': stubs.containerHealthMonitor,
@@ -135,6 +161,7 @@ describe('appReconciler tests', () => {
       // mount model (real prod shape: roundcube). The reconciler must not attempt a start
       // (volume construction would throw) and must surface it, not silently loop "not ready".
       localSpec = { name: 'App', version: 4, compose: [{ name: 'www', containerData: '/data|g:/var/roundcube/db' }] };
+      stubs.deploymentProvider.buildDeployment.rejects(new Error('invalid containerData: sync flag on a non-primary mount'));
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
@@ -145,7 +172,7 @@ describe('appReconciler tests', () => {
     it('defers (does not drop) the reconcile when the local spec read fails transiently', async () => {
       // a momentary DB read failure must not be mistaken for "not installed" - the
       // reconcile defers and retries rather than silently dropping the recovery
-      stubs.dbHelper.findOneInDatabase.rejects(new Error('connection reset'));
+      stubs.appsRepository.getInstalledApp.rejects(new Error('connection reset'));
       await appReconciler.reconcile('www_App'); // must not throw
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
@@ -175,21 +202,17 @@ describe('appReconciler tests', () => {
       expect(stubs.appInspector.startAppMonitoring.calledOnce).to.be.true;
     });
 
-    it('ensures mount paths exist (recreating any syncthing-cleaned source) before starting', async () => {
+    it('ensures mount sources exist (recreating any syncthing-cleaned source) before starting', async () => {
       await appReconciler.reconcile('www_App');
-      expect(stubs.volumeService.ensureMountPathsExist.calledOnce).to.be.true;
-      // called with (componentSpec, mainAppName, isComponent, fullAppSpecs)
-      const [comp, mainAppName, isComponent, fullAppSpecs] = stubs.volumeService.ensureMountPathsExist.firstCall.args;
-      expect(comp).to.deep.equal({ name: 'www', containerData: '/data' });
-      expect(mainAppName).to.equal('App');
-      expect(isComponent).to.be.true;
-      expect(fullAppSpecs).to.deep.equal(localSpec);
+      expect(stubs.appVolumeService.ensureMountSourcesExist.calledOnce).to.be.true;
+      const [comp] = stubs.appVolumeService.ensureMountSourcesExist.firstCall.args;
+      expect(comp.identifier).to.equal('www_App');
       // and the ensure must happen before the docker start, or the start could fail on a missing mount
-      sinon.assert.callOrder(stubs.volumeService.ensureMountPathsExist, stubs.dockerService.appDockerStart);
+      sinon.assert.callOrder(stubs.appVolumeService.ensureMountSourcesExist, stubs.dockerService.appDockerStart);
     });
 
     it('does not start (or record a restart) when ensuring mount paths fails', async () => {
-      stubs.volumeService.ensureMountPathsExist.rejects(new Error('mkdir failed'));
+      stubs.appVolumeService.ensureMountSourcesExist.rejects(new Error('mkdir failed'));
       let threw = false;
       try {
         await appReconciler.reconcile('www_App');
@@ -356,9 +379,9 @@ describe('appReconciler tests', () => {
       localSpec = {
         name: 'App', version: 8, enterprise: 'CIPHERTEXT', compose: [{ name: 'db', containerData: '' }],
       };
-      stubs.appQueryService.decryptEnterpriseApps.callsFake(async () => [
+      stubs.deploymentProvider.buildDeployment.callsFake(async () => fakeDeployment(
         { name: 'App', version: 8, compose: [{ name: 'db', containerData: 'g:/data' }] },
-      ]);
+      ));
       await appReconciler.reconcile('db_App');
       // treated as g: from the DECRYPTED containerData -> not started without a controller.
       // If it had acted on the encrypted spec (containerData '') it would be a plain start.
@@ -369,8 +392,8 @@ describe('appReconciler tests', () => {
       localSpec = {
         name: 'App', version: 8, enterprise: 'CIPHERTEXT', compose: [{ name: 'db', containerData: '' }],
       };
-      // throwOnError path: decryption failing (e.g. key not loaded at boot) must propagate
-      stubs.appQueryService.decryptEnterpriseApps.rejects(new Error('enterpriseKey is mandatory'));
+      // decryption failing (e.g. key not loaded at boot) must defer, not act on ciphertext
+      stubs.deploymentProvider.buildDeployment.rejects(new Error('Could not resolve spec for App'));
       await appReconciler.reconcile('db_App'); // must not throw
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
