@@ -15,6 +15,7 @@ describe('appQueryService tests', () => {
 
   let appSpecHelpersStub;
   let appsRepositoryStub;
+  let enterpriseHelperStub;
   let logStub;
   let configStub;
 
@@ -87,7 +88,13 @@ describe('appQueryService tests', () => {
     };
 
 
-    appSpecHelpersStub = {};
+    appSpecHelpersStub = {
+      specificationFormatter: sinon.stub().returnsArg(0),
+    };
+
+    enterpriseHelperStub = {
+      checkAndDecryptAppSpecs: sinon.stub().returnsArg(0),
+    };
 
     appsRepositoryStub = {
       listInstalledApps: sinon.stub(),
@@ -118,6 +125,8 @@ describe('appQueryService tests', () => {
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../utils/appSpecHelpers': appSpecHelpersStub,
+      '../utils/enterpriseHelper': enterpriseHelperStub,
+      '../utils/cacheManager': { default: { enterpriseAppDecryptionCache: new Map() } },
       '../../lib/log': logStub,
       '../verificationHelper': verificationHelperStub,
       '../fluxNetworkHelper': fluxNetworkHelperStub,

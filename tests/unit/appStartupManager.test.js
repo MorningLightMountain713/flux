@@ -13,6 +13,7 @@ describe('appStartupManager tests', () => {
   let registryManagerStub;
   let appsRepositoryStub;
   let appOperationsStub;
+  let appReconcilerStub;
   let appUninstallerStub;
   let globalStateStub;
   let appQueryServiceStub;
@@ -45,6 +46,10 @@ describe('appStartupManager tests', () => {
 
     appOperationsStub = {
       appDockerStart: sinon.stub().resolves(),
+    };
+
+    appReconcilerStub = {
+      enqueue: sinon.stub(),
     };
 
     appUninstallerStub = {
@@ -84,6 +89,7 @@ describe('appStartupManager tests', () => {
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       './appOperations': appOperationsStub,
+      '../appMonitoring/appReconciler': appReconcilerStub,
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../appQuery/appQueryService': appQueryServiceStub,
@@ -226,7 +232,7 @@ describe('appStartupManager tests', () => {
 
       expect(results.appsStarted).to.deep.equal(['AppA']);
       expect(results.appsRemoved).to.deep.equal([]);
-      expect(appOperationsStub.appDockerStart.calledWith('AppA')).to.equal(true);
+      expect(appReconcilerStub.enqueue.calledWith('AppA')).to.equal(true);
     });
 
     it('should remove app when location record has expired', async () => {
@@ -394,10 +400,10 @@ describe('appStartupManager tests', () => {
       expect(results.appsPartiallyStarted).to.deep.equal(['MixedApp']);
       expect(results.appsStarted).to.deep.equal([]);
       expect(results.appsSkippedGMode).to.deep.equal([]);
-      // Non-g component started
-      expect(appOperationsStub.appDockerStart.calledWith('web_MixedApp')).to.equal(true);
+      // Non-g component handed to the reconciler
+      expect(appReconcilerStub.enqueue.calledWith('web_MixedApp')).to.equal(true);
       // g: component NOT started here (left for masterSlaveApps)
-      expect(appOperationsStub.appDockerStart.calledWith('db_MixedApp')).to.equal(false);
+      expect(appReconcilerStub.enqueue.calledWith('db_MixedApp')).to.equal(false);
     });
 
     it('should skip a compose app where every component is g:', async () => {

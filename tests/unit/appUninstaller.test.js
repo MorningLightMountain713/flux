@@ -69,6 +69,7 @@ describe('appUninstaller tests', () => {
         appDockerRemove: sinon.stub().resolves(),
         appDockerImageRemove: sinon.stub().resolves(),
         getAppIdentifier: sinon.stub().returns('testapp'),
+        getBaseAppName: sinon.stub().callsFake((id) => id),
       },
       '../../lib/log': logStub,
       '../utils/globalState': {
