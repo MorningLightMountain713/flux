@@ -342,6 +342,13 @@ function isManagedElsewhere(identifier) {
 
 async function effectiveDesiredRunning(identifier, spec, exitCode) {
   if (await appsRuntimeState.isOperatorStopped(identifier)) return { desired: false, reason: 'operatorStopped' };
+  // The shutdown pipeline owns a draining/stopping app's containers: draining
+  // ones must keep serving (no stop here) and stopped ones must stay down (no
+  // restart that races the daemon's signal stage). Take no action while the LB
+  // state holds — it self-expires at deadline+slack, and clear/expiry enqueue a
+  // reconcile, so recovery resumes the moment the pipeline ends.
+  const appName = identifier.split('_')[1] || identifier;
+  if (globalState.getAppLbState(appName)) return { desired: null, reason: 'shutdownPipeline' };
   if (spec.isG || spec.isR) {
     const cd = controllerDesired.get(identifier) ?? null;
     // No controller opinion yet. controllerDesired is in-memory, so a FluxOS
