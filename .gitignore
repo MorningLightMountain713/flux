@@ -398,3 +398,7 @@ test-infra/runner/.image-cache/
 # it inside the container at boot; it never belongs in the repo.
 ZelBack/config/local.js
 ZelBack/config/local-*.js
+
+# flux-spec sibling checkout vendored at the repo root for harness image
+# builds (package.json file:../flux-spec deps) - never commit it
+/flux-spec/
