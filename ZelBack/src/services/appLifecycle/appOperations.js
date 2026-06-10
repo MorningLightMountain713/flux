@@ -52,6 +52,8 @@ const appQueryService = require('../appQuery/appQueryService');
 const { listRunningContainers } = appQueryService;
 const { startAppMonitoring, stopAppMonitoring } = require('../appManagement/appInspector');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appReconciler = require('../appMonitoring/appReconciler');
+const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appVolumeService = require('./appVolumeService');
 const appUninstaller = require('./appUninstaller');
 const appInstaller = require('./appInstaller');
@@ -774,9 +776,9 @@ async function promoteApplicationToPrimary(appname, appId) {
       return;
     }
 
-    // Step 4: Start the container
-    log.info(`Step 4: Starting container for ${appname}`);
-    await restartApplication(appname);
+    // Step 4: hand the run-state decision to the reconciler (the single
+    // container actuator); permissions are already fixed at this point
+    appReconciler.setControllerDesired(appname, 'running', 'masterSlave primary (synced)');
 
     log.info(`Successfully completed permissions fix workflow for ${appname}`);
   } catch (error) {
@@ -1835,6 +1837,16 @@ async function coordinateActiveStandbyApps() {
       return;
     }
 
+    // Wait for the syncthing monitor's first run before electing any primary:
+    // that run performs the startup mount-safety check (switching unsafe
+    // sendreceive folders to receiveonly). Electing earlier could start a
+    // master on a sendreceive-but-unmounted folder and lose data. The monitor
+    // clears the flag only after a fully successful cycle.
+    if (globalState.syncthingAppsFirstRun) {
+      log.info('activeStandby: syncthing first-run mount-safety not complete yet, skipping this cycle');
+      return;
+    }
+
     try {
       // eslint-disable-next-line global-require
       const syncthingService = require('../syncthingService');
@@ -1907,6 +1919,12 @@ async function coordinateActiveStandbyApps() {
         }
       }
       if (needsToBeChecked) {
+        // operator explicitly stopped this g: component; don't elect or act on it
+        // eslint-disable-next-line no-await-in-loop
+        if (await appsRuntimeState.isOperatorStopped(identifier)) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
         // Get master IP from FDM using the new /appips endpoint
         // eslint-disable-next-line no-await-in-loop
         const fdmResult = await getMasterIpFromFdm(appName, axiosOptions);
@@ -2145,7 +2163,7 @@ async function coordinateActiveStandbyApps() {
               if (!ipsMatch(localSocketAddr, ip) && runningAppsNames.includes(identifier)) {
                 // Stop only the active-standby component on this standby node. Sibling components
                 // (e.g. a DB cluster component that needs all instances running) must keep running.
-                stopApplication(identifier);
+                appReconciler.setControllerDesired(identifier, 'stopped', 'masterSlave standby');
                 log.info(`activeStandby: stopping docker component:${identifier} it's running on ip:${ip} and localSocketAddr is: ${localSocketAddr}`);
               } else if (ipsMatch(localSocketAddr, ip) && !runningAppsNames.includes(identifier)) {
                 // Check if app is ready (syncthing data is synced) before starting
