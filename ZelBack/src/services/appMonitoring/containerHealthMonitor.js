@@ -1,15 +1,12 @@
-const config = require('config');
 const log = require('../../lib/log');
-const dbHelper = require('../dbHelper');
 const dockerService = require('../dockerService');
-const generalService = require('../generalService');
 const appInstaller = require('../appLifecycle/appInstaller');
 const appUninstaller = require('../appLifecycle/appUninstaller');
+const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appInspector = require('../appManagement/appInspector');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const globalState = require('../utils/globalState');
-const { localAppsInformation } = require('../utils/appConstants');
 const { verifyAppVolumeMount } = require('../utils/volumeService');
 
 
