@@ -1,20 +1,18 @@
-const config = require('config');
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
-const dbHelper = require('../dbHelper');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const dockerOperations = require('../appManagement/dockerOperations');
-const volumeService = require('../utils/volumeService');
-const mountParser = require('../utils/mountParser');
 const globalState = require('../utils/globalState');
 const appInspector = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appQueryService = require('../appQuery/appQueryService');
+const appsRepository = require('../appDatabase/appsRepository');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appVolumeService = require('../appLifecycle/appVolumeService');
 const containerHealthMonitor = require('./containerHealthMonitor');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
-const { localAppsInformation } = require('../utils/appConstants');
 const { AsyncGate } = require('../utils/asyncGate');
 
 // The single, level-based actuator for app containers. Every trigger (docker
@@ -132,15 +130,16 @@ function policyAllowsRun(policy, exitCode) {
 // --- desired/actual state ------------------------------------------------
 
 /**
- * Resolves a component identifier to its local installed spec, or null if the
- * app is not installed on this node. Returns the component, plus g:/r: flags.
+ * Resolves a component identifier to its DeploymentComponent view, or null if
+ * the app (or component) is not installed on this node. The deployment layer
+ * owns version dispatch, enterprise decryption, and containerData parsing —
+ * the reconciler never reads raw spec documents.
  */
 async function getLocalComponentSpec(identifier) {
   const mainAppName = identifier.split('_')[1] || identifier;
-  let appSpec;
+  let inst;
   try {
-    const database = dbHelper.databaseConnection().db(config.database.appslocal.database);
-    appSpec = await dbHelper.findOneInDatabase(database, localAppsInformation, { name: mainAppName }, { projection: { _id: 0 } });
+    inst = await appsRepository.getInstalledApp(mainAppName);
   } catch (err) {
     // A DB read failure is transient, not "not installed". Throw a tagged error so
     // reconcile defers + retries rather than silently dropping the recovery.
@@ -148,47 +147,32 @@ async function getLocalComponentSpec(identifier) {
     error.transient = true;
     throw error;
   }
-  if (!appSpec) return null;
+  if (!inst) return null;
+
+  let deployment;
   try {
-    [appSpec] = await appQueryService.decryptEnterpriseApps([appSpec], { formatSpecs: false, throwOnError: true });
+    deployment = await deploymentProvider.buildDeployment(inst);
   } catch (err) {
-    // Decryption failed (e.g. the enterprise key isn't loaded yet at boot). Never
-    // proceed on still-encrypted data: containerData would be unreadable, so we'd
-    // misclassify g:/r: or start a container on garbage. Treat as transient like a
-    // DB read failure so reconcile defers and retries once the key is available.
-    const error = new Error(`failed to decrypt enterprise spec for ${identifier}: ${err.message}`);
-    error.transient = true;
-    throw error;
-  }
-
-  let comp;
-  if (appSpec.version >= 4 && Array.isArray(appSpec.compose)) {
-    const componentName = identifier.split('_')[0];
-    comp = appSpec.compose.find((c) => c.name === componentName);
-    if (!comp) return null;
-  } else {
-    comp = appSpec; // v1-3: the app itself is the single component
-  }
-
-  // Classify via the canonical parser (sync flags are valid only on the primary
-  // mount), NOT a loose substring: `'/data|g:/db'.includes('g:')` is true but the
-  // g: is in an invalid non-primary position, so it is NOT a g: component. Also flag
-  // an unparseable spec so reconcile can fail loud instead of looping (the container
-  // could never be created — volume construction would throw on the same spec).
-  const cd = comp.containerData || '';
-  const syncMode = mountParser.getComponentSyncMode(cd);
-  let invalidSpec = false;
-  let invalidReason = null;
-  if (cd) {
-    try {
-      mountParser.parseContainerData(cd);
-    } catch (err) {
-      invalidSpec = true;
-      invalidReason = err.message;
+    if (inst.isEncrypted) {
+      // Decryption failed (e.g. the enterprise key isn't loaded yet at boot).
+      // Never act on ciphertext - defer and retry once the key is available.
+      const error = new Error(`failed to decrypt enterprise spec for ${identifier}: ${err.message}`);
+      error.transient = true;
+      throw error;
     }
+    // Structural failure (e.g. invalid containerData): the spec can never be
+    // actuated - volume construction would throw on the same input - so fail
+    // loud instead of looping. Retrying cannot fix an invalid spec.
+    return { invalidSpec: true, invalidReason: err.message };
   }
+
+  const componentName = identifier.includes('_') ? identifier.split('_')[0] : mainAppName;
+  const comp = deployment.getComponent(componentName);
+  if (!comp) return null;
+
+  const isG = comp.hasActiveStandbySyncthing();
   return {
-    appSpec, comp, isG: syncMode === 'g', isR: syncMode === 'r', invalidSpec, invalidReason,
+    deployment, comp, isG, isR: !isG && comp.hasSyncthing(), invalidSpec: false, invalidReason: null,
   };
 }
 
@@ -450,9 +434,7 @@ async function reconcile(rawIdentifier) {
   // Recreate any bind-mount paths removed while the container was stopped (e.g.
   // Syncthing cleanup of a g:/r: data folder) before starting — otherwise the
   // start fails on a missing mount source and the app backoff-loops forever.
-  const mainAppName = identifier.split('_')[1] || identifier;
-  const isComponent = spec.appSpec.version >= 4 && Array.isArray(spec.appSpec.compose);
-  await volumeService.ensureMountPathsExist(spec.comp, mainAppName, isComponent, isComponent ? spec.appSpec : null);
+  await appVolumeService.ensureMountSourcesExist(spec.comp);
 
   // The controller verdict was sampled at reconcile entry, but the syncthing
   // decider's stop wrapper runs OUTSIDE this single-flight and may have flipped
