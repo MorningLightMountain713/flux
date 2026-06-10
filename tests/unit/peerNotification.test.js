@@ -29,7 +29,7 @@ function mockInstantiatedSpec({
 describe('peerNotification tests', () => {
   let peerNotification;
   let logStub;
-  let monitorAndRecoverAppsStub;
+  let enqueueAllStub;
   let getAppLocationStub;
   let resolveSpecStub;
   let listInstalledAppsStub;
@@ -44,7 +44,7 @@ describe('peerNotification tests', () => {
       warn: sinon.stub(),
     };
 
-    monitorAndRecoverAppsStub = sinon.stub().resolves({ masterSlaveAppsInstalled: [], startedApps: [] });
+    enqueueAllStub = sinon.stub().resolves();
     getAppLocationStub = sinon.stub().resolves(null);
     resolveSpecStub = sinon.stub().resolves(null);
     listInstalledAppsStub = sinon.stub().resolves([
@@ -79,8 +79,8 @@ describe('peerNotification tests', () => {
         storeAppStateEvent: sinon.stub().resolves(),
         APP_STATE_EVENT_TYPES: { APPRUNNING: 'apprunning' },
       },
-      '../appMonitoring/containerHealthMonitor': {
-        monitorAndRecoverApps: monitorAndRecoverAppsStub,
+      '../appMonitoring/appReconciler': {
+        enqueueAll: enqueueAllStub,
       },
       '../appDatabase/appsRepository': {
         listInstalledApps: listInstalledAppsStub,
@@ -118,19 +118,10 @@ describe('peerNotification tests', () => {
       expect(peerNotification.checkAndNotifyPeersOfRunningApps).to.be.a('function');
     });
 
-    it('should call monitorAndRecoverApps with InstantiatedSpec array and resolved views', async () => {
+    it('triggers the hourly reconciler sweep instead of monitor-driven recovery', async () => {
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
-      expect(monitorAndRecoverAppsStub.calledOnce).to.be.true;
-      const [ip, apps, runningNames, resolvedViews] = monitorAndRecoverAppsStub.firstCall.args;
-      expect(ip).to.equal('192.168.1.1:16127');
-      expect(apps).to.have.length(1);
-      expect(apps[0].name).to.equal('app1');
-      expect(apps[0].spec.componentNames()).to.deep.equal(['c1']);
-      expect(runningNames).to.deep.equal(['c1_app1']);
-      // cleartext app: view is the spec itself, keyed by name
-      expect(resolvedViews).to.be.an.instanceOf(Map);
-      expect(resolvedViews.get('app1').componentNames()).to.deep.equal(['c1']);
+      expect(enqueueAllStub.calledOnceWith('hourly')).to.be.true;
     });
 
     it('resolves an encrypted installed app via resolveSpec and broadcasts it by name+hash', async () => {
@@ -150,9 +141,12 @@ describe('peerNotification tests', () => {
       // resolveSpec called with the encrypted app's wire form
       expect(resolveSpecStub.calledOnce).to.be.true;
       expect(resolveSpecStub.firstCall.args[0]).to.deep.equal({ name: 'encapp', version: 8, hash: 'enchash' });
-      // view passed to the monitor under the app name (not the encrypted wrapper)
-      const [, , , resolvedViews] = monitorAndRecoverAppsStub.firstCall.args;
-      expect(resolvedViews.get('encapp').componentNames()).to.deep.equal(['c1']);
+      // resolved app is broadcast by name+hash (presence, not the encrypted wrapper)
+      expect(broadcastAllStub.calledOnce).to.be.true;
+      const broadcast = broadcastAllStub.firstCall.args[0];
+      expect(broadcast.apps).to.deep.include({
+        name: 'encapp', hash: 'enchash', runningSince: broadcast.apps[0].runningSince, state: 'active',
+      });
     });
 
     it('should use appsRepository.getAppLocation for location lookup', async () => {
