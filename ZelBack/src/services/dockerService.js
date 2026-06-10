@@ -46,20 +46,14 @@ function getDockerContainerHandle(id) {
  */
 function getAppIdentifier(appName) {
   // this id is used for volumes, docker names so we know it really belongs to flux
-  if (appName.startsWith('zel')) {
-    return appName;
-  }
   if (appName.startsWith('flux')) {
     return appName;
-  }
-  if (appName === 'KadenaChainWebNode' || appName === 'FoldingAtHomeB') {
-    return `zel${appName}`;
   }
   return `flux${appName}`;
 }
 
 /**
- * Inverse of getAppIdentifier: strips the flux/zel namespace prefix to recover
+ * Inverse of getAppIdentifier: strips the flux namespace prefix to recover
  * the bare component identifier (`{component}_{app}`, or `{app}` for v1-3) used
  * by app/component specs. Idempotent on an already-bare identifier. Consumers
  * whose canonical form is the bare identifier (e.g. the reconciler) normalise
@@ -67,7 +61,7 @@ function getAppIdentifier(appName) {
  * getAppIdentifier.
  *
  * Note: like getAppIdentifier this is not perfectly invertible — a component
- * literally named `flux...`/`zel...` is ambiguous — but that is the existing
+ * literally named `flux...` is ambiguous — but that is the existing
  * limitation of the prefix-as-marker convention, not new here.
  *
  * @param {string} idOrName
@@ -75,7 +69,6 @@ function getAppIdentifier(appName) {
  */
 function getBaseAppName(idOrName) {
   if (idOrName.startsWith('flux')) return idOrName.slice(4);
-  if (idOrName.startsWith('zel')) return idOrName.slice(3);
   return idOrName;
 }
 
@@ -1662,7 +1655,7 @@ async function migrateContainerRestartPolicies() {
   try {
     const containers = await dockerListContainers(true);
     if (!containers) return;
-    const fluxContainers = containers.filter((c) => c.Names[0].startsWith('/flux') || c.Names[0].startsWith('/zel'));
+    const fluxContainers = containers.filter((c) => c.Names[0].startsWith('/flux'));
     let migrated = 0;
     for (const c of fluxContainers) {
       try {
