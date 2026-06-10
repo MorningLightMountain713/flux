@@ -547,7 +547,7 @@ async function handleReceiveOnlyTransition(params) {
 
     log.error(`handleReceiveOnlyTransition - ${appId} still stalled after Syncthing restart and peers hold the data; removing locally (data preserved on peers)`);
     try {
-      await appUninstaller.removeAppLocally(appId, null, true, false, true);
+      await appUninstaller.uninstallApplication(appId, { forceKill: true, skipGuard: true, broadcastRemoval: true });
     } catch (error) {
       log.error(`handleReceiveOnlyTransition - Failed to remove ${appId}: ${error.message}`);
     }
@@ -567,7 +567,7 @@ async function handleReceiveOnlyTransition(params) {
     const unreadableMs = Date.now() - cache.statusUnreadableSince;
     if (unreadableMs >= HEALTH_REMOVE_THRESHOLD_MS) {
       log.warn(`handleReceiveOnlyTransition - ${appId} sync status unreadable for ${Math.round(unreadableMs / 60000)}m; removing locally (never started, canonical data is on the source/peers)`);
-      await appUninstaller.removeAppLocally(appId, null, true, false, true);
+      await appUninstaller.uninstallApplication(appId, { forceKill: true, skipGuard: true, broadcastRemoval: true });
       cache.restarted = true;
     } else {
       log.warn(`handleReceiveOnlyTransition - ${appId} sync status unavailable; staying receiveonly (will not start on unverified data; ${Math.round(unreadableMs / 60000)}m of ${Math.round(HEALTH_REMOVE_THRESHOLD_MS / 60000)}m before removal)`);

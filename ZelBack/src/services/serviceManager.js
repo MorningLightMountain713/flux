@@ -485,7 +485,6 @@ async function startFluxFunctions() {
     globalState.waitForBootContainerStateSettled().then(() => {
       syncthingMonitor.syncthingApps(
         globalState,
-        appQueryService.installedApps,
         () => globalState,
         // stop: record the desired run-state, then really stop synchronously so
         // the folder data wipe that follows happens on a stopped container
@@ -497,7 +496,6 @@ async function startFluxFunctions() {
         // permissions are already fixed by the state machine before this point
         async (id) => { appReconciler.setControllerDesired(id, 'running', 'syncthing synced'); },
         dockerOperations.appDeleteDataInMountPoint,
-        appUninstaller.removeAppLocally,
       ); // rechecks syncthing configuration each cycle
       setTimeout(() => {
         appOperations.coordinateActiveStandbyApps();

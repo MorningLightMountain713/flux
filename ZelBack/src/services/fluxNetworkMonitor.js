@@ -56,7 +56,7 @@ async function ipChangesOverLimit() {
           for (const app of apps) {
             log.warn(`REMOVAL REASON: Too many IP changes - ${app.name} being removed due to ${ipChangeData.count} IP changes in ${timeDifference}ms (DoS protection)`);
             // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.removeAppLocally(app.name, null, true, null, false).catch((error) => log.error(error)); // we will not send appremove messages because they will not be accepted by the other nodes
+            await appUninstaller.uninstallApplication(app.name, { forceKill: true }).catch((error) => log.error(error)); // we will not send appremove messages because they will not be accepted by the other nodes
             // eslint-disable-next-line no-await-in-loop
             await serviceHelper.delay(500);
           }

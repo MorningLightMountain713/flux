@@ -75,7 +75,7 @@ describe('appReconciler tests', () => {
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
       },
       containerHealthMonitor: { recreateMissingContainers: sinon.stub().resolves() },
-      appUninstaller: { removeAppLocally: sinon.stub().resolves() },
+      appUninstaller: { uninstallApplication: sinon.stub().resolves() },
       appTamperingDetectionService: { recordEvent: sinon.stub().resolves(), isNetworkMissingError: () => false },
     };
 
@@ -269,7 +269,7 @@ describe('appReconciler tests', () => {
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('boom'));
       await appReconciler.reconcile('www_App');
       expect(stubs.appTamperingDetectionService.recordEvent.calledWithMatch('App', 'recreation_failed')).to.be.true;
-      expect(stubs.appUninstaller.removeAppLocally.calledOnceWith('App', null, false, true, true)).to.be.true;
+      expect(stubs.appUninstaller.uninstallApplication.calledOnceWith('App', { broadcastRemoval: true })).to.be.true;
     });
 
     it('defers (never recreates/uninstalls) when docker is unreachable', async () => {
@@ -281,7 +281,7 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerListContainers.rejects(connErr); // probe: docker is down
       await appReconciler.reconcile('www_App');
       expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
-      expect(stubs.appUninstaller.removeAppLocally.called).to.be.false;
+      expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
       expect(stubs.appTamperingDetectionService.recordEvent.called).to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });

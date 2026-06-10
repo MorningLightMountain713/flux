@@ -28,7 +28,7 @@ const nodecmdMock = {
 };
 
 const appReconcilerMock = { setControllerDesired: sinon.stub(), enqueue: sinon.stub() };
-const appUninstallerMock = { removeAppLocally: sinon.stub().resolves() };
+const appUninstallerMock = { uninstallApplication: sinon.stub().resolves() };
 
 // Load module with mocked dependencies
 const stateMachine = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine', {
@@ -56,8 +56,8 @@ describe('syncthingFolderStateMachine tests', () => {
     serviceHelperMock.delay.reset();
     serviceHelperMock.delay.resolves();
     nodecmdMock.run.reset();
-    appUninstallerMock.removeAppLocally.reset();
-    appUninstallerMock.removeAppLocally.resolves();
+    appUninstallerMock.uninstallApplication.reset();
+    appUninstallerMock.uninstallApplication.resolves();
 
     // Mock successful file system operations for safety checks
     // This makes verifyFolderMountSafety return isSafe: true
@@ -492,7 +492,7 @@ describe('syncthingFolderStateMachine tests', () => {
       // cannot verify the data is synced -> must not flip to sendreceive or start, and
       // must not remove yet (well under the removal threshold on the first unreadable cycle)
       sinon.assert.notCalled(mockParams.appDockerRestartFn);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.syncthingFolder.type).to.equal('receiveonly');
       expect(result.cache.restarted).to.not.equal(true);
     });
@@ -513,7 +513,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       // never started on unverified data, but cleaned up rather than stuck forever
       sinon.assert.notCalled(mockParams.appDockerRestartFn);
-      sinon.assert.calledOnce(appUninstallerMock.removeAppLocally);
+      sinon.assert.calledOnce(appUninstallerMock.uninstallApplication);
     });
 
     it('should stop Docker and restart Syncthing when sync is stalled with synced peers', async () => {
@@ -693,8 +693,6 @@ describe('syncthingFolderStateMachine tests', () => {
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
       expect(result.cache.restarted).to.be.true;
-      // Note: We can't easily test appUninstaller.removeAppLocally since it's required dynamically
-      // In production, this would remove the app
     });
 
     it('should NOT remove app when stalled and the only peer reports 100% but holds no data (empty)', async () => {
