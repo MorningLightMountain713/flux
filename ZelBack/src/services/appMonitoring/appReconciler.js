@@ -115,24 +115,26 @@ const volumeMissingNoted = new Set();
 const canonical = (id) => dockerService.getBaseAppName(id);
 
 // --- restart policy ------------------------------------------------------
-// getRestartPolicy is the ONLY place the policy source lives. Today it returns
-// the constant 'always' (restores the pre-FluxOS Docker `restart: always`
-// behavior). v9: return spec.comp.restartPolicy ?? 'always'.
-// eslint-disable-next-line no-unused-vars
+// getRestartPolicy is the ONLY place the policy source lives: the v9
+// per-component spec field. Legacy versions (v1-v8) pin it to 'always' in
+// their component classes and the deployment layer bridges absent values, so
+// every component answers without a fallback here.
 function getRestartPolicy(spec) {
-  return 'always';
+  return spec.comp.restartPolicy;
 }
 
 /**
  * Whether a stopped container should be (re)started under the given policy and
  * its actual last exit code. exitCode === null means the container has never
- * run (Docker state 'created'), i.e. an initial start.
+ * run (Docker state 'created'), i.e. an initial start. Values are the v9 spec
+ * vocabulary: always | onFailure | never. A clean exit (0) under onFailure
+ * means the component completed its work - the run-once init/migration shape.
  */
 function policyAllowsRun(policy, exitCode) {
   switch (policy) {
-    case 'on-failure': return exitCode === null || exitCode !== 0;
-    case 'no': return exitCode === null;
-    default: return true; // always / unless-stopped
+    case 'onFailure': return exitCode === null || exitCode !== 0;
+    case 'never': return exitCode === null;
+    default: return true; // always
   }
 }
 
