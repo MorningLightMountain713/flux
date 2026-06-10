@@ -43,6 +43,8 @@ describe('appController tests', () => {
         commands: [],
         secrets: [],
         containerData: '',
+        // mirrors AppComponentBase.containerIdentifier for compose components
+        containerIdentifier: (appName) => `${c.name}_${appName}`,
       };
     }
     const spec = {
@@ -535,7 +537,6 @@ describe('appController tests', () => {
       ];
       const fluxApps = [
         { Id: 'container3', Names: ['/fluxapp1'] },
-        { Id: 'container4', Names: ['/zelapp1'] },
       ];
 
       sinon.stub(dockerService, 'dockerListContainers').resolves([...nonFluxApps, ...fluxApps]);

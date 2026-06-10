@@ -20,7 +20,7 @@ const appTamperingDetectionService = require('../appTamperingDetectionService');
 //
 // Desired state inputs:
 //   operatorStopped (durable, appsRuntimeState) - user lock, wins over all.
-//   controllerDesired (in-memory, below)        - election/sync output for g:/r:.
+//   controllerDesired (in-memory, below)        - election/sync output for replicated components.
 //   restart policy + actual exit code           - Docker-like restart policy.
 
 // id -> 'running' | 'stopped'. In-memory: re-derived from live truth (FDM
@@ -37,6 +37,27 @@ const backoffTimers = new Map(); // id -> scheduled retry timeout
 // container, defer and re-check shortly (the operation also re-enqueues on
 // completion, so this is just a backstop)
 const MANAGED_RETRY_MS = 5000;
+
+// Replicated components hold silently at awaitingController (correct for a FluxOS
+// restart with containers still running), but a hold that outlives many sweep
+// cycles means no decider is speaking - e.g. the syncthing first-run gate is
+// wedged - and that silence has hidden whole-node outages. Surface it by age.
+const AWAITING_CONTROLLER_WARN_MS = 10 * 60 * 1000;
+const silentHoldSince = new Map(); // id -> { since, warned }
+
+function trackSilentHold(identifier) {
+  const entry = silentHoldSince.get(identifier);
+  if (!entry) {
+    silentHoldSince.set(identifier, { since: Date.now(), warned: false });
+    return;
+  }
+  const heldMs = Date.now() - entry.since;
+  if (!entry.warned && heldMs > AWAITING_CONTROLLER_WARN_MS) {
+    entry.warned = true;
+    log.warn(`appReconciler - ${identifier} held at awaitingController for ${Math.round(heldMs / 60000)}m - no masterSlave/syncthing decider has declared a desired state for it`);
+    fluxEventBus.publish('reconciler:actuated', { identifier, action: 'awaitingControllerHeld', heldMs });
+  }
+}
 
 // The reconciler's canonical id is the bare component identifier
 // (`{component}_{app}`). Deciders disagree on the form they pass — masterSlave
@@ -110,13 +131,32 @@ async function getLocalComponentSpec(identifier) {
     return { invalidSpec: true, invalidReason: err.message };
   }
 
-  const componentName = identifier.includes('_') ? identifier.split('_')[0] : mainAppName;
-  const comp = deployment.getComponent(componentName);
-  if (!comp) return null;
+  // Resolve by matching each component's own identifier - never by parsing
+  // the string. A bare app name resolves directly only for v1-v3 flat
+  // deployments (whose single component IS the app); for v4+ it matches
+  // nothing, including a component named like the app, whose identifier is
+  // the name_name stutter.
+  const entries = deployment.componentEntries();
+  const match = entries.find(([, c]) => c.identifier === identifier);
+  if (!match) {
+    // An app-level identifier: callers that hold only an app name (boot
+    // recovery, the hourly sweep) cannot derive component identifiers - the
+    // deployment owns them, sometimes behind encryption - so the reconciler
+    // expands the identifier itself. Replicated components are safe to
+    // include: they hold at awaitingController until a decider speaks.
+    if (!identifier.includes('_')) {
+      const expandTo = entries.map(([, c]) => c.identifier);
+      if (expandTo.length > 0) return { expandTo };
+    }
+    // A component-style identifier that resolves to nothing is a real
+    // mismatch (renamed component, stale enqueue) - surface it instead of
+    // dropping the recovery as if the app were uninstalled.
+    return { missingComponent: true };
+  }
+  const comp = match[1];
 
-  const isG = comp.hasActiveStandbySyncthing();
   return {
-    deployment, comp, isG, isR: !isG && comp.hasSyncthing(), invalidSpec: false, invalidReason: null,
+    deployment, comp, invalidSpec: false, invalidReason: null,
   };
 }
 
@@ -187,7 +227,7 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
   // reconcile, so recovery resumes the moment the pipeline ends.
   const appName = identifier.split('_')[1] || identifier;
   if (globalState.getAppLbState(appName)) return { desired: null, reason: 'shutdownPipeline' };
-  if (spec.isG || spec.isR) {
+  if (spec.comp.hasSyncthing()) {
     const cd = controllerDesired.get(identifier) ?? null;
     // No controller opinion yet. controllerDesired is in-memory, so a FluxOS
     // restart wipes it while the container keeps running (Docker is independent of
@@ -246,7 +286,26 @@ async function reconcile(rawIdentifier) {
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
   }
-  if (!spec) return; // not installed here - nothing to enforce
+  if (!spec) {
+    silentHoldSince.delete(identifier);
+    log.info(`appReconciler - ${identifier} not installed here, nothing to enforce`);
+    return;
+  }
+
+  // App-level identifier expanded by the spec layer (component identifiers
+  // live inside the deployment, sometimes behind encryption): reconcile each
+  // component individually.
+  if (spec.expandTo) {
+    log.info(`appReconciler - ${identifier} expanded to components: ${spec.expandTo.join(', ')}`);
+    spec.expandTo.forEach((id) => enqueue(id));
+    return;
+  }
+
+  if (spec.missingComponent) {
+    log.error(`appReconciler - ${identifier} does not match any component of its installed deployment, not reconciling`);
+    fluxEventBus.publish('reconciler:actuated', { identifier, action: 'missingComponent' });
+    return;
+  }
 
   // Invalid containerData (e.g. a sync flag on a non-primary mount, or an index-ref
   // primary): the spec can never be actuated — volume construction would throw — so
@@ -272,9 +331,14 @@ async function reconcile(rawIdentifier) {
 
   const { desired, reason } = await effectiveDesiredRunning(identifier, spec, actual.exitCode);
 
-  // null = no controller opinion yet for a g:/r: component: neither start nor stop,
-  // leave the container in its current state until the decider speaks.
-  if (desired === null) return;
+  // null = no controller opinion yet for a replicated component: neither start nor stop,
+  // leave the container in its current state until the decider speaks - but
+  // surface the hold once it has outlived any plausible decider cycle.
+  if (desired === null) {
+    if (reason === 'awaitingController') trackSilentHold(identifier);
+    return;
+  }
+  silentHoldSince.delete(identifier);
 
   if (!desired) {
     if (actual.running) {
@@ -303,7 +367,7 @@ async function reconcile(rawIdentifier) {
   }
 
   // Recreate any bind-mount paths removed while the container was stopped (e.g.
-  // Syncthing cleanup of a g:/r: data folder) before starting — otherwise the
+  // Syncthing cleanup of a replicated data folder) before starting — otherwise the
   // start fails on a missing mount source and the app backoff-loops forever.
   await appVolumeService.ensureMountSourcesExist(spec.comp);
 
@@ -358,19 +422,17 @@ function enqueue(rawIdentifier) {
 }
 
 /**
- * Enqueue every installed component (hourly tick / reconnect / boot drift).
+ * Enqueue every installed app (hourly tick / reconnect / boot drift). Apps are
+ * enqueued by name; reconcile expands each to its component identifiers
+ * through the deployment layer, which owns version dispatch and decryption.
  */
 async function enqueueAll(reason = 'resync') {
   const res = await appQueryService.installedApps();
   if (!res || res.status !== 'success') return;
   let count = 0;
   for (const app of res.data) {
-    if (app.version >= 4 && Array.isArray(app.compose)) {
-      app.compose.forEach((c) => { enqueue(`${c.name}_${app.name}`); count += 1; });
-    } else {
-      enqueue(app.name);
-      count += 1;
-    }
+    enqueue(app.name);
+    count += 1;
   }
   fluxEventBus.publish('reconciler:swept', { reason, count });
 }
@@ -379,7 +441,7 @@ async function enqueueAll(reason = 'resync') {
 
 /**
  * A decider (masterSlave election / syncthing readiness) declares the desired
- * run-state of a g:/r: component and triggers enforcement. The decider does its
+ * run-state of a replicated component and triggers enforcement. The decider does its
  * own synchronous data-safety steps (stop+wipe, permission-fix) first; this
  * only records intent and enqueues.
  */

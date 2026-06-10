@@ -23,7 +23,10 @@ describe('appReconciler tests', () => {
         restartPolicy: c.restartPolicy ?? 'always',
       };
     });
-    return { getComponent: (n) => comps.find((c) => c.name === n) || null };
+    return {
+      getComponent: (n) => comps.find((c) => c.name === n) || null,
+      componentEntries: () => comps.map((c) => [c.name, c]),
+    };
   };
 
   beforeEach(() => {
@@ -450,6 +453,53 @@ describe('appReconciler tests', () => {
       await startPromise;
       await done.promise; // the drained reconcile actually completed
       expect(stubs.dockerService.dockerContainerInspect.called).to.be.true;
+    });
+
+    it('expands an app-level identifier to per-component reconciles (boot recovery, sweep)', async () => {
+      // Component identifiers live inside the deployment (sometimes behind
+      // encryption), so boot recovery and the hourly sweep can only enqueue
+      // the bare app name. The reconciler must fan out, not silently drop it.
+      localSpec = {
+        name: 'App',
+        version: 4,
+        compose: [
+          { name: 'web', containerData: '/data' },
+          { name: 'cache', containerData: '/data' },
+        ],
+      };
+      const started = [];
+      const done = deferred();
+      stubs.dockerService.appDockerStart = sinon.stub().callsFake(async (id) => {
+        started.push(id);
+        if (started.length === 2) done.resolve();
+      });
+      appReconciler.enqueue('App'); // bare app name - no component identifier matches
+      await done.promise;
+      expect(started.sort()).to.deep.equal(['cache_App', 'web_App']);
+    });
+
+    it('expands the bare name of a component named like its app to the name_name identifier', async () => {
+      // 146 live production apps are single-component with the component
+      // named after the app; their container identifier is the stutter, so a
+      // bare-name enqueue must expand rather than half-match the component.
+      localSpec = {
+        name: 'App',
+        version: 4,
+        compose: [{ name: 'App', containerData: '/data' }],
+      };
+      const done = deferred();
+      stubs.dockerService.appDockerStart = sinon.stub().callsFake(async (id) => done.resolve(id));
+      appReconciler.enqueue('App');
+      expect(await done.promise).to.equal('App_App');
+    });
+
+    it('surfaces a component identifier that matches nothing instead of dropping it', async () => {
+      const done = deferred();
+      stubs.log.error = sinon.stub().callsFake(() => done.resolve());
+      appReconciler.enqueue('gone_App'); // component "gone" does not exist
+      await done.promise;
+      expect(stubs.log.error.firstCall.args[0]).to.include('does not match any component');
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('coalesces concurrent enqueues for the same id into a single re-run', async () => {
