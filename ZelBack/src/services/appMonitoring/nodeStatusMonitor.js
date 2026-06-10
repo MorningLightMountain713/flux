@@ -19,8 +19,7 @@ const globalAppsLocations = config.database.appsglobal.collections.appsLocations
 
 /**
  * Method responsible to monitor node status and uninstall apps if node is not confirmed
- * @param {Function} installedAppsFn - Function to get installed apps
- * @param {Function} removeAppLocallyFn - Function to remove apps locally
+ * @param {string} reason - Why all local apps are being removed
  * @returns {Promise<void>}
  */
 // eslint-disable-next-line consistent-return
