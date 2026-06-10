@@ -107,14 +107,6 @@ describe('volumeValidationService tests', () => {
       expect(result).to.equal('testapp');
     });
 
-    it('should extract app name and remove "zel" prefix', () => {
-      const command = 'sudo mount -o loop /home/testTEMP /root/flux/ZelApps/zelmyapp';
-
-      const result = volumeValidationService.extractAppNameFromCrontabCommand(command);
-
-      expect(result).to.equal('myapp');
-    });
-
     it('should return app name without prefix if no recognized prefix', () => {
       const command = 'sudo mount -o loop /home/testTEMP /root/flux/ZelApps/myapp';
 

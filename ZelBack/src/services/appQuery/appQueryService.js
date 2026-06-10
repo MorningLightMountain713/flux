@@ -238,7 +238,7 @@ async function listRunningContainers() {
     // Find stopped containers that are in backup/restore and add them to running list
     fluxContainers.forEach((container) => {
       const containerName = container.Names[0].slice(1); // Remove leading '/'
-      const appName = containerName.replace(/^(zel|flux)/, ''); // Remove zel/flux prefix
+      const appName = containerName.replace(/^flux/, ''); // Remove flux prefix
       // backup/restore hold the bare MAIN app name; composed containers are
       // component_app, so compare on the main name
       const mainAppName = appName.split('_')[1] || appName;

@@ -49,10 +49,6 @@ describe('telemetryIdentityService tests', () => {
       expect(service.parseContainerName('fluxMyApp')).to.deep.equal({ appName: 'MyApp', componentName: null });
     });
 
-    it('parses a legacy zel-prefixed name', () => {
-      expect(service.parseContainerName('zelKadena')).to.deep.equal({ appName: 'Kadena', componentName: null });
-    });
-
     it('parses a component name (first underscore is the separator)', () => {
       expect(service.parseContainerName('db_My_Complex_App')).to.deep.equal({ appName: 'My_Complex_App', componentName: 'db' });
     });
