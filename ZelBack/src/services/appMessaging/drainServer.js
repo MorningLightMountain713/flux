@@ -5,6 +5,7 @@ const nodePath = require('node:path');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
 const peerNotification = require('./peerNotification');
+const appReconciler = require('../appMonitoring/appReconciler');
 
 /**
  * Inbound counterpart to utils/fluxShutdowndClient.js: the UNIX socket fluxos
@@ -39,8 +40,8 @@ let sweepTimer = null;
  * Entries must self-expire rather than wait on an explicit clear: the one case
  * that wedges the node is the daemon dying mid-pipeline, and a dead daemon
  * clears nothing. Past deadline+slack the shutdown demonstrably failed, so the
- * sweep reverts the app to active and rebroadcasts; the same cycle's recovery
- * pass restarts its containers (they were cache-armed while the state held).
+ * sweep reverts the app to active, rebroadcasts, and enqueues a reconcile —
+ * the reconciler restarts whatever the pipeline stopped, immediately.
  */
 function expiryFromDeadline(deadlineUnixSeconds) {
   const now = Date.now();
@@ -61,6 +62,7 @@ function sweepExpiredStates() {
   if (expired.length) {
     log.warn(`drain state expired for ${expired.join(', ')} - shutdown pipeline did not complete, reverting to active`);
     peerNotification.checkAndNotifyPeersOfRunningApps();
+    appReconciler.enqueueAll('drain-expired').catch((err) => log.error(`drain expiry reconcile failed: ${err.message}`));
   }
   if (!globalState.hasAppLbStates()) stopSweepTimer();
   return expired;
@@ -89,14 +91,18 @@ function handleSetState(method, state, params) {
 
 /**
  * Drop an app's drain/stop state (pipeline aborted): the app reverts to
- * active on the next broadcast, and container recovery resumes.
+ * active on the next broadcast, and a reconcile sweep restarts whatever the
+ * pipeline stopped.
  */
 function handleClearApp(params) {
   const appName = params && params.app_name;
   if (!appName) throw new Error('clear_app: app_name required');
   const existed = globalState.clearAppLbState(appName);
   if (!globalState.hasAppLbStates()) stopSweepTimer();
-  if (existed) peerNotification.checkAndNotifyPeersOfRunningApps();
+  if (existed) {
+    peerNotification.checkAndNotifyPeersOfRunningApps();
+    appReconciler.enqueueAll('drain-cleared').catch((err) => log.error(`drain clear reconcile failed: ${err.message}`));
+  }
   return { ok: true, existed };
 }
 
