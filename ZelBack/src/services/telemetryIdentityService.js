@@ -40,9 +40,13 @@ function parseContainerName(name) {
 
   const underscoreIdx = name.indexOf('_');
   if (underscoreIdx > 0 && underscoreIdx < name.length - 1) {
-    const componentName = name.slice(0, underscoreIdx);
+    // Container names are flux<component>_<app>; the tag carries the spec
+    // component name, so strip the docker prefix (container_name keeps it).
+    let componentName = name.slice(0, underscoreIdx);
+    if (componentName.startsWith('flux')) componentName = componentName.slice(4);
+    else if (componentName.startsWith('zel')) componentName = componentName.slice(3);
     const appName = name.slice(underscoreIdx + 1);
-    return { appName, componentName };
+    return { appName, componentName: componentName || null };
   }
 
   if (name.startsWith('flux')) {
