@@ -41,8 +41,8 @@ async function dockerTerminalHandler(socket) {
     // recorded with no matching 'close'.
     const mainAppName = nameOrId.split('_')[1] || nameOrId;
     const parts = nameOrId.split('_');
-    const component = parts.length > 1 ? parts[0].replace(/^(zel|flux)/, '') || null : null;
-    const analyticsAppName = parts.length > 1 ? mainAppName : mainAppName.replace(/^(zel|flux)/, '');
+    const component = parts.length > 1 ? parts[0].replace(/^flux/, '') || null : null;
+    const analyticsAppName = parts.length > 1 ? mainAppName : mainAppName.replace(/^flux/, '');
     socket.on('disconnect', () => {
       clientGone = true;
       if (execStream) execStream.destroy();
