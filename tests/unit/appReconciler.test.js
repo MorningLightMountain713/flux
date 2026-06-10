@@ -23,7 +23,10 @@ describe('appReconciler tests', () => {
         restartPolicy: c.restartPolicy ?? 'always',
       };
     });
-    return { getComponent: (n) => comps.find((c) => c.name === n) || null };
+    return {
+      getComponent: (n) => comps.find((c) => c.name === n) || null,
+      componentEntries: () => comps.map((c) => [c.name, c]),
+    };
   };
 
   beforeEach(() => {
@@ -450,6 +453,38 @@ describe('appReconciler tests', () => {
       await startPromise;
       await done.promise; // the drained reconcile actually completed
       expect(stubs.dockerService.dockerContainerInspect.called).to.be.true;
+    });
+
+    it('expands an app-level identifier to per-component reconciles (v9 boot recovery)', async () => {
+      // v9 specs carry components inside the deployment (sometimes behind
+      // encryption), so boot recovery and the hourly sweep can only enqueue the
+      // bare app name. The reconciler must fan out, not silently drop it.
+      localSpec = {
+        name: 'App',
+        version: 4,
+        compose: [
+          { name: 'web', containerData: '/data' },
+          { name: 'cache', containerData: '/data' },
+        ],
+      };
+      const started = [];
+      const done = deferred();
+      stubs.dockerService.appDockerStart = sinon.stub().callsFake(async (id) => {
+        started.push(id);
+        if (started.length === 2) done.resolve();
+      });
+      appReconciler.enqueue('App'); // bare app name - no component called "App"
+      await done.promise;
+      expect(started.sort()).to.deep.equal(['cache_App', 'web_App']);
+    });
+
+    it('surfaces a component identifier that matches nothing instead of dropping it', async () => {
+      const done = deferred();
+      stubs.log.error = sinon.stub().callsFake(() => done.resolve());
+      appReconciler.enqueue('gone_App'); // component "gone" does not exist
+      await done.promise;
+      expect(stubs.log.error.firstCall.args[0]).to.include('does not match any component');
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('coalesces concurrent enqueues for the same id into a single re-run', async () => {
