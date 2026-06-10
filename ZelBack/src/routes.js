@@ -50,6 +50,7 @@ const backupRestoreService = require('./services/backupRestoreService');
 const IOUtils = require('./services/IOUtils');
 const arcaneAuthService = require('./services/arcaneAuthService');
 const appTamperingDetectionService = require('./services/appTamperingDetectionService');
+const fluxEventBus = require('./services/utils/fluxEventBus');
 
 function isLocal(req, res, next) {
   const remote = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || req.headers['x-forwarded-for'];
@@ -320,6 +321,12 @@ module.exports = (app) => {
   });
   app.get('/flux/dosstate', cache('30 seconds'), (req, res) => {
     fluxNetworkHelper.getDOSState(req, res);
+  });
+  app.post('/flux/dosstate', (req, res) => {
+    fluxNetworkHelper.setDOSStateApi(req, res);
+  });
+  app.get('/flux/startdiscovery', (req, res) => {
+    fluxCommunication.startDiscoveryApi(req, res);
   });
   // New peer endpoints
   app.get('/flux/peers/:filter?', cache('30 seconds'), (req, res) => {
@@ -1551,5 +1558,9 @@ module.exports = (app) => {
   });
   app.get('/explorer/issynced', cache('30 seconds'), (req, res) => {
     explorerService.isExplorerSynced(req, res);
+  });
+
+  app.get('/flux/eventstream', (req, res) => {
+    fluxEventBus.sseHandler(req, res);
   });
 };
