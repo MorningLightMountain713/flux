@@ -170,7 +170,21 @@ async function getLocalComponentSpec(identifier) {
 
   const componentName = identifier.includes('_') ? identifier.split('_')[0] : mainAppName;
   const comp = deployment.getComponent(componentName);
-  if (!comp) return null;
+  if (!comp) {
+    // An app-level identifier (no component prefix) for a multi-component
+    // deployment: callers that only hold raw spec docs (boot recovery, the
+    // hourly sweep) cannot derive component names for encrypted v9 specs, so
+    // the reconciler expands the identifier itself. g: components are safe to
+    // include - they hold at awaitingController until a decider speaks.
+    if (!identifier.includes('_')) {
+      const expandTo = deployment.componentEntries().map(([name]) => `${name}_${mainAppName}`);
+      if (expandTo.length > 0) return { expandTo };
+    }
+    // A component-style identifier that resolves to nothing is a real mismatch
+    // (renamed component, stale enqueue) - surface it instead of dropping the
+    // recovery as if the app were uninstalled.
+    return { missingComponent: true };
+  }
 
   const isG = comp.hasActiveStandbySyncthing();
   return {
@@ -333,6 +347,21 @@ async function reconcile(rawIdentifier) {
     return;
   }
   if (!spec) return; // not installed here - nothing to enforce
+
+  // App-level identifier expanded by the spec layer (v9 component names live
+  // inside the deployment, sometimes behind encryption): reconcile each
+  // component individually.
+  if (spec.expandTo) {
+    log.info(`appReconciler - ${identifier} expanded to components: ${spec.expandTo.join(', ')}`);
+    spec.expandTo.forEach((id) => enqueue(id));
+    return;
+  }
+
+  if (spec.missingComponent) {
+    log.error(`appReconciler - ${identifier} does not match any component of its installed deployment, not reconciling`);
+    fluxEventBus.publish('reconciler:actuated', { identifier, action: 'missingComponent' });
+    return;
+  }
 
   // Invalid containerData (e.g. a sync flag on a non-primary mount, or an index-ref
   // primary): the spec can never be actuated — volume construction would throw — so
