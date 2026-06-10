@@ -12,11 +12,8 @@ const dbHelper = require('../dbHelper');
 const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const registryManager = require('../appDatabase/registryManager');
 const appReconciler = require('../appMonitoring/appReconciler');
 const nodeDosState = require('../nodeDosState');
-const appsRepository = require('../appDatabase/appsRepository');
-const appOperations = require('./appOperations');
 const appUninstaller = require('./appUninstaller');
 const appNetworkLinker = require('./appNetworkLinker');
 const appSlice = require('./appSlice');
@@ -29,7 +26,7 @@ const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const nodeConfirmationService = require('../nodeConfirmationService');
 const { localAppsInformation, SIGTERM_EXPIRY_MS, RUNNING_EXPIRY_MS } = require('../utils/appConstants');
-const { getNonGComponentIdentifiers, parseContainerName, appHasValidLocationOnNode } = require('../utils/appUtilities');
+const { parseContainerName, appHasValidLocationOnNode } = require('../utils/appUtilities');
 const { RemovalOutcome } = require('../utils/removalOutcome');
 const { untilSucceeds, BOOT_STEP_RETRY_MS } = require('../utils/untilSucceeds');
 
@@ -88,8 +85,7 @@ async function getStoppedFluxContainers() {
     // Filter for Flux app containers that are stopped (not running)
     const stoppedContainers = containers.filter((container) => {
       const name = container.Names && container.Names[0] ? container.Names[0] : '';
-      // Flux containers start with /flux or /zel
-      const isFluxContainer = name.startsWith('/flux') || name.startsWith('/zel');
+      const isFluxContainer = name.startsWith('/flux');
       // Check if container is stopped (State is 'exited' or not 'running')
       const isStopped = container.State !== 'running';
       return isFluxContainer && isStopped;
@@ -209,8 +205,9 @@ async function confirmHeldApp(appName, componentsToStart, localSocketAddr, hold)
 /**
  * Reconcile local app state against the network on boot. For each stopped
  * container, checks whether this node still has a valid location record.
- * - Valid location, non-g components: started.
- * - Valid location, g: components: left stopped (managed by masterSlaveApps).
+ * - Valid location: the app is handed to the reconciler, which expands it to
+ *   per-component reconciles through the deployment layer (replicated
+ *   components hold at awaitingController until a decider speaks).
  * - Expired/missing location: app removed locally (node was reassigned).
  * - Unreadable location: app held stopped until the record can be read, then
  *   decided as above (confirmHeldApp).
@@ -219,10 +216,8 @@ async function confirmHeldApp(appName, componentsToStart, localSocketAddr, hold)
 async function reconcileAppsOnBoot() {
   const results = {
     appsChecked: 0,
-    appsStarted: [],
-    appsPartiallyStarted: [], // mixed compose: non-g components started, g: components left for masterSlaveApps
-    appsSkippedGMode: [],
-    appsSkippedNoSpec: [],
+    appsEnqueued: [],
+    appsSkippedNotInstalled: [],
     appsRemoved: [],
     appsUnconfirmed: [], // location unreadable: held stopped until it can be read
     appsFailed: [],
@@ -273,41 +268,7 @@ async function reconcileAppsOnBoot() {
       // Check if app is installed
       if (!installedAppNames.has(appName)) {
         log.warn(`appStartupManager - App ${appName} not in installed apps list, skipping all its containers`);
-        results.appsSkippedNoSpec.push(appName);
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-
-      // Get the app specification (with decryption for enterprise apps)
-      let appSpec;
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const inst = await appsRepository.getGlobalAppInfo(appName);
-        appSpec = inst ? inst.spec.serialize() : null;
-      } catch (specError) {
-        log.error(`appStartupManager - Error fetching specs for app ${appName}: ${specError.message}`);
-      }
-
-      if (!appSpec) {
-        log.warn(`appStartupManager - No global spec found for app ${appName}, skipping all its containers`);
-        results.appsSkippedNoSpec.push(appName);
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-
-      // Partition the app's components by g: syncthing mode. Non-g components are
-      // started here; g: components are left stopped for masterSlaveApps to elect a
-      // primary. If every component is g:, the app is skipped entirely.
-      const componentsToStart = getNonGComponentIdentifiers(appSpec, appName);
-      const totalComponents = (appSpec.compose && appSpec.compose.length > 0)
-        ? appSpec.compose.length
-        : 1;
-      const isPartial = componentsToStart.length > 0
-        && componentsToStart.length < totalComponents;
-
-      if (componentsToStart.length === 0) {
-        log.info(`appStartupManager - App ${appName} uses g: syncthing mode in every component, skipping (managed by masterSlaveApps)`);
-        results.appsSkippedGMode.push(appName);
+        results.appsSkippedNotInstalled.push(appName);
         // eslint-disable-next-line no-continue
         continue;
       }
@@ -325,7 +286,7 @@ async function reconcileAppsOnBoot() {
           const hold = Symbol(appName);
           globalState.unconfirmedApps.set(appName, hold);
           fluxEventBus.publish('boot:appUnconfirmed', { name: appName });
-          confirmHeldApp(appName, componentsToStart, localSocketAddr, hold)
+          confirmHeldApp(appName, [appName], localSocketAddr, hold)
             .catch((error) => log.error(`appStartupManager - App ${appName}: the location check stopped: ${error.message}`));
           results.appsUnconfirmed.push(appName);
           // eslint-disable-next-line no-continue
@@ -349,32 +310,25 @@ async function reconcileAppsOnBoot() {
         }
       }
 
-      // App has valid location - start the non-g components individually so that any
-      // g: siblings remain stopped (masterSlaveApps will start them only on the primary).
-      if (isPartial) {
-        log.info(`appStartupManager - App ${appName} has valid location, starting ${componentsToStart.length}/${totalComponents} non-g components (g: components managed by masterSlaveApps)`);
-      } else {
-        log.info(`appStartupManager - App ${appName} has valid location, starting app`);
-      }
-
-      startAtBoot(componentsToStart);
-
-      if (isPartial) {
-        results.appsPartiallyStarted.push(appName);
-      } else {
-        results.appsStarted.push(appName);
-      }
+      // App has valid location - hand it to the reconciler, which expands it
+      // to per-component reconciles through the deployment layer (component
+      // names for encrypted v9 specs only exist behind decryption, which the
+      // reconciler defer-retries until fluxbenchd serves it). It actuates once
+      // the boot gate opens and applies desired-state + restart policy;
+      // replicated components hold at awaitingController until a decider
+      // speaks.
+      log.info(`appStartupManager - App ${appName} has valid location, queued for reconcile`);
+      appReconciler.enqueue(appName);
+      results.appsEnqueued.push(appName);
     }
 
     log.info(
       'appStartupManager - Recovery complete. '
       + `Apps checked: ${results.appsChecked}, `
-      + `Apps started: ${results.appsStarted.length}, `
-      + `Apps partially started (mixed g:): ${results.appsPartiallyStarted.length}, `
+      + `Apps enqueued for reconcile: ${results.appsEnqueued.length}, `
       + `Apps removed (expired location): ${results.appsRemoved.length}, `
       + `Apps held (location unreadable): ${results.appsUnconfirmed.length}, `
-      + `Apps skipped (g: mode): ${results.appsSkippedGMode.length}, `
-      + `Apps skipped (no spec): ${results.appsSkippedNoSpec.length}, `
+      + `Apps skipped (not installed): ${results.appsSkippedNotInstalled.length}, `
       + `Apps failed: ${results.appsFailed.length}`,
     );
 
