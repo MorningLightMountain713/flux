@@ -498,6 +498,11 @@ describe('appOperations tests', () => {
       let recursionCounter = 0;
       globalStateRef = require('../../ZelBack/src/services/utils/globalState');
       globalStateRef.activeStandbyCoordinationRunning = false;
+      // the first-run mount-safety gate blocks election until the syncthing
+      // monitor's first cycle completes; these tests model a settled node
+      globalStateRef.syncthingAppsFirstRun = false;
+      const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
+      sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
       globalStateRef.installationInProgress = false;
       globalStateRef.removalInProgress = false;
       globalStateRef.softRedeployInProgress = false;
@@ -603,14 +608,16 @@ describe('appOperations tests', () => {
 
       const dockerService = require('../../ZelBack/src/services/dockerService');
       sinon.stub(dockerService, 'getAppIdentifier').returns('appid');
-      const appDockerStopStub = sinon.stub(dockerService, 'appDockerStop').resolves();
+      const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
+      const setDesiredStub = sinon.stub(appReconciler, 'setControllerDesired');
 
       await appOps.coordinateActiveStandbyApps();
-      await new Promise((r) => { setImmediate(r); }); // flush the fire-and-forget stopApplication
+      await new Promise((r) => { setImmediate(r); }); // flush the fire-and-forget hand-off
 
-      // IP-granular standby stop acts on the active-standby component identifier only.
-      expect(appDockerStopStub.calledWith(identifier), 'active-standby component stopped on standby node').to.be.true;
-      expect(appDockerStopStub.neverCalledWith('n8napp'), 'never stops by app name').to.be.true;
+      // IP-granular standby stop hands the active-standby component identifier
+      // to the reconciler (the single actuator) - never the app name or a sibling.
+      expect(setDesiredStub.calledWith(identifier, 'stopped', 'masterSlave standby'), 'active-standby component handed to the reconciler as stopped').to.be.true;
+      expect(setDesiredStub.neverCalledWith('n8napp'), 'never acts by app name').to.be.true;
     });
 
     it('does not stop its own container when it is the primary on a non-default (UPnP) port', async () => {
