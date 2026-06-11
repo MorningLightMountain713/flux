@@ -30,6 +30,23 @@ export function nodeClient(nodeNum) {
   const eventBuffer = [];
   const emitter = new EventEmitter();
   emitter.on('error', () => {});
+  let lastEventAt = 0;
+
+  // The library's auto-reconnect fetch has no connect timeout: one hung TCP
+  // connect freezes its retry loop forever and starves every wait on this
+  // node, while the server holds replayable events (Last-Event-ID + ring
+  // buffer). Bound the connect phase only - once headers arrive the stream
+  // must live unbounded.
+  function fetchWithConnectTimeout(input, init) {
+    const controller = new AbortController();
+    const onUpstreamAbort = () => controller.abort();
+    init?.signal?.addEventListener('abort', onUpstreamAbort, { once: true });
+    const connectTimer = setTimeout(() => controller.abort(), 15000);
+    return fetch(input, { ...init, signal: controller.signal }).finally(() => {
+      clearTimeout(connectTimer);
+      init?.signal?.removeEventListener('abort', onUpstreamAbort);
+    });
+  }
 
   function connectEventStream(timeout = 60000) {
     return new Promise((resolve, reject) => {
@@ -37,7 +54,7 @@ export function nodeClient(nodeNum) {
         reject(new Error(`SSE connect timeout after ${timeout}ms for ${ip}`));
       }, timeout);
 
-      eventSource = new EventSource(`${url}/flux/eventstream`);
+      eventSource = new EventSource(`${url}/flux/eventstream`, { fetch: fetchWithConnectTimeout });
 
       eventSource.onopen = () => {
         clearTimeout(timer);
@@ -45,6 +62,9 @@ export function nodeClient(nodeNum) {
       };
 
       eventSource.onerror = (err) => {
+        // A dead stream must never be silent: every later wait on this node
+        // starves with a generic timeout unless the drop is visible here.
+        console.error(`###SSE-ERROR ${ip} readyState=${eventSource?.readyState} ${err?.message || err?.code || 'connection error'} (${new Date().toISOString()})`);
         emitter.emit('error', err);
       };
 
@@ -106,6 +126,7 @@ export function nodeClient(nodeNum) {
             data: JSON.parse(e.data),
             id: parseInt(e.lastEventId, 10) || 0,
           };
+          lastEventAt = Date.now();
           eventBuffer.push(entry);
           emitter.emit(e.type, entry);
         });
@@ -130,7 +151,11 @@ export function nodeClient(nodeNum) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         cleanup();
-        reject(new Error(`Timeout after ${timeout}ms waiting for event: ${name}`));
+        // Distinguish "the node never emitted it" from "this client's stream
+        // is dead": a healthy stream shows recent traffic, a dead one shows a
+        // stale lastEvent and a non-open readyState.
+        const sinceLast = lastEventAt ? `${Math.round((Date.now() - lastEventAt) / 1000)}s ago` : 'never';
+        reject(new Error(`Timeout after ${timeout}ms waiting for event: ${name} (${ip} stream readyState=${eventSource?.readyState}, lastEvent=${sinceLast}, buffered=${eventBuffer.length})`));
       }, timeout);
 
       function handler(entry) {
