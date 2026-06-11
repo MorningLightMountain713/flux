@@ -329,6 +329,7 @@ async function startFluxFunctions() {
       peerCountIfAboveThreshold: () => peerManager.peerCountIfAboveThreshold(),
       markSyncRequested: (key) => peerManager.markSyncRequested(key),
       clearSyncRequested: () => peerManager.clearSyncRequested(),
+      completeSyncRequest: (key) => peerManager.completeSyncRequest(key),
       isEnterprise: () => enterpriseNetwork.getCachedEnterpriseIdentity(),
       networkStateReady: () => networkStateService.waitStarted(),
       fluxVersion,
