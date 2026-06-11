@@ -138,6 +138,24 @@ function resyncAll() {
   }
 }
 
+// Sinks can appear after boot: the sink cache rebuild races fluxbenchd's
+// unseal, and the reconciler re-seeds the cache once decryption succeeds.
+// When that happens the daemon must exist and re-sync, or containers that
+// started sinkless stay invisible until the next fluxos restart.
+let sinkResyncTimer = null;
+
+function scheduleSinkResync() {
+  if (stopped || sinkResyncTimer) return;
+  sinkResyncTimer = setTimeout(() => {
+    sinkResyncTimer = null;
+    (async () => {
+      if (!telemetrySinkCache.hasAnyTelemetryApps()) return;
+      await telemetryConfigService.ensureNode();
+      resyncAll();
+    })().catch((err) => log.warn(`telemetry identity: sink resync failed: ${err.message}`));
+  }, 2000);
+}
+
 async function setfacl(params) {
   const result = await serviceHelper.runCommand('setfacl', {
     runAsRoot: true,
@@ -380,10 +398,16 @@ async function start() {
 
   await setBaseAcls();
   await subscribeEvents();
+  telemetrySinkCache.onChange(scheduleSinkResync);
 }
 
 async function stop() {
   stopped = true;
+
+  if (sinkResyncTimer) {
+    clearTimeout(sinkResyncTimer);
+    sinkResyncTimer = null;
+  }
 
   if (eventStream) {
     eventStream.destroy();

@@ -9,6 +9,14 @@ event stream and assert on cluster-level behavior (boot, peering, app
 install/removal, spawning, the container reconciler, syncthing deciders,
 masterSlave election, crash and dockerd-restart recovery).
 
+**The SSE event stream (`fluxEventBus`) is test-harness observability ONLY.**
+`publish()` is a no-op unless the `testEventStream` config flag is set, and
+only the harness node configs set it. Publishing is safe to sprinkle through
+production code paths precisely because it costs nothing there — but never
+SUBSCRIBE production behavior to the bus: it would work in every suite and
+silently never fire on a real node. Production cross-service notification
+needs a direct callback/observer (see `telemetrySinkCache.onChange`).
+
 Everything below runs from a checkout of this repository on the test host.
 
 ## Host prerequisites

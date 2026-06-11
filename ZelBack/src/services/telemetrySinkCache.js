@@ -26,12 +26,27 @@ function extractSink(deployment) {
   return sink;
 }
 
+// Single change observer (the identity service registers its resync here).
+// A plain callback rather than fluxEventBus: the bus is the harness's SSE
+// test stream and publishes nothing in production.
+let changeListener = null;
+
+function onChange(listener) {
+  changeListener = listener;
+}
+
 /** Set (or clear, when sink is null) the routing entry for an app. */
 function setSink(appName, sink) {
+  const k = key(appName);
+  const prev = sinks.get(k) || null;
   if (sink && sink.apiKey) {
-    sinks.set(key(appName), sink);
+    sinks.set(k, sink);
   } else {
-    sinks.delete(key(appName));
+    sinks.delete(k);
+  }
+  const next = sinks.get(k) || null;
+  if (changeListener && JSON.stringify(prev) !== JSON.stringify(next)) {
+    changeListener();
   }
 }
 
@@ -40,7 +55,7 @@ function getSink(appName) {
 }
 
 function deleteSink(appName) {
-  sinks.delete(key(appName));
+  setSink(appName, null);
 }
 
 function hasAnyTelemetryApps() {
@@ -75,4 +90,5 @@ module.exports = {
   deleteSink,
   hasAnyTelemetryApps,
   reconcileFromInstalled,
+  onChange,
 };
