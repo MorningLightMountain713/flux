@@ -211,7 +211,7 @@ class FluxPeerManager extends EventEmitter {
     const peer = this.#peers.get(key);
     if (!peer) return null;
 
-    this.#syncRequestedPeers.delete(key);
+    const syncWasInFlight = this.#syncRequestedPeers.delete(key);
     this.#removeTracking(peer);
 
     // Clean up peer exchange topology and notify others
@@ -256,6 +256,12 @@ class FluxPeerManager extends EventEmitter {
       this.#aboveThreshold = false;
       this.emit('peersBelowThreshold', this.#peers.size);
       fluxEventBus.publish('peers:belowThreshold', { count: this.#peers.size, threshold: this.#syncDegradedThreshold });
+    }
+    // Announce after all cleanup (and after any degraded transition, which
+    // resets the sync round and makes the loss moot): an in-flight sync died
+    // with this connection and its requester may want a replacement peer.
+    if (syncWasInFlight) {
+      this.emit('syncPeerLost', key);
     }
     return peer;
   }
