@@ -90,7 +90,7 @@ function buildIdentity(rawName, image, region) {
 }
 
 async function resolveIdentity(containerId) {
-  const inspect = await dockerService.dockerContainerInspect(containerId);
+  const inspect = await dockerService.dockerContainerInspect(containerId, { identifierType: 'id' });
   if (!inspect) return null;
   const region = await nodeRegion();
   const image = inspect.Config && inspect.Config.Image;
@@ -172,9 +172,9 @@ async function setContainerAcls(containerId) {
  * install hook (before start) and from the docker `start` event (restarts).
  * A no-op on non-Arcane nodes (no socket server) and for non-telemetry apps.
  */
-async function announce(idOrName) {
+async function announce(idOrName, { identifierType = 'name' } = {}) {
   if (!server) return;
-  const inspect = await dockerService.dockerContainerInspect(idOrName);
+  const inspect = await dockerService.dockerContainerInspect(idOrName, { identifierType });
   if (!inspect || !inspect.Id) return;
 
   const region = await nodeRegion();
@@ -205,7 +205,8 @@ async function handleDockerEvent(event) {
   const containerId = (event.Actor && event.Actor.ID) || event.id;
   if (!containerId) return;
   if (action === 'start') {
-    await announce(containerId);
+    // docker events carry the raw container id, not a flux container name
+    await announce(containerId, { identifierType: 'id' });
   } else {
     // die / destroy — the daemon untracks; an unknown id is a harmless no-op.
     notifyStopped(containerId);
