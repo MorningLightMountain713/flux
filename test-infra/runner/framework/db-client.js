@@ -361,12 +361,21 @@ export function dbClient(nodeNum) {
       await localDb.collection('policydocuments').deleteOne({ _id: 'networkPolicy' });
     },
 
-    async failpointFind(collection, { times = 1, errorCode = 50 } = {}) {
+    async dropAndReseed(ip, height) {
       const client = await getClient();
-      const namespace = `${dbNames.explorer}.${collection}`;
+      for (const name of Object.values(dbNames)) {
+        await client.db(name).dropDatabase();
+      }
+      await this.seedScannedHeight(height);
+      await this.seedGeolocation(ip);
+    },
+
+    async failpointFind(collection, { times = 1, always = false, errorCode = 50, db: dbKey = 'explorer' } = {}) {
+      const client = await getClient();
+      const namespace = `${dbNames[dbKey]}.${collection}`;
       await client.db('admin').command({
         configureFailPoint: 'failCommand',
-        mode: { times },
+        mode: always ? 'alwaysOn' : { times },
         data: { failCommands: ['find'], errorCode, namespace },
       });
     },

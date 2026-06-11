@@ -513,7 +513,11 @@ async function startFluxFunctions() {
         .map((p) => ({ key: p.key, connectionId: p.connectionId, send: (msg) => p.send(msg) })),
       onPeerEvent: (event, cb) => peerManager.on(event, cb),
       offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
-      isAboveThreshold: () => peerManager.isAboveThreshold(),
+      peerCountIfAboveThreshold: () => peerManager.peerCountIfAboveThreshold(),
+      markSyncRequested: (key) => peerManager.markSyncRequested(key),
+      clearSyncRequested: () => peerManager.clearSyncRequested(),
+      completeSyncRequest: (key) => peerManager.completeSyncRequest(key),
+      isEnterprise: () => enterpriseNetwork.getCachedEnterpriseIdentity(),
       networkStateReady: () => networkStateService.waitStarted(),
       fluxVersion,
     });

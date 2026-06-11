@@ -33,6 +33,7 @@ const CLOSE_CODE_NAMES = Object.freeze(
 const LEGACY_MIN_PEER_UPTIME_SECONDS = config.fluxapps.appSyncMinPeerUptime ?? 7500;
 
 class FluxPeerManager extends EventEmitter {
+  #syncRequestedPeers = new Set();
   static CONNECTION_BACKOFF_MS = config.fluxapps.connectionBackoffMs ?? [2 * 60000, 5 * 60000, 10 * 60000, 15 * 60000];
 
   /** @type {Map<string, FluxPeerSocket>} */
@@ -261,6 +262,7 @@ class FluxPeerManager extends EventEmitter {
     const peer = this.#peers.get(key);
     if (!peer) return null;
 
+    const syncWasInFlight = this.#syncRequestedPeers.delete(key);
     this.#removeTracking(peer);
 
     // Clean up peer exchange topology and notify others
@@ -313,6 +315,12 @@ class FluxPeerManager extends EventEmitter {
         threshold: this.#syncDegradedThreshold,
         deliberate: this.#deliberateTeardown,
       });
+    }
+    // Announce after all cleanup (and after any degraded transition, which
+    // resets the sync round and makes the loss moot): an in-flight sync died
+    // with this connection and its requester may want a replacement peer.
+    if (syncWasInFlight) {
+      this.emit('syncPeerLost', key);
     }
     // The counterpart of peerConnected. A listener waiting on this peer for an
     // answer now knows the answer is never coming, which is a fact rather than
@@ -1696,6 +1704,25 @@ class FluxPeerManager extends EventEmitter {
     this.#history = new Array(HISTORY_BUFFER_SIZE);
     this.#historyIndex = 0;
     this.#historyCount = 0;
+  }
+
+  markSyncRequested(key) { this.#syncRequestedPeers.add(key); }
+
+  isSyncRequested(key) { return this.#syncRequestedPeers.has(key); }
+
+  completeSyncRequest(key) { this.#syncRequestedPeers.delete(key); }
+
+  clearSyncRequested() { this.#syncRequestedPeers.clear(); }
+
+  // --- Liveness ---
+
+  /**
+   * Ping all connected peers.
+   */
+  pingAll() {
+    for (const peer of this.#peers.values()) {
+      peer.ping();
+    }
   }
 }
 
