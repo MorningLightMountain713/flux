@@ -23,11 +23,21 @@ const STATES = Object.freeze({
 });
 
 const MIN_SYNC_COMPLETIONS = config.fluxapps.appSyncMinCompletions ?? 3;
+// Per-peer deadline: each asked peer gets this long, from the moment it is
+// asked, to deliver all sync types before it is failed and replaced.
 const SYNC_TIMEOUT_MS = config.fluxapps.syncTimeoutMs ?? 120000;
+// Total distinct peers a sync round may ask (initial batch + replacements).
+// Bounds the worst case to (1 + MAX - MIN) sequential deadlines before the
+// block timer remains the only path to readiness.
+const MAX_SYNC_PEERS = config.fluxapps.appSyncMaxPeers ?? 5;
 const MIN_UPTIME_SECONDS = config.fluxapps.appSyncMinPeerUptime ?? 7500;
 const HASH_SYNC_MAX_RETRIES = config.fluxapps.hashSyncMaxRetries ?? 3;
 const HASH_SYNC_RETRY_MS = config.fluxapps.hashSyncRetryMs ?? 300000;
 const FALLBACK_RECHECK_BLOCKS = config.fluxapps.hashSyncFallbackRecheckBlocks ?? 100;
+
+// The three counted ephemeral sync types. Temp messages are requested with
+// the initial batch but are best-effort and never counted toward readiness.
+const SYNC_TYPES = Object.freeze(['apprunning', 'appinstalling', 'apperrors']);
 
 class AppSyncOrchestrator {
   #state = STATES.INITIALIZING;
@@ -37,6 +47,7 @@ class AppSyncOrchestrator {
   #offPeerEvent = null;
   #markSyncRequested = null;
   #clearSyncRequested = null;
+  #completeSyncRequest = null;
   #isEnterprise = null;
   #waitForNetworkState = null;
   #networkReady = false;
@@ -56,9 +67,14 @@ class AppSyncOrchestrator {
   #started = false;
   #syncInProgress = false;
   #askedPeers = new Set();
+  // Per asked peer: { askedAt, done: Set<syncType>, failed }. A failed peer
+  // (disconnected or past its deadline) keeps its delivered types counted in
+  // #syncCompletions; only what it never delivered is re-asked elsewhere.
+  #peerProgress = new Map();
   #syncCompletions = { apprunning: 0, appinstalling: 0, apperrors: 0 };
   #stateSyncComplete = false;
-  #syncTimeout = null;
+  #syncRoundAbandoned = false;
+  #syncPeerLostHandler = null;
   #hashSyncAttempts = 0;
   #hashSyncRetryTimer = null;
   #nextHashRetryHeight = 0;
@@ -76,6 +92,7 @@ class AppSyncOrchestrator {
     this.#offPeerEvent = options.offPeerEvent;
     this.#markSyncRequested = options.markSyncRequested ?? (() => {});
     this.#clearSyncRequested = options.clearSyncRequested ?? (() => {});
+    this.#completeSyncRequest = options.completeSyncRequest ?? (() => {});
     this.#isEnterprise = options.isEnterprise ?? (() => false);
     this.#peerCountIfAboveThreshold = options.peerCountIfAboveThreshold ?? (() => 0);
     this.#waitForNetworkState = options.networkStateReady ?? null;
@@ -116,8 +133,10 @@ class AppSyncOrchestrator {
       log.info(`AppSyncOrchestrator - Peers below threshold (${count} peers)`);
       this.#onPeersDegraded();
     };
+    this.#syncPeerLostHandler = (key) => this.#onSyncPeerLost(key);
     this.#onPeerEvent('peerThresholdReached', this.#peerThresholdHandler);
     this.#onPeerEvent('peersBelowThreshold', this.#peersBelowHandler);
+    this.#onPeerEvent('syncPeerLost', this.#syncPeerLostHandler);
 
     // peerThresholdReached is edge-triggered and latched in FluxPeerManager:
     // if peers connected fast enough that the threshold was crossed BEFORE the
@@ -130,7 +149,7 @@ class AppSyncOrchestrator {
       this.#peerThresholdHandler(peersAlready);
     }
 
-    this.#ephemeralSyncHandler = (syncType) => this.#onEphemeralSyncComplete(syncType);
+    this.#ephemeralSyncHandler = (syncType, peerKey) => this.#onEphemeralSyncComplete(syncType, peerKey);
     appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_COMPLETE, this.#ephemeralSyncHandler);
 
     this.#hashUnresolvedHandler = () => this.#onHashUnresolved();
@@ -163,9 +182,11 @@ class AppSyncOrchestrator {
     this.#onPeersReady();
   }
 
-  #onEphemeralSyncComplete(syncType) {
+  #onEphemeralSyncComplete(syncType, peerKey) {
     if (this.#stateSyncComplete) return;
     if (this.#syncCompletions[syncType] === undefined) return;
+    const progress = this.#peerProgress.get(peerKey);
+    if (progress && !progress.failed) progress.done.add(syncType);
     this.#syncCompletions[syncType] += 1;
     log.info(`AppSyncOrchestrator - ${syncType} sync complete (${this.#syncCompletions[syncType]}/${MIN_SYNC_COMPLETIONS})`);
     fluxEventBus.publish('ephemeralSync:peerComplete', {
@@ -177,11 +198,8 @@ class AppSyncOrchestrator {
       && this.#syncCompletions.appinstalling >= MIN_SYNC_COMPLETIONS
       && this.#syncCompletions.apperrors >= MIN_SYNC_COMPLETIONS) {
       this.#stateSyncComplete = true;
-      if (this.#syncTimeout) {
-        clearTimeout(this.#syncTimeout);
-        this.#syncTimeout = null;
-      }
       this.#clearSyncRequested();
+      this.#peerProgress.clear();
       log.info('AppSyncOrchestrator - All state syncs complete');
       fluxEventBus.publish('ephemeralSync:allComplete', {
         apprunning: this.#syncCompletions.apprunning,
@@ -190,6 +208,98 @@ class AppSyncOrchestrator {
       });
       this.#checkReadiness();
     }
+  }
+
+  /**
+   * A peer we asked dropped its connection. If it still owed sync types, it
+   * is failed and what it never delivered is re-asked from a fresh peer. Its
+   * delivered types stay banked in the completion counts.
+   * @param {string} key ip:port of the lost peer
+   */
+  #onSyncPeerLost(key) {
+    if (this.#stateSyncComplete) return;
+    const progress = this.#peerProgress.get(key);
+    if (!progress || progress.failed) return;
+    const missing = SYNC_TYPES.filter((type) => !progress.done.has(type));
+    if (missing.length === 0) return;
+    progress.failed = true;
+    log.warn(`AppSyncOrchestrator - Sync peer ${key} disconnected mid-sync (missing: ${missing.join(', ')})`);
+    fluxEventBus.publish('ephemeralSync:peerFailed', { peer: key, reason: 'disconnected', missing });
+    this.#topUpSyncPeers();
+  }
+
+  /**
+   * Per-block supervision of an open sync round: fail peers that missed
+   * their per-peer deadline (their late responses are no longer accepted),
+   * then retry any replacement that previously found no fresh peer.
+   */
+  #superviseStateSync() {
+    if (this.#stateSyncComplete || this.#syncRoundAbandoned) return;
+    if (this.#askedPeers.size === 0) return;
+    const now = Date.now();
+    for (const [key, progress] of this.#peerProgress) {
+      if (progress.failed) continue;
+      const missing = SYNC_TYPES.filter((type) => !progress.done.has(type));
+      if (missing.length === 0) continue;
+      if (now - progress.askedAt < SYNC_TIMEOUT_MS) continue;
+      progress.failed = true;
+      this.#completeSyncRequest(key);
+      log.warn(`AppSyncOrchestrator - Sync peer ${key} missed the ${Math.round(SYNC_TIMEOUT_MS / 1000)}s deadline (missing: ${missing.join(', ')})`);
+      fluxEventBus.publish('ephemeralSync:peerFailed', { peer: key, reason: 'deadline', missing });
+    }
+    this.#topUpSyncPeers();
+  }
+
+  /**
+   * Replace failed sync peers: for every type still short of
+   * MIN_SYNC_COMPLETIONS after counting live in-flight peers, ask fresh
+   * never-asked peers for exactly the missing types. Bounded by
+   * MAX_SYNC_PEERS per sync round; when the budget is spent and nothing is
+   * in flight, the round is abandoned and the block timer remains the only
+   * path to readiness (the pre-existing terminal fallback).
+   */
+  #topUpSyncPeers() {
+    if (this.#stateSyncComplete || this.#syncRoundAbandoned) return;
+    if (this.#askedPeers.size === 0) return;
+
+    const pending = { apprunning: 0, appinstalling: 0, apperrors: 0 };
+    let anyLivePending = false;
+    for (const progress of this.#peerProgress.values()) {
+      if (progress.failed) continue;
+      for (const type of SYNC_TYPES) {
+        if (!progress.done.has(type)) {
+          pending[type] += 1;
+          anyLivePending = true;
+        }
+      }
+    }
+    const typesNeeded = SYNC_TYPES.filter(
+      (type) => this.#syncCompletions[type] + pending[type] < MIN_SYNC_COMPLETIONS,
+    );
+    if (typesNeeded.length === 0) return;
+
+    const budget = MAX_SYNC_PEERS - this.#askedPeers.size;
+    if (budget <= 0) {
+      if (!anyLivePending) {
+        this.#syncRoundAbandoned = true;
+        this.#clearSyncRequested();
+        this.#peerProgress.clear();
+        log.warn(`AppSyncOrchestrator - State sync abandoned after ${this.#askedPeers.size} peers, block timer will force readiness`);
+      }
+      return;
+    }
+
+    const eligible = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
+    const fresh = eligible.filter((peer) => !this.#askedPeers.has(peer.key));
+    if (fresh.length === 0) return; // re-checked on every processed block
+
+    const needed = Math.max(...typesNeeded.map(
+      (type) => MIN_SYNC_COMPLETIONS - this.#syncCompletions[type] - pending[type],
+    ));
+    const peersToAsk = fresh.slice(0, Math.min(needed, budget));
+    const peerKeys = peersToAsk.map((peer) => peer.key).join(', ');
+    log.info(`AppSyncOrchestrator - Replacing failed sync peers: asking ${peerKeys} for ${typesNeeded.join(', ')}`);
+    this.#askPeersForTypes(peersToAsk, typesNeeded, false);
   }
 
   async #onPeersReady() {
@@ -209,20 +319,53 @@ class AppSyncOrchestrator {
   }
 
   async #requestSyncs() {
+    if (this.#stateSyncComplete) return;
+    if (this.#askedPeers.size > 0) {
+      // A round is already open (e.g. a peer-threshold re-fire) - only
+      // replace what is actually missing instead of asking a fresh batch.
+      this.#topUpSyncPeers();
+      return;
+    }
+
     const eligible = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
-    const fresh = eligible.filter((p) => !this.#askedPeers.has(p.key));
-
-    if (fresh.length < MIN_SYNC_COMPLETIONS && this.#askedPeers.size === 0) {
-      log.info(`AppSyncOrchestrator - Only ${fresh.length} eligible sync peers (need ${MIN_SYNC_COMPLETIONS}), falling back to block timer`);
+    if (eligible.length < MIN_SYNC_COMPLETIONS) {
+      log.info(`AppSyncOrchestrator - Only ${eligible.length} eligible sync peers (need ${MIN_SYNC_COMPLETIONS}), falling back to block timer`);
       return;
     }
 
-    if (fresh.length === 0) {
-      log.info('AppSyncOrchestrator - No new eligible sync peers to ask');
-      return;
-    }
+    const peersToAsk = eligible.slice(0, MIN_SYNC_COMPLETIONS);
+    await this.#askPeersForTypes(peersToAsk, SYNC_TYPES, true);
+  }
 
-    const peersToAsk = fresh.slice(0, MIN_SYNC_COMPLETIONS);
+  #sendRequests(peers, label, message) {
+    const peerKeys = peers.map((p) => p.key).join(', ');
+    log.info(`AppSyncOrchestrator - Requesting ${label} sync from ${peers.length} peers: ${peerKeys}`);
+    for (const peer of peers) {
+      try {
+        peer.send(message);
+      } catch (error) {
+        log.error(`AppSyncOrchestrator - Failed to request ${label} from ${peer.key}: ${error.message}`);
+      }
+    }
+  }
+
+  /**
+   * Send sync requests for the given types to the given peers. Peers are
+   * registered in the asked ledger and progress map synchronously, before the
+   * async signing work, so concurrent top-up triggers cannot double-ask. If
+   * signing fails the registered peers never receive requests; their deadline
+   * expiry replaces them.
+   * @param {Array<{key: string, send: Function}>} peersToAsk
+   * @param {string[]} types Counted sync types to request
+   * @param {boolean} includeTemp Also request temp messages (initial batch only)
+   */
+  async #askPeersForTypes(peersToAsk, types, includeTemp) {
+    const askedAt = Date.now();
+    for (const peer of peersToAsk) {
+      this.#askedPeers.add(peer.key);
+      this.#markSyncRequested(peer.key);
+      this.#peerProgress.set(peer.key, { askedAt, done: new Set(), failed: false });
+    }
 
     let pubkey;
     let requestTs;
@@ -240,46 +383,27 @@ class AppSyncOrchestrator {
       return;
     }
 
-    for (const peer of peersToAsk) {
-      this.#askedPeers.add(peer.key);
-      this.#markSyncRequested(peer.key);
+    if (includeTemp) {
+      const tempSig = signMsg(peerCodec.MSG_TYPE.REQUEST_TEMP_MESSAGES, 0);
+      this.#sendRequests(peersToAsk, 'temp messages', peerCodec.encodeRequestTempMessages(0, requestTs, pubkey, tempSig));
     }
 
-    const tempSig = signMsg(peerCodec.MSG_TYPE.REQUEST_TEMP_MESSAGES, 0);
-    const runningSig = signMsg(peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, 0);
-    const installingSig = signMsg(peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING, 0);
-    const errorsSig = signMsg(peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING_ERRORS, 0);
+    const codecs = {
+      apprunning: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, encode: peerCodec.encodeRequestAppRunning },
+      appinstalling: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING, encode: peerCodec.encodeRequestAppInstalling },
+      apperrors: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING_ERRORS, encode: peerCodec.encodeRequestAppInstallingErrors },
+    };
+    for (const type of types) {
+      const { msgType, encode } = codecs[type];
+      const sig = signMsg(msgType, 0);
+      this.#sendRequests(peersToAsk, type, encode(0, requestTs, pubkey, sig));
+    }
 
-    this.#sendRequests(peersToAsk, 'temp messages', peerCodec.encodeRequestTempMessages(0, requestTs, pubkey, tempSig));
-    this.#sendRequests(peersToAsk, 'apprunning', peerCodec.encodeRequestAppRunning(0, requestTs, pubkey, runningSig));
-    this.#sendRequests(peersToAsk, 'appinstalling', peerCodec.encodeRequestAppInstalling(0, requestTs, pubkey, installingSig));
-    this.#sendRequests(peersToAsk, 'apperrors', peerCodec.encodeRequestAppInstallingErrors(0, requestTs, pubkey, errorsSig));
     fluxEventBus.publish('ephemeralSync:requested', {
       peerCount: peersToAsk.length,
-      peers: peersToAsk.map((p) => p.key),
+      peers: peersToAsk.map((peer) => peer.key),
+      types,
     });
-
-    if (!this.#syncTimeout && !this.#stateSyncComplete) {
-      this.#syncTimeout = setTimeout(() => {
-        this.#syncTimeout = null;
-        this.#clearSyncRequested();
-        if (!this.#stateSyncComplete) {
-          log.warn(`AppSyncOrchestrator - Sync timeout, completions: apprunning=${this.#syncCompletions.apprunning} appinstalling=${this.#syncCompletions.appinstalling} apperrors=${this.#syncCompletions.apperrors}`);
-        }
-      }, SYNC_TIMEOUT_MS);
-    }
-  }
-
-  #sendRequests(peers, label, message) {
-    const peerKeys = peers.map((p) => p.key).join(', ');
-    log.info(`AppSyncOrchestrator - Requesting ${label} sync from ${peers.length} peers: ${peerKeys}`);
-    for (const peer of peers) {
-      try {
-        peer.send(message);
-      } catch (error) {
-        log.error(`AppSyncOrchestrator - Failed to request ${label} from ${peer.key}: ${error.message}`);
-      }
-    }
   }
 
   #onPeersDegraded() {
@@ -295,14 +419,12 @@ class AppSyncOrchestrator {
 
   #resetSyncState() {
     this.#askedPeers.clear();
+    this.#peerProgress.clear();
     this.#clearSyncRequested();
     this.#syncCompletions = { apprunning: 0, appinstalling: 0, apperrors: 0 };
     this.#stateSyncComplete = false;
+    this.#syncRoundAbandoned = false;
     this.#hashSyncAttempts = 0;
-    if (this.#syncTimeout) {
-      clearTimeout(this.#syncTimeout);
-      this.#syncTimeout = null;
-    }
     if (this.#hashSyncRetryTimer) {
       clearTimeout(this.#hashSyncRetryTimer);
       this.#hashSyncRetryTimer = null;
@@ -323,6 +445,7 @@ class AppSyncOrchestrator {
     }
     if (this.#state === STATES.SYNCING || this.#state === STATES.READY || this.#state === STATES.RESYNCING) {
       this.#blocksSinceSyncStarted += count;
+      this.#superviseStateSync();
       this.#checkReadiness();
       this.#checkHashRetry(blockHeight);
     }
@@ -636,12 +759,11 @@ class AppSyncOrchestrator {
     if (this.#peersBelowHandler) {
       this.#offPeerEvent('peersBelowThreshold', this.#peersBelowHandler);
     }
+    if (this.#syncPeerLostHandler) {
+      this.#offPeerEvent('syncPeerLost', this.#syncPeerLostHandler);
+    }
     peerNotification.stopBroadcastInterval();
     this.#broadcastStarted = null;
-    if (this.#syncTimeout) {
-      clearTimeout(this.#syncTimeout);
-      this.#syncTimeout = null;
-    }
     if (this.#hashSyncRetryTimer) {
       clearTimeout(this.#hashSyncRetryTimer);
       this.#hashSyncRetryTimer = null;

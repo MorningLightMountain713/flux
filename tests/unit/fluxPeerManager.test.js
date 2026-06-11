@@ -682,6 +682,44 @@ describe('FluxPeerManager tests', () => {
     });
   });
 
+  describe('sync peer loss announcements', () => {
+    it('should announce a removed peer whose sync request was still in flight', () => {
+      const ws = createMockWs('10.0.0.1', '16127');
+      manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
+      manager.markSyncRequested('10.0.0.1:16127');
+      const lost = [];
+      manager.on('syncPeerLost', (key) => lost.push(key));
+
+      manager.remove('10.0.0.1:16127');
+
+      expect(lost).to.deep.equal(['10.0.0.1:16127']);
+    });
+
+    it('should stay silent when the removed peer had no sync request in flight', () => {
+      const ws = createMockWs('10.0.0.1', '16127');
+      manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
+      const lost = [];
+      manager.on('syncPeerLost', (key) => lost.push(key));
+
+      manager.remove('10.0.0.1:16127');
+
+      expect(lost).to.deep.equal([]);
+    });
+
+    it('should stay silent when the sync request was completed before removal', () => {
+      const ws = createMockWs('10.0.0.1', '16127');
+      manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
+      manager.markSyncRequested('10.0.0.1:16127');
+      manager.completeSyncRequest('10.0.0.1:16127');
+      const lost = [];
+      manager.on('syncPeerLost', (key) => lost.push(key));
+
+      manager.remove('10.0.0.1:16127');
+
+      expect(lost).to.deep.equal([]);
+    });
+  });
+
   describe('has / get', () => {
     it('should return true/peer for existing key', () => {
       const ws = createMockWs('10.0.0.1', '16127');
