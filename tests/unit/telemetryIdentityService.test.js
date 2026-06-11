@@ -23,6 +23,8 @@ describe('telemetryIdentityService tests', () => {
 
     sinkCacheStub = {
       getSink: sinon.stub().returns(null),
+      hasAnyTelemetryApps: sinon.stub().returns(false),
+      onChange: sinon.stub(),
     };
 
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
@@ -36,7 +38,7 @@ describe('telemetryIdentityService tests', () => {
       './serviceHelper': { runCommand: sinon.stub().resolves({ error: null, stdout: '', stderr: '' }) },
       './geolocationService': geolocationServiceStub,
       './telemetrySinkCache': sinkCacheStub,
-      './telemetryConfigService': { chownGroup: sinon.stub().resolves() },
+      './telemetryConfigService': { chownGroup: sinon.stub().resolves(), ensureNode: sinon.stub().resolves() },
     });
   });
 

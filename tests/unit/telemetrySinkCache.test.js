@@ -89,6 +89,33 @@ describe('telemetrySinkCache tests', () => {
     });
   });
 
+  describe('onChange', () => {
+    it('notifies when a sink appears, changes, or is removed', () => {
+      const listener = sinon.stub();
+      cache.onChange(listener);
+
+      cache.setSink('app1', { provider: 'datadog', apiKey: 'k1' });
+      expect(listener.callCount).to.equal(1);
+
+      cache.setSink('app1', { provider: 'datadog', apiKey: 'k2' });
+      expect(listener.callCount).to.equal(2);
+
+      cache.deleteSink('app1');
+      expect(listener.callCount).to.equal(3);
+    });
+
+    it('does not notify when the stored sink is unchanged (reconcile sweeps re-seed every cycle)', () => {
+      const listener = sinon.stub();
+      cache.onChange(listener);
+
+      const sink = { provider: 'datadog', apiKey: 'k1' };
+      cache.setSink('app1', sink);
+      cache.setSink('app1', { ...sink });
+      cache.setSink('absent', null);
+      expect(listener.callCount).to.equal(1);
+    });
+  });
+
   describe('reconcileFromInstalled', () => {
     it('rebuilds the cache from installed telemetry apps and drops non-telemetry ones', async () => {
       deploymentProviderStub.listInstalledDeployments.resolves([
