@@ -138,18 +138,24 @@ for f in "${SUITES[@]}"; do
   docker volume ls -q --filter "label=flux-e2e-run=$RUN_LABEL" | xargs -r docker volume rm >/dev/null 2>&1
 
   echo "###SUITE-START [$i/$total] $name $(date -u +%H:%M:%S)"
-  # Wall-clock backstop around mocha ITSELF: mocha deliberately runs without
-  # --exit, so a suite that finishes its run but holds one leaked handle hangs
-  # forever — and the gate driver waits on the pid, so one wedged suite stalls
-  # the whole gate (suite 28 in the 2026-06-12 gate sat 65 minutes until killed
-  # by hand). timeout must wrap mocha directly: bash defers traps while a
-  # foreground child runs, so an outer timeout on this script could never fire.
-  # node_modules/.bin/mocha (not npx) so the TERM lands on the mocha node
-  # process, not a wrapper; -k escalates to KILL if the event loop is wedged.
-  # A timed-out suite reports a nonzero rc in SUITE-END (observed 125 when the
-  # TERM landed mid-boot; the exact code depends on how mocha dies).
-  timeout -k 30s "${E2E_SUITE_WALL_SEC:-1800}s" node_modules/.bin/mocha "$f" --reporter tap --timeout "$SUITE_TIMEOUT_MS" 2>&1 | tee "$LOG_DIR/$name.tap"
+  # Two complementary protections so one suite can't stall the whole gate (the
+  # driver waits on the pid):
+  #   --exit: a finished run that holds a leaked handle must not hang mocha and
+  #     swallow the run's aggregate (the suite-21 incident); open-handle-report
+  #     keeps such leaks visible as a non-gating ###OPEN-HANDLES warning.
+  #   timeout -k: wall-clock backstop for a suite wedged MID-run, which --exit
+  #     cannot help (suite 28 sat 65 minutes in the 2026-06-12 gate). timeout
+  #     must wrap mocha directly (bash defers traps while a foreground child
+  #     runs, so an outer timeout could never fire); node_modules/.bin/mocha
+  #     (not npx) so the TERM lands on the mocha node process, not a wrapper;
+  #     -k escalates to KILL if the event loop is wedged. A timed-out suite
+  #     reports a nonzero rc in SUITE-END.
+  timeout -k 30s "${E2E_SUITE_WALL_SEC:-1800}s" node_modules/.bin/mocha "$f" --reporter tap --timeout "$SUITE_TIMEOUT_MS" --exit --require ./framework/open-handle-report.js 2>&1 | tee "$LOG_DIR/$name.tap"
   rc=${PIPESTATUS[0]}
+
+  if grep -q '###OPEN-HANDLES' "$LOG_DIR/$name.tap" 2>/dev/null; then
+    echo "###OPEN-HANDLES-WARN $name $(grep -m1 '###OPEN-HANDLES' "$LOG_DIR/$name.tap")"
+  fi
 
   # grep -c prints the count (0 when none) but exits 1 on zero matches; `|| true`
   # keeps that single "0" without appending a second one (which would break the
