@@ -194,7 +194,7 @@ describe('Legacy spawner deferrals', function () {
     await env?.teardown();
   });
 
-  describe('non-enterprise app deferred for static_ip', function () {
+  describe('unencrypted app deferred for static_ip', function () {
     const appName = `e2elegstatip${Date.now()}`;
 
     before(async function () {
@@ -217,7 +217,7 @@ describe('Legacy spawner deferrals', function () {
     });
   });
 
-  describe('non-enterprise app deferred for datacenter', function () {
+  describe('unencrypted app deferred for datacenter', function () {
     const appName = `e2elegdc${Date.now()}`;
 
     before(async function () {
