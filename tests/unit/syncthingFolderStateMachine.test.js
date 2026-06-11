@@ -295,7 +295,7 @@ describe('syncthingFolderStateMachine tests', () => {
       mockParams = {
         appId: 'test-app',
         syncFolder: null,
-        syncMode: 'receiveOnly',
+        syncMode: 'syncFirst',
         syncthingAppsFirstRun: false,
         receiveOnlySyncthingAppsCache: new Map(),
         appLocation: sinon.stub().resolves([]),
@@ -317,6 +317,32 @@ describe('syncthingFolderStateMachine tests', () => {
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
       expect(result.skipUpdate).to.be.true;
+    });
+
+    it('requests a start for a stopped syncFirst component whose folder is already sendreceive', async () => {
+      appReconcilerMock.setControllerDesired.resetHistory();
+      mockParams.syncFolder = { type: 'sendreceive' };
+      dockerServiceMock.dockerContainerInspect.resolves({
+        State: { Running: false },
+      });
+
+      const result = await stateMachine.manageFolderSyncState(mockParams);
+
+      expect(result.skipUpdate).to.be.true;
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+    });
+
+    it('does not request a start for a stopped activeStandby component (the election decides)', async () => {
+      appReconcilerMock.setControllerDesired.resetHistory();
+      mockParams.syncFolder = { type: 'sendreceive' };
+      mockParams.syncMode = 'activeStandby';
+      dockerServiceMock.dockerContainerInspect.resolves({
+        State: { Running: false },
+      });
+
+      await stateMachine.manageFolderSyncState(mockParams);
+
+      sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
     });
 
     it('should handle first run with no sync folder', async () => {
