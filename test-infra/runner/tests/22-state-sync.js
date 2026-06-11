@@ -298,25 +298,45 @@ describe('State sync: 3-peer ephemeral sync', function () {
   });
 });
 
-describe('State sync: failed sync peers are replaced', function () {
+describe('State sync: failed sync peer is replaced', function () {
   let env;
   dumpLogsOnFailure(() => env);
   const appName = `e2esynrep${Date.now()}`;
+  // 4 sources and a late joiner that needs 4 peers and 4 completions: it must
+  // ask every source, so the single poisoned source is deterministically in
+  // the asked set. One poisoned node only, because failCommand is one global
+  // failpoint on the shared mongod (see db-client.failpointFind).
+  const SOURCES = [0, 1, 2, 3];
+  const POISONED_DB = 4; // dbClient index of source node 3
+  const JOINER = 4;
+  const LATECOMER = 5;
 
   before(async function () {
     this.timeout(600000);
     env = await createTestEnv({ hookCtx: this,
-      nodes: 11,
-      deferredNodes: 1,
+      nodes: 6,
+      deferredNodes: 2,
       tickerAutostart: false,
       nodeConfigOverrides: {
-        // appSyncMaxPeers must cover the initial batch of 3 plus a full
-        // replacement batch of 3 after every initial peer misses its deadline
-        10: { fluxapps: { appSyncMinCompletions: 3, appSyncPeerThreshold: 3, appSyncMaxPeers: 8 } },
+        // appSyncMaxPeers covers the initial batch of 4 plus replacements
+        4: { fluxapps: { appSyncMinCompletions: 4, appSyncPeerThreshold: 4, appSyncMaxPeers: 6 } },
       },
     });
-    const initial = Array.from({ length: 10 }, (_, i) => i);
-    await bootAndPeer(env, initial);
+
+    // bootAndPeer's connection thresholds assume a 10-node mesh; a 4-source
+    // mesh tops out at 3 connections per node
+    const clients = SOURCES.map((i) => env.clients[i]);
+    for (const client of clients) await waitForDaemonReady(client);
+    await Promise.all(clients.map(
+      (c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000),
+    ));
+    await advanceBlock();
+    for (const client of clients) {
+      await waitForBlockProcessed(client, (d) => d.height > 2100000, 50000);
+    }
+    await env.startDiscovery(SOURCES);
+    await clients[0].waitForEvent('peers:added', (d) => d.total >= 3, 120000);
+    await startTicker();
 
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
@@ -336,14 +356,14 @@ describe('State sync: failed sync peers are replaced', function () {
       }],
     });
 
-    for (let i = 1; i <= 10; i++) {
-      const dc = dbClient(i);
+    for (const i of SOURCES) {
+      const dc = dbClient(i + 1);
       await dc.seedGlobalAppSpec(app.spec);
       await dc.seedPermanentMessage(app.permanentMessage);
       await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
       await dc.seedAppLocation({
         name: appName,
-        ip: `${subnet.base}.${100 + i}:16127`,
+        ip: `${subnet.base}.${101 + i}:16127`,
         hash: app.hash,
         broadcastedAt: Date.now(),
       });
@@ -352,65 +372,60 @@ describe('State sync: failed sync peers are replaced', function () {
     await queueAppTx(app.hash);
     await advanceBlock();
     await Promise.any(
-      env.clients.slice(0, 10).map((c) => c.waitForEvent('network:apprunning',
+      clients.map((c) => c.waitForEvent('network:apprunning',
         (d) => d.apps?.some((a) => a.name === appName), 60000)),
     );
-    await waitForOrchestratorState(env.clients[0], 'READY', 120000);
+    await waitForOrchestratorState(clients[0], 'READY', 120000);
 
-    // Every source node fails ALL its appstateevents reads until cleared:
-    // whichever 3 peers the late joiner asks will deliver appinstalling and
-    // apperrors but never the apprunning done marker, so all 3 miss the
-    // per-peer deadline. alwaysOn rather than a count so internal reads of
-    // the same collection cannot drain the failpoint before the request
-    for (let i = 1; i <= 10; i++) {
-      await dbClient(i).failpointFind('appstateevents', { always: true, db: 'appsGlobal' });
-    }
+    // Poison one source: ALL its appstateevents reads fail until cleared, so
+    // it delivers appinstalling and apperrors but never the apprunning done
+    // marker and misses the per-peer deadline. alwaysOn rather than a count
+    // so internal reads of the same collection cannot drain the failpoint
+    await dbClient(POISONED_DB).failpointFind('appstateevents', { always: true, db: 'appsGlobal' });
   });
 
   after(async function () {
     this.timeout(60000);
-    for (let i = 1; i <= 10; i++) {
-      try {
-        await dbClient(i).failpointClear();
-      } catch (err) { /* node may already be gone in teardown */ }
-    }
+    try {
+      await dbClient(POISONED_DB).failpointClear();
+    } catch (err) { /* node may already be gone in teardown */ }
     await env?.teardown();
   });
 
-  it('should replace deadline-failed peers with fresh peers and complete sync', async function () {
-    this.timeout(240000);
-    const client = await env.startNode(10);
+  it('should replace a deadline-failed peer with a fresh one and complete sync', async function () {
+    this.timeout(300000);
+    const poisonedKey = `${subnet.base}.13:16127`;
+    const client = await env.startNode(JOINER);
     await waitForDaemonReady(client);
     await waitForNodeStatus(client, (d) => d.confirmed === true, 30000);
 
-    // Round 1: three peers asked for every sync type
+    // Round 1: the joiner needs 4 completions from 4 peers, so every source
+    // is asked, the poisoned one included
     const round1 = await client.waitForEvent(
       'ephemeralSync:requested',
-      (d) => d.peerCount >= 3,
+      (d) => d.peerCount >= 4,
       120000,
     );
+    expect(round1.data.peers).to.include(poisonedKey);
 
-    // Disarm the failpoints so the replacement round can succeed. The round-1
-    // reads have already failed (responders read within milliseconds of the
-    // request) and round 2 cannot send before the per-peer deadline expires,
-    // so this clear sits in a window a full deadline wide
-    for (let i = 1; i <= 10; i++) {
-      await dbClient(i).failpointClear();
-    }
-
-    // All three round-1 peers miss the per-peer deadline on apprunning
+    // The poisoned source misses its per-peer deadline on apprunning only
     const failed = await client.waitForEvent(
       'ephemeralSync:peerFailed',
       (d) => d.reason === 'deadline' && d.missing.includes('apprunning'),
       120000,
     );
-    expect(round1.data.peers).to.include(failed.data.peer);
+    expect(failed.data.peer).to.equal(poisonedKey);
+    await dbClient(POISONED_DB).failpointClear();
 
-    // Round 2 asks only fresh peers and only for the missing type
+    // No fresh peer exists at failure time; the replacement happens once one
+    // appears (the suite-19 shape: retried on each processed block)
+    const fresh = await env.startNode(LATECOMER);
+    await waitForDaemonReady(fresh);
+
     const round2 = await client.waitForEvent(
       'ephemeralSync:requested',
       (d) => Array.isArray(d.types) && d.types.length === 1,
-      120000,
+      180000,
     );
     expect(round2.data.types).to.deep.equal(['apprunning']);
     for (const key of round2.data.peers) {
@@ -418,7 +433,7 @@ describe('State sync: failed sync peers are replaced', function () {
     }
 
     const allComplete = await client.waitForEvent('ephemeralSync:allComplete', () => true, 120000);
-    expect(allComplete.data.apprunning).to.be.gte(3);
+    expect(allComplete.data.apprunning).to.be.gte(4);
     await waitForOrchestratorState(client, 'READY', 120000);
   });
 });

@@ -315,6 +315,9 @@ export function dbClient(nodeNum) {
       await this.seedGeolocation(ip);
     },
 
+    // failCommand is a single GLOBAL failpoint on the mongod, and all harness
+    // nodes share one mongod: arming it for several nodes/namespaces just
+    // overwrites the previous configuration. One namespace at a time only.
     async failpointFind(collection, { times = 1, always = false, errorCode = 50, db: dbKey = 'explorer' } = {}) {
       const client = await getClient();
       const namespace = `${dbNames[dbKey]}.${collection}`;
