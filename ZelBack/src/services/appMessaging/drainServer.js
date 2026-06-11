@@ -15,9 +15,10 @@ const appReconciler = require('../appMonitoring/appReconciler');
  *
  * Deliberately a local UNIX socket, NOT the public HTTP API: the API binds all
  * interfaces and is UPnP-forwarded, so a network-reachable drain endpoint would
- * be a remote DoS. Caller authorization is by filesystem permissions -- the
- * socket is group flux-daemon-access, mode 0660; ownership/group are a
- * deployment concern (fluxos runs with that group on Arcane).
+ * be a remote DoS. Caller authorization is by filesystem permissions -- after
+ * listen the socket and its dir are chgrp'd flux-daemon-access (socket 0660,
+ * dir 0750) so the flux-shutdownd service user can connect; on hosts without
+ * the group (dev) the perms stay owner-only.
  */
 
 const SOCKET_PATH = process.env.FLUX_DRAIN_SOCKET || '/run/fluxos/drain.sock';
@@ -149,6 +150,24 @@ function onConnection(socket) {
 }
 
 /**
+ * Resolve the flux-daemon-access gid so the socket can be group-opened to the
+ * flux-shutdownd service user. Node has no getgrnam, so read /etc/group.
+ * Null (group absent -- dev boxes) leaves the perms owner-only.
+ */
+function daemonAccessGid() {
+  let groups;
+  try {
+    groups = fs.readFileSync('/etc/group', 'utf8');
+  } catch {
+    return null;
+  }
+  const line = groups.split('\n').find((entry) => entry.startsWith('flux-daemon-access:'));
+  const gid = line ? Number(line.split(':')[2]) : NaN;
+  const resolved = Number.isInteger(gid) ? gid : null;
+  return resolved;
+}
+
+/**
  * Start the drain socket server. Arcane-only -- only the local flux-shutdownd
  * connects, so non-Arcane nodes create no socket. Best-effort: a bind failure
  * is logged, never fatal to startup.
@@ -166,6 +185,13 @@ async function start() {
       srv.listen(SOCKET_PATH, resolve);
     });
     fs.chmodSync(SOCKET_PATH, 0o660);
+    const gid = daemonAccessGid();
+    if (gid !== null) {
+      try {
+        fs.chownSync(SOCKET_PATH, -1, gid);
+        fs.chownSync(nodePath.dirname(SOCKET_PATH), -1, gid);
+      } catch { /* non-root dev runs cannot chgrp; perms stay owner-only */ }
+    }
     server = srv;
     log.info(`drain socket listening at ${SOCKET_PATH}`);
   } catch (error) {
@@ -186,5 +212,6 @@ module.exports = {
   stop,
   handleRequest,
   sweepExpiredStates,
+  daemonAccessGid,
   SOCKET_PATH,
 };
