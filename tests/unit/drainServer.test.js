@@ -158,4 +158,34 @@ describe('drainServer tests', () => {
       expect(globalState.getAppLbState('myapp')).to.equal('draining');
     });
   });
+
+  describe('daemonAccessGid', () => {
+    function loadWithEtcGroup(readFileSync) {
+      return proxyquire('../../ZelBack/src/services/appMessaging/drainServer', {
+        'node:fs': { readFileSync },
+        './peerNotification': { checkAndNotifyPeersOfRunningApps: rebroadcastStub },
+        '../appMonitoring/appReconciler': { enqueueAll: enqueueAllStub },
+        '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+      });
+    }
+
+    it('resolves the gid of flux-daemon-access from /etc/group', () => {
+      const etcGroup = 'docker:x:986:fluxadm\nflux-daemon-access:x:1000:fluxadm\n';
+      const loaded = loadWithEtcGroup(sinon.stub().returns(etcGroup));
+
+      expect(loaded.daemonAccessGid()).to.equal(1000);
+    });
+
+    it('returns null when the group is absent (dev boxes)', () => {
+      const loaded = loadWithEtcGroup(sinon.stub().returns('docker:x:986:fluxadm\n'));
+
+      expect(loaded.daemonAccessGid()).to.equal(null);
+    });
+
+    it('returns null when /etc/group is unreadable', () => {
+      const loaded = loadWithEtcGroup(sinon.stub().throws(new Error('EACCES')));
+
+      expect(loaded.daemonAccessGid()).to.equal(null);
+    });
+  });
 });
