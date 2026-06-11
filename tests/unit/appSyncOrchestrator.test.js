@@ -443,6 +443,155 @@ describe('AppSyncOrchestrator', () => {
     });
   });
 
+  describe('sync peer failure and replacement', () => {
+    let completeSyncRequestStub;
+    let clearSyncRequestedStub;
+
+    // Boots an orchestrator to the point where the initial batch of 3 sync
+    // peers has been asked (mainnet topology: appSyncMinCompletions = 3).
+    async function startWithAskedPeers(peers) {
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({
+        isEnterprise: () => true,
+        completeSyncRequest: completeSyncRequestStub,
+        clearSyncRequested: clearSyncRequestedStub,
+      });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      return orchestrator;
+    }
+
+    function completeAllTypes(peerKey) {
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peerKey);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', peerKey);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', peerKey);
+    }
+
+    beforeEach(() => {
+      completeSyncRequestStub = sinon.stub();
+      clearSyncRequestedStub = sinon.stub();
+    });
+
+    it('should replace a disconnected peer with one fresh peer asking only the undelivered types', async () => {
+      const peers = makeEligiblePeers(5);
+      await startWithAskedPeers(peers);
+      expect(peers[2].send.callCount).to.equal(4);
+      expect(peers[3].send.called).to.be.false;
+
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key);
+      peerEmitter.emit('syncPeerLost', peers[0].key);
+      await clock.tickAsync(0);
+
+      // One replacement peer, asked only for what is still short after the
+      // delivered apprunning completion was banked
+      expect(peers[3].send.callCount).to.equal(2);
+      const sentTypes = peers[3].send.args.map((args) => args[0][0]);
+      expect(sentTypes).to.deep.equal([0x22, 0x23]);
+      expect(peers[4].send.called).to.be.false;
+    });
+
+    it('should not replace a disconnected peer that had delivered every sync type', async () => {
+      const peers = makeEligiblePeers(5);
+      await startWithAskedPeers(peers);
+
+      completeAllTypes(peers[0].key);
+      peerEmitter.emit('syncPeerLost', peers[0].key);
+      await clock.tickAsync(0);
+
+      expect(peers[3].send.called).to.be.false;
+    });
+
+    it('should never re-ask a peer that already failed, even when it reconnects', async () => {
+      const peers = makeEligiblePeers(5);
+      await startWithAskedPeers(peers);
+
+      peerEmitter.emit('syncPeerLost', peers[0].key);
+      await clock.tickAsync(0);
+      expect(peers[3].send.callCount).to.equal(3);
+
+      // The lost peer reconnects and is eligible again; its replacement dies too
+      peerEmitter.emit('syncPeerLost', peers[3].key);
+      await clock.tickAsync(0);
+
+      expect(peers[4].send.callCount).to.equal(3);
+      expect(peers[0].send.callCount).to.equal(4);
+    });
+
+    it('should fail a silent peer at its deadline, stop accepting it, and replace it', async () => {
+      const peers = makeEligiblePeers(5);
+      await startWithAskedPeers(peers);
+      completeAllTypes(peers[0].key);
+      completeAllTypes(peers[1].key);
+
+      await clock.tickAsync(120000);
+      blockEmitter.emit('blocksProcessed', 2555001);
+      await clock.tickAsync(0);
+
+      sinon.assert.calledWith(completeSyncRequestStub, peers[2].key);
+      expect(peers[3].send.callCount).to.equal(3);
+      expect(logStub.warn.args.some((args) => String(args[0]).includes('missed the 120s deadline'))).to.be.true;
+    });
+
+    it('should retry the replacement on a later block when no fresh peer existed at failure time', async () => {
+      const peers = makeEligiblePeers(3);
+      await startWithAskedPeers(peers);
+
+      peerEmitter.emit('syncPeerLost', peers[0].key);
+      await clock.tickAsync(0);
+
+      const latecomer = makePeer('10.0.0.99:16127');
+      getEligibleSyncPeersStub.returns([...peers, latecomer]);
+      blockEmitter.emit('blocksProcessed', 2555001);
+      await clock.tickAsync(0);
+
+      expect(latecomer.send.callCount).to.equal(3);
+    });
+
+    it('should stop after the peer budget and abandon the round so the block timer takes over', async () => {
+      const peers = makeEligiblePeers(7);
+      const orchestrator = await startWithAskedPeers(peers);
+
+      for (const idx of [0, 1, 2, 3, 4]) {
+        peerEmitter.emit('syncPeerLost', peers[idx].key);
+        // eslint-disable-next-line no-await-in-loop
+        await clock.tickAsync(0);
+      }
+
+      // 3 initial + 2 replacements exhausts the budget of 5 distinct peers
+      expect(peers[3].send.callCount).to.equal(3);
+      expect(peers[4].send.callCount).to.equal(3);
+      expect(peers[5].send.called).to.be.false;
+      expect(logStub.warn.args.some((args) => String(args[0]).includes('State sync abandoned'))).to.be.true;
+      expect(clearSyncRequestedStub.called).to.be.true;
+
+      // The block timer remains the terminal path to readiness
+      for (let i = 0; i < 130; i += 1) {
+        blockEmitter.emit('blocksProcessed', 2555001 + i);
+      }
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+    });
+
+    it('should clear the in-flight marks and ignore later peer losses once sync completes', async () => {
+      const peers = makeEligiblePeers(5);
+      const orchestrator = await startWithAskedPeers(peers);
+
+      for (const peer of peers.slice(0, 3)) {
+        completeAllTypes(peer.key);
+      }
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+      expect(clearSyncRequestedStub.called).to.be.true;
+
+      peerEmitter.emit('syncPeerLost', peers[1].key);
+      await clock.tickAsync(0);
+      expect(peers[3].send.called).to.be.false;
+    });
+  });
+
   describe('hash sync recovery', () => {
     it('should retry hash sync on failure', async () => {
       syncMissingHashesStub.onFirstCall().rejects(new Error('connection failed'));

@@ -303,12 +303,12 @@ export function dbClient(nodeNum) {
       await this.seedGeolocation(ip);
     },
 
-    async failpointFind(collection, { times = 1, errorCode = 50 } = {}) {
+    async failpointFind(collection, { times = 1, always = false, errorCode = 50, db: dbKey = 'explorer' } = {}) {
       const client = await getClient();
-      const namespace = `${dbNames.explorer}.${collection}`;
+      const namespace = `${dbNames[dbKey]}.${collection}`;
       await client.db('admin').command({
         configureFailPoint: 'failCommand',
-        mode: { times },
+        mode: always ? 'alwaysOn' : { times },
         data: { failCommands: ['find'], errorCode, namespace },
       });
     },
