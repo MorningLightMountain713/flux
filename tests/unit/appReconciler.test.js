@@ -82,6 +82,7 @@ describe('appReconciler tests', () => {
       containerHealthMonitor: { recreateMissingContainers: sinon.stub().resolves() },
       appUninstaller: { uninstallApplication: sinon.stub().resolves() },
       appTamperingDetectionService: { recordEvent: sinon.stub().resolves(), isNetworkMissingError: () => false },
+      telemetrySinkCache: { setSink: sinon.stub(), extractSink: sinon.stub().returns(null) },
     };
 
     appReconciler = proxyquire('../../ZelBack/src/services/appMonitoring/appReconciler', {
@@ -97,6 +98,7 @@ describe('appReconciler tests', () => {
       './containerHealthMonitor': stubs.containerHealthMonitor,
       '../appLifecycle/appUninstaller': stubs.appUninstaller,
       '../appTamperingDetectionService': stubs.appTamperingDetectionService,
+      '../telemetrySinkCache': stubs.telemetrySinkCache,
       '../utils/appConstants': { localAppsInformation: 'zelappsinformation' },
     });
   });
@@ -226,6 +228,15 @@ describe('appReconciler tests', () => {
       expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
       expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
       expect(stubs.appInspector.startAppMonitoring.calledOnce).to.be.true;
+    });
+
+    it('re-seeds the telemetry sink on every successful deployment build', async () => {
+      // The boot-time sink rebuild races fluxbenchd's unseal; the reconcile
+      // retry path is what converges sink state once decryption is available.
+      const sink = { provider: 'datadog', apiKey: 'k' };
+      stubs.telemetrySinkCache.extractSink.returns(sink);
+      await appReconciler.reconcile('www_App');
+      expect(stubs.telemetrySinkCache.setSink.calledWith('App', sink)).to.be.true;
     });
 
     it('ensures mount sources exist (recreating any syncthing-cleaned source) before starting', async () => {
