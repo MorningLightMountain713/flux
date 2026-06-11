@@ -372,11 +372,13 @@ async function installApplication(instantiated, options = {}) {
   } catch (error) {
     globalState.installationInProgress = false;
     log.error(error.message || error);
-    if (onStatus) onStatus({ status: `Error: ${error.message || error}` });
+    // Standard error envelope: stream consumers (frontend, harness) detect a
+    // failed install by status:"error" chunks, not by parsing prose.
+    if (onStatus) onStatus(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
 
     if (!test) {
       log.info(`Error occured. Initiating Flux App ${appName} removal`);
-      if (onStatus) onStatus({ status: `Error occured. Initiating Flux App ${appName} removal` });
+      if (onStatus) onStatus(messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appName} removal`));
       await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
       log.info(`Cleanup completed for ${appName} after installation failure`);
     }
