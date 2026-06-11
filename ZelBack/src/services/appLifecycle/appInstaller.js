@@ -579,7 +579,14 @@ async function installComponent(component, options = {}) {
     await telemetryIdentityService.onComponentCreated(component);
   }
 
-  if (test || !component.hasActiveStandbySyncthing()) {
+  // A hard install (createVolumes) creates fresh empty volumes, so a
+  // component whose data must sync before first start is held for the sync
+  // decider to start once seeded; a component where only one elected
+  // instance may run is held on every install. Soft installs reuse existing
+  // volumes, so sync-before-start components start immediately.
+  const holdStart = component.hasActiveStandbySyncthing()
+    || (createVolumes && component.requiresSyncBeforeStart());
+  if (test || !holdStart) {
     status(`Starting ${id}...`);
     const app = await dockerService.appDockerStart(id);
     if (!app) {
