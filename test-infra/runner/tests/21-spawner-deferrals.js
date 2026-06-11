@@ -101,7 +101,7 @@ describe('Arcane spawner deferrals', function () {
     await env?.teardown();
   });
 
-  describe('non-enterprise app deferred as non_enterprise_on_arcane', function () {
+  describe('unencrypted app deferred as unencrypted_on_arcane', function () {
     const appName = `e2earcdefer${Date.now()}`;
 
     before(async function () {
@@ -109,10 +109,10 @@ describe('Arcane spawner deferrals', function () {
       await registerApp(env, appName);
     });
 
-    it('should defer with reason non_enterprise_on_arcane', async function () {
+    it('should defer with reason unencrypted_on_arcane', async function () {
       this.timeout(60000);
-      const deferred = await anyDeferralEvent(env, appName, 'non_enterprise_on_arcane');
-      expect(deferred.reason).to.equal('non_enterprise_on_arcane');
+      const deferred = await anyDeferralEvent(env, appName, 'unencrypted_on_arcane');
+      expect(deferred.reason).to.equal('unencrypted_on_arcane');
     });
 
     it('should install after deferral expires', async function () {
@@ -189,7 +189,7 @@ describe('Legacy spawner deferrals', function () {
     await env?.teardown();
   });
 
-  describe('non-enterprise app deferred for static_ip', function () {
+  describe('unencrypted app deferred for static_ip', function () {
     const appName = `e2elegstatip${Date.now()}`;
 
     before(async function () {
@@ -212,7 +212,7 @@ describe('Legacy spawner deferrals', function () {
     });
   });
 
-  describe('non-enterprise app deferred for datacenter', function () {
+  describe('unencrypted app deferred for datacenter', function () {
     const appName = `e2elegdc${Date.now()}`;
 
     before(async function () {

@@ -1716,14 +1716,6 @@ class FluxPeerManager extends EventEmitter {
 
   // --- Liveness ---
 
-  /**
-   * Ping all connected peers.
-   */
-  pingAll() {
-    for (const peer of this.#peers.values()) {
-      peer.ping();
-    }
-  }
 }
 
 // Singleton export
