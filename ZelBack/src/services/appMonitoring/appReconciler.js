@@ -375,7 +375,13 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
   // reconcile, so recovery resumes the moment the pipeline ends.
   const appName = identifier.split('_')[1] || identifier;
   if (globalState.getAppLbState(appName)) return { desired: null, reason: 'shutdownPipeline' };
-  if (spec.comp.hasSyncthing()) {
+  // Only decider-owned components hold for a controller opinion: activeStandby
+  // (the election decides which instance runs) and sync-before-start (the sync
+  // readiness decider starts it once its data is complete). Plain-sync
+  // components replicate data but their run-state is nobody's decision - they
+  // run like any other component; holding them would leave a crashed one down
+  // forever.
+  if (spec.comp.hasActiveStandbySyncthing() || spec.comp.requiresSyncBeforeStart()) {
     const cd = controllerDesired.get(identifier) ?? null;
     // No controller opinion yet. controllerDesired is in-memory, so a FluxOS
     // restart wipes it while the container keeps running (Docker is independent of
