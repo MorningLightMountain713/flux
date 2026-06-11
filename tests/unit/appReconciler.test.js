@@ -14,11 +14,13 @@ describe('appReconciler tests', () => {
     const comps = entries.map((c) => {
       const primary = (c.containerData || '').split('|')[0];
       const isG = primary.startsWith('g:');
-      const isSync = isG || primary.startsWith('r:') || primary.startsWith('s:');
+      const isR = primary.startsWith('r:');
+      const isSync = isG || isR || primary.startsWith('s:');
       return {
         name: c.name,
         identifier: (spec.version >= 4) ? `${c.name}_${spec.name}` : spec.name,
         hasActiveStandbySyncthing: () => isG,
+        requiresSyncBeforeStart: () => isR,
         hasSyncthing: () => isSync,
         restartPolicy: c.restartPolicy ?? 'always',
       };
@@ -425,6 +427,24 @@ describe('appReconciler tests', () => {
       localSpec = { name: 'App', version: 4, compose: [{ name: 'web', containerData: 'r:/data' }] };
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
       await appReconciler.reconcile('web_App'); // controllerDesired unset
+      expect(stubs.dockerService.appDockerStop.called).to.be.false;
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
+    // Plain sync replicates data but no decider owns its run-state: a stopped
+    // s: component must restart like any normal component, with no controller
+    // opinion required - holding it would leave a crashed one down forever.
+    it('starts a stopped s: component without any controller opinion', async () => {
+      localSpec = { name: 'App', version: 4, compose: [{ name: 'cache', containerData: 's:/data' }] };
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 137 } });
+      await appReconciler.reconcile('cache_App'); // controllerDesired unset
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('cache_App')).to.be.true;
+    });
+
+    it('leaves a running s: component running (no controller involvement either way)', async () => {
+      localSpec = { name: 'App', version: 4, compose: [{ name: 'cache', containerData: 's:/data' }] };
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('cache_App');
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
