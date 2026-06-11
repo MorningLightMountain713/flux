@@ -104,8 +104,16 @@ for f in "${SUITES[@]}"; do
   docker volume ls -q --filter "label=flux-e2e-run=$RUN_LABEL" | xargs -r docker volume rm >/dev/null 2>&1
 
   echo "###SUITE-START [$i/$total] $name $(date -u +%H:%M:%S)"
-  npx mocha "$f" --reporter tap --timeout "$SUITE_TIMEOUT_MS" 2>&1 | tee "$LOG_DIR/$name.tap"
+  # --exit: a leaked handle must never hang mocha and swallow the run's
+  # aggregate (the suite-21 incident). open-handle-report keeps such leaks
+  # visible as a non-gating ###OPEN-HANDLES warning instead.
+  npx mocha "$f" --reporter tap --timeout "$SUITE_TIMEOUT_MS" --exit \
+    --require ./framework/open-handle-report.js 2>&1 | tee "$LOG_DIR/$name.tap"
   rc=${PIPESTATUS[0]}
+
+  if grep -q '###OPEN-HANDLES' "$LOG_DIR/$name.tap" 2>/dev/null; then
+    echo "###OPEN-HANDLES-WARN $name $(grep -m1 '###OPEN-HANDLES' "$LOG_DIR/$name.tap")"
+  fi
 
   # grep -c prints the count (0 when none) but exits 1 on zero matches; `|| true`
   # keeps that single "0" without appending a second one (which would break the
