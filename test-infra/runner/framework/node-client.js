@@ -337,6 +337,7 @@ export function nodeClient(nodeNum) {
         'shutdown:drained',
         'ephemeralSync:requested',
         'ephemeralSync:peerComplete',
+        'ephemeralSync:peerFailed',
         'ephemeralSync:allComplete',
         'sync:refused',
         'ephemeralSync:peerTimedOut',
