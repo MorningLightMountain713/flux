@@ -14,6 +14,7 @@ const containerHealthMonitor = require('./containerHealthMonitor');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const { AsyncGate } = require('../utils/asyncGate');
+const telemetrySinkCache = require('../telemetrySinkCache');
 
 // The single, level-based actuator for app containers. Every trigger (docker
 // die event, stream reconnect, hourly tick, boot, post-install, and the
@@ -261,6 +262,13 @@ async function getLocalComponentSpec(identifier) {
     // loud instead of looping. Retrying cannot fix an invalid spec.
     return { invalidSpec: true, invalidReason: err.message };
   }
+
+  // A successful build is also the convergence point for telemetry routing:
+  // the sink lives behind the same decryption this build just proved
+  // available. The boot-time cache rebuild races fluxbenchd's unseal and
+  // orphans the cache when it loses (observed live on cabbage); this seam
+  // already defer-retries on exactly that dependency, so re-seed here.
+  telemetrySinkCache.setSink(mainAppName, telemetrySinkCache.extractSink(deployment));
 
   // Resolve by matching each component's own identifier - never by parsing
   // the string. A bare app name resolves directly only for v1-v3 flat
