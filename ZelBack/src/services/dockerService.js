@@ -218,14 +218,16 @@ async function getDockerContainer(identifier, options = {}) {
  * Returns low-level information about a container.
  *
  * @param {string} idOrName
- * @param {object} options
- * @returns {object}
+ * @param {object} [options]
+ * @param {string} [options.identifierType='name'] - 'name' or 'id'; remaining
+ *   options are passed to inspect
+ * @returns {Promise<object|null>}
  */
 async function dockerContainerInspect(idOrName, options = {}) {
-  // container ID or name
-  const dockerContainer = await getDockerContainer(idOrName);
+  const { identifierType, ...inspectOptions } = options;
+  const dockerContainer = await getDockerContainer(idOrName, { identifierType });
   if (!dockerContainer) return null;
-  const response = await dockerContainer.inspect(options);
+  const response = await dockerContainer.inspect(inspectOptions);
   return response;
 }
 

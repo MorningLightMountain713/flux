@@ -114,6 +114,12 @@ describe('telemetryIdentityService tests', () => {
       expect(id.tags.image_name).to.equal('nginx:1.25');
       expect(id.tags.region).to.equal('NA');
     });
+
+    it('inspects by container id, not name (docker events carry raw ids)', async () => {
+      dockerServiceStub.dockerContainerInspect.resolves(null);
+      await service.resolveIdentity(containerId);
+      expect(dockerServiceStub.dockerContainerInspect.firstCall.args[1]).to.deep.equal({ identifierType: 'id' });
+    });
   });
 
   describe('sendSync', () => {
