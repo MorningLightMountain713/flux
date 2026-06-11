@@ -75,7 +75,7 @@ function anyDeferralEvent(env, appName, reason) {
 
 // --- Arcane node tests (default — all nodes have FLUXOS_PATH) ---
 
-describe('Arcane: non-enterprise app deferred as non_enterprise_on_arcane', function () {
+describe('Arcane: unencrypted app deferred as unencrypted_on_arcane', function () {
   let env;
   dumpLogsOnFailure(() => env);
   const appName = `e2earcdefer${Date.now()}`;
@@ -92,10 +92,10 @@ describe('Arcane: non-enterprise app deferred as non_enterprise_on_arcane', func
     await env?.teardown();
   });
 
-  it('should defer with reason non_enterprise_on_arcane', async function () {
+  it('should defer with reason unencrypted_on_arcane', async function () {
     this.timeout(60000);
-    const deferred = await anyDeferralEvent(env, appName, 'non_enterprise_on_arcane');
-    expect(deferred.reason).to.equal('non_enterprise_on_arcane');
+    const deferred = await anyDeferralEvent(env, appName, 'unencrypted_on_arcane');
+    expect(deferred.reason).to.equal('unencrypted_on_arcane');
   });
 
   it('should install after deferral expires', async function () {
