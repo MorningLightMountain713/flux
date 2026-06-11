@@ -132,12 +132,19 @@ export function nodeClient(nodeNum) {
     });
   }
 
+  // Pending waitForEvent settlers. Disconnect detaches every listener, so a
+  // wait pending at that moment could never resolve - it would only sit on its
+  // timeout timer (the runner's open-handle leak: every Promise.any loser held
+  // its full timeout after teardown). Settle them at the source instead.
+  const pendingWaits = new Set();
+
   function disconnectEventStream() {
     if (eventSource) {
       eventSource.close();
       eventSource = null;
     }
     eventBuffer.length = 0;
+    for (const settle of [...pendingWaits]) settle();
     const names = emitter.eventNames().filter((n) => n !== 'error');
     for (const name of names) emitter.removeAllListeners(name);
   }
@@ -163,11 +170,18 @@ export function nodeClient(nodeNum) {
         }
       }
 
+      function settle() {
+        cleanup();
+        reject(new Error(`Event stream for ${ip} disconnected while waiting for event: ${name}`));
+      }
+
       function cleanup() {
         clearTimeout(timer);
         emitter.removeListener(name, handler);
+        pendingWaits.delete(settle);
       }
 
+      pendingWaits.add(settle);
       emitter.on(name, handler);
     });
   }
