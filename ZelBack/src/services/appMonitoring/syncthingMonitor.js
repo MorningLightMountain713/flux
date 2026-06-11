@@ -136,7 +136,7 @@ async function processComponentSync(params) {
   const syncthingFolder = createSyncthingFolderConfig(id, label, folder, devices);
   const syncFolder = allFoldersResp.data.find((x) => x.id === id);
 
-  if (syncMode === 'receiveOnly' || syncMode === 'activeStandby') {
+  if (syncMode === 'syncFirst' || syncMode === 'activeStandby') {
     const { syncthingFolder: updatedFolder, cache, skipProcessing } = await manageFolderSyncState({
       appId,
       syncFolder,

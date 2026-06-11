@@ -456,7 +456,7 @@ async function handleReceiveOnlyTransition(params) {
 
     syncthingFolder.type = 'sendreceive';
 
-    if (syncMode === 'receiveOnly') {
+    if (syncMode === 'syncFirst') {
       log.info(`handleReceiveOnlyTransition - starting ${appId}`);
       await appDockerRestartFn(appId);
     }
@@ -498,7 +498,7 @@ async function handleReceiveOnlyTransition(params) {
       log.info(`handleReceiveOnlyTransition - ${appId} is synced (${syncStatus.syncPercentage.toFixed(2)}%), switching to sendreceive`);
       await fixAppdataPermissions(appId);
       syncthingFolder.type = 'sendreceive';
-      if (syncMode === 'receiveOnly') {
+      if (syncMode === 'syncFirst') {
         log.info(`handleReceiveOnlyTransition - starting ${appId}`);
         await appDockerRestartFn(appId);
       }
@@ -618,7 +618,7 @@ async function ensureContainerRunning(appId, syncMode) {
   try {
     const containerInspect = await dockerService.dockerContainerInspect(appId);
 
-    if (!containerInspect.State.Running && syncMode === 'receiveOnly') {
+    if (!containerInspect.State.Running && syncMode === 'syncFirst') {
       log.info(`ensureContainerRunning - ${appId} is not running, requesting start`);
       appReconciler.setControllerDesired(appId, 'running', 'syncthing r: ensure-running');
     }
