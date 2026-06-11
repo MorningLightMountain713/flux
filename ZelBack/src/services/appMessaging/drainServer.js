@@ -154,10 +154,10 @@ function onConnection(socket) {
  * flux-shutdownd service user. Node has no getgrnam, so read /etc/group.
  * Null (group absent -- dev boxes) leaves the perms owner-only.
  */
-function daemonAccessGid() {
+async function daemonAccessGid() {
   let groups;
   try {
-    groups = fs.readFileSync('/etc/group', 'utf8');
+    groups = await fs.promises.readFile('/etc/group', 'utf8');
   } catch {
     return null;
   }
@@ -175,21 +175,21 @@ function daemonAccessGid() {
 async function start() {
   if (server || !isArcane) return;
   try {
-    fs.mkdirSync(nodePath.dirname(SOCKET_PATH), { recursive: true });
-    try { fs.chmodSync(nodePath.dirname(SOCKET_PATH), 0o750); } catch { /* dir owned elsewhere */ }
-    try { fs.unlinkSync(SOCKET_PATH); } catch { /* no stale socket */ }
+    await fs.promises.mkdir(nodePath.dirname(SOCKET_PATH), { recursive: true });
+    await fs.promises.chmod(nodePath.dirname(SOCKET_PATH), 0o750).catch(() => { /* dir owned elsewhere */ });
+    await fs.promises.unlink(SOCKET_PATH).catch(() => { /* no stale socket */ });
 
     const srv = net.createServer(onConnection);
     await new Promise((resolve, reject) => {
       srv.once('error', reject);
       srv.listen(SOCKET_PATH, resolve);
     });
-    fs.chmodSync(SOCKET_PATH, 0o660);
-    const gid = daemonAccessGid();
+    await fs.promises.chmod(SOCKET_PATH, 0o660);
+    const gid = await daemonAccessGid();
     if (gid !== null) {
       try {
-        fs.chownSync(SOCKET_PATH, -1, gid);
-        fs.chownSync(nodePath.dirname(SOCKET_PATH), -1, gid);
+        await fs.promises.chown(SOCKET_PATH, -1, gid);
+        await fs.promises.chown(nodePath.dirname(SOCKET_PATH), -1, gid);
       } catch { /* non-root dev runs cannot chgrp; perms stay owner-only */ }
     }
     server = srv;
