@@ -2,6 +2,13 @@ const { EventEmitter } = require('node:events');
 const config = require('config');
 const log = require('../../lib/log');
 
+// TEST-HARNESS OBSERVABILITY ONLY. publish() is a no-op unless the
+// `testEventStream` config flag is set (the integration harness sets it;
+// production never does). Never route a production behavior through this
+// bus - a subscriber would work in the harness and silently never fire on
+// a real node. For production cross-service notification use a direct
+// callback/observer registration instead (see telemetrySinkCache.onChange).
+
 const RING_BUFFER_SIZE = 1024;
 
 // Express compression middleware buffers res.write() calls to build
