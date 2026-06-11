@@ -11,6 +11,8 @@ import {
 } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
+import { fluxTeamKey } from '../framework/keys.js';
+import { authenticate } from '../auth.js';
 
 const subnet = getSubnetConfig();
 
@@ -419,18 +421,25 @@ describe('State sync: failed sync peer is replaced', function () {
 
     // No fresh peer exists at failure time; the replacement happens once one
     // appears (the suite-19 shape: retried on each processed block)
+    const latecomerKey = `${subnet.base}.15:16127`;
     const fresh = await env.startNode(LATECOMER);
     await waitForDaemonReady(fresh);
+    await waitForNodeStatus(fresh, (d) => d.confirmed === true, 30000);
+
+    // Organic discovery between the two late joiners is too slow to assert
+    // on; connect them explicitly so the test measures replacement behavior,
+    // not discovery cadence
+    const auth = await authenticate(client.url, fluxTeamKey());
+    await client.getAuthed(`/flux/addpeer/${latecomerKey}`, auth.zelidauth);
+    await client.waitForEvent('peers:added', (d) => d.ip === `${subnet.base}.15`, 60000);
 
     const round2 = await client.waitForEvent(
       'ephemeralSync:requested',
       (d) => Array.isArray(d.types) && d.types.length === 1,
-      180000,
+      120000,
     );
     expect(round2.data.types).to.deep.equal(['apprunning']);
-    for (const key of round2.data.peers) {
-      expect(round1.data.peers).to.not.include(key);
-    }
+    expect(round2.data.peers).to.deep.equal([latecomerKey]);
 
     const allComplete = await client.waitForEvent('ephemeralSync:allComplete', () => true, 120000);
     expect(allComplete.data.apprunning).to.be.gte(4);
