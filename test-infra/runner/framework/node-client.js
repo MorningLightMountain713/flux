@@ -86,6 +86,7 @@ export function nodeClient(nodeNum) {
         'network:sigterm',
         'ephemeralSync:requested',
         'ephemeralSync:peerComplete',
+        'ephemeralSync:peerFailed',
         'ephemeralSync:allComplete',
         'sync:chunkVerified',
         'hashSync:complete',
