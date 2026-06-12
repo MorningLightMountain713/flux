@@ -10,6 +10,7 @@ describe('appSpawner tests', () => {
   let findUnderProvisionedStub;
   let delayStub;
   let daemonSyncStub;
+  let ensureProvidersRegisteredStub;
 
   function createConfigStub(overrides = {}) {
     return {
@@ -125,9 +126,13 @@ describe('appSpawner tests', () => {
     daemonSyncStub = sinon.stub().returns({
       data: { height: opts.daemonHeight || 2555563, synced: true },
     });
+    ensureProvidersRegisteredStub = sinon.stub().resolves();
 
     appSpawner = proxyquire('../../ZelBack/src/services/appLifecycle/appSpawner', {
       config: configStub,
+      '../utils/specCutover': {
+        ensureProvidersRegistered: ensureProvidersRegisteredStub,
+      },
       '../serviceHelper': {
         delay: delayStub,
         ensureNumber: sinon.stub().returnsArg(0),
@@ -206,7 +211,7 @@ describe('appSpawner tests', () => {
       },
       '../utils/globalState': globalStateStub,
       '../geolocationService': {
-        isStaticIP: sinon.stub().returns(false),
+        isStaticIP: sinon.stub().returns(opts.nodeHasStaticIp ?? false),
         isDataCenter: sinon.stub().returns(false),
         getNodeGeolocation: sinon.stub().returns({ continentCode: 'NA', countryCode: 'US', regionName: 'NY' }),
       },
@@ -384,6 +389,23 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.appsToBeCheckedLater).to.have.lengthOf(0);
     });
+
+    it('never defers an app that targets this node (politeness rules have nobody to yield to)', async () => {
+      // outpoint-pinned to this node + node has a static IP the app does not
+      // require: the static-IP deferral must NOT delay a targeted app
+      const candidate = makeCandidate({
+        placement: {
+          targetOutpoints: ['txid:0'],
+          hasTargets: () => true,
+          matchesTarget: () => true,
+          staticIp: false,
+        },
+      });
+      buildModule({ candidates: [candidate], nodeHasStaticIp: true });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(globalStateStub.appsToBeCheckedLater).to.have.lengthOf(0);
+      expect(logStub.info.calledWithMatch(/targets this node/)).to.be.true;
+    });
   });
 
   describe('install error caching', () => {
@@ -412,6 +434,23 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.trySpawningGlobalAppCache.has('abc123')).to.be.true;
       expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.false;
+    });
+
+    it('retries a failed decrypt next cycle instead of caching the app', async () => {
+      const candidate = makeCandidate({ encrypted: true, hash: 'enc123' });
+      candidate.instantiated.spec.createProvider = sinon.stub().rejects(new Error('benchmark channel down'));
+      buildModule({ candidates: [candidate] });
+      const hadPath = process.env.FLUXOS_PATH;
+      process.env.FLUXOS_PATH = hadPath || '/dat/usr/lib/fluxos';
+      try {
+        await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      } finally {
+        if (!hadPath) delete process.env.FLUXOS_PATH;
+      }
+      // a node-local decrypt failure is not a verdict on the app: neither
+      // cache may hold the hash, so the next cycle reselects it
+      expect(globalStateStub.trySpawningGlobalAppCache.has('enc123')).to.be.false;
+      expect(globalStateStub.spawnErrorsLongerAppCache.has('enc123')).to.be.false;
     });
   });
 
@@ -450,6 +489,23 @@ describe('appSpawner tests', () => {
       await waitForLoopExits(1);
 
       expect(findUnderProvisionedStub.callCount).to.equal(3);
+    });
+
+    it('registers crypto providers before the first spawn cycle', async () => {
+      buildModule();
+      delayStub.resetBehavior();
+      delayStub.callsFake(() => {
+        globalStateStub.spawnerPaused = true;
+        return Promise.resolve();
+      });
+
+      appSpawner.initialize();
+      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      await waitForLoopExits(1);
+
+      expect(ensureProvidersRegisteredStub.calledOnce).to.be.true;
+      // the first encrypted-app decrypt must never beat registration
+      expect(ensureProvidersRegisteredStub.calledBefore(findUnderProvisionedStub)).to.be.true;
     });
 
     it('should exit loop when spawnerPaused set mid-iteration', async () => {
