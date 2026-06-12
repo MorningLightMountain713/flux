@@ -43,4 +43,5 @@ async function resolveSpec(plainSpec) {
 module.exports = {
   deserializeSpec,
   resolveSpec,
+  ensureProvidersRegistered,
 };
