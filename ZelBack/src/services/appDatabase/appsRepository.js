@@ -81,6 +81,7 @@ async function findUnderProvisionedApps(currentHeight, nowSeconds) {
       },
     },
     { $match: { _isAlive: true } },
+    { $unset: '_isAlive' },
     {
       $lookup: {
         from: config.database.appsglobal.collections.appsLocations,
@@ -95,21 +96,26 @@ async function findUnderProvisionedApps(currentHeight, nowSeconds) {
         _required: { $ifNull: ['$instances', 3] },
       },
     },
+    { $unset: '_locations' },
     {
       $match: {
         $expr: { $lt: ['$_actual', '$_required'] },
       },
     },
     { $sort: { name: 1 } },
+    // Emit { actual, required, doc } with doc byte-identical to storage: the
+    // pipeline's working fields must never reach hydrate (encrypted specs
+    // bind their cleartext metadata into the AAD, and deserialize rejects
+    // foreign fields).
+    { $replaceWith: { actual: '$_actual', required: '$_required', doc: '$$ROOT' } },
+    { $unset: ['doc._actual', 'doc._required'] },
   ];
 
   const database = globalDb();
   const results = await dbHelper.aggregateInDatabase(database, globalAppsInformation, pipeline);
 
   const candidates = [];
-  for (const doc of results) {
-    const actual = doc._actual;
-    const required = doc._required;
+  for (const { actual, required, doc } of results) {
     // eslint-disable-next-line no-await-in-loop
     const instantiated = await hydrate(doc);
     if (instantiated) {

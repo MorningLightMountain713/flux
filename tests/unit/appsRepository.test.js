@@ -332,8 +332,8 @@ describe('appsRepository', () => {
     });
 
     it('should hydrate pipeline results and return candidates', async () => {
-      const doc = { version: 7, name: 'testApp', owner: 'owner1', hash: 'h1', height: 2550000, instances: 3, _actual: 1, _required: 3 };
-      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      const doc = { version: 7, name: 'testApp', owner: 'owner1', hash: 'h1', height: 2550000, instances: 3 };
+      dbHelperStub.aggregateInDatabase.resolves([{ actual: 1, required: 3, doc }]);
       const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
       expect(result).to.have.lengthOf(1);
       expect(result[0].instantiated.name).to.equal('testApp');
@@ -342,12 +342,32 @@ describe('appsRepository', () => {
     });
 
     it('should skip docs that fail hydration', async () => {
-      const good = { version: 7, name: 'goodApp', owner: 'o1', hash: 'h1', height: 100, instances: 3, _actual: 0, _required: 3 };
-      const bad = { version: 99, name: 'badApp', owner: 'o2', hash: 'h2', height: 100, instances: 3, _actual: 0, _required: 3 };
-      dbHelperStub.aggregateInDatabase.resolves([good, bad]);
+      const good = { version: 7, name: 'goodApp', owner: 'o1', hash: 'h1', height: 100, instances: 3 };
+      const bad = { version: 99, name: 'badApp', owner: 'o2', hash: 'h2', height: 100, instances: 3 };
+      dbHelperStub.aggregateInDatabase.resolves([
+        { actual: 0, required: 3, doc: good },
+        { actual: 0, required: 3, doc: bad },
+      ]);
       const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
       expect(result).to.have.lengthOf(1);
       expect(result[0].instantiated.name).to.equal('goodApp');
+    });
+
+    it('strips its working fields before the doc leaves the pipeline (AAD safety)', async () => {
+      // Encrypted specs bind cleartext metadata into the AAD; a doc decorated
+      // with pipeline scratch fields fails decryption. The pipeline must
+      // emit { actual, required, doc } with the doc byte-identical to storage.
+      dbHelperStub.aggregateInDatabase.resolves([]);
+      await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
+      const replaceWith = pipeline.find((stage) => stage.$replaceWith);
+      expect(replaceWith.$replaceWith).to.deep.equal({ actual: '$_actual', required: '$_required', doc: '$$ROOT' });
+      const unsets = pipeline.filter((stage) => stage.$unset).map((stage) => stage.$unset);
+      expect(unsets).to.deep.include('_isAlive');
+      expect(unsets).to.deep.include('_locations');
+      expect(unsets).to.deep.include(['doc._actual', 'doc._required']);
+      // the final stage leaves nothing of the pipeline's own bookkeeping behind
+      expect(pipeline[pipeline.length - 1]).to.deep.equal({ $unset: ['doc._actual', 'doc._required'] });
     });
 
     it('should pass currentHeight and nowSeconds into the pipeline', async () => {
@@ -371,7 +391,7 @@ describe('appsRepository', () => {
       dbHelperStub.aggregateInDatabase.resolves([]);
       await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
       const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
-      const sortStage = pipeline[pipeline.length - 1];
+      const sortStage = pipeline.find((stage) => stage.$sort);
       expect(sortStage.$sort).to.deep.equal({ name: 1 });
     });
   });
