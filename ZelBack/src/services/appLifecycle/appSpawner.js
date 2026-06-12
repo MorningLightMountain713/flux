@@ -64,6 +64,7 @@ const hwRequirements = require('../appRequirements/hwRequirements');
 const portManager = require('../appNetwork/portManager');
 const placementFeasibility = require('../appPlacement/placementFeasibility');
 const { getSpecBackend } = require('../utils/specLibs');
+const { ensureProvidersRegistered } = require('../utils/specCutover');
 const { appsFolder } = require('../utils/appConstants');
 const globalState = require('../utils/globalState');
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
@@ -100,6 +101,10 @@ function initialize() {
 async function spawnLoop() {
   spawnLoopRunning = true;
   try {
+    // Crypto providers are otherwise registered lazily by the first
+    // specCutover call; the first spawn cycle can beat that and fail an
+    // encrypted app's createProvider into the spawn caches.
+    await ensureProvidersRegistered();
     while (!globalState.spawnerPaused) {
       const delayMs = await trySpawningGlobalApplication();
       if (delayMs > 0) await serviceHelper.delay(delayMs);
@@ -425,8 +430,18 @@ async function trySpawningGlobalApplication() {
 
     let spec = instantiated.spec;
     if (instantiated.isEncrypted) {
-      const provider = await spec.createProvider();
-      spec = (await spec.decrypt(provider)).spec;
+      try {
+        const provider = await spec.createProvider();
+        spec = (await spec.decrypt(provider)).spec;
+      } catch (error) {
+        // Decrypt failures are node-local state (provider registration, the
+        // benchmark channel), never a verdict on the app — caching the hash
+        // would suppress a healthy app for the cache TTL. Clear the
+        // selection-time entry so the next cycle retries.
+        log.warn(`trySpawningGlobalApplication - decrypt of ${appToRun} failed, will retry next cycle: ${error.message}`);
+        globalState.trySpawningGlobalAppCache.delete(appHash);
+        return shortDelayTime;
+      }
     }
     const { DeploymentSpec } = await getSpecBackend();
     const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
@@ -710,7 +725,12 @@ async function trySpawningGlobalApplication() {
       const tier = await generalService.nodeTier();
       const appHWrequirements = deployment.totalResources();
       let delay = false;
-      if (!specPlacement.staticIp && geolocationService.isStaticIP()) {
+      if (specPlacement.matchesTarget(targetInfo)) {
+        // The spec pinned this node (IP/outpoint/operator target): there is
+        // no other node to defer to, so the politeness deferrals below
+        // (static IP, datacenter, capacity gap) must not delay it.
+        log.info(`trySpawningGlobalApplication - App ${appToRun} targets this node`);
+      } else if (!specPlacement.staticIp && geolocationService.isStaticIP()) {
         const deferral = config.fluxapps.spawnDeferrals.staticIpMs;
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
@@ -738,8 +758,6 @@ async function trySpawningGlobalApplication() {
         globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'datacenter', delayMs });
         delay = true;
-      } else if (specPlacement.matchesTarget(targetInfo)) {
-        log.info(`trySpawningGlobalApplication - App ${appToRun} targets this node`);
       } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.largeMs;
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
