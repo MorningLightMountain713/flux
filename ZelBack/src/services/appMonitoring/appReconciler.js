@@ -572,7 +572,7 @@ async function reconcile(rawIdentifier) {
   // it (stop + data wipe) during the awaits above. Re-read at actuation time:
   // starting onto a folder mid-wipe corrupts the fresh sync. The decider's own
   // enqueue drives the follow-up reconcile, so aborting here needs no retry.
-  if ((spec.isG || spec.isR) && controllerDesired.get(identifier) !== 'running') {
+  if ((spec.comp.hasActiveStandbySyncthing() || spec.comp.requiresSyncBeforeStart()) && controllerDesired.get(identifier) !== 'running') {
     log.info(`appReconciler - ${identifier} controller verdict changed during reconcile, aborting start`);
     return;
   }
