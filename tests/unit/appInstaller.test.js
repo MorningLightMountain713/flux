@@ -221,7 +221,6 @@ describe('appInstaller tests', () => {
       '../appQuery/appQueryService': {
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
         listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
-        decryptEnterpriseApps: sinon.stub().callsFake(async (apps) => apps),
       },
       '../utils/registryCredentialHelper': {
         getCredentials: sinon.stub().resolves(null),
