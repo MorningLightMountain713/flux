@@ -1,4 +1,5 @@
 const log = require('../../lib/log');
+const dbHelper = require('../dbHelper');
 const fluxEventBus = require('../utils/fluxEventBus');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
@@ -1214,7 +1215,7 @@ async function reconcile(rawIdentifier) {
   // (a folder a decider has just stopped, or wiped). The writer's own enqueue
   // drives the next pass, so not starting here needs no retry. Nothing awaits
   // between this check and the start.
-  if ((spec.isG || spec.isR) && controllerDesired.writes(identifier) !== opinionWrites) {
+  if ((spec.comp.hasActiveStandbySyncthing() || spec.comp.requiresSyncBeforeStart()) && controllerDesired.writes(identifier) !== opinionWrites) {
     log.info(`appReconciler - ${identifier}: a controller opinion was written during this pass, not starting it`);
     return;
   }
