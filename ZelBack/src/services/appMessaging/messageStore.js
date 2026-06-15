@@ -49,17 +49,6 @@ function buildConditionalUpsert(broadcastedAt, conditionalFields, options = {}) 
   return [{ $set: set }];
 }
 
-async function getPreviousOwner(appName, currentOwner) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const doc = await database.collection(globalAppsMessages)
-    .findOne(
-      { 'appSpecifications.name': appName, 'appSpecifications.owner': { $ne: currentOwner } },
-      { projection: { _id: 0, 'appSpecifications.owner': 1 }, sort: { height: -1 } },
-    );
-  return doc?.appSpecifications?.owner ?? null;
-}
-
 /**
  * Store temporary app message
  * @param {object} message - Message to store
@@ -163,10 +152,11 @@ async function storeAppTemporaryMessage(message, options = {}) {
       }
     }
 
-    await appEventVerifier.authorize({
+    await appEventVerifier.authorizeWithReplayFallback({
       appEvent,
       previousState,
       daemonHeight: block,
+      isReplay: isAppRequested,
     });
   }
 
