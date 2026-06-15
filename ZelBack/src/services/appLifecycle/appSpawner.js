@@ -357,8 +357,16 @@ async function trySpawningGlobalApplication() {
     // verify app compliance
     const blockResult = await imageManager.isImageBlocked(instantiated.name, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
     if (blockResult.blocked) {
+      log.info(`trySpawningGlobalApplication - App ${instantiated.name} image is blocked: ${blockResult.reason}. Adding to error cache.`);
       globalState.spawnErrorsLongerAppCache.set(appHash, '');
-      throw new Error(blockResult.reason);
+      return shortDelayTime;
+    }
+    if (blockResult.undetermined) {
+      // Blocklist unreachable (transient) - don't admit something we couldn't check.
+      // Defer to next cycle without the longer back-off so a brief outage can't lock it out.
+      log.warn(`trySpawningGlobalApplication - image blocklist unreachable for ${instantiated.name}, deferring spawn to next cycle`);
+      globalState.trySpawningGlobalAppCache.delete(appHash);
+      return shortDelayTime;
     }
 
     await hwRequirements.checkNodeResources(deployment);
@@ -663,15 +671,23 @@ async function trySpawningGlobalApplication() {
     }
 
     // install the app
-    let registerOk = false;
+    let installResult;
     try {
-      registerOk = await appInstaller.installApplication(instantiated);
+      installResult = await appInstaller.installApplication(instantiated);
     } catch (error) {
       log.error(error);
-      registerOk = false;
+      installResult = { status: appInstaller.InstallStatus.FAILED, reason: error.message || String(error) };
     }
-    if (!registerOk) {
-      log.info(`trySpawningGlobalApplication - Install failed for ${appToRun}, adding to local error cache`);
+    if (installResult.status === appInstaller.InstallStatus.DEFERRED) {
+      // Transient (blocklist unreachable, node busy) - retry next cycle without the
+      // longer back-off, so a brief outage doesn't lock the app out for days.
+      log.info(`trySpawningGlobalApplication - install deferred for ${appToRun}: ${installResult.reason}; retrying next cycle`);
+      globalState.trySpawningGlobalAppCache.delete(appHash);
+      return shortDelayTime;
+    }
+    if (installResult.status !== appInstaller.InstallStatus.INSTALLED && installResult.status !== appInstaller.InstallStatus.SKIPPED) {
+      // rejected (blocked image) or failed (install errored) - back off the longer cache.
+      log.info(`trySpawningGlobalApplication - install ${installResult.status} for ${appToRun}: ${installResult.reason}; adding to local error cache`);
       globalState.spawnErrorsLongerAppCache.set(appHash, '');
       fluxEventBus.publish('spawner:installFailed', { appName: appToRun, hash: appHash });
       return shortDelayTime;

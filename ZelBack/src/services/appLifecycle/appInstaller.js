@@ -38,6 +38,18 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const volumeService = require('../utils/volumeService');
 const config = require('config');
 
+/**
+ * Outcome of installApplication. Separates a transient deferral (retry later) from a
+ * permanent rejection and a real failure, so callers can back off appropriately.
+ */
+const InstallStatus = Object.freeze({
+  INSTALLED: 'installed', // installed and launched
+  SKIPPED: 'skipped', // already installed - nothing to do
+  DEFERRED: 'deferred', // could not decide / node busy - retry later
+  REJECTED: 'rejected', // admission denied for this spec - won't change on retry
+  FAILED: 'failed', // install started then errored - local cleanup already done
+});
+
 let onInstallComplete = null;
 function setOnInstallComplete(callback) {
   onInstallComplete = callback;
@@ -130,13 +142,15 @@ async function setupApplicationPorts(comp, appName, isComponent, onStatus, test 
 }
 
 /**
- * To register an app locally. Performs pre-installation checks - database in place, Flux Docker network in place and if app already installed. Then registers app in database and performs hard install. If registration fails, the app is removed locally.
- * @param {object} appSpecs App specifications.
- * @param {object} componentSpecs Component specifications.
- * @param {object} res Response.
- * @param {boolean} test indicates if it is just to test the app install.
- * @param {boolean} sendRemovalMessage whether to broadcast removal message to network if installation fails.
- * @returns {Promise<boolean>} Returns true if installation was successful, false otherwise.
+ * To register an app locally. Runs the admission checks (resources, image blocklist)
+ * before any state is mutated, then registers the app in the database and performs the
+ * install. If the install fails after it has started, the app is removed locally.
+ * @param {object} instantiated Instantiated app spec.
+ * @param {object} [options] onStatus stream callback, test, createVolumes, sendRemovalMessage.
+ * @returns {Promise<{status: string, reason: string|null}>} status is an InstallStatus
+ *   value: INSTALLED (success), SKIPPED (already installed), DEFERRED (transient - blocklist
+ *   unreachable or node busy, retry later), REJECTED (blocked image - won't change on retry),
+ *   FAILED (install started then errored; local cleanup already done).
  */
 async function installApplication(instantiated, options = {}) {
   const onStatus = options.onStatus || null;
@@ -147,11 +161,11 @@ async function installApplication(instantiated, options = {}) {
   try {
     if (globalState.removalInProgress) {
       log.error('Another application is undergoing removal. Installation not possible.');
-      return false;
+      return { status: InstallStatus.DEFERRED, reason: 'Another application is undergoing removal' };
     }
     if (globalState.installationInProgress) {
       log.error('Another application is undergoing installation. Installation not possible');
-      return false;
+      return { status: InstallStatus.DEFERRED, reason: 'Another application is undergoing installation' };
     }
     globalState.installationInProgress = true;
 
@@ -172,13 +186,29 @@ async function installApplication(instantiated, options = {}) {
     if (await appsRepository.existsInstalledApp(appName)) {
       globalState.installationInProgress = false;
       log.error(`Flux App ${appName} already installed`);
-      return false;
+      return { status: InstallStatus.SKIPPED, reason: `Flux App ${appName} already installed` };
     }
 
     await checkPlacement(instantiated);
 
     const deployment = await deploymentProvider.buildDeployment(instantiated);
     await checkNodeResources(deployment);
+
+    // Admission decision, taken before any state is mutated so neither outcome needs
+    // cleanup: a blocked image is a rejection (won't change on retry); an unreachable
+    // blocklist is a deferral (transient - retry rather than admit something unchecked).
+    const blockResult = await isImageBlocked(appName, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
+    if (blockResult.blocked) {
+      globalState.installationInProgress = false;
+      if (onStatus) onStatus(messageHelper.createErrorMessage(blockResult.reason));
+      return { status: InstallStatus.REJECTED, reason: blockResult.reason };
+    }
+    if (blockResult.undetermined) {
+      globalState.installationInProgress = false;
+      const reason = `Image blocklist unreachable - cannot verify ${appName} for installation, will retry`;
+      if (onStatus) onStatus(messageHelper.createErrorMessage(reason));
+      return { status: InstallStatus.DEFERRED, reason };
+    }
 
     // eslint-disable-next-line global-require
     const appQueryService = require('../appQuery/appQueryService');
@@ -265,9 +295,6 @@ async function installApplication(instantiated, options = {}) {
         telemetrySinkCache.setSink(appName, telemetrySink);
         if (telemetrySink) await telemetryConfigService.ensureNode();
       }
-
-      const blockResult = await isImageBlocked(appName, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
-      if (blockResult.blocked) throw new Error(blockResult.reason);
 
       const owner = instantiated.owner;
       const burstEligible = owner
@@ -383,7 +410,7 @@ async function installApplication(instantiated, options = {}) {
       log.info(`Cleanup completed for ${appName} after installation failure`);
     }
 
-    return false;
+    return { status: InstallStatus.FAILED, reason: error.message || serviceHelper.ensureString(error) };
   } finally {
     if (test) {
       try {
@@ -394,7 +421,7 @@ async function installApplication(instantiated, options = {}) {
       }
     }
   }
-  return true;
+  return { status: InstallStatus.INSTALLED, reason: null };
 }
 
 /**
@@ -744,6 +771,7 @@ async function testInstallApplicationAPI(req, res) {
 }
 
 module.exports = {
+  InstallStatus,
   installApplication,
   installComponent,
   installApplicationAPI,
