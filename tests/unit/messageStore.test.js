@@ -107,6 +107,7 @@ describe('messageStore tests', () => {
       deserializeTempMessage: sinon.stub().callsFake((msg) => Promise.resolve(makeMockAppEvent(msg))),
       deserializeMessage: sinon.stub().resolves({}),
       authorize: sinon.stub().resolves(),
+      authorizeWithReplayFallback: sinon.stub().resolves(),
       verifyAttestation: sinon.stub().returns(true),
     };
 

@@ -310,6 +310,21 @@ async function listAppMessagesByName(name) {
   return [...results1, ...results2];
 }
 
+/**
+ * The most recent on-chain owner of an app that differs from currentOwner.
+ * Used to replay pre-v8.10.0 owner-change races: a confirmed update whose
+ * signature was made by an owner older than the immediate previous one.
+ * @returns {Promise<string|null>}
+ */
+async function getPreviousOwner(appName, currentOwner) {
+  const doc = await dbHelper.findOneInDatabase(
+    globalDb(), globalAppsMessages,
+    { 'appSpecifications.name': appName, 'appSpecifications.owner': { $ne: currentOwner } },
+    { projection: { _id: 0, 'appSpecifications.owner': 1 }, sort: { height: -1 } },
+  );
+  return doc?.appSpecifications?.owner ?? null;
+}
+
 async function getPreviousPermanentMessage(name, beforeTimestamp) {
   const projection = { projection: { _id: 0 } };
   const queries = [
@@ -555,6 +570,7 @@ module.exports = {
   getTempMessageByName,
   storePermanentMessage,
   listAppMessagesByName,
+  getPreviousOwner,
   getPreviousPermanentMessage,
   // upsert + errors
   upsertIfNewer,

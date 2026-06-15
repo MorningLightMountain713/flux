@@ -4,6 +4,7 @@ const signatureVerifier = require('../signatureVerifier');
 const benchmarkService = require('../benchmarkService');
 const { ARCANE_ATTESTATION_PUBKEY, verifyAttestationSignature } = require('../utils/arcaneAttestation');
 const { getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
+const appsRepository = require('../appDatabase/appsRepository');
 
 async function deserializeMessage(message) {
   const { AppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
@@ -42,7 +43,7 @@ function resolveTeamSupportAddress(daemonHeight) {
 }
 
 async function authorize({
-  appEvent, previousState, daemonHeight, verifyHash = true,
+  appEvent, previousState, daemonHeight, verifyHash = true, extraSigners = [],
 }) {
   if (verifyHash) {
     const hashResult = appEvent.verifyHash();
@@ -51,7 +52,7 @@ async function authorize({
     }
   }
 
-  const signers = [appEvent.spec.owner];
+  const signers = [appEvent.spec.owner, ...extraSigners];
 
   if (appEvent.isUpdate && previousState) {
     if (previousState.owner && previousState.owner !== appEvent.spec.owner) {
@@ -85,6 +86,39 @@ async function authorize({
   throw new Error(
     'Received signature does not correspond with Flux App owner or Flux App specifications are not properly formatted',
   );
+}
+
+/**
+ * authorize() with the replay-only owner-change-race fallback.
+ *
+ * When two updates landed close together pre-v8.10.0 and the first changed the
+ * owner, the second was signed by the OLD owner — accepted by the network at the
+ * time (re-verification did not exist yet). Replaying such an already-mined
+ * message, the immediate previous owner no longer matches; find the older on-chain
+ * owner and retry. Gated on isReplay (the message is confirmed/on-chain, mined and
+ * paid) — live gossip is never relaxed this way.
+ *
+ * The historical owner comes from resolveHistoricalOwner, which differs by caller:
+ * the single-message store path reads the committed DB (default), while bulk resync
+ * must read its in-memory batch map (the DB is stale until the batch flushes).
+ *
+ * @param {{appEvent: object, previousState: object, daemonHeight: number,
+ *   isReplay?: boolean, resolveHistoricalOwner?: Function}} params
+ */
+async function authorizeWithReplayFallback({
+  appEvent, previousState, daemonHeight, isReplay = false,
+  resolveHistoricalOwner = (name, currentOwner) => appsRepository.getPreviousOwner(name, currentOwner),
+}) {
+  try {
+    return await authorize({ appEvent, previousState, daemonHeight });
+  } catch (err) {
+    if (!isReplay || !appEvent.isUpdate || !previousState || !previousState.owner) throw err;
+    const historicalOwner = await resolveHistoricalOwner(appEvent.spec.name, previousState.owner);
+    if (!historicalOwner) throw err;
+    return authorize({
+      appEvent, previousState, daemonHeight, extraSigners: [historicalOwner],
+    });
+  }
 }
 
 /**
@@ -143,6 +177,7 @@ module.exports = {
   deserializeMessage,
   deserializeTempMessage,
   authorize,
+  authorizeWithReplayFallback,
   requestAttestation,
   verifyAttestation,
   computeOutboundHash,
