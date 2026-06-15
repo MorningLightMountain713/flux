@@ -8,6 +8,7 @@ describe('appUninstaller tests', () => {
   let messageHelperStub;
   let logStub;
   let configStub;
+  let globalStateStub;
 
   beforeEach(() => {
     configStub = {
@@ -55,6 +56,14 @@ describe('appUninstaller tests', () => {
       findInDatabase: sinon.stub(),
     };
 
+    globalStateStub = {
+      removalInProgress: false,
+      installationInProgress: false,
+      setRemovalInProgress: sinon.stub(),
+      resetRemovalInProgress: sinon.stub(),
+      getRemovalInProgress: sinon.stub().returns(false),
+    };
+
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
       config: configStub,
       '../verificationHelper': verificationHelperStub,
@@ -72,12 +81,7 @@ describe('appUninstaller tests', () => {
         getBaseAppName: sinon.stub().callsFake((id) => id),
       },
       '../../lib/log': logStub,
-      '../utils/globalState': {
-        removalInProgress: false,
-        setRemovalInProgress: sinon.stub(),
-        resetRemovalInProgress: sinon.stub(),
-        getRemovalInProgress: sinon.stub().returns(false),
-      },
+      '../utils/globalState': globalStateStub,
       '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
         config: configStub,
       }),
@@ -166,16 +170,28 @@ describe('appUninstaller tests', () => {
   });
 
   describe('uninstallApplication tests', () => {
-    it('should report error via onStatus if app name is not specified', async () => {
+    it('reports the error via onStatus and returns FAILED if no app name is specified', async () => {
       const messages = [];
-      await appUninstaller.uninstallApplication(undefined, { onStatus: (msg) => messages.push(msg) });
+      const result = await appUninstaller.uninstallApplication(undefined, { onStatus: (msg) => messages.push(msg) });
       expect(messages.some((m) => m.includes('No App specified'))).to.be.true;
+      expect(result.status).to.equal(appUninstaller.UninstallStatus.FAILED);
     });
 
-    it('should report not found via onStatus when app missing and skipGuard is false', async () => {
+    it('reports not found via onStatus and returns SKIPPED when the app is missing and skipGuard is false', async () => {
       const messages = [];
-      await appUninstaller.uninstallApplication('nonexistent', { onStatus: (msg) => messages.push(msg) });
+      const result = await appUninstaller.uninstallApplication('nonexistent', { onStatus: (msg) => messages.push(msg) });
       expect(messages.some((m) => m.includes('Flux App not found'))).to.be.true;
+      expect(result.status).to.equal(appUninstaller.UninstallStatus.SKIPPED);
+    });
+
+    it('returns DEFERRED without attempting removal when another op is in progress', async () => {
+      globalStateStub.installationInProgress = true;
+      try {
+        const result = await appUninstaller.uninstallApplication('anyapp', {});
+        expect(result.status).to.equal(appUninstaller.UninstallStatus.DEFERRED);
+      } finally {
+        globalStateStub.installationInProgress = false;
+      }
     });
   });
 

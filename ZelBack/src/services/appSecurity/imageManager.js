@@ -413,7 +413,12 @@ async function checkApplicationsCompliance() {
       log.warn(`Application ${appName} is blacklisted, removing`);
       log.warn(`REMOVAL REASON: Blacklisted image - ${appName} uses a blacklisted Docker image (imageManager)`);
       // eslint-disable-next-line no-await-in-loop
-      await appUninstaller.uninstallApplication(appName, { broadcastRemoval: true });
+      const removal = await appUninstaller.uninstallApplication(appName, { broadcastRemoval: true });
+      if (removal.status !== appUninstaller.UninstallStatus.REMOVED
+        && removal.status !== appUninstaller.UninstallStatus.SKIPPED) {
+        // The blocked app may still be running - surface it; the next sweep retries.
+        log.error(`Blacklisted app ${appName} was not removed (${removal.status}: ${removal.reason}); it may still be running`);
+      }
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(3 * 60 * 1000);
     }
