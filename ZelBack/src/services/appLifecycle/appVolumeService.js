@@ -209,21 +209,22 @@ async function createAppVolume(deployComp, res, test = false) {
   }
 }
 
+/**
+ * Ensure every bind-mount source for a component exists before its container is
+ * (re)created on the soft/volume-reuse path. The operations are unconditional and
+ * idempotent (`mkdir -p` / `touch`), so there is no check-then-act (TOCTOU) window
+ * inside this helper.
+ */
 async function ensureMountSourcesExist(deployComp) {
   for (const mount of deployComp.mounts) {
-    try {
-      await fs.access(mount.Source); // eslint-disable-line no-await-in-loop
-    } catch {
-      log.warn(`Mount source missing, creating: ${mount.Source}`);
-      if (mount.sourceType === 'file') {
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.runCommand('touch', { params: [mount.Source], runAsRoot: true });
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
-      } else {
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.runCommand('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
-      }
+    if (mount.sourceType === 'file') {
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.runCommand('touch', { params: [mount.Source], runAsRoot: true });
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.runCommand('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
     }
   }
 }
