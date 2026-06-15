@@ -720,6 +720,21 @@ async function appDockerCreate(deployComp, options = {}) {
   // key entirely otherwise (see the spread on containerConfig below).
   const entrypoint = deployComp.entrypoint || [];
 
+  // v9 livenessProbe -> Docker HEALTHCHECK. Probe durations are seconds in the
+  // spec; Config.Healthcheck wants nanoseconds. cmd is exec-form argv, so Test
+  // uses CMD (not CMD-SHELL). The probe is canonical when present (all five keys
+  // filled by the spec), so no defensive defaults here.
+  const { livenessProbe } = deployComp;
+  const healthcheck = livenessProbe
+    ? {
+      Test: ['CMD', ...livenessProbe.cmd],
+      Interval: livenessProbe.interval * 1_000_000_000,
+      Timeout: livenessProbe.timeout * 1_000_000_000,
+      Retries: livenessProbe.retries,
+      StartPeriod: livenessProbe.startPeriod * 1_000_000_000,
+    }
+    : null;
+
   const isSender = envParams.some((env) => env.startsWith('LOG=SEND'));
   const isCollector = envParams.some((env) => env.startsWith('LOG=COLLECT'));
 
@@ -823,6 +838,7 @@ async function appDockerCreate(deployComp, options = {}) {
     Tty: false,
     ExposedPorts: exposedPorts,
     ...(containerLabels && { Labels: containerLabels }),
+    ...(healthcheck && { Healthcheck: healthcheck }),
     HostConfig: {
       NanoCPUs: nanoCpus,
       Memory: memoryBytes,
