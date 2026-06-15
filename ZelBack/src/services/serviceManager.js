@@ -503,7 +503,6 @@ async function startFluxFunctions() {
       // so a start can never race a data wipe.
       syncthingMonitor.syncthingApps(
         globalState,
-        appQueryService.installedApps,
         () => globalState,
       ); // rechecks syncthing configuration each cycle
       setTimeout(() => {
