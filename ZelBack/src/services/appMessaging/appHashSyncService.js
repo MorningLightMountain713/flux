@@ -237,7 +237,6 @@ async function processMessages(messages, onProgress) {
   const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
   const daemonHeight = syncStatus.data.height || 0;
 
-  const prevOwnerMap = new Map();
   const CHUNK_SIZE = 2000;
   for (let offset = 0; offset < filtered.length; offset += CHUNK_SIZE) {
     const chunk = filtered.slice(offset, offset + CHUNK_SIZE);
@@ -353,10 +352,23 @@ async function processMessages(messages, onProgress) {
           });
         }
 
-        await appEventVerifier.authorize({
+        await appEventVerifier.authorizeWithReplayFallback({
           appEvent,
           previousState,
           daemonHeight,
+          isReplay: true,
+          // bulk resync: the DB is stale until permInserts flush, so the historical
+          // owner for an owner-change race comes from the in-memory batch map, not the DB
+          resolveHistoricalOwner: (name, currentOwner) => {
+            let found = null;
+            for (const m of (prevMessagesMap.get(name) || [])) {
+              const owner = (m.appSpecifications || m.zelAppSpecifications)?.owner;
+              if (owner && owner !== currentOwner && (!found || m.height > found.height)) {
+                found = { owner, height: m.height };
+              }
+            }
+            return found?.owner ?? null;
+          },
         });
 
         // Verified — add to batch and update map for subsequent messages

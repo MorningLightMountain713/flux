@@ -465,4 +465,53 @@ describe('appEventVerifier', () => {
     });
   });
 
+  describe('authorizeWithReplayFallback', () => {
+    it('accepts a replayed update signed by an older on-chain owner', async () => {
+      const appEvent = new FakeAppEvent({
+        spec: { owner: 'newOwner', name: 'myapp' },
+        isUpdate: true,
+        // primary pass (current/previous owners) fails; retry with the historical owner succeeds
+        validSignersByIteration: [new Set(), new Set(['oldestOwner'])],
+      });
+      const result = await appEventVerifier.authorizeWithReplayFallback({
+        appEvent,
+        previousState: { owner: 'midOwner' },
+        daemonHeight: 1000,
+        isReplay: true,
+        resolveHistoricalOwner: async () => 'oldestOwner',
+      });
+      expect(result.signer).to.equal('oldestOwner');
+    });
+
+    it('does not apply the historical-owner fallback for live gossip (isReplay false)', async () => {
+      const appEvent = new FakeAppEvent({
+        spec: { owner: 'newOwner', name: 'myapp' },
+        isUpdate: true,
+        validSignersByIteration: [new Set(), new Set(['oldestOwner'])],
+      });
+      await expect(appEventVerifier.authorizeWithReplayFallback({
+        appEvent,
+        previousState: { owner: 'midOwner' },
+        daemonHeight: 1000,
+        isReplay: false,
+        resolveHistoricalOwner: async () => 'oldestOwner',
+      })).to.be.rejectedWith(/does not correspond with Flux App owner/);
+    });
+
+    it('rejects when no older on-chain owner is found', async () => {
+      const appEvent = new FakeAppEvent({
+        spec: { owner: 'newOwner', name: 'myapp' },
+        isUpdate: true,
+        validSignersByIteration: [new Set(), new Set(['oldestOwner'])],
+      });
+      await expect(appEventVerifier.authorizeWithReplayFallback({
+        appEvent,
+        previousState: { owner: 'midOwner' },
+        daemonHeight: 1000,
+        isReplay: true,
+        resolveHistoricalOwner: async () => null,
+      })).to.be.rejectedWith(/does not correspond with Flux App owner/);
+    });
+  });
+
 });
