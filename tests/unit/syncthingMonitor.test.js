@@ -95,12 +95,7 @@ const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/sy
 
 describe('syncthingMonitor tests', () => {
   let mockState;
-  let mockInstalledAppsFn;
   let mockGetGlobalStateFn;
-  let mockAppDockerStopFn;
-  let mockAppDockerRestartFn;
-  let mockAppDeleteDataFn;
-  let mockRemoveAppLocallyFn;
   let monitorControl;
   let clock;
 
@@ -115,12 +110,7 @@ describe('syncthingMonitor tests', () => {
       receiveOnlySyncthingAppsCache: new Map(),
       syncthingAppsFirstRun: false,
     };
-    mockInstalledAppsFn = sinon.stub();
     mockGetGlobalStateFn = sinon.stub();
-    mockAppDockerStopFn = sinon.stub().resolves();
-    mockAppDockerRestartFn = sinon.stub().resolves();
-    mockAppDeleteDataFn = sinon.stub().resolves();
-    mockRemoveAppLocallyFn = sinon.stub().resolves();
 
     // Reset all mocked services
     deploymentProviderMock.listInstalledDeployments.reset();
@@ -166,17 +156,12 @@ describe('syncthingMonitor tests', () => {
 
   describe('syncthingApps tests', () => {
     it('should return control object with stop and isActive methods', () => {
-      mockInstalledAppsFn.resolves({ status: 'success', data: [] });
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
         mockGetGlobalStateFn,
-        mockAppDockerStopFn,
-        mockAppDockerRestartFn,
-        mockAppDeleteDataFn,
-        mockRemoveAppLocallyFn,
       );
 
       expect(monitorControl).to.have.property('stop').that.is.a('function');
@@ -185,17 +170,12 @@ describe('syncthingMonitor tests', () => {
     });
 
     it('should stop monitoring when stop is called', () => {
-      mockInstalledAppsFn.resolves({ status: 'success', data: [] });
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
         mockGetGlobalStateFn,
-        mockAppDockerStopFn,
-        mockAppDockerRestartFn,
-        mockAppDeleteDataFn,
-        mockRemoveAppLocallyFn,
       );
 
       expect(monitorControl.isActive()).to.be.true;
@@ -205,61 +185,46 @@ describe('syncthingMonitor tests', () => {
 
     it('should not run if installation in progress', async () => {
       mockState.installationInProgress = true;
-      mockInstalledAppsFn.resolves({ status: 'success', data: [] });
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
         mockGetGlobalStateFn,
-        mockAppDockerStopFn,
-        mockAppDockerRestartFn,
-        mockAppDeleteDataFn,
-        mockRemoveAppLocallyFn,
       );
 
       // Wait for first execution to complete
       await clock.tickAsync(100);
 
-      sinon.assert.notCalled(mockInstalledAppsFn);
+      sinon.assert.notCalled(deploymentProviderMock.listInstalledDeployments);
       expect(mockState.updateSyncthingRunning).to.be.false;
     });
 
     it('should not run if removal in progress', async () => {
       mockState.removalInProgress = true;
-      mockInstalledAppsFn.resolves({ status: 'success', data: [] });
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
         mockGetGlobalStateFn,
-        mockAppDockerStopFn,
-        mockAppDockerRestartFn,
-        mockAppDeleteDataFn,
-        mockRemoveAppLocallyFn,
       );
 
       // Wait for first execution to complete
       await clock.tickAsync(100);
 
-      sinon.assert.notCalled(mockInstalledAppsFn);
+      sinon.assert.notCalled(deploymentProviderMock.listInstalledDeployments);
       expect(mockState.updateSyncthingRunning).to.be.false;
     });
 
     it('should not run if already running', async () => {
       mockState.updateSyncthingRunning = true;
-      mockInstalledAppsFn.resolves({ status: 'success', data: [] });
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
         mockGetGlobalStateFn,
-        mockAppDockerStopFn,
-        mockAppDockerRestartFn,
-        mockAppDeleteDataFn,
-        mockRemoveAppLocallyFn,
       );
 
       // Wait for first execution to complete
       await clock.tickAsync(100);
 
-      sinon.assert.notCalled(mockInstalledAppsFn);
+      sinon.assert.notCalled(deploymentProviderMock.listInstalledDeployments);
     });
 
     it('should switch unsafe-mount folders to receiveonly on first run WITHOUT restarting syncthing', async () => {
@@ -267,7 +232,6 @@ describe('syncthingMonitor tests', () => {
       // fleet's v2.0.x) - a process restart here drops every folder's transfers
       // and delays startup by 5s for nothing.
       mockState.syncthingAppsFirstRun = true;
-      mockInstalledAppsFn.resolves({ status: 'success', data: [] });
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
       syncthingServiceMock.getConfigFolders.resolves({
@@ -278,12 +242,7 @@ describe('syncthingMonitor tests', () => {
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
-        mockInstalledAppsFn,
         mockGetGlobalStateFn,
-        mockAppDockerStopFn,
-        mockAppDockerRestartFn,
-        mockAppDeleteDataFn,
-        mockRemoveAppLocallyFn,
       );
       await clock.tickAsync(10000);
 
@@ -294,18 +253,12 @@ describe('syncthingMonitor tests', () => {
     });
 
     it('should start the events consumer (edge accelerator) and stop it on shutdown', async () => {
-      mockInstalledAppsFn.resolves({ status: 'success', data: [] });
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
-        mockInstalledAppsFn,
         mockGetGlobalStateFn,
-        mockAppDockerStopFn,
-        mockAppDockerRestartFn,
-        mockAppDeleteDataFn,
-        mockRemoveAppLocallyFn,
       );
 
       sinon.assert.calledOnce(syncthingEventsConsumerMock.start);
@@ -320,21 +273,15 @@ describe('syncthingMonitor tests', () => {
     it('should run an early evaluation (debounced) when folder events arrive', async () => {
       // events never decide anything - they only run the SAME monitoring pass
       // earlier than the interval would
-      mockInstalledAppsFn.resolves({ status: 'success', data: [] });
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
-        mockInstalledAppsFn,
         mockGetGlobalStateFn,
-        mockAppDockerStopFn,
-        mockAppDockerRestartFn,
-        mockAppDeleteDataFn,
-        mockRemoveAppLocallyFn,
       );
       await clock.tickAsync(100); // initial run completes
-      const runsAfterStart = mockInstalledAppsFn.callCount;
+      const runsAfterStart = deploymentProviderMock.listInstalledDeployments.callCount;
 
       const handlers = syncthingEventsConsumerMock.start.firstCall.args[0];
       handlers.onFolderActivity('fluxcomp_app1', 'FolderSummary');
@@ -342,7 +289,7 @@ describe('syncthingMonitor tests', () => {
 
       await clock.tickAsync(2500); // past the debounce, well before the interval
 
-      expect(mockInstalledAppsFn.callCount).to.equal(runsAfterStart + 1);
+      expect(deploymentProviderMock.listInstalledDeployments.callCount).to.equal(runsAfterStart + 1);
     });
 
     it('should prevent overlapping executions', async () => {
@@ -360,10 +307,6 @@ describe('syncthingMonitor tests', () => {
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
         mockGetGlobalStateFn,
-        mockAppDockerStopFn,
-        mockAppDockerRestartFn,
-        mockAppDeleteDataFn,
-        mockRemoveAppLocallyFn,
       );
 
       // First execution starts immediately
@@ -394,10 +337,6 @@ describe('syncthingMonitor tests', () => {
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
         mockGetGlobalStateFn,
-        mockAppDockerStopFn,
-        mockAppDockerRestartFn,
-        mockAppDeleteDataFn,
-        mockRemoveAppLocallyFn,
       );
 
       // Wait for first execution to complete

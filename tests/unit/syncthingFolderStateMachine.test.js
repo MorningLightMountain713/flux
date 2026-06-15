@@ -735,7 +735,7 @@ describe('syncthingFolderStateMachine tests', () => {
         appId: 'test-app',
         identifier: 'app_test',
         syncFolder: null,
-        syncMode: 'syncFirst',
+        requiresSyncBeforeStart: true,
         syncthingAppsFirstRun: false,
         receiveOnlySyncthingAppsCache: new Map(),
         appLocation: sinon.stub().resolves([]),
@@ -844,7 +844,7 @@ describe('syncthingFolderStateMachine tests', () => {
     it('does not request a start for a stopped activeStandby component (the election decides)', async () => {
       appReconcilerMock.setControllerDesired.resetHistory();
       mockParams.syncFolder = { type: 'sendreceive' };
-      mockParams.syncMode = 'activeStandby';
+      mockParams.requiresSyncBeforeStart = false;
       dockerServiceMock.dockerContainerInspect.resolves({
         State: { Running: false },
       });
