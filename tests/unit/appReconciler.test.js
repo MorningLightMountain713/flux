@@ -79,7 +79,6 @@ describe('appReconciler tests', () => {
         recordExit: sinon.stub().resolves(),
       },
       appQueryService: {
-        decryptEnterpriseApps: sinon.stub().callsFake(async (arr) => arr),
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
       },
       containerHealthMonitor: { recreateMissingContainers: sinon.stub().resolves() },
