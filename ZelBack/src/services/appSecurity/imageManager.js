@@ -291,8 +291,13 @@ async function isImageBlocked(appName, images, options = {}) {
   const repos = await getBlockedRepositories();
   const userBlockedRepos = await getUserBlockedRepositories();
 
+  // A null official list means the fetch failed (network / cold cache), not "nothing
+  // is blocked" - flag it so install gates can defer instead of admitting an
+  // image they could not check. An empty list ([]) is a real "fetched, nothing blocked".
+  const undetermined = repos === null;
+
   if (!repos && !userBlockedRepos) {
-    return { blocked: false, reason: null };
+    return { blocked: false, reason: null, undetermined };
   }
 
   const blocked = repos ? repos.map(stripTag) : [];
@@ -334,7 +339,7 @@ async function isImageBlocked(appName, images, options = {}) {
     }
   }
 
-  return { blocked: false, reason: null };
+  return { blocked: false, reason: null, undetermined };
 }
 
 /**

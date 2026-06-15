@@ -354,22 +354,22 @@ describe('appInstaller tests', () => {
       globalStateStub.installationInProgress = false;
     });
 
-    it('should return error if removal is in progress', async () => {
+    it('defers when a removal is in progress', async () => {
       globalStateStub.removalInProgress = true;
 
       const result = await appInstaller.installApplication(mockInstantiatedSpec);
 
       expect(logStub.error.called).to.be.true;
-      expect(result).to.be.false;
+      expect(result.status).to.equal(appInstaller.InstallStatus.DEFERRED);
     });
 
-    it('should return error if another installation is in progress', async () => {
+    it('defers when another installation is in progress', async () => {
       globalStateStub.installationInProgress = true;
 
       const result = await appInstaller.installApplication(mockInstantiatedSpec);
 
       expect(logStub.error.called).to.be.true;
-      expect(result).to.be.false;
+      expect(result.status).to.equal(appInstaller.InstallStatus.DEFERRED);
     });
   });
 
@@ -608,7 +608,7 @@ describe('appInstaller tests', () => {
 
       const result = await appInstallerFresh.installApplication(mockInstantiated, {});
 
-      expect(result, 'install succeeded').to.equal(true);
+      expect(result.status, 'install succeeded').to.equal(appInstaller.InstallStatus.INSTALLED);
       expect(onInstallComplete.calledOnce, 'post-install broadcast fired').to.be.true;
       expect(lockHeldWhenBroadcasting, 'install lock released BEFORE broadcasting').to.equal(false);
       expect(fluxEventBusPublish.calledWith('app:installed'), 'app:installed event published').to.be.true;
