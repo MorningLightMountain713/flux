@@ -457,6 +457,22 @@ describe('imageManager tests', () => {
 
       expect(result.blocked).to.be.false;
       expect(result.reason).to.be.null;
+      expect(result.undetermined).to.be.false;
+    });
+
+    it('returns undetermined (not blocked) when the official blocklist is unreachable', async () => {
+      // A fetch failure must be distinguishable from "fetched, nothing blocked" so the
+      // install gates can defer rather than admit an image they could not check.
+      serviceHelper.axiosGet.rejects(new Error('network unreachable'));
+
+      const result = await imageManager.isImageBlocked(
+        'TestApp',
+        ['allowed/app:latest'],
+        { owner: '1ValidOwner', hash: 'validhash' },
+      );
+
+      expect(result.blocked).to.be.false;
+      expect(result.undetermined).to.be.true;
     });
 
     it('handles a 64-char hash in the blocklist without catastrophic backtracking', async () => {

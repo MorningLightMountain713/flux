@@ -2,6 +2,15 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+// Mirrors appInstaller.InstallStatus (proxyquire.noCallThru stubs the real module out).
+const InstallStatus = Object.freeze({
+  INSTALLED: 'installed',
+  SKIPPED: 'skipped',
+  DEFERRED: 'deferred',
+  REJECTED: 'rejected',
+  FAILED: 'failed',
+});
+
 describe('appSpawner tests', () => {
   let appSpawner;
   let logStub;
@@ -196,7 +205,7 @@ describe('appSpawner tests', () => {
         socketAddressesMatch: sinon.stub().callsFake((a, b) => a === b),
       },
       '../appSecurity/imageManager': {
-        isImageBlocked: sinon.stub().resolves({ blocked: false }),
+        isImageBlocked: opts.imageBlockedStub ?? sinon.stub().resolves({ blocked: false }),
         verifyRepository: sinon.stub().resolves(),
         isAppVetted: sinon.stub().resolves(false),
       },
@@ -238,7 +247,8 @@ describe('appSpawner tests', () => {
         publish: sinon.stub(),
       },
       './appInstaller': {
-        installApplication: opts.installStub ?? sinon.stub().resolves(true),
+        InstallStatus,
+        installApplication: opts.installStub ?? sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null }),
       },
       './appUninstaller': {
         uninstallApplication: sinon.stub().resolves(),
@@ -422,10 +432,33 @@ describe('appSpawner tests', () => {
       buildModule({
         candidates: [candidate],
         errorCount: 0,
-        installStub: sinon.stub().resolves(false),
+        installStub: sinon.stub().resolves({ status: InstallStatus.FAILED, reason: 'install error' }),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.true;
+    });
+
+    it('defers without long-caching when the blocklist is unreachable at the compliance check', async () => {
+      const candidate = makeCandidate();
+      buildModule({
+        candidates: [candidate],
+        errorCount: 0,
+        imageBlockedStub: sinon.stub().resolves({ blocked: false, undetermined: true }),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      // transient outage -> retry next cycle, never the longer back-off cache
+      expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.false;
+    });
+
+    it('defers without long-caching when installApplication reports the blocklist unreachable', async () => {
+      const candidate = makeCandidate();
+      buildModule({
+        candidates: [candidate],
+        errorCount: 0,
+        installStub: sinon.stub().resolves({ status: InstallStatus.DEFERRED, reason: 'blocklist unreachable' }),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.false;
     });
 
     it('should not overwrite short-term cache with long-term cache when network errors throw into catch', async () => {
