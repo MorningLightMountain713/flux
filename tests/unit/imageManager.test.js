@@ -656,7 +656,7 @@ describe('imageManager tests', () => {
         { appName: 'BadApp', allImages: () => ['blocked/repo:latest'] },
       ]);
 
-      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves({ status: appUninstaller.UninstallStatus.REMOVED, reason: null });
 
       sinon.stub(serviceHelper, 'axiosGet').resolves({
         data: ['blocked/repo'],
@@ -682,7 +682,7 @@ describe('imageManager tests', () => {
     it('should handle failure to get installed apps', async () => {
       sinon.stub(appsRepository, 'listInstalledApps').rejects(new Error('Failed to get apps'));
 
-      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves({ status: appUninstaller.UninstallStatus.REMOVED, reason: null });
 
       await imageManager.checkApplicationsCompliance();
 
@@ -698,7 +698,7 @@ describe('imageManager tests', () => {
         { appName: 'GoodApp', allImages: () => ['allowed/app:latest'] },
       ]);
 
-      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves({ status: appUninstaller.UninstallStatus.REMOVED, reason: null });
 
       sinon.stub(serviceHelper, 'axiosGet').resolves({
         data: ['blocked/repo'],
@@ -729,7 +729,7 @@ describe('imageManager tests', () => {
         { appName: 'BadApp2', allImages: () => ['blocked/repo2:latest'] },
       ]);
 
-      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves({ status: appUninstaller.UninstallStatus.REMOVED, reason: null });
 
       sinon.stub(serviceHelper, 'axiosGet').resolves({
         data: ['blocked/repo1', 'blocked/repo2'],
