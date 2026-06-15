@@ -2,6 +2,14 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+// Mirrors appUninstaller.UninstallStatus (proxyquire.noCallThru stubs the real module out).
+const UninstallStatus = Object.freeze({
+  REMOVED: 'removed',
+  SKIPPED: 'skipped',
+  DEFERRED: 'deferred',
+  FAILED: 'failed',
+});
+
 describe('appReconciler tests', () => {
   let appReconciler;
   let stubs;
@@ -82,7 +90,7 @@ describe('appReconciler tests', () => {
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
       },
       containerHealthMonitor: { recreateMissingContainers: sinon.stub().resolves() },
-      appUninstaller: { uninstallApplication: sinon.stub().resolves() },
+      appUninstaller: { UninstallStatus, uninstallApplication: sinon.stub().resolves({ status: UninstallStatus.REMOVED, reason: null }) },
       appTamperingDetectionService: { recordEvent: sinon.stub().resolves(), isNetworkMissingError: () => false },
       dockerOperations: { appDeleteDataInMountPoint: sinon.stub().resolves() },
       serviceHelper: { delay: sinon.stub().resolves() },
@@ -292,6 +300,23 @@ describe('appReconciler tests', () => {
       await appReconciler.reconcile('www_App');
       expect(stubs.appTamperingDetectionService.recordEvent.calledWithMatch('App', 'recreation_failed')).to.be.true;
       expect(stubs.appUninstaller.uninstallApplication.calledOnceWith('App', { broadcastRemoval: true })).to.be.true;
+    });
+
+    it('retries the reconcile when the post-recreate-failure removal is deferred (busy)', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
+      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('boom'));
+      // a deferred removal means the app is still there - the reconcile must retry, not assume it's gone
+      stubs.appUninstaller.uninstallApplication.resolves({ status: UninstallStatus.DEFERRED, reason: 'busy' });
+
+      await appReconciler.reconcile('www_App');
+      expect(stubs.appUninstaller.uninstallApplication.callCount).to.equal(1);
+
+      clock.tick(6000); // past MANAGED_RETRY_MS
+      await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
+      expect(stubs.appUninstaller.uninstallApplication.callCount).to.equal(2);
+      clock.restore();
     });
 
     // "Vanished" requires docker to CONFIRM absence: the reachability probe

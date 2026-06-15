@@ -32,6 +32,17 @@ const appsFolder = `${appsFolderPath}/`;
 const cmdAsync = util.promisify(nodecmd.run);
 const crontabLoad = util.promisify(systemcrontab.load);
 
+/**
+ * Outcome of uninstallApplication. Lets a caller tell a real removal from a no-op or a
+ * transient deferral, instead of the old "always undefined, errors swallowed" contract.
+ */
+const UninstallStatus = Object.freeze({
+  REMOVED: 'removed', // app/component torn down
+  SKIPPED: 'skipped', // nothing to remove - not installed / already gone
+  DEFERRED: 'deferred', // another op in progress - removal not attempted, retry later
+  FAILED: 'failed', // teardown started then errored
+});
+
 // Fired once per component identifier after a successful local removal, beside
 // the durable runtime-state clear (mirrors appInstaller.setOnInstallComplete).
 // serviceManager wires it to appReconciler.clearControllerDesired so the
@@ -359,13 +370,12 @@ async function uninstallComponent(component, options = {}) {
 }
 
 /**
- * Remove application completely from local node
- * @param {string} app - Application name
- * @param {object} res - Response object for streaming
- * @param {boolean} force - Force removal
- * @param {boolean} endResponse - Whether to end response
- * @param {boolean} sendMessage - Whether to send message to network
- * @returns {Promise<void>}
+ * Remove an application (or one component) from the local node.
+ * @param {string} appName - App name, or a component identifier (component_app).
+ * @param {object} [options] - forceKill, skipGuard, broadcastRemoval, onStatus.
+ * @returns {Promise<{status: string, reason: string|null}>} status is an UninstallStatus
+ *   value: REMOVED (torn down), SKIPPED (not installed - nothing to remove), DEFERRED
+ *   (another op in progress, retry later), FAILED (teardown started then errored).
  */
 async function uninstallApplication(appName, options = {}) {
   const {
@@ -395,11 +405,11 @@ async function uninstallApplication(appName, options = {}) {
     if (!skipGuard) {
       if (globalState.removalInProgress) {
         status('Another application is undergoing removal. Removal not possible.');
-        return;
+        return { status: UninstallStatus.DEFERRED, reason: 'Another application is undergoing removal' };
       }
       if (globalState.installationInProgress) {
         status('Another application is undergoing installation. Removal not possible.');
-        return;
+        return { status: UninstallStatus.DEFERRED, reason: 'Another application is undergoing installation' };
       }
     }
 
@@ -416,7 +426,8 @@ async function uninstallApplication(appName, options = {}) {
     let spec = await appsRepository.getInstalledApp(resolvedAppName);
     if (!spec) {
       if (!skipGuard) {
-        throw new Error('Flux App not found');
+        status('Flux App not found');
+        return { status: UninstallStatus.SKIPPED, reason: 'Flux App not found' };
       }
       spec = await appsRepository.getGlobalAppInfo(resolvedAppName);
       if (!spec) {
@@ -446,7 +457,8 @@ async function uninstallApplication(appName, options = {}) {
     }
 
     if (!spec) {
-      throw new Error('Flux App not found');
+      status('Flux App not found');
+      return { status: UninstallStatus.SKIPPED, reason: 'Flux App not found' };
     }
 
     // Tear down components via the normalized DeploymentSpec (mirrors
@@ -572,9 +584,11 @@ async function uninstallApplication(appName, options = {}) {
     }
 
     status(`Removal step done. Result: Flux App ${resolvedAppName} was successfully removed`);
+    return { status: UninstallStatus.REMOVED, reason: null };
   } catch (error) {
     log.error(`Error removing app ${appName}: ${error.message}`);
     status(`Error: ${error.message}`);
+    return { status: UninstallStatus.FAILED, reason: error.message };
   } finally {
     globalState.removalInProgress = false;
   }
@@ -664,6 +678,7 @@ async function removeAppLocallyApi(req, res) {
 }
 
 module.exports = {
+  UninstallStatus,
   uninstallApplication,
   uninstallComponent,
   cleanupDeploymentPorts,

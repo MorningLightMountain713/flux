@@ -440,7 +440,14 @@ async function recreateMissing(identifier) {
       await appTamperingDetectionService.recordEvent(mainAppName, 'network_pruned', `Docker network missing during recreation: ${err.message}`);
     }
     log.warn(`REMOVAL REASON: Container recreation failure - ${mainAppName} (appReconciler)`);
-    await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
+    const removal = await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
+    if (removal.status === appUninstaller.UninstallStatus.DEFERRED
+      || removal.status === appUninstaller.UninstallStatus.FAILED) {
+      // Removal didn't land (busy or errored); the app is still in a bad state, so retry
+      // the reconcile rather than assume it's gone.
+      log.warn(`appReconciler - removal of ${mainAppName} ${removal.status} (${removal.reason}); scheduling retry`);
+      scheduleRetry(identifier, MANAGED_RETRY_MS);
+    }
   }
 }
 
