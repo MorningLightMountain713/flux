@@ -715,6 +715,11 @@ async function appDockerCreate(deployComp, options = {}) {
 
   const adjustedCommands = (deployComp.cmd || []).filter((c) => c !== '--privileged');
 
+  // Docker treats Entrypoint:[] as an explicit clear of the image's own
+  // ENTRYPOINT, so only override when the component actually set one — omit the
+  // key entirely otherwise (see the spread on containerConfig below).
+  const entrypoint = deployComp.entrypoint || [];
+
   const isSender = envParams.some((env) => env.startsWith('LOG=SEND'));
   const isCollector = envParams.some((env) => env.startsWith('LOG=COLLECT'));
 
@@ -813,6 +818,7 @@ async function appDockerCreate(deployComp, options = {}) {
     AttachStdout: true,
     AttachStderr: true,
     Cmd: adjustedCommands,
+    ...(entrypoint.length > 0 && { Entrypoint: entrypoint }),
     Env: envParams,
     Tty: false,
     ExposedPorts: exposedPorts,
@@ -822,6 +828,8 @@ async function appDockerCreate(deployComp, options = {}) {
       Memory: memoryBytes,
       MemorySwap: memorySwapBytes,
       Mounts: deployComp.mounts,
+      // tini as PID 1 (reaps zombies, forwards signals) — v9 `init`, default true.
+      Init: deployComp.init,
       Ulimits: [
         {
           Name: 'nofile',

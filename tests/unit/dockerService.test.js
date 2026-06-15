@@ -1091,6 +1091,42 @@ describe('dockerService tests', () => {
       expect(actualConfig.HostConfig.Mounts[0].Target).to.equal('/chaindata');
     });
 
+    it('overrides the image ENTRYPOINT when the component sets entrypoint', async () => {
+      const deployComp = makeDeployComp({ entrypoint: ['/custom-entry', '--flag'] });
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const actualConfig = dockerStub.firstCall.args[0];
+      expect(actualConfig.Entrypoint).to.deep.equal(['/custom-entry', '--flag']);
+    });
+
+    it('leaves Entrypoint unset for an empty entrypoint so the image default is kept', async () => {
+      const deployComp = makeDeployComp({ entrypoint: [] });
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const actualConfig = dockerStub.firstCall.args[0];
+      expect(actualConfig).to.not.have.property('Entrypoint');
+    });
+
+    it('runs the container under an init (tini) when init is true', async () => {
+      const deployComp = makeDeployComp({ init: true });
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const actualConfig = dockerStub.firstCall.args[0];
+      expect(actualConfig.HostConfig.Init).to.equal(true);
+    });
+
+    it('does not run an init when init is false', async () => {
+      const deployComp = makeDeployComp({ init: false });
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const actualConfig = dockerStub.firstCall.args[0];
+      expect(actualConfig.HostConfig.Init).to.equal(false);
+    });
+
     it('should set up port bindings from DeploymentComponent', async () => {
       const deployComp = makeDeployComp();
 
