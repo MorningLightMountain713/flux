@@ -405,7 +405,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         const currentState = await appsRepository.getGlobalAppInfo(specifications.name);
         await appEventVerifier.authorize({
           appEvent: confirmedEvent,
-          previousSpec: currentState ? currentState.spec : null,
+          previousState: currentState ?? null,
           daemonHeight: getDaemonHeight(),
         });
       }
