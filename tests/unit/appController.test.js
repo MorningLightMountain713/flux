@@ -12,6 +12,7 @@ const dockerService = require('../../ZelBack/src/services/dockerService');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
+const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 
 function mockInstantiatedSpec(spec) {
   if (!spec) return null;
@@ -69,6 +70,22 @@ describe('appController tests', () => {
     return {
       name: opts.name,
       spec,
+    };
+  }
+
+  // The deployment view that deploymentProvider.buildDeployment returns, with
+  // explicit component identifiers as scenario inputs. The flat-vs-`name_app`
+  // identifier RULE is the domain's (flux-spec) concern, tested on
+  // AppComponentFlat/AppComponentV9 - this stub just states what the resolved
+  // deployment exposes so appController's own behavior can be asserted.
+  function stubDeployment(comps) {
+    const byName = {};
+    comps.forEach((c) => {
+      byName[c.name] = { identifier: c.identifier, hasActiveStandbySyncthing: () => !!c.activeStandby };
+    });
+    return {
+      componentEntries: () => comps.map((c) => [c.name, byName[c.name]]),
+      getComponent: (n) => byName[n],
     };
   }
 
@@ -388,12 +405,13 @@ describe('appController tests', () => {
     // is then lock-cleared+stopped, which the reconciler converges to running
     // (user intent). Without this, stop -> restart leaves the lock set and the
     // reconciler silently re-stops the app at its next trigger.
-    it('clears the operator stop lock before restarting (v1-3 app)', async () => {
+    it('clears the operator stop lock before restarting (single-component app)', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'TestApp',
-        version: 3,
-      });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      // a flat (v1-3) app: its single component is identified by the bare app name
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'TestApp', identifier: 'TestApp' },
+      ]));
       const setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
 
       const req = { params: { appname: 'TestApp' }, query: {} };
@@ -406,14 +424,11 @@ describe('appController tests', () => {
 
     it('clears every component lock before restarting a composed app', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'ComposedApp',
-        version: 4,
-        compose: [
-          { name: 'Component1', containerData: '/data' },
-          { name: 'Component2', containerData: '/data' },
-        ],
-      });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component1', identifier: 'Component1_ComposedApp' },
+        { name: 'Component2', identifier: 'Component2_ComposedApp' },
+      ]));
       const setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
 
       const req = { params: { appname: 'ComposedApp' }, query: {} };
@@ -427,14 +442,11 @@ describe('appController tests', () => {
 
     it('clears only the named component lock on a component restart', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'ComposedApp',
-        version: 4,
-        compose: [
-          { name: 'Component1', containerData: '/data' },
-          { name: 'Component2', containerData: '/data' },
-        ],
-      });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component1', identifier: 'Component1_ComposedApp' },
+        { name: 'Component2', identifier: 'Component2_ComposedApp' },
+      ]));
       const setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
 
       const req = { params: { appname: 'Component1_ComposedApp' }, query: {} };
@@ -445,17 +457,16 @@ describe('appController tests', () => {
       sinon.assert.callOrder(setOperatorStopped, dockerService.appDockerRestart);
     });
 
-    // The g:-skip path avoids a direct docker restart of a not-running g:
+    // The activeStandby-skip path avoids a direct docker restart of a not-running
     // component (the election governs it), but the user's stop-veto must still
     // be lifted so the election MAY start it - appStart's existing semantics.
-    it('still clears the lock when a g: component restart is skipped', async () => {
+    it('still clears the lock when an activeStandby component restart is skipped', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(registryManager, 'getApplicationSpecifications').resolves({
-        name: 'ComposedApp',
-        version: 4,
-        compose: [{ name: 'Gcomp', containerData: 'g:/data' }],
-      });
-      sinon.stub(dockerService, 'dockerListContainers').resolves([]); // g: component not running
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Gcomp', identifier: 'Gcomp_ComposedApp', activeStandby: true },
+      ]));
+      sinon.stub(dockerService, 'dockerListContainers').resolves([]); // component not running
       const setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
 
       const req = { params: { appname: 'Gcomp_ComposedApp' }, query: {} };

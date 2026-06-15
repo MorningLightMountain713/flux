@@ -310,7 +310,7 @@ describe('appReconciler tests', () => {
       await appReconciler.reconcile('www_App');
       expect(stubs.containerHealthMonitor.recreateMissingContainers.called, 'must not recreate an existing container').to.be.false;
       expect(stubs.appTamperingDetectionService.recordEvent.called, 'must not write tamper events on a transient failure').to.be.false;
-      expect(stubs.appUninstaller.removeAppLocally.called).to.be.false;
+      expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       const deferred = stubs.log.warn.getCalls().some((c) => /deferring/.test(c.args[0]));
@@ -328,7 +328,7 @@ describe('appReconciler tests', () => {
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('409 Conflict: name already in use'));
       stubs.dockerService.getDockerContainerOnly.resolves({ Id: 'abc123' }); // exists at re-check
       await appReconciler.reconcile('www_App');
-      expect(stubs.appUninstaller.removeAppLocally.called, 'must not remove - the container exists').to.be.false;
+      expect(stubs.appUninstaller.uninstallApplication.called, 'must not remove - the container exists').to.be.false;
       const recordedFailure = stubs.appTamperingDetectionService.recordEvent.getCalls()
         .some((c) => c.args[1] === 'recreation_failed');
       expect(recordedFailure, 'a moot recreate failure must not pollute the tamper ledger').to.be.false;
@@ -375,7 +375,7 @@ describe('appReconciler tests', () => {
       appReconciler.setControllerDesired('db_App', 'running', 'test');
       stubs.globalState.bootContainerStateSettled = true;
       // decider stop+wipe lands during the mount-path await
-      stubs.volumeService.ensureMountPathsExist.callsFake(async () => {
+      stubs.appVolumeService.ensureMountSourcesExist.callsFake(async () => {
         appReconciler.setControllerDesired('db_App', 'stopped', 'decider stop+wipe');
       });
       await appReconciler.reconcile('db_App');
@@ -387,7 +387,7 @@ describe('appReconciler tests', () => {
       stubs.globalState.bootContainerStateSettled = false;
       appReconciler.setControllerDesired('db_App', 'running', 'test');
       stubs.globalState.bootContainerStateSettled = true;
-      stubs.volumeService.ensureMountPathsExist.callsFake(async () => {
+      stubs.appVolumeService.ensureMountSourcesExist.callsFake(async () => {
         appReconciler.clearControllerDesired('db_App');
       });
       await appReconciler.reconcile('db_App');
@@ -508,7 +508,7 @@ describe('appReconciler tests', () => {
         stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
         await appReconciler.reconcile('www_App');
         expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
-        expect(stubs.appUninstaller.removeAppLocally.called).to.be.false;
+        expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
         expect(stubs.appTamperingDetectionService.recordEvent.called).to.be.false;
       });
 
@@ -756,115 +756,84 @@ describe('appReconciler tests', () => {
     });
   });
 
-  // The sweep contract: enqueueAll must cover EVERY installed component -
-  // enterprise apps included. Enterprise specs are stored encrypted
-  // (compose: []), so the sweep decrypts (leniently - one failing app must not
-  // abort the sweep) to enumerate components; for an app whose decryption
-  // fails it falls back to the app's existing docker containers, so reconciles
-  // get queued and converge the moment decryption recovers (reconcile itself
-  // never acts on encrypted data - it defers). Assertions target the coverage
-  // contract (what got swept), not the mechanism.
+  // The sweep contract (v9): enqueueAll enqueues every installed app BY NAME;
+  // reconcile expands each app-level id to its component identifiers through the
+  // deployment layer (which owns version dispatch + decryption) and reconciles
+  // each. An app whose spec can't be resolved (e.g. enterprise decrypt fails)
+  // DEFERS at reconcile - never acted on with ciphertext - and one failing app
+  // never aborts the sweep for the others. Assertions target that coverage.
   describe('enqueueAll sweep coverage', () => {
-    // every reconcile chain here is built from immediately-resolving stubs
-    // (pure microtasks), so two macrotask turns deterministically drain all
-    // reconciles the sweep enqueued (the second covers the workqueue's one
-    // setImmediate hop for a coalesced re-run)
+    // enqueueAll -> reconcile(app) -> expand -> reconcile(component) -> start is a
+    // two-hop chain off immediately-resolving stubs; a handful of macrotask turns
+    // deterministically drains it rather than guessing exact tick counts.
     const flush = async () => {
-      await new Promise((resolve) => { setImmediate(resolve); });
-      await new Promise((resolve) => { setImmediate(resolve); });
+      for (let i = 0; i < 6; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => { setImmediate(resolve); });
+      }
     };
 
-    it('sweeps every component of an enterprise app when decryption succeeds', async () => {
-      const stored = {
-        name: 'EntApp', version: 8, enterprise: 'CIPHERTEXT', hash: 'h1', compose: [],
+    it('enqueues an app by name and reconciles every component it expands to', async () => {
+      localSpec = {
+        name: 'EntApp', version: 8, enterprise: 'CIPHERTEXT',
+        compose: [{ name: 'c1', containerData: '/data' }, { name: 'c2', containerData: '/data' }],
       };
-      const decrypted = { ...stored, compose: [{ name: 'c1', containerData: '/data' }, { name: 'c2', containerData: '/data' }] };
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [stored] });
-      stubs.dbHelper.findOneInDatabase.callsFake(async (db, coll, query) => (query.name === 'EntApp' ? stored : null));
-      stubs.appQueryService.decryptEnterpriseApps.callsFake(async (arr) => arr.map((a) => (a.enterprise ? decrypted : a)));
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'EntApp' }] });
 
       const started = [];
       stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
 
       await appReconciler.enqueueAll('test');
       await flush();
-      expect(started, 'both enterprise components must be swept and reconciled to a start').to.have.members(['c1_EntApp', 'c2_EntApp']);
+      // the app id expands through the deployment layer to its component ids,
+      // each reconciled to a start
+      expect(started).to.have.members(['c1_EntApp', 'c2_EntApp']);
     });
 
-    it('falls back to the app\'s docker containers when decryption fails - reconciles queue and defer', async () => {
-      const stored = {
-        name: 'EntApp', version: 8, enterprise: 'CIPHERTEXT', hash: 'h1', compose: [],
+    it('defers an app whose spec cannot be resolved (decrypt fails) - never acts on ciphertext', async () => {
+      localSpec = {
+        name: 'EntApp', version: 8, enterprise: 'CIPHERTEXT', compose: [{ name: 'c1', containerData: '/data' }],
       };
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [stored] });
-      stubs.dbHelper.findOneInDatabase.callsFake(async (db, coll, query) => (query.name === 'EntApp' ? stored : null));
-      // benchd unavailable: lenient calls return the spec still encrypted, strict callers get the throw
-      stubs.appQueryService.decryptEnterpriseApps.callsFake(async (arr, opts) => {
-        if (opts && opts.throwOnError) throw new Error('benchd unavailable');
-        return arr;
-      });
-      // the app's existing containers, plus an unrelated app's container that
-      // this fallback must NOT sweep in (it is not part of the failed app)
-      stubs.dockerService.dockerListContainers.resolves([
-        { Names: ['/fluxc1_EntApp'] },
-        { Names: ['/fluxc2_EntApp'] },
-        { Names: ['/fluxweb_Other'] },
-      ]);
-
-      const defers = [];
-      stubs.log.warn.callsFake((msg) => {
-        if (/spec read failed, deferring/.test(msg)) defers.push(msg);
-      });
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'EntApp' }] });
+      // benchd unavailable: building the deployment for the still-encrypted spec throws
+      stubs.deploymentProvider.buildDeployment.rejects(new Error('benchd unavailable'));
 
       await appReconciler.enqueueAll('test');
       await flush();
-      // both components reached reconcile and deferred on the failed decrypt
-      expect(defers.some((m) => m.includes('c1_EntApp')), 'c1_EntApp must be swept (docker-derived) and defer').to.be.true;
-      expect(defers.some((m) => m.includes('c2_EntApp')), 'c2_EntApp must be swept (docker-derived) and defer').to.be.true;
-      expect(defers.some((m) => m.includes('web_Other')), 'unrelated app must not be swept by the fallback').to.be.false;
-      // never actuate on encrypted data
-      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+      // the encrypted app defers at reconcile - no expansion onto, nor actuation of, ciphertext
+      expect(stubs.dockerService.appDockerStart.called, 'must never start on an unresolved spec').to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
-    it('an undecryptable app does not abort the sweep for other apps', async () => {
-      const ent = {
-        name: 'EntApp', version: 8, enterprise: 'CIPHERTEXT', hash: 'h1', compose: [],
-      };
+    it('one app failing to resolve does not abort the sweep for the others', async () => {
       const plain = { name: 'Plain', version: 4, compose: [{ name: 'www', containerData: '/data' }] };
-      const byName = { EntApp: ent, Plain: plain };
-      // the failing app FIRST: a sweep that dies on it would never reach Plain
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [ent, plain] });
-      stubs.dbHelper.findOneInDatabase.callsFake(async (db, coll, query) => byName[query.name] ?? null);
-      stubs.appQueryService.decryptEnterpriseApps.callsFake(async (arr, opts) => {
-        if (opts && opts.throwOnError && arr.some((a) => a.enterprise)) throw new Error('benchd unavailable');
-        return arr;
+      // the failing app FIRST: a sweep that died on it would never reach Plain
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'EntApp' }, { name: 'Plain' }] });
+      stubs.appsRepository.getInstalledApp.callsFake(async (n) => ({ name: n, isEncrypted: n === 'EntApp' }));
+      stubs.deploymentProvider.buildDeployment.callsFake(async (inst) => {
+        if (inst.name === 'EntApp') throw new Error('benchd unavailable');
+        return fakeDeployment(plain);
       });
-      stubs.dockerService.dockerListContainers.resolves([{ Names: ['/fluxc1_EntApp'] }]);
 
       const started = [];
       stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
-      const defers = [];
-      stubs.log.warn.callsFake((msg) => {
-        if (/spec read failed, deferring/.test(msg)) defers.push(msg);
-      });
 
       await appReconciler.enqueueAll('test');
       await flush();
-      expect(started, 'the plain app must still reconcile and start').to.include('www_Plain');
-      expect(defers.some((m) => m.includes('c1_EntApp')), 'the failed app is still covered via its docker container').to.be.true;
+      expect(started, 'the resolvable app must still reconcile and start').to.include('www_Plain');
     });
 
-    // coverage guard (passes today): the legacy single-spec path must survive the fix
-    it('sweeps a legacy (v1-3) app under its app name', async () => {
-      const legacy = { name: 'Legacy', version: 3, containerData: '/data' };
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [legacy] });
-      stubs.dbHelper.findOneInDatabase.callsFake(async (db, coll, query) => (query.name === 'Legacy' ? legacy : null));
+    it('sweeps a single-component (flat) app under its bare app name', async () => {
+      localSpec = { name: 'Legacy', version: 3, containerData: '/data' };
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'Legacy' }] });
 
       const started = [];
       stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
 
       await appReconciler.enqueueAll('test');
       await flush();
+      // a flat (v1-3) component identifier IS the bare app name, so reconcile
+      // resolves it directly (no expansion stutter)
       expect(started).to.deep.equal(['Legacy']);
     });
   });
