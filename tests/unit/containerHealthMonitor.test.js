@@ -16,6 +16,7 @@ describe('containerHealthMonitor tests', () => {
   let deploymentProviderStub;
   let dockerServiceStub;
   let appInstallerStub;
+  let appVolumeServiceStub;
   let appUninstallerStub;
   let appInspectorStub;
   let tamperingStub;
@@ -39,6 +40,7 @@ describe('containerHealthMonitor tests', () => {
     deploymentProviderStub = { buildDeployment: sinon.stub().resolves(fakeDeployment) };
     dockerServiceStub = { getDockerContainer: sinon.stub().resolves(null) };
     appInstallerStub = { installComponent: sinon.stub().resolves() };
+    appVolumeServiceStub = { ensureMountSourcesExist: sinon.stub().resolves() };
     appUninstallerStub = { uninstallApplication: sinon.stub().resolves() };
     appInspectorStub = { startAppMonitoring: sinon.stub() };
     tamperingStub = {
@@ -52,6 +54,7 @@ describe('containerHealthMonitor tests', () => {
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       '../dockerService': dockerServiceStub,
       '../appLifecycle/appInstaller': appInstallerStub,
+      '../appLifecycle/appVolumeService': appVolumeServiceStub,
       '../appLifecycle/appUninstaller': appUninstallerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
@@ -149,12 +152,27 @@ describe('containerHealthMonitor tests', () => {
       expect(opts.createVolumes).to.be.false;
     });
 
+    it('remakes vanished bind-mount sources before a soft recreate', async () => {
+      volumeServiceStub.verifyAppVolumeMount.resolves(true);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      expect(appVolumeServiceStub.ensureMountSourcesExist.calledOnce).to.be.true;
+      expect(appVolumeServiceStub.ensureMountSourcesExist.firstCall.args[0]).to.equal(webComp);
+      // the sources must exist before the container is recreated
+      sinon.assert.callOrder(appVolumeServiceStub.ensureMountSourcesExist, appInstallerStub.installComponent);
+    });
+
     it('recreates volumes when the component volume is gone', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(false);
       await containerHealthMonitor.recreateMissingContainers('web_testapp');
       expect(appInstallerStub.installComponent.calledOnce).to.be.true;
       const [, opts] = appInstallerStub.installComponent.firstCall.args;
       expect(opts.createVolumes).to.be.true;
+    });
+
+    it('does not remake sources on a hard recreate (the fresh volume creates them)', async () => {
+      volumeServiceStub.verifyAppVolumeMount.resolves(false);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      expect(appVolumeServiceStub.ensureMountSourcesExist.called).to.be.false;
     });
 
     it('treats an unreadable volume state as not mounted', async () => {

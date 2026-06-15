@@ -1,5 +1,6 @@
 const log = require('../../lib/log');
 const appInstaller = require('../appLifecycle/appInstaller');
+const appVolumeService = require('../appLifecycle/appVolumeService');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { verifyAppVolumeMount } = require('../utils/volumeService');
@@ -28,6 +29,18 @@ async function recreateMissingContainers(componentIdentifier) {
       volumeMounted = await verifyAppVolumeMount(mainAppName, true, deployComp.name);
     } catch {
       // volume not mounted
+    }
+    if (volumeMounted) {
+      // Soft recreate reuses the mounted volume; a bind-mount source can have
+      // vanished while the container was down (e.g. Syncthing pruning a replicated
+      // subdir), and Docker's Mounts API errors on a missing source rather than
+      // creating it, so remake them first. (Hard recreate skips this: createAppVolume
+      // makes the sources after it mounts the fresh volume.) ensureMountSourcesExist
+      // is race-free internally, but a residual TOCTOU remains — installComponent
+      // pulls the image before appDockerCreate binds, so a re-prune in that window
+      // still fails the create and can escalate to removal. Fully closing it needs a
+      // rearchitect (pruner coordination / sources outside the synced tree).
+      await appVolumeService.ensureMountSourcesExist(deployComp);
     }
     await appInstaller.installComponent(deployComp, { createVolumes: !volumeMounted, owner: instantiated.owner });
   }
