@@ -208,6 +208,13 @@ async function checkAppForUpdates(deployment) {
 
   try {
     for (const [name, deployComp] of deployment.componentEntries()) {
+      // A component pinned with autoUpdate:false is neither polled nor redeployed.
+      // Default is true, so only an explicit opt-out skips.
+      if (deployComp.autoUpdate === false) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+
       const containerName = dockerService.getAppIdentifier(deployComp.identifier);
 
       // eslint-disable-next-line no-await-in-loop
