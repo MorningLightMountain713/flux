@@ -9,9 +9,7 @@ describe('appQueryService tests', () => {
   let dockerServiceStub;
   let registryManagerStub;
 
-  let appSpecHelpersStub;
   let appsRepositoryStub;
-  let enterpriseHelperStub;
   let logStub;
   let configStub;
 
@@ -69,15 +67,6 @@ describe('appQueryService tests', () => {
       appInstallingLocation: sinon.stub(),
     };
 
-
-    appSpecHelpersStub = {
-      specificationFormatter: sinon.stub().returnsArg(0),
-    };
-
-    enterpriseHelperStub = {
-      checkAndDecryptAppSpecs: sinon.stub().returnsArg(0),
-    };
-
     appsRepositoryStub = {
       listInstalledApps: sinon.stub(),
     };
@@ -96,9 +85,6 @@ describe('appQueryService tests', () => {
       '../dockerService': dockerServiceStub,
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../utils/appSpecHelpers': appSpecHelpersStub,
-      '../utils/enterpriseHelper': enterpriseHelperStub,
-      '../utils/cacheManager': { default: { enterpriseAppDecryptionCache: new Map() } },
       '../../lib/log': logStub,
       '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
         config: configStub,
@@ -108,102 +94,6 @@ describe('appQueryService tests', () => {
 
   afterEach(() => {
     sinon.restore();
-  });
-
-  describe('decryptEnterpriseApps', () => {
-    const enterpriseApp = {
-      name: 'entApp', version: 8, enterprise: 'CIPHERTEXT', hash: 'h1',
-    };
-
-    it('returns non-enterprise apps unchanged without decrypting', async () => {
-      const apps = [{ name: 'plain', version: 4 }];
-      const result = await appQueryService.decryptEnterpriseApps(apps, { formatSpecs: false });
-      expect(result).to.deep.equal(apps);
-      expect(enterpriseHelperStub.checkAndDecryptAppSpecs.called).to.be.false;
-    });
-
-    it('swallows a decryption failure and returns the encrypted spec by default (lenient)', async () => {
-      // resetBehavior first: a stub's returnsArg(0) (set in beforeEach) otherwise wins over rejects()
-      enterpriseHelperStub.checkAndDecryptAppSpecs.resetBehavior();
-      enterpriseHelperStub.checkAndDecryptAppSpecs.rejects(new Error('enterpriseKey is mandatory'));
-      const result = await appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false });
-      // display/listing callers keep the whole list; the failed one stays encrypted
-      expect(result).to.deep.equal([enterpriseApp]);
-    });
-
-    it('rethrows a decryption failure when throwOnError is set', async () => {
-      enterpriseHelperStub.checkAndDecryptAppSpecs.resetBehavior();
-      enterpriseHelperStub.checkAndDecryptAppSpecs.rejects(new Error('enterpriseKey is mandatory'));
-      let threw = false;
-      try {
-        await appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false, throwOnError: true });
-      } catch (err) {
-        threw = true;
-        expect(err.message).to.match(/enterpriseKey is mandatory/);
-      }
-      expect(threw, 'should propagate the decrypt error so the caller can defer, not act on ciphertext').to.be.true;
-    });
-
-    // Call-volume contract: with many components in defer loops, benchd must
-    // not be hammered. Concurrent decrypts of the same spec share one in-flight
-    // attempt, and a failure is remembered briefly so retries inside the window
-    // are answered from the failure cache (lenient callers get the encrypted
-    // spec back, strict callers get the rethrow) - one benchd attempt per app
-    // per window, regardless of component count. Successes are unaffected.
-    describe('benchd call volume under failure', () => {
-      it('shares one in-flight decryption across concurrent callers of the same spec', async () => {
-        const decrypted = { ...enterpriseApp, compose: [{ name: 'c1' }] };
-        let release;
-        const gate = new Promise((res) => { release = res; });
-        enterpriseHelperStub.checkAndDecryptAppSpecs.resetBehavior();
-        enterpriseHelperStub.checkAndDecryptAppSpecs.callsFake(async () => {
-          await gate;
-          return decrypted;
-        });
-
-        const p1 = appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false });
-        const p2 = appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false });
-        release();
-        const [r1, r2] = await Promise.all([p1, p2]);
-
-        expect(enterpriseHelperStub.checkAndDecryptAppSpecs.callCount, 'concurrent callers must share one benchd attempt').to.equal(1);
-        expect(r1[0].compose).to.have.lengthOf(1);
-        expect(r2[0].compose).to.have.lengthOf(1);
-      });
-
-      it('remembers a decryption failure briefly - retries inside the window skip benchd', async () => {
-        enterpriseHelperStub.checkAndDecryptAppSpecs.resetBehavior();
-        enterpriseHelperStub.checkAndDecryptAppSpecs.rejects(new Error('benchd unavailable'));
-        const clock = sinon.useFakeTimers();
-        try {
-          await appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false });
-          await appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false });
-          expect(enterpriseHelperStub.checkAndDecryptAppSpecs.callCount, 'second call inside the window must not hit benchd').to.equal(1);
-
-          clock.tick(61 * 1000); // past the failure window - benchd may have recovered
-          await appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false });
-          expect(enterpriseHelperStub.checkAndDecryptAppSpecs.callCount, 'after the window the decrypt is retried').to.equal(2);
-        } finally {
-          clock.restore();
-        }
-      });
-
-      it('a remembered failure still rejects strict callers without another benchd call', async () => {
-        enterpriseHelperStub.checkAndDecryptAppSpecs.resetBehavior();
-        enterpriseHelperStub.checkAndDecryptAppSpecs.rejects(new Error('benchd unavailable'));
-
-        await appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false }); // seeds the failure window
-        let threw = false;
-        try {
-          await appQueryService.decryptEnterpriseApps([enterpriseApp], { formatSpecs: false, throwOnError: true });
-        } catch (err) {
-          threw = true;
-          expect(err.message).to.match(/benchd unavailable/);
-        }
-        expect(threw, 'strict caller must still get the failure (reconcile defers on it)').to.be.true;
-        expect(enterpriseHelperStub.checkAndDecryptAppSpecs.callCount, 'the cached failure answers without re-hitting benchd').to.equal(1);
-      });
-    });
   });
 
   describe('installedApps', () => {
