@@ -377,7 +377,6 @@ describe('appOperations tests', () => {
   });
 
   describe('ensureMountSourcesExist tests', () => {
-    let fsStub;
     let serviceHelperStub;
     let logStub;
     let proxyquire;
@@ -385,10 +384,6 @@ describe('appOperations tests', () => {
     beforeEach(() => {
       // eslint-disable-next-line global-require
       proxyquire = require('proxyquire').noCallThru();
-
-      fsStub = {
-        access: sinon.stub(),
-      };
 
       serviceHelperStub = {
         runCommand: sinon.stub().resolves({ error: null }),
@@ -411,28 +406,12 @@ describe('appOperations tests', () => {
 
     function loadModule() {
       return proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
-        'node:fs/promises': fsStub,
         '../serviceHelper': serviceHelperStub,
         '../../lib/log': logStub,
       });
     }
 
-    it('skips creating paths that already exist', async () => {
-      fsStub.access = sinon.stub().resolves();
-      const mod = loadModule();
-      const deployComp = buildDeployComp([
-        { Source: '/apps/fluxweb_test/html', sourceType: 'directory' },
-        { Source: '/apps/fluxweb_test/config.yaml', sourceType: 'file' },
-      ]);
-
-      await mod.ensureMountSourcesExist(deployComp);
-
-      expect(fsStub.access.callCount).to.equal(2);
-      expect(serviceHelperStub.runCommand.called).to.be.false;
-    });
-
-    it('creates missing file with touch and chmod', async () => {
-      fsStub.access = sinon.stub().rejects(new Error('ENOENT'));
+    it('creates a file source with touch and chmod', async () => {
       const mod = loadModule();
       const deployComp = buildDeployComp([
         { Source: '/apps/fluxweb_test/config.yaml', sourceType: 'file' },
@@ -444,8 +423,7 @@ describe('appOperations tests', () => {
       expect(serviceHelperStub.runCommand.calledWith('chmod', sinon.match({ params: ['777', '/apps/fluxweb_test/config.yaml'], runAsRoot: true }))).to.be.true;
     });
 
-    it('creates missing directory with mkdir', async () => {
-      fsStub.access = sinon.stub().rejects(new Error('ENOENT'));
+    it('creates a directory source with mkdir -p', async () => {
       const mod = loadModule();
       const deployComp = buildDeployComp([
         { Source: '/apps/fluxweb_test/logs', sourceType: 'directory' },
@@ -456,12 +434,7 @@ describe('appOperations tests', () => {
       expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', '/apps/fluxweb_test/logs'], runAsRoot: true }))).to.be.true;
     });
 
-    it('handles mixed files and directories', async () => {
-      fsStub.access = sinon.stub();
-      fsStub.access.onCall(0).resolves();
-      fsStub.access.onCall(1).rejects(new Error('ENOENT'));
-      fsStub.access.onCall(2).rejects(new Error('ENOENT'));
-
+    it('materialises every source unconditionally, with no prior existence check (idempotent, no TOCTOU)', async () => {
       const mod = loadModule();
       const deployComp = buildDeployComp([
         { Source: '/apps/fluxweb_test/html', sourceType: 'directory' },
@@ -471,8 +444,12 @@ describe('appOperations tests', () => {
 
       await mod.ensureMountSourcesExist(deployComp);
 
+      // mkdir -p / touch run for every source, not gated on a prior stat — mkdir -p
+      // and touch are themselves idempotent, so there is no check-then-act window.
+      expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', '/apps/fluxweb_test/html'] }))).to.be.true;
       expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', '/apps/fluxweb_test/logs'] }))).to.be.true;
       expect(serviceHelperStub.runCommand.calledWith('touch', sinon.match({ params: ['/apps/fluxweb_test/config.yaml'] }))).to.be.true;
+      expect(serviceHelperStub.runCommand.calledWith('chmod', sinon.match({ params: ['777', '/apps/fluxweb_test/config.yaml'] }))).to.be.true;
     });
 
     it('handles empty mounts array', async () => {
@@ -481,7 +458,6 @@ describe('appOperations tests', () => {
 
       await mod.ensureMountSourcesExist(deployComp);
 
-      expect(fsStub.access.called).to.be.false;
       expect(serviceHelperStub.runCommand.called).to.be.false;
     });
   });
