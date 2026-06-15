@@ -60,7 +60,7 @@ describe('appHashSyncService tests', () => {
       '../appDatabase/registryManager': { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
       '../utils/appSpecHelpers': { specificationFormatter: sinon.stub().returnsArg(0) },
       '../utils/specCutover': { deserializeSpec: deserializeSpecStub },
-      '../utils/specLibs': { validateGossipSpec: validateGossipSpecStub, getSpec: sinon.stub().resolves({}) },
+      '../utils/specLibs': { validateGossipSpec: validateGossipSpecStub, getSpec: sinon.stub().resolves({}), getSpecBackend: sinon.stub().resolves({ InstantiatedSpec: { fromEvent: (x) => x } }) },
       '../providers/FluxOSLegacyCryptoProvider': { create: sinon.stub().resolves({}) },
       '../utils/appUtilities': { appPricePerMonth: sinon.stub().returns(0.01) },
       '../utils/chainUtilities': { getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01, cpu: 1, ram: 1, hdd: 1 }]) },
@@ -801,7 +801,7 @@ describe('appHashSyncService tests', () => {
           '../appDatabase/registryManager': { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
         '../utils/appSpecHelpers': { specificationFormatter: sinon.stub().returnsArg(0) },
         '../utils/specCutover': { deserializeSpec: localDeserializeSpecStub },
-        '../utils/specLibs': { validateGossipSpec: localValidateGossipSpecStub, getSpec: sinon.stub().resolves({}) },
+        '../utils/specLibs': { validateGossipSpec: localValidateGossipSpecStub, getSpec: sinon.stub().resolves({}), getSpecBackend: sinon.stub().resolves({ InstantiatedSpec: { fromEvent: (x) => x } }) },
         '../providers/FluxOSLegacyCryptoProvider': localLegacyCryptoProviderStub,
         '../utils/appUtilities': { appPricePerMonth: sinon.stub().returns(0.01) },
         '../utils/chainUtilities': { getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01, cpu: 1, ram: 1, hdd: 1 }]) },
@@ -876,8 +876,8 @@ describe('appHashSyncService tests', () => {
       expect(localAppEventVerifierStub.authorize.callCount).to.equal(2);
       // previous spec resolved and passed to authorize for each update message
       // (first update sees the registered owner; second sees the first update's owner)
-      expect(localAppEventVerifierStub.authorize.firstCall.args[0].previousSpec).to.have.property('owner', 'oldOwner');
-      expect(localAppEventVerifierStub.authorize.secondCall.args[0].previousSpec).to.have.property('owner', 'newOwner');
+      expect(localAppEventVerifierStub.authorize.firstCall.args[0].previousState.spec).to.have.property('owner', 'oldOwner');
+      expect(localAppEventVerifierStub.authorize.secondCall.args[0].previousState.spec).to.have.property('owner', 'newOwner');
       // Both messages should be inserted
       expect(localCollectionStub.insertMany.called).to.be.true;
       const inserted = localCollectionStub.insertMany.firstCall.args[0];

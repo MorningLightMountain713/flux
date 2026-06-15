@@ -51,7 +51,7 @@ describe('messageStore tests', () => {
         checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
       },
       '../appDatabase/appSpecHistory': {
-        getPreviousSpec: sinon.stub().resolves({ owner: 'owner1' }),
+        getPreviousState: sinon.stub().resolves({ spec: { owner: 'owner1' }, contentHash: null }),
       },
       '../utils/specLibs': {
         validateGossipSpec: sinon.stub().resolves(),

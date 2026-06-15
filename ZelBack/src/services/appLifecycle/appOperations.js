@@ -1371,7 +1371,9 @@ async function updateAppGlobaly(params) {
     extend: cleanExtend,
     signature: cleanSignature,
   });
-  await appEventVerifier.authorize({ appEvent, previousSpec, daemonHeight, verifyHash: false });
+  await appEventVerifier.authorize({
+    appEvent, previousState: appInfo, daemonHeight, verifyHash: false,
+  });
 
   const { latestSupportedSpecVersion } = config.fluxapps;
   if (appInfo.version !== spec.version && spec.version !== latestSupportedSpecVersion) {

@@ -8,7 +8,7 @@ const serviceHelper = require('../serviceHelper');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
 const { deserializeSpec } = require('../utils/specCutover');
-const { validateGossipSpec, getSpec } = require('../utils/specLibs');
+const { validateGossipSpec, getSpec, getSpecBackend } = require('../utils/specLibs');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
@@ -335,7 +335,7 @@ async function processMessages(messages, onProgress) {
 
         const appEvent = await appEventVerifier.deserializeMessage(appMessage);
 
-        let previousSpec = null;
+        let previousState = null;
         if (!isRegistration) {
           const prevMessagesList = prevMessagesMap.get(appSpecFormatted.name);
           const prevMsg = prevMessagesList ? findPrevMessage(prevMessagesList, height) : null;
@@ -344,12 +344,18 @@ async function processMessages(messages, onProgress) {
             continue;
           }
           const prevSpecBlob = prevMsg.appSpecifications;
-          previousSpec = await deserializeSpec(prevSpecBlob);
+          const { InstantiatedSpec } = await getSpecBackend();
+          previousState = InstantiatedSpec.fromEvent({
+            spec: await deserializeSpec(prevSpecBlob),
+            hash: prevMsg.hash,
+            height: serviceHelper.ensureNumber(prevMsg.height),
+            contentHash: prevMsg.contentHash ?? null,
+          });
         }
 
         await appEventVerifier.authorize({
           appEvent,
-          previousSpec,
+          previousState,
           daemonHeight,
         });
 

@@ -7,7 +7,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
 const { getSpec, validateGossipSpec } = require('../utils/specLibs');
-const { getPreviousSpec } = require('../appDatabase/appSpecHistory');
+const { getPreviousState } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const {
   globalAppsMessages,
@@ -144,10 +144,10 @@ async function storeAppTemporaryMessage(message, options = {}) {
       await validateGossipSpec(validationBlob, { height: block });
     }
 
-    let previousSpec = null;
+    let previousState = null;
     if (!appEvent.isRegistration) {
-      previousSpec = await getPreviousSpec(appEvent.spec, appEvent.timestamp);
-      if (!previousSpec) {
+      previousState = await getPreviousState(appEvent.spec, appEvent.timestamp);
+      if (!previousState) {
         log.info(`Queueing update for ${appEvent.spec.name} - registration not yet stored`);
         globalState.queuePendingUpdate(appEvent.spec.name, message, block);
         return false;
@@ -157,15 +157,15 @@ async function storeAppTemporaryMessage(message, options = {}) {
     if (validationBlob) {
       if (appEvent.isRegistration) {
         await registryManager.checkApplicationRegistrationNameConflicts(appEvent.spec, appEvent.hash);
-      } else if (previousSpec) {
+      } else if (previousState) {
         const { UpdatePolicy } = await getSpec();
-        UpdatePolicy.assertCompatible(previousSpec, appEvent.spec);
+        UpdatePolicy.assertCompatible(previousState.spec, appEvent.spec);
       }
     }
 
     await appEventVerifier.authorize({
       appEvent,
-      previousSpec,
+      previousState,
       daemonHeight: block,
     });
   }
