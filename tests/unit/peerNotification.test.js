@@ -81,6 +81,7 @@ describe('peerNotification tests', () => {
       },
       '../appMonitoring/appReconciler': {
         enqueueAll: enqueueAllStub,
+        waitForBootDrainSettled: sinon.stub().resolves(),
       },
       '../appDatabase/appsRepository': {
         listInstalledApps: listInstalledAppsStub,
