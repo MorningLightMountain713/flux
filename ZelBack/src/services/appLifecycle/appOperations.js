@@ -1710,7 +1710,11 @@ async function reconcileInstalledApps() {
         if (localSocketAddr && runningAppList.length > minInstances && isNewestInstance(runningAppList, localSocketAddr)) {
           log.warn(`REMOVAL REASON: Too many instances - ${installed.name} running on ${runningAppList.length} instances (max: ${minInstances}) - This node is the newest instance`);
           // eslint-disable-next-line no-await-in-loop
-          await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
+          const removal = await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
+          if (removal.status === appUninstaller.UninstallStatus.DEFERRED || removal.status === appUninstaller.UninstallStatus.FAILED) {
+            // Removal didn't land (busy or errored); this sweep re-checks next cycle.
+            log.warn(`Over-instance removal of ${installed.name} ${removal.status} (${removal.reason}); will retry next cycle`);
+          }
           // eslint-disable-next-line no-await-in-loop
           await serviceHelper.delay(config.fluxapps.removal.delay * 1000);
           continue;
