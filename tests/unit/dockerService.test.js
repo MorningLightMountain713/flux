@@ -956,6 +956,38 @@ describe('dockerService tests', () => {
       expect(actualConfig.HostConfig.Init).to.equal(false);
     });
 
+    it('wires a v9 livenessProbe into a docker Healthcheck, seconds to nanoseconds', async () => {
+      const deployComp = makeDeployComp({
+        livenessProbe: {
+          cmd: ['pg_isready', '-U', 'app'],
+          interval: 30,
+          timeout: 5,
+          retries: 3,
+          startPeriod: 10,
+        },
+      });
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const actualConfig = dockerStub.firstCall.args[0];
+      expect(actualConfig.Healthcheck).to.deep.equal({
+        Test: ['CMD', 'pg_isready', '-U', 'app'],
+        Interval: 30000000000,
+        Timeout: 5000000000,
+        Retries: 3,
+        StartPeriod: 10000000000,
+      });
+    });
+
+    it('sets no Healthcheck when the component has no livenessProbe', async () => {
+      const deployComp = makeDeployComp();
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const actualConfig = dockerStub.firstCall.args[0];
+      expect(actualConfig).to.not.have.property('Healthcheck');
+    });
+
     it('should set up port bindings from DeploymentComponent', async () => {
       const deployComp = makeDeployComp();
 
