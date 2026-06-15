@@ -7,7 +7,7 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const syncthingService = require('../syncthingService');
-const { decryptEnterpriseApps } = require('../appQuery/appQueryService');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const log = require('../../lib/log');
 const {
   MONITOR_INTERVAL_MS,
@@ -21,8 +21,6 @@ const {
   buildDeviceConfiguration,
   createSyncthingFolderConfig,
   ensureStfolderExists,
-  getContainerDataFlags,
-  requiresSyncing,
   folderNeedsUpdate,
 } = require('./syncthingMonitorHelpers');
 const {
@@ -47,35 +45,25 @@ const appsFolder = `${appsFolderPath}/`;
  * Check if app folders are properly mounted
  * Returns list of apps whose folders are not mounted yet
  * Uses verifyFolderMountSafety to detect folders that exist but aren't properly mounted
- * @param {Array} appsInstalled - List of installed apps
+ * @param {Array} deployments - Installed app deployments
  * @returns {Promise<Array>} List of apps with unmounted folders
  */
-async function checkAppFolderMounts(appsInstalled) {
+async function checkAppFolderMounts(deployments) {
   const unmountedApps = [];
 
   // eslint-disable-next-line no-restricted-syntax
-  for (const installedApp of appsInstalled) {
-    if (installedApp.version <= 3) {
-      // Legacy app - single folder
-      const appId = dockerService.getAppIdentifier(installedApp.name);
+  for (const deployment of deployments) {
+    // eslint-disable-next-line no-restricted-syntax
+    for (const [, deployComp] of deployment.componentEntries()) {
+      // deployComp.identifier is the docker-style id - bare appName for flat
+      // (v1-3) specs, comp_app for composed (v4+) - so no version branching here.
+      const appId = dockerService.getAppIdentifier(deployComp.identifier);
       const appFolder = `${appsFolder}${appId}`;
       // eslint-disable-next-line no-await-in-loop
       const mountSafety = await verifyFolderMountSafety(appId, appFolder);
       if (!mountSafety.isSafe) {
         // Folder exists but mount is not safe (empty and not mounted - likely unmounted loop device)
-        unmountedApps.push({ appId, appName: installedApp.name, reason: mountSafety.reason });
-      }
-    } else {
-      // Newer app - check each component
-      // eslint-disable-next-line no-restricted-syntax
-      for (const component of installedApp.compose || []) {
-        const appId = dockerService.getAppIdentifier(`${component.name}_${installedApp.name}`);
-        const appFolder = `${appsFolder}${appId}`;
-        // eslint-disable-next-line no-await-in-loop
-        const mountSafety = await verifyFolderMountSafety(appId, appFolder);
-        if (!mountSafety.isSafe) {
-          unmountedApps.push({ appId, appName: installedApp.name, reason: mountSafety.reason });
-        }
+        unmountedApps.push({ appId, appName: deployment.appName, reason: mountSafety.reason });
       }
     }
   }
@@ -107,7 +95,7 @@ async function appLocation(appName) {
  */
 async function processContainerData(params) {
   const {
-    containerData,
+    deployComp,
     identifier,
     installedAppName,
     localSocketAddr,
@@ -122,14 +110,10 @@ async function processContainerData(params) {
     newFoldersConfiguration,
   } = params;
 
-  const containersData = containerData.split('|');
-
-  // Check if syncing is required (only check primary mount - index 0)
-  const primaryContainer = containersData[0];
-  const primaryContainerDataFlags = getContainerDataFlags(primaryContainer);
-
-  if (!requiresSyncing(primaryContainerDataFlags)) {
-    // No syncing required for this app
+  // Only syncthing-enabled components need folder management. In v9 a sync mode
+  // is minted only for activeStandby (g:) and syncFirst (r:), so hasSyncthing()
+  // is exactly the old requiresSyncing() gate.
+  if (!deployComp.hasSyncthing()) {
     return;
   }
 
@@ -162,13 +146,15 @@ async function processContainerData(params) {
   const syncthingFolder = createSyncthingFolderConfig(id, label, folder, devices);
   const syncFolder = allFoldersResp.data.find((x) => x.id === id);
 
-  // Handle receive-only or global sync flags
-  if (primaryContainerDataFlags.includes('r') || primaryContainerDataFlags.includes('g')) {
+  // activeStandby (the election decides which instance runs) and syncFirst (the
+  // sync-readiness decider starts it once data is complete) are the decider-owned
+  // modes that drive the folder state machine.
+  if (deployComp.requiresSyncBeforeStart() || deployComp.hasActiveStandbySyncthing()) {
     // Use state machine to manage folder sync transitions
     const { syncthingFolder: updatedFolder, cache, skipProcessing } = await manageFolderSyncState({
       appId,
       syncFolder,
-      containerDataFlags: primaryContainerDataFlags,
+      requiresSyncBeforeStart: deployComp.requiresSyncBeforeStart(),
       syncthingAppsFirstRun: state.syncthingAppsFirstRun,
       receiveOnlySyncthingAppsCache: state.receiveOnlySyncthingAppsCache,
       appLocation,
@@ -270,11 +256,10 @@ async function logSyncState(foldersConfiguration) {
 /**
  * Core function to process all installed apps and configure Syncthing
  * @param {object} state - State object
- * @param {Function} installedAppsFn - Get installed apps function
  * @param {Function} getGlobalStateFn - Get global state function
  * @returns {Promise<void>}
  */
-async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn) {
+async function syncthingAppsCore(state, getGlobalStateFn) {
   // Sync global state before checking
   getGlobalStateFn();
 
@@ -287,19 +272,13 @@ async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn) {
   let syncthingInitializedSuccessfully = false;
 
   try {
-    // Get list of all installed apps
-    const appsInstalled = await installedAppsFn();
-    if (appsInstalled.status === 'error') {
-      log.error('syncthingAppsCore - Failed to get installed apps');
-      return;
-    }
-
-    // Decrypt enterprise apps (version 8 with encrypted content)
-    appsInstalled.data = await decryptEnterpriseApps(appsInstalled.data);
+    // Installed app deployments, resolved (and decrypted for enterprise apps)
+    // through the domain provider - no version branching, no separate decrypt.
+    const deployments = await deploymentProvider.listInstalledDeployments();
 
     // CRITICAL: Check if app folder mounts are ready before processing
     // This prevents syncthing operations when loop devices aren't mounted after reboot
-    const unmountedApps = await checkAppFolderMounts(appsInstalled.data);
+    const unmountedApps = await checkAppFolderMounts(deployments);
     if (unmountedApps.length > 0) {
       const unmountedList = unmountedApps.map((app) => app.appId).join(', ');
       log.warn(`syncthingAppsCore - Skipping processing: ${unmountedApps.length} app folders not mounted yet: ${unmountedList}`);
@@ -407,42 +386,31 @@ async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn) {
       newFoldersConfiguration,
     };
 
-    // Process all installed apps
+    // Process every component of every installed app. componentEntries() and
+    // deployComp.identifier are polymorphic over the spec version, so there is
+    // no v1-3-vs-v4+ branching here.
     // eslint-disable-next-line no-restricted-syntax
-    for (const installedApp of appsInstalled.data) {
+    for (const deployment of deployments) {
+      const { appName } = deployment;
       // Skip if backup/restore in progress
-      const backupSkip = state.backupInProgress.some((item) => installedApp.name === item);
-      const restoreSkip = state.restoreInProgress.some((item) => installedApp.name === item);
+      const backupSkip = state.backupInProgress.some((item) => appName === item);
+      const restoreSkip = state.restoreInProgress.some((item) => appName === item);
 
       if (backupSkip || restoreSkip) {
-        log.info(`syncthingAppsCore - Backup/restore in progress for ${installedApp.name}, syncthing disabled`);
+        log.info(`syncthingAppsCore - Backup/restore in progress for ${appName}, syncthing disabled`);
         // eslint-disable-next-line no-continue
         continue;
       }
 
-      // Process based on app version
-      if (installedApp.version <= 3) {
-        // Legacy app (version <= 3) - single containerData
+      // eslint-disable-next-line no-restricted-syntax
+      for (const [, deployComp] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
         await processContainerData({
           ...sharedParams,
-          containerData: installedApp.containerData,
-          identifier: installedApp.name,
-          installedAppName: installedApp.name,
+          deployComp,
+          identifier: deployComp.identifier,
+          installedAppName: appName,
         });
-      } else {
-        // Newer app (version > 3) - compose with multiple components
-        // eslint-disable-next-line no-restricted-syntax
-        for (const installedComponent of installedApp.compose) {
-          const identifier = `${installedComponent.name}_${installedApp.name}`;
-          // eslint-disable-next-line no-await-in-loop
-          await processContainerData({
-            ...sharedParams,
-            containerData: installedComponent.containerData,
-            identifier,
-            installedAppName: installedApp.name,
-          });
-        }
       }
     }
 
@@ -564,11 +532,10 @@ async function syncthingAppsCore(state, installedAppsFn, getGlobalStateFn) {
  * Replaces the old recursive approach with a proper interval
  *
  * @param {object} state - State object
- * @param {Function} installedAppsFn - Get installed apps function
  * @param {Function} getGlobalStateFn - Get global state function
  * @returns {Object} Control object with stop() method
  */
-function syncthingApps(state, installedAppsFn, getGlobalStateFn) {
+function syncthingApps(state, getGlobalStateFn) {
   let intervalId = null;
   let isRunning = false;
 
@@ -582,7 +549,6 @@ function syncthingApps(state, installedAppsFn, getGlobalStateFn) {
     try {
       await syncthingAppsCore(
         state,
-        installedAppsFn,
         getGlobalStateFn,
       );
     } catch (error) {

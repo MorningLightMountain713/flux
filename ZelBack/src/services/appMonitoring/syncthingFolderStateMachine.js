@@ -462,7 +462,7 @@ async function handleReceiveOnlyTransition(params) {
     cache,
     runningAppList,
     localSocketAddr,
-    containerDataFlags,
+    requiresSyncBeforeStart,
     syncthingFolder,
   } = params;
 
@@ -514,7 +514,7 @@ async function handleReceiveOnlyTransition(params) {
 
     syncthingFolder.type = 'sendreceive';
 
-    if (containerDataFlags.includes('r')) {
+    if (requiresSyncBeforeStart) {
       log.info(`handleReceiveOnlyTransition - requesting start of ${appId} (leader)`);
       appReconciler.setControllerDesired(appId, 'running', 'syncthing leader start');
     }
@@ -555,7 +555,7 @@ async function handleReceiveOnlyTransition(params) {
       log.info(`handleReceiveOnlyTransition - ${appId} is synced (${syncStatus.syncPercentage.toFixed(2)}%), switching to sendreceive`);
       await fixAppdataPermissions(appId);
       syncthingFolder.type = 'sendreceive';
-      if (containerDataFlags.includes('r')) {
+      if (requiresSyncBeforeStart) {
         log.info(`handleReceiveOnlyTransition - requesting start of ${appId} (synced)`);
         appReconciler.setControllerDesired(appId, 'running', 'syncthing synced start');
       }
@@ -670,16 +670,16 @@ async function handleNewApp(params) {
 /**
  * Ensure container is running if needed
  * @param {string} appId - App ID
- * @param {string} containerDataFlags - Container flags
+ * @param {boolean} requiresSyncBeforeStart - True if the component must finish syncing before its first start (SyncMode.SYNC_FIRST)
  * @returns {Promise<void>}
  */
-async function ensureContainerRunning(appId, containerDataFlags) {
+async function ensureContainerRunning(appId, requiresSyncBeforeStart) {
   try {
     const containerInspect = await dockerService.dockerContainerInspect(appId);
 
-    if (!containerInspect.State.Running && containerDataFlags.includes('r')) {
+    if (!containerInspect.State.Running && requiresSyncBeforeStart) {
       log.info(`ensureContainerRunning - ${appId} is not running, requesting start`);
-      appReconciler.setControllerDesired(appId, 'running', 'syncthing r: ensure-running');
+      appReconciler.setControllerDesired(appId, 'running', 'syncthing syncFirst: ensure-running');
     }
   } catch (error) {
     log.error(`ensureContainerRunning - Error checking/starting ${appId}: ${error.message}`);
@@ -697,7 +697,7 @@ async function manageFolderSyncState(params) {
   const {
     appId,
     syncFolder,
-    containerDataFlags,
+    requiresSyncBeforeStart,
     syncthingAppsFirstRun,
     receiveOnlySyncthingAppsCache,
     appLocation,
@@ -736,7 +736,7 @@ async function manageFolderSyncState(params) {
     }
 
     // Mount is safe, proceed normally
-    await ensureContainerRunning(appId, containerDataFlags);
+    await ensureContainerRunning(appId, requiresSyncBeforeStart);
     // Ensure cache entry exists so health monitor can track this folder
     const existingCache = receiveOnlySyncthingAppsCache.get(appId);
     const cache = existingCache || { restarted: true };
@@ -774,7 +774,7 @@ async function manageFolderSyncState(params) {
       cache,
       runningAppList,
       localSocketAddr,
-      containerDataFlags,
+      requiresSyncBeforeStart,
       syncthingFolder,
     });
     return result;
@@ -812,7 +812,7 @@ async function manageFolderSyncState(params) {
   }
 
   // Default case - ensure container is running
-  await ensureContainerRunning(appId, containerDataFlags);
+  await ensureContainerRunning(appId, requiresSyncBeforeStart);
   return { syncthingFolder, cache: null };
 }
 
