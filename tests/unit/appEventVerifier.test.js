@@ -20,7 +20,7 @@ describe('appEventVerifier', () => {
   class FakeAppEvent {
     constructor({
       spec, hashValid = true, isUpdate = false,
-      validSignersByIteration = [],
+      validSignersByIteration = [], renewalVerdict = 'changed',
     }) {
       this.spec = spec;
       this.isUpdate = isUpdate;
@@ -28,10 +28,15 @@ describe('appEventVerifier', () => {
       this._hashValid = hashValid;
       this._validSignersByIteration = validSignersByIteration;
       this._iteration = 0;
+      this._renewalVerdict = renewalVerdict;
     }
 
     verifyHash() {
       return { valid: this._hashValid };
+    }
+
+    async assessRenewal() {
+      return this._renewalVerdict;
     }
 
     async verifySignature(verifyFn, signers) {
@@ -63,13 +68,11 @@ describe('appEventVerifier', () => {
   }
 
   const fakeUpdatePolicy = {
-    isTtlOnlyUpdate: sinon.stub(),
+    extensionSignerPermitted: (verdict) => verdict === 'unchanged' || verdict === 'unverifiable',
   };
 
   beforeEach(() => {
     registeredVersionClasses[8] = FakeFluxAppSpecV8;
-    fakeUpdatePolicy.isTtlOnlyUpdate.resetHistory();
-    fakeUpdatePolicy.isTtlOnlyUpdate.returns(false);
 
     specLibsStub = {
       getSpec: sinon.stub().resolves({
@@ -232,9 +235,9 @@ describe('appEventVerifier', () => {
         isUpdate: true,
         validSignersByIteration: [new Set(['oldOwner'])],
       });
-      const previousSpec = { owner: 'oldOwner' };
+      const previousState = { owner: 'oldOwner' };
       const result = await appEventVerifier.authorize({
-        appEvent, previousSpec, daemonHeight: 1000,
+        appEvent, previousState, daemonHeight: 1000,
       });
       expect(result.signer).to.equal('oldOwner');
     });
@@ -260,7 +263,7 @@ describe('appEventVerifier', () => {
       });
       const result = await appEventVerifier.authorize({
         appEvent,
-        previousSpec: { owner: 'ownerA' },
+        previousState: { owner: 'ownerA' },
         daemonHeight: 2000000,
       });
       expect(result.signer).to.equal('teamSupport');
@@ -287,40 +290,38 @@ describe('appEventVerifier', () => {
       });
       await expect(appEventVerifier.authorize({
         appEvent,
-        previousSpec: { owner: 'ownerA' },
+        previousState: { owner: 'ownerA' },
         daemonHeight: 1000000,
       })).to.be.rejectedWith(/does not correspond with Flux App owner/);
     });
 
-    it('accepts a usersToExtend signer only for TTL-only updates', async () => {
-      fakeUpdatePolicy.isTtlOnlyUpdate.returns(true);
-
+    it('accepts a usersToExtend signer for a content-unchanged renewal', async () => {
       const appEvent = new FakeAppEvent({
         spec: { owner: 'ownerA', name: 'myapp' },
         isUpdate: true,
+        renewalVerdict: 'unchanged',
         // First pass (owner + previousOwner + teamSupport) fails; second
         // pass (usersToExtend) succeeds.
         validSignersByIteration: [new Set(), new Set(['extender1'])],
       });
       const result = await appEventVerifier.authorize({
         appEvent,
-        previousSpec: { owner: 'ownerA' },
+        previousState: { owner: 'ownerA' },
         daemonHeight: 1000,
       });
       expect(result.signer).to.equal('extender1');
     });
 
-    it('rejects a usersToExtend signer when the update is not TTL-only', async () => {
-      fakeUpdatePolicy.isTtlOnlyUpdate.returns(false);
-
+    it('rejects a usersToExtend signer when the renewal changes content', async () => {
       const appEvent = new FakeAppEvent({
         spec: { owner: 'ownerA', name: 'myapp' },
         isUpdate: true,
+        renewalVerdict: 'changed',
         validSignersByIteration: [new Set(), new Set(['extender1'])],
       });
       await expect(appEventVerifier.authorize({
         appEvent,
-        previousSpec: { owner: 'ownerA' },
+        previousState: { owner: 'ownerA' },
         daemonHeight: 1000,
       })).to.be.rejectedWith(/does not correspond with Flux App owner/);
     });

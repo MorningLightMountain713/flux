@@ -42,7 +42,7 @@ function resolveTeamSupportAddress(daemonHeight) {
 }
 
 async function authorize({
-  appEvent, previousSpec, daemonHeight, verifyHash = true,
+  appEvent, previousState, daemonHeight, verifyHash = true,
 }) {
   if (verifyHash) {
     const hashResult = appEvent.verifyHash();
@@ -53,9 +53,9 @@ async function authorize({
 
   const signers = [appEvent.spec.owner];
 
-  if (appEvent.isUpdate && previousSpec) {
-    if (previousSpec.owner && previousSpec.owner !== appEvent.spec.owner) {
-      signers.push(previousSpec.owner);
+  if (appEvent.isUpdate && previousState) {
+    if (previousState.owner && previousState.owner !== appEvent.spec.owner) {
+      signers.push(previousState.owner);
     }
     const teamSupport = resolveTeamSupportAddress(daemonHeight);
     if (teamSupport && isMarketplaceApp(appEvent.spec.name)) {
@@ -66,9 +66,14 @@ async function authorize({
   let result = await appEvent.verifySignature(verifyFn, signers);
   if (result.valid) return result;
 
-  if (appEvent.isUpdate && previousSpec) {
+  if (appEvent.isUpdate && previousState) {
+    // usersToExtend (subscription-renewal) signers may authorize a renewal whose
+    // content is unchanged. The event encapsulates the per-version assessment
+    // (v9: extend flag + contentHash; v1-8: spec compare, decrypting enterprise
+    // specs where the node can) — see flux-spec assessRenewal / extensionSignerPermitted.
     const { UpdatePolicy } = await getSpec();
-    if (UpdatePolicy.isTtlOnlyUpdate(previousSpec, appEvent.spec)) {
+    const verdict = await appEvent.assessRenewal(previousState);
+    if (UpdatePolicy.extensionSignerPermitted(verdict)) {
       const usersToExtend = (config.fluxapps && config.fluxapps.usersToExtend) || [];
       if (usersToExtend.length > 0) {
         result = await appEvent.verifySignature(verifyFn, usersToExtend);
