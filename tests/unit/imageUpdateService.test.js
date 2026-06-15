@@ -331,6 +331,7 @@ describe('imageUpdateService tests', () => {
           identifier: c.identifier || c.name,
           image: c.image,
           imageAuth: c.imageAuth || '',
+          autoUpdate: c.autoUpdate,
         }]),
       };
     }
@@ -417,6 +418,28 @@ describe('imageUpdateService tests', () => {
       const result = await imageUpdateService.checkAppForUpdates(deployment);
 
       expect(result.needsUpdate).to.equal(false);
+    });
+
+    it('does not poll or update a component pinned with autoUpdate false even when a newer image exists', async () => {
+      const deployment = mockDeployment('TestApp', [
+        { name: 'TestApp', identifier: 'TestApp', image: 'nginx:latest', autoUpdate: false },
+      ]);
+
+      const localDigest = 'sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd';
+      const remoteDigest = 'sha256:fed987cba654fed987cba654fed987cba654fed987cba654fed987cba654fedc';
+
+      dockerServiceStub.dockerContainerInspect.resolves({ Image: 'sha256:local123' });
+      dockerServiceStub.dockerListImages.resolves([
+        { Id: 'sha256:local123', RepoDigests: [`nginx@${localDigest}`] },
+      ]);
+      mockDigestToReturn = remoteDigest;
+
+      const result = await imageUpdateService.checkAppForUpdates(deployment);
+
+      expect(result.needsUpdate).to.equal(false);
+      expect(result.components).to.have.lengthOf(0);
+      // pinned: never even polled the local digest
+      expect(dockerServiceStub.dockerContainerInspect.called).to.equal(false);
     });
   });
 
