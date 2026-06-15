@@ -443,8 +443,16 @@ async function trySpawningGlobalApplication() {
     // verify app compliance
     const blockResult = await imageManager.isImageBlocked(instantiated.name, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
     if (blockResult.blocked) {
+      log.info(`trySpawningGlobalApplication - App ${instantiated.name} image is blocked: ${blockResult.reason}. Adding to error cache.`);
       globalState.spawnErrorsLongerAppCache.set(appHash, '');
-      throw new Error(blockResult.reason);
+      return shortDelayTime;
+    }
+    if (blockResult.undetermined) {
+      // Blocklist unreachable (transient) - don't admit something we couldn't check.
+      // Defer to next cycle without the longer back-off so a brief outage can't lock it out.
+      log.warn(`trySpawningGlobalApplication - image blocklist unreachable for ${instantiated.name}, deferring spawn to next cycle`);
+      globalState.trySpawningGlobalAppCache.delete(appHash);
+      return shortDelayTime;
     }
 
     // Refused before taking on new work, and only here. An application this node
@@ -941,23 +949,29 @@ async function trySpawningGlobalApplication() {
     }
 
     // install the app
-    let registerOk = false;
+    let installResult;
     // The installer still signals some failures by throwing, and only the reason
     // it throws with says WHICH check refused - a port already held by another
     // app is raised that way, and reporting the failure without it leaves a suite
-    // unable to tell a refusal from an app that was simply never selected. What
-    // it no longer does is collapse "I touched nothing" and "I tore the app down"
-    // into one false: the outcome says which.
+    // unable to tell a refusal from an app that was simply never selected.
     let installError = null;
     try {
-      registerOk = await appInstaller.installApplication(instantiated);
+      installResult = await appInstaller.installApplication(instantiated);
     } catch (error) {
       log.error(error);
       installError = error.message ?? String(error);
-      registerOk = false;
+      installResult = { status: appInstaller.InstallStatus.FAILED, reason: error.message || String(error) };
     }
-    if (!registerOk) {
-      log.info(`trySpawningGlobalApplication - Install failed for ${appToRun}, adding to local error cache`);
+    if (installResult.status === appInstaller.InstallStatus.DEFERRED) {
+      // Transient (blocklist unreachable, node busy) - retry next cycle without the
+      // longer back-off, so a brief outage doesn't lock the app out for days.
+      log.info(`trySpawningGlobalApplication - install deferred for ${appToRun}: ${installResult.reason}; retrying next cycle`);
+      globalState.trySpawningGlobalAppCache.delete(appHash);
+      return shortDelayTime;
+    }
+    if (installResult.status !== appInstaller.InstallStatus.INSTALLED && installResult.status !== appInstaller.InstallStatus.SKIPPED) {
+      // rejected (blocked image) or failed (install errored) - back off the longer cache.
+      log.info(`trySpawningGlobalApplication - install ${installResult.status} for ${appToRun}: ${installResult.reason}; adding to local error cache`);
       globalState.spawnErrorsLongerAppCache.set(appHash, '');
       fluxEventBus.publish('spawner:installFailed', { appName: appToRun, hash: appHash, error: installError });
       return shortDelayTime;
