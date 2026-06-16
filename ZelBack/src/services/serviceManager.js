@@ -536,7 +536,7 @@ async function startFluxFunctions() {
       }, bootDelay(15 * 60 * 1000));
     }, bootDelay(5 * 60 * 1000));
     setTimeout(() => {
-      appInspector.checkStorageSpaceForApps(appsStorageViolations);
+      appInspector.enforceWritableLayerLimit(appsStorageViolations);
     }, bootDelay(20 * 60 * 1000));
     setInterval(() => {
       backupRestoreService.cleanLocalBackup();

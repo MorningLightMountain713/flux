@@ -65,6 +65,76 @@ describe('appInspector tests', () => {
     sinon.restore();
   });
 
+  describe('enforceWritableLayerLimit', () => {
+    let clock;
+    let listInstalledDeploymentsStub;
+    let supportsManagedStorageStub;
+    let dockerGetUsageStub;
+
+    function load() {
+      listInstalledDeploymentsStub = sinon.stub().resolves([]);
+      supportsManagedStorageStub = sinon.stub().resolves(false);
+      dockerGetUsageStub = sinon.stub().resolves({ Containers: [] });
+      return proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+        config: configStub,
+        '../dockerService': {
+          dockerGetUsage: dockerGetUsageStub,
+          getAppDockerNameIdentifier: (id) => `/${id}`,
+          dockerContainerStatsStream: (containerId, callback) => callback(null, {}),
+        },
+        '../appRuntime/deploymentProvider': { listInstalledDeployments: listInstalledDeploymentsStub },
+        '../utils/hostStorageCapability': { supportsManagedStorage: supportsManagedStorageStub },
+        '../appLifecycle/appUninstaller': { uninstallApplication: sinon.stub().resolves() },
+        '../../services/appLifecycle/appOperations': { redeployApplication: sinon.stub().resolves() },
+        '../messageHelper': messageHelperStub,
+        '../../lib/log': logStub,
+        '../appQuery/appQueryService': {},
+        '../serviceHelper': { ensureString: sinon.stub().returnsArg(0), delay: sinon.stub().resolves() },
+        '../dbHelper': { databaseConnection: sinon.stub() },
+        '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
+        '../utils/appConstants': { appConstants: {} },
+        '../utils/appUtilities': { getContainerStorage: sinon.stub().returns(0) },
+        'node-cmd': { run: (cmd, callback) => callback(null, 'data', 'stderr') },
+      });
+    }
+
+    beforeEach(() => { clock = sinon.useFakeTimers(); });
+    afterEach(() => { clock.restore(); });
+
+    it('skips the sweep on a managed node — the kernel XFS quota enforces the cap', async () => {
+      const inspector = load();
+      supportsManagedStorageStub.resolves(true);
+      await inspector.enforceWritableLayerLimit([]);
+      expect(listInstalledDeploymentsStub.called).to.be.false;
+    });
+
+    it('flags a non-managed app whose container exceeds its per-component budget', async () => {
+      const inspector = load();
+      listInstalledDeploymentsStub.resolves([{
+        appName: 'big',
+        componentEntries: () => [['web', { identifier: 'web_big', rootFsGb: 2, swapGb: 1 }]],
+      }]);
+      // budget = (2 + 1) * 1e9 = 3e9; the container reports 5e9 on disk → violation
+      dockerGetUsageStub.resolves({ Containers: [{ Names: ['/web_big'], SizeRootFs: 5e9 }] });
+      const violations = [];
+      await inspector.enforceWritableLayerLimit(violations);
+      expect(violations).to.include('big');
+    });
+
+    it('does not flag a non-managed app within its per-component budget', async () => {
+      const inspector = load();
+      listInstalledDeploymentsStub.resolves([{
+        appName: 'small',
+        componentEntries: () => [['web', { identifier: 'web_small', rootFsGb: 10, swapGb: 2 }]],
+      }]);
+      // budget = (10 + 2) * 1e9 = 12e9; the container reports 4e9 on disk → fits
+      dockerGetUsageStub.resolves({ Containers: [{ Names: ['/web_small'], SizeRootFs: 4e9 }] });
+      const violations = [];
+      await inspector.enforceWritableLayerLimit(violations);
+      expect(violations).to.not.include('small');
+    });
+  });
+
   describe('appInspect', () => {
     it('should inspect app and return data', async () => {
       const req = {
