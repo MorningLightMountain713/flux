@@ -119,10 +119,13 @@ async function validateAppsCumulatively(installedApps) {
           continue;
         }
 
-        const { cpu, memory, storage } = deployment.totalResources();
+        const { cpu, memory } = deployment.totalResources();
         const appCpu = cpu * 10;
         const appRam = memory;
-        const appHdd = storage + config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap;
+        // Full host-disk footprint (storage + rootFsGb + swapGb across components).
+        // Also fixes a prior inconsistency here: the overhead was added once per app, not
+        // per component — reservableHostDiskGb() sums per component like the other sites.
+        const appHdd = deployment.reservableHostDiskGb();
 
         // Check if this app individually exceeds node capacity
         if (appCpu > useableCpuOnNode) {

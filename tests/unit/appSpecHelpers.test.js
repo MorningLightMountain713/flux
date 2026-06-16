@@ -701,7 +701,7 @@ describe('appSpecHelpers tests', () => {
       telemetry: null,
       components: {
         web: {
-          cpu: 0.5, memory: 512, imageReserveGb: 1, swapGb: 0,
+          cpu: 0.5, memory: 512, rootFsGb: 1, swapGb: 0,
           persistentStorage: { sizeGb: 5, sync: null, mounts: {} },
           ports: { http: { hostPort: 31000, containerPort: 80, protocol: 'tcp' } },
           loadBalancing: null, shutdown: null, preStop: null, imageAuth: null,

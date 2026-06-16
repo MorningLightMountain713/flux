@@ -59,7 +59,10 @@ async function createAppVolume(deployComp, res, test = false) {
     throw new Error('Unable to obtain locked system resources by Flux App. Aborting.');
   }
   const hddLockedByApps = resourcesLocked.data.appsHddLocked;
-  const availableSpaceForApps = useableSpaceOnNode - hddLockedByApps + effectiveHdd + config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap;
+  // Add this app's own reservation back (appsHddLocked already counts it) so the
+  // check measures free space as if it weren't yet reserved. Use the full host-disk
+  // reservation to stay consistent with resourceQueryService.appsResources.
+  const availableSpaceForApps = useableSpaceOnNode - hddLockedByApps + deployComp.reservableHostDiskGb();
   if (effectiveHdd >= availableSpaceForApps) {
     throw new Error('Insufficient space on Flux Node to spawn an application');
   }
