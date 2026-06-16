@@ -41,7 +41,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       web: {
         cpu: 0.5,
         memory: 512,
-        imageReserveGb: 1,
+        rootFsGb: 1,
         swapGb: 0,
         persistentStorage: { sizeGb: 5, sync: null, mounts: {} },
         ports: {
@@ -210,7 +210,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       expect(breakdown.commodity.memory.units).to.equal(15);
       expect(breakdown.commodity.memory.subtotal).to.equal(750_000);
 
-      // storage: (sizeGb=5 + imageReserveGb=1 + swapGb=0) × 3 instances = 18 units × 20_000
+      // storage: (sizeGb=5 + rootFsGb=1 + swapGb=0) × 3 instances = 18 units × 20_000
       expect(breakdown.commodity.storage.units).to.equal(18);
       expect(breakdown.commodity.storage.subtotal).to.equal(360_000);
 
