@@ -3,9 +3,10 @@ const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const deviceHelper = require('../deviceHelper');
 
-// Docker data-root: a genuine filesystem-path selection (kept on the env var, not
-// the capability verdict) — the new mechanism puts docker on the encrypted /dat.
-const dockerDataRoot = process.env.FLUXOS_PATH ? '/dat/var/lib/docker' : '/var/lib/docker';
+// Managed-storage docker data-root: a fixed contract path (the Arcane image puts
+// docker on the encrypted xfs /dat). On any other host this path is absent, so the
+// xfs/prjquota checks below fail and the node reads as unmanaged — no env proxy.
+const MANAGED_DOCKER_ROOT = '/dat/var/lib/docker';
 const APP_SWAP_DIR = '/dat/app-swap';
 
 let capabilityPromise = null;
@@ -41,35 +42,35 @@ async function hostSwapFenced() {
 }
 
 /**
- * Whether the host actually carries the v9 new-mechanism contract — host-swap
- * fence + flux-apps.slice + dedicated swap pool dir + xfs/prjquota docker root.
- * This is a real-state check of the running host (NOT the spoofable env proxy and
- * NOT the attestation verdict): a node running an older image, or any non-Arcane
- * host, fails it and falls back to the OLD mechanism. Cached for the process
- * lifetime — host config does not change while running.
+ * Whether this host is provisioned to run v9 managed storage — the host-swap fence
+ * + flux-apps.slice + dedicated swap pool dir + xfs/prjquota docker root. A
+ * real-state check of the running host (NOT the spoofable env proxy and NOT the
+ * attestation verdict): a node on an older image, or any non-Arcane host, fails it
+ * and falls back to the unmanaged path. Cached for the process lifetime — host
+ * config does not change while running.
  * @returns {Promise<boolean>}
  */
-function isNewMechanismCapable() {
+function supportsManagedStorage() {
   if (!capabilityPromise) {
     capabilityPromise = (async () => {
       const [systemd, cgroupV2, xfs, prjquota, fenced, sliceUnit, swapDir] = await Promise.all([
         pathExists('/run/systemd/system'),
         pathExists('/sys/fs/cgroup/cgroup.controllers'),
-        fsTypeIsXfs(dockerDataRoot),
-        deviceHelper.hasQuotaOptionForMountTarget(dockerDataRoot),
+        fsTypeIsXfs(MANAGED_DOCKER_ROOT),
+        deviceHelper.hasQuotaOptionForMountTarget(MANAGED_DOCKER_ROOT),
         hostSwapFenced(),
         pathExists('/etc/systemd/system/flux-apps.slice'),
         pathExists(APP_SWAP_DIR),
       ]);
-      const capable = systemd && cgroupV2 && xfs && prjquota && fenced && sliceUnit && swapDir;
-      if (!capable) {
-        log.info(`hostMechanism - OLD mechanism (systemd=${systemd} cgroupv2=${cgroupV2} xfs=${xfs} prjquota=${prjquota} fenced=${fenced} slice=${sliceUnit} swapdir=${swapDir})`);
+      const supported = systemd && cgroupV2 && xfs && prjquota && fenced && sliceUnit && swapDir;
+      if (!supported) {
+        log.info(`hostStorageCapability - managed storage unsupported (systemd=${systemd} cgroupv2=${cgroupV2} xfs=${xfs} prjquota=${prjquota} fenced=${fenced} slice=${sliceUnit} swapdir=${swapDir})`);
       } else {
-        log.info('hostMechanism - NEW mechanism host config present (fence + flux-apps.slice + swap pool + xfs/prjquota)');
+        log.info('hostStorageCapability - managed storage supported (fence + flux-apps.slice + swap pool + xfs/prjquota)');
       }
-      return capable;
+      return supported;
     })().catch((error) => {
-      log.warn(`hostMechanism - capability check failed, assuming OLD mechanism: ${error.message}`);
+      log.warn(`hostStorageCapability - capability check failed, assuming unmanaged storage: ${error.message}`);
       return false;
     });
   }
@@ -77,6 +78,6 @@ function isNewMechanismCapable() {
 }
 
 module.exports = {
-  isNewMechanismCapable,
+  supportsManagedStorage,
   APP_SWAP_DIR,
 };

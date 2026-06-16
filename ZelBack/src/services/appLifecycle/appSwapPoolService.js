@@ -2,10 +2,10 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
-const hostMechanism = require('../utils/hostMechanism');
+const hostStorageCapability = require('../utils/hostStorageCapability');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 
-const POOL_DIR = hostMechanism.APP_SWAP_DIR;
+const POOL_DIR = hostStorageCapability.APP_SWAP_DIR;
 const GB = 1024 * 1024 * 1024;
 const MIN_CHUNK_GB = 8;
 // Leave headroom under the kernel MAX_SWAPFILES (~24) for the host swapfile and
@@ -100,7 +100,7 @@ async function computeNeed() {
 }
 
 async function doReconcile() {
-  if (!(await hostMechanism.isNewMechanismCapable())) return; // OLD nodes: no dedicated pool
+  if (!(await hostStorageCapability.supportsManagedStorage())) return; // unmanaged nodes: no dedicated pool
 
   await serviceHelper.runCommand('mkdir', { runAsRoot: true, params: ['-p', POOL_DIR], logError: false });
 

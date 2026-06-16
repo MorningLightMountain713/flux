@@ -5,7 +5,7 @@ const fs = require('node:fs/promises');
 const { expect } = chai;
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const hostMechanism = require('../../ZelBack/src/services/utils/hostMechanism');
+const hostStorageCapability = require('../../ZelBack/src/services/utils/hostStorageCapability');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const appSwapPoolService = require('../../ZelBack/src/services/appLifecycle/appSwapPoolService');
 
@@ -31,7 +31,7 @@ describe('appSwapPoolService tests', () => {
 
   describe('doReconcile', () => {
     it('does nothing on a node without the new-mechanism host config', async () => {
-      sinon.stub(hostMechanism, 'isNewMechanismCapable').resolves(false);
+      sinon.stub(hostStorageCapability, 'supportsManagedStorage').resolves(false);
       const runCommand = sinon.stub(serviceHelper, 'runCommand');
 
       await appSwapPoolService.doReconcile();
@@ -40,7 +40,7 @@ describe('appSwapPoolService tests', () => {
     });
 
     it('grows the pool with fixed-size chunks and swaps them on to cover the need', async () => {
-      sinon.stub(hostMechanism, 'isNewMechanismCapable').resolves(true);
+      sinon.stub(hostStorageCapability, 'supportsManagedStorage').resolves(true);
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([deployment(8, 8)]); // need 16
       sinon.stub(fs, 'readdir').resolves([]); // no existing chunks
       const runCommand = sinon.stub(serviceHelper, 'runCommand').callsFake(() => Promise.resolve({ error: null, stdout: '' }));
@@ -59,7 +59,7 @@ describe('appSwapPoolService tests', () => {
     });
 
     it('does not grow when existing capacity already covers the need', async () => {
-      sinon.stub(hostMechanism, 'isNewMechanismCapable').resolves(true);
+      sinon.stub(hostStorageCapability, 'supportsManagedStorage').resolves(true);
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([deployment(4)]); // need 4
       sinon.stub(fs, 'readdir').resolves(['chunk-0000.swap']);
       sinon.stub(fs, 'stat').resolves({ size: 8 * 1024 * 1024 * 1024 }); // 8G existing
