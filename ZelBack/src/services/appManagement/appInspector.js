@@ -4,6 +4,7 @@ const verificationHelper = require('../verificationHelper');
 const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const hostStorageCapability = require('../utils/hostStorageCapability');
 const appsRepository = require('../appDatabase/appsRepository');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const log = require('../../lib/log');
@@ -813,29 +814,39 @@ async function monitorSharedDBApps(globalState) {
 }
 
 /**
- * Check storage space usage of applications and enforce limits
+ * Enforce the per-app writable-layer + swap budget on legacy (non-managed) nodes.
+ * Managed nodes hard-cap the writable layer in the kernel via the XFS StorageOpt
+ * project quota, so the software sweep only runs where there is no quota.
+ * Reschedules every 30 minutes.
  * @param {Array} appsStorageViolations - Array tracking storage violations
  * @returns {Promise<void>}
  */
-async function checkStorageSpaceForApps(appsStorageViolations) {
+async function enforceWritableLayerLimit(appsStorageViolations) {
   try {
-    // eslint-disable-next-line global-require
-    const config = require('config');
+    // Managed nodes cap the writable layer via the XFS project quota (StorageOpt),
+    // so this sweep is only needed where there is no kernel-level enforcement.
+    if (await hostStorageCapability.supportsManagedStorage()) {
+      setTimeout(() => {
+        enforceWritableLayerLimit(appsStorageViolations);
+      }, 30 * 60 * 1000);
+      return;
+    }
     const deployments = await deploymentProvider.listInstalledDeployments();
     const dockerSystemDF = await dockerService.dockerGetUsage();
-    const allowedMaximum = (config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap) * 1000 * 1024 * 1024;
+    const GB = 1e9; // decimal GB — matches rootFsGb and docker SizeRootFs
     // eslint-disable-next-line no-restricted-syntax
     for (const deployment of deployments) {
       let totalSize = 0;
+      let maxAllowedSize = 0;
       // eslint-disable-next-line no-restricted-syntax
       for (const [, comp] of deployment.componentEntries()) {
+        maxAllowedSize += (comp.rootFsGb + comp.swapGb) * GB;
         const contId = dockerService.getAppDockerNameIdentifier(comp.identifier);
         const contExists = dockerSystemDF.Containers.find((cont) => cont.Names[0] === contId);
         if (contExists) {
           totalSize += contExists.SizeRootFs;
         }
       }
-      const maxAllowedSize = deployment.componentCount() * allowedMaximum;
       if (totalSize > maxAllowedSize) {
         appsStorageViolations.push(deployment.appName);
         const occurancies = appsStorageViolations.filter((appName) => (appName) === deployment.appName).length;
@@ -865,12 +876,12 @@ async function checkStorageSpaceForApps(appsStorageViolations) {
       }
     }
     setTimeout(() => {
-      checkStorageSpaceForApps(appsStorageViolations);
+      enforceWritableLayerLimit(appsStorageViolations);
     }, 30 * 60 * 1000);
   } catch (error) {
     log.error(error);
     setTimeout(() => {
-      checkStorageSpaceForApps(appsStorageViolations);
+      enforceWritableLayerLimit(appsStorageViolations);
     }, 30 * 60 * 1000);
   }
 }
@@ -893,5 +904,5 @@ module.exports = {
   getAppsDOSState,
   checkApplicationsCpuUSage,
   monitorSharedDBApps,
-  checkStorageSpaceForApps,
+  enforceWritableLayerLimit,
 };
