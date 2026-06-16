@@ -30,8 +30,11 @@ function mockSpec(overrides = {}) {
 
 function mockDeployment(resources = {}) {
   const defaults = { cpu: 1, memory: 500, storage: 10, swap: 0 };
+  const r = { ...defaults, ...resources };
   return {
-    totalResources: () => ({ ...defaults, ...resources }),
+    totalResources: () => r,
+    // sizeGb + rootFsGb(10) + swapGb
+    reservableHostDiskGb: () => r.storage + 10 + r.swap,
   };
 }
 
