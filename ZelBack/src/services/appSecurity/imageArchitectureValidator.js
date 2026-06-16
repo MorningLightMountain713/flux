@@ -26,6 +26,18 @@ async function verifyImageRegistryAndArchitectures(spec, options = {}) {
       image: comp.image,
       architectures: result.supportedArchitectures,
     });
+
+    // Early rootFs-fit reject: if even the compressed image already exceeds the
+    // component's rootFs budget it cannot fit decompressed. Gated on a known size
+    // (private/encrypted images may be unmeasured here — the install-time inspect
+    // is authoritative). Version-blind: legacy components are never charged.
+    if (result.imageSizeBytes && !comp.imageFitsRootFs(result.imageSizeBytes)) {
+      throw new Error(
+        `Component '${comp.name}' image (${comp.image}) is ${(result.imageSizeBytes / 1e9).toFixed(2)}GB compressed, `
+        + `which already exceeds its rootFsGb budget of ${comp.rootFsGb}GB. `
+        + 'rootFsGb must budget the decompressed image plus writable-layer headroom.',
+      );
+    }
   }
 
   // Encrypted apps run on Arcane nodes (amd64-only), so every component must

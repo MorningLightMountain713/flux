@@ -57,6 +57,8 @@ class ImageVerifier {
 
   #supportedArchitectures = [];
 
+  #imageSizeBytes = 0;
+
   authConfigured = false;
 
   authVerified = false;
@@ -152,6 +154,17 @@ class ImageVerifier {
    */
   get supportedArchitectures() {
     return this.#supportedArchitectures;
+  }
+
+  /**
+   * Largest compressed image size (summed layer sizes) across the evaluated
+   * architectures, in bytes. 0 until a manifest is evaluated. The registry
+   * reports compressed sizes, so this is a lower bound on the decompressed
+   * on-disk size — good for an early rootFs-fit reject, not an authoritative one.
+   * @returns {number}
+   */
+  get imageSizeBytes() {
+    return this.#imageSizeBytes;
   }
 
   #createAxiosInstance() {
@@ -435,6 +448,10 @@ class ImageVerifier {
       manifest.layers.forEach((layer) => {
         size += layer.size;
       });
+
+      // Track the largest compressed image across evaluated architectures so a
+      // caller can early-reject an image that cannot fit the component's rootFs.
+      if (size > this.#imageSizeBytes) this.#imageSizeBytes = size;
 
       if (size > this.maxImageSize) {
         this.#evaluationErrorDetail = `Docker image: ${this.rawImageTag} size is over Flux limit`;
