@@ -15,6 +15,14 @@ const bootContainerStateSettledGate = new AsyncGate();
 const dbReadyGate = new AsyncGate();
 const policyReadyGate = new AsyncGate();
 let appStateAuthoritative = false;
+// Node-capability verdict, resolved at boot via the benchmark channel. Tri-state:
+// null = unknown (still resolving), true = arcane, false = legacy.
+// capabilityResolvedGate opens once the verdict is first concluded — a definitive
+// answer or the boot-budget timeout. The value may still flip null/false -> true if
+// the channel comes up late, but never true -> false (a momentary outage is a
+// live-secure concern, not an identity flip).
+const capabilityResolvedGate = new AsyncGate();
+let capabilityVerdict = null;
 let updateSyncthingRunning = false;
 let syncthingAppsFirstRun = true;
 const backupInProgress = [];
@@ -280,6 +288,16 @@ module.exports = {
   // and mirrors it; nothing else writes it.
   get appStateAuthoritative() { return appStateAuthoritative; },
   set appStateAuthoritative(value) { appStateAuthoritative = Boolean(value); },
+
+  // Tri-state node-capability verdict (null/true/false) + its one-shot
+  // "resolved" gate. The probe writes the value and calls markCapabilityResolved
+  // once concluded; consumers read capabilityVerdict (cheap, no heavy imports) and
+  // may await waitForCapabilityResolved when they must not act before it is known.
+  get capabilityVerdict() { return capabilityVerdict; },
+  set capabilityVerdict(value) { capabilityVerdict = value; },
+  get capabilityResolved() { return capabilityResolvedGate.ready; },
+  markCapabilityResolved() { capabilityResolvedGate.open(); },
+  waitForCapabilityResolved() { return capabilityResolvedGate.wait(); },
 
   get updateSyncthingRunning() { return updateSyncthingRunning; },
   set updateSyncthingRunning(value) { updateSyncthingRunning = value; },

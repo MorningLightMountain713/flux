@@ -39,8 +39,10 @@ const volumeExecutor = require('./appSystem/volumeExecutor');
 const appStartupManager = require('./appLifecycle/appStartupManager');
 const hardwareValidationService = require('./appLifecycle/hardwareValidationService');
 const globalState = require('./utils/globalState');
+const nodeCapabilities = require('./utils/nodeCapabilities');
 const { peerManager } = require('./utils/peerState');
 const enterpriseNetwork = require('./utils/enterpriseNetwork');
+const enterpriseConfig = require('./utils/enterpriseConfig');
 const policyStore = require('./policyStore');
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
 const appQueryService = require('./appQuery/appQueryService');
@@ -269,6 +271,16 @@ async function startFluxFunctions() {
     // below-floor node stays up holding a sticky DOS, so /flux/info names the
     // version found and the version required.
     fluxNetworkHelper.checkNodeJsVersionAllowed();
+    // Seed the node-capability probe first (fire-once, non-blocking). It resolves
+    // over the benchmark channel independently of the daemon/db, so it gets the
+    // longest head start to settle before any is-arcane consumer reads the verdict.
+    nodeCapabilities.start();
+    // Seed the enterprise node->owners map from helpers/enterprisenodes.json on disk
+    // and sync it from github (every 6h thereafter). Awaited so consumers (identity
+    // resolution, the spawn loop, app-spec validation) have data before they run; the
+    // disk read and github fetch are both bounded (10s fetch timeout) so boot is never
+    // stuck on this. A failed/invalid sync keeps the last-good value.
+    await enterpriseConfig.startSync().catch((err) => log.error(`enterpriseConfig sync start error: ${err.message}`));
     // Hard dependencies — nothing starts until these are confirmed.
     await dbHelper.waitForMongo();
     await dockerService.waitForDocker();
