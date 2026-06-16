@@ -875,7 +875,7 @@ async function startFluxFunctions() {
     // thirty minutes out. It re-arms itself from then on, so only the first run
     // needs the gate.
     setTimeout(() => {
-      globalState.waitForPolicyReady().then(() => appInspector.checkStorageSpaceForApps(
+      globalState.waitForPolicyReady().then(() => appInspector.enforceWritableLayerLimit(
         appsStorageViolations,
       )).catch((error) => log.error(`Storage space check error: ${error.message}`));
     }, bootDelay(20 * 60 * 1000));
