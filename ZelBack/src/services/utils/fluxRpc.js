@@ -113,6 +113,7 @@ class FluxRpc {
     ]),
     fluxbenchd: new Map([
       ['getstatus', null],
+      ['getnodetype', null],
       ['restartnodebenchmarks', null],
       ['signzelnodetransaction', null],
       ['getbenchmarks', null],
