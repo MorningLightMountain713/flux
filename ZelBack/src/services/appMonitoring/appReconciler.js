@@ -10,6 +10,7 @@ const appQueryService = require('../appQuery/appQueryService');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('../appLifecycle/appVolumeService');
+const appSwapPoolService = require('../appLifecycle/appSwapPoolService');
 const containerHealthMonitor = require('./containerHealthMonitor');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
@@ -1100,6 +1101,13 @@ async function start() {
   if (started) return;
   started = true;
   await globalState.waitForBootContainerStateSettled();
+  // Provision + swapon the per-app swap pool before any app starts (no-op without
+  // the new-mechanism host config). Best-effort: a failure must not wedge the boot
+  // drain — per-container memory.swap.max still bounds usage and install/uninstall
+  // reconciles retry.
+  await appSwapPoolService.reconcile().catch((error) => {
+    log.warn(`appReconciler - boot swap-pool reconcile failed: ${error.message}`);
+  });
   // drain everything enqueued during boot now that daemon/DB are ready
   const pending = [...bootPending];
   bootPending.clear();

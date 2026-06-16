@@ -19,6 +19,7 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
+const appSwapPoolService = require('./appSwapPoolService');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const volumeService = require('../utils/volumeService');
@@ -354,6 +355,10 @@ async function uninstallComponent(component, options = {}) {
     await cleanupAppData(appId, label, null);
     const volumepath = await cleanupCrontab(appId, null);
     await cleanupVolumePath(volumepath, label, null);
+    // Reclaim now-unneeded app-swap pool capacity (idempotent; no-op without the
+    // new-mechanism host config). The container is already gone, so its swap pages
+    // are freed and an emptied chunk can be swapped off + removed.
+    await appSwapPoolService.reconcile();
   }
 
   if (containerRemoved) {
