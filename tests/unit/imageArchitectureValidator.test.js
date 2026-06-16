@@ -12,6 +12,10 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
       name: overrides.name || 'component1',
       image: overrides.image || overrides.repotag || 'nginx:latest',
       imageAuth: overrides.imageAuth || overrides.repoauth || '',
+      rootFsGb: overrides.rootFsGb !== undefined ? overrides.rootFsGb : 2,
+      // The fit decision is the component's (real logic lives + is tested in
+      // flux-spec); the validator just acts on the boolean. Default to "fits".
+      imageFitsRootFs: overrides.imageFitsRootFs || (() => true),
     };
   }
 
@@ -126,6 +130,42 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
       } catch (err) {
         expect(err.message).to.include('common architecture');
       }
+    });
+  });
+
+  describe('rootFs fit (early compressed-size reject)', () => {
+    it('rejects when the component reports the image does not fit its rootFs budget', async () => {
+      verifyRepositoryStub.resolves({
+        verified: true, supportedArchitectures: ['amd64'], imageSizeBytes: 5e9,
+      });
+      const spec = makeSpec({
+        compose: [{ name: 'big', image: 'big:latest', rootFsGb: 2, imageFitsRootFs: () => false }],
+      });
+      try {
+        await verifyImageRegistryAndArchitectures(spec);
+        expect.fail('Should have thrown');
+      } catch (err) {
+        expect(err.message).to.include('rootFsGb');
+        expect(err.message).to.include('exceeds');
+      }
+    });
+
+    it('skips the fit check when the image size is unknown', async () => {
+      verifyRepositoryStub.resolves({ verified: true, supportedArchitectures: ['amd64'] });
+      const fits = sinon.stub().returns(false);
+      const spec = makeSpec({ compose: [{ name: 'c', imageFitsRootFs: fits }] });
+      await verifyImageRegistryAndArchitectures(spec);
+      expect(fits.called).to.be.false;
+    });
+
+    it('accepts when the component reports the image fits', async () => {
+      verifyRepositoryStub.resolves({
+        verified: true, supportedArchitectures: ['amd64'], imageSizeBytes: 1e9,
+      });
+      const spec = makeSpec({
+        compose: [{ name: 'c', rootFsGb: 10, imageFitsRootFs: () => true }],
+      });
+      await verifyImageRegistryAndArchitectures(spec);
     });
   });
 
