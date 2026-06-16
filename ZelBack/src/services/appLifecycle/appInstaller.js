@@ -596,6 +596,9 @@ async function installComponent(component, options = {}) {
   // container is created, so its memory.swap.max has live backing. Idempotent; a
   // no-op on nodes without the new-mechanism host config.
   await appSwapPoolService.reconcile();
+  // Measure the pulled image's on-disk size so the writable-layer (StorageOpt) cap
+  // can be rootFsGb - imageSize for v9. 0 (inspect failed) falls back to full rootFsGb.
+  const measuredImageSizeBytes = await dockerService.appDockerImageSize(component.image);
   status(`Creating ${id}...`);
   await dockerService.appDockerCreate(component, {
     test,
@@ -605,6 +608,7 @@ async function installComponent(component, options = {}) {
     syslogTarget,
     crossAppLogCollector,
     owner,
+    measuredImageSizeBytes,
   });
 
   // Set the log ACL and announce identity to flux-telemetryd before the
