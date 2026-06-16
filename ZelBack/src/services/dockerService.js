@@ -5,6 +5,7 @@ const path = require('path');
 const serviceHelper = require('./serviceHelper');
 const pgpService = require('./pgpService');
 const deviceHelper = require('./deviceHelper');
+const hostStorageCapability = require('./utils/hostStorageCapability');
 const generalService = require('./generalService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const log = require('../lib/log');
@@ -700,6 +701,9 @@ async function appDockerCreate(deployComp, options = {}) {
   const extraEnv = options.extraEnv || [];
   const syslogTarget = options.syslogTarget || null;
   const crossAppLogCollector = options.crossAppLogCollector || null;
+  const measuredImageSizeBytes = options.measuredImageSizeBytes || 0;
+  // Managed-storage host (host-swap fence + flux-apps.slice + xfs/prjquota). Cached, local check.
+  const managedStorage = await hostStorageCapability.supportsManagedStorage();
 
   const { appName } = deployComp;
   const identifier = deployComp.identifier;
@@ -840,6 +844,10 @@ async function appDockerCreate(deployComp, options = {}) {
     ...(containerLabels && { Labels: containerLabels }),
     ...(healthcheck && { Healthcheck: healthcheck }),
     HostConfig: {
+      // Place app containers in the dedicated app slice so they sit outside the
+      // fenced host slices (their per-container memory.swap.max draws from the app
+      // swap pool, not the host's). Only on nodes carrying the new-mechanism config.
+      ...(managedStorage && { CgroupParent: 'flux-apps.slice' }),
       NanoCPUs: nanoCpus,
       Memory: memoryBytes,
       MemorySwap: memorySwapBytes,
@@ -884,7 +892,11 @@ async function appDockerCreate(deployComp, options = {}) {
     const mountTarget = isArcane ? '/dat/var/lib/docker' : '/var/lib/docker';
     const hasQuotaPossibility = await deviceHelper.hasQuotaOptionForMountTarget(mountTarget);
     if (hasQuotaPossibility) {
-      containerConfig.HostConfig.StorageOpt = { size: `${config.fluxapps.hddFileSystemMinimum}G` };
+      // Cap the writable layer at the per-app budget: v9 subtracts the measured
+      // image size from rootFsGb (image + writable); legacy stays flat at rootFsGb
+      // (== the old hddFileSystemMinimum for v1-v8, so live apps are unchanged).
+      const capGb = deployComp.writableLayerCapGb(measuredImageSizeBytes);
+      containerConfig.HostConfig.StorageOpt = { size: `${capGb.toFixed(2)}G` };
     }
   }
 
@@ -1146,6 +1158,23 @@ async function appDockerImageRemove(idOrName) {
   const dockerImage = docker.getImage(idOrName);
   await dockerImage.remove();
   return `Flux App ${idOrName} image successfully removed.`;
+}
+
+/**
+ * Measured on-disk size of a pulled image, in bytes (docker inspect .Size). Used
+ * to size the per-app writable-layer (StorageOpt) cap. Returns 0 if unavailable so
+ * callers fall back to the full rootFsGb budget rather than fail.
+ * @param {string} idOrName image id or repo:tag
+ * @returns {Promise<number>} on-disk image size in bytes
+ */
+async function appDockerImageSize(idOrName) {
+  try {
+    const info = await docker.getImage(idOrName).inspect();
+    return info.Size || 0;
+  } catch (error) {
+    log.warn(`appDockerImageSize - could not inspect ${idOrName}: ${error.message}`);
+    return 0;
+  }
 }
 
 /**
@@ -1626,6 +1655,7 @@ module.exports = {
   appDockerCreate,
   appDockerUpdateCpu,
   appDockerImageRemove,
+  appDockerImageSize,
   appDockerKill,
   appDockerPause,
   appDockerRemove,
