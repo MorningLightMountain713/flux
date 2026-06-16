@@ -698,6 +698,16 @@ async function installComponent(component, options = {}) {
   // Measure the pulled image's on-disk size so the writable-layer (StorageOpt) cap
   // can be rootFsGb - imageSize for v9. 0 (inspect failed) falls back to full rootFsGb.
   const measuredImageSizeBytes = await dockerService.appDockerImageSize(component.image);
+  // Authoritative rootFs-fit reject: the decompressed image must leave room within
+  // the component's rootFs budget, else its writable layer has none. Version-blind
+  // (legacy is never charged); 0 (inspect failed) skips so create still proceeds.
+  if (measuredImageSizeBytes && !component.imageFitsRootFs(measuredImageSizeBytes)) {
+    throw new Error(
+      `Component '${component.name}' image (${component.image}) is ${(measuredImageSizeBytes / 1e9).toFixed(2)}GB on disk, `
+      + `which exceeds its rootFsGb budget of ${component.rootFsGb}GB. `
+      + 'rootFsGb must budget the image plus writable-layer headroom.',
+    );
+  }
   status(`Creating ${id}...`);
   await dockerService.appDockerCreate(component, {
     test,

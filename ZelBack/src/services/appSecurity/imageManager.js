@@ -134,6 +134,9 @@ async function verifyRepository(repotag, options = {}) {
     const result = {
       verified: true,
       supportedArchitectures: supportedArchs,
+      // Compressed manifest size (lower bound on decompressed) for an early
+      // rootFs-fit reject at ingestion; the install-time inspect is authoritative.
+      imageSizeBytes: imgVerifier.imageSizeBytes,
     };
 
     // Cache successful verification (uses default TTL from FluxCacheManager: 1 hour)
