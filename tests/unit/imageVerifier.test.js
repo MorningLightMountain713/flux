@@ -748,6 +748,8 @@ describe('imageVerifier tests', () => {
 
       expect(result).to.equal(true);
       expect(() => verifier.throwIfError()).to.not.throw();
+      // compressed layer sum surfaced for the early rootFs-fit reject
+      expect(verifier.imageSizeBytes).to.equal(193911453);
     });
 
     it('should throw if a docker manifest arch does not match the Flux network', async () => {

@@ -43,17 +43,20 @@ describe('imageManager tests', () => {
         addCredentials: sinon.stub(),
         supported: true,
         supportedArchitectures: ['amd64', 'arm64'],
+        imageSizeBytes: 12345,
         errorMeta: null,
       });
     });
 
     it('should verify repository without authentication', async () => {
-      await imageManager.verifyRepository('test/app:latest');
+      const result = await imageManager.verifyRepository('test/app:latest');
 
       sinon.assert.calledOnce(ImageVerifierStub);
       const instance = ImageVerifierStub.firstCall.returnValue;
       sinon.assert.calledOnce(instance.verifyImage);
       sinon.assert.calledOnce(instance.throwIfError);
+      // compressed image size surfaced for the early rootFs-fit reject
+      expect(result.imageSizeBytes).to.equal(12345);
     });
 
     it('should verify repository with authentication', async () => {
