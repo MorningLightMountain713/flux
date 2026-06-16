@@ -177,6 +177,23 @@ async function getStatus(req, res) {
 }
 
 /**
+ * To get the node type from the benchmark channel: a tri-state
+ * `{ nodetype: 'pending' | 'arcane' | 'legacy' }`. Reads a latch decided once at
+ * benchmark-daemon boot, so a definitive `arcane`/`legacy` is stable for the
+ * process lifetime; `pending` means the latch has not settled yet (retry).
+ * @param {object} req Request.
+ * @param {object} res Response.
+ * @returns {object} Message.
+ */
+async function getNodeType(req, res) {
+  const rpccall = 'getnodetype';
+
+  const response = await executeCall(rpccall);
+
+  return res ? res.json(response) : response;
+}
+
+/**
  * To restart node benchmarks. Only accessible by admins and Flux team members.
  * @param {object} req Request.
  * @param {object} res Response.
@@ -487,6 +504,7 @@ module.exports = {
   executeCall,
   // == Benchmarks ==
   getStatus,
+  getNodeType,
   restartNodeBenchmarks,
   signFluxTransaction,
   signFluxTransactionPost,
