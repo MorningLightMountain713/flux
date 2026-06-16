@@ -27,6 +27,7 @@ const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const telemetryConfigService = require('../telemetryConfigService');
 const appVolumeService = require('./appVolumeService');
+const appSwapPoolService = require('./appSwapPoolService');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -690,6 +691,10 @@ async function installComponent(component, options = {}) {
     status(`Volume mount verified for ${id}`);
   }
 
+  // Ensure the dedicated app-swap pool covers all installed apps' swap before the
+  // container is created, so its memory.swap.max has live backing. Idempotent; a
+  // no-op on nodes without the new-mechanism host config.
+  await appSwapPoolService.reconcile();
   status(`Creating ${id}...`);
   await dockerService.appDockerCreate(component, {
     test,
