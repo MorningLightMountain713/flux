@@ -61,11 +61,13 @@ async function appsResources(req, res) {
 
     // eslint-disable-next-line no-restricted-syntax
     for (const deployment of deployments) {
-      const { cpu, memory, storage } = deployment.totalResources();
-      const componentCount = deployment.componentCount();
+      const { cpu, memory } = deployment.totalResources();
       appsCpusLocked += cpu;
       appsRamLocked += memory;
-      appsHddLocked += storage + (config.fluxapps.hddFileSystemMinimum + config.fluxapps.defaultSwap) * componentCount;
+      // Full host-disk footprint per app: persistent storage + rootFsGb + swapGb
+      // across components. Legacy specs report 10/2 per component, matching the old
+      // flat (hddFileSystemMinimum + defaultSwap) * componentCount overhead.
+      appsHddLocked += deployment.reservableHostDiskGb();
     }
     const appsUsage = {
       appsCpusLocked,

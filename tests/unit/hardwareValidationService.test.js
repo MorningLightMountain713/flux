@@ -69,7 +69,11 @@ describe('hardwareValidationService tests', () => {
   });
 
   function fakeDeployment(resources) {
-    return { totalResources: () => resources };
+    return {
+      totalResources: () => resources,
+      // sizeGb + rootFsGb(10) + swapGb(2) for a legacy single-component app
+      reservableHostDiskGb: () => (resources.storage || 0) + 12,
+    };
   }
 
   describe('performBootTimeHardwareValidation', () => {
@@ -201,7 +205,7 @@ describe('hardwareValidationService tests', () => {
 
       expect(result).to.have.length(1);
       expect(result[0].name).to.equal('bigApp');
-      expect(result[0].reason).to.include('requires 87GB storage');
+      expect(result[0].reason).to.include('requires 92GB storage');
     });
 
     it('should remove newer apps when cumulative CPU exceeds capacity', async () => {

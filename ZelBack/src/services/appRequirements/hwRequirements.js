@@ -158,7 +158,10 @@ async function checkNodeResources(deployment) {
     throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
   }
 
-  const { cpu, memory, storage } = deployment.totalResources();
+  const { cpu, memory } = deployment.totalResources();
+  // Full host-disk footprint (storage + rootFsGb + swapGb), so the node
+  // won't admit an app whose image/swap overhead it can't actually hold.
+  const requiredHdd = deployment.reservableHostDiskGb();
   const specs = await getNodeSpecs();
 
   const totalSpaceOnNode = specs.ssdStorage;
@@ -167,7 +170,7 @@ async function checkNodeResources(deployment) {
   }
   const useableSpaceOnNode = totalSpaceOnNode * 0.95 - config.lockedSystemResources.hdd - config.lockedSystemResources.extrahdd;
   const availableSpace = useableSpaceOnNode - resourcesLocked.data.appsHddLocked;
-  if (storage > availableSpace) {
+  if (requiredHdd > availableSpace) {
     throw new Error('Insufficient space on Flux Node to spawn an application');
   }
 
