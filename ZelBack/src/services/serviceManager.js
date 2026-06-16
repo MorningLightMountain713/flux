@@ -36,6 +36,7 @@ const containerMountRecovery = require('./appLifecycle/containerMountRecovery');
 const appStartupManager = require('./appLifecycle/appStartupManager');
 const hardwareValidationService = require('./appLifecycle/hardwareValidationService');
 const globalState = require('./utils/globalState');
+const nodeCapabilities = require('./utils/nodeCapabilities');
 const { peerManager } = require('./utils/peerState');
 const enterpriseNetwork = require('./utils/enterpriseNetwork');
 const enterpriseConfig = require('./utils/enterpriseConfig');
@@ -131,6 +132,10 @@ async function startFluxFunctions() {
       log.error(`Flux port ${apiPort} is not supported. Shutting down.`);
       process.exit();
     }
+    // Seed the node-capability probe first (fire-once, non-blocking). It resolves
+    // over the benchmark channel independently of the daemon/db, so it gets the
+    // longest head start to settle before any is-arcane consumer reads the verdict.
+    nodeCapabilities.start();
     // Seed the enterprise node->owners map from helpers/enterprisenodes.json on disk
     // and sync it from github (every 6h thereafter). Awaited so consumers (identity
     // resolution, the spawn loop, app-spec validation) have data before they run; the
