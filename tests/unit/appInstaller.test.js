@@ -621,10 +621,12 @@ describe('appInstaller tests', () => {
   describe('install-time start hold for syncing components', () => {
     let appDockerStartStub;
     let createAppVolumeStub;
+    let appDockerImageSizeStub;
 
     function loadInstaller() {
       appDockerStartStub = sinon.stub().resolves('ok');
       createAppVolumeStub = sinon.stub().resolves();
+      appDockerImageSizeStub = sinon.stub().resolves(0);
       return proxyquire.noCallThru().load('../../ZelBack/src/services/appLifecycle/appInstaller', {
         config: configStub,
         '../verificationHelper': verificationHelperStub,
@@ -641,7 +643,7 @@ describe('appInstaller tests', () => {
         '../geolocationService': { isStaticIP: sinon.stub().returns(true) },
         '../dockerService': {
           appDockerCreate: sinon.stub().resolves(),
-          appDockerImageSize: sinon.stub().resolves(0),
+          appDockerImageSize: appDockerImageSizeStub,
           appDockerStart: appDockerStartStub,
           dockerPullStream: sinon.stub(),
         },
@@ -673,7 +675,7 @@ describe('appInstaller tests', () => {
       });
     }
 
-    function makeComponent(syncMode) {
+    function makeComponent(syncMode, overrides = {}) {
       return {
         name: 'web',
         appName: 'syncholdapp',
@@ -681,8 +683,12 @@ describe('appInstaller tests', () => {
         image: 'nginx:latest',
         imageAuth: null,
         hostPorts: [],
+        rootFsGb: 2,
+        // Fit decision delegated to the component (real logic tested in flux-spec).
+        imageFitsRootFs: () => true,
         hasActiveStandbySyncthing: () => syncMode === 'activeStandby',
         requiresSyncBeforeStart: () => syncMode === 'syncFirst',
+        ...overrides,
       };
     }
 
@@ -720,6 +726,20 @@ describe('appInstaller tests', () => {
     it('starts a component without sync on a hard install', async () => {
       await installWith(null, true);
       expect(appDockerStartStub.calledOnce).to.be.true;
+    });
+
+    it('rejects a component whose measured image exceeds its rootFs budget', async () => {
+      const installer = loadInstaller();
+      appDockerImageSizeStub.resolves(5e9); // 5GB on disk, over the 2GB rootFs budget
+      const component = makeComponent(null, { imageFitsRootFs: () => false });
+      try {
+        await installer.installComponent(component, { owner: 'owner1', createVolumes: true });
+        expect.fail('Should have thrown');
+      } catch (err) {
+        expect(err.message).to.include('rootFsGb');
+        expect(err.message).to.include('exceeds');
+      }
+      expect(appDockerStartStub.called).to.be.false;
     });
   });
 });
