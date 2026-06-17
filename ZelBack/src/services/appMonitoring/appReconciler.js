@@ -362,22 +362,29 @@ async function dockerActual(identifier) {
       // classified from THIS inspect so the running-branch network check needs no
       // second docker call (and no TOCTOU between two inspects).
       attachment: dockerService.classifyContainerNetworkAttachment(info),
+      // docker HEALTHCHECK status from a v9 livenessProbe: healthy | unhealthy |
+      // starting, or null when the component declares no probe.
+      health: info.State?.Health?.Status ?? null,
     };
   } catch (err) {
     let containers;
     try {
       containers = await dockerService.dockerListContainers(true);
     } catch (probeErr) {
-      return { reachable: false, exists: false, running: false, exitCode: null };
+      return {
+        reachable: false, exists: false, running: false, exitCode: null, health: null,
+      };
     }
     const dockerName = dockerService.getAppDockerNameIdentifier(identifier);
     const listed = containers.some((c) => Array.isArray(c.Names) && c.Names.includes(dockerName));
     if (listed) {
       return {
-        reachable: true, exists: true, running: false, exitCode: null, indeterminate: true,
+        reachable: true, exists: true, running: false, exitCode: null, health: null, indeterminate: true,
       };
     }
-    return { reachable: true, exists: false, running: false, exitCode: null };
+    return {
+      reachable: true, exists: false, running: false, exitCode: null, health: null,
+    };
   }
 }
 
@@ -1051,52 +1058,88 @@ async function reconcile(rawIdentifier) {
     // resolve sibling components by name) and no published ports, and no future
     // `docker start` repairs it - only a recreate clears the stale endpoint.
     // Verify the attachment (from the inspect dockerActual already did) before
-    // trusting "running"; heal by recreating, confirmed in-pass and paced.
-    if (!dockerService.isContainerDetachedFromNetwork(actual.attachment)) {
-      // An operator restart is a level, not an action: it raises a generation and
-      // this bounces the container once the generation passes the one already
-      // actuated. Not paced by the backoff ladder - a deliberate bounce is not
-      // crash recovery, and pacing it is what made six restarts look like an app
-      // that could not stay up.
-      const restartState = await appsRuntimeState.getState(identifier);
-      const desiredGeneration = (restartState && restartState.restartGeneration) || 0;
-      const actuatedGeneration = (restartState && restartState.actuatedRestartGeneration) || 0;
-      if (desiredGeneration > actuatedGeneration) {
-        log.info(`appReconciler - ${identifier} restart requested (generation ${desiredGeneration}); restarting`);
-        try {
-          await dockerService.appDockerRestart(identifier);
-        } catch (err) {
-          log.error(`appReconciler - failed to restart ${identifier} on request: ${err.message}; retrying`);
-          fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartRequestFailed', reason: err.message });
-          scheduleRetry(identifier, MANAGED_RETRY_MS);
-          return;
-        }
-        fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restarted', reason: 'operatorRequested' });
-        // A restart is a start, so it can come up on a stale endpoint the same way.
-        scheduleRetry(identifier, POST_START_VERIFY_MS);
-        // Last, because it throws. The bounce above already happened, so a write
-        // failure must not also cost the event and the attachment check a
-        // successful restart is owed - it is the record that failed, not the
-        // restart.
-        //
-        // The throw reaches the pass-level retry, which PACES it - a rate, not a
-        // bound, and the difference matters. UNHANDLED_FAILURE_RETRIES clears only
-        // on a pass that succeeds, so a database that reads but cannot write never
-        // records the generation: four bounces over fifteen seconds, then one per
-        // hourly sweep for as long as the condition holds. Bounding it needs that
-        // condition to be something the node observes centrally rather than each
-        // write site discovering it alone, which is its own change.
-        await appsRuntimeState.recordRestartGeneration(identifier, desiredGeneration);
+    // trusting "running"; heal by recreating, confirmed in-pass and paced. This
+    // check runs before the health one: a detached container can only be fixed
+    // by the heal (no restart repairs a stale endpoint), so health-first would
+    // restart-loop it while the detachment persists.
+    if (dockerService.isContainerDetachedFromNetwork(actual.attachment)) {
+      await healDetachedNetwork(identifier, mainAppName, spec);
+      return;
+    }
+    // An operator restart is a level, not an action: it raises a generation and
+    // this bounces the container once the generation passes the one already
+    // actuated. Not paced by the backoff ladder - a deliberate bounce is not
+    // crash recovery, and pacing it is what made six restarts look like an app
+    // that could not stay up.
+    const restartState = await appsRuntimeState.getState(identifier);
+    const desiredGeneration = (restartState && restartState.restartGeneration) || 0;
+    const actuatedGeneration = (restartState && restartState.actuatedRestartGeneration) || 0;
+    if (desiredGeneration > actuatedGeneration) {
+      log.info(`appReconciler - ${identifier} restart requested (generation ${desiredGeneration}); restarting`);
+      try {
+        await dockerService.appDockerRestart(identifier);
+      } catch (err) {
+        log.error(`appReconciler - failed to restart ${identifier} on request: ${err.message}; retrying`);
+        fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartRequestFailed', reason: err.message });
+        scheduleRetry(identifier, MANAGED_RETRY_MS);
         return;
       }
-      // The container is where it should be; monitoring may not be. A stop turns
-      // it off, and a stop docker never carried out leaves a running container
-      // unmonitored with no later pass to notice.
-      appInspector.ensureAppMonitoring(identifier);
-      return; // running and properly attached (heal state was cleared above)
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restarted', reason: 'operatorRequested' });
+      // A restart is a start, so it can come up on a stale endpoint the same way.
+      scheduleRetry(identifier, POST_START_VERIFY_MS);
+      // Last, because it throws. The bounce above already happened, so a write
+      // failure must not also cost the event, the peer notification and the
+      // attachment check a successful restart is owed - it is the record that
+      // failed, not the restart.
+      //
+      // The throw reaches the pass-level retry, which PACES it - a rate, not a
+      // bound, and the difference matters. UNHANDLED_FAILURE_RETRIES clears only
+      // on a pass that succeeds, so a database that reads but cannot write never
+      // records the generation: four bounces over fifteen seconds, then one per
+      // hourly sweep for as long as the condition holds. Bounding it needs that
+      // condition to be something the node observes centrally rather than each
+      // write site discovering it alone, which is its own change.
+      await appsRuntimeState.recordRestartGeneration(identifier, desiredGeneration);
+      return;
     }
-    await healDetachedNetwork(identifier, mainAppName, spec);
-    return;
+    // A running container whose v9 livenessProbe HEALTHCHECK has failed its retries
+    // (docker reports unhealthy) is restarted, paced by the SAME backoff ladder as crash
+    // restarts so a permanently-unhealthy container is not restart-looped. The ladder
+    // resets on a sustained healthy run (restartWaitMs runningNow). health is null when the
+    // component declares no probe, so probe-less apps never enter here.
+    if (actual.health === 'unhealthy') {
+      const wait = await appsRuntimeState.restartWaitMs(identifier, { runningNow: true });
+      if (wait > 0) {
+        log.warn(`appReconciler - ${identifier} running but unhealthy, backing off ${Math.round(wait / 1000)}s before restart`);
+        fluxEventBus.publish('reconciler:actuated', { identifier, action: 'unhealthyBackoff', waitMs: wait });
+        scheduleRetry(identifier, wait);
+        return;
+      }
+      await appsRuntimeState.recordRestart(identifier);
+      try {
+        await dockerService.appDockerRestart(identifier);
+      } catch (err) {
+        // appDockerRestart owns the stop+start; a thrown restart leaves the container in
+        // whatever state docker left it. Pace the retry off the ladder (attempt recorded
+        // above) rather than hammering, mirroring the failed-start path below.
+        log.error(`appReconciler - failed to restart unhealthy ${identifier}: ${err.message}; retrying`);
+        fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthyFailed', reason: err.message });
+        scheduleRetry(identifier, MANAGED_RETRY_MS);
+        return;
+      }
+      log.warn(`appReconciler - ${identifier} restarted (was unhealthy)`);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartedUnhealthy' });
+      // A restart is a start: it can come up detached the same way (stale endpoint
+      // born at start time), so re-verify the attachment shortly rather than
+      // waiting for the hourly sweep.
+      scheduleRetry(identifier, POST_START_VERIFY_MS);
+      return;
+    }
+    // The container is where it should be; monitoring may not be. A stop turns
+    // it off, and a stop docker never carried out leaves a running container
+    // unmonitored with no later pass to notice.
+    appInspector.ensureAppMonitoring(identifier);
+    return; // healthy / starting / probe-less — running and properly attached
   }
 
   if (!actual.exists) {
@@ -1145,7 +1188,7 @@ async function reconcile(rawIdentifier) {
   // pacing that turns a deliberate restart into what looks like an outage.
   // exitCode null is a container that has never run - an initial start, not a death.
   const crashed = !!actual.oomKilled || (actual.exitCode !== null && actual.exitCode !== 0);
-  const wait = await appsRuntimeState.restartWaitMs(identifier, actual.finishedAt);
+  const wait = await appsRuntimeState.restartWaitMs(identifier, { lastFinishedAtMs: actual.finishedAt });
   if (wait > 0) {
     // name which of the two put it here: a reported fault, or restarts arriving
     // fast enough to be one whatever the exit code said. Support cannot tell
