@@ -1,9 +1,10 @@
 const log = require('../lib/log');
 const messageHelper = require('./messageHelper');
 const fluxConfigdClient = require('./utils/fluxConfigdClient');
+const globalState = require('./utils/globalState');
 
 function isArcane() {
-  return Boolean(process.env.FLUXOS_PATH);
+  return globalState.isArcane();
 }
 
 /**

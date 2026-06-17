@@ -43,7 +43,7 @@ const stream = require('node:stream');
 const { Privilege, authOf } = require('./utils/privileges');
 const fluxEventBus = require('./utils/fluxEventBus');
 
-const isArcane = Boolean(process.env.FLUXOS_PATH);
+const globalState = require('./utils/globalState');
 
 /**
  * What an endpoint that updates FluxOS's own code answers on this node type, or
@@ -1992,7 +1992,7 @@ async function streamChainPreparation(req, res) {
     // node is running using zelcash or pm2 etc
 
     // stop services
-    if (isArcane) {
+    if (globalState.isArcane()) {
       await serviceHelper.runCommand('systemctl', { runAsRoot: false, params: ['stop', 'flux-watchdog.service', 'fluxd.service'] });
     } else {
       const { error: watchdogError } = await serviceHelper.runCommand('pm2', { runAsRoot: false, params: ['stop', 'watchdog'] });
@@ -2024,7 +2024,7 @@ async function streamChainPreparation(req, res) {
       if (!lock && daemonStartRequired) {
         daemonStartRequired = false;
         log.info('Stream chain prep timeout hit: restarting services');
-        if (isArcane) {
+        if (globalState.isArcane()) {
           serviceHelper.runCommand('systemctl', { runAsRoot: false, params: ['start', 'fluxd.service', 'flux-watchdog.service'] });
         } else {
           serviceHelper.runCommand('systemctl', { runAsRoot: true, params: ['start', 'zelcash.service'] });
@@ -2261,7 +2261,7 @@ async function streamChain(req, res) {
     if (daemonStartRequired) {
       daemonStartRequired = false;
 
-      if (isArcane) {
+      if (globalState.isArcane()) {
         await serviceHelper.runCommand('systemctl', { runAsRoot: false, params: ['start', 'fluxd.service', 'flux-watchdog.service'] });
       } else {
         await serviceHelper.runCommand('systemctl', { runAsRoot: true, params: ['start', 'zelcash.service'] });
@@ -2273,17 +2273,13 @@ async function streamChain(req, res) {
   }
 }
 
-async function isSystemSecure() {
-  return benchmarkService.isSystemSecure();
-}
-
 /**
  * Returns information if node is running ArcaneOS
  * @param {object} req Request.
  * @param {object} res Response.
  */
 async function isArcaneOs(req, res) {
-  const response = messageHelper.createDataMessage(await isSystemSecure());
+  const response = messageHelper.createDataMessage(globalState.isArcane());
   res.json(response);
 }
 
@@ -2361,5 +2357,4 @@ module.exports = {
   tailFluxLog,
   unlockStreamLock,
   isArcaneOs,
-  isSystemSecure,
 };
