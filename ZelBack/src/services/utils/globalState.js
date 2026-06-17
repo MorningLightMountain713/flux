@@ -107,9 +107,13 @@ module.exports = {
   waitForDbReady() { return dbReadyGate.wait(); },
 
   // Node-capability verdict (true = arcane, false = legacy), resolved before consumers
-  // run. Consumers read capabilityVerdict directly (cheap, no heavy imports).
+  // run. Consumers read it via isArcane() (a use-time read, never a module-load capture).
   get capabilityVerdict() { return capabilityVerdict; },
   set capabilityVerdict(value) { capabilityVerdict = value; },
+  // Is this an attested Arcane node? The single is-arcane read for every consumer.
+  // Resolved before consumers run, so an unresolved null reads as not-arcane (the safe
+  // direction for the security gates).
+  isArcane() { return capabilityVerdict === true; },
 
   get updateSyncthingRunning() { return updateSyncthingRunning; },
   set updateSyncthingRunning(value) { updateSyncthingRunning = value; },

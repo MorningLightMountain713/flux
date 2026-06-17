@@ -1716,11 +1716,10 @@ async function reconcileInstalledApps() {
 
         if (registrySpec.hash === installed.hash) continue;
 
-        // Encrypted apps require an ArcaneOS node. Uninstall ONLY on a confirmed
-        // legacy verdict (capabilityVerdict === false); while the verdict is still
-        // unknown (null) leave the app running and re-check next cycle — never tear
-        // down a paid encrypted app on a transient unknown.
-        if (registrySpec.isEncrypted && globalState.capabilityVerdict === false) {
+        // Encrypted apps require an attested ArcaneOS node. The verdict is resolved
+        // before this runs, so a non-arcane verdict is definitive — uninstall the
+        // now-ineligible encrypted app.
+        if (registrySpec.isEncrypted && !globalState.isArcane()) {
           log.warn(`REMOVAL REASON: Enterprise app requires arcaneOS - ${installed.name}`);
           // eslint-disable-next-line no-await-in-loop
           await appUninstaller.uninstallApplication(installed.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });

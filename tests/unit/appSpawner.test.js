@@ -63,6 +63,8 @@ describe('appSpawner tests', () => {
       trySpawningGlobalAppCache: new Map(),
       appsToBeCheckedLater: [],
       appsSyncthingToBeCheckedLater: [],
+      capabilityVerdict: null,
+      isArcane() { return this.capabilityVerdict === true; },
     };
   }
 
@@ -472,14 +474,9 @@ describe('appSpawner tests', () => {
     it('retries a failed decrypt next cycle instead of caching the app', async () => {
       const candidate = makeCandidate({ encrypted: true, hash: 'enc123' });
       candidate.instantiated.spec.createProvider = sinon.stub().rejects(new Error('benchmark channel down'));
-      buildModule({ candidates: [candidate] });
-      const hadPath = process.env.FLUXOS_PATH;
-      process.env.FLUXOS_PATH = hadPath || '/dat/usr/lib/fluxos';
-      try {
-        await appSpawner.trySpawningGlobalApplication().catch(() => {});
-      } finally {
-        if (!hadPath) delete process.env.FLUXOS_PATH;
-      }
+      // attested arcane: encrypted apps are eligible here, so the decrypt is actually reached
+      buildModule({ candidates: [candidate], globalStateOverrides: { capabilityVerdict: true } });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
       // a node-local decrypt failure is not a verdict on the app: neither
       // cache may hold the hash, so the next cycle reselects it
       expect(globalStateStub.trySpawningGlobalAppCache.has('enc123')).to.be.false;
