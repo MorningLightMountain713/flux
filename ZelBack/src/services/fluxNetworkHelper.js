@@ -20,8 +20,7 @@ const { peerManager } = require('./utils/peerState');
 const { CLOSE_CODES, DIRECTION } = require('./utils/FluxPeerSocket');
 const nodeDosState = require('./nodeDosState');
 const { normalizeSocketAddress, parseSocketAddress } = require('./utils/socketAddressUtils');
-
-const isArcane = Boolean(process.env.FLUXOS_PATH);
+const globalState = require('./utils/globalState');
 
 let storedFluxBenchAllowed = null;
 
@@ -1257,7 +1256,7 @@ async function adjustFirewall() {
       log.info('Firewall adjusted for DNS traffic');
 
       // fix up for ssh being misteriously removed (needs tracing)
-      if (isArcane) {
+      if (globalState.isArcane()) {
         // this should also be limit, but existing nodes use allow (needs to be updated)
         const execAllowFluxadmSsh = 'LANG="en_US.UTF-8" && sudo ufw insert 1 allow to any app FluxadmSSH > /dev/null 2>&1';
         await cmdAsync(execAllowFluxadmSsh);
@@ -1674,7 +1673,6 @@ module.exports = {
   allowOnlyDockerNetworksToFluxNodeService,
   addFluxNodeServiceIpToLoopback,
   keepUPNPPortsOpen,
-  isArcane,
   clockDrift,
   getClockDrift,
   initClockOffsetCache,

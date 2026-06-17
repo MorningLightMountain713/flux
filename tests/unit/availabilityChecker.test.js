@@ -25,9 +25,7 @@ describe('availabilityChecker tests', () => {
   let mockDosState;
   let mockPortsNotWorking;
   let mockFailedNodesCache;
-  let isArcane;
-  let delayStub;
-  let setImmediateStub;
+  let waitMs;
   let listInstalledAppsStub;
   let buildDeploymentStub;
 
@@ -46,12 +44,7 @@ describe('availabilityChecker tests', () => {
     };
     mockPortsNotWorking = new Set();
     mockFailedNodesCache = new Map();
-    isArcane = false;
-
-    // Stub delay to prevent actual waiting
-    delayStub = sinon.stub(serviceHelper, 'delay').resolves();
-    // Stub setImmediate to prevent infinite recursion
-    setImmediateStub = sinon.stub(global, 'setImmediate');
+    waitMs = undefined;
   });
 
   afterEach(() => {
@@ -62,27 +55,24 @@ describe('availabilityChecker tests', () => {
     it('should delay and retry if DOS mount message present', async () => {
       mockDosState.dosMountMessage = 'Mount error detected';
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       expect(mockDosState.dosMessage).to.equal('Mount error detected');
       expect(mockDosState.dosStateValue).to.equal(100);
-      sinon.assert.calledOnce(delayStub);
-      sinon.assert.calledWith(delayStub, 240_000);
+      expect(waitMs).to.equal(240_000);
     });
 
     it('should delay and retry if DOS duplicate app message present', async () => {
       mockDosState.dosDuplicateAppMessage = 'Duplicate app detected';
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       expect(mockDosState.dosMessage).to.equal('Duplicate app detected');
@@ -94,15 +84,14 @@ describe('availabilityChecker tests', () => {
         data: { synced: false },
       });
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       sinon.assert.notCalled(listInstalledAppsStub);
-      sinon.assert.calledWith(delayStub, 240_000);
+      expect(waitMs).to.equal(240_000);
     });
 
     it('should return early if node not confirmed', async () => {
@@ -111,11 +100,10 @@ describe('availabilityChecker tests', () => {
       });
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(false);
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       sinon.assert.notCalled(listInstalledAppsStub);
@@ -128,11 +116,10 @@ describe('availabilityChecker tests', () => {
       sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(null);
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       sinon.assert.notCalled(listInstalledAppsStub);
@@ -146,11 +133,10 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.rejects(new Error('Failed'));
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       sinon.assert.calledOnce(listInstalledAppsStub);
@@ -170,11 +156,10 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'isPortUserBlocked').returns(false);
       sinon.stub(networkStateService, 'getRandomSocketAddress').resolves(null);
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       sinon.assert.calledOnce(listInstalledAppsStub);
@@ -194,14 +179,13 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(true);
       sinon.stub(fluxNetworkHelper, 'isPortUserBlocked').returns(false);
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
-      sinon.assert.calledWith(delayStub, 15_000);
+      expect(waitMs).to.equal(15_000);
     });
 
     it('should skip UPNP banned ports when UPNP enabled', async () => {
@@ -218,14 +202,13 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'isPortUPNPBanned').returns(true);
       sinon.stub(fluxNetworkHelper, 'isPortUserBlocked').returns(false);
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
-      sinon.assert.called(delayStub);
+      expect(waitMs).to.be.a('number');
     });
 
     it('should skip user blocked ports', async () => {
@@ -240,14 +223,13 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(fluxNetworkHelper, 'isPortUserBlocked').returns(true);
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
-      sinon.assert.called(delayStub);
+      expect(waitMs).to.be.a('number');
     });
 
     it('should skip ports already in use by apps', async () => {
@@ -265,14 +247,13 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(fluxNetworkHelper, 'isPortUserBlocked').returns(false);
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
-      sinon.assert.called(delayStub);
+      expect(waitMs).to.be.a('number');
     });
 
     it('should skip if remote socket address not available', async () => {
@@ -288,14 +269,13 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'isPortUserBlocked').returns(false);
       sinon.stub(networkStateService, 'getRandomSocketAddress').resolves(null);
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
-      sinon.assert.calledWith(delayStub, 240_000);
+      expect(waitMs).to.equal(240_000);
     });
 
     it('should skip if remote node in failed cache', async () => {
@@ -312,14 +292,13 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'isPortUserBlocked').returns(false);
       sinon.stub(networkStateService, 'getRandomSocketAddress').resolves('192.168.1.200:16127');
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
-      sinon.assert.calledWith(delayStub, 15_000);
+      expect(waitMs).to.equal(15_000);
     });
 
     it('should handle UPNP mapping failures', async () => {
@@ -341,11 +320,10 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'deleteAllowPortRule').resolves();
       sinon.stub(upnpService, 'removeMapUpnpPort').resolves();
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       expect(mockDosState.lastUPNPMapFailed).to.be.true;
@@ -371,11 +349,10 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'deleteAllowPortRule').resolves();
       sinon.stub(upnpService, 'removeMapUpnpPort').resolves();
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       expect(mockDosState.dosStateValue).to.equal(4);
@@ -384,15 +361,13 @@ describe('availabilityChecker tests', () => {
     it('should handle errors gracefully and retry', async () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').throws(new Error('Service error'));
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
-      sinon.assert.calledWith(delayStub, 240_000);
-      sinon.assert.calledOnce(setImmediateStub);
+      expect(waitMs).to.equal(240_000);
     });
 
     it('should use random port from config range when nextTestingPort not set', async () => {
@@ -408,11 +383,10 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'isPortUserBlocked').returns(false);
       sinon.stub(networkStateService, 'getRandomSocketAddress').resolves(null);
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       expect(mockDosState.testingPort).to.be.a('number');
@@ -434,11 +408,10 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'isPortUserBlocked').returns(false);
       sinon.stub(networkStateService, 'getRandomSocketAddress').resolves(null);
 
-      await availabilityChecker.checkMyAppsAvailability(
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
         mockPortsNotWorking,
         mockFailedNodesCache,
-        isArcane,
       );
 
       expect(mockDosState.testingPort).to.equal(30050);

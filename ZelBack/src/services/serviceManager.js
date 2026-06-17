@@ -489,7 +489,6 @@ async function startFluxFunctions() {
         dosState,
         portsNotWorking,
         portManager.failedNodesTestPortsCache,
-        fluxNetworkHelper.isArcane,
       );
     }, bootDelay(3 * 60 * 1000));
     nodeStatusMonitor.initialize(appQueryService.installedApps);
