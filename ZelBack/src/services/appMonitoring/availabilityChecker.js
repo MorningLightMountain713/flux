@@ -21,16 +21,30 @@ async function signCheckAppData(message) {
   return signature;
 }
 
+// Short-TTL memoization of the ufw "is the firewall active" probe, so the
+// availability loop doesn't shell `ufw status` on every iteration. The
+// .catch(() => true) fail-safe treats a transient probe error as active, so a
+// flaky ufw never makes us skip opening (or cleaning up) the test port.
+let firewallActiveCache = { value: null, at: 0 };
+const FIREWALL_ACTIVE_CACHE_MS = 60_000;
+
+async function firewallActiveCached() {
+  const now = Date.now();
+  if (firewallActiveCache.value !== null && now - firewallActiveCache.at < FIREWALL_ACTIVE_CACHE_MS) {
+    return firewallActiveCache.value;
+  }
+  const active = await fluxNetworkHelper.isFirewallActive().catch(() => true);
+  firewallActiveCache = { value: active, at: now };
+  return active;
+}
+
 // Helper function to handle test shutdown
-async function handleTestShutdown(testingPort, testHttpServer, isArcane, options = {}) {
+async function handleTestShutdown(testingPort, testHttpServer, options = {}) {
   const skipFirewall = options.skipFirewall || false;
   const skipUpnp = options.skipUpnp || false;
   const skipHttpServer = options.skipHttpServer || false;
 
-  const updateFirewall = skipFirewall
-    ? false
-    : isArcane
-    || await fluxNetworkHelper.isFirewallActive().catch(() => true);
+  const updateFirewall = skipFirewall ? false : await firewallActiveCached();
 
   if (updateFirewall) {
     await fluxNetworkHelper
@@ -54,14 +68,15 @@ async function handleTestShutdown(testingPort, testHttpServer, isArcane, options
 }
 
 /**
- * Check my apps availability by testing ports from external nodes
+ * Run a single app-availability check iteration. The body that used to re-spawn
+ * itself via setImmediate now simply returns how long the caller should wait
+ * before the next iteration.
  * @param {object} dosState - DOS state object with getters and setters
  * @param {object} portsNotWorking - Set of ports not working
  * @param {object} failedNodesTestPortsCache - Cache of failed nodes
- * @param {boolean} isArcane - Whether running on Arcane
- * @returns {Promise<void>}
+ * @returns {Promise<number>} ms to wait before the next iteration
  */
-async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane) {
+async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTestPortsCache) {
   const timeouts = {
     default: 3_600_000,
     error: 60_000,
@@ -81,10 +96,7 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
     dosState.dosMessage = dosState.dosMountMessage || dosState.dosDuplicateAppMessage;
     // eslint-disable-next-line no-param-reassign
     dosState.dosStateValue = thresholds.dos;
-
-    await serviceHelper.delay(timeouts.appError);
-    setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-    return;
+    return timeouts.appError;
   }
 
   const isUpnp = upnpService.isUPNP();
@@ -114,9 +126,7 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
     if (!syncStatus.data.synced) {
       log.info('Flux Node daemon not synced. Application checks are disabled');
-      await serviceHelper.delay(timeouts.appError);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.appError;
     }
 
     let isNodeConfirmed = false;
@@ -124,17 +134,13 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
 
     if (!isNodeConfirmed) {
       log.info('Flux Node not Confirmed. Application checks are disabled');
-      await serviceHelper.delay(timeouts.appError);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.appError;
     }
 
     const localSocketAddress = await fluxNetworkHelper.getLocalSocketAddress();
     if (!localSocketAddress) {
       log.info('No Public IP found. Application checks are disabled');
-      await serviceHelper.delay(timeouts.appError);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.appError;
     }
 
     const installedApps = await appsRepository.listInstalledApps();
@@ -164,9 +170,7 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
     if (isPortBanned) {
       log.info(`checkMyAppsAvailability - Testing port ${dosState.testingPort} is banned`);
       setNextPort();
-      await serviceHelper.delay(timeouts.failure);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.failure;
     }
 
     if (isUpnp) {
@@ -174,9 +178,7 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
       if (isPortUpnpBanned) {
         log.info(`checkMyAppsAvailability - Testing port ${dosState.testingPort} is UPNP banned`);
         setNextPort();
-        await serviceHelper.delay(timeouts.failure);
-        setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-        return;
+        return timeouts.failure;
       }
     }
 
@@ -184,33 +186,25 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
     if (isPortUserBlocked) {
       log.info(`checkMyAppsAvailability - Testing port ${dosState.testingPort} is user blocked`);
       setNextPort();
-      await serviceHelper.delay(timeouts.failure);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.failure;
     }
 
     if (appPorts.includes(dosState.testingPort)) {
       log.info(`checkMyAppsAvailability - Skipped checking ${dosState.testingPort} - in use`);
       setNextPort();
-      await serviceHelper.delay(timeouts.failure);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.failure;
     }
 
     const remoteSocketAddress = await networkStateService.getRandomSocketAddress(localSocketAddress);
     if (!remoteSocketAddress) {
-      await serviceHelper.delay(timeouts.appError);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.appError;
     }
 
     if (failedNodesTestPortsCache.has(remoteSocketAddress)) {
-      await serviceHelper.delay(timeouts.failure);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.failure;
     }
 
-    const firewallActive = isArcane ? true : await fluxNetworkHelper.isFirewallActive();
+    const firewallActive = await firewallActiveCached();
     if (firewallActive) {
       await fluxNetworkHelper.allowPort(dosState.testingPort);
     }
@@ -230,15 +224,12 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
         dosState.lastUPNPMapFailed = true;
         log.info(`checkMyAppsAvailability - Testing port ${dosState.testingPort} failed to create UPnP mapping`);
         setNextPort();
-        await handleTestShutdown(dosState.testingPort, testHttpServer, isArcane, {
+        await handleTestShutdown(dosState.testingPort, testHttpServer, {
           skipFirewall: !firewallActive,
           skipUpnp: true,
           skipHttpServer: true,
         });
-        const upnpDelay = dosState.dosMessage ? timeouts.dos : timeouts.error;
-        await serviceHelper.delay(upnpDelay);
-        setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-        return;
+        return dosState.dosMessage ? timeouts.dos : timeouts.error;
       }
       // eslint-disable-next-line no-param-reassign
       dosState.lastUPNPMapFailed = false;
@@ -261,14 +252,12 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
     if (error) {
       log.warn(`Unable to listen on port: ${dosState.testingPort}. Error: ${error}`);
       setNextPort();
-      await handleTestShutdown(dosState.testingPort, testHttpServer, isArcane, {
+      await handleTestShutdown(dosState.testingPort, testHttpServer, {
         skipFirewall: !firewallActive,
         skipUpnp: !isUpnp,
         skipHttpServer: true,
       });
-      await serviceHelper.delay(timeouts.error);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.error;
     }
 
     const timeout = 10_000;
@@ -304,15 +293,13 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
         return null;
       });
 
-    await handleTestShutdown(dosState.testingPort, testHttpServer, isArcane, {
+    await handleTestShutdown(dosState.testingPort, testHttpServer, {
       skipFirewall: !firewallActive,
       skipUpnp: !isUpnp,
     });
 
     if (!resMyAppAvailability) {
-      await serviceHelper.delay(timeouts.failure);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.failure;
     }
 
     const {
@@ -324,9 +311,7 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
 
     if (!['success', 'error'].includes(responseStatus)) {
       log.warn(`checkMyAppsAvailability - Unexpected response status: ${responseStatus}`);
-      await serviceHelper.delay(timeouts.error);
-      setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
-      return;
+      return timeouts.error;
     }
 
     const portTestFailed = responseStatus === 'error';
@@ -389,20 +374,36 @@ async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTes
       log.error(`checkMyAppsAvailability - Count: ${portsNotWorking.size}. portsNotWorking: ${JSON.stringify(Array.from(portsNotWorking))}`);
     }
 
-    await serviceHelper.delay(waitMs);
-    setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+    return waitMs;
   } catch (error) {
     if (!dosState.dosMessage && (dosState.dosMountMessage || dosState.dosDuplicateAppMessage)) {
       // eslint-disable-next-line no-param-reassign
       dosState.dosMessage = dosState.dosMountMessage || dosState.dosDuplicateAppMessage;
     }
-    await handleTestShutdown(dosState.testingPort, testHttpServer, isArcane, { skipUpnp: !isUpnp });
+    await handleTestShutdown(dosState.testingPort, testHttpServer, { skipUpnp: !isUpnp });
     log.error(`checkMyAppsAvailability - Error: ${error}`);
-    await serviceHelper.delay(timeouts.appError);
-    setImmediate(() => checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache, isArcane));
+    return timeouts.appError;
+  }
+}
+
+/**
+ * Continuously check my apps availability, pacing each iteration by the delay it
+ * returns. Fire-and-forget — runs for the lifetime of the process.
+ * @param {object} dosState - DOS state object with getters and setters
+ * @param {object} portsNotWorking - Set of ports not working
+ * @param {object} failedNodesTestPortsCache - Cache of failed nodes
+ * @returns {Promise<void>}
+ */
+async function checkMyAppsAvailability(dosState, portsNotWorking, failedNodesTestPortsCache) {
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const waitMs = await runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTestPortsCache);
+    // eslint-disable-next-line no-await-in-loop
+    await serviceHelper.delay(waitMs);
   }
 }
 
 module.exports = {
   checkMyAppsAvailability,
+  runAvailabilityCheckOnce,
 };

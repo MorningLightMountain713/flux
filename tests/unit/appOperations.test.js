@@ -640,27 +640,24 @@ describe('appOperations tests', () => {
 
   describe('shutdownPlanResync tests', () => {
     let proxyquire;
-    let savedFluxosPath;
 
     beforeEach(() => {
       proxyquire = require('proxyquire');
-      savedFluxosPath = process.env.FLUXOS_PATH;
-    });
-
-    afterEach(() => {
-      if (savedFluxosPath === undefined) delete process.env.FLUXOS_PATH;
-      else process.env.FLUXOS_PATH = savedFluxosPath;
     });
 
     function loadWith({ arcane = true, installed = [], plans = [], deployment = {} } = {}) {
-      if (arcane) process.env.FLUXOS_PATH = '/tmp/flux';
-      else delete process.env.FLUXOS_PATH;
       const client = {
+        SOCKET_PATH: '/run/flux-shutdownd/daemon.sock',
         listAppPlans: sinon.stub().resolves(plans),
         upsertAppPlanBestEffort: sinon.stub().resolves(),
         deleteAppPlanBestEffort: sinon.stub().resolves(),
       };
+      // arcane => the shutdownd socket exists (fs.access resolves); else it's absent.
+      const fsPromises = {
+        access: arcane ? sinon.stub().resolves() : sinon.stub().rejects(new Error('ENOENT')),
+      };
       const mod = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
+        'node:fs/promises': fsPromises,
         '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
         '../appDatabase/appsRepository': { listInstalledApps: sinon.stub().resolves(installed) },
         '../appRuntime/deploymentProvider': { buildDeployment: sinon.stub().resolves(deployment) },
@@ -693,7 +690,7 @@ describe('appOperations tests', () => {
       expect(client.deleteAppPlanBestEffort.called).to.be.false;
     });
 
-    it('does nothing on a non-Arcane node', async () => {
+    it('does nothing when the shutdownd socket is absent', async () => {
       const { mod, client } = loadWith({ arcane: false });
       await mod.shutdownPlanResync();
       expect(client.listAppPlans.called).to.be.false;
