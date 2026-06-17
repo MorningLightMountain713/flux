@@ -132,10 +132,12 @@ async function startFluxFunctions() {
       log.error(`Flux port ${apiPort} is not supported. Shutting down.`);
       process.exit();
     }
-    // Seed the node-capability probe first (fire-once, non-blocking). It resolves
-    // over the benchmark channel independently of the daemon/db, so it gets the
-    // longest head start to settle before any is-arcane consumer reads the verdict.
-    nodeCapabilities.start();
+    // Resolve the node-capability ("is-arcane") verdict up front, before any consumer
+    // reads it. Awaited: on legacy the FLUX_ARCANE_NODE pre-gate returns instantly; on
+    // Arcane the systemd contract guarantees fluxbenchd's RPC is up, so this settles in
+    // the latch window (usually already latched by now). Depends only on the benchmark
+    // channel, not the daemon/db.
+    await nodeCapabilities.resolveNodeCapability();
     // Seed the enterprise node->owners map from helpers/enterprisenodes.json on disk
     // and sync it from github (every 6h thereafter). Awaited so consumers (identity
     // resolution, the spawn loop, app-spec validation) have data before they run; the
