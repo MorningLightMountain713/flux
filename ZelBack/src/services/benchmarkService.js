@@ -14,9 +14,6 @@ const dbHelper = require('./dbHelper');
 const { Privilege, authOf } = require('./utils/privileges');
 const { isValidAppNameAndOwner } = require('./utils/appIdentity');
 
-// eslint-disable-next-line no-unused-vars
-const isArcane = Boolean(process.env.FLUXOS_PATH);
-
 const { benchmark: benchmarkCollection } = config.database.local.collections;
 const validTiers = ['CUMULUS', 'NIMBUS', 'STRATUS'];
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
