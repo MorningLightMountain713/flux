@@ -1,17 +1,14 @@
-const config = require('config');
 const log = require('../../lib/log');
 const benchmarkService = require('../benchmarkService');
 const globalState = require('./globalState');
 
-// Boot budget to first-conclude the verdict — shares the boot daemon/sync timeout
-// so an unreachable benchmark channel is treated like the other boot dependencies.
-const RESOLVE_BUDGET_MS = config.system.bootDaemonTimeoutMs ?? 300000;
-// Fast retry while resolving within the boot window (catches the ~10s latch settle
-// quickly); slow recheck afterwards, only to pick up a late channel recovery.
-const PROBE_RETRY_MS = 3000;
-const PROBE_RECHECK_MS = 60000;
-
-let started = false;
+// Poll cadence while waiting for the verdict to latch on an Arcane node. The latch
+// settles ~1-12s after fluxbench boot, and is usually already settled by the time fluxos
+// reaches the resolver (the systemd contract starts fluxbenchd first).
+const PROBE_RETRY_MS = 1000;
+// Surface a warning every N probes while still waiting, so an unusually slow latch is
+// visible (it should always settle within fluxbench's <=3 attestation attempts).
+const PROBE_WARN_EVERY = 15;
 
 function delay(ms) {
   return new Promise((resolve) => {
@@ -48,8 +45,32 @@ async function probeOnce() {
   return 'unreachable';
 }
 
-async function resolveLoop() {
-  const deadline = Date.now() + RESOLVE_BUDGET_MS;
+/**
+ * Resolve the node-capability ("is-arcane") verdict once at boot, caching it onto
+ * globalState.capabilityVerdict (boolean: true = arcane, false = legacy). Awaited at the
+ * top of startFluxFunctions so every is-arcane consumer reads a settled value.
+ *
+ * Pre-gate: only the Arcane fluxos.service unit sets FLUX_ARCANE_NODE. Its absence is a
+ * definitive legacy signal — a static fact baked into the locked Arcane image, never a
+ * timeout — so legacy nodes (pm2, no unit) short-circuit without touching the benchmark
+ * channel. Presence is only a trigger to run the real check; it is never the verdict itself.
+ *
+ * On an Arcane node the systemd boot contract guarantees fluxbenchd's RPC is answerable
+ * (it signals readiness on RPC-listen before fluxos starts), so getnodetype always
+ * responds; we poll until the verdict latches. We NEVER conclude legacy from a timeout —
+ * a false legacy on a genuine Arcane node triggers legacy self-provisioning and can brick
+ * it — only from a definitive latched signal (or an old daemon's -32601). If the latch
+ * never settles (it always does within fluxbench's attestation attempts) we keep waiting
+ * rather than guess: boot blocks fail-closed instead of proceeding on an unknown verdict.
+ */
+async function resolveNodeCapability() {
+  if (!process.env.FLUX_ARCANE_NODE) {
+    globalState.capabilityVerdict = false;
+    log.info('nodeCapabilities - FLUX_ARCANE_NODE unset; node-capability verdict: legacy');
+    return;
+  }
+
+  let attempts = 0;
   for (;;) {
     let state;
     try {
@@ -62,53 +83,35 @@ async function resolveLoop() {
 
     if (state === 'arcane') {
       globalState.capabilityVerdict = true;
-      globalState.markCapabilityResolved();
       log.info('nodeCapabilities - node-capability verdict resolved: arcane');
       return;
     }
     if (state === 'legacy') {
       globalState.capabilityVerdict = false;
-      globalState.markCapabilityResolved();
       log.info('nodeCapabilities - node-capability verdict resolved: legacy');
       return;
     }
 
-    // pending / unreachable — not yet known.
-    if (!globalState.capabilityResolved && Date.now() >= deadline) {
-      // Boot-bounded conclusion: still unknown at the boot budget. Conclude
-      // not-attested so consumers stop blocking; keep probing so a late channel
-      // recovery can still flip the verdict up to attested (never the reverse).
-      globalState.capabilityVerdict = false;
-      globalState.markCapabilityResolved();
-      log.warn('nodeCapabilities - benchmark channel unresolved within boot budget; concluding legacy (still probing for recovery)');
+    // pending / unreachable — not yet known. Keep polling; never conclude legacy from a
+    // timeout. The latch settles fast in practice.
+    attempts += 1;
+    if (attempts % PROBE_WARN_EVERY === 0) {
+      log.warn(`nodeCapabilities - verdict still ${state} after ${attempts} probes; waiting for the benchmark channel to latch`);
     }
     // eslint-disable-next-line no-await-in-loop
-    await delay(globalState.capabilityResolved ? PROBE_RECHECK_MS : PROBE_RETRY_MS);
+    await delay(PROBE_RETRY_MS);
   }
 }
 
 /**
- * Seed the node-capability probe (fire-once). Resolves onto
- * globalState.capabilityVerdict + capabilityResolvedGate. Safe to seed before the
- * daemon is ready — it depends only on the benchmark channel, not the flux daemon.
- */
-function start() {
-  if (started) return;
-  started = true;
-  resolveLoop().catch((error) => {
-    log.error(`nodeCapabilities - resolve loop terminated: ${error.message}`);
-  });
-}
-
-/**
- * @returns {boolean|null} tri-state verdict: true attested, false not-attested, null unknown.
+ * @returns {boolean} the resolved verdict: true = arcane, false = legacy.
  */
 function verdict() {
   return globalState.capabilityVerdict;
 }
 
 module.exports = {
-  start,
+  resolveNodeCapability,
   verdict,
   // exposed for tests
   probeOnce,
