@@ -68,8 +68,6 @@ const hwRequirements = require('../appRequirements/hwRequirements');
 const { resolveSubmission, assertSecretsNotConflicting } = require('../appRequirements/appSubmission');
 const globalState = require('../utils/globalState');
 
-const isArcane = Boolean(process.env.FLUXOS_PATH);
-
 // Legacy apps that use old gateway IP assignment method
 const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated', 'isokosse', 'ChainBraryDApp', 'health', 'ethercalc'];
 
@@ -1637,7 +1635,13 @@ async function reconcileApp(installed, registrySpec) {
  * daemon socket is absent elsewhere, so a list failure just ends the resync.
  */
 async function shutdownPlanResync() {
-  if (!isArcane) return;
+  // Gate on the flux-shutdownd socket presence, not node identity: the daemon and its
+  // socket only exist where the shutdown pipeline is installed. Absent => nothing to do.
+  try {
+    await fs.access(fluxShutdowndClient.SOCKET_PATH);
+  } catch {
+    return;
+  }
 
   let summaries;
   try {

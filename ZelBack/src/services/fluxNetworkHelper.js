@@ -21,8 +21,7 @@ const { CLOSE_CODES, DIRECTION } = require('./utils/FluxPeerSocket');
 const cacheManager = require('./utils/cacheManager').default;
 const nodeDosState = require('./nodeDosState');
 const { normalizeSocketAddress, socketAddressesMatch, parseSocketAddress } = require('./utils/socketAddressUtils');
-
-const isArcane = Boolean(process.env.FLUXOS_PATH);
+const globalState = require('./utils/globalState');
 
 
 // Sticky DOS state. Owned exclusively by whoever set it (e.g. the tampering
@@ -1628,7 +1627,7 @@ async function adjustFirewall() {
       log.info('Firewall adjusted for DNS traffic');
 
       // fix up for ssh being misteriously removed (needs tracing)
-      if (isArcane) {
+      if (globalState.isArcane()) {
         // this should also be limit, but existing nodes use allow (needs to be updated)
         const execAllowFluxadmSsh = 'LANG="en_US.UTF-8" && sudo ufw insert 1 allow to any app FluxadmSSH > /dev/null 2>&1';
         await cmdAsync(execAllowFluxadmSsh);
@@ -2054,7 +2053,6 @@ module.exports = {
   allowOnlyDockerNetworksToFluxNodeService,
   addFluxNodeServiceIpToLoopback,
   keepUPNPPortsOpen,
-  isArcane,
   clockDrift,
   getClockDrift,
   initClockOffsetCache,
