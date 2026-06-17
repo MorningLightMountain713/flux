@@ -337,22 +337,29 @@ async function dockerActual(identifier) {
       // classified from THIS inspect so the running-branch network check needs no
       // second docker call (and no TOCTOU between two inspects).
       attachment: dockerService.classifyContainerNetworkAttachment(info),
+      // docker HEALTHCHECK status from a v9 livenessProbe: healthy | unhealthy |
+      // starting, or null when the component declares no probe.
+      health: info.State?.Health?.Status ?? null,
     };
   } catch (err) {
     let containers;
     try {
       containers = await dockerService.dockerListContainers(true);
     } catch (probeErr) {
-      return { reachable: false, exists: false, running: false, exitCode: null };
+      return {
+        reachable: false, exists: false, running: false, exitCode: null, health: null,
+      };
     }
     const dockerName = dockerService.getAppDockerNameIdentifier(identifier);
     const listed = containers.some((c) => Array.isArray(c.Names) && c.Names.includes(dockerName));
     if (listed) {
       return {
-        reachable: true, exists: true, running: false, exitCode: null, indeterminate: true,
+        reachable: true, exists: true, running: false, exitCode: null, health: null, indeterminate: true,
       };
     }
-    return { reachable: true, exists: false, running: false, exitCode: null };
+    return {
+      reachable: true, exists: false, running: false, exitCode: null, health: null,
+    };
   }
 }
 
@@ -884,12 +891,48 @@ async function reconcile(rawIdentifier) {
     // resolve sibling components by name) and no published ports, and no future
     // `docker start` repairs it - only a recreate clears the stale endpoint.
     // Verify the attachment (from the inspect dockerActual already did) before
-    // trusting "running"; heal by recreating, confirmed in-pass and paced.
-    if (!dockerService.isContainerDetachedFromNetwork(actual.attachment)) {
-      return; // running and properly attached (heal state was cleared above)
+    // trusting "running"; heal by recreating, confirmed in-pass and paced. This
+    // check runs before the health one: a detached container can only be fixed
+    // by the heal (no restart repairs a stale endpoint), so health-first would
+    // restart-loop it while the detachment persists.
+    if (dockerService.isContainerDetachedFromNetwork(actual.attachment)) {
+      await healDetachedNetwork(identifier, mainAppName, spec);
+      return;
     }
-    await healDetachedNetwork(identifier, mainAppName, spec);
-    return;
+    // A running container whose v9 livenessProbe HEALTHCHECK has failed its retries
+    // (docker reports unhealthy) is restarted, paced by the SAME backoff ladder as crash
+    // restarts so a permanently-unhealthy container is not restart-looped. The ladder
+    // resets on a sustained healthy run (restartWaitMs runningNow). health is null when the
+    // component declares no probe, so probe-less apps never enter here.
+    if (actual.health === 'unhealthy') {
+      const wait = await appsRuntimeState.restartWaitMs(identifier, { runningNow: true });
+      if (wait > 0) {
+        log.warn(`appReconciler - ${identifier} running but unhealthy, backing off ${Math.round(wait / 1000)}s before restart`);
+        fluxEventBus.publish('reconciler:actuated', { identifier, action: 'unhealthyBackoff', waitMs: wait });
+        scheduleRetry(identifier, wait);
+        return;
+      }
+      await appsRuntimeState.recordRestart(identifier);
+      try {
+        await dockerService.appDockerRestart(identifier);
+      } catch (err) {
+        // appDockerRestart owns the stop+start; a thrown restart leaves the container in
+        // whatever state docker left it. Pace the retry off the ladder (attempt recorded
+        // above) rather than hammering, mirroring the failed-start path below.
+        log.error(`appReconciler - failed to restart unhealthy ${identifier}: ${err.message}; retrying`);
+        fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthyFailed', reason: err.message });
+        scheduleRetry(identifier, MANAGED_RETRY_MS);
+        return;
+      }
+      log.warn(`appReconciler - ${identifier} restarted (was unhealthy)`);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartedUnhealthy' });
+      // A restart is a start: it can come up detached the same way (stale endpoint
+      // born at start time), so re-verify the attachment shortly rather than
+      // waiting for the hourly sweep.
+      scheduleRetry(identifier, POST_START_VERIFY_MS);
+      return;
+    }
+    return; // healthy / starting / probe-less — running and properly attached
   }
 
   if (!actual.exists) {
@@ -933,7 +976,7 @@ async function reconcile(rawIdentifier) {
 
   // exists but stopped, should run -> backoff-paced restart (no sleeping; the
   // worker re-enqueues when the backoff window elapses)
-  const wait = await appsRuntimeState.restartWaitMs(identifier, actual.finishedAt);
+  const wait = await appsRuntimeState.restartWaitMs(identifier, { lastFinishedAtMs: actual.finishedAt });
   if (wait > 0) {
     log.warn(`appReconciler - ${identifier} stopped, backing off ${Math.round(wait / 1000)}s before restart`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'backoff', waitMs: wait });

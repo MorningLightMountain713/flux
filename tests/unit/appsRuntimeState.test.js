@@ -161,7 +161,7 @@ describe('appsRuntimeState tests', () => {
       const startedAt = Date.now();
       clock.tick(15 * 60 * 1000); // sat stopped for 15 minutes, death never recorded
 
-      await appsRuntimeState.restartWaitMs(id, startedAt + 5000); // docker: died 5s after start
+      await appsRuntimeState.restartWaitMs(id, { lastFinishedAtMs: startedAt + 5000 }); // docker: died 5s after start
 
       expect(store.get('www_App').restartHistory).to.have.lengthOf(1); // not laundered
     });
@@ -174,7 +174,7 @@ describe('appsRuntimeState tests', () => {
       const startedAt = Date.now();
       clock.tick(3 * 24 * 60 * 60 * 1000); // ran for days; died during reboot, no event
 
-      const wait = await appsRuntimeState.restartWaitMs(id, startedAt + (2 * 24 * 60 * 60 * 1000));
+      const wait = await appsRuntimeState.restartWaitMs(id, { lastFinishedAtMs: startedAt + (2 * 24 * 60 * 60 * 1000) });
 
       expect(wait).to.equal(0);
       expect(store.get('www_App').restartHistory).to.deep.equal([]);
@@ -190,6 +190,33 @@ describe('appsRuntimeState tests', () => {
 
       expect(wait).to.equal(0);
       expect(store.get('www_App').restartHistory).to.deep.equal([]);
+    });
+
+    it('resets when the container is running now and has been up past the stable window (unhealthy path)', async () => {
+      // The unhealthy-restart path has no death to measure: the container is still
+      // running. runningNow proves uptime since the last restart (docker RestartPolicy
+      // 'no' means no auto-restart in between), so a sustained run resets the ladder.
+      const id = 'www_App';
+      await appsRuntimeState.recordRestart(id);
+      clock.tick(11 * 60 * 1000); // up and healthy for 11 minutes, then a livenessProbe flip
+
+      const wait = await appsRuntimeState.restartWaitMs(id, { runningNow: true });
+
+      expect(wait).to.equal(0);
+      expect(store.get('www_App').restartHistory).to.deep.equal([]);
+    });
+
+    it('holds the ladder for a rapid unhealthy flap (running, but up less than the stable window)', async () => {
+      const id = 'www_App';
+      await appsRuntimeState.recordRestart(id); // rung 1
+      clock.tick(40 * 1000); // only up 40s before flipping unhealthy again
+
+      const wait = await appsRuntimeState.restartWaitMs(id, { runningNow: true });
+
+      // ladder[1] = 30s, already elapsed -> restart now, but the history is NOT laundered
+      // so the next rapid flap climbs the ladder
+      expect(wait).to.equal(0);
+      expect(store.get('www_App').restartHistory).to.have.lengthOf(1);
     });
 
     it('holds the history when there is no death evidence at all', async () => {
