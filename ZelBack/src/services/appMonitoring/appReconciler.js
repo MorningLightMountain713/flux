@@ -18,10 +18,10 @@ const { AsyncGate } = require('../utils/asyncGate');
 const telemetrySinkCache = require('../telemetrySinkCache');
 
 // The single, level-based actuator for app containers. Every trigger (docker
-// die event, stream reconnect, hourly tick, boot, post-install, and the
-// masterSlave/syncthing deciders) just enqueues a component identifier; one
-// reconcile per identifier drives the actual Docker state toward the desired
-// state. This is the ONLY place that calls appDockerStart/appDockerStop.
+// container events via containerEventBridge, stream reconnect, hourly tick, boot,
+// post-install, and the masterSlave/syncthing deciders) just enqueues a component
+// identifier; one reconcile per identifier drives the actual Docker state toward the
+// desired state. This is the ONLY place that calls appDockerStart/appDockerStop.
 //
 // Desired state inputs:
 //   operatorStopped (durable, appsRuntimeState) - user lock, wins over all.
