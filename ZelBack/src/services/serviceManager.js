@@ -287,10 +287,12 @@ async function startFluxFunctions() {
     // Before the dependencies are waited for: a stalled one is what this sees.
     // Awaited so a trip recorded in this boot holds the node before boot acts.
     await hostStallService.start();
-    // Seed the node-capability probe first (fire-once, non-blocking). It resolves
-    // over the benchmark channel independently of the daemon/db, so it gets the
-    // longest head start to settle before any is-arcane consumer reads the verdict.
-    nodeCapabilities.start();
+    // Resolve the node-capability ("is-arcane") verdict up front, before any consumer
+    // reads it. Awaited: on legacy the FLUX_ARCANE_NODE pre-gate returns instantly; on
+    // Arcane the systemd contract guarantees fluxbenchd's RPC is up, so this settles in
+    // the latch window (usually already latched by now). Depends only on the benchmark
+    // channel, not the daemon/db.
+    await nodeCapabilities.resolveNodeCapability();
     // Hard dependencies — nothing starts until these are confirmed.
     await dbHelper.waitForMongo();
     databaseHealthService.watch(dbHelper.databaseConnection(), 'main');

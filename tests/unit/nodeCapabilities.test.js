@@ -70,8 +70,72 @@ describe('nodeCapabilities tests', () => {
     });
   });
 
+  describe('resolveNodeCapability', () => {
+    let savedArcaneEnv;
+
+    beforeEach(() => {
+      savedArcaneEnv = process.env.FLUX_ARCANE_NODE;
+      globalState.capabilityVerdict = null;
+    });
+
+    afterEach(() => {
+      sinon.restore();
+      if (savedArcaneEnv === undefined) delete process.env.FLUX_ARCANE_NODE;
+      else process.env.FLUX_ARCANE_NODE = savedArcaneEnv;
+      globalState.capabilityVerdict = null;
+    });
+
+    it('concludes legacy via the pre-gate, without probing, when FLUX_ARCANE_NODE is unset', async () => {
+      delete process.env.FLUX_ARCANE_NODE;
+      const statusStub = sinon.stub(benchmarkService, 'getStatus');
+
+      await nodeCapabilities.resolveNodeCapability();
+
+      expect(globalState.capabilityVerdict).to.equal(false);
+      // the benchmark channel is never touched on the legacy fast-path
+      expect(statusStub.called).to.equal(false);
+    });
+
+    it('resolves arcane when the benchmark channel latches arcane', async () => {
+      process.env.FLUX_ARCANE_NODE = '1';
+      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
+      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'success', data: { nodetype: 'arcane' } });
+
+      await nodeCapabilities.resolveNodeCapability();
+
+      expect(globalState.capabilityVerdict).to.equal(true);
+    });
+
+    it('resolves legacy when an Arcane-imaged node attests legacy', async () => {
+      process.env.FLUX_ARCANE_NODE = '1';
+      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
+      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'success', data: { nodetype: 'legacy' } });
+
+      await nodeCapabilities.resolveNodeCapability();
+
+      expect(globalState.capabilityVerdict).to.equal(false);
+    });
+
+    it('keeps polling through pending and never gives up before the verdict latches', async () => {
+      process.env.FLUX_ARCANE_NODE = '1';
+      const clock = sinon.useFakeTimers();
+      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
+      const nodeType = sinon.stub(benchmarkService, 'getNodeType');
+      nodeType.onFirstCall().resolves({ status: 'success', data: { nodetype: 'pending' } });
+      nodeType.onSecondCall().resolves({ status: 'success', data: { nodetype: 'arcane' } });
+
+      const resolved = nodeCapabilities.resolveNodeCapability();
+      // flush the first (pending) probe, fire the poll delay, run the second (arcane) probe
+      await clock.tickAsync(1100);
+      await resolved;
+
+      expect(globalState.capabilityVerdict).to.equal(true);
+      expect(nodeType.callCount).to.equal(2);
+    });
+  });
+
   describe('verdict', () => {
-    it('returns the tri-state value held on globalState', () => {
+    it('returns the verdict held on globalState', () => {
       globalState.capabilityVerdict = null;
       expect(nodeCapabilities.verdict()).to.equal(null);
       globalState.capabilityVerdict = true;
