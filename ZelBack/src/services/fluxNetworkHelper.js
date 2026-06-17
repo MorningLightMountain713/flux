@@ -29,8 +29,7 @@ const { UDP_PROBE_MAGIC, UDP_PROBE_BYTES } = require('./utils/fluxUdpTestServer'
 const {
   normalizeSocketAddress, socketAddressesMatch, parseSocketAddress,
 } = require('./utils/socketAddressUtils');
-
-const isArcane = Boolean(process.env.FLUXOS_PATH);
+const globalState = require('./utils/globalState');
 
 
 // Who may hold this node back from placement. An owner is an IDENTITY, not a
@@ -2011,7 +2010,7 @@ async function nodeFirewallRules() {
   const ports = [apiPort, +apiPort - 1, +apiPort + 1, +apiPort + 2, 80, 443, 16125, ...config.server.allowedPorts];
   const rules = [['delete', 'allow', 'in', 'proto', 'udp', 'to', 'any', 'port', '53']];
   // this should also be limit, but existing nodes use allow (needs to be updated)
-  if (isArcane) rules.push(['prepend', 'allow', 'to', 'any', 'app', 'FluxadmSSH']);
+  if (globalState.isArcane()) rules.push(['prepend', 'allow', 'to', 'any', 'app', 'FluxadmSSH']);
   // the OpenSSH profile exists only where openssh-server is installed
   rules.push(['prepend', 'limit', 'to', 'any', 'app', 'OpenSSH']);
 
@@ -2583,7 +2582,6 @@ module.exports = {
   allowOnlyDockerNetworksToFluxNodeService,
   addFluxNodeServiceIpToLoopback,
   keepUPNPPortsOpen,
-  isArcane,
   clockDrift,
   getClockDrift,
   initClockOffsetCache,

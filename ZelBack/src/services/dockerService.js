@@ -20,7 +20,11 @@ const shutdownPlan = require('./appLifecycle/shutdownPlan');
 
 const globalState = require('./utils/globalState');
 
-const isArcane = Boolean(process.env.FLUXOS_PATH);
+const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
+// ToDo: Fix all the string concatenation in this file and use path.join()
+const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
+// eslint-disable-next-line no-unused-vars
+const appsFolder = `${appsFolderPath}/`;
 
 const docker = new Docker();
 
@@ -1101,7 +1105,9 @@ async function appDockerCreate(deployComp, options = {}) {
   const driverStatus = dockerInfoResp.DriverStatus;
   const backingFs = driverStatus.find((status) => status[0] === 'Backing Filesystem');
   if (backingFs && backingFs[1] === 'xfs') {
-    const mountTarget = isArcane ? '/dat/var/lib/docker' : '/var/lib/docker';
+    // The docker data-root is the real discriminator (not node identity): check
+    // prjquota support on the filesystem docker actually reports as its root.
+    const mountTarget = dockerInfoResp.DockerRootDir;
     const hasQuotaPossibility = await deviceHelper.hasQuotaOptionForMountTarget(mountTarget);
     if (hasQuotaPossibility) {
       // Cap the writable layer at the per-app budget: v9 subtracts the measured
