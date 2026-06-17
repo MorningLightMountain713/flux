@@ -5,9 +5,7 @@ const serviceHelper = require('../serviceHelper');
 const benchmarkService = require('../benchmarkService');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const log = require('../../lib/log');
-
-// Check if running on Arcane OS
-const isArcane = Boolean(process.env.FLUXOS_PATH);
+const globalState = require('../utils/globalState');
 
 /**
  * Get application public key for encryption
@@ -17,7 +15,7 @@ const isArcane = Boolean(process.env.FLUXOS_PATH);
  * @returns {Promise<string>} The public key
  */
 async function getAppPublicKey(fluxID, appName, blockHeight) {
-  if (!isArcane) {
+  if (!globalState.isArcane()) {
     throw new Error('Application Specifications can only be validated on a node running Arcane OS.');
   }
   const inputData = JSON.stringify({
