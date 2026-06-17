@@ -90,21 +90,22 @@ describe('containerEventBridge', () => {
   });
 
   describe('health_status', () => {
-    it('enqueues the container itself on unhealthy (the reconciler decides the restart)', () => {
+    // The status is NOT parsed from the event: docker carries it only as a free-form
+    // Action suffix ("health_status: <status-or-raw-output>"), which it documents as "far
+    // from ideal". Any health event re-reconciles the container (the reconciler reads the
+    // authoritative .State.Health.Status from inspect and restarts it if unhealthy) and
+    // re-evaluates its dependents (a dependsOn 'healthy' dependent starts once the target
+    // reads healthy).
+    it('re-reconciles the container and re-evaluates its dependents on any health event', () => {
       containerEventBridge.handleContainerHealth(healthEvent('fluxweb_app', 'unhealthy'));
       expect(stubs.appReconciler.enqueue.calledOnceWith('fluxweb_app')).to.be.true;
-      expect(stubs.appReconciler.enqueueDependents.called).to.be.false;
+      expect(stubs.appReconciler.enqueueDependents.calledOnceWith('fluxweb_app')).to.be.true;
     });
 
-    it('wakes dependents on healthy (satisfies a dependsOn healthy)', () => {
-      containerEventBridge.handleContainerHealth(healthEvent('fluxdb_app', 'healthy'));
+    it('behaves identically for a free-form health Action (which the old colon-parse would mangle)', () => {
+      containerEventBridge.handleContainerEvent({ Action: 'health_status: probe failed: connection refused', Actor: { Attributes: { name: 'fluxdb_app' } } });
+      expect(stubs.appReconciler.enqueue.calledOnceWith('fluxdb_app')).to.be.true;
       expect(stubs.appReconciler.enqueueDependents.calledOnceWith('fluxdb_app')).to.be.true;
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
-    });
-
-    it('reads the status from Actor.Attributes.health when the Action carries no suffix', () => {
-      containerEventBridge.handleContainerHealth({ Action: 'health_status', Actor: { Attributes: { name: 'fluxweb_app', health: 'unhealthy' } } });
-      expect(stubs.appReconciler.enqueue.calledOnceWith('fluxweb_app')).to.be.true;
     });
 
     it('ignores non-flux containers', () => {
