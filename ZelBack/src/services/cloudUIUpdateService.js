@@ -4,15 +4,13 @@ const path = require('path');
 const { exec } = require('child_process');
 const axios = require('axios');
 const log = require('../lib/log');
+const globalState = require('./utils/globalState');
 
 const REPO = 'RunOnFlux/fluxos-frontend';
 const RELEASE_API = `${config.github.apiBaseUrl}/repos/${REPO}/releases/latest`;
 const PROJECT_ROOT = path.join(__dirname, '..', '..', '..');
 const CLOUDUI_DIR = path.join(PROJECT_ROOT, 'CloudUI');
 const VERSION_FILE = path.join(CLOUDUI_DIR, 'version');
-
-// ArcaneOS nodes have watchdog handling CloudUI updates
-const isArcaneOS = Boolean(process.env.FLUXOS_PATH);
 
 /**
  * Checks if CloudUI folder exists and has content
@@ -138,7 +136,7 @@ function runUpdateScript() {
 async function checkAndUpdateCloudUI() {
   try {
     // Skip on ArcaneOS - watchdog handles CloudUI updates
-    if (isArcaneOS) {
+    if (globalState.isArcane()) {
       log.info('CloudUI: Running on ArcaneOS, skipping update check (handled by watchdog)');
       return;
     }
@@ -216,5 +214,4 @@ module.exports = {
   // Exported for testing
   CLOUDUI_DIR,
   VERSION_FILE,
-  isArcaneOS,
 };
