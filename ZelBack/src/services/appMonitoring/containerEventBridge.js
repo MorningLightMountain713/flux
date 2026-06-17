@@ -14,8 +14,10 @@ const appReconciler = require('./appReconciler');
 //                    restart policy + backoff). A clean exit (0) can also satisfy a
 //                    dependsOn 'completed', so wake the dependents too.
 //   start         -> a container came up: can satisfy a dependsOn 'started' -> wake dependents.
-//   health_status -> unhealthy: enqueue it (the reconciler restarts running-but-unhealthy
-//                    containers); healthy: can satisfy a dependsOn 'healthy' -> wake dependents.
+//   health_status -> reconcile the container AND its dependents; the reconciler reads the
+//                    authoritative .State.Health.Status from docker inspect and decides
+//                    (restart if unhealthy; a dependsOn 'healthy' dependent starts once the
+//                    target reads healthy). The event's status is NOT parsed.
 
 let eventStream = null;
 let stopped = false;
@@ -87,26 +89,18 @@ function handleContainerStart(event) {
   wakeDependents(containerName);
 }
 
-// docker health events carry the status in the Action ("health_status: healthy" |
-// "health_status: unhealthy"); some daemons also surface it on Actor.Attributes.health.
-// Prefer the Action suffix, fall back to the attribute.
-function healthFromEvent(event) {
-  const action = event.Action || event.status || '';
-  const fromAction = action.includes(':') ? action.split(':').pop().trim() : '';
-  return fromAction || event.Actor?.Attributes?.health || '';
-}
-
 function handleContainerHealth(event) {
   const containerName = event.Actor?.Attributes?.name;
   if (!containerName || !isFluxContainer(containerName)) return;
-  const status = healthFromEvent(event);
-  if (status === 'unhealthy') {
-    // the reconciler decides whether to restart (paced by the backoff ladder); a
-    // deliberate stop in flight is handled by its isManagedElsewhere guard.
-    appReconciler.enqueue(containerName);
-  } else if (status === 'healthy') {
-    wakeDependents(containerName);
-  }
+  // Don't parse the status out of the event — docker only carries it as a free-form
+  // Action suffix ("health_status: unhealthy"), with no structured field. Re-reconcile
+  // the container (the reconciler reads the authoritative .State.Health.Status from
+  // inspect and restarts it if unhealthy; a deliberate stop in flight is handled by its
+  // isManagedElsewhere guard) and its dependents (a dependsOn 'healthy' dependent starts
+  // once the target reads healthy). Health events are transition-only, so this is at most
+  // one no-op reconcile per transition.
+  appReconciler.enqueue(containerName);
+  wakeDependents(containerName);
 }
 
 function handleContainerEvent(event) {
