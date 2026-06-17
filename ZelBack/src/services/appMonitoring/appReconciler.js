@@ -270,22 +270,29 @@ async function dockerActual(identifier) {
       running: !!(info.State && info.State.Running),
       exitCode: everRan ? (info.State.ExitCode ?? null) : null,
       finishedAt,
+      // docker HEALTHCHECK status from a v9 livenessProbe: healthy | unhealthy |
+      // starting, or null when the component declares no probe.
+      health: info.State?.Health?.Status ?? null,
     };
   } catch (err) {
     let containers;
     try {
       containers = await dockerService.dockerListContainers(true);
     } catch (probeErr) {
-      return { reachable: false, exists: false, running: false, exitCode: null };
+      return {
+        reachable: false, exists: false, running: false, exitCode: null, health: null,
+      };
     }
     const dockerName = dockerService.getAppDockerNameIdentifier(identifier);
     const listed = containers.some((c) => Array.isArray(c.Names) && c.Names.includes(dockerName));
     if (listed) {
       return {
-        reachable: true, exists: true, running: false, exitCode: null, indeterminate: true,
+        reachable: true, exists: true, running: false, exitCode: null, health: null, indeterminate: true,
       };
     }
-    return { reachable: true, exists: false, running: false, exitCode: null };
+    return {
+      reachable: true, exists: false, running: false, exitCode: null, health: null,
+    };
   }
 }
 
@@ -553,7 +560,38 @@ async function reconcile(rawIdentifier) {
     return;
   }
 
-  if (actual.running) return; // already where we want it
+  if (actual.running) {
+    // A running container whose v9 livenessProbe HEALTHCHECK has failed its retries
+    // (docker reports unhealthy) is restarted, paced by the SAME backoff ladder as crash
+    // restarts so a permanently-unhealthy container is not restart-looped. The ladder
+    // resets on a sustained healthy run (restartWaitMs runningNow). health is null when the
+    // component declares no probe, so probe-less apps never enter here.
+    if (actual.health === 'unhealthy') {
+      const wait = await appsRuntimeState.restartWaitMs(identifier, { runningNow: true });
+      if (wait > 0) {
+        log.warn(`appReconciler - ${identifier} running but unhealthy, backing off ${Math.round(wait / 1000)}s before restart`);
+        fluxEventBus.publish('reconciler:actuated', { identifier, action: 'unhealthyBackoff', waitMs: wait });
+        scheduleRetry(identifier, wait);
+        return;
+      }
+      await appsRuntimeState.recordRestart(identifier);
+      try {
+        await dockerService.appDockerRestart(identifier);
+      } catch (err) {
+        // appDockerRestart owns the stop+start; a thrown restart leaves the container in
+        // whatever state docker left it. Pace the retry off the ladder (attempt recorded
+        // above) rather than hammering, mirroring the failed-start path below.
+        log.error(`appReconciler - failed to restart unhealthy ${identifier}: ${err.message}; retrying`);
+        fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthyFailed', reason: err.message });
+        scheduleRetry(identifier, MANAGED_RETRY_MS);
+        return;
+      }
+      log.warn(`appReconciler - ${identifier} restarted (was unhealthy)`);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartedUnhealthy' });
+      return;
+    }
+    return; // healthy / starting / probe-less — already where we want it
+  }
 
   if (!actual.exists) {
     await recreateMissing(identifier);
@@ -562,7 +600,7 @@ async function reconcile(rawIdentifier) {
 
   // exists but stopped, should run -> backoff-paced restart (no sleeping; the
   // worker re-enqueues when the backoff window elapses)
-  const wait = await appsRuntimeState.restartWaitMs(identifier, actual.finishedAt);
+  const wait = await appsRuntimeState.restartWaitMs(identifier, { lastFinishedAtMs: actual.finishedAt });
   if (wait > 0) {
     log.warn(`appReconciler - ${identifier} stopped, backing off ${Math.round(wait / 1000)}s before restart`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'backoff', waitMs: wait });

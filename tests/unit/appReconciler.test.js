@@ -31,11 +31,14 @@ describe('appReconciler tests', () => {
         requiresSyncBeforeStart: () => isR,
         hasSyncthing: () => isSync,
         restartPolicy: c.restartPolicy ?? 'always',
+        hasDependencies: () => !!c.dependsOn && Object.keys(c.dependsOn).length > 0,
+        dependencyEntries: () => (c.dependsOn ? Object.entries(c.dependsOn).map(([n, v]) => [n, v.condition]) : []),
       };
     });
     return {
       getComponent: (n) => comps.find((c) => c.name === n) || null,
       componentEntries: () => comps.map((c) => [c.name, c]),
+      dependentsOf: (name) => comps.filter((c) => c.dependencyEntries().some(([dn]) => dn === name)).map((c) => c.name),
     };
   };
 
@@ -65,6 +68,7 @@ describe('appReconciler tests', () => {
         getDockerContainerOnly: sinon.stub().resolves(undefined),
         appDockerStart: sinon.stub().resolves(),
         appDockerStop: sinon.stub().resolves(),
+        appDockerRestart: sinon.stub().resolves(),
         getAppIdentifier: (id) => `flux${id}`,
         getAppDockerNameIdentifier: (id) => `/flux${id}`,
         getBaseAppName: (id) => (id.startsWith('flux') ? id.slice(4) : id),
@@ -85,6 +89,7 @@ describe('appReconciler tests', () => {
         restartWaitMs: sinon.stub().resolves(0),
         recordRestart: sinon.stub().resolves(),
         recordExit: sinon.stub().resolves(),
+        getState: sinon.stub().resolves(null),
       },
       appQueryService: {
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
@@ -187,6 +192,61 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 137 } });
       await appReconciler.reconcile('job_App');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+  });
+
+  describe('livenessProbe actuator (restart running-but-unhealthy)', () => {
+    const runningUnhealthy = { State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'unhealthy' } } };
+
+    it('restarts a running container whose healthcheck reports unhealthy', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves(runningUnhealthy);
+      await appReconciler.reconcile('www_App');
+      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerRestart.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerStop.called).to.be.false;
+    });
+
+    it('paces the unhealthy restart off the running-now ladder, not the death-based one', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves(runningUnhealthy);
+      await appReconciler.reconcile('www_App');
+      const [id, opts] = stubs.appsRuntimeState.restartWaitMs.firstCall.args;
+      expect(id).to.equal('www_App');
+      expect(opts).to.deep.equal({ runningNow: true });
+    });
+
+    it('backs off instead of restarting an unhealthy container during its cooldown', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves(runningUnhealthy);
+      stubs.appsRuntimeState.restartWaitMs.resolves(30000);
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerRestart.called).to.be.false;
+      expect(stubs.appsRuntimeState.recordRestart.called).to.be.false;
+    });
+
+    it('leaves a running healthy container alone', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'healthy' } } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerRestart.called).to.be.false;
+      expect(stubs.dockerService.appDockerStop.called).to.be.false;
+    });
+
+    it('leaves a running container in the starting grace period alone', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'starting' } } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerRestart.called).to.be.false;
+    });
+
+    it('leaves a running container with no healthcheck alone', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerRestart.called).to.be.false;
+    });
+
+    it('retries with the managed delay when the unhealthy restart throws', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves(runningUnhealthy);
+      stubs.dockerService.appDockerRestart.rejects(new Error('docker busy'));
+      await appReconciler.reconcile('www_App'); // must not throw
+      const loggedFailure = stubs.log.error.getCalls().some((c) => /failed to restart unhealthy/.test(c.args[0]));
+      expect(loggedFailure).to.be.true;
     });
   });
 
@@ -599,7 +659,7 @@ describe('appReconciler tests', () => {
         },
       });
       await appReconciler.reconcile('www_App');
-      sinon.assert.calledWithExactly(stubs.appsRuntimeState.restartWaitMs, 'www_App', Date.parse(finishedAt));
+      sinon.assert.calledWithExactly(stubs.appsRuntimeState.restartWaitMs, 'www_App', { lastFinishedAtMs: Date.parse(finishedAt) });
     });
 
     it('passes no death evidence for a container that never ran (docker zero FinishedAt)', async () => {
@@ -609,7 +669,7 @@ describe('appReconciler tests', () => {
         },
       });
       await appReconciler.reconcile('www_App');
-      sinon.assert.calledWithExactly(stubs.appsRuntimeState.restartWaitMs, 'www_App', null);
+      sinon.assert.calledWithExactly(stubs.appsRuntimeState.restartWaitMs, 'www_App', { lastFinishedAtMs: null });
     });
   });
 

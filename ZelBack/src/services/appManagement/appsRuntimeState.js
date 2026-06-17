@@ -133,33 +133,48 @@ async function recordRestart(identifier) {
  * Returns how long (ms) the reconciler must wait before the next restart is
  * allowed — 0 means restart now. Level-based: measured from the last restart
  * against the backoff ladder, so the worker re-enqueues after the remaining
- * time rather than sleeping.
+ * time rather than sleeping. Crash restarts and livenessProbe-unhealthy
+ * restarts share one ladder: both mean "this container is unstable, back off".
  *
- * The ladder resets only when the previous run PROVABLY lasted STABLE_RUN_MS:
- * death time minus start time, where the death time is the best available
- * evidence — the recorded die event, or docker's State.FinishedAt passed in by
- * the reconciler from the inspect it already performed (docker records the
- * true death time even when the event was missed: reboot, FluxOS restart,
- * stream gap). Time since the ATTEMPT is not stability: the component sits
- * stopped in backoff between attempts, and resetting on elapsed time launders
- * a crash loop's history at any rung longer than STABLE_RUN_MS, making the
- * cap unreachable. With no death evidence at all the ladder holds — the
- * conservative direction costs at most one deeper rung, the permissive one
- * re-opens the laundering bug.
+ * The ladder resets only on PROOF the last run lasted STABLE_RUN_MS. Two kinds
+ * of proof, selected by the caller's context:
+ *   - dead (the crash path): death time minus the restart that launched it,
+ *     where the death time is the best evidence — the recorded die event, or
+ *     docker's State.FinishedAt the reconciler passes from the inspect it
+ *     already did (docker records the true death even when the event was
+ *     missed: reboot, FluxOS restart, stream gap).
+ *   - runningNow (the unhealthy path): the container is alive RIGHT NOW and
+ *     docker won't auto-restart it (RestartPolicy 'no'), so it has been up
+ *     continuously since the last restart — now minus lastRestart is genuine
+ *     uptime, not idle backoff time.
+ * Time since the ATTEMPT is never stability for a STOPPED container: it sits
+ * idle in backoff between attempts, and resetting on that elapsed time launders
+ * a crash loop's history at any rung longer than STABLE_RUN_MS, making the cap
+ * unreachable. With no proof at all the ladder holds — the conservative
+ * direction costs at most one deeper rung, the permissive one re-opens the bug.
  *
  * @param {string} identifier
- * @param {number|null} lastFinishedAtMs - docker State.FinishedAt of the
- *        stopped container (ms epoch), when the caller has inspect data
+ * @param {object} [opts]
+ * @param {number|null} [opts.lastFinishedAtMs] - docker State.FinishedAt of the
+ *        stopped container (ms epoch) — the crash path's stability evidence
+ * @param {boolean} [opts.runningNow] - the container is confirmed running now
+ *        (the unhealthy-restart path); reset on uptime since the last restart
  * @returns {Promise<number>}
  */
-async function restartWaitMs(identifier, lastFinishedAtMs = null) {
+async function restartWaitMs(identifier, { lastFinishedAtMs = null, runningNow = false } = {}) {
   const state = await getState(identifier);
   const history = (state && state.restartHistory) || [];
   if (history.length === 0) return 0;
 
   const lastRestart = history[history.length - 1];
-  const lastDeath = Math.max(state.lastDiedAt || 0, lastFinishedAtMs || 0);
-  if (lastDeath > lastRestart && lastDeath - lastRestart > STABLE_RUN_MS) {
+  let stableRunMs = 0;
+  if (runningNow) {
+    stableRunMs = Date.now() - lastRestart;
+  } else {
+    const lastDeath = Math.max(state.lastDiedAt || 0, lastFinishedAtMs || 0);
+    if (lastDeath > lastRestart) stableRunMs = lastDeath - lastRestart;
+  }
+  if (stableRunMs > STABLE_RUN_MS) {
     await setFields(identifier, { restartHistory: [] });
     return 0;
   }
