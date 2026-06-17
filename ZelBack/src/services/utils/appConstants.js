@@ -34,9 +34,6 @@ const supportedArchitectures = ['amd64', 'arm64'];
 // Architectures an encrypted app must support — it runs on Arcane nodes, which are amd64-only
 const arcaneRequiredArchitectures = ['amd64'];
 
-// Environment flags
-const isArcane = Boolean(process.env.FLUXOS_PATH);
-
 // Apps that might be using old gateway IP assignment
 const appsThatMightBeUsingOldGatewayIpAssignment = [
   'HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated',
@@ -108,7 +105,6 @@ module.exports = {
   // Configuration
   supportedArchitectures,
   arcaneRequiredArchitectures,
-  isArcane,
   appsThatMightBeUsingOldGatewayIpAssignment,
   defaultNodeSpecs,
   appsMonitoredTemplate,
