@@ -4,8 +4,7 @@ const fs = require('fs').promises;
 
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
-
-const isArcane = Boolean(process.env.FLUXOS_PATH);
+const globalState = require('./utils/globalState');
 
 // Watchdog repository and paths
 const WATCHDOG_REPO = 'https://github.com/RunOnFlux/fluxnode-watchdog.git';
@@ -276,7 +275,7 @@ async function startWatchdog() {
 async function ensureWatchdogRunning() {
   try {
     // Skip on ArcaneOS - watchdog is managed differently there (systemd service)
-    if (isArcane) {
+    if (globalState.isArcane()) {
       log.info('ArcaneOS detected, skipping pm2 watchdog setup (managed by systemd)');
       return;
     }
