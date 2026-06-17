@@ -22,7 +22,6 @@ const appReconciler = require('../appMonitoring/appReconciler');
  */
 
 const SOCKET_PATH = process.env.FLUX_DRAIN_SOCKET || '/run/fluxos/drain.sock';
-const isArcane = Boolean(process.env.FLUXOS_PATH);
 
 // An entry outlives the pipeline deadline by this much before self-expiring:
 // the post-deadline tail (SIGKILL sweep, fs sync, unit ordering) is alive-but-
@@ -173,7 +172,7 @@ async function daemonAccessGid() {
  * is logged, never fatal to startup.
  */
 async function start() {
-  if (server || !isArcane) return;
+  if (server || !globalState.isArcane()) return;
   try {
     await fs.promises.mkdir(nodePath.dirname(SOCKET_PATH), { recursive: true });
     await fs.promises.chmod(nodePath.dirname(SOCKET_PATH), 0o750).catch(() => { /* dir owned elsewhere */ });
