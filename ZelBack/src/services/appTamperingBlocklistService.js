@@ -5,7 +5,7 @@ const dbHelper = require('./dbHelper');
 const nodeDosState = require('./nodeDosState');
 const generalService = require('./generalService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
-const benchmarkService = require('./benchmarkService');
+const globalState = require('./utils/globalState');
 
 const BLOCKLIST_URL = `${config.github.rawBaseUrl}/helpers/tamperingblockednodes.json`;
 const CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours
@@ -47,28 +47,13 @@ async function fetchBlocklist() {
 }
 
 /**
- * Three-state ArcaneOS check via fluxbenchd.
- *   true  — confirmed ArcaneOS, skip enforcement
- *   false — confirmed NOT ArcaneOS, enforce
- *   null  — fluxbenchd unreachable or response malformed, skip this tick
- *
- * Harder to spoof than `process.env.FLUXOS_PATH` because it depends on a
- * separate daemon process. The null case is intentional: we never want to
- * falsely DOS a real ArcaneOS node just because bench is momentarily down.
+ * An attested Arcane node is exempt from blocklist enforcement. Reads the
+ * boot-resolved node-capability verdict (true = arcane -> exempt, false = legacy
+ * -> enforce); it is resolved before this service starts, so there is no
+ * unresolved tick to guard against.
  */
-async function isArcaneOs() {
-  try {
-    const benchmarkResponse = await benchmarkService.getBenchmarks();
-    if (!benchmarkResponse || benchmarkResponse.status !== 'success' || !benchmarkResponse.data) {
-      return null;
-    }
-    const { systemsecure } = benchmarkResponse.data;
-    if (typeof systemsecure !== 'boolean') return null;
-    return systemsecure;
-  } catch (error) {
-    log.warn(`appTamperingBlocklist - benchmark check failed: ${error.message}`);
-    return null;
-  }
+function isArcaneOs() {
+  return globalState.isArcane();
 }
 
 /**
@@ -127,13 +112,8 @@ async function waitForDaemonSynced() {
  * clears it when its own condition is no longer true.
  */
 async function enforceBlocklist() {
-  const arcane = await isArcaneOs();
-  if (arcane === true) {
+  if (isArcaneOs()) {
     log.info('appTamperingBlocklist - node is ArcaneOS, enforcement disabled');
-    return;
-  }
-  if (arcane === null) {
-    log.info('appTamperingBlocklist - benchmark unreachable, skipping this tick');
     return;
   }
 
@@ -182,7 +162,7 @@ async function enforceBlocklist() {
  */
 async function start() {
   if (intervalHandle) return;
-  if ((await isArcaneOs()) === true) {
+  if (isArcaneOs()) {
     log.info('appTamperingBlocklist - node is ArcaneOS, enforcer will not start');
     return;
   }

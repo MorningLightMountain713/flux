@@ -36,30 +36,18 @@ describe('cloudUIUpdateService tests', () => {
   });
 
   function loadService(envOverrides = {}) {
-    const originalEnv = process.env.FLUXOS_PATH;
-
-    if (envOverrides.FLUXOS_PATH !== undefined) {
-      process.env.FLUXOS_PATH = envOverrides.FLUXOS_PATH;
-    } else {
-      delete process.env.FLUXOS_PATH;
-    }
-
-    const service = proxyquire(
+    // Map the legacy FLUXOS_PATH fixture onto the node-capability verdict.
+    const arcane = Boolean(envOverrides.FLUXOS_PATH);
+    return proxyquire(
       '../../ZelBack/src/services/cloudUIUpdateService',
       {
         fs: fsStub,
         axios: axiosStub,
         child_process: { exec: execStub },
         '../lib/log': logStub,
+        './utils/globalState': { isArcane: () => arcane },
       },
     );
-
-    // Restore original env after loading
-    if (originalEnv !== undefined) {
-      process.env.FLUXOS_PATH = originalEnv;
-    }
-
-    return service;
   }
 
   describe('cloudUIExists tests', () => {
@@ -418,23 +406,4 @@ describe('cloudUIUpdateService tests', () => {
     });
   });
 
-  describe('isArcaneOS tests', () => {
-    it('should be false when FLUXOS_PATH is not set', () => {
-      cloudUIUpdateService = loadService();
-
-      expect(cloudUIUpdateService.isArcaneOS).to.equal(false);
-    });
-
-    it('should be true when FLUXOS_PATH is set', () => {
-      cloudUIUpdateService = loadService({ FLUXOS_PATH: '/opt/fluxos' });
-
-      expect(cloudUIUpdateService.isArcaneOS).to.equal(true);
-    });
-
-    it('should be false when FLUXOS_PATH is empty string', () => {
-      cloudUIUpdateService = loadService({ FLUXOS_PATH: '' });
-
-      expect(cloudUIUpdateService.isArcaneOS).to.equal(false);
-    });
-  });
 });

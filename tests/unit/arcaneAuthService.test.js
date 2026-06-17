@@ -7,6 +7,7 @@ const log = require('../../ZelBack/src/lib/log');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const arcaneAuthService = require('../../ZelBack/src/services/arcaneAuthService');
 const fluxConfigdClient = require('../../ZelBack/src/services/utils/fluxConfigdClient');
+const globalState = require('../../ZelBack/src/services/utils/globalState');
 
 describe('arcaneAuthService proxy tests', () => {
   let logInfoStub;
@@ -14,7 +15,7 @@ describe('arcaneAuthService proxy tests', () => {
   let callFluxConfigdRPCStub;
 
   beforeEach(() => {
-    process.env.FLUXOS_PATH = '/tmp/test-fluxos';
+    sinon.stub(globalState, 'isArcane').returns(true);
     process.env.FLUX_CONFIG_CONNECTION = 'unix:///tmp/flux-configd-test.sock';
     logInfoStub = sinon.stub(log, 'info');
     logErrorStub = sinon.stub(log, 'error');
@@ -22,7 +23,6 @@ describe('arcaneAuthService proxy tests', () => {
   });
 
   afterEach(() => {
-    delete process.env.FLUXOS_PATH;
     delete process.env.FLUX_CONFIG_CONNECTION;
     sinon.restore();
   });
