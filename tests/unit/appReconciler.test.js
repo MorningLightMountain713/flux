@@ -147,6 +147,15 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
+    it('does not restart a running-but-unhealthy component while its app is draining', async () => {
+      // the shutdown-pipeline hold (desired:null) must win over the livenessProbe actuator
+      stubs.globalState.getAppLbState.returns('draining');
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'unhealthy' } } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerRestart.called).to.be.false;
+      expect(stubs.dockerService.appDockerStop.called).to.be.false;
+    });
+
     it('restarts the stopped component on the first reconcile after the state clears', async () => {
       stubs.globalState.getAppLbState.returns(null);
       await appReconciler.reconcile('www_App');
