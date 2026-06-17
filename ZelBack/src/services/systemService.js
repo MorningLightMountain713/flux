@@ -16,8 +16,7 @@ const syncthingService = require('./syncthingService');
 const fifoQueue = require('./utils/fifoQueue');
 const fluxEventBus = require('./utils/fluxEventBus');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
-
-const isArcane = Boolean(process.env.FLUXOS_PATH);
+const globalState = require('./utils/globalState');
 
 /**
  * The running interval to check when syncthing was updated
@@ -791,7 +790,7 @@ async function monitorAptCache(event) {
  * @returns {Promise<void>}
  */
 async function monitorSystem() {
-  if (isArcane) return;
+  if (globalState.isArcane()) return;
 
   let installed = [];
   try {
@@ -840,7 +839,7 @@ async function monitorSystem() {
 }
 
 async function mongoDBConfig() {
-  if (isArcane) return;
+  if (globalState.isArcane()) return;
 
   log.info('MongoDB file config verification...');
   try {
@@ -897,7 +896,7 @@ async function mongoDBConfig() {
 
 // eslint-disable-next-line consistent-return
 async function mongodGpgKeyVeryfity() {
-  if (isArcane) return true;
+  if (globalState.isArcane()) return true;
 
   log.info('MongoDB GPG verification...');
   try {
@@ -956,7 +955,7 @@ async function restartSystemdService(service) {
 }
 
 async function enableFluxdZmq(zmqEndpoint) {
-  if (isArcane) return true;
+  if (globalState.isArcane()) return true;
 
   if (typeof zmqEndpoint !== 'string') return false;
 
@@ -1066,7 +1065,7 @@ async function enableFluxdZmq(zmqEndpoint) {
  * @returns {Promise<boolean>} True if chrony is configured successfully, false otherwise
  */
 async function ensureChronyd() {
-  if (isArcane) return true;
+  if (globalState.isArcane()) return true;
 
   try {
     log.info('Checking time synchronization service...');
