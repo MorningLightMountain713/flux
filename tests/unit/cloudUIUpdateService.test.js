@@ -38,21 +38,9 @@ describe('cloudUIUpdateService tests', () => {
   });
 
   function loadService(envOverrides = {}) {
-    // Both halves of the original state, because the variable being ABSENT is
-    // one of the two states this switches between. Recording only its value
-    // left a load that set it unable to put it back, and the next load then
-    // restored the leak faithfully - which reaches every later test file in the
-    // run, since process.env outlives the module.
-    const hadEnv = 'FLUXOS_PATH' in process.env;
-    const originalEnv = process.env.FLUXOS_PATH;
-
-    if (envOverrides.FLUXOS_PATH !== undefined) {
-      process.env.FLUXOS_PATH = envOverrides.FLUXOS_PATH;
-    } else {
-      delete process.env.FLUXOS_PATH;
-    }
-
-    const service = proxyquire(
+    // Map the legacy FLUXOS_PATH fixture onto the node-capability verdict.
+    const arcane = Boolean(envOverrides.FLUXOS_PATH);
+    return proxyquire(
       '../../ZelBack/src/services/cloudUIUpdateService',
       {
         fs: fsStub,
@@ -63,17 +51,9 @@ describe('cloudUIUpdateService tests', () => {
         // the hardcoded https://api.github.com, because they are the same string.
         config: { github: { apiBaseUrl: STUB_API_BASE } },
         '../lib/log': logStub,
+        './utils/globalState': { isArcane: () => arcane },
       },
     );
-
-    // Restore original env after loading
-    if (hadEnv) {
-      process.env.FLUXOS_PATH = originalEnv;
-    } else {
-      delete process.env.FLUXOS_PATH;
-    }
-
-    return service;
   }
 
   describe('cloudUIExists tests', () => {
@@ -486,23 +466,4 @@ describe('cloudUIUpdateService tests', () => {
     });
   });
 
-  describe('isArcaneOS tests', () => {
-    it('should be false when FLUXOS_PATH is not set', () => {
-      cloudUIUpdateService = loadService();
-
-      expect(cloudUIUpdateService.isArcaneOS).to.equal(false);
-    });
-
-    it('should be true when FLUXOS_PATH is set', () => {
-      cloudUIUpdateService = loadService({ FLUXOS_PATH: '/opt/fluxos' });
-
-      expect(cloudUIUpdateService.isArcaneOS).to.equal(true);
-    });
-
-    it('should be false when FLUXOS_PATH is empty string', () => {
-      cloudUIUpdateService = loadService({ FLUXOS_PATH: '' });
-
-      expect(cloudUIUpdateService.isArcaneOS).to.equal(false);
-    });
-  });
 });

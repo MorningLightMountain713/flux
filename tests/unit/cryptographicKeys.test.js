@@ -7,6 +7,7 @@ const verificationHelper = require('../../ZelBack/src/services/verificationHelpe
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const globalState = require('../../ZelBack/src/services/utils/globalState');
 
 describe('cryptographicKeys tests', () => {
   let req;
@@ -51,6 +52,8 @@ describe('cryptographicKeys tests', () => {
 
     // Clear module cache and reload to pick up environment variable changes
     reloadModule();
+    // Default to an attested Arcane verdict; the non-arcane case overrides below.
+    sinon.stub(globalState, 'isArcane').returns(true);
   });
 
   afterEach(() => {
@@ -60,8 +63,7 @@ describe('cryptographicKeys tests', () => {
 
   describe('getAppPublicKey tests', () => {
     it('should throw error if not running on Arcane OS', async () => {
-      delete process.env.FLUXOS_PATH;
-      reloadModule();
+      globalState.isArcane.returns(false);
 
       try {
         await cryptographicKeys.getAppPublicKey('1ABC123', 'TestApp', 1000);

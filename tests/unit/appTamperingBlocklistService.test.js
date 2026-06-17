@@ -9,11 +9,10 @@ describe('appTamperingBlocklistService tests', () => {
   let nodeDosStateStub;
   let generalServiceStub;
   let daemonMiscStub;
-  let benchmarkServiceStub;
 
   const MOCK_TXHASH = 'abc123deadbeef';
 
-  function loadService() {
+  function loadService(arcane = false) {
     return proxyquire('../../ZelBack/src/services/appTamperingBlocklistService', {
       config: {
         database: {
@@ -34,7 +33,7 @@ describe('appTamperingBlocklistService tests', () => {
       './nodeDosState': nodeDosStateStub,
       './generalService': generalServiceStub,
       './daemonService/daemonServiceMiscRpcs': daemonMiscStub,
-      './benchmarkService': benchmarkServiceStub,
+      './utils/globalState': { isArcane: () => arcane },
     });
   }
 
@@ -66,11 +65,6 @@ describe('appTamperingBlocklistService tests', () => {
 
     daemonMiscStub = {
       isDaemonSynced: sinon.stub().returns({ data: { synced: true } }),
-    };
-
-    // Default: non-Arcane node (bench says systemsecure=false).
-    benchmarkServiceStub = {
-      getBenchmarks: sinon.stub().resolves({ status: 'success', data: { systemsecure: false } }),
     };
 
     service = loadService();
@@ -314,11 +308,7 @@ describe('appTamperingBlocklistService tests', () => {
 
   describe('ArcaneOS gating (via fluxbenchd)', () => {
     function makeArcaneService() {
-      benchmarkServiceStub.getBenchmarks = sinon.stub().resolves({
-        status: 'success',
-        data: { systemsecure: true },
-      });
-      return loadService();
+      return loadService(true);
     }
 
     it('enforceBlocklist is a no-op when bench reports systemsecure=true', async () => {
@@ -351,44 +341,6 @@ describe('appTamperingBlocklistService tests', () => {
       const twelveH = 12 * 60 * 60 * 1000;
       const calledWith12h = setIntervalSpy.getCalls().some((c) => c.args[1] === twelveH);
       expect(calledWith12h).to.be.false;
-    });
-
-    it('enforceBlocklist skips tick when fluxbenchd is unreachable (errors)', async () => {
-      benchmarkServiceStub.getBenchmarks = sinon.stub().rejects(new Error('bench down'));
-      const svc = loadService();
-      serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setEventCount(100);
-
-      await svc.enforceBlocklist();
-
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
-      expect(serviceHelperStub.axiosGet.called).to.be.false;
-    });
-
-    it('enforceBlocklist skips tick when fluxbenchd returns status=error', async () => {
-      benchmarkServiceStub.getBenchmarks = sinon.stub().resolves({ status: 'error' });
-      const svc = loadService();
-      serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setEventCount(100);
-
-      await svc.enforceBlocklist();
-
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
-      expect(serviceHelperStub.axiosGet.called).to.be.false;
-    });
-
-    it('enforceBlocklist skips tick when systemsecure is not a boolean', async () => {
-      benchmarkServiceStub.getBenchmarks = sinon.stub().resolves({
-        status: 'success',
-        data: { systemsecure: null },
-      });
-      const svc = loadService();
-      serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
-      setEventCount(100);
-
-      await svc.enforceBlocklist();
-
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
     });
 
     it('FLUXOS_PATH env var alone does not skip enforcement (spoof guard)', async () => {
