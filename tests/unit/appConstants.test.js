@@ -205,41 +205,6 @@ describe('appConstants tests', () => {
     });
   });
 
-  describe('isArcane flag tests', () => {
-    it('should be true when FLUXOS_PATH is set', () => {
-      process.env.FLUXOS_PATH = '/arcane/path';
-      // eslint-disable-next-line global-require
-      appConstants = require('../../ZelBack/src/services/utils/appConstants');
-
-      expect(appConstants.isArcane).to.be.true;
-    });
-
-    it('should be false when FLUXOS_PATH is not set', () => {
-      delete process.env.FLUXOS_PATH;
-      process.env.HOME = '/home/user';
-      // eslint-disable-next-line global-require
-      appConstants = require('../../ZelBack/src/services/utils/appConstants');
-
-      expect(appConstants.isArcane).to.be.false;
-    });
-
-    it('should be false when FLUXOS_PATH is empty string', () => {
-      process.env.FLUXOS_PATH = '';
-      // eslint-disable-next-line global-require
-      appConstants = require('../../ZelBack/src/services/utils/appConstants');
-
-      expect(appConstants.isArcane).to.be.false;
-    });
-
-    it('should be true for any non-empty FLUXOS_PATH', () => {
-      process.env.FLUXOS_PATH = 'x';
-      // eslint-disable-next-line global-require
-      appConstants = require('../../ZelBack/src/services/utils/appConstants');
-
-      expect(appConstants.isArcane).to.be.true;
-    });
-  });
-
   describe('appsThatMightBeUsingOldGatewayIpAssignment tests', () => {
     beforeEach(() => {
       process.env.HOME = '/home/user';
@@ -335,7 +300,6 @@ describe('appConstants tests', () => {
 
     it('should export configuration constants', () => {
       expect(appConstants).to.have.property('supportedArchitectures');
-      expect(appConstants).to.have.property('isArcane');
       expect(appConstants).to.have.property('appsThatMightBeUsingOldGatewayIpAssignment');
       expect(appConstants).to.have.property('defaultNodeSpecs');
     });
@@ -352,7 +316,6 @@ describe('appConstants tests', () => {
       expect(appConstants.fluxDirPath).to.equal('/mnt/data/flux/production');
       expect(appConstants.appsFolderPath).to.equal('/var/apps/flux');
       expect(appConstants.appsFolder).to.equal('/var/apps/flux/');
-      expect(appConstants.isArcane).to.be.true;
     });
 
     it('should work in standard FluxOS environment', () => {
@@ -366,7 +329,6 @@ describe('appConstants tests', () => {
       expect(appConstants.fluxDirPath).to.equal('/home/flux/zelflux');
       expect(appConstants.appsFolderPath).to.equal('/home/flux/zelflux/ZelApps');
       expect(appConstants.appsFolder).to.equal('/home/flux/zelflux/ZelApps/');
-      expect(appConstants.isArcane).to.be.false;
     });
 
     it('should work in Arcane OS environment', () => {
@@ -379,7 +341,6 @@ describe('appConstants tests', () => {
       expect(appConstants.fluxDirPath).to.equal('/opt/arcane');
       expect(appConstants.appsFolderPath).to.equal('/opt/arcane/ZelApps');
       expect(appConstants.appsFolder).to.equal('/opt/arcane/ZelApps/');
-      expect(appConstants.isArcane).to.be.true;
     });
   });
 

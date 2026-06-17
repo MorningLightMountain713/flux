@@ -10,7 +10,9 @@ const levels = {
   debug: 3,
 };
 
-const isArcane = Boolean(process.env.FLUXOS_PATH);
+// ArcaneOS captures logs via journald and sets FLUX_LOG_TO_CONSOLE=0 to suppress
+// console mirroring; legacy nodes (var unset) log to the console.
+const logToConsole = process.env.FLUX_LOG_TO_CONSOLE !== '0';
 const forceConsole = Boolean(config.logConsole);
 
 const logLevel = config && config.logLevel ? config.logLevel : levels.debug;
@@ -73,7 +75,7 @@ function debug(args) {
     return;
   }
   try {
-    if (!isArcane || forceConsole) console.log(args);
+    if (logToConsole || forceConsole) console.log(args);
     // write to file
     const filepath = `${homeDirPath}debug.log`;
     writeToFile(filepath, args);
