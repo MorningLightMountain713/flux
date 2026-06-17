@@ -556,16 +556,6 @@ async function reconcile(rawIdentifier) {
   if (actual.running) return; // already where we want it
 
   if (!actual.exists) {
-    // Defer (re)creation until the node-capability verdict is known: a create
-    // bakes in the node's mechanism (cgroup slice, swap, rootFs cap) and, for
-    // encrypted apps, its eligibility. The boot probe concludes within the boot
-    // budget; a node still unresolved past that budget is a failure state, so
-    // deferring is acceptable. Matches the existing transient-defer pattern, so
-    // runReconcile's finally still runs and the boot-drain pass is consumed.
-    if (globalState.capabilityVerdict === null) {
-      scheduleRetry(identifier, MANAGED_RETRY_MS);
-      return;
-    }
     await recreateMissing(identifier);
     return;
   }

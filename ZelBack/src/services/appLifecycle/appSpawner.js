@@ -274,16 +274,12 @@ async function trySpawningGlobalApplication() {
         log.info(`trySpawningGlobalApplication - Application ${appToRun} is already spawned or being installed on ${runningAppList.length + installingAppList.length} instances.`);
         return shortDelayTime;
       }
-      // Encrypted apps can only install on an ArcaneOS node. Gate on the
-      // node-capability verdict (not the spoofable env proxy), mirroring the
-      // reconcileInstalledApps eligibility check: refuse AND remember (long-error
-      // cache) only on a confirmed legacy verdict; while the verdict is still
-      // unknown, skip this round without poisoning the cache — it may resolve arcane.
-      if (selectedCandidate.instantiated.isEncrypted && globalState.capabilityVerdict !== true) {
+      // Encrypted apps can only install on an attested ArcaneOS node. The verdict is
+      // resolved before this runs, so a non-arcane verdict is definitive: refuse and
+      // remember (long-error cache).
+      if (selectedCandidate.instantiated.isEncrypted && !globalState.isArcane()) {
         log.info(`trySpawningGlobalApplication - Application ${appToRun} is encrypted, can only install on ArcaneOS`);
-        if (globalState.capabilityVerdict === false) {
-          globalState.spawnErrorsLongerAppCache.set(appHash, '');
-        }
+        globalState.spawnErrorsLongerAppCache.set(appHash, '');
         return shortDelayTime;
       }
     }
@@ -489,13 +485,12 @@ async function trySpawningGlobalApplication() {
       const tier = await generalService.nodeTier();
       const appHWrequirements = deployment.totalResources();
       let delay = false;
-      const isArcane = Boolean(process.env.FLUXOS_PATH);
       if (specPlacement.matchesTarget(targetInfo)) {
         // The spec pinned this node (IP/outpoint/operator target): there is
         // no other node to defer to, so the politeness deferrals below
         // (static IP, datacenter, capacity gap) must not delay it.
         log.info(`trySpawningGlobalApplication - App ${appToRun} targets this node`);
-      } else if (!isEncryptedApp && isArcane) {
+      } else if (!isEncryptedApp && globalState.isArcane()) {
         const appToCheck = {
           timeToCheck: Date.now() + unencryptedSpawnDelayMs,
           appName: appToRun,
