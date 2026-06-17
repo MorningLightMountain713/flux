@@ -360,13 +360,10 @@ describe('watchdogService tests', () => {
   describe('ensureWatchdogRunning tests', () => {
     describe('on ArcaneOS', () => {
       beforeEach(() => {
-        // Simulate ArcaneOS by setting FLUXOS_PATH
-        process.env.FLUXOS_PATH = '/opt/flux';
-        watchdogService = proxyquire('../../ZelBack/src/services/watchdogService', {});
-      });
-
-      afterEach(() => {
-        delete process.env.FLUXOS_PATH;
+        // Simulate ArcaneOS via the injected node-capability verdict
+        watchdogService = proxyquire('../../ZelBack/src/services/watchdogService', {
+          './utils/globalState': { isArcane: () => true },
+        });
       });
 
       it('should skip watchdog setup on ArcaneOS', async () => {
@@ -378,8 +375,9 @@ describe('watchdogService tests', () => {
 
     describe('on Legacy OS', () => {
       beforeEach(() => {
-        delete process.env.FLUXOS_PATH;
-        watchdogService = proxyquire('../../ZelBack/src/services/watchdogService', {});
+        watchdogService = proxyquire('../../ZelBack/src/services/watchdogService', {
+          './utils/globalState': { isArcane: () => false },
+        });
       });
 
       it('should return early if pm2 is not installed', async () => {
