@@ -25,7 +25,7 @@ const peerNotification = require('./appMessaging/peerNotification');
 const drainServer = require('./appMessaging/drainServer');
 const syncthingMonitor = require('./appMonitoring/syncthingMonitor');
 const daemonHealthMonitor = require('./appMonitoring/daemonHealthMonitor');
-const containerCrashRecovery = require('./appMonitoring/containerCrashRecovery');
+const containerEventBridge = require('./appMonitoring/containerEventBridge');
 const appReconciler = require('./appMonitoring/appReconciler');
 const appOperations = require('./appLifecycle/appOperations');
 const imageManager = require('./appSecurity/imageManager');
@@ -317,12 +317,13 @@ async function startFluxFunctions() {
     dockerService.migrateContainerRestartPolicies();
 
     // Start the reconcile workqueue (the single container actuator) and the
-    // Docker die-event bridge that feeds it. The workqueue holds all triggers
-    // until bootContainerStateSettled, then drains once daemon/DB are ready.
+    // Docker container event bridge that feeds it (die / start / health_status).
+    // The workqueue holds all triggers until bootContainerStateSettled, then
+    // drains once daemon/DB are ready.
     appReconciler.start().catch((error) => {
       log.error(`App reconciler error: ${error.message}`);
     });
-    containerCrashRecovery.start();
+    containerEventBridge.start();
 
     // Telemetry identity socket for flux-telemetryd (Arcane-only; self-skips
     // elsewhere). The boot reconcile in appStartupManager repopulates routing.
