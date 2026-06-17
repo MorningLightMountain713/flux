@@ -250,6 +250,115 @@ describe('appReconciler tests', () => {
     });
   });
 
+  describe('dependsOn condition gating', () => {
+    const flush = async () => {
+      for (let i = 0; i < 6; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => { setImmediate(resolve); });
+      }
+    };
+
+    // web depends on db; db's container state is driven per-identifier via withArgs.
+    const twoComp = (condition) => ({
+      name: 'App',
+      version: 9,
+      compose: [
+        { name: 'db', containerData: '/data', restartPolicy: condition === 'completed' ? 'never' : 'always' },
+        { name: 'web', containerData: '/data', dependsOn: { db: { condition } } },
+      ],
+    });
+    // a fresh (never-started) dependent the reconciler would start once unblocked
+    const webCreated = { State: { Running: false, Status: 'created', ExitCode: 0 } };
+
+    it('holds a started-dependent while its target is not running', async () => {
+      localSpec = twoComp('started');
+      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
+      await appReconciler.reconcile('web_App');
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
+    it('starts a started-dependent once its target is running', async () => {
+      localSpec = twoComp('started');
+      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('web_App');
+      expect(stubs.dockerService.appDockerStart.calledWith('web_App')).to.be.true;
+    });
+
+    it('holds a healthy-dependent while its target is only starting, starts it once healthy', async () => {
+      localSpec = twoComp('healthy');
+      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'starting' } } });
+      await appReconciler.reconcile('web_App');
+      expect(stubs.dockerService.appDockerStart.called, 'held while dep only starting').to.be.false;
+
+      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'healthy' } } });
+      await appReconciler.reconcile('web_App');
+      expect(stubs.dockerService.appDockerStart.calledWith('web_App'), 'starts once dep healthy').to.be.true;
+    });
+
+    it('holds a completed-dependent until its run-once target exits 0', async () => {
+      localSpec = twoComp('completed');
+      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('web_App');
+      expect(stubs.dockerService.appDockerStart.called, 'held while target still running').to.be.false;
+
+      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
+      await appReconciler.reconcile('web_App');
+      expect(stubs.dockerService.appDockerStart.calledWith('web_App'), 'starts once target exits 0').to.be.true;
+    });
+
+    it('treats a completed dependency as satisfied even after its container is removed (durable exit)', async () => {
+      localSpec = twoComp('completed');
+      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
+      // db_App vanished: inspect throws, docker's list (default []) confirms it's gone
+      stubs.dockerService.dockerContainerInspect.withArgs('db_App').rejects(new Error('no such container'));
+      stubs.appsRuntimeState.getState.withArgs('db_App').resolves({ lastExitCode: 0 });
+      await appReconciler.reconcile('web_App');
+      expect(stubs.dockerService.appDockerStart.calledWith('web_App')).to.be.true;
+    });
+
+    it('does not re-run a completed run-once component whose container has vanished (durable exit)', async () => {
+      localSpec = { name: 'App', version: 9, compose: [{ name: 'job', containerData: '/data', restartPolicy: 'never' }] };
+      stubs.dockerService.dockerContainerInspect.rejects(new Error('no such container'));
+      stubs.dockerService.dockerListContainers.resolves([]); // docker confirms it's gone -> exists:false
+      stubs.appsRuntimeState.getState.withArgs('job_App').resolves({ lastExitCode: 0 });
+      await appReconciler.reconcile('job_App');
+      expect(stubs.dockerService.appDockerStart.called, 'must not re-run a completed run-once container').to.be.false;
+      expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
+    });
+
+    it('enqueueDependents re-evaluates every dependent of a component', async () => {
+      localSpec = {
+        name: 'App',
+        version: 9,
+        compose: [
+          { name: 'db', containerData: '/data' },
+          { name: 'web', containerData: '/data', dependsOn: { db: { condition: 'started' } } },
+          { name: 'cache', containerData: '/data', dependsOn: { db: { condition: 'started' } } },
+        ],
+      };
+      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('cache_App').resolves(webCreated);
+      const started = [];
+      stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
+
+      await appReconciler.enqueueDependents('db_App');
+      await flush();
+      expect(started).to.have.members(['web_App', 'cache_App']);
+    });
+
+    it('does not hold a plain component that has no dependsOn', async () => {
+      localSpec = { name: 'App', version: 9, compose: [{ name: 'solo', containerData: '/data' }] };
+      stubs.dockerService.dockerContainerInspect.resolves(webCreated);
+      await appReconciler.reconcile('solo_App');
+      expect(stubs.dockerService.appDockerStart.calledWith('solo_App')).to.be.true;
+    });
+  });
+
   describe('reconcile decisions', () => {
     it('does nothing when the app is not installed locally', async () => {
       localSpec = null;

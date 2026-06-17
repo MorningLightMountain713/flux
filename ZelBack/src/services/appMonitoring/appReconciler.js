@@ -107,24 +107,28 @@ const VOLUME_MOUNT_RETRY_MS = 30 * 1000;
 // event, so the paced retries don't re-record it every cycle
 const volumeMissingNoted = new Set();
 
-// Replicated components hold silently at awaitingController (correct for a FluxOS
-// restart with containers still running), but a hold that outlives many sweep
-// cycles means no decider is speaking - e.g. the syncthing first-run gate is
-// wedged - and that silence has hidden whole-node outages. Surface it by age.
-const AWAITING_CONTROLLER_WARN_MS = 10 * 60 * 1000;
+// A component can hold silently with no action: awaitingController (no decider has
+// spoken) or awaitingDependency (a dependsOn target hasn't reached its condition). Both
+// are correct in the moment, but a hold that outlives many sweep cycles means something
+// is wedged - a stuck syncthing first-run gate, a dependency that never comes up - and
+// that silence has hidden whole-node outages. Surface it by age.
+const SILENT_HOLD_WARN_MS = 10 * 60 * 1000;
 const silentHoldSince = new Map(); // id -> { since, warned }
 
-function trackSilentHold(identifier) {
+function trackSilentHold(identifier, reason) {
   const entry = silentHoldSince.get(identifier);
   if (!entry) {
     silentHoldSince.set(identifier, { since: Date.now(), warned: false });
     return;
   }
   const heldMs = Date.now() - entry.since;
-  if (!entry.warned && heldMs > AWAITING_CONTROLLER_WARN_MS) {
+  if (!entry.warned && heldMs > SILENT_HOLD_WARN_MS) {
     entry.warned = true;
-    log.warn(`appReconciler - ${identifier} held at awaitingController for ${Math.round(heldMs / 60000)}m - no masterSlave/syncthing decider has declared a desired state for it`);
-    fluxEventBus.publish('reconciler:actuated', { identifier, action: 'awaitingControllerHeld', heldMs });
+    const detail = reason === 'awaitingDependency'
+      ? 'a dependsOn target has not reached its condition'
+      : 'no masterSlave/syncthing decider has declared a desired state for it';
+    log.warn(`appReconciler - ${identifier} held at ${reason} for ${Math.round(heldMs / 60000)}m - ${detail}`);
+    fluxEventBus.publish('reconciler:actuated', { identifier, action: 'silentHoldWarned', reason, heldMs });
   }
 }
 
@@ -315,6 +319,34 @@ function isManagedElsewhere(identifier) {
   return false;
 }
 
+/**
+ * The last exit code that the run decision should key on. docker inspect gives it
+ * while the container exists; once it has vanished (pruned / removed) the live code is
+ * null, so fall back to the durable record (appsRuntimeState.lastExitCode, written on
+ * every genuine die and surviving a FluxOS restart). This makes `never` / `onFailure`
+ * a real "exactly once / until success" guarantee and a `completed` dependency
+ * satisfiable even after its container is gone — instead of re-running on amnesia.
+ */
+async function effectiveExitCode(identifier, actual) {
+  if (actual.exists) return actual.exitCode;
+  const rs = await appsRuntimeState.getState(identifier);
+  return (rs && rs.lastExitCode !== undefined) ? rs.lastExitCode : actual.exitCode;
+}
+
+/**
+ * Whether a dependsOn target has reached the required condition, read from its live
+ * container state. `started` = running; `healthy` = livenessProbe healthy; `completed` =
+ * ran to a clean exit (effective exit code 0, surviving a vanished container).
+ */
+async function dependencyConditionMet(condition, identifier, actual) {
+  if (condition === 'healthy') return actual.health === 'healthy';
+  if (condition === 'completed') {
+    const exitCode = await effectiveExitCode(identifier, actual);
+    return !actual.running && exitCode === 0;
+  }
+  return actual.running; // 'started'
+}
+
 async function effectiveDesiredRunning(identifier, spec, exitCode) {
   if (await appsRuntimeState.isOperatorStopped(identifier)) return { desired: false, reason: 'operatorStopped' };
   // The shutdown pipeline owns a draining/stopping app's containers: draining
@@ -339,6 +371,26 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
     // here would bounce every running syncthing app on every FluxOS restart.
     if (cd === null) return { desired: null, reason: 'awaitingController' };
     if (cd !== 'running') return { desired: false, reason: 'controllerDesired' };
+  }
+  // Hold a dependent until each dependsOn target reaches its condition. dependsOn is a
+  // same-node, same-app relationship, so the target's container state is read directly.
+  // desired:null (not false) means "leave as-is" — a dependent already running is not
+  // stopped if a dependency later flaps; dependsOn is a startup gate, not a runtime
+  // kill-switch. The dependency's own start / health_status / clean-exit docker event
+  // re-enqueues this dependent (the event bridge calls enqueueDependents), so the hold
+  // lifts event-driven, never polled.
+  if (spec.comp.hasDependencies()) {
+    for (const [depName, condition] of spec.comp.dependencyEntries()) {
+      const depComp = spec.deployment.getComponent(depName);
+      // validateSemantics guarantees the target exists; skip defensively if not.
+      // eslint-disable-next-line no-continue
+      if (!depComp) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const depActual = await dockerActual(depComp.identifier);
+      // eslint-disable-next-line no-await-in-loop
+      const met = await dependencyConditionMet(condition, depComp.identifier, depActual);
+      if (!met) return { desired: null, reason: 'awaitingDependency' };
+    }
   }
   const desired = policyAllowsRun(getRestartPolicy(spec), exitCode);
   return { desired, reason: desired ? 'running' : 'policy' };
@@ -540,13 +592,15 @@ async function reconcile(rawIdentifier) {
     return;
   }
 
-  const { desired, reason } = await effectiveDesiredRunning(identifier, spec, actual.exitCode);
+  const selfExitCode = await effectiveExitCode(identifier, actual);
+  const { desired, reason } = await effectiveDesiredRunning(identifier, spec, selfExitCode);
 
-  // null = no controller opinion yet for a replicated component: neither start nor stop,
-  // leave the container in its current state until the decider speaks - but
-  // surface the hold once it has outlived any plausible decider cycle.
+  // null = a hold: no controller opinion yet for a replicated component, or a dependsOn
+  // target that hasn't reached its condition. Neither start nor stop - leave the
+  // container as-is until the decider speaks / the dependency comes up (event-driven),
+  // but surface the hold once it has outlived any plausible cycle.
   if (desired === null) {
-    if (reason === 'awaitingController') trackSilentHold(identifier);
+    if (reason === 'awaitingController' || reason === 'awaitingDependency') trackSilentHold(identifier, reason);
     return;
   }
   silentHoldSince.delete(identifier);
@@ -705,6 +759,31 @@ async function enqueueAll(reason = 'resync') {
   fluxEventBus.publish('reconciler:swept', { reason, count });
 }
 
+/**
+ * Re-evaluate the dependents of a component whose state just changed — called by the
+ * event bridge when a container reaches a dependsOn milestone (start, health_status
+ * healthy, or a clean exit). Each dependent re-checks its own condition in
+ * effectiveDesiredRunning, so this only enqueues them; it never decides. dependsOn is a
+ * same-app relationship, so the dependents live in the same deployment.
+ */
+async function enqueueDependents(rawIdentifier) {
+  const identifier = canonical(rawIdentifier);
+  let spec;
+  try {
+    spec = await getLocalComponentSpec(identifier);
+  } catch (err) {
+    // transient (DB / decryption): the dependency's next event, the reconnect sweep, or
+    // the hourly tick re-evaluates dependents. Nothing to actuate here.
+    log.warn(`appReconciler - enqueueDependents ${identifier} spec read failed: ${err.message}`);
+    return;
+  }
+  if (!spec || !spec.deployment || !spec.comp) return;
+  for (const depName of spec.deployment.dependentsOf(spec.comp.name)) {
+    const dependent = spec.deployment.getComponent(depName);
+    if (dependent) enqueue(dependent.identifier);
+  }
+}
+
 // --- controllerDesired seam (written by masterSlave/syncthing deciders) ---
 
 /**
@@ -793,6 +872,7 @@ function stop() {
 module.exports = {
   enqueue,
   enqueueAll,
+  enqueueDependents,
   setControllerDesired,
   clearControllerDesired,
   requestStopAndClearData,
