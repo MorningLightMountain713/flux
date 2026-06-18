@@ -10,6 +10,7 @@ const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstall
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
 describe('appOperations tests', () => {
   afterEach(() => {
@@ -86,6 +87,7 @@ describe('appOperations tests', () => {
       // eslint-disable-next-line global-require
       const globalState = require('../../ZelBack/src/services/utils/globalState');
       globalState.restoreInProgress = [];
+      operationRegistry.clear();
     });
 
     it('should add app to restore progress', () => {
@@ -113,6 +115,14 @@ describe('appOperations tests', () => {
       const globalState = require('../../ZelBack/src/services/utils/globalState');
       const count = globalState.restoreInProgress.filter((app) => app === 'TestApp').length;
       expect(count).to.equal(1);
+    });
+
+    it('mirrors the restore lease into the operation registry (Stage-1 dual-write)', () => {
+      appOperations.addToRestoreProgress('TestApp');
+      expect(operationRegistry.get('TestApp')?.type, 'add must hold a restore lease on the app').to.equal('restore');
+
+      appOperations.removeFromRestoreProgress('TestApp');
+      expect(operationRegistry.isHeld('TestApp'), 'remove must release the restore lease').to.be.false;
     });
   });
 
