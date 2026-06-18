@@ -5,6 +5,7 @@ const dockerService = require('../dockerService');
 const dockerOperations = require('../appManagement/dockerOperations');
 const globalState = require('../utils/globalState');
 const { appNameFromIdentifier } = require('../utils/componentIdentifier');
+const operationRegistry = require('../utils/operationRegistry');
 const specLibs = require('../utils/specLibs');
 const appInspector = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -301,22 +302,20 @@ async function dockerActual(identifier) {
 }
 
 /**
- * Whether another subsystem currently owns this container — a global
- * install/remove/redeploy, a per-component backup/restore, or the transient
- * window of a deliberate stop/restart/kill (tracked in stoppingContainers).
- * The reconciler must not actuate while one of these is in flight.
+ * Whether an operation currently owns this container — an app-scoped operation on
+ * its parent app (install/remove/redeploy/reconcile/backup/restore) or the
+ * component's own transient stop/restart/kill window. The reconciler must not
+ * actuate while one of these is in flight. This is per-app, NOT a node-wide
+ * freeze: an operation on a different app no longer defers this one.
  */
-function isManagedElsewhere(identifier) {
-  if (globalState.isOperationInProgress && globalState.isOperationInProgress()) return true;
-  // backup/restore hold a lease on the WHOLE app under its bare main name
-  // (appendBackupTask pushes req.appname), so a component reconcile must ask
-  // with the main app name, not the component identifier.
-  const mainAppName = appNameFromIdentifier(identifier);
-  const backup = globalState.backupInProgress || [];
-  const restore = globalState.restoreInProgress || [];
-  if (backup.includes(mainAppName) || restore.includes(mainAppName)) return true;
-  if (globalState.stoppingContainers.has(dockerService.getAppIdentifier(identifier))) return true;
-  return false;
+function hasOperationLease(identifier) {
+  // the component's own stop/restart/kill window, keyed on the prefixed docker
+  // name exactly as dockerService acquires the 'stopping' lease
+  if (operationRegistry.isHeld(dockerService.getAppIdentifier(identifier))) return true;
+  // any app-scoped operation on the parent app — every type folds into one check,
+  // keyed on the bare app name (install/remove/softRedeploy/hardRedeploy/reconcile/
+  // backup/restore all acquire on the app name)
+  return operationRegistry.isHeld(appNameFromIdentifier(identifier));
 }
 
 /**
@@ -415,7 +414,7 @@ async function recreateMissing(identifier) {
     // Removal must be justified by the state of the world NOW, not at
     // classification time: a whole recreate attempt (image pull - up to
     // minutes) sits between them, during which a redeploy can legitimately
-    // create the container (isManagedElsewhere is only sampled at reconcile
+    // create the container (hasOperationLease is only sampled at reconcile
     // entry), or our own recreate can fail AFTER creating it (start/network
     // step). If the container exists, the failure is moot: no tamper events,
     // no removal - retry shortly and converge on the actual state.
@@ -447,7 +446,7 @@ async function recreateMissing(identifier) {
 
 async function reconcile(rawIdentifier) {
   const identifier = canonical(rawIdentifier);
-  if (isManagedElsewhere(identifier)) {
+  if (hasOperationLease(identifier)) {
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
   }
@@ -834,7 +833,7 @@ async function start() {
   await globalState.waitForBootContainerStateSettled();
   // Warm the flux-spec-backend cache so the sync identifier->name helpers
   // (componentIdentifier -> specLibs.getSpecBackendSync) resolve before any
-  // reconcile runs — isManagedElsewhere cannot await an ESM import.
+  // reconcile runs — hasOperationLease cannot await an ESM import.
   await specLibs.getSpecBackend();
   // Provision + swapon the per-app swap pool before any app starts (no-op without
   // the new-mechanism host config). Best-effort: a failure must not wedge the boot
