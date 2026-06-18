@@ -4,6 +4,9 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+// Real registry singleton - un-stubbed in proxyquire, so the module under test
+// and the test share it.
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
 // Create mocks for all dependencies
 const dbHelperMock = {
@@ -153,6 +156,7 @@ describe('syncthingMonitor tests', () => {
     if (monitorControl && monitorControl.isActive()) {
       monitorControl.stop();
     }
+    operationRegistry.clear();
     clock.restore();
   });
 
@@ -185,8 +189,8 @@ describe('syncthingMonitor tests', () => {
       expect(monitorControl.isActive()).to.be.false;
     });
 
-    it('should not run if installation in progress', async () => {
-      mockState.installationInProgress = true;
+    it('should not run while a folder-set-changing operation is in flight', async () => {
+      operationRegistry.acquire('SomeApp', 'install', 'test');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -200,8 +204,8 @@ describe('syncthingMonitor tests', () => {
       expect(mockState.updateSyncthingRunning).to.be.false;
     });
 
-    it('should not run if removal in progress', async () => {
-      mockState.removalInProgress = true;
+    it('runs the cycle during a backup (backup is per-app, never a whole-cycle freeze)', async () => {
+      operationRegistry.acquire('SomeApp', 'backup', 'test');
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -211,8 +215,7 @@ describe('syncthingMonitor tests', () => {
       // Wait for first execution to complete
       await clock.tickAsync(100);
 
-      sinon.assert.notCalled(deploymentProviderMock.listInstalledDeployments);
-      expect(mockState.updateSyncthingRunning).to.be.false;
+      sinon.assert.called(deploymentProviderMock.listInstalledDeployments);
     });
 
     it('should not run if already running', async () => {
