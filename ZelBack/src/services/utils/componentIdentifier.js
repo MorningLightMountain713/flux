@@ -1,33 +1,27 @@
-// Derive the app/component name encoded in a bare container identifier — the
-// inverse of flux-spec's forward containerIdentifier (`{component}_{app}` for
-// v4+, the bare `{app}` for v1-3 flat). Correct for every spec version because
-// app names never contain '_' (legacy ^[a-zA-Z0-9]+$, v9 the app-name rule), so
-// the LAST '_' is always the component/app separator — even when a (legacy)
-// component name itself contains '_'. Sync and dependency-free so the
-// reconciler's hot/sync paths and the operation registry share one rule
-// (flux-spec-backend is ESM-only and can't be required synchronously). Where a
-// built DeploymentSpec is in hand, prefer its componentForIdentifier (exact map).
-// Inputs are the bare identifier — strip the flux/zel prefix first.
+const specLibs = require('./specLibs');
+
+// Thin sync bridge to flux-spec's identifier<->name rule. The rule itself lives
+// in DeploymentSpec (next to the forward containerIdentifier and the exact-map
+// componentForIdentifier) -- this only exists because flux-spec-backend is
+// ESM-only and these callers (e.g. the reconciler's sync isManagedElsewhere
+// guard) cannot await an import. The reconciler preloads flux-spec-backend at
+// boot, so getSpecBackendSync is warm before any reconcile. Transitional: retires
+// when the labels track replaces name-parsing with label reads.
 
 /**
- * The main app name encoded in a bare container identifier.
- * @param {string} identifier - `{component}_{app}` (v4+) or `{app}` (v1-3 flat)
- * @returns {string}
+ * @param {string} identifier - bare `{component}_{app}` (v4+) or `{app}` (v1-3)
+ * @returns {string} the main app name
  */
 function appNameFromIdentifier(identifier) {
-  const i = identifier.lastIndexOf('_');
-  return i === -1 ? identifier : identifier.slice(i + 1);
+  return specLibs.getSpecBackendSync().DeploymentSpec.appNameFromIdentifier(identifier);
 }
 
 /**
- * The component name encoded in a bare container identifier — equals the app
- * name for v1-3 flat, where the component is the app.
  * @param {string} identifier
- * @returns {string}
+ * @returns {string} the component name (equals the app name for v1-3 flat)
  */
 function componentNameFromIdentifier(identifier) {
-  const i = identifier.lastIndexOf('_');
-  return i === -1 ? identifier : identifier.slice(0, i);
+  return specLibs.getSpecBackendSync().DeploymentSpec.componentNameFromIdentifier(identifier);
 }
 
 module.exports = { appNameFromIdentifier, componentNameFromIdentifier };
