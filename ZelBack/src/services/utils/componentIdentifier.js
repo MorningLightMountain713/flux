@@ -3,7 +3,7 @@ const specLibs = require('./specLibs');
 // Thin sync bridge to flux-spec's identifier<->name rule. The rule itself lives
 // in DeploymentSpec (next to the forward containerIdentifier and the exact-map
 // componentForIdentifier) -- this only exists because flux-spec-backend is
-// ESM-only and these callers (e.g. the reconciler's sync isManagedElsewhere
+// ESM-only and these callers (e.g. the reconciler's sync hasOperationLease
 // guard) cannot await an import. The reconciler preloads flux-spec-backend at
 // boot, so getSpecBackendSync is warm before any reconcile. Transitional: retires
 // when the labels track replaces name-parsing with label reads.
