@@ -1,6 +1,8 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+// Real registry singleton - un-stubbed in proxyquire, so the installer and the test share it.
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
 describe('appInstaller tests', () => {
   let appInstaller;
@@ -353,19 +355,11 @@ describe('appInstaller tests', () => {
     afterEach(() => {
       globalStateStub.removalInProgress = false;
       globalStateStub.installationInProgress = false;
+      operationRegistry.clear();
     });
 
-    it('defers when a removal is in progress', async () => {
-      globalStateStub.removalInProgress = true;
-
-      const result = await appInstaller.installApplication(mockInstantiatedSpec);
-
-      expect(logStub.error.called).to.be.true;
-      expect(result.status).to.equal(appInstaller.InstallStatus.DEFERRED);
-    });
-
-    it('defers when another installation is in progress', async () => {
-      globalStateStub.installationInProgress = true;
+    it('defers when the app already holds an operation lease', async () => {
+      operationRegistry.acquire('testapp', 'remove', 'test');
 
       const result = await appInstaller.installApplication(mockInstantiatedSpec);
 
