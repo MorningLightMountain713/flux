@@ -1,6 +1,9 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+// The real registry singleton — the reconciler's hasOperationLease reads it, and
+// proxyquire (un-stubbed dep) gives the reconciler this same instance.
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
 // Mirrors appUninstaller.UninstallStatus (proxyquire.noCallThru stubs the real module out).
 const UninstallStatus = Object.freeze({
@@ -129,7 +132,7 @@ describe('appReconciler tests', () => {
     });
   });
 
-  afterEach(() => { appReconciler.stop(); sinon.restore(); });
+  afterEach(() => { appReconciler.stop(); operationRegistry.clear(); sinon.restore(); });
 
   // resolves exactly when its .resolve() is called — lets tests await the real
   // completion signal of an async reconcile instead of guessing with timer ticks
@@ -529,7 +532,7 @@ describe('appReconciler tests', () => {
     // Removal must be justified by the state of the world at REMOVAL time, not
     // at classification time: between them sits a whole recreate attempt (image
     // pull - seconds to minutes), during which a redeploy can legitimately
-    // create the container (isManagedElsewhere is only sampled at entry), or
+    // create the container (hasOperationLease is only sampled at entry), or
     // our own recreate can fail AFTER creating it (start/network step failed).
     it('does not remove the app when the container exists by the time recreation fails', async () => {
       stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
@@ -682,29 +685,37 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStart.calledOnceWith('db_App')).to.be.true;
     });
 
-    it('defers while another operation owns the container', async () => {
-      stubs.globalState.isOperationInProgress = () => true;
+    it('defers while an app-scoped operation holds the parent app lease', async () => {
+      // any app-scoped lease on the parent app (here: install) owns the whole app's
+      // runtime - a reconcile of any component must not actuate. Per-app, not node-wide.
+      operationRegistry.acquire('App', 'install', 'test');
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
-    // The backup/restore lease: while an app appears in backupInProgress /
-    // restoreInProgress (bare MAIN APP name, exactly as appendBackupTask /
-    // appendRestoreTask write it), the operation owns the whole app's runtime.
+    it('does NOT defer when the lease is on a DIFFERENT app (no node-wide freeze)', async () => {
+      operationRegistry.acquire('OtherApp', 'install', 'test');
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+    });
+
+    // The backup/restore lease: while the parent app holds a backup/restore lease
+    // (keyed on the bare MAIN APP name, exactly as appendBackupTask /
+    // appendRestoreTask acquire it), the operation owns the whole app's runtime.
     // A reconcile of ANY component of that app must not actuate - not start,
     // not stop, not recreate - while the lease is held; the next reconcile
     // after release enforces desired state again.
     describe('backup/restore lease', () => {
       it('does not start a stopped component while its app is being backed up', async () => {
-        stubs.globalState.backupInProgress.push('App'); // bare main-app name (production format)
+        operationRegistry.acquire('App', 'backup', 'test'); // bare main-app name (production format)
         await appReconciler.reconcile('www_App');
         expect(stubs.dockerService.appDockerStart.called).to.be.false;
         expect(stubs.appsRuntimeState.recordRestart.called).to.be.false;
       });
 
       it('does not stop a running operator-stopped component while its app is being restored', async () => {
-        stubs.globalState.restoreInProgress.push('App');
+        operationRegistry.acquire('App', 'restore', 'test');
         stubs.appsRuntimeState.isOperatorStopped.resolves(true);
         stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
         await appReconciler.reconcile('www_App');
@@ -712,7 +723,7 @@ describe('appReconciler tests', () => {
       });
 
       it('does not recreate or remove a missing container while its app is being restored', async () => {
-        stubs.globalState.restoreInProgress.push('App');
+        operationRegistry.acquire('App', 'restore', 'test');
         stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
         stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
         await appReconciler.reconcile('www_App');
@@ -722,18 +733,18 @@ describe('appReconciler tests', () => {
       });
 
       it('enforces desired state again once the lease is released', async () => {
-        stubs.globalState.backupInProgress.push('App');
+        operationRegistry.acquire('App', 'backup', 'test');
         await appReconciler.reconcile('www_App');
         expect(stubs.dockerService.appDockerStart.called).to.be.false; // held
 
-        stubs.globalState.backupInProgress.length = 0; // lease released
+        operationRegistry.release('App'); // lease released
         await appReconciler.reconcile('www_App');
         expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
       });
     });
 
-    it('defers while the container is in stoppingContainers (transient stop)', async () => {
-      stubs.globalState.stoppingContainers.add('fluxwww_App');
+    it('defers while the component holds a stopping lease (transient stop)', async () => {
+      operationRegistry.acquire('fluxwww_App', 'stopping', 'test'); // prefixed docker name, as dockerService acquires it
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
