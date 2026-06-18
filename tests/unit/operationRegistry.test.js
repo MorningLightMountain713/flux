@@ -98,6 +98,15 @@ describe('operationRegistry', () => {
       expect(registry.anyHeld()).to.equal(true);
     });
 
+    it('anyHeldOfType is true only for a held lease of a listed type', () => {
+      registry.acquire('web', 'backup', 'appOperations');
+      expect(registry.anyHeldOfType('install', 'remove', 'reconcile')).to.equal(false);
+      expect(registry.anyHeldOfType('backup', 'restore')).to.equal(true);
+      registry.release('web');
+      registry.acquire('db', 'install', 'appInstaller');
+      expect(registry.anyHeldOfType('install', 'remove', 'softRedeploy', 'hardRedeploy', 'reconcile')).to.equal(true);
+    });
+
     it('listByType returns only the keys of that lease type', () => {
       registry.acquire('web', 'backup', 'appOperations');
       registry.acquire('db', 'backup', 'appOperations');
