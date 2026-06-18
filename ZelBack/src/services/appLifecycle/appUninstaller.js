@@ -449,15 +449,12 @@ async function uninstallApplication(appName, options = {}) {
     const callerLine = stack.split('\n')[2]?.trim();
     log.warn(`APP REMOVAL TRIGGERED: ${appName} | forceKill=${forceKill} | skipGuard=${skipGuard} | broadcastRemoval=${broadcastRemoval} | caller: ${callerLine}`);
 
-    if (!skipGuard) {
-      if (globalState.removalInProgress) {
-        status('Another application is undergoing removal. Removal not possible.');
-        return { status: UninstallStatus.DEFERRED, reason: 'Another application is undergoing removal' };
-      }
-      if (globalState.installationInProgress) {
-        status('Another application is undergoing installation. Removal not possible.');
-        return { status: UninstallStatus.DEFERRED, reason: 'Another application is undergoing installation' };
-      }
+    // Per-app: defer only if THIS app is already mid-operation (skipGuard is the
+    // documented emergency-removal bypass). Removals of different apps run
+    // concurrently - each removes only its own containers/volumes/network.
+    if (!skipGuard && operationRegistry.isHeld(appName)) {
+      status(`An operation is already in progress for ${appName}. Removal not possible.`);
+      return { status: UninstallStatus.DEFERRED, reason: `An operation is already in progress for ${appName}` };
     }
 
     globalState.removalInProgress = true;
