@@ -14,7 +14,7 @@ const registryCredentialHelper = require('./utils/registryCredentialHelper');
 const { ImageVerifier } = require('./utils/imageVerifier');
 const serviceHelper = require('./serviceHelper');
 const deploymentProvider = require('./appRuntime/deploymentProvider');
-const globalState = require('./utils/globalState');
+const operationRegistry = require('./utils/operationRegistry');
 const fluxEventBus = require('./utils/fluxEventBus');
 
 const CHECK_INTERVAL = config.fluxapps.imageUpdateCheckIntervalMs || 6 * 60 * 60 * 1000;
@@ -27,19 +27,6 @@ const DELAY_BETWEEN_COMPONENTS = config.fluxapps.imageUpdateDelayBetweenComponen
 // Track the timers
 let checkIntervalTimer = null;
 let initialDelayTimer = null;
-
-/**
- * Checks if any app operation is currently in progress.
- * @returns {boolean} True if an operation is in progress, false otherwise
- */
-function isOperationInProgress() {
-  return (
-    globalState.removalInProgress
-    || globalState.installationInProgress
-    || globalState.softRedeployInProgress
-    || globalState.hardRedeployInProgress
-  );
-}
 
 /**
  * Removes the existing flux_watchtower container if it exists.
@@ -273,8 +260,8 @@ async function checkAppForUpdates(deployment) {
  */
 async function triggerAppUpdate(appName) {
   try {
-    if (isOperationInProgress()) {
-      log.warn(`Skipping redeploy for ${appName}: another operation in progress`);
+    if (operationRegistry.isHeld(appName)) {
+      log.warn(`Skipping redeploy for ${appName}: an operation is already in progress for it`);
       return false;
     }
 
@@ -299,12 +286,9 @@ async function triggerAppUpdate(appName) {
 async function checkForImageUpdates() {
   log.info('Starting image update check cycle');
 
-  // Check if any operation is in progress
-  if (isOperationInProgress()) {
-    log.info('Skipping image update check: another operation in progress');
-    return;
-  }
-
+  // No node-wide freeze: the cycle always runs. A busy app is skipped per-app in
+  // triggerAppUpdate (isHeld(appName)) - an operation on one app no longer stalls
+  // image checks for every other app.
   try {
     const deployments = await deploymentProvider.listInstalledDeployments();
 
@@ -314,11 +298,6 @@ async function checkForImageUpdates() {
     let appsChecked = 0;
 
     for (const deployment of deployments) {
-      if (isOperationInProgress()) {
-        log.info('Aborting image update check: operation started');
-        break;
-      }
-
       try {
         appsChecked += 1;
 
@@ -416,5 +395,4 @@ module.exports = {
   getRemoteManifestDigest,
   checkAppForUpdates,
   triggerAppUpdate,
-  isOperationInProgress,
 };
