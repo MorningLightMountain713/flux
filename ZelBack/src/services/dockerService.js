@@ -17,8 +17,9 @@ const cpuBurstHelper = require('./utils/cpuBurstHelper');
 const LogFrameDecoder = require('./utils/logFrameDecoder');
 const shutdownPlan = require('./appLifecycle/shutdownPlan');
 
-const globalState = require('./utils/globalState');
+
 const operationRegistry = require('./utils/operationRegistry');
+const globalState = require('./utils/globalState');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 // ToDo: Fix all the string concatenation in this file and use path.join()
@@ -1216,7 +1217,6 @@ async function appDockerStart(idOrName) {
     const dockerContainer = await getDockerContainer(idOrName);
     if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
-    globalState.stoppingContainers.delete(getDockerName(idOrName));
     operationRegistry.release(getDockerName(idOrName));
     await dockerContainer.start(); // may throw
 
@@ -1268,23 +1268,18 @@ async function appDockerStop(idOrName, timeout) {
   }
 
   const dockerName = getDockerName(idOrName);
-  // Held for the duration of the stop operation (legitimately hours under a
-  // graceful shutdown) so the die handler swallows the deliberate stop and the
-  // reconciler defers. Cleared when the operation settles - never left for the
-  // die event to clean up: a lost event (stream outage) would leak the flag
-  // and permanently wedge the reconciler's actuation for this component.
-  globalState.stoppingContainers.add(dockerName);
-  // Dual-write the registry's component-scoped 'stopping' lease alongside the Set
-  // (Stage 1: the Set is still authoritative; nothing reads the registry yet).
-  // Keyed on the docker name to mirror the Set exactly — the bare-vs-prefixed
-  // canonicalization is a later concern.
+  // The component-scoped 'stopping' lease is held for the duration of the stop
+  // (legitimately hours under a graceful shutdown) so the die handler swallows the
+  // deliberate stop and the reconciler defers. Keyed on the docker name. Released
+  // when the operation settles - never by the die event: a lost event (stream
+  // outage) would otherwise leak it and permanently wedge the reconciler's
+  // actuation for this component.
   operationRegistry.acquire(dockerName, 'stopping', 'dockerService', `stop ${dockerName}`);
 
   try {
     const opts = timeout !== undefined ? { t: timeout } : {};
     await dockerContainer.stop(opts);
   } finally {
-    globalState.stoppingContainers.delete(dockerName);
     operationRegistry.release(dockerName);
   }
   return `Flux App ${idOrName} successfully stopped.`;
@@ -1306,19 +1301,16 @@ async function appDockerRestart(idOrName) {
   const containerInfo = await dockerContainer.inspect();
   if (!containerInfo.State.Running) {
     // If stopped, start it instead of restarting
-    globalState.stoppingContainers.delete(getDockerName(idOrName));
     operationRegistry.release(getDockerName(idOrName));
     await dockerContainer.start();
     return `Flux App ${idOrName} was stopped, successfully started.`;
   }
 
   const dockerName = getDockerName(idOrName);
-  globalState.stoppingContainers.add(dockerName);
   operationRegistry.acquire(dockerName, 'stopping', 'dockerService', `restart ${dockerName}`);
   try {
     await dockerContainer.restart();
   } finally {
-    globalState.stoppingContainers.delete(dockerName);
     operationRegistry.release(dockerName);
   }
   return `Flux App ${idOrName} successfully restarted.`;
@@ -1336,14 +1328,12 @@ async function appDockerKill(idOrName) {
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
   const dockerName = getDockerName(idOrName);
-  // same flag lifetime as appDockerStop: operation-scoped, never event-scoped
-  globalState.stoppingContainers.add(dockerName);
+  // same lease lifetime as appDockerStop: operation-scoped, never event-scoped
   operationRegistry.acquire(dockerName, 'stopping', 'dockerService', `kill ${dockerName}`);
 
   try {
     await dockerContainer.kill();
   } finally {
-    globalState.stoppingContainers.delete(dockerName);
     operationRegistry.release(dockerName);
   }
   return `Flux App ${idOrName} successfully killed.`;
@@ -1377,8 +1367,6 @@ async function appDockerRemove(idOrName) {
   // container ID or name
   const dockerContainer = await getDockerContainer(idOrName);
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
-
-  globalState.stoppingContainers.delete(getDockerName(idOrName));
   operationRegistry.release(getDockerName(idOrName));
   await dockerContainer.remove();
   // Recorded only once the container is actually gone - this is a record of what
@@ -1398,8 +1386,6 @@ async function appDockerForceRemove(idOrName, removeVolumes = true) {
   // container ID or name
   const dockerContainer = await getDockerContainer(idOrName);
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
-
-  globalState.stoppingContainers.delete(getDockerName(idOrName));
   operationRegistry.release(getDockerName(idOrName));
   await dockerContainer.remove({ force: true, v: removeVolumes });
   if (removalIsWorthRecording(idOrName)) globalState.fluxRemovedContainers.add(getDockerName(idOrName));
