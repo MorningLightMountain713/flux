@@ -4,6 +4,9 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const sinon = require('sinon');
 const { expect } = require('chai');
 const proxyquire = require('proxyquire').noCallThru();
+// Real registry singleton - un-stubbed in proxyquire, so the module under test
+// and the test drive the same instance.
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
 // Create all stubs upfront
 const dockerServiceStub = {
@@ -30,13 +33,6 @@ const registryCredentialHelperStub = {
 
 const serviceHelperStub = {
   delay: sinon.stub().resolves(),
-};
-
-const globalStateStub = {
-  removalInProgress: false,
-  installationInProgress: false,
-  softRedeployInProgress: false,
-  hardRedeployInProgress: false,
 };
 
 const logStub = {
@@ -79,7 +75,6 @@ const imageUpdateService = proxyquire('../../ZelBack/src/services/imageUpdateSer
   './utils/registryCredentialHelper': registryCredentialHelperStub,
   './utils/imageVerifier': { ImageVerifier: MockImageVerifier },
   './serviceHelper': serviceHelperStub,
-  './utils/globalState': globalStateStub,
 });
 
 describe('imageUpdateService tests', () => {
@@ -105,11 +100,7 @@ describe('imageUpdateService tests', () => {
     logStub.error.reset();
     logStub.debug.reset();
 
-    // Reset globalState
-    globalStateStub.removalInProgress = false;
-    globalStateStub.installationInProgress = false;
-    globalStateStub.softRedeployInProgress = false;
-    globalStateStub.hardRedeployInProgress = false;
+    operationRegistry.clear();
 
     // Reset mock verifier state
     mockVerifierParseError = false;
@@ -454,8 +445,8 @@ describe('imageUpdateService tests', () => {
       sinon.assert.calledWith(appOperationsStub.redeployApplication, 'TestApp', { createVolumes: false });
     });
 
-    it('should return false when removal is in progress', async () => {
-      globalStateStub.removalInProgress = true;
+    it('should return false when the app holds an operation lease', async () => {
+      operationRegistry.acquire('TestApp', 'install', 'test');
 
       const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
@@ -463,31 +454,14 @@ describe('imageUpdateService tests', () => {
       sinon.assert.notCalled(appOperationsStub.redeployApplication);
     });
 
-    it('should return false when installation is in progress', async () => {
-      globalStateStub.installationInProgress = true;
+    it('should still redeploy when a DIFFERENT app holds a lease (per-app, no node-wide freeze)', async () => {
+      operationRegistry.acquire('OtherApp', 'install', 'test');
+      appOperationsStub.redeployApplication.resolves();
 
       const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
-      expect(result).to.equal(false);
-      sinon.assert.notCalled(appOperationsStub.redeployApplication);
-    });
-
-    it('should return false when soft redeploy is in progress', async () => {
-      globalStateStub.softRedeployInProgress = true;
-
-      const result = await imageUpdateService.triggerAppUpdate('TestApp');
-
-      expect(result).to.equal(false);
-      sinon.assert.notCalled(appOperationsStub.redeployApplication);
-    });
-
-    it('should return false when hard redeploy is in progress', async () => {
-      globalStateStub.hardRedeployInProgress = true;
-
-      const result = await imageUpdateService.triggerAppUpdate('TestApp');
-
-      expect(result).to.equal(false);
-      sinon.assert.notCalled(appOperationsStub.redeployApplication);
+      expect(result).to.equal(true);
+      sinon.assert.calledOnce(appOperationsStub.redeployApplication);
     });
 
     it('should return false and log error when redeployApplication throws', async () => {
@@ -501,13 +475,13 @@ describe('imageUpdateService tests', () => {
   });
 
   describe('checkForImageUpdates tests', () => {
-    it('should skip check when operation in progress', async () => {
-      globalStateStub.installationInProgress = true;
+    it('runs the check even while another operation is in progress (no node-wide freeze)', async () => {
+      operationRegistry.acquire('SomeBusyApp', 'install', 'test');
 
       await imageUpdateService.checkForImageUpdates();
 
-      sinon.assert.notCalled(deploymentProviderStub.listInstalledDeployments);
-      sinon.assert.calledWith(logStub.info, 'Skipping image update check: another operation in progress');
+      // The cycle is no longer gated node-wide; it proceeds and lists deployments.
+      sinon.assert.calledOnce(deploymentProviderStub.listInstalledDeployments);
     });
 
     function mockDeployment(appName, components) {
@@ -540,7 +514,7 @@ describe('imageUpdateService tests', () => {
       sinon.assert.calledWith(logStub.info, sinon.match(/Checking 2 installed apps/));
     });
 
-    it('should abort when operation starts during check', async () => {
+    it('does not abort the cycle when an operation starts mid-check (processes every app)', async () => {
       deploymentProviderStub.listInstalledDeployments.resolves([
         mockDeployment('App1', [{ name: 'App1', image: 'nginx:latest' }]),
         mockDeployment('App2', [{ name: 'App2', image: 'redis:latest' }]),
@@ -552,7 +526,8 @@ describe('imageUpdateService tests', () => {
       dockerServiceStub.dockerContainerInspect.callsFake(() => {
         callCount += 1;
         if (callCount === 1) {
-          globalStateStub.removalInProgress = true;
+          // An operation starting on another app no longer aborts the cycle.
+          operationRegistry.acquire('OtherApp', 'install', 'test');
         }
         return Promise.resolve({ Image: 'sha256:img' });
       });
@@ -564,7 +539,8 @@ describe('imageUpdateService tests', () => {
 
       await imageUpdateService.checkForImageUpdates();
 
-      sinon.assert.calledWith(logStub.info, 'Aborting image update check: operation started');
+      // Both apps inspected - the loop ran to completion, no early break.
+      expect(callCount).to.equal(2);
     });
   });
 
