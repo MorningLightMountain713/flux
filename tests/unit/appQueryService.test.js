@@ -1,6 +1,8 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+// Real registry singleton - un-stubbed in proxyquire, so the module under test and the test share it.
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
 describe('appQueryService tests', () => {
   let appQueryService;
@@ -245,15 +247,12 @@ describe('appQueryService tests', () => {
 
     // listRunningApps must report an app under backup/restore as running even
     // though its container is deliberately stopped, so the network (FDM, peers)
-    // does not react to the stop. The lease arrays hold bare MAIN APP names
-    // (exactly as appendBackupTask writes them); container names are component
-    // identifiers - the lookup must compare the main app name.
+    // does not react to the stop. The backup/restore leases are keyed by bare MAIN
+    // APP name (exactly as appendBackupTask acquires them); container names are
+    // component identifiers - the lookup must compare the main app name.
     it('includes a stopped container of an app under backup as running', async () => {
-      // appQueryService lazy-requires globalState at call time, so proxyquire
-      // does not intercept it - manipulate the real singleton and clean up.
-      // eslint-disable-next-line global-require
-      const globalState = require('../../ZelBack/src/services/utils/globalState');
-      globalState.backupInProgress.push('App'); // bare main-app name (production format)
+      // hold a backup lease on the real registry (un-stubbed) and clean up.
+      operationRegistry.acquire('App', 'backup', 'test'); // bare main-app name (production format)
       try {
         const stoppedContainer = {
           Names: ['/fluxwww_App'], State: 'exited', HostConfig: {}, NetworkSettings: {}, Mounts: [],
@@ -268,7 +267,7 @@ describe('appQueryService tests', () => {
         const names = result.data.map((app) => app.Names[0]);
         expect(names, 'backed-up app must still be reported as running').to.include('/fluxwww_App');
       } finally {
-        globalState.backupInProgress.length = 0;
+        operationRegistry.release('App');
       }
     });
 
