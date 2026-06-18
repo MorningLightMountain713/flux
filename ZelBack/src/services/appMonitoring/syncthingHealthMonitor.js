@@ -97,7 +97,6 @@ function determineAction(issueSince, currentAction, nudgeable, lastNudgeAt) {
  * @param {Object} params - Parameters
  * @param {Array} params.foldersConfiguration - Array of folder configurations
  * @param {Map} params.folderHealthCache - Cache for health tracking
- * @param {Object} params.state - Global state object
  * @param {Map} params.receiveOnlySyncthingAppsCache - Cache tracking app initialization state
  * @returns {Promise<Object>} Health monitoring results
  */
@@ -105,22 +104,13 @@ async function monitorFolderHealth(params) {
   const {
     foldersConfiguration,
     folderHealthCache,
-    state,
     receiveOnlySyncthingAppsCache,
   } = params;
 
-  // Skip if other operations in progress
-  if (state.installationInProgress || state.removalInProgress || state.softRedeployInProgress || state.hardRedeployInProgress) {
-    log.info('monitorFolderHealth - Skipping health check, other operations in progress');
-    return { checked: false, actions: [] };
-  }
-
-  // Skip if backup or restore in progress
-  if ((state.backupInProgress && state.backupInProgress.length > 0) || (state.restoreInProgress && state.restoreInProgress.length > 0)) {
-    log.info('monitorFolderHealth - Skipping health check, backup or restore in progress');
-    return { checked: false, actions: [] };
-  }
-
+  // No operation-flag guards here: this watchdog only inspects the folder list it
+  // is handed (foldersConfiguration), which the main syncthing cycle already builds
+  // with busy apps skipped per-app and only runs when no folder-set-changing
+  // operation is in flight. So a busy app's folders never reach this function.
   const results = {
     checked: true,
     timestamp: Date.now(),
