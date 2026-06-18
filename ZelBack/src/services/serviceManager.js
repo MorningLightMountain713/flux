@@ -538,7 +538,7 @@ async function startFluxFunctions() {
         appOperations.coordinateActiveStandbyApps();
       }, config.fluxapps.masterSlaveIntervalMs ?? 30 * 1000);
       setTimeout(() => {
-        appInspector.monitorSharedDBApps(globalState);
+        appInspector.monitorSharedDBApps();
       }, 60 * 1000);
     });
     // Hash sync and spawner startup are now managed by the AppSyncOrchestrator (event-driven)
