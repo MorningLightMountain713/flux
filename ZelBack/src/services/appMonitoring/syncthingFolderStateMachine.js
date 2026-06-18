@@ -769,7 +769,7 @@ async function handleReceiveOnlyTransition(params) {
       // installed-DB row behind (still broadcast as running, never re-evaluated)
       const mainAppName = appId.split('_')[1] || appId;
       try {
-        await appUninstaller.removeAppLocally(mainAppName, null, true, false, true);
+        await appUninstaller.uninstallApplication(mainAppName, { forceKill: true, broadcastRemoval: true });
       } catch (error) {
         log.error(`handleReceiveOnlyTransition - Failed to remove ${mainAppName}: ${error.message}`);
       }
