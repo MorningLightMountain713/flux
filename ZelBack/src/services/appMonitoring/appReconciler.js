@@ -4,6 +4,7 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const dockerOperations = require('../appManagement/dockerOperations');
 const globalState = require('../utils/globalState');
+const { appNameFromIdentifier } = require('../utils/componentIdentifier');
 const appInspector = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appQueryService = require('../appQuery/appQueryService');
@@ -238,7 +239,7 @@ function policyAllowsRun(policy, exitCode) {
  * the reconciler never reads raw spec documents.
  */
 async function getLocalComponentSpec(identifier) {
-  const mainAppName = identifier.split('_')[1] || identifier;
+  const mainAppName = appNameFromIdentifier(identifier);
   let inst;
   try {
     inst = await appsRepository.getInstalledApp(mainAppName);
@@ -281,8 +282,8 @@ async function getLocalComponentSpec(identifier) {
   // nothing, including a component named like the app, whose identifier is
   // the name_name stutter.
   const entries = deployment.componentEntries();
-  const match = entries.find(([, c]) => c.identifier === identifier);
-  if (!match) {
+  const comp = deployment.componentForIdentifier(identifier);
+  if (!comp) {
     // An app-level identifier: callers that hold only an app name (boot
     // recovery, the hourly sweep) cannot derive component identifiers - the
     // deployment owns them, sometimes behind encryption - so the reconciler
@@ -297,8 +298,6 @@ async function getLocalComponentSpec(identifier) {
     // dropping the recovery as if the app were uninstalled.
     return { missingComponent: true };
   }
-  const comp = match[1];
-
   return {
     deployment, comp, invalidSpec: false, invalidReason: null,
   };
@@ -378,7 +377,7 @@ function isManagedElsewhere(identifier) {
   // backup/restore hold a lease on the WHOLE app under its bare main name
   // (appendBackupTask pushes req.appname), so a component reconcile must ask
   // with the main app name, not the component identifier.
-  const mainAppName = identifier.split('_')[1] || identifier;
+  const mainAppName = appNameFromIdentifier(identifier);
   const backup = globalState.backupInProgress || [];
   const restore = globalState.restoreInProgress || [];
   if (backup.includes(mainAppName) || restore.includes(mainAppName)) return true;
@@ -421,7 +420,7 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
   // restart that races the daemon's signal stage). Take no action while the LB
   // state holds — it self-expires at deadline+slack, and clear/expiry enqueue a
   // reconcile, so recovery resumes the moment the pipeline ends.
-  const appName = identifier.split('_')[1] || identifier;
+  const appName = spec.comp.appName;
   if (globalState.getAppLbState(appName)) return { desired: null, reason: 'shutdownPipeline' };
   // Only decider-owned components hold for a controller opinion: activeStandby
   // (the election decides which instance runs) and sync-before-start (the sync
@@ -469,7 +468,7 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
  * behavior previously in containerHealthMonitor.monitorAndRecoverApps.
  */
 async function recreateMissing(identifier) {
-  const mainAppName = identifier.split('_')[1] || identifier;
+  const mainAppName = appNameFromIdentifier(identifier);
 
   await appTamperingDetectionService.recordEvent(mainAppName, 'container_vanished', `Container ${identifier} missing, not found in Docker`);
   try {
