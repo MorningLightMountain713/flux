@@ -5,6 +5,7 @@ const messageHelper = require('../messageHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const admissionControl = require('../utils/admissionControl');
 const log = require('../../lib/log');
 
 // Import appQueryService to avoid circular dependency (will be cleaned up later)
@@ -69,6 +70,13 @@ async function appsResources(req, res) {
       // flat (hddFileSystemMinimum + defaultSwap) * componentCount overhead.
       appsHddLocked += deployment.reservableHostDiskGb();
     }
+    // Add in-flight admissions: apps that passed resource admission but have not yet
+    // landed in the DB (the check->insertInstalledApp window). Without this a
+    // concurrent install of a different app would not see them and could double-admit.
+    const inflight = admissionControl.pendingResources();
+    appsCpusLocked += inflight.cpu;
+    appsRamLocked += inflight.memory;
+    appsHddLocked += inflight.hdd;
     const appsUsage = {
       appsCpusLocked,
       appsRamLocked,
