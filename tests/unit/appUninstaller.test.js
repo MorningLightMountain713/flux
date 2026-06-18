@@ -1,6 +1,8 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+// Real registry singleton - un-stubbed in proxyquire, so the uninstaller and the test share it.
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
 describe('appUninstaller tests', () => {
   let appUninstaller;
@@ -188,13 +190,13 @@ describe('appUninstaller tests', () => {
       expect(result.status).to.equal(appUninstaller.UninstallStatus.SKIPPED);
     });
 
-    it('returns DEFERRED without attempting removal when another op is in progress', async () => {
-      globalStateStub.installationInProgress = true;
+    it('returns DEFERRED without attempting removal when the app holds an operation lease', async () => {
+      operationRegistry.acquire('anyapp', 'install', 'test');
       try {
         const result = await appUninstaller.uninstallApplication('anyapp', {});
         expect(result.status).to.equal(appUninstaller.UninstallStatus.DEFERRED);
       } finally {
-        globalStateStub.installationInProgress = false;
+        operationRegistry.clear();
       }
     });
   });

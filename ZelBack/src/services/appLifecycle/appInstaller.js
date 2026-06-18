@@ -162,13 +162,12 @@ async function installApplication(instantiated, options = {}) {
   const sendRemovalMessage = options.sendRemovalMessage || false;
   const appName = instantiated.name;
   try {
-    if (globalState.removalInProgress) {
-      log.error('Another application is undergoing removal. Installation not possible.');
-      return { status: InstallStatus.DEFERRED, reason: 'Another application is undergoing removal' };
-    }
-    if (globalState.installationInProgress) {
-      log.error('Another application is undergoing installation. Installation not possible');
-      return { status: InstallStatus.DEFERRED, reason: 'Another application is undergoing installation' };
+    // Per-app: defer only if THIS app is already mid-operation. Installs of
+    // different apps now run concurrently - the admission semaphore backstops
+    // resource accounting, ports are per-port, swap is serialized.
+    if (operationRegistry.isHeld(appName)) {
+      log.error(`An operation is already in progress for ${appName}. Installation not possible.`);
+      return { status: InstallStatus.DEFERRED, reason: `An operation is already in progress for ${appName}` };
     }
     globalState.installationInProgress = true;
     // Dual-write the operation registry alongside the global flag (Stage 1: the
@@ -400,15 +399,11 @@ async function installApplication(instantiated, options = {}) {
     if (onStatus) onStatus({ status: `Flux App ${appName} successfully installed and launched` });
     globalState.installationInProgress = false;
 
-    // Broadcast this node's running apps AFTER releasing the install lock.
-    // onInstallComplete() -> checkAndNotifyPeersOfRunningApps() relies on
-    // containerHealthMonitor.monitorAndRecoverApps() to force-include syncthing
-    // apps whose components are not all simultaneously "running" at this instant
-    // (e.g. a component mid receive-only resync). That recovery path bails out
-    // while globalState.isOperationInProgress() is true, so broadcasting before
-    // installationInProgress is cleared would exclude the just-installed app from
-    // its own announcement. checkAndNotifyPeersOfRunningApps never throws (it
-    // catches internally), so running it after the lock release is safe.
+    // Broadcast this node's running apps AFTER releasing the install lock, so the
+    // just-installed app is included in its own announcement (a peer-running-apps
+    // broadcast taken while this install still held the lock could exclude it).
+    // checkAndNotifyPeersOfRunningApps never throws (it catches internally), so
+    // running it after the lock release is safe.
     if (!test && onInstallComplete) {
       await onInstallComplete();
       fluxEventBus.publish('app:installed', { name: appName, hash: instantiated.hash });
