@@ -243,6 +243,7 @@ async function redeployComponent(appName, componentName, options = {}) {
   const onStatus = options.onStatus || null;
 
   const stateFlag = createVolumes ? 'hardRedeployInProgress' : 'softRedeployInProgress';
+  const leaseType = createVolumes ? 'hardRedeploy' : 'softRedeploy';
   const label = createVolumes ? 'rebuild' : 'redeploy';
 
   const status = (msg) => {
@@ -259,6 +260,11 @@ async function redeployComponent(appName, componentName, options = {}) {
   }
 
   globalState[stateFlag] = true;
+  // Dual-write the redeploy lease alongside the soft/hard flag (Stage 1). The
+  // flag write goes through a computed key (globalState[stateFlag]) and a
+  // successful whole-app redeploy never calls install/remove, so this app-scoped
+  // lease is the ONLY registry record of an in-flight redeploy.
+  operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
 
   try {
     const deployment = await deploymentProvider.getInstalledDeployment(appName);
@@ -295,10 +301,12 @@ async function redeployComponent(appName, componentName, options = {}) {
 
     status(`Component ${deployComp.identifier} ${label} complete`);
     globalState[stateFlag] = false;
+    operationRegistry.release(appName);
   } catch (error) {
     log.error(error);
     log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployComponent)`);
     globalState[stateFlag] = false;
+    operationRegistry.release(appName);
     await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true });
   }
 }
@@ -333,7 +341,12 @@ async function redeployApplication(appName, options = {}) {
   }
 
   const stateFlag = createVolumes ? 'hardRedeployInProgress' : 'softRedeployInProgress';
+  const leaseType = createVolumes ? 'hardRedeploy' : 'softRedeploy';
   globalState[stateFlag] = true;
+  // Dual-write the redeploy lease alongside the soft/hard flag (Stage 1) — see
+  // redeployComponent: the success path loops uninstall/installComponent (no
+  // app-level install/remove lease), so this is the sole registry record.
+  operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
 
   try {
     const deployment = await deploymentProvider.getInstalledDeployment(appName);
@@ -404,10 +417,12 @@ async function redeployApplication(appName, options = {}) {
 
     status(`Application ${appName} ${label} complete`);
     globalState[stateFlag] = false;
+    operationRegistry.release(appName);
   } catch (error) {
     log.error(error);
     log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployApplication)`);
     globalState[stateFlag] = false;
+    operationRegistry.release(appName);
     await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval });
     log.info(`Cleanup completed for ${appName} after ${label} failure`);
   }
