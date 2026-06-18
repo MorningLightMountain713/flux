@@ -1,6 +1,7 @@
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 const globalState = require('../utils/globalState');
+const operationRegistry = require('../utils/operationRegistry');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appReconciler = require('./appReconciler');
 
@@ -59,13 +60,13 @@ async function handleContainerDie(event) {
   const containerName = event.Actor?.Attributes?.name;
   if (!containerName || !isFluxContainer(containerName)) return;
 
-  // A deliberate FluxOS stop (appDockerStop/Kill/Restart) marks the container in
-  // stoppingContainers for the duration of the operation; its die needs no
-  // reconcile - the operation already recorded the desired state before acting.
-  // Skip to avoid churn. Best-effort only: the flag is cleared by the operation
-  // itself when it settles (never by this event), so a die that arrives after
-  // the operation resolved simply falls through to a desired-state no-op.
-  if (globalState.stoppingContainers.has(containerName)) {
+  // A deliberate FluxOS stop (appDockerStop/Kill/Restart) holds a 'stopping' lease
+  // on the container for the duration of the operation; its die needs no reconcile -
+  // the operation already recorded the desired state before acting. Skip to avoid
+  // churn. Best-effort only: the lease is released by the operation itself when it
+  // settles (never by this event), so a die that arrives after the operation
+  // resolved simply falls through to a desired-state no-op.
+  if (operationRegistry.isHeld(containerName)) {
     return;
   }
 
