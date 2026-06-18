@@ -96,7 +96,7 @@ function handleContainerHealth(event) {
   // Action suffix ("health_status: unhealthy"), with no structured field. Re-reconcile
   // the container (the reconciler reads the authoritative .State.Health.Status from
   // inspect and restarts it if unhealthy; a deliberate stop in flight is handled by its
-  // isManagedElsewhere guard) and its dependents (a dependsOn 'healthy' dependent starts
+  // hasOperationLease guard) and its dependents (a dependsOn 'healthy' dependent starts
   // once the target reads healthy). Health events are transition-only, so this is at most
   // one no-op reconcile per transition.
   appReconciler.enqueue(containerName);
