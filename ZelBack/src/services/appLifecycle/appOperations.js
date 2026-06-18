@@ -66,6 +66,7 @@ const telemetryIdentityService = require('../telemetryIdentityService');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const { resolveSubmission, assertSecretsNotConflicting } = require('../appRequirements/appSubmission');
 const globalState = require('../utils/globalState');
+const operationRegistry = require('../utils/operationRegistry');
 
 // Legacy apps that use old gateway IP assignment method
 const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated', 'isokosse', 'ChainBraryDApp', 'health', 'ethercalc'];
@@ -821,6 +822,11 @@ async function appendBackupTask(req, res) {
     const authorized = res ? await verificationHelper.verifyPrivilege('appownerabove', req, appname) : true;
     if (authorized === true) {
       globalState.backupInProgress.push(appname);
+      // Dual-write the operation registry alongside the flag array (Stage 1: the
+      // array is still authoritative; nothing reads the registry yet). backup is
+      // an app-scoped lease on the same key as install/remove/reconcile — at
+      // Stage 2 that makes it mutually exclusive with them (no feature carve-out).
+      operationRegistry.acquire(appname, 'backup', 'appOperations', `backup ${appname}`);
       const backupDeployment = await deploymentProvider.getInstalledDeployment(appname);
       const hasSyncthing = backupDeployment && backupDeployment.componentEntries().some(([, comp]) => comp.hasSyncthing());
       if (hasSyncthing) {
@@ -875,6 +881,7 @@ async function appendBackupTask(req, res) {
       await serviceHelper.delay(5 * 1000);
       const indexToRemove = globalState.backupInProgress.indexOf(appname);
       globalState.backupInProgress.splice(indexToRemove, 1);
+      operationRegistry.release(appname);
       res.end();
       return true;
       // eslint-disable-next-line no-else-return
@@ -888,6 +895,7 @@ async function appendBackupTask(req, res) {
     if (indexToRemove >= 0) {
       globalState.backupInProgress.splice(indexToRemove, 1);
     }
+    operationRegistry.release(appname);
     await sendChunk(res, `${error?.message}\n`);
     res.end();
     return false;
@@ -937,6 +945,10 @@ async function appendRestoreTask(req, res) {
     if (authorized === true) {
       const componentItem = restore.map((restoreItem) => restoreItem);
       globalState.restoreInProgress.push(appname);
+      // Dual-write the operation registry alongside the flag array (Stage 1: the
+      // array is still authoritative; nothing reads the registry yet). Same
+      // app-scoped key as backup/install/remove/reconcile.
+      operationRegistry.acquire(appname, 'restore', 'appOperations', `restore ${appname}`);
       const restoreDeployment = await deploymentProvider.getInstalledDeployment(appname);
       const restoreHasSyncthing = restoreDeployment && restoreDeployment.componentEntries().some(([, comp]) => comp.hasSyncthing());
       if (restoreHasSyncthing) {
@@ -1032,6 +1044,7 @@ async function appendRestoreTask(req, res) {
       await serviceHelper.delay(5 * 1000);
       const indexToRemove = globalState.restoreInProgress.indexOf(appname);
       globalState.restoreInProgress.splice(indexToRemove, 1);
+      operationRegistry.release(appname);
       res.end();
       return true;
       // eslint-disable-next-line no-else-return
@@ -1045,6 +1058,7 @@ async function appendRestoreTask(req, res) {
     if (indexToRemove >= 0) {
       globalState.restoreInProgress.splice(indexToRemove, 1);
     }
+    operationRegistry.release(appname);
     await sendChunk(res, `${error?.message}\n`);
     res.end();
     return false;
@@ -1248,6 +1262,8 @@ function addToRestoreProgress(appname) {
   if (!globalState.restoreInProgress.includes(appname)) {
     globalState.restoreInProgress.push(appname);
   }
+  // Dual-write the registry on every path that mutates the array (Stage 1).
+  operationRegistry.acquire(appname, 'restore', 'appOperations', `restore ${appname}`);
 }
 
 /**
@@ -1259,6 +1275,7 @@ function removeFromRestoreProgress(appname) {
   if (index > -1) {
     globalState.restoreInProgress.splice(index, 1);
   }
+  operationRegistry.release(appname);
 }
 
 /**
@@ -1616,6 +1633,11 @@ async function reconcileApp(installed, registrySpec) {
   }
 
   globalState.reconciliationInProgress = true;
+  // Dual-write the registry alongside the reconciliationInProgress expando
+  // (Stage 1: the flag is still authoritative; nothing reads the registry yet).
+  // reconcile is an app-scoped lease on the same key as install/remove/backup/
+  // restore — mutually exclusive with them once readers migrate (Stage 2).
+  operationRegistry.acquire(installed.name, 'reconcile', 'appOperations', `reconcile ${installed.name}`);
   try {
     log.info(`Application ${installed.name} version is obsolete, reconciling...`);
     await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec);
@@ -1627,6 +1649,7 @@ async function reconcileApp(installed, registrySpec) {
     log.info(`Cleanup completed for ${installed.name} after reconciliation failure`);
   } finally {
     globalState.reconciliationInProgress = false;
+    operationRegistry.release(installed.name);
   }
 }
 
