@@ -21,6 +21,7 @@ const pgpService = require('../pgpService');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
+const operationRegistry = require('../utils/operationRegistry');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const telemetrySinkCache = require('../telemetrySinkCache');
@@ -268,6 +269,10 @@ async function installApplication(instantiated, options = {}) {
       return { status: InstallStatus.DEFERRED, reason: 'Another application is undergoing installation' };
     }
     globalState.installationInProgress = true;
+    // Dual-write the operation registry alongside the global flag (Stage 1: the
+    // flag is still authoritative; nothing reads the registry yet). Released in
+    // the finally, mirroring the flag's lifetime.
+    operationRegistry.acquire(appName, 'install', 'appInstaller', `install ${appName}`);
 
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     if (!localSocketAddr) {
@@ -512,6 +517,7 @@ async function installApplication(instantiated, options = {}) {
 
     return { status: InstallStatus.FAILED, reason: error.message || serviceHelper.ensureString(error) };
   } finally {
+    operationRegistry.release(appName);
     if (test) {
       try {
         await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true });
