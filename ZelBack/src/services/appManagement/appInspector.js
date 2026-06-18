@@ -7,6 +7,7 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const hostStorageCapability = require('../utils/hostStorageCapability');
 const appsRepository = require('../appDatabase/appsRepository');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
+const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');
 // eslint-disable-next-line no-unused-vars
 const { appConstants } = require('../utils/appConstants');
@@ -765,18 +766,21 @@ async function checkApplicationsCpuUSage(appsMonitored) {
 
 /**
  * Monitor shared database applications and handle uninstall signals
- * @param {object} globalState - Global state object with installation/removal flags
  * @returns {Promise<void>}
  */
-async function monitorSharedDBApps(globalState) {
+async function monitorSharedDBApps() {
   try {
-    if (globalState.installationInProgress || globalState.removalInProgress || globalState.softRedeployInProgress || globalState.hardRedeployInProgress) {
-      return;
-    }
     const deployments = await deploymentProvider.listInstalledDeployments();
 
     // eslint-disable-next-line no-restricted-syntax
     for (const deployment of deployments) {
+      // Skip an app mid-operation: this monitor's action is a destructive uninstall,
+      // which must not race a lifecycle operation on that app. Per-app (any lease
+      // type) - a busy app no longer blocks monitoring every other app.
+      if (operationRegistry.isHeld(deployment.appName)) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       const sharedDbEntry = deployment.componentEntries().find(([, comp]) => comp.image.includes('runonflux/shared-db'));
       if (sharedDbEntry) {
         const [, sharedDbComp] = sharedDbEntry;
@@ -809,7 +813,7 @@ async function monitorSharedDBApps(globalState) {
     log.error(`monitorSharedDBApps: ${error}`);
   } finally {
     await serviceHelper.delay(5 * 60 * 1000);
-    monitorSharedDBApps(globalState);
+    monitorSharedDBApps();
   }
 }
 
