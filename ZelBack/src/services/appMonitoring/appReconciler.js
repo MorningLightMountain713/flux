@@ -5,6 +5,7 @@ const dockerService = require('../dockerService');
 const dockerOperations = require('../appManagement/dockerOperations');
 const globalState = require('../utils/globalState');
 const { appNameFromIdentifier } = require('../utils/componentIdentifier');
+const specLibs = require('../utils/specLibs');
 const appInspector = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appQueryService = require('../appQuery/appQueryService');
@@ -831,6 +832,10 @@ async function start() {
   if (started) return;
   started = true;
   await globalState.waitForBootContainerStateSettled();
+  // Warm the flux-spec-backend cache so the sync identifier->name helpers
+  // (componentIdentifier -> specLibs.getSpecBackendSync) resolve before any
+  // reconcile runs — isManagedElsewhere cannot await an ESM import.
+  await specLibs.getSpecBackend();
   // Provision + swapon the per-app swap pool before any app starts (no-op without
   // the new-mechanism host config). Best-effort: a failure must not wedge the boot
   // drain — per-container memory.swap.max still bounds usage and install/uninstall
