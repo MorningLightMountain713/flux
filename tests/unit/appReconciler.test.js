@@ -121,6 +121,11 @@ describe('appReconciler tests', () => {
       '../serviceHelper': stubs.serviceHelper,
       '../telemetrySinkCache': stubs.telemetrySinkCache,
       '../utils/appConstants': { localAppsInformation: 'zelappsinformation' },
+      '../utils/componentIdentifier': {
+        appNameFromIdentifier: (id) => { const i = id.lastIndexOf('_'); return i === -1 ? id : id.slice(i + 1); },
+        componentNameFromIdentifier: (id) => { const i = id.lastIndexOf('_'); return i === -1 ? id : id.slice(0, i); },
+      },
+      '../utils/specLibs': { getSpecBackend: sinon.stub().resolves() },
     });
   });
 
