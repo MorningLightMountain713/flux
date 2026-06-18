@@ -2,6 +2,8 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { EventEmitter } = require('node:events');
+// Real registry singleton - un-stubbed in proxyquire, so the bridge and the test share it.
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
 describe('containerEventBridge', () => {
   let stubs;
@@ -29,6 +31,7 @@ describe('containerEventBridge', () => {
   });
 
   afterEach(() => {
+    operationRegistry.clear();
     sinon.restore();
   });
 
@@ -56,15 +59,15 @@ describe('containerEventBridge', () => {
       expect(stubs.appReconciler.enqueueDependents.calledOnceWith('fluxinit_app')).to.be.true;
     });
 
-    it('does NOT reconcile a deliberate-stop die while the stop operation holds the flag', async () => {
-      stubs.globalState.stoppingContainers.add('fluxwww_app'); // held by an in-flight appDockerStop
+    it('does NOT reconcile a deliberate-stop die while the stop operation holds the lease', async () => {
+      operationRegistry.acquire('fluxwww_app', 'stopping', 'test'); // held by an in-flight appDockerStop
       await containerEventBridge.handleContainerDie(dieEvent('fluxwww_app', 0));
       expect(stubs.appReconciler.enqueue.called).to.be.false;
       expect(stubs.appReconciler.enqueueDependents.called).to.be.false;
       expect(stubs.appsRuntimeState.recordExit.called).to.be.false;
-      // the flag is OWNED by the stop operation (cleared in its finally), not by
-      // this event - the handler must not clear it out from under the operation
-      expect(stubs.globalState.stoppingContainers.has('fluxwww_app')).to.be.true;
+      // the lease is OWNED by the stop operation (released in its finally), not by
+      // this event - the handler must not release it out from under the operation
+      expect(operationRegistry.isHeld('fluxwww_app')).to.be.true;
     });
 
     it('ignores non-flux containers', async () => {
