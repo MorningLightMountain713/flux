@@ -1588,6 +1588,15 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     }
   }
 
+  // A reconcile that dropped a component leaves its image behind. Now that the
+  // new component set is in place, reclaim the removed components' images,
+  // reference-gated — an image still shared with a surviving component (or
+  // another app) is left alone, and there is no churn because the new set is up.
+  // This is the set-diff layer that knows what was dropped; the per-component
+  // uninstall primitive does not.
+  const removedImages = removed.map((name) => oldDeployment.getComponent(name)?.image);
+  await appUninstaller.reclaimUnusedImages(removedImages, (msg) => log.info(msg));
+
   // The applied spec changed, so the app-wide shutdown plan (hash, components,
   // timeouts) may differ. Push the full refreshed plan. Guarded — must never
   // break the update.
