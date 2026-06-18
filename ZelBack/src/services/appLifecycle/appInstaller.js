@@ -22,6 +22,7 @@ const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const upnpService = require('../upnpService');
 const globalState = require('../utils/globalState');
 const operationRegistry = require('../utils/operationRegistry');
+const admissionControl = require('../utils/admissionControl');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const telemetrySinkCache = require('../telemetrySinkCache');
@@ -297,7 +298,14 @@ async function installApplication(instantiated, options = {}) {
     await checkPlacement(instantiated);
 
     const deployment = await deploymentProvider.buildDeployment(instantiated);
-    await checkNodeResources(deployment);
+    // Check resources and reserve them atomically: two concurrent installs of
+    // different apps must not both pass before either is accounted (the in-flight
+    // double-admit race). The reservation is released once the app is durably in
+    // the DB (counted by appsResources) or the install fails (the finally).
+    await admissionControl.withLock(async () => {
+      await checkNodeResources(deployment);
+      admissionControl.reserve(appName, deployment);
+    });
 
     // Admission decision, taken before any state is mutated so neither outcome needs
     // cleanup: a blocked image is a rejection (won't change on retry); an unreachable
@@ -382,6 +390,9 @@ async function installApplication(instantiated, options = {}) {
       throw new Error(`CRITICAL: Failed to create database entry for ${appName}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
     }
     log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
+    // Now counted by appsResources (it is in the DB); drop the pending reservation
+    // so it is not double-counted. The finally releases it on any earlier failure.
+    admissionControl.release(appName);
 
     try {
       if (!await appsRepository.existsInstalledApp(appName)) {
@@ -518,6 +529,10 @@ async function installApplication(instantiated, options = {}) {
     return { status: InstallStatus.FAILED, reason: error.message || serviceHelper.ensureString(error) };
   } finally {
     operationRegistry.release(appName);
+    // Safety net for every pre-insert failure/early-return path: a reserved-but-
+    // not-installed app must never leak its pending resources. Idempotent with the
+    // explicit release after insertInstalledApp.
+    admissionControl.release(appName);
     if (test) {
       try {
         await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true });
