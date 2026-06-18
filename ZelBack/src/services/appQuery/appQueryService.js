@@ -6,6 +6,7 @@ const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
 const appConstants = require('../utils/appConstants');
+const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');
 
 // Database collections
@@ -46,16 +47,15 @@ async function installedApps(req, res) {
 }
 
 async function listRunningContainers() {
-  const globalState = require('../utils/globalState');
-
   let apps = await dockerService.dockerListContainers(false);
   if (apps.length > 0) {
     apps = apps.filter((app) => app.Names[0].slice(1, 5) === 'flux');
   }
 
-  const backupInProgress = globalState.backupInProgress || [];
-  const restoreInProgress = globalState.restoreInProgress || [];
-  const appsInBackupRestore = [...backupInProgress, ...restoreInProgress];
+  // Apps mid backup/restore appear stopped but must still be surfaced as present.
+  // Derive the set from the registry's backup/restore leases (the same app-name
+  // keys the flag arrays held).
+  const appsInBackupRestore = [...operationRegistry.listByType('backup'), ...operationRegistry.listByType('restore')];
 
   if (appsInBackupRestore.length > 0) {
     const allContainers = await dockerService.dockerListContainers(true);
@@ -82,10 +82,7 @@ async function listRunningApps(req, res) {
     const apps = await listRunningContainers();
 
     // Include apps that are in backup or restore as "running" even if container is stopped
-    const globalState = require('../utils/globalState');
-    const backupInProgress = globalState.backupInProgress || [];
-    const restoreInProgress = globalState.restoreInProgress || [];
-    const appsInBackupRestore = [...backupInProgress, ...restoreInProgress];
+    const appsInBackupRestore = [...operationRegistry.listByType('backup'), ...operationRegistry.listByType('restore')];
 
     if (appsInBackupRestore.length > 0) {
       // Get all containers including stopped ones
