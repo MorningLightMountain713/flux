@@ -84,6 +84,29 @@ describe('operationRegistry', () => {
       const keys = registry.list().map((l) => l.key).sort();
       expect(keys).to.deep.equal(['db', 'web']);
     });
+
+    it('anyHeld is false when empty and true while any lease is held', () => {
+      expect(registry.anyHeld()).to.equal(false);
+      registry.acquire('web', 'install', 'appInstaller');
+      expect(registry.anyHeld()).to.equal(true);
+      registry.release('web');
+      expect(registry.anyHeld()).to.equal(false);
+    });
+
+    it('anyHeld counts a transient component stopping lease too', () => {
+      registry.acquire('worker_web', 'stopping', 'dockerService');
+      expect(registry.anyHeld()).to.equal(true);
+    });
+
+    it('listByType returns only the keys of that lease type', () => {
+      registry.acquire('web', 'backup', 'appOperations');
+      registry.acquire('db', 'backup', 'appOperations');
+      registry.acquire('cache', 'restore', 'appOperations');
+      registry.acquire('api', 'install', 'appInstaller');
+      expect(registry.listByType('backup').sort()).to.deep.equal(['db', 'web']);
+      expect(registry.listByType('restore')).to.deep.equal(['cache']);
+      expect(registry.listByType('reconcile')).to.deep.equal([]);
+    });
   });
 
   describe('TTL watchdog', () => {
