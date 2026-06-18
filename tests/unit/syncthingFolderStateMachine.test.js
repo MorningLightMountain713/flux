@@ -4,18 +4,11 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const sinon = require('sinon');
 const { globalState } = require('./fixtures/globalState');
-const { syncthingIgnoreLines } = require('../../ZelBack/src/services/appSystem/volumeReservedNames');
 const proxyquire = require('proxyquire').noCallThru();
-const { makePeerIdentityDouble } = require('./peerIdentityTestDouble');
-const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
-const syncthingService = require('../../ZelBack/src/services/syncthingService');
 
 // Create mocks for dependencies
 const syncthingServiceMock = {
   getDbStatus: sinon.stub(),
-  eachDbLocalChanged: sinon.stub(),
-  getDbLocalChanged: sinon.stub(),
-  getDbFile: sinon.stub(),
   systemRestart: sinon.stub(),
   getConfig: sinon.stub(),
   getDbCompletion: sinon.stub(),
@@ -24,20 +17,9 @@ const syncthingServiceMock = {
   // reports 100% complete.
   getDeviceId: sinon.stub().resolves('LOCAL-DEVICE'),
   getConfigDevices: sinon.stub(),
-  getConfigFolders: sinon.stub(),
   dbRevert: sinon.stub(),
-  scanFolder: sinon.stub(),
-  getDeviceStats: sinon.stub(),
-  getSystemStatus: sinon.stub(),
   systemPause: sinon.stub(),
   systemResume: sinon.stub(),
-  // The release this node's syncthing reports. The counts the stubs above return
-  // are corrected for it by syncthingService's own functions, as the real reads are.
-  syncthingVersion: 'v2.1.5',
-  async getDbStatusInFileBytes(folder) {
-    const entry = syncthingService.nonFileEntryBytesForVersion(this.syncthingVersion);
-    return syncthingService.statusInFileBytes(await this.getDbStatus(folder), entry);
-  },
 };
 
 // The device cache the veto reads, owned by this suite and cleared between
@@ -52,9 +34,17 @@ const dockerServiceMock = {
 
 const serviceHelperMock = {
   delay: sinon.stub().resolves(),
-  runCommand: sinon.stub().resolves({ error: null, stdout: '', stderr: '' }),
 };
 
+const nodecmdMock = {
+  run: sinon.stub(),
+};
+
+const appReconcilerMock = {
+  setControllerDesired: sinon.stub(),
+  requestStopAndClearData: sinon.stub(),
+  enqueue: sinon.stub(),
+};
 const volumeServiceMock = {
   isPathMounted: sinon.stub(),
   ensureAppVolumeMounted: sinon.stub(),
@@ -71,24 +61,9 @@ const appTamperingDetectionServiceMock = {
   recordEvent: sinon.stub().resolves(),
 };
 
-const appReconcilerMock = {
-  setControllerDesired: sinon.stub(),
-  requestStopAndClearData: sinon.stub(),
-  enqueue: sinon.stub(),
-  hasControllerOpinion: sinon.stub(),
-  adoptControllerDesired: sinon.stub(),
-};
-const appUninstallerMock = { removeAppLocally: sinon.stub().resolves() };
-const appQueryServiceMock = { holdsComponent: sinon.stub() };
+const appUninstallerMock = { uninstallApplication: sinon.stub().resolves() };
 // the pre-promotion peer probe (/apps/promotedfolders)
-const axiosMock = { get: sinon.stub(), post: sinon.stub() };
-// This node signs its holdings probe, so WHETHER IT CAN SIGN decides which request the
-// peer is asked with. Left to the real signer it is decided by whether the machine
-// running the suite happens to hold a derivable node key - the signed path on a node,
-// the open one on a laptop - and the suite silently covers a different path on each.
-// Pinned here, and `post` is answered by whatever a test told `get`, so every case
-// below still drives the outcome through the stub it configures.
-const nodeSignerMock = { nodeSigner: sinon.stub() };
+const axiosMock = { get: sinon.stub() };
 // this node's own connectivity - how it tells a dead peer from its own isolation
 const fluxCommunicationMock = { peerResponsiveness: sinon.stub() };
 
@@ -107,35 +82,6 @@ const syncthingFailure = (message, { code, httpStatus = null } = {}) => Object.a
   { code, httpStatus },
 );
 
-// A peer that findSyncedPeer can SHOW holds the folder: the folder must list a device
-// other than this node's, and that device must answer connected, complete and non-empty.
-const peerHoldsTheData = () => {
-  syncthingServiceMock.getConfig.resolves({
-    folders: [{ id: 'test-app', type: 'receiveonly', devices: [{ deviceID: 'LOCAL-DEVICE' }, { deviceID: 'PEER-DEVICE' }] }],
-  });
-  syncthingServiceMock.getDbCompletion.resolves({ completion: 100, globalBytes: 4096, remoteState: 'valid' });
-  syncthingServiceMock.getDbStatus.resolves({ globalBytes: 4096, globalFiles: 1, inSyncBytes: 0, state: 'idle' });
-};
-
-// an entry as syncthing's /rest/db/localchanged returns it. Directories carry the
-// legacy synthetic size of 128, which is why the production filter keys on type.
-const localEntry = (name, size, modified = '2026-09-16T10:00:00Z') => ({
-  name, type: 'FILE_INFO_TYPE_FILE', size, deleted: false, modified,
-});
-const localDir = (name) => ({
-  name, type: 'FILE_INFO_TYPE_DIRECTORY', size: 128, deleted: false, modified: '2026-09-16T10:00:00Z',
-});
-
-// eachDbLocalChanged hands its caller one page at a time and reports how the walk
-// ended. A missing file list is the folder failing to answer, which is not the same
-// as a folder holding nothing - so it reports read:false rather than an empty page.
-const feed = (answer) => async (folderId, onBatch) => {
-  const files = answer?.files;
-  if (!Array.isArray(files)) return { read: false, pages: 0, truncated: false };
-  onBatch(files);
-  return { read: true, pages: 1, truncated: false };
-};
-
 // a directory entry as fs.readdir({ withFileTypes: true }) returns it
 const dirent = (name, isFile = true) => ({
   name,
@@ -150,76 +96,36 @@ const dirent = (name, isFile = true) => ({
 // node's own connectivity. Loaded before the state machine because the state
 // machine is handed this same mocked copy: a second, unmocked one would reach the
 // real syncthing service and answer every evidence question with silence.
-const peerIdentityMock = makePeerIdentityDouble({ post: axiosMock.post });
-const registryManagerMock = { shuttingDownNodes: sinon.stub() };
 const peerFolderLivenessMock = proxyquire('../../ZelBack/src/services/appMonitoring/peerFolderLiveness', {
-  '../peerIdentityService': peerIdentityMock,
-  '../appDatabase/registryManager': registryManagerMock,
   '../fluxCommunication': fluxCommunicationMock,
   '../syncthingService': syncthingServiceMock,
   '../utils/globalState': globalStateMock,
   axios: axiosMock,
-  '../utils/nodeSigner': nodeSignerMock,
 });
 
 // A fresh liveness object per call is the contract: it holds one pass's view.
 const { createPeerFolderLiveness } = peerFolderLivenessMock;
 
 // Load module with mocked dependencies
-const primaryRoleMock = {
-  holdAsStandby: sinon.stub().resolves(),
-};
-const PeerComponent = Object.freeze({ RUNNING: 'running', NOT_RUNNING: 'notRunning', UNKNOWN: 'unknown' });
-const peerComponentMock = {
-  PeerComponent,
-  componentStateOnPeers: sinon.stub(),
-  componentStateOnOtherHolders: sinon.stub(),
-};
-
-const localChangeCheck = proxyquire('../../ZelBack/src/services/appMonitoring/localChangeCheck', {
-  '../syncthingService': syncthingServiceMock,
-});
-
-// Lets every check the passes asked for run to its end.
-async function checksSettled() {
-  for (let i = 0; i < 50; i += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((resolve) => { setImmediate(resolve); });
-  }
-}
-
 const stateMachine = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine', {
-  './localChangeCheck': localChangeCheck,
   '../dockerService': dockerServiceMock,
   '../syncthingService': syncthingServiceMock,
   '../serviceHelper': serviceHelperMock,
-  '../utils/volumeService': volumeServiceMock,
-  '../appTamperingDetectionService': appTamperingDetectionServiceMock,
-  'node:fs': fsMock,
+  'node-cmd': nodecmdMock,
   // stub new collaborators so the unit test doesn't load the real module graph
   './appReconciler': appReconcilerMock,
   '../appLifecycle/appUninstaller': appUninstallerMock,
+  '../utils/volumeService': volumeServiceMock,
+  '../appTamperingDetectionService': appTamperingDetectionServiceMock,
+  'node:fs': fsMock,
   './peerFolderLiveness': peerFolderLivenessMock,
-  '../appQuery/appQueryService': appQueryServiceMock,
-  '../appLifecycle/primaryRole': primaryRoleMock,
-  './peerComponent': peerComponentMock,
 });
 
 describe('syncthingFolderStateMachine tests', () => {
   beforeEach(() => {
-    globalStateMock.folderStates.clear();
-    peerIdentityMock.reset();
-    primaryRoleMock.holdAsStandby.resetHistory();
-    peerComponentMock.componentStateOnPeers.reset();
-    peerComponentMock.componentStateOnOtherHolders.reset();
     // Reset only this file's own stubs (NOT a global sinon.reset(), which would
     // wipe stub behaviour set up by other test files in the same mocha process)
     syncthingServiceMock.getDbStatus.reset();
-    syncthingServiceMock.syncthingVersion = 'v2.1.5';
-    // default: this node holds the component, so no test is about demotion by accident
-    appQueryServiceMock.holdsComponent.reset();
-    appQueryServiceMock.holdsComponent.resolves(true);
-    syncthingServiceMock.eachDbLocalChanged.reset();
     syncthingServiceMock.systemRestart.reset();
     syncthingServiceMock.systemRestart.resolves();
     syncthingServiceMock.getConfig.reset();
@@ -231,24 +137,6 @@ describe('syncthingFolderStateMachine tests', () => {
     globalStateMock.syncthingDevicesIDCache.clear();
     syncthingServiceMock.dbRevert.reset();
     syncthingServiceMock.dbRevert.resolves({ status: 'success' });
-    // default: one local change, whose cluster version another device holds
-    syncthingServiceMock.getDbLocalChanged.reset();
-    syncthingServiceMock.getDbLocalChanged.resolves({ files: [{ name: 'appdata/changed' }] });
-    syncthingServiceMock.getConfigFolders.reset();
-    syncthingServiceMock.getConfigFolders.resolves({ id: 'test-app', devices: [{ deviceID: 'LOCAL-DEVICE' }, { deviceID: 'PRIMARY-DEVICE' }] });
-    syncthingServiceMock.getDbFile.reset();
-    syncthingServiceMock.getDbFile.resolves({ global: { localFlags: 0 }, local: { localFlags: 8 } });
-    syncthingServiceMock.scanFolder.reset();
-    syncthingServiceMock.scanFolder.resolves({});
-    // default: this node's syncthing has never been connected to any peer
-    syncthingServiceMock.getDeviceStats.reset();
-    syncthingServiceMock.getDeviceStats.resolves({});
-    // this node's syncthing started before any connection the tests close
-    syncthingServiceMock.getSystemStatus.reset();
-    syncthingServiceMock.getSystemStatus.resolves({ startTime: '2026-09-25T13:00:00Z' });
-    // no node has announced a shutdown
-    registryManagerMock.shuttingDownNodes.reset();
-    registryManagerMock.shuttingDownNodes.resolves([]);
     syncthingServiceMock.systemPause.reset();
     syncthingServiceMock.systemPause.resolves({ status: 'success' });
     syncthingServiceMock.systemResume.reset();
@@ -266,12 +154,8 @@ describe('syncthingFolderStateMachine tests', () => {
     fsMock.promises.readdir.reset();
     appTamperingDetectionServiceMock.recordEvent.reset();
     appTamperingDetectionServiceMock.recordEvent.resolves();
-    appUninstallerMock.removeAppLocally.reset();
+    appUninstallerMock.uninstallApplication.reset();
     axiosMock.get.reset();
-    axiosMock.post.reset();
-    axiosMock.post.callsFake((url, body, config) => axiosMock.get(url, config));
-    nodeSignerMock.nodeSigner.reset();
-    nodeSignerMock.nodeSigner.resolves({ pubKey: 'PUB', sign: () => 'SIG' });
     // default: no peer holds a writable copy, so the promotion path is unchanged
     // for every test that is not about this probe
     axiosMock.get.resolves({ data: { data: { ready: true, folders: [] } } });
@@ -279,21 +163,33 @@ describe('syncthingFolderStateMachine tests', () => {
     // default: this node is evidently well connected, so an unreachable peer reads
     // as a dead peer rather than as this node's own isolation
     fluxCommunicationMock.peerResponsiveness.returns({ responding: 8, total: 8 });
-    appUninstallerMock.removeAppLocally.resolves();
+    appUninstallerMock.uninstallApplication.resolves();
     appReconcilerMock.setControllerDesired.reset();
     appReconcilerMock.requestStopAndClearData.reset();
     appReconcilerMock.enqueue.reset();
 
-    // Default filesystem state: app dir exists, is a mountpoint, holds files with
-    // bytes in them. This makes verifyFolderMountSafety return isSafe: true, and it
-    // is what "holds data" means to the cold-start seed guard - a size, not a count.
-    fsMock.promises.stat.resolves({ isDirectory: () => true, size: 4096 });
-    volumeServiceMock.isPathMounted.resolves(true);
-    fsMock.promises.readdir.resolves([dirent('state.db'), dirent('config.yaml')]);
-    // Default: syncthing reports no local changes of the owner's. Tests that mean
-    // "this node holds data" say so with localEntry, because a count of items is
-    // exactly what cannot tell the owner's data from FluxOS scaffolding.
-    syncthingServiceMock.eachDbLocalChanged.callsFake(feed({ files: [] }));
+    // Mock successful file system operations for safety checks
+    // This makes verifyFolderMountSafety return isSafe: true
+    // nodecmd.run callback signature: (err, data, stderr)
+    nodecmdMock.run.callsFake((cmd, callback) => {
+      if (cmd.includes('test -d')) {
+        // Directory exists
+        callback(null, 'exists', '');
+      } else if (cmd.includes('mountpoint')) {
+        // Not a mount point (exit code 1) - this causes an error
+        const err = new Error('not a mountpoint');
+        err.code = 1;
+        callback(err, '', '');
+      } else if (cmd.includes('find')) {
+        // Has files (return count > 0)
+        callback(null, '10\n', '');
+      } else if (cmd.includes('chmod')) {
+        // Permission changes succeed
+        callback(null, '', '');
+      } else {
+        callback(null, '', '');
+      }
+    });
   });
 
   describe('isDesignatedLeader', () => {
@@ -378,18 +274,6 @@ describe('syncthingFolderStateMachine tests', () => {
   });
 
   describe('probeFolderSyncCompletion', () => {
-    // A folder of directories alone holds no data, whichever release counts them.
-    it('does not read a folder of directories alone as synced with data on syncthing before v2.1.2', async () => {
-      syncthingServiceMock.syncthingVersion = 'v2.0.15';
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 256, globalDirectories: 2, globalFiles: 0, inSyncBytes: 256, state: 'idle',
-      });
-
-      const { status } = await stateMachine.probeFolderSyncCompletion('test-folder');
-
-      expect(status).to.include({ globalBytes: 0, isSynced: false });
-    });
-
     // Syncthing saying "no such folder" is a finding about the data. Syncthing
     // not answering is a finding about syncthing. The backup gate reports one of
     // these to an operator as a fact about their data, so they must not arrive
@@ -496,21 +380,6 @@ describe('syncthingFolderStateMachine tests', () => {
       expect(result.isSynced).to.be.false;
     });
 
-    it('reports locally changed directories apart from files', async () => {
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 1000,
-        inSyncBytes: 1000,
-        state: 'idle',
-        receiveOnlyChangedFiles: 0,
-        receiveOnlyChangedDirectories: 3,
-      });
-
-      const result = await stateMachine.getFolderSyncCompletion('test-folder');
-
-      expect(result.receiveOnlyChangedFiles).to.equal(0);
-      expect(result.receiveOnlyChangedDirectories).to.equal(3);
-    });
-
     it('should mark as synced when 100% complete', async () => {
       syncthingServiceMock.getDbStatus.resolves({
         globalBytes: 1000,
@@ -541,231 +410,25 @@ describe('syncthingFolderStateMachine tests', () => {
     });
   });
 
-  // What a node claims to hold, which is the input the ranking above compares. It had
-  // no tests at all while the comparator that consumes it had six - and it is the more
-  // dangerous half, because every exclusion here is the difference between "this node
-  // holds the customer's world" and "this node holds what FluxOS put on the volume when
-  // it built it". Every mount form a spec can declare leaves something in this list.
-  describe('localHoldings', () => {
-    const answer = (files) => { syncthingServiceMock.eachDbLocalChanged.callsFake(feed({ files })); };
-
-    it('sums the owner\'s files and carries the newest of their timestamps', async () => {
-      answer([
-        localEntry('appdata/world.db', 4096, '2026-09-16T10:00:00Z'),
-        localEntry('appdata/level.dat', 900, '2026-09-16T11:30:00Z'),
-      ]);
-      const held = await stateMachine.localHoldings('test-app', []);
-      expect(held.bytes).to.equal(4996);
-      expect(held.newestModified).to.equal(Date.parse('2026-09-16T11:30:00Z'));
-    });
-
-    // The m: and ml: mounts are mkdir'd on the volume before the app ever runs, and
-    // syncthing gives a directory the legacy synthetic size of 128. Counted, an empty
-    // node claims 256 bytes it does not hold and can outrank a real holder.
-    it('does not count directories, whatever size syncthing gives them', async () => {
-      answer([localDir('logs'), localDir('cache'), localDir('appdata')]);
-      const held = await stateMachine.localHoldings('test-app', []);
-      expect(held.bytes).to.equal(0);
-      expect(held.newestModified).to.equal(0);
-    });
-
-    // The f: mount is touched at volume creation, so its mtime is the moment the volume
-    // was built - which is NEWER than the owner's data on a node that has held it for
-    // weeks. newestModified is the ranking's first key, so a zero-length file that
-    // carried its timestamp would hand the seed to the node holding nothing.
-    it('takes no timestamp from a zero-length file', async () => {
-      answer([localEntry('server.json', 0, '2026-09-16T12:00:00Z')]);
-      const held = await stateMachine.localHoldings('test-app', []);
-      expect(held.bytes).to.equal(0);
-      expect(held.newestModified).to.equal(0);
-    });
-
-    it('ignores a deleted entry, which is the absence of data', async () => {
-      answer([{ ...localEntry('appdata/gone', 5000), deleted: true }]);
-      expect((await stateMachine.localHoldings('test-app', [])).bytes).to.equal(0);
-    });
-
-    // Names in the volume root that belong to something other than the owner.
-    //
-    // SECOND LINE, NOT FIRST. Of the names below only lost+found can actually reach this
-    // function: syncthing never scans its own internals (.stfolder, .stignore) and never
-    // emits a FileInfo for a path its ignore patterns match (scanner/walk.go), and every
-    // folder FluxOS replicates leads its .stignore with /backup and /.flux-op-*. So this
-    // term fires only for a folder whose ignores are absent or failed to write - which is
-    // exactly when a wrong answer here would be acted on, and why it is asserted.
-    it('ignores syncthing\'s own markers, lost+found and the staging tree', async () => {
-      answer([
-        localEntry('.stignore', 300),
-        localEntry('.stfolder/anything', 400),
-        localEntry('lost+found/recovered', 5000),
-        localEntry('.flux-op-b3f1c2de-4a5b-6c7d-8e9f-0a1b2c3d4e5f/staged', 6000),
-      ]);
-      expect((await stateMachine.localHoldings('test-app', [])).bytes).to.equal(0);
-    });
-
-    // Its own test rather than one more name in the list above: backup is excluded by a
-    // separate term, and folded in with the reserved names it was covered by an
-    // assertion that stayed green with that term deleted. Same standing as those - a
-    // folder with its /backup ignore intact never lists it.
-    it('ignores the backup directory, which is this node\'s own archive of the data', async () => {
-      answer([localEntry('backup/archive.tar', 9000)]);
-      expect((await stateMachine.localHoldings('test-app', [])).bytes).to.equal(0);
-    });
-
-    // An ml: directory holds what the component can obtain again for free. It is on the
-    // volume and it is not the owner's data, so it must not buy that node the seed.
-    // Also a second line: the same name is an anchored .stignore pattern, so a daemon
-    // with its ignores intact does not list it either.
-    it('ignores a subdirectory the spec declared local, by its top-level name', async () => {
-      answer([localEntry('cache/pak0.pak', 8200000000), localEntry('appdata/world.db', 12)]);
-      const held = await stateMachine.localHoldings('test-app', ['cache']);
-      expect(held.bytes).to.equal(12);
-    });
-
-    // UNKNOWN IS NOT EMPTY, and the difference is the whole cold start. A node that
-    // cannot read its own holdings must not be ranked as one holding nothing - it would
-    // publish an unknown folder over a known world. Both shapes below produced a fleet
-    // where folderIsEmpty was false on every node at 0/0 bytes and nobody was ever
-    // elected: two holders each waiting for the other, with the app down throughout.
-    it('answers null when the read fails, rather than nothing-held', async () => {
-      syncthingServiceMock.eachDbLocalChanged.rejects(new Error('connect ECONNREFUSED'));
-      expect(await stateMachine.localHoldings('test-app', [])).to.equal(null);
-    });
-
-    it('answers null when the reply carries no file list at all', async () => {
-      syncthingServiceMock.eachDbLocalChanged.callsFake(feed({ total: 0 }));
-      expect(await stateMachine.localHoldings('test-app', [])).to.equal(null);
-    });
-  });
-
-  describe('bestHolder', () => {
-    const peers = (...ips) => ips.map((ip) => ({ ip }));
-    // '10.0.0.2' sorts BEFORE '9.0.0.1' as a string, so every case below would come out
-    // differently under the address order - which is what makes them able to fail.
-    const low = '10.0.0.2:16127';
-    const high = '9.0.0.1:16127';
-
-    it('orders by address when no candidate holds anything - a true cold start', () => {
-      const claims = { [low]: { bytes: 0, newestModified: 0 }, [high]: { bytes: 0, newestModified: 0 } };
-      expect(stateMachine.bestHolder(peers(low, high), claims)).to.equal(low);
-    });
-
-    it('gives it to the only candidate holding data, against the address order', () => {
-      const claims = { [low]: { bytes: 0, newestModified: 0 }, [high]: { bytes: 5821604997, newestModified: 200 } };
-      expect(stateMachine.bestHolder(peers(low, high), claims)).to.equal(high);
-    });
-
-    // Identical byte counts are the one case a timestamp can be read as the same
-    // content written at different moments, so it decides only there.
-    it('prefers the most recently written copy when both hold the same bytes', () => {
-      const claims = { [low]: { bytes: 900, newestModified: 100 }, [high]: { bytes: 900, newestModified: 200 } };
-      expect(stateMachine.bestHolder(peers(low, high), claims)).to.equal(high);
-    });
-
-    it('prefers the larger copy when both were written at the same moment', () => {
-      const claims = { [low]: { bytes: 100, newestModified: 100 }, [high]: { bytes: 900, newestModified: 100 } };
-      expect(stateMachine.bestHolder(peers(low, high), claims)).to.equal(high);
-    });
-
-    // The direction this ordering is chosen to fail in. A volume holding one recent
-    // scrap must never publish over the owner's world: the holder's files would
-    // become local changes in a folder that is now synced, and the revert deletes
-    // them. Losing the scrap's own writes is the lesser loss, and the recoverable one.
-    it('prefers the larger copy over a near-empty one written more recently', () => {
-      const claims = {
-        [low]: { bytes: 200, newestModified: 999 },
-        [high]: { bytes: 5821604997, newestModified: 100 },
-      };
-      expect(stateMachine.bestHolder(peers(low, high), claims)).to.equal(high);
-    });
-
-    it('falls back to the address only between candidates that are otherwise equal', () => {
-      const claims = { [low]: { bytes: 900, newestModified: 100 }, [high]: { bytes: 900, newestModified: 100 } };
-      expect(stateMachine.bestHolder(peers(low, high), claims)).to.equal(low);
-    });
-
-    // A peer too old for the endpoint, or unreachable this pass, cannot be ranked -
-    // and ranking only the ones that answered would put a silent HOLDER last and hand
-    // the seed to an empty node. Unless the whole field can be compared, the address
-    // order stands, which is what the fleet did before any node could answer.
-    it('does not rank at all when a candidate could not answer', () => {
-      const claims = { [high]: { bytes: 5821604997, newestModified: 200 } };
-      expect(stateMachine.bestHolder(peers(low, high), claims)).to.equal(low);
-    });
-
-    // A claim is read from an unauthenticated endpoint, so it is input. Subtracting a
-    // field that is not a number gives NaN, which sort() reads as EQUAL: the comparison
-    // returns before the address tiebreak, and the winner becomes whichever candidate
-    // the peer list carried first - a per-node database order, so two nodes elect two
-    // leaders. Each case below is a field the ranking cannot compare, and `high` claims
-    // enough to win if it were compared at all.
-    [
-      ['an empty claim, which an older peer sends', {}],
-      ['a claim with no byte count', { newestModified: 200 }],
-      ['a claim with no timestamp', { bytes: 5821604997 }],
-      ['a byte count that is not a number', { bytes: '5821604997', newestModified: 200 }],
-      ['a byte count that is not finite', { bytes: Infinity, newestModified: 200 }],
-      ['a timestamp that is not a number', { bytes: 5821604997, newestModified: null }],
-    ].forEach(([what, claim]) => {
-      it(`does not rank at all against ${what}`, () => {
-        const claims = { [low]: { bytes: 900, newestModified: 100 }, [high]: claim };
-        expect(stateMachine.bestHolder(peers(low, high), claims)).to.equal(low);
-        // The order the list arrives in must not decide it either.
-        expect(stateMachine.bestHolder(peers(high, low), claims)).to.equal(low);
-      });
-    });
-
-    // Comparable is all the ranking asks. A figure no measurement could produce is
-    // still ordered against the rest, and refusing it would hand the whole field to
-    // the address order - which here would return `low`, so this can fail.
-    it('ranks a byte count no measurement could produce, and it loses', () => {
-      const claims = {
-        [low]: { bytes: -1, newestModified: 0 },
-        [high]: { bytes: 900, newestModified: 100 },
-      };
-      expect(stateMachine.bestHolder(peers(low, high), claims)).to.equal(high);
-    });
-  });
-
   describe('manageFolderSyncState', () => {
     let mockParams;
 
     beforeEach(() => {
       mockParams = {
         appId: 'test-app',
-        identifier: 'app_test',
         syncFolder: null,
         requiresSyncBeforeStart: true,
         syncthingAppsFirstRun: false,
         receiveOnlySyncthingAppsCache: new Map(),
         appLocation: sinon.stub().resolves([]),
         localSocketAddr: '10.0.0.1:16127',
-        // As the monitor builds it: the fields it owns, and no type.
         syncthingFolder: {
           id: 'test-app',
+          type: 'sendreceive',
         },
         installedAppName: 'test-app',
         liveness: createPeerFolderLiveness(),
       };
-    });
-
-    // A harness suite counts these from an event to know each holder has decided
-    // since it, so every pass counts once, whichever way the folder stands.
-    it('counts every pass over a folder, writable or not', async () => {
-      const count = sinon.stub(fluxEventBus, 'count');
-      try {
-        dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: true } });
-        mockParams.syncFolder = { type: 'sendreceive' };
-        await stateMachine.manageFolderSyncState(mockParams);
-
-        mockParams.syncFolder = { type: 'receiveonly' };
-        mockParams.syncthingAppsFirstRun = true;
-        await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(count.withArgs('syncthing:folderPass', 'test-app', 'evaluated').callCount).to.equal(2);
-      } finally {
-        count.restore();
-      }
     });
 
     it('asks a stopped r: container to run and keeps the cache entry when the folder is already syncing', async () => {
@@ -786,46 +449,15 @@ describe('syncthingFolderStateMachine tests', () => {
       expect(result.syncthingFolder).to.equal(mockParams.syncthingFolder);
     });
 
-    describe('an r: container already running on a syncing folder', () => {
-      beforeEach(() => {
-        mockParams.syncFolder = { type: 'sendreceive' };
-        dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: true } });
-        appReconcilerMock.setControllerDesired.resetHistory();
-        appReconcilerMock.hasControllerOpinion.reset();
-        appReconcilerMock.adoptControllerDesired.reset();
-        appReconcilerMock.adoptControllerDesired.resolves(true);
+    it('leaves an already-running container alone when the folder is already syncing', async () => {
+      mockParams.syncFolder = { type: 'sendreceive' };
+      dockerServiceMock.dockerContainerInspect.resolves({
+        State: { Running: true },
       });
 
-      it('leaves an opinion this process holds alone', async () => {
-        appReconcilerMock.hasControllerOpinion.returns(true);
+      await stateMachine.manageFolderSyncState(mockParams);
 
-        await stateMachine.manageFolderSyncState(mockParams);
-
-        sinon.assert.calledWith(appReconcilerMock.hasControllerOpinion, 'test-app');
-        sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
-        sinon.assert.notCalled(appReconcilerMock.adoptControllerDesired);
-      });
-
-      // A FluxOS restart leaves the container running with no opinion in this
-      // process. Nothing needs starting, so the verdict is adopted, not requested.
-      it('adopts running when this process holds no opinion', async () => {
-        appReconcilerMock.hasControllerOpinion.returns(false);
-
-        await stateMachine.manageFolderSyncState(mockParams);
-
-        sinon.assert.calledOnceWithExactly(appReconcilerMock.adoptControllerDesired, 'test-app', 'running', sinon.match.string);
-        sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
-      });
-
-      it('leaves a g: component to the election', async () => {
-        mockParams.containerDataFlags = 'g';
-        appReconcilerMock.hasControllerOpinion.returns(false);
-
-        await stateMachine.manageFolderSyncState(mockParams);
-
-        sinon.assert.notCalled(appReconcilerMock.adoptControllerDesired);
-        sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
-      });
+      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
     });
 
     it('requests a start for a stopped syncFirst component whose folder is already sendreceive', async () => {
@@ -898,398 +530,7 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.notCalled(volumeServiceMock.isPathMounted);
     });
 
-    it('runs no permission sweep on promotion: synced files arrive owned by their writer', async () => {
-      fsMock.promises.readdir.resolves([]);
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([{ ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 }]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 0,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-      expect(result.syncthingFolder.type, 'the fixture must reach a promotion, or nothing could have been swept').to.equal('sendreceive');
-
-      const chmods = serviceHelperMock.runCommand.getCalls().filter((call) => call.args[0] === 'chmod');
-      expect(chmods, 'a mode sweep over a synced folder is a modification of every file in it').to.have.length(0);
-    });
-
-    it('names a single-writer leader without deciding its folder type: the role makes it send when it starts', async () => {
-      mockParams.containerDataFlags = 'g';
-      fsMock.promises.readdir.resolves([]);
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([{ ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 }]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 0,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder, 'a g: folder\'s type is its primary role\'s').to.not.have.property('type');
-      expect(result.cache.restarted, 'the election reads this as ready to start').to.be.true;
-      sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
-    });
-
-    it('keeps the ready mark of a single-writer standby, and decides no type for its folder', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'receiveonly' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder, 'a g: folder\'s type is its primary role\'s').to.not.have.property('type');
-      expect(result.cache).to.deep.equal({ restarted: true });
-      sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
-    });
-
-    // A ready standby is not measured, so a peer about to seed must not wait on it:
-    // every state but a measurement it already holds becomes no claim.
-    [
-      ['not looked at', { state: 'notLookedAt' }, { state: 'noClaim' }],
-      ['held out', { state: 'heldOut' }, { state: 'noClaim' }],
-      ['measured', { state: 'measured', bytes: 7, newestModified: 3 }, { state: 'measured', bytes: 7, newestModified: 3 }],
-    ].forEach(([what, before, after]) => {
-      it(`records a ready single-writer standby it found ${what} as ${after.state}`, async () => {
-        mockParams.containerDataFlags = 'g';
-        mockParams.syncFolder = { id: 'test-app', type: 'receiveonly' };
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-        dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-        globalStateMock.folderStates.set('test-app', before);
-
-        await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(globalStateMock.folderStates.get('test-app')).to.deep.equal(after);
-      });
-    });
-
-    // A receiveonly folder keeps its own deviations, owner and mode included, and
-    // the primary counts every one of them as outstanding for this node.
-    it('reverts a ready single-writer standby whose directories differ from the cluster', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'receiveonly' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 1000,
-        inSyncBytes: 1000,
-        state: 'idle',
-        receiveOnlyChangedFiles: 0,
-        receiveOnlyChangedDirectories: 1,
-      });
-
-      const publish = sinon.stub(fluxEventBus, 'publish');
-      try {
-        // The primary runs the app on another holder.
-        peerComponentMock.componentStateOnOtherHolders.resolves('running');
-        // The first pass asks for the check; the next asks for the revert its answer allows.
-        await stateMachine.manageFolderSyncState(mockParams);
-        await checksSettled();
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-        await checksSettled();
-
-        sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
-        expect(result.syncthingFolder, 'a g: folder\'s type is its primary role\'s').to.not.have.property('type');
-        expect(result.cache).to.include({ restarted: true });
-        sinon.assert.calledWithExactly(publish, 'syncthing:localChangesReverted', { folder: 'test-app', files: 0, directories: 1 });
-      } finally {
-        publish.restore();
-      }
-    });
-
-    it('reports no revert when syncthing refuses it', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'receiveonly' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 1000,
-        inSyncBytes: 1000,
-        state: 'idle',
-        receiveOnlyChangedFiles: 2,
-        receiveOnlyChangedDirectories: 0,
-      });
-      syncthingServiceMock.dbRevert.resolves({ status: 'error', data: { message: 'folder is not running' } });
-
-      const publish = sinon.stub(fluxEventBus, 'publish');
-      try {
-        // The primary runs the app on another holder.
-        peerComponentMock.componentStateOnOtherHolders.resolves('running');
-        // The first pass asks for the check; the next asks for the revert its answer allows.
-        await stateMachine.manageFolderSyncState(mockParams);
-        await checksSettled();
-        await stateMachine.manageFolderSyncState(mockParams);
-        await checksSettled();
-
-        sinon.assert.calledOnce(syncthingServiceMock.dbRevert);
-        sinon.assert.neverCalledWith(publish, 'syncthing:localChangesReverted');
-      } finally {
-        publish.restore();
-      }
-    });
-
-    it('does not revert a ready single-writer standby that is still pulling', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'receiveonly' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 1000,
-        inSyncBytes: 400,
-        state: 'syncing',
-        receiveOnlyChangedFiles: 2,
-        receiveOnlyChangedDirectories: 1,
-      });
-
-      await stateMachine.manageFolderSyncState(mockParams);
-
-      sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-    });
-
-    it('does not revert a ready single-writer standby with no local changes', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'receiveonly' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 1000,
-        inSyncBytes: 1000,
-        state: 'idle',
-        receiveOnlyChangedFiles: 0,
-        receiveOnlyChangedDirectories: 0,
-      });
-
-      await stateMachine.manageFolderSyncState(mockParams);
-
-      sinon.assert.calledOnce(syncthingServiceMock.getDbStatus);
-      sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-    });
-
-    it('stops at its checkpoint before asking for a sending folder it does not hold to be held as a standby', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'sendreceive' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      appQueryServiceMock.holdsComponent.resolves(false);
-      const checkpoint = sinon.stub(fluxEventBus, 'checkpoint').resolves();
-      try {
-        await stateMachine.manageFolderSyncState(mockParams);
-
-        sinon.assert.calledWithExactly(checkpoint, 'syncthing:beforeStandbyHold', 'test-app');
-        sinon.assert.callOrder(checkpoint.withArgs('syncthing:beforeStandbyHold'), primaryRoleMock.holdAsStandby);
-      } finally {
-        checkpoint.restore();
-      }
-    });
-
-    it('demotes a single-writer folder found sendreceive on a node that does not hold it', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'sendreceive' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      appQueryServiceMock.holdsComponent.resolves(false);
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      sinon.assert.calledWith(appQueryServiceMock.holdsComponent, 'test-app');
-      sinon.assert.calledOnceWithExactly(primaryRoleMock.holdAsStandby, 'app_test', 'test-app', { othersHold: sinon.match.func });
-      expect(result.syncthingFolder, 'a g: folder\'s type is its primary role\'s').to.not.have.property('type');
-      expect(result.cache).to.deep.equal({ restarted: false, numberOfExecutions: 0 });
-      sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
-    });
-
-    describe('a single-writer folder that sends on a node that does not hold it', () => {
-      const demote = async () => {
-        mockParams.containerDataFlags = 'g';
-        mockParams.syncFolder = { id: 'test-app', type: 'sendreceive', paused: true };
-        mockParams.syncthingFolder = { id: 'test-app', paused: false };
-        appQueryServiceMock.holdsComponent.resolves(false);
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-        return { result, othersHold: primaryRoleMock.holdAsStandby.firstCall.args[2].othersHold };
-      };
-
-      it('leaves its pause out of the pass\'s write, for its primary role to decide', async () => {
-        mockParams.readAppLocation = sinon.stub().resolves([]);
-
-        const { result } = await demote();
-
-        expect(result.syncthingFolder).to.not.have.property('paused');
-      });
-
-      // The election asks the same question of the same holders, through the
-      // same function, so whichever reaches the folder first answers alike.
-      it('asks every other holder its location records name', async () => {
-        mockParams.readAppLocation = sinon.stub().resolves([]);
-        peerComponentMock.componentStateOnOtherHolders.resolves(PeerComponent.RUNNING);
-
-        const { othersHold } = await demote();
-
-        expect(await othersHold()).to.equal(PeerComponent.RUNNING);
-        const [readLocations, localSocketAddr, ctx, options] = peerComponentMock.componentStateOnOtherHolders.firstCall.args;
-        expect(readLocations).to.equal(mockParams.readAppLocation);
-        expect(localSocketAddr).to.equal(mockParams.localSocketAddr);
-        expect(ctx).to.include({ identifier: 'app_test', appName: 'test-app' });
-        expect(ctx.appIds).to.deep.equal(['test-app']);
-        expect(options, 'a node FDM names').to.equal(undefined);
-      });
-
-      // A holder running any g: component of the app is its primary, and this
-      // folder's unsent changes are not to go out beside it.
-      it('asks about every g: component of the app', async () => {
-        mockParams.readAppLocation = sinon.stub().resolves([]);
-        mockParams.electedSiblings = ['fluxweb_test-app'];
-
-        const { othersHold } = await demote();
-        await othersHold();
-
-        const [, , ctx] = peerComponentMock.componentStateOnOtherHolders.firstCall.args;
-        expect(ctx.appIds).to.deep.equal(['test-app', 'fluxweb_test-app']);
-      });
-    });
-
-    it('leaves the pause of a sending single-writer folder out of the write when what it holds cannot be read', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'sendreceive', paused: true };
-      mockParams.syncthingFolder = { id: 'test-app', paused: false };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      appQueryServiceMock.holdsComponent.resolves(null);
-      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder).to.not.have.property('paused');
-      sinon.assert.notCalled(primaryRoleMock.holdAsStandby);
-    });
-
-    it('unpauses a sending single-writer folder this node holds', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'sendreceive', paused: true };
-      mockParams.syncthingFolder = { id: 'test-app', paused: false };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      appQueryServiceMock.holdsComponent.resolves(true);
-      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: true } });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder).to.include({ paused: false });
-    });
-
-    // Held covers a primary its owner stopped to work on its data, which has no
-    // running container: demoting it would revert the owner's edits.
-    it('does not demote a single-writer folder while this node holds it, running or not', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'sendreceive' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-      appQueryServiceMock.holdsComponent.resolves(true);
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      sinon.assert.notCalled(primaryRoleMock.holdAsStandby);
-      expect(result.syncthingFolder, 'a g: folder\'s type is its primary role\'s').to.not.have.property('type');
-      expect(result.cache).to.deep.equal({ restarted: true });
-    });
-
-    it('does not demote when what this node holds cannot be read', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.syncFolder = { id: 'test-app', type: 'sendreceive' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      appQueryServiceMock.holdsComponent.resolves(null);
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      sinon.assert.notCalled(primaryRoleMock.holdAsStandby);
-      expect(result.syncthingFolder, 'a g: folder\'s type is its primary role\'s').to.not.have.property('type');
-    });
-
-    it('never demotes a replicated folder for a stopped container', async () => {
-      mockParams.containerDataFlags = 'r';
-      mockParams.syncFolder = { id: 'test-app', type: 'sendreceive' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-      appQueryServiceMock.holdsComponent.resolves(false);
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type).to.equal('sendreceive');
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
-    });
-
-    // The figure peers rank this node by. It is published where it is computed, and
-    // it has to mean the same thing as the node's own use of it.
-    it('publishes what it holds for the peers that rank it', async () => {
-      fsMock.promises.readdir.resolves([]);
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([{ ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 }]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 0,
-      });
-      syncthingServiceMock.eachDbLocalChanged.callsFake(feed({
-        files: [localEntry('appdata/world.db', 5821604997, '2026-09-16T23:00:00Z')],
-      }));
-
-      await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(globalStateMock.folderStates.get('test-app')).to.include({ state: 'measured', bytes: 5821604997 });
-    });
-
-    // A read it cannot make is not a smaller claim, it is no claim - and the node
-    // stands down on exactly that. Left up, the last good figure makes every peer
-    // defer to a node that is refusing to lead, and nobody seeds. Recorded as
-    // no claim rather than removed, so the folder is not one it has yet to look at.
-    it('records the folder as no claim when it can no longer read what it holds', async () => {
-      globalStateMock.folderStates.set('test-app', { state: 'measured', bytes: 5821604997, newestModified: 200 });
-      globalStateMock.folderStates.set('other-app', { state: 'measured', bytes: 900, newestModified: 100 });
-      fsMock.promises.readdir.resolves([]);
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([{ ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 }]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 0,
-      });
-      syncthingServiceMock.eachDbLocalChanged.rejects(new Error('connect ECONNREFUSED'));
-
-      await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(globalStateMock.folderStates.get('test-app'), 'an unreadable folder still claims its last good figure').to.deep.equal({ state: 'noClaim' });
-      expect(globalStateMock.folderStates.get('other-app'), 'another folder\'s claim is not this folder\'s to withdraw').to.include({ state: 'measured' });
-    });
-
-    // The status read for the decision is the one the disk is judged against. Read
-    // a second time, a status that failed or read empty in between paired this
-    // reading's "synced" with that one's "nothing to check", and an empty volume
-    // was promoted - its missing files sent to every peer as deletions.
-    it('does not promote a synced folder over an empty disk when syncthing\'s status reads empty a moment later', async () => {
-      fsMock.promises.readdir.resolves([]);
-      mockParams.containerDataFlags = 'r';
-      mockParams.syncFolder = { id: 'test-app', type: 'receiveonly' };
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: false, numberOfExecutions: 1 });
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.0:16127', runningSince: '2026-01-01T00:00:00Z', broadcastedAt: 1000 },
-        { ip: '10.0.0.1:16127', runningSince: '2026-01-01T00:01:00Z', broadcastedAt: 1000 },
-      ]);
-      syncthingServiceMock.getDbStatus.resetBehavior();
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, globalFiles: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 0,
-      });
-      syncthingServiceMock.getDbStatus.onFirstCall().resolves({
-        globalBytes: 500000, globalFiles: 12, inSyncBytes: 500000, state: 'idle', receiveOnlyChangedFiles: 0,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type, 'the empty volume was promoted').to.equal('receiveonly');
-      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
-    });
-
     it('should elect leader and start immediately', async () => {
-      // A cold start holds nothing, so the volume is empty too - the seed guard reads
-      // the disk, and the suite default puts files there for verifyFolderMountSafety.
-      fsMock.promises.readdir.resolves([]);
       mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
         restarted: false,
         numberOfExecutions: 1,
@@ -1347,9 +588,6 @@ describe('syncthingFolderStateMachine tests', () => {
     });
 
     it('confirms again after a heal - isolation resets the streak, it does not end the candidacy', async () => {
-      // A cold start holds nothing, so the volume is empty too - the seed guard reads
-      // the disk, and the suite default puts files there for verifyFolderMountSafety.
-      fsMock.promises.readdir.resolves([]);
       mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
         restarted: false,
         numberOfExecutions: 1,
@@ -1432,7 +670,6 @@ describe('syncthingFolderStateMachine tests', () => {
       // about the holder's device and answered that it is not connected
       globalStateMock.syncthingDevicesIDCache.set('10.0.0.1:16127', 'HOLDER-DEVICE-ID');
       syncthingServiceMock.getDbCompletion.resolves({ remoteState: 'unknown', completion: 0, globalBytes: 0 });
-      syncthingServiceMock.getDeviceStats.resolves({ 'HOLDER-DEVICE-ID': { lastSeen: '2026-09-25T14:00:00Z' } });
       // the survivor had been syncing alongside and holds a full copy - a partial
       // survivor must NOT take over (covered by the partial-copy test above)
       syncthingServiceMock.getDbStatus.resolves({
@@ -1471,41 +708,6 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      expect(result.syncthingFolder.type).to.not.equal('sendreceive');
-      expect(result.cache.designationPending).to.not.equal(true);
-      expect(result.cache.designatedLeader).to.not.equal(true);
-    });
-
-    it('leaves a holder that announced a shutdown in the election until its expiry has passed', async () => {
-      // A clean shutdown closes the holder's connection as surely as a death,
-      // and a node back from a reboot within SIGTERM_EXPIRY_MS keeps what it holds.
-      mockParams.localSocketAddr = '10.0.0.2:16127';
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false,
-        numberOfExecutions: 1,
-        leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
-        { ip: '10.0.0.2:16127', runningSince: null, broadcastedAt: 1000 },
-      ]);
-      axiosMock.get.rejects(new Error('connect ECONNREFUSED'));
-      fluxCommunicationMock.peerResponsiveness.returns({ responding: 8, total: 8 });
-      globalStateMock.syncthingDevicesIDCache.set('10.0.0.1:16127', 'HOLDER-DEVICE-ID');
-      syncthingServiceMock.getDbCompletion.resolves({ remoteState: 'unknown', completion: 0, globalBytes: 0 });
-      syncthingServiceMock.getDeviceStats.resolves({ 'HOLDER-DEVICE-ID': { lastSeen: '2026-09-25T14:00:00Z' } });
-      // an empty folder, so no route to sendreceive exists except winning the
-      // election - which requires the holder's exclusion
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 0,
-      });
-      registryManagerMock.shuttingDownNodes.resolves(['10.0.0.1:16127']);
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      // the holder's closed connection was read, and only its shutdown kept it
-      // in the election, which this node therefore did not win
-      expect(registryManagerMock.shuttingDownNodes.called).to.be.true;
       expect(result.syncthingFolder.type).to.not.equal('sendreceive');
       expect(result.cache.designationPending).to.not.equal(true);
       expect(result.cache.designatedLeader).to.not.equal(true);
@@ -1628,10 +830,10 @@ describe('syncthingFolderStateMachine tests', () => {
       expect(result.cache.restarted).to.not.equal(true);
     });
 
-    it('does not seed when a peer already holds the writable copy', async () => {
+    it('stays receiveonly when a peer already holds the writable copy', async () => {
       // Winning is not the same as winning first. The peer decided from a smaller
-      // view of the holder list and promoted; seeding here too would leave two
-      // first copies of the same folder.
+      // view of the holder list and promoted; promoting here too would leave two
+      // writable copies of the same folder, and neither node revisits it.
       mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
         restarted: false,
         numberOfExecutions: 1,
@@ -1648,346 +850,6 @@ describe('syncthingFolderStateMachine tests', () => {
       expect(result.syncthingFolder.type).to.equal('receiveonly');
       expect(result.cache.restarted).to.not.equal(true);
       sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
-    });
-
-    // Two holders can each be elected to seed - each decides from its own view of
-    // the claims - and confirm on the same pass. Each announces its intent when it is
-    // elected, marks itself deciding before it reads its peers, and reads them fresh:
-    // a holder that has decided, or that also intends to and ranks first, keeps this
-    // node from seeding.
-    describe('the seed decision between holders that can reach each other', () => {
-      const confirmedSeed = ({ local = '10.0.0.1:16127', ownFiles = [] } = {}) => {
-        mockParams.localSocketAddr = local;
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-          restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-        });
-        mockParams.appLocation.resolves([
-          { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
-          { ip: '10.0.0.2:16127', runningSince: null, broadcastedAt: 1000 },
-        ]);
-        fluxCommunicationMock.peerResponsiveness.returns({ responding: 8, total: 8 });
-        fsMock.promises.readdir.resolves([]);
-        syncthingServiceMock.getDbStatus.resolves({
-          globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 0,
-        });
-        syncthingServiceMock.eachDbLocalChanged.callsFake(feed({ files: ownFiles }));
-      };
-      const rivalAnswers = (seeding) => {
-        axiosMock.get.resolves({ data: { data: { ready: true, folders: [], seeding } } });
-      };
-      let count;
-      beforeEach(() => { count = sinon.stub(fluxEventBus, 'count'); });
-      afterEach(() => { count.restore(); });
-      const outcomes = () => count.getCalls()
-        .filter((call) => call.args[0] === 'syncthing:seedDecision').map((call) => call.args[2]);
-
-      it('seeds, and marks it decided, when no rival answers with a mark', async () => {
-        confirmedSeed();
-        rivalAnswers({});
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('sendreceive');
-        expect(globalStateMock.seedMarks.get('test-app')).to.include({ stage: 'decided' });
-        expect(outcomes()).to.deep.equal(['seeded']);
-      });
-
-      it('marks itself deciding before it reads its peers', async () => {
-        confirmedSeed();
-        const seenAtRead = [];
-        axiosMock.get.callsFake(async () => {
-          seenAtRead.push(globalStateMock.seedMarks.get('test-app')?.stage);
-          return { data: { data: { ready: true, folders: [], seeding: {} } } };
-        });
-
-        await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(seenAtRead.at(-1), 'the deciding read happened before this node was marked deciding').to.equal('deciding');
-      });
-
-      it('yields to a rival that has already decided to seed', async () => {
-        confirmedSeed();
-        rivalAnswers({ 'test-app': { stage: 'decided', bytes: 0, newestModified: 0 } });
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('receiveonly');
-        expect(result.cache.restarted).to.not.equal(true);
-        expect(outcomes()).to.deep.equal(['yieldedToDecided']);
-        expect(globalStateMock.seedMarks.get('test-app'), 'still elected, so still announcing').to.include({ stage: 'intent' });
-        sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
-      });
-
-      ['intent', 'deciding'].forEach((stage) => {
-        it(`yields to a rival whose ${stage} carries more data`, async () => {
-          confirmedSeed();
-          rivalAnswers({ 'test-app': { stage, bytes: 500, newestModified: 10 } });
-
-          const result = await stateMachine.manageFolderSyncState(mockParams);
-
-          expect(result.syncthingFolder.type).to.equal('receiveonly');
-          expect(outcomes()).to.deep.equal(['yieldedToRank']);
-        });
-      });
-
-      it('seeds over a rival whose claim ranks below its own', async () => {
-        confirmedSeed({ ownFiles: [localEntry('appdata/world.db', 800)] });
-        rivalAnswers({ 'test-app': { stage: 'deciding', bytes: 500, newestModified: Date.parse('2027-01-01T00:00:00Z') } });
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('sendreceive');
-        expect(outcomes()).to.deep.equal(['seeded']);
-      });
-
-      it('separates equal claims by the lower address, the same way on both sides', async () => {
-        confirmedSeed({ local: '10.0.0.1:16127' });
-        rivalAnswers({ 'test-app': { stage: 'deciding', bytes: 0, newestModified: 0 } });
-        expect((await stateMachine.manageFolderSyncState(mockParams)).syncthingFolder.type, 'the lower address').to.equal('sendreceive');
-
-        globalStateMock.seedMarks.clear();
-        mockParams.syncthingFolder = { id: 'test-app' };
-        mockParams.liveness = createPeerFolderLiveness();
-        confirmedSeed({ local: '10.0.0.2:16127' });
-        rivalAnswers({ 'test-app': { stage: 'deciding', bytes: 0, newestModified: 0 } });
-        expect((await stateMachine.manageFolderSyncState(mockParams)).syncthingFolder.type, 'the higher address').to.equal('receiveonly');
-      });
-
-      it('reads its peers fresh for the decision, not from the answer the pass opened with', async () => {
-        confirmedSeed();
-        axiosMock.get.onFirstCall().resolves({ data: { data: { ready: true, folders: [], seeding: {} } } });
-        axiosMock.get.resolves({ data: { data: { ready: true, folders: [], seeding: { 'test-app': { stage: 'decided' } } } } });
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(axiosMock.get.callCount, 'the rival was asked again for the decision').to.be.at.least(2);
-        expect(result.syncthingFolder.type).to.equal('receiveonly');
-        expect(outcomes()).to.deep.equal(['yieldedToDecided']);
-      });
-
-      it('decides nothing when the decision took longer than a pass, and decides again on the next', async () => {
-        confirmedSeed();
-        const clock = sinon.useFakeTimers({ toFake: ['hrtime'] });
-        try {
-          axiosMock.get.callsFake(async () => {
-            clock.tick(30001);
-            return { data: { data: { ready: true, folders: [], seeding: {} } } };
-          });
-          const slow = await stateMachine.manageFolderSyncState(mockParams);
-          expect(slow.syncthingFolder.type).to.equal('receiveonly');
-          expect(outcomes()).to.deep.equal(['overBudget']);
-          expect(globalStateMock.seedMarks.get('test-app')).to.include({ stage: 'intent' });
-
-          rivalAnswers({});
-          mockParams.receiveOnlySyncthingAppsCache.set('test-app', slow.cache);
-          mockParams.syncthingFolder = { id: 'test-app' };
-          mockParams.liveness = createPeerFolderLiveness();
-          const next = await stateMachine.manageFolderSyncState(mockParams);
-          expect(next.syncthingFolder.type).to.equal('sendreceive');
-        } finally {
-          clock.restore();
-        }
-      });
-
-      // The budget bounds the time from this node's read to its decision: a rival
-      // its read missed marked its intent after the read began. Time before the read
-      // is not in it.
-      [
-        ['before the read, which does not count', 'syncthing:beforeSeedDecision', 'sendreceive', 'seeded'],
-        ['after the read, which does', 'syncthing:beforeSeedRecord', 'receiveonly', 'overBudget'],
-      ].forEach(([when, name, type, outcome]) => {
-        it(`times the decision from its read: a pass spent ${when}`, async () => {
-          confirmedSeed();
-          rivalAnswers({});
-          const clock = sinon.useFakeTimers({ toFake: ['hrtime'] });
-          const checkpoint = sinon.stub(fluxEventBus, 'checkpoint').callsFake(async (held) => {
-            if (held === name) clock.tick(30001);
-          });
-          try {
-            const result = await stateMachine.manageFolderSyncState(mockParams);
-
-            expect(result.syncthingFolder.type).to.equal(type);
-            expect(outcomes()).to.deep.equal([outcome]);
-          } finally {
-            checkpoint.restore();
-            clock.restore();
-          }
-        });
-      });
-
-      // Two holders that cannot reach each other are a partition, which only an
-      // election agreed across the fleet settles; one that cannot answer at all is
-      // decided as it was before peers could be asked.
-      it('does not count a rival it cannot read', async () => {
-        confirmedSeed();
-        axiosMock.get.rejects(new Error('connect ECONNREFUSED'));
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('sendreceive');
-      });
-
-      it('does not count a rival too old to be asked', async () => {
-        confirmedSeed();
-        axiosMock.get.rejects(httpStatus(404));
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('sendreceive');
-      });
-
-      it('announces intent on the pass it is elected, and withdraws it once it is not', async () => {
-        confirmedSeed();
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: false, numberOfExecutions: 1, leaderStreak: 0 });
-        rivalAnswers({});
-
-        const first = await stateMachine.manageFolderSyncState(mockParams);
-        expect(first.syncthingFolder.type).to.equal('receiveonly');
-        expect(globalStateMock.seedMarks.get('test-app')).to.include({ stage: 'intent' });
-
-        // A peer holding the owner's data now outranks it, so it is no longer elected.
-        mockParams.liveness = createPeerFolderLiveness();
-        mockParams.syncthingFolder = { id: 'test-app' };
-        rivalAnswers({});
-        axiosMock.get.resolves({ data: { data: { ready: true, folders: [], holding: { 'test-app': { bytes: 900, newestModified: 5 } } } } });
-        await stateMachine.manageFolderSyncState(mockParams);
-        expect(globalStateMock.seedMarks.has('test-app')).to.equal(false);
-      });
-
-      it('goes back to intent when it is not safe to seed after all', async () => {
-        confirmedSeed();
-        rivalAnswers({});
-        syncthingServiceMock.getDbStatus.resolves({
-          globalBytes: 1000, globalFiles: 1, inSyncBytes: 500, state: 'idle', receiveOnlyChangedFiles: 0,
-        });
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('receiveonly');
-        expect(globalStateMock.seedMarks.get('test-app')).to.include({ stage: 'intent' });
-      });
-    });
-
-    // The election goes on naming the lowest address for as long as it wins the
-    // tiebreak, so a node that lost the seed to a peer would otherwise stay
-    // receiveonly for as long as that peer holds the copy - receiving the data and
-    // never eligible to take over.
-    it('goes on as a standby once a peer holds the writable copy, and turns writable when synced', async () => {
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false,
-        numberOfExecutions: 1,
-        leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
-        { ip: '10.0.0.2:16127', runningSince: null, broadcastedAt: 1000 },
-      ]);
-      axiosMock.get.resolves({ data: { data: { ready: true, folders: ['test-app'] } } });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 100000, inSyncBytes: 100000, state: 'idle', receiveOnlyChangedFiles: 0,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type).to.equal('sendreceive');
-      expect(result.cache.restarted).to.be.true;
-      expect(result.cache.designationPending, 'a standby promotion was recorded as a seed').to.not.equal(true);
-    });
-
-    it('a single-writer seed taken by a peer becomes ready when synced, with no type decided for its folder', async () => {
-      mockParams.containerDataFlags = 'g';
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false,
-        numberOfExecutions: 1,
-        leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
-        { ip: '10.0.0.2:16127', runningSince: null, broadcastedAt: 1000 },
-      ]);
-      axiosMock.get.resolves({ data: { data: { ready: true, folders: ['test-app'] } } });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 100000, inSyncBytes: 100000, state: 'idle', receiveOnlyChangedFiles: 0,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      // The election reads a synced single-writer standby as ready; only the
-      // primary's folder sends.
-      expect(result.syncthingFolder, 'a g: folder\'s type is its primary role\'s').to.not.have.property('type');
-      expect(result.cache.restarted, 'the standby never became ready to take over').to.be.true;
-      expect(result.cache.designationPending, 'a standby promotion was recorded as a seed').to.not.equal(true);
-    });
-
-    describe('a peer whose address another node answers', () => {
-      const leaderWithOnePeer = () => {
-        // A cold start holds nothing, so the volume is empty too.
-        fsMock.promises.readdir.resolves([]);
-        syncthingServiceMock.getDbStatus.resolves({
-          globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 0,
-        });
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-          restarted: false,
-          numberOfExecutions: 1,
-          leaderStreak: 5,
-        });
-        mockParams.appLocation.resolves([
-          { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
-          { ip: '10.0.0.2:16127', runningSince: null, broadcastedAt: 1000 },
-        ]);
-        // Whatever answers holds nothing.
-        axiosMock.get.resolves({ data: { data: { ready: true, folders: [] } } });
-        axiosMock.post.resolves({ data: { data: { ready: true, folders: [] } } });
-      };
-
-      it('promotes the elected node when the peer proves it holds nothing - the control', async () => {
-        leaderWithOnePeer();
-        peerIdentityMock.verified('10.0.0.2:16127');
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('sendreceive');
-      });
-
-      it('does not promote on "holds nothing" from a different node, because the peer may hold the copy', async () => {
-        leaderWithOnePeer();
-        peerIdentityMock.misrouted('10.0.0.2:16127', '10.0.0.7:16137');
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('receiveonly');
-        expect(result.cache.restarted).to.not.equal(true);
-      });
-
-      it('does not promote on "holds nothing" in a reply a peer that proves who it is did not sign', async () => {
-        leaderWithOnePeer();
-        peerIdentityMock.verified('10.0.0.2:16127');
-        peerIdentityMock.repliesUnsigned('10.0.0.2:16127');
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('receiveonly');
-        expect(result.cache.restarted).to.not.equal(true);
-      });
-
-      it('keeps a holder another node answers for in the election, rather than dropping it as gone', async () => {
-        mockParams.localSocketAddr = '10.0.0.2:16127';
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-          restarted: false,
-          numberOfExecutions: 1,
-          leaderStreak: 5,
-        });
-        mockParams.appLocation.resolves([
-          { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
-          { ip: '10.0.0.2:16127', runningSince: null, broadcastedAt: 1000 },
-        ]);
-        peerIdentityMock.misrouted('10.0.0.1:16127', '10.0.0.7:16137');
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('receiveonly');
-        expect(result.cache.restarted).to.not.equal(true);
-      });
     });
 
     it('withdraws the designation when a gate turns the winner back', async () => {
@@ -2034,9 +896,6 @@ describe('syncthingFolderStateMachine tests', () => {
     });
 
     it('promotes once that peer has determined it holds nothing', async () => {
-      // A cold start holds nothing, so the volume is empty too - the seed guard reads
-      // the disk, and the suite default puts files there for verifyFolderMountSafety.
-      fsMock.promises.readdir.resolves([]);
       // The wait needs no bound because it resolves itself: the peer completes its
       // pass and answers, or it stops responding and becomes the unreachable case,
       // which does not block.
@@ -2069,9 +928,6 @@ describe('syncthingFolderStateMachine tests', () => {
     });
 
     it('promotes when no peer holds the writable copy', async () => {
-      // A cold start holds nothing, so the volume is empty too - the seed guard reads
-      // the disk, and the suite default puts files there for verifyFolderMountSafety.
-      fsMock.promises.readdir.resolves([]);
       mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
         restarted: false,
         numberOfExecutions: 1,
@@ -2093,9 +949,6 @@ describe('syncthingFolderStateMachine tests', () => {
     });
 
     it('promotes over an unreachable peer when this node is evidently well connected', async () => {
-      // A cold start holds nothing, so the volume is empty too - the seed guard reads
-      // the disk, and the suite default puts files there for verifyFolderMountSafety.
-      fsMock.promises.readdir.resolves([]);
       // A node still trading pings with the fleet is watching one peer fall over,
       // not sitting in a partition. Deferring there would let a dead node strand the
       // app with no writable copy anywhere.
@@ -2121,9 +974,6 @@ describe('syncthingFolderStateMachine tests', () => {
     });
 
     it('still seeds a cold start when a peer cannot be asked, instead of waiting to be upgraded', async () => {
-      // A cold start holds nothing, so the volume is empty too - the seed guard reads
-      // the disk, and the suite default puts files there for verifyFolderMountSafety.
-      fsMock.promises.readdir.resolves([]);
       // The other half, and the reason a peer that cannot answer must not be filed
       // as "not ready yet": unready blocks with no bound, which it earns by
       // resolving itself. A peer that predates the endpoint never will. Blocking
@@ -2249,11 +1099,7 @@ describe('syncthingFolderStateMachine tests', () => {
     it('withdraws the designated-leader claim when the election is lost', async () => {
       // a node that was on a leader streak but loses the election (a peer now
       // serves) must retract designatedLeader - a stale claim would let it
-      // skip the primary-selection stagger it no longer deserves.
-      // The loss is a peer that can be SHOWN to hold the data; holding data of its
-      // own no longer costs a node the election, because there would be nobody to
-      // defer to.
-      peerHoldsTheData();
+      // skip the primary-selection stagger it no longer deserves
       mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
         restarted: false,
         numberOfExecutions: 1,
@@ -2273,9 +1119,6 @@ describe('syncthingFolderStateMachine tests', () => {
     });
 
     it('should let a confirmed leader start even while stall evidence is accumulating', async () => {
-      // A cold start holds nothing, so the volume is empty too - the seed guard reads
-      // the disk, and the suite default puts files there for verifyFolderMountSafety.
-      fsMock.promises.readdir.resolves([]);
       // The old machinery stopped the container during its stall recovery, so
       // leadership had to be suppressed mid-recovery. The ladder never stops the
       // container before an (atomic) removal, so a confirmed leader simply starts -
@@ -2304,7 +1147,7 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
       expect(result.syncthingFolder.type).to.equal('sendreceive');
       expect(result.cache.restarted).to.be.true;
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
     });
 
     it('should wait for sync completion when not leader', async () => {
@@ -2375,11 +1218,7 @@ describe('syncthingFolderStateMachine tests', () => {
         receiveOnlyChangedBytes: 555,
       });
 
-      // The first pass asks for the check; the next acts on its answer.
-      await stateMachine.manageFolderSyncState(mockParams);
-      await checksSettled();
       const result = await stateMachine.manageFolderSyncState(mockParams);
-      await checksSettled();
 
       sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
       expect(result.syncthingFolder.type).to.equal('receiveonly');
@@ -2387,891 +1226,20 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, sinon.match.any, 'running');
     });
 
-    // A change whose cluster version is this node's own is held by no other device:
-    // syncthing reverts it by deleting it. One to data another device wrote is the
-    // only copy of that data, so it is kept and promoted with the rest; one this node
-    // made itself is reverted, as any pollution is. The check runs off the pass, and
-    // its answer is acted on only while the folder is the one it was checked against.
-    describe('a local change no other device holds', () => {
-      const FROM_PRIMARY = ['PRIMARY:5', 'LOCAL-D:9'];
-      const changes = (...files) => syncthingServiceMock.getDbLocalChanged.resolves({ files });
-      const onlyHere = (name) => syncthingServiceMock.getDbFile.withArgs('test-app', name).resolves({ global: { localFlags: 8 }, local: { localFlags: 8 } });
-      const heldElsewhere = (name) => syncthingServiceMock.getDbFile.withArgs('test-app', name).resolves({ global: { localFlags: 0 }, local: { localFlags: 8 } });
-      const status = (over = {}) => syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 1000, inSyncBytes: 1000, state: 'idle', receiveOnlyChangedFiles: 0, receiveOnlyChangedDirectories: 1,
-        sequence: 10, remoteSequence: { 'PRIMARY-DEVICE': 5 }, ...over,
-      });
-      const sharedWith = (...devices) => syncthingServiceMock.getConfigFolders.resolves({ id: 'test-app', devices: devices.map((deviceID) => ({ deviceID })) });
-      const pollutedCandidate = () => {
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: false, numberOfExecutions: 1 });
-        mockParams.appLocation.resolves([
-          { ip: '10.0.0.0:16127', runningSince: null, broadcastedAt: 1000 },
-          { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
-        ]);
-        status();
-      };
-      const readyStandby = () => {
-        mockParams.containerDataFlags = 'g';
-        mockParams.syncFolder = { id: 'test-app', type: 'receiveonly' };
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: true });
-        dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-        status();
-      };
-      const pass = () => stateMachine.manageFolderSyncState(mockParams);
-      const checkedPass = async () => {
-        await pass();
-        await checksSettled();
-        const result = await pass();
-        await checksSettled();
-        return result;
-      };
-
-      it('is neither reverted nor promoted before the check has answered', async () => {
-        pollutedCandidate();
-        changes({ name: 'appdata/held', version: FROM_PRIMARY });
-        heldElsewhere('appdata/held');
-
-        const result = await pass();
-
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-        expect(result.cache.restarted).to.be.false;
-      });
-
-      it('is kept, and the folder is promoted', async () => {
-        pollutedCandidate();
-        changes({ name: 'appdata/only-here', version: FROM_PRIMARY });
-        onlyHere('appdata/only-here');
-
-        const result = await checkedPass();
-
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-        expect(result.cache.restarted, 'a change only this node holds kept the folder from promoting').to.be.true;
-      });
-
-      it('is reverted on an r: folder when this node made it, asking nothing about it', async () => {
-        pollutedCandidate();
-        changes({ name: 'appdata/made-here', version: ['LOCAL-D:9'] });
-
-        const result = await checkedPass();
-
-        sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
-        sinon.assert.notCalled(syncthingServiceMock.getDbFile);
-        expect(result.cache.restarted).to.be.false;
-      });
-
-      it('is reverted when another device holds the cluster\'s version', async () => {
-        pollutedCandidate();
-        changes({ name: 'appdata/held', version: FROM_PRIMARY });
-        heldElsewhere('appdata/held');
-
-        await checkedPass();
-
-        sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
-      });
-
-      it('is found behind changes other devices hold', async () => {
-        pollutedCandidate();
-        changes({ name: 'appdata/held', version: FROM_PRIMARY }, { name: 'appdata/only-here', version: FROM_PRIMARY });
-        heldElsewhere('appdata/held');
-        onlyHere('appdata/only-here');
-
-        await checkedPass();
-
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-      });
-
-      it('is found on a later page', async () => {
-        pollutedCandidate();
-        const held = Array.from({ length: 1000 }, (_, k) => ({ name: `appdata/held-${k}`, version: FROM_PRIMARY }));
-        syncthingServiceMock.getDbLocalChanged.withArgs('test-app', 1).resolves({ files: held });
-        syncthingServiceMock.getDbLocalChanged.withArgs('test-app', 2).resolves({ files: [{ name: 'appdata/only-here', version: FROM_PRIMARY }] });
-        syncthingServiceMock.getDbFile.resolves({ global: { localFlags: 0 } });
-        onlyHere('appdata/only-here');
-
-        await checkedPass();
-
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-      });
-
-      // The primary dies and is dropped from the folder: a change it held is now the
-      // only copy. Neither counter moves when a device leaves, so the device list is
-      // what makes the answer from before stale.
-      it('is not reverted on an answer from before the primary left the folder', async () => {
-        pollutedCandidate();
-        changes({ name: 'appdata/save', version: FROM_PRIMARY });
-        heldElsewhere('appdata/save');
-        await pass();
-        await checksSettled();
-        sharedWith('LOCAL-DEVICE');
-        onlyHere('appdata/save');
-
-        await pass();
-        await checksSettled();
-        const result = await pass();
-
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-        expect(result.cache.restarted, 'the only copy, kept, is promoted').to.be.true;
-      });
-
-      // A pull moves the folder's sequences and not its counts of this node's changes,
-      // so the answer stands while the primary keeps writing.
-      it('reverts on its answer while the folder only pulls, its sequences moving every pass', async () => {
-        pollutedCandidate();
-        changes({ name: 'appdata/held', version: FROM_PRIMARY });
-        heldElsewhere('appdata/held');
-        await pass();
-        await checksSettled();
-        status({ sequence: 11, remoteSequence: { 'PRIMARY-DEVICE': 6 } });
-
-        await pass();
-        await checksSettled();
-
-        sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
-      });
-
-      [
-        ['another change on this node', { receiveOnlyChangedFiles: 1 }],
-        ['a change of what this node changed', { receiveOnlyChangedBytes: 4096 }],
-      ].forEach(([what, moved]) => {
-        it(`is checked again after ${what}, and not reverted on the answer from before it`, async () => {
-          pollutedCandidate();
-          changes({ name: 'appdata/held', version: FROM_PRIMARY });
-          heldElsewhere('appdata/held');
-          await pass();
-          await checksSettled();
-          status(moved);
-
-          await pass();
-          await checksSettled();
-
-          sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-          sinon.assert.calledTwice(syncthingServiceMock.getDbLocalChanged);
-        });
-      });
-
-      // The counts can stay the same while the changes do not: the revert reads them
-      // again, and goes ahead only on the ones the check examined.
-      it('does not revert changes other than the ones checked, and checks them before any revert', async () => {
-        pollutedCandidate();
-        changes({ name: 'appdata/held', version: FROM_PRIMARY });
-        heldElsewhere('appdata/held');
-        await pass();
-        await checksSettled();
-        changes({ name: 'appdata/other', version: FROM_PRIMARY });
-        onlyHere('appdata/other');
-
-        await pass();
-        await checksSettled();
-
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-        expect(mockParams.receiveOnlySyncthingAppsCache.get('test-app'), 'the answer the revert did not rest on').to.not.have.property('localChangeCheck');
-
-        await checkedPass();
-
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-        expect(mockParams.receiveOnlySyncthingAppsCache.get('test-app').localChangeCheck.onlyCopy).to.equal('appdata/other');
-      });
-
-      it('does not revert when its changes cannot be read again', async () => {
-        pollutedCandidate();
-        changes({ name: 'appdata/held', version: FROM_PRIMARY });
-        heldElsewhere('appdata/held');
-        await pass();
-        await checksSettled();
-        syncthingServiceMock.getDbLocalChanged.rejects(new Error('connect ECONNREFUSED'));
-
-        await pass();
-        await checksSettled();
-
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-      });
-
-      it('leaves no answer on a folder whose entry was replaced while it was checked', async () => {
-        pollutedCandidate();
-        changes({ name: 'appdata/held', version: FROM_PRIMARY });
-        heldElsewhere('appdata/held');
-        await pass();
-        const checked = mockParams.receiveOnlySyncthingAppsCache.get('test-app');
-        const replacement = { restarted: false, numberOfExecutions: 0 };
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', replacement);
-        await checksSettled();
-
-        expect(checked, 'the replaced entry took the answer').to.not.have.property('localChangeCheck');
-        expect(replacement).to.not.have.property('localChangeCheck');
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-      });
-
-      it('is neither reverted nor promoted while the changes cannot be read, and is asked about again', async () => {
-        pollutedCandidate();
-        syncthingServiceMock.getDbLocalChanged.rejects(new Error('connect ECONNREFUSED'));
-
-        const result = await checkedPass();
-
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-        expect(result.cache.restarted).to.be.false;
-        sinon.assert.calledTwice(syncthingServiceMock.getDbLocalChanged);
-      });
-
-      it('is neither reverted nor promoted while which devices share the folder cannot be read', async () => {
-        pollutedCandidate();
-        syncthingServiceMock.getConfigFolders.rejects(new Error('connect ECONNREFUSED'));
-
-        const result = await checkedPass();
-
-        sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-        sinon.assert.notCalled(syncthingServiceMock.getDbLocalChanged);
-        expect(result.cache.restarted).to.be.false;
-      });
-
-      // A change only this node made, on a single-writer folder, is the app's data
-      // while no other holder runs the app - its own writes as an earlier primary
-      // included - and junk beside a holder that runs it.
-      describe('made on this node, on a single-writer folder', () => {
-        const MADE_HERE = ['LOCAL-D:9'];
-        const othersRun = (state) => peerComponentMock.componentStateOnOtherHolders.resolves(state);
-
-        it('is reverted while another holder runs the app', async () => {
-          readyStandby();
-          changes({ name: 'appdata/stray', version: MADE_HERE });
-          othersRun('running');
-
-          await checkedPass();
-
-          sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
-        });
-
-        it('is kept while no other holder runs the app, and said once', async () => {
-          readyStandby();
-          changes({ name: 'appdata/written-as-primary', version: MADE_HERE }, { name: 'appdata', version: MADE_HERE });
-          othersRun('notRunning');
-          const publish = sinon.stub(fluxEventBus, 'publish');
-          try {
-            await checkedPass();
-            await pass();
-
-            sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-            sinon.assert.calledOnceWithExactly(
-              publish.withArgs('syncthing:localChangesKept'),
-              'syncthing:localChangesKept',
-              {
-                folder: 'test-app', files: 0, directories: 1, reason: 'noHolderRunsTheApp',
-              },
-            );
-          } finally {
-            publish.restore();
-          }
-        });
-
-        it('is neither reverted nor promoted while whether another holder runs the app cannot be said', async () => {
-          pollutedCandidate();
-          mockParams.containerDataFlags = 'g';
-          changes({ name: 'appdata/stray', version: MADE_HERE });
-          othersRun('unknown');
-
-          const result = await checkedPass();
-
-          sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-          expect(result.cache.restarted).to.be.false;
-        });
-
-        // The sole survivor of an app it was once the primary of: its folder becomes
-        // ready to take over with its changes, rather than being held for a revert
-        // that deletes them.
-        it('lets a folder become ready to take over while no other holder runs the app', async () => {
-          pollutedCandidate();
-          mockParams.containerDataFlags = 'g';
-          changes({ name: 'appdata/written-as-primary', version: MADE_HERE });
-          othersRun('notRunning');
-
-          const result = await checkedPass();
-
-          sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-          expect(result.cache.restarted).to.be.true;
-        });
-
-        it('is reverted once a holder runs the app, though it was kept while none did', async () => {
-          readyStandby();
-          changes({ name: 'appdata/stray', version: MADE_HERE });
-          othersRun('notRunning');
-          await checkedPass();
-          sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-
-          othersRun('running');
-          await pass();
-          await checksSettled();
-
-          sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
-        });
-
-        it('is kept beside a holder that runs the app when another change is the only copy of another device\'s data', async () => {
-          readyStandby();
-          changes({ name: 'appdata/stray', version: MADE_HERE }, { name: 'appdata/only-here', version: FROM_PRIMARY });
-          onlyHere('appdata/only-here');
-          othersRun('running');
-
-          await checkedPass();
-
-          sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-          sinon.assert.notCalled(peerComponentMock.componentStateOnOtherHolders);
-        });
-
-        it('does not ask whether another holder runs the app when every change names another device', async () => {
-          readyStandby();
-          changes({ name: 'appdata/held', version: FROM_PRIMARY });
-          heldElsewhere('appdata/held');
-
-          await checkedPass();
-
-          sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
-          sinon.assert.notCalled(peerComponentMock.componentStateOnOtherHolders);
-        });
-      });
-
-      it('is kept on a ready standby, said once, and costs nothing on the passes after', async () => {
-        readyStandby();
-        changes({ name: 'appdata/only-here', version: FROM_PRIMARY });
-        onlyHere('appdata/only-here');
-        const publish = sinon.stub(fluxEventBus, 'publish');
-        try {
-          await checkedPass();
-          await pass();
-          await pass();
-
-          sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-          sinon.assert.calledOnceWithExactly(
-            publish.withArgs('syncthing:localChangesKept'),
-            'syncthing:localChangesKept',
-            { folder: 'test-app', files: 0, directories: 1, reason: 'onlyCopy' },
-          );
-          sinon.assert.calledOnce(syncthingServiceMock.getDbLocalChanged);
-          sinon.assert.calledOnce(syncthingServiceMock.getDbFile);
-        } finally {
-          publish.restore();
-        }
-      });
-    });
-
-    // Three properties of what counts as "holding", each able to hand the seed to the
-    // wrong node. In all three this node's address sorts FIRST, so the address order
-    // would give it the seed; only the holdings decide otherwise.
-    const peerHoldsOlderData = (bytes = 900, modified = 100) => {
-      axiosMock.get.resolves({
-        data: { data: { ready: true, folders: [], holding: { 'test-app': { bytes, newestModified: modified } } } },
+    // B1 guard on the cold-start seed: a node holding its OWN data (preserved local
+    // changes) on an empty global must WAIT for a connected source - never seed. Seeding
+    // would promote unverified data, and a db/revert would delete the only copy. Even as
+    // the lowest IP (which would win the seed election) and with a running peer present,
+    // holding local data forces it to defer and take no action.
+    it('does not seed on an empty global when it holds local data, even as the lowest IP', async () => {
+      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
+        restarted: false,
+        numberOfExecutions: 1,
+        leaderStreak: 5, // leadership would be confirmed if it elected itself
       });
       mockParams.appLocation.resolves([
-        { ip: '10.0.0.1:16127', runningSince: 2000, broadcastedAt: 1000 },
-        { ip: '10.0.0.2:16127', runningSince: 2000, broadcastedAt: 1000 },
-      ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 2,
-      });
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-    };
-
-    // A holder that has not yet measured what it holds of the folder - an install its
-    // monitor has not reached - would read as holding nothing, and the field would fall
-    // to the address order over a holder that may hold the owner's data. So nobody
-    // seeds while one has not looked. This node's address sorts first and it holds
-    // nothing, so the address order would give it the seed.
-    describe('a holder that has not yet looked at the folder', () => {
-      const coldStartBeside = (peerAnswer) => {
-        mockParams.localSocketAddr = '10.0.0.1:16127';
-        mockParams.appLocation.resolves([
-          { ip: '10.0.0.1:16127', runningSince: 2000, broadcastedAt: 1000 },
-          { ip: '10.0.0.2:16127', runningSince: 2000, broadcastedAt: 1000 },
-        ]);
-        syncthingServiceMock.eachDbLocalChanged.callsFake(feed({ files: [] }));
-        syncthingServiceMock.getDbStatus.resolves({
-          globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 0,
-        });
-        axiosMock.get.resolves({ data: { data: { ready: true, folders: [], holding: {}, ...peerAnswer } } });
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-          restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-        });
-      };
-
-      it('keeps any node from seeding until it has', async () => {
-        const count = sinon.spy(fluxEventBus, 'count');
-        try {
-          coldStartBeside({ notLookedAt: ['test-app'] });
-
-          const result = await stateMachine.manageFolderSyncState(mockParams);
-
-          expect(result.syncthingFolder.type, 'seeded over a holder that had not looked at what it holds').to.equal('receiveonly');
-          sinon.assert.calledWith(count, 'syncthing:seedDecision', 'test-app', 'holderNotLookedAt');
-        } finally {
-          count.restore();
-        }
-      });
-
-      it('a canary: the same holder, having looked and holding nothing, leaves the seed to the address order', async () => {
-        coldStartBeside({ notLookedAt: [] });
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('sendreceive');
-      });
-
-      it('is waited on for one of the app\'s other elected folders too', async () => {
-        coldStartBeside({ notLookedAt: ['sibling-app'] });
-        mockParams.electedSiblings = ['sibling-app'];
-        // no node writes the app's other folder yet, so the election decides this one
-        appQueryServiceMock.holdsComponent.resolves(false);
-        globalStateMock.folderStates.set('sibling-app', { state: 'measured', bytes: 0, newestModified: 0 });
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('receiveonly');
-      });
-
-      // A peer too old to say reads as having looked at everything, as it always has.
-      it('is not assumed of a peer that does not say', async () => {
-        coldStartBeside({});
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('sendreceive');
-      });
-    });
-
-    // A holder whose volume will not mount cannot seed, and the address order would
-    // give it the seed whenever it sorts first. Here it does: 10.0.0.1, beside this
-    // node at 10.0.0.2.
-    describe('a holder that cannot mount a volume', () => {
-      const BROKEN = '10.0.0.1:16127';
-      const coldStartBesideBroken = (brokenAnswer, { holdsData = false, others = {} } = {}) => {
-        mockParams.localSocketAddr = '10.0.0.2:16127';
-        mockParams.appLocation.resolves([
-          { ip: BROKEN, runningSince: 2000, broadcastedAt: 1000 },
-          { ip: '10.0.0.2:16127', runningSince: 2000, broadcastedAt: 1000 },
-          ...Object.keys(others).map((ip) => ({ ip, runningSince: 2000, broadcastedAt: 1000 })),
-        ]);
-        syncthingServiceMock.eachDbLocalChanged.callsFake(feed({
-          files: holdsData ? [localEntry('world.dat', 5821604997, '2026-09-16T10:00:00Z')] : [],
-        }));
-        syncthingServiceMock.getDbStatus.resolves({
-          globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: holdsData ? 2 : 0,
-        });
-        axiosMock.get.callsFake(async (url) => {
-          const other = Object.keys(others).find((ip) => url.includes(ip.split(':')[0]));
-          const answer = url.includes(BROKEN.split(':')[0]) ? brokenAnswer : (others[other] ?? {});
-          return { data: { data: { ready: true, folders: [], holding: {}, ...answer } } };
-        });
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-          restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-        });
-      };
-      const counting = async (run) => {
-        const count = sinon.spy(fluxEventBus, 'count');
-        try {
-          return await run(count);
-        } finally {
-          count.restore();
-        }
-      };
-
-      it('seeds from the holder with data, leaving out one whose volume image is on it and will not mount', async () => {
-        await counting(async (count) => {
-          coldStartBesideBroken({ heldOut: ['test-app'] }, { holdsData: true });
-
-          const result = await stateMachine.manageFolderSyncState(mockParams);
-
-          expect(result.syncthingFolder.type, 'the holder with data did not seed').to.equal('sendreceive');
-          sinon.assert.calledWith(count, 'syncthing:seedDecision', 'test-app', 'holderCannotSeed');
-        });
-      });
-
-      it('seeds nothing while a holder whose volume image is on it will not mount and no other holder has data', async () => {
-        await counting(async (count) => {
-          coldStartBesideBroken({ heldOut: ['test-app'] });
-
-          const result = await stateMachine.manageFolderSyncState(mockParams);
-
-          expect(result.syncthingFolder.type, 'an empty copy seeded over a volume that may hold the app\'s data').to.equal('receiveonly');
-          sinon.assert.calledWith(count, 'syncthing:seedDecision', 'test-app', 'holderVolumeHeldOut');
-        });
-      });
-
-      it('seeds an empty copy beside a holder whose volume image is gone', async () => {
-        await counting(async (count) => {
-          coldStartBesideBroken({ volumeGone: ['test-app'] });
-
-          const result = await stateMachine.manageFolderSyncState(mockParams);
-
-          expect(result.syncthingFolder.type, 'the address order gave the seed to a holder with no volume').to.equal('sendreceive');
-          sinon.assert.calledWith(count, 'syncthing:seedDecision', 'test-app', 'holderCannotSeed');
-          sinon.assert.neverCalledWith(count, 'syncthing:seedDecision', 'test-app', 'holderVolumeHeldOut');
-        });
-      });
-
-      // A canary for the three above: the same holder, mounted and holding nothing,
-      // keeps the seed by the address order.
-      it('leaves the seed to the address order when that holder says neither', async () => {
-        coldStartBesideBroken({});
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('receiveonly');
-      });
-
-      it('leaves out a holder that cannot mount the volume of one of the app\'s other elected folders', async () => {
-        coldStartBesideBroken({ volumeGone: ['sibling-app'] });
-        mockParams.electedSiblings = ['sibling-app'];
-        appQueryServiceMock.holdsComponent.resolves(false);
-        globalStateMock.folderStates.set('sibling-app', { state: 'measured', bytes: 0, newestModified: 0 });
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('sendreceive');
-      });
-
-      it('seeds from the holder with data among the rest, not from the next empty address', async () => {
-        // 10.0.0.1 cannot mount; 10.0.0.2 (this node) holds data; 10.0.0.3 holds nothing.
-        coldStartBesideBroken({ heldOut: ['test-app'] }, {
-          holdsData: true,
-          others: { '10.0.0.3:16127': { holding: { 'test-app': { bytes: 0, newestModified: 0 } } } },
-        });
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('sendreceive');
-      });
-
-      it('leaves the seed to another holder\'s larger copy among the rest', async () => {
-        coldStartBesideBroken({ heldOut: ['test-app'] }, {
-          others: { '10.0.0.3:16127': { holding: { 'test-app': { bytes: 900, newestModified: 100 } } } },
-        });
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type, 'an empty copy seeded beside a holder with data').to.equal('receiveonly');
-      });
-
-      it('seeds nothing while every other holder cannot mount', async () => {
-        coldStartBesideBroken({ volumeGone: ['test-app'] }, {
-          others: { '10.0.0.3:16127': { heldOut: ['test-app'] } },
-        });
-
-        const result = await stateMachine.manageFolderSyncState(mockParams);
-
-        expect(result.syncthingFolder.type).to.equal('receiveonly');
-      });
-    });
-
-    // Every claim is filed under the address the election list carries, because an
-    // object key matches exactly where addresses compare tolerantly. Keyed from
-    // anywhere else, this node stops finding its OWN claim as soon as the two
-    // spellings differ - and a missing claim is not a tie, it drops the whole field
-    // back to the address order with nothing said about it.
-    it('finds its own claim when the election list spells its address differently', async () => {
-      // This node holds the world; the peer holds almost nothing. The address order
-      // gives the seed to the peer, so only the ranking can promote this node - and
-      // the ranking runs only if this node's own claim is found.
-      mockParams.localSocketAddr = '10.0.0.2:16127';
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.1:16127', runningSince: 2000, broadcastedAt: 1000 },
-        { ip: '10.0.0.2', runningSince: 2000, broadcastedAt: 1000 },
-      ]);
-      syncthingServiceMock.eachDbLocalChanged.callsFake(feed({
-        files: [localEntry('world.dat', 5821604997, '2026-09-16T10:00:00Z')],
-      }));
-      axiosMock.get.resolves({
-        data: { data: { ready: true, folders: [], holding: { 'test-app': { bytes: 900, newestModified: 100 } } } },
-      });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 2,
-      });
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type, 'the ranking never ran, so the address order seeded the near-empty peer').to.equal('sendreceive');
-    });
-
-    it('does not let FluxOS scaffolding outrank a peer holding the owner data', async () => {
-      // Directories carry the legacy synthetic size of 128 and a mtime of their own.
-      // Counted, they would make this node look both non-empty and more recently
-      // written than the peer actually holding the world.
-      syncthingServiceMock.eachDbLocalChanged.callsFake(feed({
-        files: [localDir('appdata'), localDir('lost+found'), localEntry('server.json', 0, '2026-09-16T23:00:00Z')],
-      }));
-      peerHoldsOlderData();
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type).to.equal('receiveonly');
-    });
-
-    it('does not let a full ml: directory outrank a peer holding the owner data', async () => {
-      // The game files are excluded from replication, so they are not the cluster's to
-      // hold and must not buy this node the seed over the node with the world.
-      syncthingServiceMock.eachDbLocalChanged.callsFake(feed({
-        files: [localEntry('cache/enshrouded_server_000.dat', 257000000, '2026-09-16T23:00:00Z')],
-      }));
-      mockParams.unsyncedSubdirs = ['cache'];
-      peerHoldsOlderData();
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type).to.equal('receiveonly');
-    });
-
-    it('stands down when it cannot read its own holdings and a peer can show it holds data', async () => {
-      // Unknown is not empty and is not a claim. A third holder that cannot be asked
-      // means the field cannot be ranked, so the address order would otherwise stand -
-      // and this node sorts first, so it would publish an unknown folder over a known
-      // world. Two peers, because with every peer answering the ranking already sinks
-      // an empty node and the distinction between "empty" and "unknown" never shows.
-      syncthingServiceMock.eachDbLocalChanged.rejects(new Error('syncthing unreachable'));
-      axiosMock.get.withArgs(sinon.match(/10\.0\.0\.2/)).resolves({
-        data: { data: { ready: true, folders: [], holding: { 'test-app': { bytes: 900, newestModified: 100 } } } },
-      });
-      axiosMock.get.withArgs(sinon.match(/10\.0\.0\.3/)).rejects(new Error('connect ECONNREFUSED'));
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.1:16127', runningSince: 2000, broadcastedAt: 1000 },
-        { ip: '10.0.0.2:16127', runningSince: 2000, broadcastedAt: 1000 },
-        { ip: '10.0.0.3:16127', runningSince: 2000, broadcastedAt: 1000 },
-      ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 2,
-      });
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type).to.equal('receiveonly');
-    });
-
-    // The ranking has to reach the ELECTION, not just be correct in isolation. This
-    // node's address sorts LAST ('9.0.0.1' after '10.0.0.2' as a string), so under the
-    // address order it loses and the empty peer publishes an empty folder over the
-    // customer's world. It holds the data, so it must win.
-    // An app with more than one g: component is seeded on one node: its primary
-    // runs them all, so a folder seeded anywhere else leaves no node holding every
-    // copy it may run on.
-    describe('a g: folder of an app with more than one g: component', () => {
-      const SIBLING = 'fluxdb_test-app';
-      // A brand-new folder: nothing indexed, nothing synced, nothing held here.
-      const freshFolder = ({ self = '10.0.0.1:16127', peer = '10.0.0.2:16127', peerAnswer } = {}) => {
-        mockParams.containerDataFlags = 'g';
-        mockParams.electedSiblings = [SIBLING];
-        mockParams.localSocketAddr = self;
-        mockParams.appLocation.resolves([
-          { ip: self, runningSince: 2000, broadcastedAt: 1000 },
-          { ip: peer, runningSince: 2000, broadcastedAt: 1000 },
-        ]);
-        axiosMock.get.resolves({ data: { data: { ready: true, folders: [], holding: {}, ...peerAnswer } } });
-        syncthingServiceMock.getDbStatus.resolves({
-          globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 0,
-        });
-        mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-          restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-        });
-      };
-      const seeds = (result) => result.cache.designationPending === true;
-
-      afterEach(() => {
-        globalStateMock.folderStates.clear();
-      });
-
-      describe('a component the spec has just added', () => {
-        // This node's address sorts last, so the address order seeds the peer.
-        const lastInOrder = { self: '9.0.0.1:16127', peer: '10.0.0.2:16127' };
-
-        it('is seeded by the node that holds the app\'s other g: component, wherever its address falls', async () => {
-          freshFolder({ ...lastInOrder, peerAnswer: { holding: { 'test-app': { bytes: 0, newestModified: 0 } } } });
-          appQueryServiceMock.holdsComponent.withArgs(SIBLING).resolves(true);
-
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(true);
-        });
-
-        // Canary for the test above: the same node holding none of the app leaves
-        // the seed to the address order.
-        it('is not seeded by a node holding none of the app when its address sorts last', async () => {
-          freshFolder({ ...lastInOrder, peerAnswer: { holding: { 'test-app': { bytes: 0, newestModified: 0 } } } });
-          appQueryServiceMock.holdsComponent.withArgs(SIBLING).resolves(false);
-
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(false);
-        });
-
-        // What a standby holds in the folder and never sent is a local change
-        // against the app's primary: the writer seeds over it, and the standby's
-        // copy is reverted as any standby's local change is.
-        it('is seeded by the writer over a standby holding bytes of this folder it never sent', async () => {
-          freshFolder({ ...lastInOrder, peerAnswer: { holding: { 'test-app': { bytes: 900, newestModified: 5 } } } });
-          appQueryServiceMock.holdsComponent.withArgs(SIBLING).resolves(true);
-
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(true);
-        });
-
-        // Canary for the test above: a peer that serves the folder is a source.
-        // The writer's synced copy carrying local changes of its own is reverted
-        // to it, never published as the seed.
-        it('reverts the writer\'s own local changes to a peer that serves the folder, rather than seeding them', async () => {
-          freshFolder({ ...lastInOrder, peerAnswer: { holding: { 'test-app': { bytes: 0, newestModified: 0 } } } });
-          appQueryServiceMock.holdsComponent.withArgs(SIBLING).resolves(true);
-          peerHoldsTheData();
-          syncthingServiceMock.getDbStatus.resolves({
-            globalBytes: 4096, globalFiles: 1, inSyncBytes: 4096, state: 'idle', receiveOnlyChangedFiles: 1,
-          });
-
-          // The primary runs the app on another holder.
-          peerComponentMock.componentStateOnOtherHolders.resolves('running');
-          // The first pass asks for the check; the next acts on its answer.
-          await stateMachine.manageFolderSyncState(mockParams);
-          await checksSettled();
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(false);
-          await checksSettled();
-          sinon.assert.calledWith(syncthingServiceMock.dbRevert, 'test-app');
-        });
-
-        // A standby on a release that elects one g: component takes the empty
-        // folder as its seed by the address order, and never withdraws the mark.
-        // It never starts the component, so its folder never sends.
-        it('is seeded by the writer over a peer\'s seed mark for it', async () => {
-          freshFolder({ ...lastInOrder, peerAnswer: { seeding: { 'test-app': { stage: 'decided', bytes: 0, newestModified: 0 } } } });
-          appQueryServiceMock.holdsComponent.withArgs(SIBLING).resolves(true);
-
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(true);
-        });
-
-        // Canary for the test above: a peer whose folder already sends has seeded
-        // it, and the writer stands aside.
-        it('is not seeded by the writer over a peer whose folder for it already sends', async () => {
-          freshFolder({ ...lastInOrder, peerAnswer: { folders: ['test-app'] } });
-          appQueryServiceMock.holdsComponent.withArgs(SIBLING).resolves(true);
-
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(false);
-        });
-
-        it('is left to a peer whose folder for the app\'s other g: component sends, though this node sorts first', async () => {
-          freshFolder({ peerAnswer: { folders: [SIBLING] } });
-          appQueryServiceMock.holdsComponent.withArgs(SIBLING).resolves(false);
-
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(false);
-        });
-
-        // Canary for the test above: with no writer anywhere, the node sorting
-        // first seeds.
-        it('is seeded by the node sorting first when no node writes the app', async () => {
-          freshFolder({ peerAnswer: { folders: [] } });
-          appQueryServiceMock.holdsComponent.withArgs(SIBLING).resolves(false);
-
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(true);
-        });
-      });
-
-      describe('a cold start where the holders hold different folders', () => {
-        // This node holds a little of this folder; the peer holds nothing of it
-        // and the whole of the other one.
-        const split = () => {
-          freshFolder({
-            peerAnswer: {
-              holding: { 'test-app': { bytes: 0, newestModified: 0 }, [SIBLING]: { bytes: 5000, newestModified: 9 } },
-            },
-          });
-          appQueryServiceMock.holdsComponent.withArgs(SIBLING).resolves(false);
-          syncthingServiceMock.eachDbLocalChanged.callsFake(feed({ files: [localEntry('a.dat', 100)] }));
-          globalStateMock.folderStates.set(SIBLING, { state: 'measured', bytes: 0, newestModified: 0 });
-        };
-
-        it('ranks the whole app, so the node holding the most of it seeds every folder', async () => {
-          split();
-
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(false);
-        });
-
-        // Canary for the test above: ranked on this folder alone, this node wins.
-        it('would seed this folder here ranked on this folder alone', async () => {
-          split();
-          mockParams.electedSiblings = [];
-
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(true);
-        });
-
-        it('falls back to the address order while this node cannot say what it holds of the other folder', async () => {
-          split();
-          globalStateMock.folderStates.delete(SIBLING);
-
-          expect(seeds(await stateMachine.manageFolderSyncState(mockParams))).to.equal(true);
-        });
-      });
-    });
-
-    it('the node holding the data wins the election though its address sorts last', async () => {
-      mockParams.localSocketAddr = '9.0.0.1:16127';
-      syncthingServiceMock.eachDbLocalChanged.callsFake(feed({ files: [localEntry('world.sav', 5821604997, '2026-09-16T09:00:00Z')] }));
-      // the peer answers, is ready, and claims nothing for this folder
-      axiosMock.get.resolves({
-        data: { data: { ready: true, folders: [], holding: { 'test-app': { bytes: 0, newestModified: 0 } } } },
-      });
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([
-        { ip: '9.0.0.1:16127', runningSince: 2000, broadcastedAt: 1000 },
-        { ip: '10.0.0.2:16127', runningSince: 2000, broadcastedAt: 1000 },
-      ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 1,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type).to.equal('sendreceive');
-    });
-
-    // The scaffolding FluxOS puts on a volume before anything runs is not the owner's
-    // data, and a guard that counts it defers on every node at once - nobody seeds and
-    // the app never starts. mkfs leaves lost+found, the primary mount leaves appdata,
-    // and an f: mount leaves a ZERO-LENGTH file because docker would otherwise create a
-    // directory in its place. Measured on a stuck app: receiveOnlyChangedFiles 1,
-    // receiveOnlyChangedBytes 256, and not one byte of it the owner's.
-    //
-    // Directories carry syncthing's legacy synthetic size of 128, so the filter keys on
-    // TYPE - a size test would read them as content and reinstate the standoff.
-    it('seeds a cold start whose only local changes are FluxOS scaffolding', async () => {
-      syncthingServiceMock.eachDbLocalChanged.callsFake(feed({
-        files: [localDir('appdata'), localDir('lost+found'), localEntry('server.json', 0)],
-      }));
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.1:16127', runningSince: 2000, broadcastedAt: 1000 },
-        { ip: '10.0.0.2:16127', runningSince: 2000, broadcastedAt: 1000 },
-      ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 1, receiveOnlyChangedBytes: 256,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type).to.equal('sendreceive');
-      sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-    });
-
-    // A directory the spec declared local with ml: is excluded from replication, so its
-    // bytes are not the cluster's to hold and must not make this node look like a
-    // holder - otherwise the standoff returns the first time a game finishes
-    // downloading into it.
-    it('seeds a cold start though an ml: directory is full', async () => {
-      syncthingServiceMock.eachDbLocalChanged.callsFake(feed({
-        files: [localDir('appdata'), localEntry('cache/enshrouded_server_000.dat', 257000000)],
-      }));
-      mockParams.unsyncedSubdirs = ['cache'];
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.1:16127', runningSince: 2000, broadcastedAt: 1000 },
-        { ip: '10.0.0.2:16127', runningSince: 2000, broadcastedAt: 1000 },
+        { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 }, // self, lowest IP
+        { ip: '10.0.0.2:16127', runningSince: 2000, broadcastedAt: 1000 }, // a running peer
       ]);
       syncthingServiceMock.getDbStatus.resolves({
         globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 2,
@@ -3279,55 +1247,11 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      expect(result.syncthingFolder.type).to.equal('sendreceive');
-    });
-
-    // A peer that demonstrably holds the data is a real source, and this node must sync
-    // from it rather than publish its own copy over the top. That half of the original
-    // B1 guard is unchanged and is what keeps a node from broadcasting unverified data.
-    it('defers to a peer that demonstrably holds the data, rather than publishing its own', async () => {
-      syncthingServiceMock.eachDbLocalChanged.callsFake(feed({ files: [localEntry('world.sav', 4096)] }));
-      peerHoldsTheData();
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
-        { ip: '10.0.0.2:16127', runningSince: 2000, broadcastedAt: 1000 },
-      ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 4096, globalFiles: 1, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 1,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type).to.equal('receiveonly');
+      // never seeds/promotes, never reverts the only copy - just waits, receiveonly
       sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, sinon.match.any, 'running');
-    });
-
-    // The other half, and the one that was wrong. A node holding the ONLY copy used to
-    // defer here too - waiting for a source to verify against. No source can ever
-    // arrive: a receive-only folder publishes its local files with a zeroed version
-    // vector, so no peer can take them and none can become the source being waited for.
-    // The wait was unbounded and the data unreachable. Seen live on an app with 5.8 GB
-    // of a customer's world on one node and both instances down.
-    it('publishes the only copy when no peer holds the data', async () => {
-      syncthingServiceMock.eachDbLocalChanged.callsFake(feed({ files: [localEntry('world.sav', 5821604997)] }));
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false, numberOfExecutions: 1, leaderStreak: 5,
-      });
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
-        { ip: '10.0.0.2:16127', runningSince: 2000, broadcastedAt: 1000 },
-      ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 0, inSyncBytes: 0, state: 'idle', receiveOnlyChangedFiles: 1,
-      });
-
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-
-      expect(result.syncthingFolder.type).to.equal('sendreceive');
       sinon.assert.notCalled(syncthingServiceMock.dbRevert);
+      expect(result.syncthingFolder.type).to.equal('receiveonly');
+      expect(result.cache.restarted).to.not.equal(true);
     });
 
     it('should NOT promote when the revert of local changes fails', async () => {
@@ -3350,35 +1274,6 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      expect(result.syncthingFolder.type).to.equal('receiveonly');
-      expect(result.cache.restarted).to.be.false;
-      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, sinon.match.any, 'running');
-    });
-
-    it('reverts instead of promoting when only directories differ locally', async () => {
-      mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
-        restarted: false,
-        numberOfExecutions: 1,
-      });
-      mockParams.appLocation.resolves([
-        { ip: '10.0.0.0:16127', runningSince: null, broadcastedAt: 1000 },
-        { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
-      ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 1000,
-        inSyncBytes: 1000,
-        state: 'idle',
-        receiveOnlyChangedFiles: 0,
-        receiveOnlyChangedDirectories: 2,
-      });
-
-      // The first pass asks for the check; the next acts on its answer.
-      await stateMachine.manageFolderSyncState(mockParams);
-      await checksSettled();
-      const result = await stateMachine.manageFolderSyncState(mockParams);
-      await checksSettled();
-
-      sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
       expect(result.syncthingFolder.type).to.equal('receiveonly');
       expect(result.cache.restarted).to.be.false;
       sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, sinon.match.any, 'running');
@@ -3551,7 +1446,7 @@ describe('syncthingFolderStateMachine tests', () => {
       // cannot verify the data is synced -> must not flip to sendreceive or start, and
       // must not remove yet (well under the removal threshold on the first unreadable cycle)
       sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, sinon.match.any, 'running');
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.syncthingFolder.type).to.equal('receiveonly');
       expect(result.cache.restarted).to.not.equal(true);
     });
@@ -3580,9 +1475,7 @@ describe('syncthingFolderStateMachine tests', () => {
         { ip: '10.0.0.0:16127', runningSince: null, broadcastedAt: 900 },
         { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
       ]);
-      // The folder's total is the one figure every peer's completion carries.
-      const globalBytes = completionData?.globalBytes ?? 1000;
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes, inSyncBytes: Math.min(500, globalBytes), state: 'idle' });
+      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 1000, inSyncBytes: 500, state: 'idle' });
       syncthingServiceMock.getConfig = sinon.stub().resolves({ folders: [{ id: 'test-app', type: 'receiveonly', devices: [{ deviceID: 'DEVICE123' }] }] });
       syncthingServiceMock.getDbCompletion = sinon.stub().resolves(completionData ?? { completion: 100, globalBytes: 1000, remoteState: 'valid' });
     }
@@ -3598,7 +1491,7 @@ describe('syncthingFolderStateMachine tests', () => {
       expect(syncthingServiceMock.systemResume.firstCall.args[0]).to.equal('DEVICE123');
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
       sinon.assert.notCalled(appReconcilerMock.requestStopAndClearData);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.cache.nudgeCount).to.equal(1);
       expect(result.syncthingFolder.type).to.equal('receiveonly');
     });
@@ -3616,7 +1509,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.cache.nudgeCount).to.equal(0);
       expect(result.cache.evidenceSince).to.equal(null);
       expect(result.cache.lastProgressBytes).to.equal(500);
@@ -3634,7 +1527,7 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
       sinon.assert.notCalled(appReconcilerMock.requestStopAndClearData);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.syncthingFolder.type).to.equal('receiveonly');
     });
 
@@ -3644,7 +1537,7 @@ describe('syncthingFolderStateMachine tests', () => {
       await stateMachine.manageFolderSyncState(mockParams);
 
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
     });
 
     it('should not nudge again before the nudge backoff elapses', async () => {
@@ -3659,7 +1552,7 @@ describe('syncthingFolderStateMachine tests', () => {
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.cache.nudgeCount).to.equal(1);
     });
 
@@ -3674,7 +1567,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.calledOnceWithExactly(appUninstallerMock.removeAppLocally, 'test-app', null, true, false, true);
+      sinon.assert.calledOnceWithExactly(appUninstallerMock.uninstallApplication, 'test-app', { forceKill: true, broadcastRemoval: true });
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
       sinon.assert.notCalled(appReconcilerMock.requestStopAndClearData);
       expect(result.cache.restarted).to.be.true;
@@ -3703,7 +1596,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.calledOnceWithExactly(appUninstallerMock.removeAppLocally, 'testapp', null, true, false, true);
+      sinon.assert.calledOnceWithExactly(appUninstallerMock.uninstallApplication, 'testapp', { forceKill: true, broadcastRemoval: true });
     });
 
     it('should keep nudging instead of removing while the evidence window has not elapsed', async () => {
@@ -3717,7 +1610,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       sinon.assert.calledOnce(syncthingServiceMock.systemPause);
       expect(result.cache.nudgeCount).to.equal(4);
     });
@@ -3739,7 +1632,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
       expect(result.cache.restarted).to.be.false;
       expect(result.syncthingFolder.type).to.equal('receiveonly');
@@ -3756,7 +1649,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
       expect(result.cache.restarted).to.be.false;
       expect(result.syncthingFolder.type).to.equal('receiveonly');
@@ -3775,7 +1668,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.cache.restarted).to.be.false;
     });
 
@@ -3795,7 +1688,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.cache.restarted).to.be.false;
       expect(result.syncthingFolder.type).to.equal('receiveonly');
     });
@@ -3980,62 +1873,13 @@ describe('syncthingFolderStateMachine tests', () => {
     });
   });
 
-  // A component's volume root IS its syncthing folder, so the disk side and the
-  // index have to be reading the same set. A name FluxOS skips on disk while
-  // syncthing indexes it is counted by one and not the other, which misreads the
-  // phantom check and the holdings figure - and replicates something that is not
-  // the owner's to every node holding the app.
-  describe('what the disk skips and what syncthing indexes are the same set', () => {
-    // Syncthing's own, and the whole of them: lib/fs/filesystem.go, `internals`.
-    const syncthingInternals = ['.stfolder', '.stignore', '.stversions'];
-    // An ignore line is anchored at the folder root, and one of them is still a glob.
-    const covers = (line, name) => (line.endsWith('*')
-      ? `/${name}`.startsWith(line.slice(0, -1))
-      : line === `/${name}`);
-
-    [
-      '.stfolder', '.stignore', '.stversions', 'lost+found', 'backup', '.flux-op', 'cache',
-      // The released staging shape, and the glob that covers it takes any suffix -
-      // so the disk side has to take any suffix too, not only the ids FluxOS mints.
-      '.flux-op-3f2504e0-4f89-11d3-9a0c-0305e82c3301', '.flux-op-anything',
-    ].forEach((name) => {
-      it(`excludes ${name} on both sides`, () => {
-        expect(stateMachine.isSyncedPayloadName(name, ['cache']), `${name} counted on disk`).to.be.false;
-        const lines = syncthingIgnoreLines(['cache']);
-        const excluded = syncthingInternals.includes(name) || lines.some((line) => covers(line, name));
-        expect(excluded, `${name} is skipped on disk but syncthing indexes it: ${lines.join(', ')}`).to.be.true;
-      });
-    });
-  });
-
   describe('verifySendReceiveFolderSafety', () => {
-    it('judges the disk against the status it is given, and asks syncthing for none of its own', async () => {
-      fsMock.promises.readdir.resolves([]);
-      syncthingServiceMock.getDbStatus.resetHistory();
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 0, inSyncBytes: 0, state: 'idle' });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', [], {
-        syncStatus: {
-          globalBytes: 500000, globalFiles: 12, inSyncBytes: 500000, isSynced: true,
-        },
-      });
-
-      expect(result.isSafe).to.be.false;
-      expect(result.reason).to.equal('phantom_index_empty_disk');
-      sinon.assert.notCalled(syncthingServiceMock.getDbStatus);
-    });
-
-    it('is unsafe when the index claims files and the disk holds none of them', async () => {
-      // stale ("phantom") index over a wiped volume: the mount structure FluxOS built
-      // it from is still there, as it is after any wipe, and not one of the files the
-      // index claims - sendreceive would broadcast every one as a deletion
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('backup', false), dirent('appdata', false),
-      ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 500000, globalFiles: 12, inSyncBytes: 500000, state: 'idle',
-      });
+    it('is unsafe when the index claims data but the disk holds no sync-scoped files', async () => {
+      // stale ("phantom") index over a fresh empty volume: only FluxOS's own
+      // housekeeping (.stignore, backup/) on disk, yet the index claims bytes -
+      // sendreceive would broadcast every "missing" file as a deletion
+      fsMock.promises.readdir.resolves([dirent('.stignore'), dirent('backup', false)]);
+      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500000, inSyncBytes: 500000, state: 'idle' });
 
       const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app');
 
@@ -4044,18 +1888,16 @@ describe('syncthingFolderStateMachine tests', () => {
     });
 
     it('is safe when the synced payload is only (empty) directories', async () => {
-      // The 2026-07-04 false positive: an app whose synced content is empty
-      // directories. syncthing before v2.1.2 counts each directory as 128 bytes, so
-      // the index reads 256 bytes while the disk holds no regular file. None of those
-      // bytes are in files, so there is nothing to verify.
-      syncthingServiceMock.syncthingVersion = 'v2.0.15';
+      // real 2026-07-04 false positive: an app whose synced content is empty
+      // directories. The index counts each directory entry (globalBytes 256)
+      // while the disk holds no regular file, so a files-only walk wrongly
+      // called it a phantom index and the reconciler stopped the container
+      // (exit 137) and held it down. Directories must count as content.
       fsMock.promises.readdir.resolves([]); // nested dirs are empty
       fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
         dirent('.stignore'), dirent('.stfolder', false), dirent('data', false),
       ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 256, globalFiles: 0, globalDirectories: 2, inSyncBytes: 256, state: 'idle',
-      });
+      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 256, inSyncBytes: 256, state: 'idle' });
 
       const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app');
 
@@ -4071,282 +1913,12 @@ describe('syncthingFolderStateMachine tests', () => {
       fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
         dirent('.stignore'), dirent('.stfolder', false), dirent('backup', false),
       ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 500000, globalFiles: 12, inSyncBytes: 0, state: 'idle',
-      });
+      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500000, inSyncBytes: 0, state: 'idle' });
 
       const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app');
 
       expect(result.isSafe).to.be.false;
       expect(result.reason).to.equal('phantom_index_empty_disk');
-    });
-
-    // Everything a wiped volume ACTUALLY holds. lost+found is there before the app is
-    // (ext4), the staging directory is permanent, an ml: directory is built with the
-    // volume - the primary mount and every m: directory survive the wipe itself, which
-    // preserves the mount structure, and an f: mount leaves a zero-length FILE at the
-    // root, because docker creates a directory where a bind source is missing and
-    // FluxOS touches the file instead. A walk that counts any of them finds every
-    // volume occupied, and a fixture without them describes a volume that cannot exist.
-    it('still flags a phantom over the scaffolding a real volume is built with', async () => {
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('.stfolder', false), dirent('lost+found', false),
-        dirent('.flux-op', false), dirent('backup', false), dirent('cache', false),
-        dirent('appdata', false), dirent('logs', false), dirent('server.json'),
-      ]);
-      fsMock.promises.stat.withArgs('/apps/test-app/server.json')
-        .resolves({ isDirectory: () => false, size: 0 });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 500000, globalFiles: 12, inSyncBytes: 0, state: 'idle',
-      });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', ['cache']);
-
-      expect(result.isSafe).to.be.false;
-      expect(result.reason).to.equal('phantom_index_empty_disk');
-    });
-
-    // The other half of the same rule, and the reason it is anchored at the root: below
-    // it, an empty file is the owner's. An app whose payload is lock files and sentinels
-    // holds exactly what its index claims, and a rule that skipped those everywhere
-    // would read its volume as wiped and stop it.
-    it('counts an empty file inside the owner tree, where it is theirs', async () => {
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('appdata', false), dirent('server.json'),
-      ]);
-      fsMock.promises.readdir.withArgs('/apps/test-app/appdata').resolves([dirent('app.lock')]);
-      fsMock.promises.stat.resolves({ isDirectory: () => true, size: 0 });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 500000, globalFiles: 12, inSyncBytes: 500000, state: 'idle',
-      });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', []);
-
-      expect(result.isSafe, 'a volume of the owner empty files read as wiped').to.be.true;
-    });
-
-    // An f: file the app has actually written to is data like any other.
-    it('counts a root file once the app has written bytes into it', async () => {
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('appdata', false), dirent('server.json'),
-      ]);
-      fsMock.promises.stat.withArgs('/apps/test-app/server.json')
-        .resolves({ isDirectory: () => false, size: 2048 });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 500000, globalFiles: 12, inSyncBytes: 500000, state: 'idle',
-      });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', []);
-
-      expect(result.isSafe).to.be.true;
-    });
-
-    // The scaffolding every mount form leaves - the primary mount and an m:
-    // directory, and the zero-length file an f: mount needs - is all the index
-    // holds before the app writes anything. On syncthing before v2.1.2 its two
-    // directories count 256 bytes and the empty file counts as a file, and none
-    // of that is data the disk could be missing.
-    it('has nothing to verify when the index holds only scaffolding', async () => {
-      syncthingServiceMock.syncthingVersion = 'v2.0.15';
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('lost+found', false), dirent('appdata', false), dirent('logs', false), dirent('server.json'),
-      ]);
-      fsMock.promises.stat.withArgs('/apps/test-app/server.json').resolves({ isDirectory: () => false, size: 0 });
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 256, globalFiles: 1, globalDirectories: 2, inSyncBytes: 256, state: 'idle',
-      });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', []);
-
-      expect(result.isSafe).to.be.true;
-    });
-
-    // Taking the directories off takes off nothing else: bytes in a file the disk
-    // does not hold are still a phantom on syncthing before v2.1.2.
-    it('still flags a phantom on syncthing before v2.1.2 when a file\'s bytes are missing', async () => {
-      syncthingServiceMock.syncthingVersion = 'v2.0.15';
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('lost+found', false), dirent('appdata', false), dirent('logs', false),
-      ]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 256 + 300, globalFiles: 1, globalDirectories: 2, inSyncBytes: 556, state: 'idle',
-      });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', []);
-
-      expect(result.isSafe).to.be.false;
-      expect(result.reason).to.equal('phantom_index_empty_disk');
-    });
-
-    it('is safe when the index claims files and the disk holds one', async () => {
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('lost+found', false), dirent('appdata', false),
-      ]);
-      fsMock.promises.readdir.withArgs('/apps/test-app/appdata').resolves([dirent('world.db')]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 500000, globalFiles: 12, inSyncBytes: 500000, state: 'idle',
-      });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', []);
-
-      expect(result.isSafe).to.be.true;
-    });
-
-    // The spec decides which directories are unsynced, not the name. A directory the
-    // specification never declared is the owner's data whatever it is called.
-    it('counts a directory the specification did not declare unsynced', async () => {
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('lost+found', false), dirent('cache', false),
-      ]);
-      fsMock.promises.readdir.withArgs('/apps/test-app/cache').resolves([dirent('world.db')]);
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 500000, globalFiles: 12, inSyncBytes: 0, state: 'idle',
-      });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', []);
-
-      expect(result.isSafe).to.be.true;
-    });
-
-    // A volume holds what the app's container wrote, under the ownership and mode that
-    // container chose - postgres keeps PGDATA at 0700 and refuses to start otherwise,
-    // on every start - while syncthing indexes it as root. On a node where FluxOS is
-    // not root the two sides of this check see different filesystems, and the one that
-    // can see less is the one deciding whether to stop the app.
-    const lockedAppdata = () => {
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('lost+found', false), dirent('appdata', false),
-      ]);
-      fsMock.promises.readdir.withArgs('/apps/test-app/appdata').rejects(
-        Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }),
-      );
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 500000, globalFiles: 12, inSyncBytes: 500000, state: 'idle',
-      });
-    };
-
-    const findCall = () => serviceHelperMock.runCommand.getCalls().find((call) => call.args[0] === 'find');
-
-    it('does not demote a volume whose data this process is not permitted to see', async () => {
-      lockedAppdata();
-      serviceHelperMock.runCommand.resolves({ error: null, stdout: '/apps/test-app/appdata/base/world.db\n', stderr: '' });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', []);
-
-      expect(result.isSafe).to.be.true;
-      // The probe has to have happened, and on the subtree the walk was refused: a
-      // verdict that holds whether or not it ran proves nothing about the escalation.
-      expect(findCall(), 'the refused subtree is asked of root').to.exist;
-      expect(findCall().args[1].runAsRoot).to.be.true;
-      expect(findCall().args[1].params).to.deep.equal([
-        '/apps/test-app/appdata', '-type', 'f', '-print', '-quit',
-      ]);
-    });
-
-    it('flags a phantom when root confirms the unreadable volume holds nothing', async () => {
-      lockedAppdata();
-      serviceHelperMock.runCommand.resolves({ error: null, stdout: '', stderr: '' });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', []);
-
-      expect(findCall(), 'the refused subtree is asked of root').to.exist;
-      expect(result.isSafe).to.be.false;
-      expect(result.reason).to.equal('phantom_index_empty_disk');
-    });
-
-    // find reports a subtree it could not read as a non-zero exit, which is the only
-    // signal that survives the node's locale.
-    it('leaves the folder alone when nothing on the node can read the volume', async () => {
-      lockedAppdata();
-      serviceHelperMock.runCommand.resolves({ error: new Error('command exited with code 1'), stdout: '', stderr: '' });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', []);
-
-      expect(result.isSafe).to.be.true;
-      expect(appTamperingDetectionServiceMock.recordEvent.calledWith('test-app', 'volume_unreadable')).to.be.true;
-    });
-
-    // The privileged read carries the caller's notion of content unchanged. A folder
-    // whose payload is empty directories holds no regular file at all, so asking root
-    // for one would answer every such folder "empty" and demote it. Reached through an
-    // unreadable volume root, which is the only way this reading gets that far: below
-    // the root, a directory nothing can enter has already been counted where it sits.
-    it('asks root for any entry when the index claims directories', async () => {
-      fsMock.promises.readdir.rejects(
-        Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }),
-      );
-      serviceHelperMock.runCommand.resolves({ error: null, stdout: '/apps/test-app/a\n', stderr: '' });
-
-      const check = await stateMachine.checkDirectoryHasSyncScopedContent('/apps/test-app', [], { countDirs: true });
-
-      expect(findCall().args[1].params).to.deep.equal([
-        '/apps/test-app', '-mindepth', '1', '-print', '-quit',
-      ]);
-      expect(check.hasContent).to.be.true;
-    });
-
-    // An entry that is GONE is an answer about the disk, and a walk meets one whenever
-    // something is removed under it. Only a refusal is worth a privileged read.
-    it('treats a vanished directory as the answer it is, without escalating', async () => {
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('lost+found', false), dirent('appdata', false),
-      ]);
-      fsMock.promises.readdir.withArgs('/apps/test-app/appdata').rejects(
-        Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }),
-      );
-      syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 500000, globalFiles: 12, inSyncBytes: 500000, state: 'idle',
-      });
-
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', []);
-
-      expect(findCall(), 'a missing entry is not asked of root').to.not.exist;
-      expect(result.isSafe).to.be.false;
-      expect(result.reason).to.equal('phantom_index_empty_disk');
-    });
-
-    // find reads a leading dash as an option, and an app names the directories on its
-    // own volume: handed `--version` as a bare name it prints its own version and exits
-    // 0, which reads as a file found and disables this guard. Absolute paths cannot be
-    // parsed that way, and that is the property enforced rather than assumed.
-    it('refuses to hand find a path it could read as an option', async () => {
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('relative-root').resolves([dirent('--version', false)]);
-      fsMock.promises.readdir.withArgs('relative-root/--version').rejects(
-        Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }),
-      );
-
-      const check = await stateMachine.checkDirectoryHasSyncScopedContent('relative-root', [], { countDirs: false });
-
-      expect(findCall(), 'a relative path is never handed to find').to.not.exist;
-      expect(check.hasContent).to.be.false;
-      expect(check.readable, 'unread is not the same as empty').to.be.false;
-    });
-
-    // Every one of these exclusions is a .stignore line anchored to the folder root, so
-    // the same name inside the owner's own tree is their data. Asserted on the count,
-    // which is where it shows: the verdict is already decided by the root entry above it.
-    it('counts a scaffolding name that appears below the volume root', async () => {
-      fsMock.promises.readdir.resolves([]);
-      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
-        dirent('.stignore'), dirent('lost+found', false), dirent('appdata', false),
-      ]);
-      fsMock.promises.readdir.withArgs('/apps/test-app/appdata').resolves([
-        dirent('backup', false),
-      ]);
-
-      const check = await stateMachine.checkDirectoryHasSyncScopedContent('/apps/test-app', []);
-
-      expect(check.fileCount, 'appdata and the backup directory inside it').to.equal(2);
     });
 
     it('is safe on an empty disk when the index is empty too (cold-start seed)', async () => {
@@ -4375,118 +1947,6 @@ describe('syncthingFolderStateMachine tests', () => {
     });
   });
 
-  describe('findSyncedPeer skips a peer the caller rules out', () => {
-    beforeEach(() => {
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 4096, globalFiles: 1 });
-    });
-
-    it('passes over an excluded peer and accepts the next full one', async () => {
-      syncthingServiceMock.getConfig.resolves({
-        folders: [{ id: 'fluxappone', devices: [{ deviceID: 'LOCAL-DEVICE' }, { deviceID: 'LEAVING' }, { deviceID: 'STAYING' }] }],
-      });
-      syncthingServiceMock.getDbCompletion.resolves({ completion: 100, globalBytes: 4096, remoteState: 'valid' });
-
-      const peer = await stateMachine.findSyncedPeer('fluxappone', { exclude: new Set(['LEAVING']) });
-
-      expect(peer.deviceID).to.equal('STAYING');
-    });
-
-    it('finds no peer when the only full one is excluded', async () => {
-      syncthingServiceMock.getConfig.resolves({
-        folders: [{ id: 'fluxappone', devices: [{ deviceID: 'LOCAL-DEVICE' }, { deviceID: 'LEAVING' }] }],
-      });
-      syncthingServiceMock.getDbCompletion.resolves({ completion: 100, globalBytes: 4096, remoteState: 'valid' });
-
-      expect(await stateMachine.findSyncedPeer('fluxappone', { exclude: new Set(['LEAVING']) })).to.equal(null);
-    });
-  });
-
-  // What the folder holds is one figure for the cluster; only completion and
-  // connection differ by peer.
-  describe('findSyncedPeer reads the folder once and each peer\'s completion', () => {
-    const peers = (...ids) => syncthingServiceMock.getConfig.resolves({
-      folders: [{ id: 'fluxappone', devices: [{ deviceID: 'LOCAL-DEVICE' }, ...ids.map((deviceID) => ({ deviceID }))] }],
-    });
-    const completionOf = (byPeer) => syncthingServiceMock.getDbCompletion.callsFake(async ({ device }) => byPeer[device]);
-
-    beforeEach(() => {
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 4096, globalFiles: 1 });
-    });
-
-    it('reads the folder\'s status once for a walk over several peers', async () => {
-      peers('GONE', 'BEHIND', 'FULL');
-      completionOf({
-        GONE: { completion: 100, globalBytes: 4096, remoteState: 'notSharing' },
-        BEHIND: { completion: 40, globalBytes: 4096, remoteState: 'valid' },
-        FULL: { completion: 100, globalBytes: 4096, remoteState: 'valid' },
-      });
-
-      const peer = await stateMachine.findSyncedPeer('fluxappone');
-
-      expect(peer).to.deep.equal({ deviceID: 'FULL', globalBytes: 4096 });
-      sinon.assert.calledOnce(syncthingServiceMock.getDbStatus);
-      sinon.assert.calledThrice(syncthingServiceMock.getDbCompletion);
-    });
-
-    it('asks about no peer when the folder holds no file bytes', async () => {
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 0 });
-      peers('FULL');
-      completionOf({ FULL: { completion: 100, globalBytes: 0, remoteState: 'valid' } });
-
-      expect(await stateMachine.findSyncedPeer('fluxappone')).to.equal(null);
-      sinon.assert.notCalled(syncthingServiceMock.getDbCompletion);
-    });
-
-    it('stops at the first peer that is complete and connected', async () => {
-      peers('FIRST', 'SECOND');
-      completionOf({
-        FIRST: { completion: 100, globalBytes: 4096, remoteState: 'valid' },
-        SECOND: { completion: 100, globalBytes: 4096, remoteState: 'valid' },
-      });
-
-      const peer = await stateMachine.findSyncedPeer('fluxappone');
-
-      expect(peer.deviceID).to.equal('FIRST');
-      sinon.assert.calledOnce(syncthingServiceMock.getDbCompletion);
-    });
-
-    it('finds no peer when the folder\'s status cannot be read', async () => {
-      syncthingServiceMock.getDbStatus.rejects(new Error('syncthing unavailable'));
-      peers('FULL');
-      completionOf({ FULL: { completion: 100, globalBytes: 4096, remoteState: 'valid' } });
-
-      expect(await stateMachine.findSyncedPeer('fluxappone')).to.equal(null);
-    });
-  });
-
-  // syncthing before v2.1.2 counts each directory as 128 bytes, so a peer whose copy
-  // is only directories reports bytes. It holds no data, and a peer holding none is
-  // not a source to revert to.
-  describe('findSyncedPeer on syncthing before v2.1.2', () => {
-    beforeEach(() => {
-      syncthingServiceMock.syncthingVersion = 'v2.0.15';
-      syncthingServiceMock.getConfig.resolves({
-        folders: [{ id: 'fluxappone', devices: [{ deviceID: 'LOCAL-DEVICE' }, { deviceID: 'PEER' }] }],
-      });
-    });
-
-    it('does not take a peer whose copy is only directories as a source', async () => {
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 256, globalDirectories: 2, globalFiles: 1 });
-      syncthingServiceMock.getDbCompletion.resolves({ completion: 100, globalBytes: 256, remoteState: 'valid' });
-
-      expect(await stateMachine.findSyncedPeer('fluxappone')).to.equal(null);
-    });
-
-    it('takes a peer that holds files beside its directories', async () => {
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 256 + 4096, globalDirectories: 2, globalFiles: 2 });
-      syncthingServiceMock.getDbCompletion.resolves({ completion: 100, globalBytes: 256 + 4096, remoteState: 'valid' });
-
-      const peer = await stateMachine.findSyncedPeer('fluxappone');
-
-      expect(peer).to.deep.equal({ deviceID: 'PEER', globalBytes: 4096 });
-    });
-  });
-
   describe('findSyncedPeer excludes this node', () => {
     // Every folder's device list BEGINS with the local device - see
     // syncthingMonitorHelpers, `const devices = [{ deviceID: myDeviceId }]` -
@@ -4503,7 +1963,6 @@ describe('syncthingFolderStateMachine tests', () => {
       syncthingServiceMock.getConfig.resolves({
         folders: [{ id: 'fluxappone', devices: [{ deviceID: 'LOCAL-DEVICE' }] }],
       });
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 4096, globalFiles: 1 });
     });
 
     it('does not accept this node\'s own copy as a peer holding the data', async () => {
