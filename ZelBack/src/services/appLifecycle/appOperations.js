@@ -251,10 +251,7 @@ async function redeployComponent(appName, componentName, options = {}) {
     if (onStatus) onStatus(msg);
   };
 
-  if (globalState.removalInProgress
-    || globalState.installationInProgress
-    || globalState.softRedeployInProgress
-    || globalState.hardRedeployInProgress) {
+  if (operationRegistry.isHeld(appName)) {
     status('Another operation is in progress');
     return;
   }
@@ -332,10 +329,7 @@ async function redeployApplication(appName, options = {}) {
     if (onStatus) onStatus(msg);
   };
 
-  if (globalState.removalInProgress
-    || globalState.installationInProgress
-    || globalState.softRedeployInProgress
-    || globalState.hardRedeployInProgress) {
+  if (operationRegistry.isHeld(appName)) {
     status('Another operation is in progress');
     return;
   }
@@ -453,10 +447,9 @@ async function redeployComponentAPI(req, res) {
       throw new Error('Invalid app name format. Please provide the app name and component name separately');
     }
 
-    const redeploySkip = globalState.restoreInProgress.some((backupItem) => appname === backupItem);
-    if (redeploySkip) {
-      log.info(`Restore is running for ${appname}, component redeploy skipped...`);
-      const skipResponse = messageHelper.createWarningMessage(`Restore is running for ${appname}, component redeploy skipped...`);
+    if (operationRegistry.isHeld(appname)) {
+      log.info(`Operation in progress for ${appname}, component redeploy skipped...`);
+      const skipResponse = messageHelper.createWarningMessage(`Operation in progress for ${appname}, component redeploy skipped...`);
       res.json(skipResponse);
       return;
     }
@@ -514,9 +507,8 @@ async function redeployApplicationAPI(req, res) {
       throw new Error('Component cannot be redeployed manually');
     }
 
-    const redeploySkip = globalState.restoreInProgress.some((backupItem) => appname === backupItem);
-    if (redeploySkip) {
-      log.info(`Restore is running for ${appname}, redeploy skipped...`);
+    if (operationRegistry.isHeld(appname)) {
+      log.info(`Operation in progress for ${appname}, redeploy skipped...`);
       return;
     }
 
@@ -819,9 +811,8 @@ async function appendBackupTask(req, res) {
     if (!appname || !backup) {
       throw new Error('appname and backup parameters are mandatory');
     }
-    const indexBackup = globalState.backupInProgress.indexOf(appname);
-    if (indexBackup !== -1) {
-      throw new Error('Backup in progress...');
+    if (operationRegistry.isHeld(appname)) {
+      throw new Error('An operation is already in progress for this app...');
     }
     const hasTrueBackup = backup.some((backupitem) => backupitem.backup);
     if (hasTrueBackup === false) {
@@ -941,9 +932,8 @@ async function appendRestoreTask(req, res) {
     if (!appname || !restore || !type) {
       throw new Error('appname, restore and type parameters are mandatory');
     }
-    const indexRestore = globalState.restoreInProgress.indexOf(appname);
-    if (indexRestore !== -1) {
-      throw new Error(`Restore for app ${appname} is running...`);
+    if (operationRegistry.isHeld(appname)) {
+      throw new Error(`An operation is already in progress for app ${appname}...`);
     }
     const hasTrueRestore = restore.some((restoreitem) => restoreitem.restore);
     if (hasTrueRestore === false) {
@@ -1526,20 +1516,6 @@ async function updateAppGlobalyApi(req, res) {
   });
 }
 
-/**
- * To find and remove apps that are spawned more than maximum number of instances allowed locally.
- * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
- */
-
-function isOperationInProgress() {
-  return globalState.removalInProgress
-    || globalState.installationInProgress
-    || globalState.softRedeployInProgress
-    || globalState.hardRedeployInProgress
-    || globalState.reconciliationInProgress;
-}
-
-
 async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec) {
   const oldNames = new Set(Object.keys(oldDeployment.components));
   const newNames = new Set(Object.keys(newDeployment.components));
@@ -1642,8 +1618,8 @@ async function reconcileApp(installed, registrySpec) {
   const newDeployment = await deploymentProvider.buildDeployment(registrySpec);
   if (!oldDeployment || !newDeployment) return;
 
-  if (isOperationInProgress()) {
-    log.warn(`Skipping ${installed.name} — another operation in progress`);
+  if (operationRegistry.isHeld(installed.name)) {
+    log.warn(`Skipping ${installed.name} — an operation is in progress for it`);
     return;
   }
 
@@ -1796,25 +1772,11 @@ async function forceAppRemovals() {
   try {
     log.info('Executing forceAppRemovals.');
 
-    // Skip if any installation or removal operations are in progress
-    if (globalState.removalInProgress) {
-      log.info('Skipping forceAppRemovals: Another application removal is in progress');
-      return;
-    }
-    if (globalState.installationInProgress) {
-      log.info('Skipping forceAppRemovals: Another application installation is in progress');
-      return;
-    }
-    if (globalState.softRedeployInProgress) {
-      log.info('Skipping forceAppRemovals: Soft redeploy is in progress');
-      return;
-    }
-    if (globalState.hardRedeployInProgress) {
-      log.info('Skipping forceAppRemovals: Hard redeploy is in progress');
-      return;
-    }
-    if (globalState.reinstallationOfOldAppsInProgress) {
-      log.info('Skipping forceAppRemovals: Reinstallation of old apps is in progress');
+    // Skip the orphan sweep while ANY operation is in flight (node-wide): it
+    // force-removes apps, so it must never race an install/remove/redeploy/
+    // reconcile/backup/restore on any app.
+    if (operationRegistry.anyHeld()) {
+      log.info('Skipping forceAppRemovals: an operation is in progress');
       return;
     }
 
@@ -1888,7 +1850,11 @@ async function forceAppRemovals() {
 async function coordinateActiveStandbyApps() {
   try {
     globalState.activeStandbyCoordinationRunning = true;
-    if (isOperationInProgress()) {
+    // The election cycle iterates every activeStandby app; pause it while any
+    // folder-set-changing operation is in flight (install/remove/redeploy/reconcile),
+    // node-wide. NOT backup/restore - those are skipped per-app in the loop below,
+    // so one app's backup never freezes the whole election.
+    if (operationRegistry.anyHeldOfType('install', 'remove', 'softRedeploy', 'hardRedeploy', 'reconcile')) {
       return;
     }
 
@@ -1945,8 +1911,6 @@ async function coordinateActiveStandbyApps() {
       }
     }
 
-    const backupInProgress = globalState.backupInProgress || [];
-    const restoreInProgress = globalState.restoreInProgress || [];
     const receiveOnlySyncthingAppsCache = globalState.receiveOnlySyncthingAppsCache;
 
     for (const deployment of deployments) {
@@ -1955,10 +1919,8 @@ async function coordinateActiveStandbyApps() {
       let identifier;
       let needsToBeChecked = false;
       let appId;
-      const backupSkip = backupInProgress.some((item) => appName === item);
-      const restoreSkip = restoreInProgress.some((item) => appName === item);
-      if (backupSkip || restoreSkip) {
-        log.info(`activeStandby: Backup/Restore is running for ${appName}, skipping`);
+      if (operationRegistry.isHeld(appName)) {
+        log.info(`activeStandby: operation in progress for ${appName}, skipping`);
         // eslint-disable-next-line no-continue
         continue;
       }
