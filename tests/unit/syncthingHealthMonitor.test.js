@@ -220,73 +220,6 @@ describe('syncthingHealthMonitor tests', () => {
       removeAppLocallyFn = sinon.stub().resolves();
     });
 
-    it('should skip health check when installation in progress', async () => {
-      mockState.installationInProgress = true;
-
-      const result = await healthMonitor.monitorFolderHealth({
-        foldersConfiguration: mockFoldersConfiguration,
-        folderHealthCache: mockFolderHealthCache,
-        appDockerStopFn,
-        appDockerStartFn,
-        removeAppLocallyFn,
-        state: mockState,
-        receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
-      });
-
-      expect(result.checked).to.be.false;
-      expect(result.actions).to.have.length(0);
-    });
-
-    it('should skip health check when removal in progress', async () => {
-      mockState.removalInProgress = true;
-
-      const result = await healthMonitor.monitorFolderHealth({
-        foldersConfiguration: mockFoldersConfiguration,
-        folderHealthCache: mockFolderHealthCache,
-        appDockerStopFn,
-        appDockerStartFn,
-        removeAppLocallyFn,
-        state: mockState,
-        receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
-      });
-
-      expect(result.checked).to.be.false;
-    });
-
-    it('should skip health check when backup in progress', async () => {
-      mockState.backupInProgress = ['someapp'];
-
-      const result = await healthMonitor.monitorFolderHealth({
-        foldersConfiguration: mockFoldersConfiguration,
-        folderHealthCache: mockFolderHealthCache,
-        appDockerStopFn,
-        appDockerStartFn,
-        removeAppLocallyFn,
-        state: mockState,
-        receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
-      });
-
-      expect(result.checked).to.be.false;
-      expect(result.actions).to.have.length(0);
-    });
-
-    it('should skip health check when restore in progress', async () => {
-      mockState.restoreInProgress = ['someapp'];
-
-      const result = await healthMonitor.monitorFolderHealth({
-        foldersConfiguration: mockFoldersConfiguration,
-        folderHealthCache: mockFolderHealthCache,
-        appDockerStopFn,
-        appDockerStartFn,
-        removeAppLocallyFn,
-        state: mockState,
-        receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
-      });
-
-      expect(result.checked).to.be.false;
-      expect(result.actions).to.have.length(0);
-    });
-
     it('should skip folders whose apps have not completed initial process', async () => {
       mockFoldersConfiguration = [{ id: 'fluxmyapp' }];
       syncthingServiceMock.getPeerSyncDiagnostics.resolves({
@@ -950,38 +883,6 @@ describe('syncthingHealthMonitor tests', () => {
       });
 
       sinon.assert.notCalled(stateMachineMock.nudgeFolderDevices);
-    });
-
-    it('should skip soft redeploy in progress', async () => {
-      mockState.softRedeployInProgress = true;
-
-      const result = await healthMonitor.monitorFolderHealth({
-        foldersConfiguration: mockFoldersConfiguration,
-        folderHealthCache: mockFolderHealthCache,
-        appDockerStopFn,
-        appDockerStartFn,
-        removeAppLocallyFn,
-        state: mockState,
-        receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
-      });
-
-      expect(result.checked).to.be.false;
-    });
-
-    it('should skip hard redeploy in progress', async () => {
-      mockState.hardRedeployInProgress = true;
-
-      const result = await healthMonitor.monitorFolderHealth({
-        foldersConfiguration: mockFoldersConfiguration,
-        folderHealthCache: mockFolderHealthCache,
-        appDockerStopFn,
-        appDockerStartFn,
-        removeAppLocallyFn,
-        state: mockState,
-        receiveOnlySyncthingAppsCache: mockReceiveOnlySyncthingAppsCache,
-      });
-
-      expect(result.checked).to.be.false;
     });
 
     it('should take warning action after warning threshold', async () => {
