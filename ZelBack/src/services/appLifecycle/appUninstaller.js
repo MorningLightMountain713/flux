@@ -8,6 +8,7 @@ const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const dbHelper = require('../dbHelper');
 const globalState = require('../utils/globalState');
+const operationRegistry = require('../utils/operationRegistry');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const log = require('../../lib/log');
@@ -455,6 +456,10 @@ async function uninstallApplication(appName, options = {}) {
     }
 
     globalState.removalInProgress = true;
+    // Dual-write the operation registry alongside the global flag (Stage 1: the
+    // flag is still authoritative; nothing reads the registry yet). Released in
+    // the finally with the flag.
+    operationRegistry.acquire(appName, 'remove', 'appUninstaller', `remove ${appName}`);
 
     if (!appName) {
       throw new Error('No App specified');
@@ -640,6 +645,7 @@ async function uninstallApplication(appName, options = {}) {
     return { status: UninstallStatus.FAILED, reason: error.message };
   } finally {
     globalState.removalInProgress = false;
+    operationRegistry.release(appName);
   }
 }
 
