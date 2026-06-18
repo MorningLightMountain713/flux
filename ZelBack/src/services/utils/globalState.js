@@ -235,10 +235,6 @@ module.exports = {
     return held ? held[0] : null;
   },
 
-  isOperationInProgress() {
-    return removalInProgress || installationInProgress || softRedeployInProgress || hardRedeployInProgress || reinstallationOfOldAppsInProgress;
-  },
-
   get masterSlaveAppsRunning() { return masterSlaveAppsRunning; },
   set masterSlaveAppsRunning(value) { masterSlaveAppsRunning = value; },
 
