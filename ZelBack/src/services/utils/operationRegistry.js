@@ -121,6 +121,29 @@ function list() {
 }
 
 /**
+ * Whether ANY lease is currently held — the node-wide "is anything in flight"
+ * signal for the few genuinely node-wide consumers (the daemon-health mass-wipe,
+ * the orphan sweep, the activeStandby coordinator). Counts EVERY lease, including
+ * transient component 'stopping' markers: a node-wide destructive action must
+ * never run while anything is mid-operation.
+ * @returns {boolean}
+ */
+function anyHeld() {
+  return leases.size > 0;
+}
+
+/**
+ * The keys of every lease of a given type (e.g. every app currently in 'backup').
+ * Lets a consumer recover a set it used to read off a flag array (which apps are
+ * in backup/restore) without re-scanning globalState.
+ * @param {string} type
+ * @returns {string[]}
+ */
+function listByType(type) {
+  return [...leases.entries()].filter(([, lease]) => lease.type === type).map(([key]) => key);
+}
+
+/**
  * Drop all leases and their timers. An in-memory registry never survives a crash,
  * so this is for the boot reset and tests, not normal operation.
  */
@@ -130,5 +153,5 @@ function clear() {
 }
 
 module.exports = {
-  acquire, release, isHeld, get, list, clear, TTL_MS,
+  acquire, release, isHeld, get, list, anyHeld, listByType, clear, TTL_MS,
 };
