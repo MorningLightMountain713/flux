@@ -255,16 +255,11 @@ module.exports = {
     return held ? held[0] : null;
   },
 
-  isOperationInProgress() {
-    return removalInProgress || installationInProgress || softRedeployInProgress || hardRedeployInProgress || reinstallationOfOldAppsInProgress;
-  },
-
   // Set by the graceful shutdown path and never cleared: the process exits at the
   // end of it. From then on no container starts and no decider acts, so what the
   // shutdown stops and drains stays stopped and drained.
   get shutdownInProgress() { return shutdownInProgress; },
   setShutdownInProgressTrue() { shutdownInProgress = true; },
-
   get masterSlaveAppsRunning() { return masterSlaveAppsRunning; },
   set masterSlaveAppsRunning(value) { masterSlaveAppsRunning = value; },
 
