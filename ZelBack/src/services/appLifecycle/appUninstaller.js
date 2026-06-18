@@ -276,9 +276,60 @@ async function cleanupDeploymentPorts(deployComp, appName, res, entityName) {
 }
 
 /**
+ * Reclaim app images after their containers are gone — deduplicated and
+ * reference-gated. An image is removed only when no remaining container (a
+ * sibling component, a re-spawn, or another app sharing a base image like
+ * alpine:latest) still references it; a shared image is left in place silently
+ * rather than attempting a removal Docker correctly refuses with a 409. Never
+ * force-removes — forcing would break the referrer.
+ *
+ * @param {string[]} images - candidate image refs (deduplicated internally)
+ * @param {Function} status - progress logger
+ */
+async function reclaimUnusedImages(images, status) {
+  const distinct = [...new Set((images || []).filter(Boolean))];
+  if (distinct.length === 0) return;
+  let inUse;
+  try {
+    const containers = await dockerService.dockerListContainers(true);
+    inUse = new Set();
+    // eslint-disable-next-line no-restricted-syntax
+    for (const c of containers) {
+      if (c.Image) inUse.add(c.Image);
+      if (c.ImageID) inUse.add(c.ImageID);
+    }
+  } catch (error) {
+    log.warn(`Image reclaim skipped (could not list containers): ${error.message}`);
+    return;
+  }
+  // eslint-disable-next-line no-restricted-syntax
+  for (const image of distinct) {
+    if (inUse.has(image)) {
+      status(`Image ${image} still referenced by another container; leaving it`);
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await dockerService.appDockerImageRemove(image)
+      .then(() => status(`Image ${image} removed`))
+      .catch((error) => {
+        // Backstop for an ID-vs-tag reference miss: Docker's own "must force" / 409
+        // confirms the image is still in use, so treat it as benign, not an error.
+        const msg = error.message || '';
+        if (/in use|must force|409/i.test(msg)) {
+          status(`Image ${image} still in use; leaving it`);
+        } else {
+          log.error(`Image remove failed for ${image}: ${msg}`);
+        }
+      });
+  }
+}
+
+/**
  * Uninstall a single component: stop (or kill) and remove its container, deny
- * its ports, optionally tear down volumes/syncthing/crontab, then remove the
- * image. Driven off the normalized DeploymentSpec component.
+ * its ports, optionally tear down volumes/syncthing/crontab. Image cleanup is
+ * app-level and reference-gated (see reclaimUnusedImages, called by
+ * uninstallApplication). Driven off the normalized DeploymentSpec component.
  *
  * @param {import('@runonflux/flux-spec-backend').DeploymentComponent} component
  * @param {object} [options]
@@ -354,16 +405,6 @@ async function uninstallComponent(component, options = {}) {
     // new-mechanism host config). The container is already gone, so its swap pages
     // are freed and an emptied chunk can be swapped off + removed.
     await appSwapPoolService.reconcile();
-  }
-
-  if (containerRemoved) {
-    status(`Removing Flux App ${label} image...`);
-    await dockerService.appDockerImageRemove(component.image).catch((error) => {
-      log.error(`Image remove failed for ${component.image}: ${error.message}`);
-    });
-    status(`Flux App ${label} image operations done`);
-  } else {
-    log.warn(`Skipping image removal for ${appId} because container removal failed`);
   }
 
   status(`Flux App ${label} was successfully removed`);
@@ -478,17 +519,20 @@ async function uninstallApplication(appName, options = {}) {
       await appsRuntimeState.remove(identifier);
       if (onComponentRemoved) onComponentRemoved(identifier);
     }
+    let imagesToReclaim = [];
     if (deployment && isComponent) {
       const component = deployment.getComponent(appComponent);
       if (!component) {
         throw new Error(`Flux App component ${appComponent} not found in ${resolvedAppName}`);
       }
       await uninstallComponent(component, { removeVolumes: true, forceKill, onStatus });
+      imagesToReclaim = [component.image];
     } else if (deployment) {
       for (const [, component] of deployment.componentEntries({ reverse: true })) {
         // eslint-disable-next-line no-await-in-loop
         await uninstallComponent(component, { removeVolumes: true, forceKill, onStatus });
       }
+      imagesToReclaim = deployment.componentEntries().map(([, c]) => c.image);
     } else {
       status(`No deployment for ${resolvedAppName}; best-effort container removal`);
       const appId = dockerService.getAppIdentifier(appName);
@@ -499,6 +543,11 @@ async function uninstallApplication(appName, options = {}) {
         await dockerService.appDockerRemove(appId).catch((e) => log.warn(`remove ${appId}: ${e.message}`));
       }
     }
+
+    // Now that this app's containers are gone, reclaim its images — deduplicated
+    // and reference-gated, so a base image shared with a sibling/re-spawn/other app
+    // is left in place instead of producing the old per-component "must force" 409.
+    await reclaimUnusedImages(imagesToReclaim, status);
 
     fluxEventBus.publish('app:removed', { name: resolvedAppName });
 
@@ -684,4 +733,6 @@ module.exports = {
   cleanupDeploymentPorts,
   removeAppLocallyApi,
   setOnComponentRemoved,
+  // exposed for tests
+  reclaimUnusedImages,
 };

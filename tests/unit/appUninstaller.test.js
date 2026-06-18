@@ -9,6 +9,7 @@ describe('appUninstaller tests', () => {
   let logStub;
   let configStub;
   let globalStateStub;
+  let dockerServiceStub;
 
   beforeEach(() => {
     configStub = {
@@ -64,6 +65,15 @@ describe('appUninstaller tests', () => {
       getRemovalInProgress: sinon.stub().returns(false),
     };
 
+    dockerServiceStub = {
+      appDockerStop: sinon.stub().resolves(),
+      appDockerRemove: sinon.stub().resolves(),
+      appDockerImageRemove: sinon.stub().resolves(),
+      dockerListContainers: sinon.stub().resolves([]),
+      getAppIdentifier: sinon.stub().returns('testapp'),
+      getBaseAppName: sinon.stub().callsFake((id) => id),
+    };
+
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
       config: configStub,
       '../verificationHelper': verificationHelperStub,
@@ -73,13 +83,7 @@ describe('appUninstaller tests', () => {
         ensureBoolean: sinon.stub().returnsArg(0),
       },
       '../dbHelper': dbHelperStub,
-      '../dockerService': {
-        appDockerStop: sinon.stub().resolves(),
-        appDockerRemove: sinon.stub().resolves(),
-        appDockerImageRemove: sinon.stub().resolves(),
-        getAppIdentifier: sinon.stub().returns('testapp'),
-        getBaseAppName: sinon.stub().callsFake((id) => id),
-      },
+      '../dockerService': dockerServiceStub,
       '../../lib/log': logStub,
       '../utils/globalState': globalStateStub,
       '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
@@ -192,6 +196,46 @@ describe('appUninstaller tests', () => {
       } finally {
         globalStateStub.installationInProgress = false;
       }
+    });
+  });
+
+  describe('reclaimUnusedImages (reference-gated image GC)', () => {
+    const noop = () => {};
+
+    it('removes an image no remaining container references', async () => {
+      dockerServiceStub.dockerListContainers.resolves([]);
+      await appUninstaller.reclaimUnusedImages(['alpine:latest'], noop);
+      expect(dockerServiceStub.appDockerImageRemove.calledOnceWithExactly('alpine:latest')).to.be.true;
+    });
+
+    it('leaves an image still referenced by another container (matched by tag)', async () => {
+      dockerServiceStub.dockerListContainers.resolves([{ Image: 'alpine:latest' }]);
+      await appUninstaller.reclaimUnusedImages(['alpine:latest'], noop);
+      expect(dockerServiceStub.appDockerImageRemove.called).to.be.false;
+    });
+
+    it('leaves an image still referenced by ImageID', async () => {
+      dockerServiceStub.dockerListContainers.resolves([{ Image: 'other:tag', ImageID: 'sha256:abc' }]);
+      await appUninstaller.reclaimUnusedImages(['sha256:abc'], noop);
+      expect(dockerServiceStub.appDockerImageRemove.called).to.be.false;
+    });
+
+    it('deduplicates a shared image to a single removal', async () => {
+      dockerServiceStub.dockerListContainers.resolves([]);
+      await appUninstaller.reclaimUnusedImages(['alpine:latest', 'alpine:latest', 'alpine:latest'], noop);
+      expect(dockerServiceStub.appDockerImageRemove.calledOnce).to.be.true;
+    });
+
+    it('treats a Docker "must force" 409 as benign (no error logged)', async () => {
+      dockerServiceStub.dockerListContainers.resolves([]);
+      dockerServiceStub.appDockerImageRemove.rejects(new Error('(HTTP code 409) unable to remove repository reference "alpine:latest" (must force)'));
+      await appUninstaller.reclaimUnusedImages(['alpine:latest'], noop);
+      expect(logStub.error.called).to.be.false;
+    });
+
+    it('no-ops on an empty list without listing containers', async () => {
+      await appUninstaller.reclaimUnusedImages([], noop);
+      expect(dockerServiceStub.dockerListContainers.called).to.be.false;
     });
   });
 

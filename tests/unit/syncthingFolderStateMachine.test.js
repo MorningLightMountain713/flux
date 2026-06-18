@@ -35,7 +35,7 @@ const appReconcilerMock = {
   requestStopAndClearData: sinon.stub(),
   enqueue: sinon.stub(),
 };
-const appUninstallerMock = { removeAppLocally: sinon.stub().resolves() };
+const appUninstallerMock = { uninstallApplication: sinon.stub().resolves() };
 
 // Load module with mocked dependencies
 const stateMachine = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine', {
@@ -69,8 +69,8 @@ describe('syncthingFolderStateMachine tests', () => {
     serviceHelperMock.delay.reset();
     serviceHelperMock.delay.resolves();
     nodecmdMock.run.reset();
-    appUninstallerMock.removeAppLocally.reset();
-    appUninstallerMock.removeAppLocally.resolves();
+    appUninstallerMock.uninstallApplication.reset();
+    appUninstallerMock.uninstallApplication.resolves();
     appReconcilerMock.setControllerDesired.reset();
     appReconcilerMock.requestStopAndClearData.reset();
     appReconcilerMock.enqueue.reset();
@@ -423,7 +423,7 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
       expect(result.syncthingFolder.type).to.equal('sendreceive');
       expect(result.cache.restarted).to.be.true;
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
     });
 
     it('should wait for sync completion when not leader', async () => {
@@ -679,7 +679,7 @@ describe('syncthingFolderStateMachine tests', () => {
       // cannot verify the data is synced -> must not flip to sendreceive or start, and
       // must not remove yet (well under the removal threshold on the first unreadable cycle)
       sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, sinon.match.any, 'running');
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.syncthingFolder.type).to.equal('receiveonly');
       expect(result.cache.restarted).to.not.equal(true);
     });
@@ -733,7 +733,7 @@ describe('syncthingFolderStateMachine tests', () => {
       expect(syncthingServiceMock.systemResume.firstCall.args[0].params.device).to.equal('DEVICE123');
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
       sinon.assert.notCalled(appReconcilerMock.requestStopAndClearData);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.cache.nudgeCount).to.equal(1);
       expect(result.syncthingFolder.type).to.equal('receiveonly');
     });
@@ -751,7 +751,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.cache.nudgeCount).to.equal(0);
       expect(result.cache.evidenceSince).to.equal(null);
       expect(result.cache.lastProgressBytes).to.equal(500);
@@ -772,7 +772,7 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
       sinon.assert.notCalled(appReconcilerMock.requestStopAndClearData);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.syncthingFolder.type).to.equal('receiveonly');
     });
 
@@ -782,7 +782,7 @@ describe('syncthingFolderStateMachine tests', () => {
       await stateMachine.manageFolderSyncState(mockParams);
 
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
     });
 
     it('should not nudge again before the nudge backoff elapses', async () => {
@@ -797,7 +797,7 @@ describe('syncthingFolderStateMachine tests', () => {
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.cache.nudgeCount).to.equal(1);
     });
 
@@ -812,7 +812,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.calledOnceWithExactly(appUninstallerMock.removeAppLocally, 'test-app', null, true, false, true);
+      sinon.assert.calledOnceWithExactly(appUninstallerMock.uninstallApplication, 'test-app', { forceKill: true, broadcastRemoval: true });
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
       sinon.assert.notCalled(appReconcilerMock.requestStopAndClearData);
       expect(result.cache.restarted).to.be.true;
@@ -850,7 +850,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.calledOnceWithExactly(appUninstallerMock.removeAppLocally, 'testapp', null, true, false, true);
+      sinon.assert.calledOnceWithExactly(appUninstallerMock.uninstallApplication, 'testapp', { forceKill: true, broadcastRemoval: true });
     });
 
     it('should keep nudging instead of removing while the evidence window has not elapsed', async () => {
@@ -864,7 +864,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       sinon.assert.calledOnce(syncthingServiceMock.systemPause);
       expect(result.cache.nudgeCount).to.equal(4);
     });
@@ -886,7 +886,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
       expect(result.cache.restarted).to.be.false;
       expect(result.syncthingFolder.type).to.equal('receiveonly');
@@ -903,7 +903,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       sinon.assert.notCalled(syncthingServiceMock.systemPause);
       expect(result.cache.restarted).to.be.false;
       expect(result.syncthingFolder.type).to.equal('receiveonly');
@@ -922,7 +922,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.cache.restarted).to.be.false;
     });
 
@@ -942,7 +942,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.notCalled(appUninstallerMock.removeAppLocally);
+      sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
       expect(result.cache.restarted).to.be.false;
       expect(result.syncthingFolder.type).to.equal('receiveonly');
     });
