@@ -1,5 +1,5 @@
 const serviceHelper = require('../serviceHelper');
-const globalState = require('../utils/globalState');
+const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -57,9 +57,10 @@ async function removeAllApps(reason) {
  */
 async function checkDaemonHealthAndCleanup() {
   try {
-    // Skip checks if operations in progress
-    if (globalState.removalInProgress || globalState.installationInProgress
-      || globalState.softRedeployInProgress || globalState.hardRedeployInProgress) {
+    // Skip while ANY operation is in flight: the cleanup this watchdog can trigger
+    // is a node-wide mass-removal of every installed app, so it must never run
+    // concurrently with any install/remove/redeploy/reconcile/backup/restore.
+    if (operationRegistry.anyHeld()) {
       return;
     }
 

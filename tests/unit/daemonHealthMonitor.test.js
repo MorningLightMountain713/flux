@@ -4,11 +4,12 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
+// Real registry singleton - un-stubbed in proxyquire, so the module and the test share it.
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
 describe('daemonHealthMonitor tests', () => {
   let daemonHealthMonitor;
   let serviceHelperStub;
-  let globalStateStub;
   let logStub;
   let daemonServiceMiscRpcsStub;
   let appsRepositoryStub;
@@ -24,13 +25,6 @@ describe('daemonHealthMonitor tests', () => {
     // Create stubs
     serviceHelperStub = {
       delay: sinon.stub().resolves(),
-    };
-
-    globalStateStub = {
-      removalInProgress: false,
-      installationInProgress: false,
-      softRedeployInProgress: false,
-      hardRedeployInProgress: false,
     };
 
     logStub = {
@@ -54,7 +48,6 @@ describe('daemonHealthMonitor tests', () => {
     // Use proxyquire to inject stubs
     daemonHealthMonitor = proxyquire.noCallThru()('../../ZelBack/src/services/appMonitoring/daemonHealthMonitor', {
       '../serviceHelper': serviceHelperStub,
-      '../utils/globalState': globalStateStub,
       '../../lib/log': logStub,
       '../daemonService/daemonServiceMiscRpcs': daemonServiceMiscRpcsStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
@@ -63,6 +56,7 @@ describe('daemonHealthMonitor tests', () => {
   });
 
   afterEach(() => {
+    operationRegistry.clear();
     sinon.restore();
     if (clock) {
       clock.restore();
@@ -71,8 +65,8 @@ describe('daemonHealthMonitor tests', () => {
   });
 
   describe('checkDaemonHealthAndCleanup tests', () => {
-    it('should skip checks when removal is in progress', async () => {
-      globalStateStub.removalInProgress = true;
+    it('should skip checks while any operation is in flight', async () => {
+      operationRegistry.acquire('someapp', 'install', 'test');
       daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
 
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
@@ -80,26 +74,8 @@ describe('daemonHealthMonitor tests', () => {
       expect(daemonServiceMiscRpcsStub.isDaemonSynced.called).to.be.false;
     });
 
-    it('should skip checks when installation is in progress', async () => {
-      globalStateStub.installationInProgress = true;
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
-
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(daemonServiceMiscRpcsStub.isDaemonSynced.called).to.be.false;
-    });
-
-    it('should skip checks when soft redeploy is in progress', async () => {
-      globalStateStub.softRedeployInProgress = true;
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
-
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(daemonServiceMiscRpcsStub.isDaemonSynced.called).to.be.false;
-    });
-
-    it('should skip checks when hard redeploy is in progress', async () => {
-      globalStateStub.hardRedeployInProgress = true;
+    it('should skip checks during a backup too (any lease counts for the node-wide mass-wipe)', async () => {
+      operationRegistry.acquire('someapp', 'backup', 'test');
       daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
 
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
