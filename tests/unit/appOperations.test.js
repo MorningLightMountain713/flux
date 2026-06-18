@@ -15,6 +15,7 @@ const operationRegistry = require('../../ZelBack/src/services/utils/operationReg
 describe('appOperations tests', () => {
   afterEach(() => {
     sinon.restore();
+    operationRegistry.clear();
   });
 
   describe('previous spec lookup', () => {
@@ -191,11 +192,11 @@ describe('appOperations tests', () => {
       expect(response.data.message).to.include('Invalid app name format');
     });
 
-    it('should skip redeploy if app is in restore progress', async () => {
+    it('should skip redeploy if the app holds an operation lease', async () => {
       req.params.appname = 'myapp';
       req.params.component = 'frontend';
 
-      // Use the proper method to add to restore progress
+      // A restore (or any operation) holding the app lease must skip the redeploy.
       appOperations.addToRestoreProgress('myapp');
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
@@ -205,10 +206,7 @@ describe('appOperations tests', () => {
       expect(res.json.calledOnce).to.be.true;
       const response = res.json.firstCall.args[0];
       expect(response.status).to.equal('warning');
-      expect(response.data.message).to.include('Restore is running');
-
-      // Clean up
-      appOperations.removeFromRestoreProgress('myapp');
+      expect(response.data.message).to.include('Operation in progress');
     });
 
     it('should return unauthorized error if not authorized', async () => {
@@ -255,8 +253,8 @@ describe('appOperations tests', () => {
       operationRegistry.clear();
     });
 
-    it('should return early if removal is in progress', async () => {
-      globalState.removalInProgress = true;
+    it('should return early if the app holds an operation lease', async () => {
+      operationRegistry.acquire('myapp', 'install', 'test');
       const messages = [];
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
@@ -277,30 +275,6 @@ describe('appOperations tests', () => {
 
       expect(leaseTypeDuring, 'a softRedeploy lease must be held while the redeploy runs').to.equal('softRedeploy');
       expect(operationRegistry.isHeld('myapp'), 'the redeploy lease must release when the operation settles').to.be.false;
-    });
-
-    it('should return early if installation is in progress', async () => {
-      globalState.installationInProgress = true;
-      const messages = [];
-      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
-      expect(messages).to.have.lengthOf(1);
-      expect(messages[0]).to.include('Another operation is in progress');
-    });
-
-    it('should return early if soft redeploy is in progress', async () => {
-      globalState.softRedeployInProgress = true;
-      const messages = [];
-      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
-      expect(messages).to.have.lengthOf(1);
-      expect(messages[0]).to.include('Another operation is in progress');
-    });
-
-    it('should return early if hard redeploy is in progress', async () => {
-      globalState.hardRedeployInProgress = true;
-      const messages = [];
-      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
-      expect(messages).to.have.lengthOf(1);
-      expect(messages[0]).to.include('Another operation is in progress');
     });
 
     it('should call uninstallApplication when application not found', async () => {
@@ -340,8 +314,8 @@ describe('appOperations tests', () => {
       operationRegistry.clear();
     });
 
-    it('should return early if removal is in progress', async () => {
-      globalState.removalInProgress = true;
+    it('should return early if the app holds an operation lease', async () => {
+      operationRegistry.acquire('myapp', 'install', 'test');
       const messages = [];
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
@@ -362,29 +336,6 @@ describe('appOperations tests', () => {
       expect(operationRegistry.isHeld('myapp'), 'the rebuild lease must release when the operation settles').to.be.false;
     });
 
-    it('should return early if installation is in progress', async () => {
-      globalState.installationInProgress = true;
-      const messages = [];
-      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
-      expect(messages).to.have.lengthOf(1);
-      expect(messages[0]).to.include('Another operation is in progress');
-    });
-
-    it('should return early if soft redeploy is in progress', async () => {
-      globalState.softRedeployInProgress = true;
-      const messages = [];
-      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
-      expect(messages).to.have.lengthOf(1);
-      expect(messages[0]).to.include('Another operation is in progress');
-    });
-
-    it('should return early if hard redeploy is in progress', async () => {
-      globalState.hardRedeployInProgress = true;
-      const messages = [];
-      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
-      expect(messages).to.have.lengthOf(1);
-      expect(messages[0]).to.include('Another operation is in progress');
-    });
 
     it('should call uninstallApplication when application not found', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
@@ -552,16 +503,8 @@ describe('appOperations tests', () => {
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
     });
 
-    it('should skip execution if installation is in progress', async () => {
-      globalStateRef.installationInProgress = true;
-
-      await appOperations.coordinateActiveStandbyApps();
-
-      expect(deploymentProviderStub.called).to.be.false;
-    });
-
-    it('should skip execution if removal is in progress', async () => {
-      globalStateRef.removalInProgress = true;
+    it('should skip execution while a folder-set-changing operation is in flight', async () => {
+      operationRegistry.acquire('someapp', 'install', 'test');
 
       await appOperations.coordinateActiveStandbyApps();
 
@@ -579,16 +522,17 @@ describe('appOperations tests', () => {
         }]],
       };
       deploymentProviderStub.resolves([mockDeployment]);
-      globalStateRef.backupInProgress.push(appName);
+      operationRegistry.acquire(appName, 'backup', 'test');
 
       const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
       const axiosGetStub = sinon.stub(serviceHelper, 'axiosGet');
 
       await appOperations.coordinateActiveStandbyApps();
 
+      // The cycle runs (backup is not a folder-set-changing op) but skips the
+      // backed-up app per-app, so it never probes that app's operator status.
       expect(deploymentProviderStub.called).to.be.true;
       expect(axiosGetStub.called).to.be.false;
-      globalStateRef.backupInProgress.length = 0;
     });
 
     it('stops only the active-standby component identifier on a standby node when FDM names a different primary', async () => {
