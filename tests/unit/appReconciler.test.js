@@ -26,6 +26,7 @@ describe('appReconciler tests', () => {
       const isSync = isG || isR || primary.startsWith('s:');
       return {
         name: c.name,
+        appName: spec.name,
         identifier: (spec.version >= 4) ? `${c.name}_${spec.name}` : spec.name,
         hasActiveStandbySyncthing: () => isG,
         requiresSyncBeforeStart: () => isR,
@@ -37,6 +38,7 @@ describe('appReconciler tests', () => {
     });
     return {
       getComponent: (n) => comps.find((c) => c.name === n) || null,
+      componentForIdentifier: (id) => comps.find((c) => c.identifier === id) || null,
       componentEntries: () => comps.map((c) => [c.name, c]),
       dependentsOf: (name) => comps.filter((c) => c.dependencyEntries().some(([dn]) => dn === name)).map((c) => c.name),
     };
