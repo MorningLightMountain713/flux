@@ -5,6 +5,7 @@ const dbHelper = require('../dbHelper');
 // eslint-disable-next-line no-unused-vars
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
+const operationRegistry = require('../utils/operationRegistry');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const syncthingService = require('../syncthingService');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -263,8 +264,12 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
   // Sync global state before checking
   getGlobalStateFn();
 
-  // Early return if operations in progress
-  if (state.installationInProgress || state.removalInProgress || state.softRedeployInProgress || state.hardRedeployInProgress || state.updateSyncthingRunning) {
+  // The cycle rebuilds the global folder set and prunes folders no longer backing
+  // an installed app, so it must not run while any app's folder set is changing.
+  // Node-wide for those operation classes (NOT backup/restore - those are handled
+  // per-app below so one app's backup never freezes the whole sweep). The
+  // updateSyncthingRunning re-entrancy guard is unchanged.
+  if (operationRegistry.anyHeldOfType('install', 'remove', 'softRedeploy', 'hardRedeploy', 'reconcile') || state.updateSyncthingRunning) {
     return;
   }
 
@@ -392,12 +397,12 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // eslint-disable-next-line no-restricted-syntax
     for (const deployment of deployments) {
       const { appName } = deployment;
-      // Skip if backup/restore in progress
-      const backupSkip = state.backupInProgress.some((item) => appName === item);
-      const restoreSkip = state.restoreInProgress.some((item) => appName === item);
-
-      if (backupSkip || restoreSkip) {
-        log.info(`syncthingAppsCore - Backup/restore in progress for ${appName}, syncthing disabled`);
+      // Skip this app if it holds any operation lease (per-app). A backup/restore
+      // already removed its syncthing folder, so processing it would wrongly
+      // re-add it; folding in the other lease types defers it during any operation
+      // on it. Its folders are simply left untouched this cycle.
+      if (operationRegistry.isHeld(appName)) {
+        log.info(`syncthingAppsCore - operation in progress for ${appName}, syncthing skipped this cycle`);
         // eslint-disable-next-line no-continue
         continue;
       }
@@ -491,7 +496,6 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         const healthResults = await monitorFolderHealth({
           foldersConfiguration,
           folderHealthCache: state.folderHealthCache,
-          state,
           receiveOnlySyncthingAppsCache: state.receiveOnlySyncthingAppsCache,
         });
 

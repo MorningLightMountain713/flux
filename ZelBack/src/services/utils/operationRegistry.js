@@ -133,6 +133,18 @@ function anyHeld() {
 }
 
 /**
+ * Whether any held lease is one of the given types — a node-wide "is a
+ * folder-set-changing operation in flight" signal for consumers that must freeze
+ * during some operation classes but not others (e.g. the syncthing config sweep
+ * pauses for install/remove/redeploy/reconcile but not for a single app's backup).
+ * @param {...string} types
+ * @returns {boolean}
+ */
+function anyHeldOfType(...types) {
+  return [...leases.values()].some((lease) => types.includes(lease.type));
+}
+
+/**
  * The keys of every lease of a given type (e.g. every app currently in 'backup').
  * Lets a consumer recover a set it used to read off a flag array (which apps are
  * in backup/restore) without re-scanning globalState.
@@ -153,5 +165,5 @@ function clear() {
 }
 
 module.exports = {
-  acquire, release, isHeld, get, list, anyHeld, listByType, clear, TTL_MS,
+  acquire, release, isHeld, get, list, anyHeld, anyHeldOfType, listByType, clear, TTL_MS,
 };
