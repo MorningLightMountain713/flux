@@ -22,6 +22,7 @@ const peerIdentityService = require('../peerIdentityService');
 const primaryRoleChanges = require('../appLifecycle/primaryRoleChanges');
 const folderStates = require('../appMonitoring/folderStates');
 const syncthingService = require('../syncthingService');
+const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');
 
 // Database collections
@@ -249,11 +250,10 @@ async function listRunningContainers() {
     apps = apps.filter((app) => dockerService.isAppContainer(app));
   }
 
-  // Include apps that are in backup or restore as "running" even if container is stopped
-  const globalState = require('../utils/globalState');
-  const backupInProgress = globalState.backupInProgress || [];
-  const restoreInProgress = globalState.restoreInProgress || [];
-  const appsInBackupRestore = [...backupInProgress, ...restoreInProgress];
+  // Apps mid backup/restore appear stopped but must still be surfaced as present.
+  // Derive the set from the registry's backup/restore leases (the same app-name
+  // keys the flag arrays held).
+  const appsInBackupRestore = [...operationRegistry.listByType('backup'), ...operationRegistry.listByType('restore')];
 
   if (appsInBackupRestore.length > 0) {
     // Get all containers including stopped ones
