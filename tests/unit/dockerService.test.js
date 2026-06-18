@@ -7,7 +7,6 @@ const Dockerode = require('dockerode');
 const sinon = require('sinon');
 const path = require('path');
 const dockerService = require('../../ZelBack/src/services/dockerService');
-const globalState = require('../../ZelBack/src/services/utils/globalState');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 
@@ -554,34 +553,28 @@ describe('dockerService tests', () => {
     // depend on the docker die event being delivered: a lost event (stream down)
     // would otherwise leak the flag forever and permanently wedge the
     // reconciler's actuation for that component.
-    it('holds the stopping flag during the stop and clears it on completion', async () => {
-      globalState.stoppingContainers.clear();
+    it('holds the stopping lease during the stop and releases it on completion', async () => {
       operationRegistry.clear();
       const leaseKey = dockerService.getAppIdentifier(appName);
-      let flaggedDuringStop = false;
       let leasedDuringStop = false;
       dockerStopStub.callsFake(async () => {
-        flaggedDuringStop = globalState.stoppingContainers.size === 1;
-        // the registry's component 'stopping' lease must mirror the Set 1:1 (Stage-1 dual-write)
+        // the component 'stopping' lease is held for the duration of the stop so the
+        // die handler swallows it and the reconciler defers
         leasedDuringStop = operationRegistry.get(leaseKey)?.type === 'stopping';
         return 'stopped';
       });
 
       await dockerService.appDockerStop(appName);
 
-      expect(flaggedDuringStop, 'flag must be set while the stop operation is in flight').to.be.true;
       expect(leasedDuringStop, 'the stopping lease must be held while the stop is in flight').to.be.true;
-      expect(globalState.stoppingContainers.size, 'flag must clear when the operation settles - the die event must not be its only janitor').to.equal(0);
-      expect(operationRegistry.isHeld(leaseKey), 'the stopping lease must release with the Set').to.be.false;
+      expect(operationRegistry.isHeld(leaseKey), 'the stopping lease must release when the operation settles - the die event must not be its only janitor').to.be.false;
     });
 
-    it('clears the stopping flag when the stop operation throws', async () => {
-      globalState.stoppingContainers.clear();
+    it('releases the stopping lease when the stop operation throws', async () => {
       operationRegistry.clear();
       dockerStopStub.rejects(new Error('socket hang up'));
 
       await expect(dockerService.appDockerStop(appName)).to.eventually.be.rejected;
-      expect(globalState.stoppingContainers.size).to.equal(0);
       expect(operationRegistry.isHeld(dockerService.getAppIdentifier(appName)), 'the lease must release even when the stop throws').to.be.false;
     });
   });
@@ -696,24 +689,19 @@ describe('dockerService tests', () => {
 
     // same flag-lifetime contract as appDockerStop: held during the kill
     // operation, cleared when it settles, never reliant on the die event
-    it('holds the stopping flag during the kill and clears it on completion', async () => {
-      globalState.stoppingContainers.clear();
+    it('holds the stopping lease during the kill and releases it on completion', async () => {
       operationRegistry.clear();
       const leaseKey = dockerService.getAppIdentifier(appName);
-      let flaggedDuringKill = false;
       let leasedDuringKill = false;
       dockerStub.callsFake(async () => {
-        flaggedDuringKill = globalState.stoppingContainers.size === 1;
         leasedDuringKill = operationRegistry.get(leaseKey)?.type === 'stopping';
         return 'killed';
       });
 
       await dockerService.appDockerKill(appName);
 
-      expect(flaggedDuringKill, 'flag must be set while the kill operation is in flight').to.be.true;
       expect(leasedDuringKill, 'the stopping lease must be held while the kill is in flight').to.be.true;
-      expect(globalState.stoppingContainers.size, 'flag must clear when the operation settles').to.equal(0);
-      expect(operationRegistry.isHeld(leaseKey), 'the stopping lease must release with the Set').to.be.false;
+      expect(operationRegistry.isHeld(leaseKey), 'the stopping lease must release when the operation settles').to.be.false;
     });
   });
 
