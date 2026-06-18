@@ -463,6 +463,7 @@ describe('appInstaller tests', () => {
           listInstalledDeployments: listInstalledDeploymentsStub,
           buildDeployment: sinon.stub().resolves({
             totalResources: () => ({ cpu: 1, memory: 500, storage: 10 }),
+            reservableHostDiskGb: () => 10,
             allHostPorts: () => [],
             allImages: () => [],
             componentEntries: () => [],
@@ -571,12 +572,14 @@ describe('appInstaller tests', () => {
           listInstalledDeployments: sinon.stub().resolves([]),
           getInstalledDeployment: sinon.stub().resolves({
             totalResources: () => ({ cpu: 1, memory: 500, storage: 10 }),
+            reservableHostDiskGb: () => 10,
             allHostPorts: () => [],
             allImages: () => [],
             componentEntries: () => [],
           }),
           buildDeployment: sinon.stub().resolves({
             totalResources: () => ({ cpu: 1, memory: 500, storage: 10 }),
+            reservableHostDiskGb: () => 10,
             allHostPorts: () => [],
             allImages: () => [],
             componentEntries: () => [],

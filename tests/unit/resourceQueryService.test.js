@@ -7,6 +7,7 @@ const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
+const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 const { requireMongo } = require('./dbTestHelper');
 
 describe('resourceQueryService tests', () => {
@@ -14,6 +15,7 @@ describe('resourceQueryService tests', () => {
 
   afterEach(() => {
     sinon.restore();
+    admissionControl.clear();
   });
 
   describe('fluxUsage tests', () => {
@@ -175,6 +177,27 @@ describe('resourceQueryService tests', () => {
       expect(response.data.appsCpusLocked).to.equal(3);
       expect(response.data.appsRamLocked).to.equal(6000);
       expect(response.data.appsHddLocked).to.be.greaterThan(75); // Base HDD + filesystem overhead
+    });
+
+    it('adds pending (in-flight) admissions to the locked totals', async () => {
+      const collection = config.database.appslocal.collections.appsInformation;
+      try {
+        await database.collection(collection).drop();
+      } catch (err) {
+        // Collection doesn't exist
+      }
+      // An app that passed resource admission but is not yet in the DB - a concurrent
+      // install must see its footprint or the node double-admits.
+      admissionControl.reserve('PendingApp', {
+        totalResources: () => ({ cpu: 2, memory: 4000 }),
+        reservableHostDiskGb: () => 50,
+      });
+
+      const response = await resourceQueryService.appsResources(null, null);
+
+      expect(response.data.appsCpusLocked).to.equal(2);
+      expect(response.data.appsRamLocked).to.equal(4000);
+      expect(response.data.appsHddLocked).to.equal(50);
     });
 
     it('should calculate resources for version 3 tiered apps using base values', async () => {
