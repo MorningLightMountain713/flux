@@ -252,6 +252,7 @@ describe('appOperations tests', () => {
       globalState.softRedeployInProgress = false;
       globalState.hardRedeployInProgress = false;
       globalState.reconciliationInProgress = false;
+      operationRegistry.clear();
     });
 
     it('should return early if removal is in progress', async () => {
@@ -260,6 +261,22 @@ describe('appOperations tests', () => {
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
+    });
+
+    it('holds a softRedeploy lease during the redeploy and releases it (Stage-1 dual-write)', async () => {
+      let leaseTypeDuring = null;
+      // The lease is acquired before the first await; observe it as getInstalledDeployment
+      // runs, then return null so the catch path releases it (and calls uninstallApplication).
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').callsFake(async () => {
+        leaseTypeDuring = operationRegistry.get('myapp')?.type ?? null;
+        return null;
+      });
+      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+
+      expect(leaseTypeDuring, 'a softRedeploy lease must be held while the redeploy runs').to.equal('softRedeploy');
+      expect(operationRegistry.isHeld('myapp'), 'the redeploy lease must release when the operation settles').to.be.false;
     });
 
     it('should return early if installation is in progress', async () => {
@@ -320,6 +337,7 @@ describe('appOperations tests', () => {
       globalState.softRedeployInProgress = false;
       globalState.hardRedeployInProgress = false;
       globalState.reconciliationInProgress = false;
+      operationRegistry.clear();
     });
 
     it('should return early if removal is in progress', async () => {
@@ -328,6 +346,20 @@ describe('appOperations tests', () => {
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
+    });
+
+    it('holds a hardRedeploy lease during the rebuild and releases it (Stage-1 dual-write)', async () => {
+      let leaseTypeDuring = null;
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').callsFake(async () => {
+        leaseTypeDuring = operationRegistry.get('myapp')?.type ?? null;
+        return null;
+      });
+      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
+
+      expect(leaseTypeDuring, 'a hardRedeploy lease must be held while the rebuild runs').to.equal('hardRedeploy');
+      expect(operationRegistry.isHeld('myapp'), 'the rebuild lease must release when the operation settles').to.be.false;
     });
 
     it('should return early if installation is in progress', async () => {
