@@ -20,7 +20,6 @@ const imageVerifier = require('../utils/imageVerifier');
 const pgpService = require('../pgpService');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const upnpService = require('../upnpService');
-const globalState = require('../utils/globalState');
 const operationRegistry = require('../utils/operationRegistry');
 const admissionControl = require('../utils/admissionControl');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
@@ -235,7 +234,7 @@ async function installApplication(instantiated, options = {}) {
     const runningAppsNames = runningApps.map((app) => app.Names[0].slice(5));
     const runningSet = new Set(runningAppsNames);
     const stoppedApps = installedAppComponentNames.filter((installedApp) => !runningSet.has(installedApp));
-    if (stoppedApps.length === 0 && !globalState.activeStandbyCoordinationRunning) {
+    if (stoppedApps.length === 0 && !operationRegistry.isHeld(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY)) {
       await performDockerCleanup(onStatus);
     }
 
