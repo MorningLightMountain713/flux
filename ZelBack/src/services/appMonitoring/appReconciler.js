@@ -65,6 +65,15 @@ const dataDesired = new Map();
 // reason as controllerDesired - a claim must not survive the process that made it.
 const startingClaims = new Set();
 
+// id -> 'stopped'. In-memory peer of controllerDesired: a TRANSIENT run-state hold
+// owned by an in-flight operation (backup/restore) that needs the container
+// actually stopped while it works on the volume, then running again afterwards. The
+// operation drives this THROUGH the reconciler (drive() below) instead of touching
+// Docker, so the reconciler stays the sole actuator. NOT persisted: a crash drops
+// it, and the aborted operation's app must recover rather than stay wrongly held
+// down (the lease that set it is also in-memory and gone after a crash).
+const operationDesired = new Map();
+
 // brief settle between the stop and the rm -rf so the container has fully released
 // its appdata mount before the wipe (mirrors the sync layer's prior 500ms delay).
 const DATA_CLEAR_SETTLE_MS = 500;
@@ -477,6 +486,11 @@ async function dependencyConditionMet(condition, identifier, actual) {
 async function effectiveDesiredRunning(identifier, spec, exitCode) {
   const operatorStop = await appsRuntimeState.operatorStopState(identifier);
   if (operatorStop.stopped) return { desired: false, reason: 'operatorStopped', force: operatorStop.force };
+  // A transient operation hold (backup/restore driving run-state through drive())
+  // owns the container for the operation's duration: above policy/controller/
+  // dependency, below only the operator's durable lock. Graceful stop — a force-kill
+  // rides solely with operatorStopped, never an operation hold.
+  if (operationDesired.get(identifier) === 'stopped') return { desired: false, reason: 'operationHold' };
   // The shutdown pipeline owns a draining/stopping app's containers: draining
   // ones must keep serving (no stop here) and stopped ones must stay down (no
   // restart that races the daemon's signal stage). Take no action while the LB
@@ -1620,6 +1634,31 @@ async function awaitConvergence(rawIdentifiers, opts = {}) {
 }
 
 /**
+ * Drive a set of components to a desired run-state THROUGH the reconciler and block
+ * until they settle there — how an operation (backup/restore) that needs a container
+ * actually stopped before its next step (then running again after) acts WITHOUT
+ * touching Docker, so the reconciler stays the sole actuator. Sets the transient
+ * operation hold, then reuses awaitConvergence (enqueue + await the settled verdict):
+ * 'stopped' settles once the container is down, 'running' clears the hold and settles
+ * once it is up — or legitimately held by a higher gate (e.g. the operator lock),
+ * which is the correct end-state, so a backup never churns a start onto a deliberately
+ * stopped app. The hold is transient: a crash drops it so an aborted operation's app
+ * recovers rather than staying wrongly held down.
+ *
+ * @param {string[]} rawIds component identifiers
+ * @param {'stopped'|'running'} state
+ * @returns {Promise<{converged:boolean, failed:string[]}>}
+ */
+async function drive(rawIds, state) {
+  const ids = rawIds.map(canonical);
+  ids.forEach((id) => {
+    if (state === 'stopped') operationDesired.set(id, 'stopped');
+    else operationDesired.delete(id);
+  });
+  return awaitConvergence(ids);
+}
+
+/**
  * Enqueue every installed app (hourly tick / reconnect / boot drift). Apps are
  * enqueued by name; reconcile expands each to its component identifiers
  * through the deployment layer, which owns version dispatch and decryption.
@@ -1863,6 +1902,7 @@ module.exports = {
   requestRestartOf,
   enqueueDependents,
   awaitConvergence,
+  drive,
   setControllerDesired,
   clearControllerDesired,
   forgetDesiredState,
