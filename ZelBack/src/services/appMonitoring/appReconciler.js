@@ -325,21 +325,28 @@ async function dockerActual(identifier) {
   }
 }
 
+// Operation leases that BUILD or DESTROY containers: while one runs the reconciler
+// stands down so it never races container construction/teardown. backup/restore are
+// deliberately NOT here — they hold run-state through the transient operationDesired
+// (driven via drive()) and the reconciler keeps actuating; freezing it would force
+// them to reach around it, the very thing the single-actuator invariant forbids.
+const CONSTRUCTION_LEASE_TYPES = new Set(['install', 'remove', 'softRedeploy', 'hardRedeploy', 'reconcile']);
+
 /**
- * Whether an operation currently owns this container — an app-scoped operation on
- * its parent app (install/remove/redeploy/reconcile/backup/restore) or the
- * component's own transient stop/restart/kill window. The reconciler must not
- * actuate while one of these is in flight. This is per-app, NOT a node-wide
- * freeze: an operation on a different app no longer defers this one.
+ * Whether a lease blocks the reconciler from actuating this container: a
+ * container-construction operation on its parent app (install/remove/redeploy/
+ * reconcile) or the component's own transient stop/restart/kill window. The
+ * reconciler stands down for these so it never races construction. A backup/restore
+ * lease is NOT blocking — those drive run-state through operationDesired and the
+ * reconciler keeps actuating. Per-app, NOT a node-wide freeze.
  */
-function hasOperationLease(identifier) {
+function hasBlockingLease(identifier) {
   // the component's own stop/restart/kill window, keyed on the prefixed docker
   // name exactly as dockerService acquires the 'stopping' lease
   if (operationRegistry.isHeld(dockerService.getAppIdentifier(identifier))) return true;
-  // any app-scoped operation on the parent app — every type folds into one check,
-  // keyed on the bare app name (install/remove/softRedeploy/hardRedeploy/reconcile/
-  // backup/restore all acquire on the app name)
-  return operationRegistry.isHeld(appNameFromIdentifier(identifier));
+  // a container-construction operation on the parent app, keyed on the bare app name
+  const appLease = operationRegistry.get(appNameFromIdentifier(identifier));
+  return !!appLease && CONSTRUCTION_LEASE_TYPES.has(appLease.type);
 }
 
 /**
@@ -478,7 +485,7 @@ async function recreateMissing(identifier) {
 
 async function reconcile(rawIdentifier) {
   const identifier = canonical(rawIdentifier);
-  if (hasOperationLease(identifier)) {
+  if (hasBlockingLease(identifier)) {
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
   }
