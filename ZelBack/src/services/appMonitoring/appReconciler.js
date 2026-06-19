@@ -453,7 +453,21 @@ async function recreateMissing(identifier) {
     if (appTamperingDetectionService.isNetworkMissingError(err.message)) {
       await appTamperingDetectionService.recordEvent(mainAppName, 'network_pruned', `Docker network missing during recreation: ${err.message}`);
     }
-    log.warn(`REMOVAL REASON: Container recreation failure - ${mainAppName} (appReconciler)`);
+    // §14.5 principle: a component that has run here before is NOT destroyed on a
+    // failed rebuild (its image is now unpullable, a bad update, a registry blip) —
+    // it degrades to DOWN and backs off, so a broken update can never delete an
+    // established app + its data, fleet-wide. Only a never-ran component (a fresh
+    // install that vanished before it ever started) is removed, mirroring the
+    // install converge-wait's count-based rollback.
+    const rs = await appsRuntimeState.getState(identifier);
+    if (rs && rs.hasSuccessfullyStarted) {
+      await appsRuntimeState.recordRestart(identifier);
+      const wait = Math.max(await appsRuntimeState.restartWaitMs(identifier), MANAGED_RETRY_MS);
+      log.warn(`appReconciler - ${identifier} could not be recreated but has run here before; keeping it (down) and retrying in ${Math.round(wait / 1000)}s`);
+      scheduleRetry(identifier, wait);
+      return;
+    }
+    log.warn(`REMOVAL REASON: Container recreation failure (never ran here) - ${mainAppName} (appReconciler)`);
     const removal = await appUninstaller.uninstallApplication(mainAppName, { broadcastRemoval: true });
     if (removal.status === appUninstaller.UninstallStatus.DEFERRED
       || removal.status === appUninstaller.UninstallStatus.FAILED) {
