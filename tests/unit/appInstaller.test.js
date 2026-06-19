@@ -92,6 +92,7 @@ describe('appInstaller tests', () => {
 
     // Proxy require
     appInstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appInstaller', {
+      '../appMonitoring/appReconciler': { enqueue: sinon.stub(), awaitConvergence: sinon.stub().resolves({ converged: true, failed: [] }) },
       config: configStub,
       '../verificationHelper': verificationHelperStub,
       '../messageHelper': messageHelperStub,
@@ -460,11 +461,13 @@ describe('appInstaller tests', () => {
     });
   });
 
-  describe('post-install broadcast', () => {
-    it('runs onInstallComplete/app:installed and hands off to the reconciler on a successful install', async () => {
+  describe('post-install broadcast + converge-wait', () => {
+    function loadFresh(convergeResult) {
       const onInstallComplete = sinon.stub().resolves();
       const fluxEventBusPublish = sinon.stub();
       const appReconcilerEnqueue = sinon.stub();
+      const appReconcilerAwaitConvergence = sinon.stub().resolves(convergeResult);
+      const uninstallApplication = sinon.stub().resolves();
 
       const appInstallerFresh = proxyquire.noCallThru().load('../../ZelBack/src/services/appLifecycle/appInstaller', {
         config: configStub,
@@ -494,7 +497,7 @@ describe('appInstaller tests', () => {
           getAppIdentifier: sinon.stub().returns('newapp'),
           dockerPullStream: sinon.stub().yields(null, 'pulled'),
         },
-        './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
+        './appUninstaller': { uninstallApplication },
         // appNetworkLinker.reconnectLinkedApps runs on the success path (the call kept during
         // the rebase); without this stub the install throws before reaching the broadcast.
         './appNetworkLinker': { reconnectLinkedApps: sinon.stub().resolves(), checkAppNetworkRequirements: sinon.stub().resolves(), connectComponentToLinkedApps: sinon.stub().resolves(), findLinkedAppLogCollector: sinon.stub().returns(null) },
@@ -536,7 +539,7 @@ describe('appInstaller tests', () => {
         '../utils/specLibs': { getSpecBackend: sinon.stub().resolves({}) },
         '../utils/appUtilities': { findCommonArchitectures: sinon.stub().returns(['amd64']) },
         '../utils/fluxEventBus': { publish: fluxEventBusPublish },
-        '../appMonitoring/appReconciler': { enqueue: appReconcilerEnqueue },
+        '../appMonitoring/appReconciler': { enqueue: appReconcilerEnqueue, awaitConvergence: appReconcilerAwaitConvergence },
         '../utils/cpuBurstHelper': { getCpuBurstAllowance: sinon.stub().returns(0), isEnterpriseOwner: sinon.stub().returns(false), isCpuBurstSupported: sinon.stub().resolves(false) },
         '../utils/volumeService': { verifyAppVolumeMount: sinon.stub().resolves() },
         '../appRequirements/hwRequirements': hwRequirementsStub,
@@ -546,27 +549,46 @@ describe('appInstaller tests', () => {
       });
 
       appInstallerFresh.setOnInstallComplete(onInstallComplete);
-
-      const mockPlacement = {
-        staticIp: false, dataCenter: false, hasGeoRestrictions: () => false, hasTargets: () => false,
+      return {
+        installer: appInstallerFresh, onInstallComplete, fluxEventBusPublish, appReconcilerAwaitConvergence, uninstallApplication,
       };
-      const mockInstantiated = {
-        name: 'newapp',
-        version: 2,
-        hash: 'hash1',
-        owner: 'owner1',
-        placement: mockPlacement,
-        spec: { version: 2, name: 'newapp', placement: mockPlacement, componentEntries: () => [] },
-        isEncrypted: false,
-        serialize: () => ({ version: 2, name: 'newapp' }),
-      };
+    }
 
-      const result = await appInstallerFresh.installApplication(mockInstantiated, {});
+    const mockPlacement = {
+      staticIp: false, dataCenter: false, hasGeoRestrictions: () => false, hasTargets: () => false,
+    };
+    const mockInstantiated = {
+      name: 'newapp',
+      version: 2,
+      hash: 'hash1',
+      owner: 'owner1',
+      placement: mockPlacement,
+      spec: { version: 2, name: 'newapp', placement: mockPlacement, componentEntries: () => [] },
+      isEncrypted: false,
+      serialize: () => ({ version: 2, name: 'newapp' }),
+    };
+
+    it('runs onInstallComplete/app:installed and hands off to the reconciler on a successful install', async () => {
+      const {
+        installer, onInstallComplete, fluxEventBusPublish, appReconcilerAwaitConvergence,
+      } = loadFresh({ converged: true, failed: [] });
+
+      const result = await installer.installApplication(mockInstantiated, {});
 
       expect(result.status, 'install succeeded').to.equal(appInstaller.InstallStatus.INSTALLED);
       expect(onInstallComplete.calledOnce, 'post-install broadcast fired').to.be.true;
       expect(fluxEventBusPublish.calledWith('app:installed'), 'app:installed event published').to.be.true;
-      expect(appReconcilerEnqueue.calledWith('newapp'), 'reconciler handoff enqueued the installed app').to.be.true;
+      expect(appReconcilerAwaitConvergence.calledOnce, 'install handed off + awaited reconciler convergence').to.be.true;
+    });
+
+    it('rolls back and returns PROVISIONED-BUT-NOT-RUNNING when a component fails to converge', async () => {
+      const { installer, uninstallApplication } = loadFresh({ converged: false, failed: ['web_newapp'] });
+
+      const result = await installer.installApplication(mockInstantiated, {});
+
+      expect(result.status, 'install failed the converge-wait').to.equal(appInstaller.InstallStatus.FAILED);
+      expect(result.reason).to.include('PROVISIONED-BUT-NOT-RUNNING');
+      expect(uninstallApplication.calledWith('newapp'), 'a non-converging install is rolled back').to.be.true;
     });
   });
 
