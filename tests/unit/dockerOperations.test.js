@@ -61,6 +61,7 @@ describe('appOperations application lifecycle tests', () => {
   let buildDeploymentStub;
   let appInspectorStub;
   let appVolumeServiceStub;
+  let appReconcilerStub;
   let logStub;
 
   beforeEach(() => {
@@ -91,6 +92,12 @@ describe('appOperations application lifecycle tests', () => {
       ensureMountSourcesExist: sinon.stub().resolves(),
     };
 
+    appReconcilerStub = {
+      drive: sinon.stub().resolves({ converged: true, failed: [] }),
+      enqueue: sinon.stub(),
+      setControllerDesired: sinon.stub(),
+    };
+
     logStub = {
       info: sinon.stub(),
       warn: sinon.stub(),
@@ -103,6 +110,7 @@ describe('appOperations application lifecycle tests', () => {
       '../utils/specLibs': { getSpec: sinon.stub() },
       '../appManagement/appInspector': appInspectorStub,
       './appVolumeService': appVolumeServiceStub,
+      '../appMonitoring/appReconciler': appReconcilerStub,
       '../../lib/log': logStub,
       '../dbHelper': { databaseConnection: sinon.stub() },
       '../serviceHelper': { delay: sinon.stub().resolves(), ensureString: sinon.stub().returnsArg(0) },
@@ -123,13 +131,15 @@ describe('appOperations application lifecycle tests', () => {
     });
   });
 
+  // backup/restore drive run-state THROUGH the reconciler (the sole actuator) via
+  // appReconciler.drive() — they never touch Docker. A single component resolves to
+  // itself (no spec lookup); a whole app expands to every component identifier.
   describe('stopApplication', () => {
-    it('should stop a single component directly when name contains underscore', async () => {
+    it('should drive a single component to stopped through the reconciler', async () => {
       await appOperations.stopApplication('Component1_TestApp');
 
-      sinon.assert.calledOnce(dockerServiceStub.appDockerStop);
-      sinon.assert.calledWith(dockerServiceStub.appDockerStop, 'Component1_TestApp');
-      sinon.assert.calledWith(appInspectorStub.stopAppMonitoring, 'Component1_TestApp', false);
+      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, ['Component1_TestApp'], 'stopped');
+      sinon.assert.notCalled(dockerServiceStub.appDockerStop);
     });
 
     it('should not look up specs when stopping a single component', async () => {
@@ -138,48 +148,34 @@ describe('appOperations application lifecycle tests', () => {
       sinon.assert.notCalled(appsRepositoryStub.getGlobalAppInfo);
     });
 
-    it('should log error when app specs not found for whole app', async () => {
+    it('should log error and not drive when app specs not found for whole app', async () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
       await appOperations.stopApplication('TestApp');
 
       sinon.assert.calledOnce(logStub.error);
-      sinon.assert.notCalled(dockerServiceStub.appDockerStop);
+      sinon.assert.notCalled(appReconcilerStub.drive);
     });
 
-    it('should stop all components via DeploymentSpec for whole app', async () => {
+    it('should drive all components of a whole app to stopped', async () => {
       const fakeSpec = { name: 'TestApp', version: 4, components: { Web: {}, API: {} } };
       appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec(fakeSpec));
 
       const mockDeployment = {
         componentEntries: sinon.stub().returns([
-          ['API', { identifier: 'API_TestApp' }],
           ['Web', { identifier: 'Web_TestApp' }],
+          ['API', { identifier: 'API_TestApp' }],
         ]),
       };
       buildDeploymentStub.resolves(mockDeployment);
 
       await appOperations.stopApplication('TestApp');
 
-      expect(dockerServiceStub.appDockerStop.callCount).to.equal(2);
-      expect(dockerServiceStub.appDockerStop.firstCall.args[0]).to.equal('API_TestApp');
-      expect(dockerServiceStub.appDockerStop.secondCall.args[0]).to.equal('Web_TestApp');
-      expect(appInspectorStub.stopAppMonitoring.callCount).to.equal(2);
+      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, ['Web_TestApp', 'API_TestApp'], 'stopped');
     });
 
-    it('should pass reverse option to componentEntries', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
-
-      const componentEntriesStub = sinon.stub().returns([]);
-      buildDeploymentStub.resolves({ componentEntries: componentEntriesStub });
-
-      await appOperations.stopApplication('TestApp');
-
-      sinon.assert.calledWith(componentEntriesStub, { reverse: true });
-    });
-
-    it('should handle docker stop errors gracefully', async () => {
-      dockerServiceStub.appDockerStop.rejects(new Error('Docker stop failed'));
+    it('should handle reconciler errors gracefully', async () => {
+      appReconcilerStub.drive.rejects(new Error('converge failed'));
 
       await appOperations.stopApplication('Component1_TestApp');
 
@@ -188,15 +184,14 @@ describe('appOperations application lifecycle tests', () => {
   });
 
   describe('startApplication', () => {
-    it('should start a single component directly when name contains underscore', async () => {
+    it('should drive a single component to running through the reconciler', async () => {
       await appOperations.startApplication('Component1_TestApp');
 
-      sinon.assert.calledOnce(dockerServiceStub.appDockerStart);
-      sinon.assert.calledWith(dockerServiceStub.appDockerStart, 'Component1_TestApp');
-      sinon.assert.calledWith(appInspectorStub.startAppMonitoring, 'Component1_TestApp');
+      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, ['Component1_TestApp'], 'running');
+      sinon.assert.notCalled(dockerServiceStub.appDockerStart);
     });
 
-    it('should start all components via DeploymentSpec for whole app', async () => {
+    it('should drive all components of a whole app to running', async () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
 
       const mockDeployment = {
@@ -209,90 +204,16 @@ describe('appOperations application lifecycle tests', () => {
 
       await appOperations.startApplication('TestApp');
 
-      expect(dockerServiceStub.appDockerStart.callCount).to.equal(2);
-      expect(dockerServiceStub.appDockerStart.firstCall.args[0]).to.equal('Web_TestApp');
-      expect(dockerServiceStub.appDockerStart.secondCall.args[0]).to.equal('API_TestApp');
-      expect(appInspectorStub.startAppMonitoring.callCount).to.equal(2);
+      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, ['Web_TestApp', 'API_TestApp'], 'running');
     });
 
-    it('should log error when app not found', async () => {
+    it('should log error and not drive when app not found', async () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
       await appOperations.startApplication('TestApp');
 
       sinon.assert.calledOnce(logStub.error);
-      sinon.assert.notCalled(dockerServiceStub.appDockerStart);
-    });
-  });
-
-  describe('restartApplication', () => {
-    it('should restart a single component and ensure mounts exist', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
-
-      const mockDeployComp = { identifier: 'Web_TestApp', mounts: [{ Source: '/tmp' }] };
-      buildDeploymentStub.resolves({ getComponent: () => mockDeployComp });
-
-      await appOperations.restartApplication('Web_TestApp');
-
-      sinon.assert.calledOnce(appVolumeServiceStub.ensureMountSourcesExist);
-      sinon.assert.calledWith(appVolumeServiceStub.ensureMountSourcesExist, mockDeployComp);
-      sinon.assert.calledOnce(dockerServiceStub.appDockerRestart);
-      sinon.assert.calledWith(dockerServiceStub.appDockerRestart, 'Web_TestApp');
-      sinon.assert.calledWith(appInspectorStub.startAppMonitoring, 'Web_TestApp');
-    });
-
-    it('should skip ensureMountSourcesExist when component has no mounts', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
-
-      const mockDeployComp = { identifier: 'Web_TestApp', mounts: [] };
-      buildDeploymentStub.resolves({ getComponent: () => mockDeployComp });
-
-      await appOperations.restartApplication('Web_TestApp');
-
-      sinon.assert.notCalled(appVolumeServiceStub.ensureMountSourcesExist);
-      sinon.assert.calledOnce(dockerServiceStub.appDockerRestart);
-    });
-
-    it('should restart all components for whole app', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
-
-      const webComp = { identifier: 'Web_TestApp', mounts: [] };
-      const apiComp = { identifier: 'API_TestApp', mounts: [] };
-      const mockDeployment = {
-        componentEntries: sinon.stub().returns([['Web', webComp], ['API', apiComp]]),
-        getComponent: sinon.stub(),
-      };
-      mockDeployment.getComponent.withArgs('Web').returns(webComp);
-      mockDeployment.getComponent.withArgs('API').returns(apiComp);
-      buildDeploymentStub.resolves(mockDeployment);
-
-      await appOperations.restartApplication('TestApp');
-
-      expect(dockerServiceStub.appDockerRestart.callCount).to.equal(2);
-      expect(dockerServiceStub.appDockerRestart.firstCall.args[0]).to.equal('Web_TestApp');
-      expect(dockerServiceStub.appDockerRestart.secondCall.args[0]).to.equal('API_TestApp');
-      expect(appInspectorStub.startAppMonitoring.callCount).to.equal(2);
-    });
-
-    it('should log error when app not found', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(null);
-
-      await appOperations.restartApplication('TestApp');
-
-      sinon.assert.calledOnce(logStub.error);
-      sinon.assert.notCalled(dockerServiceStub.appDockerRestart);
-    });
-
-    it('should handle docker restart errors gracefully', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
-      buildDeploymentStub.resolves({
-        getComponent: () => ({ identifier: 'Web_TestApp', mounts: [] }),
-      });
-      dockerServiceStub.appDockerRestart.rejects(new Error('Docker restart failed'));
-
-      await appOperations.restartApplication('TestApp');
-
-      sinon.assert.calledOnce(logStub.error);
+      sinon.assert.notCalled(appReconcilerStub.drive);
     });
   });
 });
