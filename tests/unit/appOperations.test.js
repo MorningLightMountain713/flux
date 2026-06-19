@@ -9,6 +9,7 @@ const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVol
 const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
+const componentProvisioner = require('../../ZelBack/src/services/appLifecycle/componentProvisioner');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
@@ -190,6 +191,24 @@ describe('appOperations tests', () => {
       expect(operationRegistry.isHeld('myapp'), 'the redeploy lease must release on error').to.be.false;
       expect(uninstall.called, 'must not destroy an intact app over a bad component name').to.be.false;
       expect(enqueue.calledOnceWith('myapp')).to.be.true;
+    });
+
+    // Prong A: a broken new image is rejected by the pre-flight BEFORE the old version
+    // is torn down, so the running app is never disturbed by a bad redeploy.
+    it('aborts without tearing down the old version when the new image fails pre-flight verify', async () => {
+      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:deleted-tag' };
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ getComponent: () => deployComp });
+      sinon.stub(componentProvisioner, 'verifyComponentImage').rejects(new Error('image not found in registry'));
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      const uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const enqueue = sinon.stub(appReconciler, 'enqueue');
+
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+
+      expect(uninstallComponent.called, 'must NOT tear down the old version when the new image fails pre-flight').to.be.false;
+      expect(uninstallApplication.called, 'and must NOT destroy the app').to.be.false;
+      expect(enqueue.calledOnceWith('myapp')).to.be.true;
+      expect(operationRegistry.isHeld('myapp')).to.be.false;
     });
   });
 

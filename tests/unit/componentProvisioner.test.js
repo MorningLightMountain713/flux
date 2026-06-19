@@ -129,4 +129,42 @@ describe('componentProvisioner tests', () => {
       expect(appDockerStartStub.called).to.be.false;
     });
   });
+
+  // The redeploy/reconcile pre-flight: verify the new image is usable WITHOUT pulling
+  // it, so a broken update can be rejected before the old version is torn down.
+  describe('verifyComponentImage (redeploy pre-flight)', () => {
+    it('returns the prepared pull config when the image verifies', async () => {
+      const provisioner = loadProvisioner();
+      const pullConfig = await provisioner.verifyComponentImage(makeComponent(null));
+      expect(pullConfig).to.deep.include({ repoTag: 'nginx:latest', provider: 'docker.io' });
+    });
+
+    it('throws on an unusable image (so the pre-flight aborts before teardown)', async () => {
+      const provisioner = proxyquire.load('../../ZelBack/src/services/appLifecycle/componentProvisioner', {
+        config: { fluxapps: { maxImageSize: 10000000000 } },
+        '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+        '../serviceHelper': { delay: sinon.stub().resolves() },
+        '../dockerService': {},
+        '../fluxNetworkHelper': {},
+        '../upnpService': {},
+        '../appRequirements/hwRequirements': { systemArchitecture: sinon.stub().resolves('amd64') },
+        '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub().throws(new Error('image not found in registry')), supported: true, provider: 'docker.io' }) },
+        '../utils/registryCredentialHelper': { getCredentials: sinon.stub().resolves(null) },
+        './appVolumeService': {},
+        './appSwapPoolService': {},
+        '../utils/volumeService': {},
+        '../telemetryIdentityService': {},
+        '../appManagement/appInspector': {},
+        util: { promisify: () => async () => 'pulled' },
+      });
+      let threw = false;
+      try {
+        await provisioner.verifyComponentImage(makeComponent(null));
+      } catch (err) {
+        threw = true;
+        expect(err.message).to.include('image not found');
+      }
+      expect(threw, 'verifyComponentImage must throw on an unusable image').to.be.true;
+    });
+  });
 });

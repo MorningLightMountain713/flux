@@ -92,6 +92,57 @@ async function checkOrbitAppHealth(component, onStatus) {
 }
 
 /**
+ * Verify a component's image is usable on this node WITHOUT pulling it: checks the
+ * node architecture, then the registry manifest for whitelist/arch/max-size/pullability
+ * (credentials applied for private registries). Throws on a deterministic "this image
+ * is broken/unusable" failure (bad ref, deleted tag, non-whitelisted, unsupported arch,
+ * oversize). Returns the prepared pullConfig so installComponent can do the actual pull.
+ *
+ * Used as a redeploy/reconcile PRE-FLIGHT (before tearing the old version down) so a
+ * broken update aborts with the old version still running. Cheap: a manifest check, no
+ * layer download — so it adds no transient disk pressure.
+ *
+ * @param {object} component - DeploymentComponent
+ * @returns {Promise<object>} pullConfig for dockerPullStreamPromise
+ */
+async function verifyComponentImage(component) {
+  const architecture = await systemArchitecture();
+  if (!supportedArchitectures.includes(architecture)) {
+    throw new Error(`Invalid architecture ${architecture} detected.`);
+  }
+
+  const imgVerifier = new imageVerifier.ImageVerifier(
+    component.image,
+    { maxImageSize: config.fluxapps.maxImageSize, architecture, architectureSet: supportedArchitectures },
+  );
+
+  const pullConfig = { repoTag: component.image };
+
+  if (component.imageAuth) {
+    const credentials = await registryCredentialHelper.getCredentials(
+      component.image,
+      component.imageAuth,
+      component.appName,
+    );
+    if (!credentials) {
+      throw new Error('Unable to get credentials');
+    }
+    imgVerifier.addCredentials(credentials);
+    pullConfig.authToken = `${credentials.username}:${credentials.password}`;
+  }
+
+  await imgVerifier.verifyImage();
+  imgVerifier.throwIfError();
+
+  if (!imgVerifier.supported) {
+    throw new Error(`Architecture ${architecture} not supported by ${component.image}`);
+  }
+
+  pullConfig.provider = imgVerifier.provider;
+  return pullConfig;
+}
+
+/**
  * Install a single app component (pull image, create volume, create + start container).
  * @param {object} component - DeploymentComponent to install
  * @param {object} options - { owner, onStatus, test, createVolumes, burstEligible, restartPolicy, extraEnv, syslogTarget, crossAppLogCollector }
@@ -148,39 +199,7 @@ async function installComponent(component, options = {}) {
     }
   }
 
-  const architecture = await systemArchitecture();
-  if (!supportedArchitectures.includes(architecture)) {
-    throw new Error(`Invalid architecture ${architecture} detected.`);
-  }
-
-  const imgVerifier = new imageVerifier.ImageVerifier(
-    component.image,
-    { maxImageSize: config.fluxapps.maxImageSize, architecture, architectureSet: supportedArchitectures },
-  );
-
-  const pullConfig = { repoTag: component.image };
-
-  if (component.imageAuth) {
-    const credentials = await registryCredentialHelper.getCredentials(
-      component.image,
-      component.imageAuth,
-      appName,
-    );
-    if (!credentials) {
-      throw new Error('Unable to get credentials');
-    }
-    imgVerifier.addCredentials(credentials);
-    pullConfig.authToken = `${credentials.username}:${credentials.password}`;
-  }
-
-  await imgVerifier.verifyImage();
-  imgVerifier.throwIfError();
-
-  if (!imgVerifier.supported) {
-    throw new Error(`Architecture ${architecture} not supported by ${component.image}`);
-  }
-
-  pullConfig.provider = imgVerifier.provider;
+  const pullConfig = await verifyComponentImage(component);
   await dockerPullStreamPromise(pullConfig, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null);
   status(`Pulling ${id} was successful`);
 
@@ -253,4 +272,5 @@ async function installComponent(component, options = {}) {
 
 module.exports = {
   installComponent,
+  verifyComponentImage,
 };
