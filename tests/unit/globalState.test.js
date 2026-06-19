@@ -77,32 +77,6 @@ describe('globalState tests', () => {
     });
   });
 
-  describe('state flags tests', () => {
-    it('should have default values for state flags', () => {
-      expect(globalState.removalInProgress).to.equal(false);
-      expect(globalState.installationInProgress).to.equal(false);
-      expect(globalState.softRedeployInProgress).to.equal(false);
-      expect(globalState.hardRedeployInProgress).to.equal(false);
-      expect(globalState.reinstallationOfOldAppsInProgress).to.equal(false);
-    });
-
-    it('should allow setting removalInProgress', () => {
-      globalState.removalInProgress = true;
-      expect(globalState.removalInProgress).to.equal(true);
-
-      globalState.removalInProgressReset();
-      expect(globalState.removalInProgress).to.equal(false);
-    });
-
-    it('should allow setting installationInProgress', () => {
-      globalState.installationInProgress = true;
-      expect(globalState.installationInProgress).to.equal(true);
-
-      globalState.installationInProgressReset();
-      expect(globalState.installationInProgress).to.equal(false);
-    });
-  });
-
   describe('cache collections tests', () => {
     it('should have empty collections by default', () => {
       expect(globalState.appsToBeCheckedLater).to.be.an('array').that.is.empty;

@@ -13,7 +13,7 @@ describe('containerEventBridge', () => {
     stubs = {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       dockerService: { dockerGetEvents: sinon.stub() },
-      globalState: { stoppingContainers: new Set(), bootContainerStateSettled: true },
+      globalState: { bootContainerStateSettled: true },
       appsRuntimeState: { recordExit: sinon.stub().resolves() },
       appReconciler: {
         enqueue: sinon.stub(),
