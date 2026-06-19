@@ -130,6 +130,23 @@ async function recordRestart(identifier) {
 }
 
 /**
+ * Marks that this component has successfully started at least once on this node
+ * (set after a successful appDockerStart). Durable, so it survives a restart: it
+ * distinguishes a first start (firstStart action; the install-window rollback
+ * applies if it can't start) from a restart of a container that has run here
+ * before (a later crash backs off, never rolls back). Cleared only by remove().
+ *
+ * @param {string} identifier
+ */
+async function setSuccessfullyStarted(identifier) {
+  try {
+    await setFields(identifier, { hasSuccessfullyStarted: true });
+  } catch (err) {
+    log.error(`appsRuntimeState - failed to record successful start for ${identifier}: ${err.message}`);
+  }
+}
+
+/**
  * Returns how long (ms) the reconciler must wait before the next restart is
  * allowed — 0 means restart now. Level-based: measured from the last restart
  * against the backoff ladder, so the worker re-enqueues after the remaining
@@ -345,6 +362,8 @@ async function prepareCollection() {
           // the reconciler on the recreate path rather than the uninstall path
           networkHealRemoval: twins.some((t) => t.networkHealRemoval === true),
           networkHealHistory: [...new Set(twins.flatMap((t) => t.networkHealHistory || []))].sort((a, b) => a - b).slice(-MAX_HISTORY),
+          // started on any twin = has started here (gates firstStart-vs-restart + the install-window rollback)
+          hasSuccessfullyStarted: twins.some((t) => t.hasSuccessfullyStarted === true),
           restartHistory: [...new Set(twins.flatMap((t) => t.restartHistory || []))].sort((a, b) => a - b).slice(-MAX_HISTORY),
           updatedAt: Math.max(...twins.map((t) => t.updatedAt || 0)),
         };
@@ -372,6 +391,7 @@ module.exports = {
   setOperatorStopped,
   isOperatorStopped,
   recordRestart,
+  setSuccessfullyStarted,
   restartWaitMs,
   setNetworkHealRemoval,
   isNetworkHealRemoval,
