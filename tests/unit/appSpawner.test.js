@@ -178,7 +178,6 @@ describe('appSpawner tests', () => {
       '../appDatabase/registryManager': {
         appLocation: sinon.stub().resolves([]),
         appInstallingLocation: sinon.stub().resolves([]),
-        expireGlobalApplications: sinon.stub().resolves(),
         storeAppInstallingMessage: sinon.stub().resolves(),
         getRunningAppIpList: sinon.stub().resolves([]),
         countAppInstallingErrors: sinon.stub().resolves(opts.errorCount ?? 0),
@@ -254,6 +253,7 @@ describe('appSpawner tests', () => {
       },
       './appUninstaller': {
         uninstallApplication: sinon.stub().resolves(),
+        expireGlobalApplications: sinon.stub().resolves(),
       },
     });
   }
