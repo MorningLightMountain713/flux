@@ -31,6 +31,15 @@ const telemetrySinkCache = require('../telemetrySinkCache');
 //   controllerDesired (in-memory, below)        - election/sync output for replicated components.
 //   dataDesired       (in-memory, below)        - sync layer's local-appdata reset.
 //   restart policy + actual exit code           - Docker-like restart policy.
+//
+// Durability rule for these inputs: anything a human ASKED for is durable — it must
+// survive a crash until it is carried out (operatorStopped, and the forced-kill mode
+// that rides with it: an operator's force-kill lost in a crash would silently downgrade
+// to the app's graceful-shutdown window, which can be hours). State the reconciler
+// RE-DERIVES from live truth each cycle is in-memory ONLY (controllerDesired from the
+// FDM election, dataDesired from sync state): persisting a stale snapshot would act on a
+// lie — start a deposed master, or wipe the only good copy. So: durable for human intent,
+// transient only for what we can recompute from the live world.
 
 // id -> 'running' | 'stopped'. In-memory: re-derived from live truth (FDM
 // election + real syncthing sync state) by the deciders each cycle, so it is
