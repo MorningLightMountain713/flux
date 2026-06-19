@@ -443,6 +443,15 @@ describe('appReconciler tests', () => {
       expect(stubs.appsRuntimeState.setSuccessfullyStarted.called).to.be.false;
     });
 
+    it('awaitConvergence resolves settled once a converging component reconciles to running', async () => {
+      // awaitConvergence registers a waiter, enqueues, and blocks until the reconcile
+      // settles the component (here: a stopped-should-run component starts).
+      const result = await appReconciler.awaitConvergence(['www_App']);
+      expect(stubs.dockerService.appDockerStart.calledWith('www_App')).to.be.true;
+      expect(result.converged).to.be.true;
+      expect(result.failed).to.deep.equal([]);
+    });
+
     it('re-seeds the telemetry sink on every successful deployment build', async () => {
       // The boot-time sink rebuild races fluxbenchd's unseal; the reconcile
       // retry path is what converges sink state once decryption is available.
