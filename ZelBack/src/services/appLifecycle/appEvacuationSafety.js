@@ -17,6 +17,7 @@ const config = require('config');
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 const globalState = require('../utils/globalState');
+const operationRegistry = require('../utils/operationRegistry');
 const mountParser = require('../utils/mountParser');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { socketAddressesMatch, extractIp } = require('../utils/socketAddressUtils');
@@ -122,10 +123,10 @@ async function canSafelyRemoveApp(appName, deps) {
       || typeof shuttingDownDevices !== 'function') {
       throw new Error('isElectedPrimary, isComponentRunningLocally and shuttingDownDevices are required');
     }
-    if (globalState.backupInProgress.includes(appName)) {
+    if (operationRegistry.listByType('backup').includes(appName)) {
       return { safe: false, code: 'BACKUP_IN_PROGRESS', reason: 'backup in progress' };
     }
-    if (globalState.restoreInProgress.includes(appName)) {
+    if (operationRegistry.listByType('restore').includes(appName)) {
       return { safe: false, code: 'RESTORE_IN_PROGRESS', reason: 'restore in progress' };
     }
 

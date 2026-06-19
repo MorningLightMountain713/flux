@@ -80,10 +80,6 @@ describe('appReconciler tests', () => {
       },
       globalState: {
         appsMonitored: {},
-        stoppingContainers: new Set(),
-        backupInProgress: [],
-        restoreInProgress: [],
-        isOperationInProgress: () => false,
         bootContainerStateSettled: true,
         waitForBootContainerStateSettled: () => Promise.resolve(),
         getAppLbState: sinon.stub().returns(null),

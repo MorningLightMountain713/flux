@@ -204,14 +204,7 @@ describe('syncthingHealthMonitor tests', () => {
     let removeAppLocallyFn;
 
     beforeEach(() => {
-      mockState = {
-        installationInProgress: false,
-        removalInProgress: false,
-        softRedeployInProgress: false,
-        hardRedeployInProgress: false,
-        backupInProgress: [],
-        restoreInProgress: [],
-      };
+      mockState = {};
       mockFoldersConfiguration = [];
       mockFolderHealthCache = new Map();
       mockReceiveOnlySyncthingAppsCache = new Map();

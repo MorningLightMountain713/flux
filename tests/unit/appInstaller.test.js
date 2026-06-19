@@ -53,11 +53,7 @@ describe('appInstaller tests', () => {
       },
     };
 
-    globalStateStub = {
-      removalInProgress: false,
-      installationInProgress: false,
-      masterSlaveAppsRunning: false,
-    };
+    globalStateStub = {};
 
     // Stubs
     verificationHelperStub = {
@@ -348,14 +344,7 @@ describe('appInstaller tests', () => {
       }),
     };
 
-    beforeEach(() => {
-      globalStateStub.removalInProgress = false;
-      globalStateStub.installationInProgress = false;
-    });
-
     afterEach(() => {
-      globalStateStub.removalInProgress = false;
-      globalStateStub.installationInProgress = false;
       operationRegistry.clear();
     });
 
@@ -445,7 +434,7 @@ describe('appInstaller tests', () => {
         '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
         '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
         '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
-        '../utils/globalState': { removalInProgress: false, installationInProgress: false },
+        '../utils/globalState': {},
         '../../lib/log': logStub,
         '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', { config: configStub }),
         '../appDatabase/appsRepository': {
@@ -652,7 +641,7 @@ describe('appInstaller tests', () => {
         '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
         '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
         '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
-        '../utils/globalState': { removalInProgress: false, installationInProgress: false },
+        '../utils/globalState': {},
         '../telemetryIdentityService': { onComponentCreated: sinon.stub().resolves() },
         '../../lib/log': logStub,
         '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', { config: configStub }),

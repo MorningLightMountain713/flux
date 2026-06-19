@@ -117,7 +117,7 @@ describe('appOperations application lifecycle tests', () => {
       '../appRuntime/deploymentProvider': { getInstalledDeployment: sinon.stub().resolves(null), buildDeployment: buildDeploymentStub },
       './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
       './appInstaller': { installComponent: sinon.stub().resolves() },
-      '../utils/globalState': { removalInProgress: false, installationInProgress: false },
+      '../utils/globalState': {},
       '../utils/appConstants': { localAppsInformation: 'test', globalAppsInformation: 'test', globalAppsInstallingErrorsLocations: 'test', globalAppsMessages: 'test', appsFolder: '/tmp/flux/apps/' },
       config: { fluxapps: { minimumInstances: 3, redeploy: { composedDelay: 30000 } }, database: { appsglobal: { database: 'globalapps', collections: { appsLocations: 'appsLocations' } } } },
     });
