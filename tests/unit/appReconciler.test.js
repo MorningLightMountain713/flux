@@ -85,7 +85,7 @@ describe('appReconciler tests', () => {
         waitForBootContainerStateSettled: () => Promise.resolve(),
         getAppLbState: sinon.stub().returns(null),
       },
-      appInspector: { startAppMonitoring: sinon.stub() },
+      appInspector: { startAppMonitoring: sinon.stub(), stopAppMonitoring: sinon.stub() },
       appsRuntimeState: {
         isOperatorStopped: sinon.stub().resolves(false),
         restartWaitMs: sinon.stub().resolves(0),
@@ -973,6 +973,59 @@ describe('appReconciler tests', () => {
       stubs.dockerOperations.appDeleteDataInMountPoint.resetHistory();
       await appReconciler.reconcile('db_App'); // flag still 'clear' -> re-wipes, no start
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.true;
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+  });
+
+  // The reconciler owns the monitoring lifecycle on BOTH ends: it starts
+  // monitoring on the start branch, so it must stop monitoring when it stops a
+  // container, or a deliberately-stopped container is left with a polling interval
+  // erroring against it every minute.
+  describe('monitoring follows run-state', () => {
+    it('stops monitoring when it stops a running operator-stopped component', async () => {
+      stubs.appsRuntimeState.isOperatorStopped.resolves(true);
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.appInspector.stopAppMonitoring.calledOnceWith('www_App', false)).to.be.true;
+    });
+  });
+
+  // An in-flight operation (backup/restore) drives a component to a desired
+  // run-state THROUGH the reconciler (the sole actuator) via drive(), which sets a
+  // transient hold (operationDesired) and awaits convergence — it never calls
+  // Docker itself.
+  describe('drive (operation run-state hold)', () => {
+    it('drives a running component to stopped and resolves converged', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      const result = await appReconciler.drive(['www_App'], 'stopped');
+      expect(result.converged).to.be.true;
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.appInspector.stopAppMonitoring.calledOnceWith('www_App', false)).to.be.true;
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
+    it('keeps a held component stopped on a later reconcile (transient hold persists)', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
+      await appReconciler.drive(['www_App'], 'stopped');
+      stubs.dockerService.appDockerStart.resetHistory();
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
+    it('drives a held component back to running once the hold is released', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
+      await appReconciler.drive(['www_App'], 'stopped');
+      const result = await appReconciler.drive(['www_App'], 'running');
+      expect(result.converged).to.be.true;
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+    });
+
+    it('settles a driveRunning to stopped when the operator lock still holds (no churn start)', async () => {
+      stubs.appsRuntimeState.isOperatorStopped.resolves(true);
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
+      const result = await appReconciler.drive(['www_App'], 'running');
+      expect(result.converged).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
   });
