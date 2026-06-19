@@ -4,8 +4,8 @@ const serviceHelper = require('../serviceHelper');
 // Removed verificationHelper to avoid circular dependency - will use dynamic require where needed
 const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
-const appInspector = require('./appInspector');
 const appsRuntimeState = require('./appsRuntimeState');
+const appReconciler = require('../appMonitoring/appReconciler');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -81,22 +81,29 @@ async function executeAppGlobalCommand(appname, command, zelidauth, paramA, bypa
  * @returns {object} Response message
  */
 /**
- * Records the operator's desired run-state for an app (or single component) so
- * the reconciler honours a deliberate stop/kill and resumes on start. Spreads
- * to every component for a whole composed-app command.
+ * Apply an operator run-state command to every target component THROUGH the
+ * reconciler (the sole actuator): record the durable intent, then enqueue so the
+ * reconciler converges the container to it. A whole-app command (appname has no
+ * '_') fans out across the deployment's components; a component command targets
+ * just that component. Intent is recorded BEFORE the enqueue so a crash in between
+ * still leaves the reconciler converging to the operator's recorded wish, never the
+ * opposite. The reconciler honours election/dependency gates itself, so an operator
+ * start of a non-elected activeStandby component is correctly held, not force-started.
  *
  * @param {string} appname app or component identifier
  * @param {object|null} deployment DeploymentSpec (null for a component command)
- * @param {boolean} stopped
+ * @param {(id: string) => Promise<void>} recordIntent records the durable intent for one component
+ * @returns {Promise<void>}
  */
-async function setAppOperatorStopped(appname, deployment, stopped) {
+async function driveOperatorCommand(appname, deployment, recordIntent) {
   const ids = (!appname.includes('_') && deployment)
     ? deployment.componentEntries().map(([, c]) => c.identifier)
     : [appname];
   // eslint-disable-next-line no-restricted-syntax
   for (const id of ids) {
     // eslint-disable-next-line no-await-in-loop
-    await appsRuntimeState.setOperatorStopped(id, stopped);
+    await recordIntent(id);
+    appReconciler.enqueue(id);
   }
 }
 
@@ -131,60 +138,22 @@ async function appStart(req, res) {
     }
 
     const isComponent = appname.includes('_');
+    let deployment = null;
     let appRes;
-
-    const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-    if (!instantiated) {
-      throw new Error('Application not found');
-    }
-    const deployment = await deploymentProvider.buildDeployment(instantiated);
-
     if (isComponent) {
-      // user-initiated start clears the operator stop lock so the reconciler keeps it running
-      await setAppOperatorStopped(appname, null, false);
-      const compName = appname.split('_')[0];
-      const deployComp = deployment.getComponent(compName);
-      if (deployComp && deployComp.hasActiveStandbySyncthing()) {
-        try {
-          const containers = await dockerService.dockerListContainers(false);
-          const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(appname) || container.Id === appname);
-          if (!isRunning) {
-            log.info(`Skipping start for activeStandby syncthing component ${appname} - not currently running`);
-            appRes = `Component ${appname} uses activeStandby syncthing and is not running - skipped start`;
-            const appResponse = messageHelper.createDataMessage(appRes);
-            return res ? res.json(appResponse) : appResponse;
-          }
-        } catch (error) {
-          log.warn(`Could not check running status for ${appname}: ${error.message}`);
-        }
-      }
-      appRes = await dockerService.appDockerStart(appname);
-      appInspector.startAppMonitoring(appname);
+      appRes = `Component ${appname} started`;
     } else {
-      // user-initiated start clears the operator stop lock so the reconciler keeps it running
-      await setAppOperatorStopped(appname, deployment, false);
-
-      for (const [, deployComp] of deployment.componentEntries()) {
-        if (deployComp.hasActiveStandbySyncthing()) {
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            const containers = await dockerService.dockerListContainers(false);
-            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(deployComp.identifier) || container.Id === deployComp.identifier);
-            if (!isRunning) {
-              log.info(`Skipping start for activeStandby syncthing component ${deployComp.identifier} - not currently running`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-          } catch (error) {
-            log.warn(`Could not check running status for ${deployComp.identifier}: ${error.message}`);
-          }
-        }
-        // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerStart(deployComp.identifier);
-        appInspector.startAppMonitoring(deployComp.identifier);
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
+        throw new Error('Application not found');
       }
+      deployment = await deploymentProvider.buildDeployment(instantiated);
       appRes = `Application ${instantiated.name} started`;
     }
+    // clear the operator stop lock; the reconciler then (re)starts each component,
+    // honouring its own election/dependency gates (a non-elected activeStandby
+    // component is held at awaitingController, never force-started).
+    await driveOperatorCommand(appname, deployment, (id) => appsRuntimeState.setOperatorStopped(id, false));
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
@@ -236,30 +205,21 @@ async function appStop(req, res) {
     }
 
     const isComponent = appname.includes('_'); // it is a component stop
+    let deployment = null;
     let appRes;
-
     if (isComponent) {
-      // lock BEFORE the docker op (matching the whole-app path): a crash between
-      // the stop and the lock write would leave a stopped container the
-      // reconciler restarts against the operator's intent
-      await setAppOperatorStopped(appname, null, true);
-      appInspector.stopAppMonitoring(appname, false);
-      appRes = await dockerService.appDockerStop(appname);
+      appRes = `Component ${appname} stopped`;
     } else {
       const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const deployment = await deploymentProvider.buildDeployment(instantiated);
-      // operator stop persists so the reconciler does not restart it
-      await setAppOperatorStopped(appname, deployment, true);
-      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
-        appInspector.stopAppMonitoring(deployComp.identifier, false);
-        // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerStop(deployComp.identifier);
-      }
+      deployment = await deploymentProvider.buildDeployment(instantiated);
       appRes = `Application ${instantiated.name} stopped`;
     }
+    // operator stop persists (the reconciler will not restart a stopped app); the
+    // reconciler does the actual stop + stops monitoring on its stop branch.
+    await driveOperatorCommand(appname, deployment, (id) => appsRuntimeState.setOperatorStopped(id, true));
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
@@ -311,60 +271,25 @@ async function appRestart(req, res) {
     }
 
     const isComponent = appname.includes('_');
+    let deployment = null;
     let appRes;
-
-    const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-    if (!instantiated) {
-      throw new Error('Application not found');
-    }
-    const deployment = await deploymentProvider.buildDeployment(instantiated);
-
     if (isComponent) {
-      // user-initiated restart means "make it run": clear the operator stop lock
-      // (before the docker op) so the reconciler keeps it running afterwards
-      await setAppOperatorStopped(appname, null, false);
-      const compName = appname.split('_')[0];
-      const deployComp = deployment.getComponent(compName);
-      if (deployComp && deployComp.hasActiveStandbySyncthing()) {
-        try {
-          const containers = await dockerService.dockerListContainers(false);
-          const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(appname) || container.Id === appname);
-          if (!isRunning) {
-            log.info(`Skipping restart for activeStandby syncthing component ${appname} - not currently running`);
-            appRes = `Component ${appname} uses activeStandby syncthing and is not running - skipped restart`;
-            const appResponse = messageHelper.createDataMessage(appRes);
-            return res ? res.json(appResponse) : appResponse;
-          }
-        } catch (error) {
-          log.warn(`Could not check running status for ${appname}: ${error.message}`);
-        }
-      }
-      appRes = await dockerService.appDockerRestart(appname);
+      appRes = `Component ${appname} restarted`;
     } else {
-      // user-initiated restart means "make it run": clear the operator stop lock
-      // for every component (before the docker ops), matching appStart
-      await setAppOperatorStopped(appname, deployment, false);
-
-      for (const [, deployComp] of deployment.componentEntries()) {
-        if (deployComp.hasActiveStandbySyncthing()) {
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            const containers = await dockerService.dockerListContainers(false);
-            const isRunning = containers.some((container) => container.Names[0] === dockerService.getAppDockerNameIdentifier(deployComp.identifier) || container.Id === deployComp.identifier);
-            if (!isRunning) {
-              log.info(`Skipping restart for activeStandby syncthing component ${deployComp.identifier} - not currently running`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-          } catch (error) {
-            log.warn(`Could not check running status for ${deployComp.identifier}: ${error.message}`);
-          }
-        }
-        // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerRestart(deployComp.identifier);
+      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+      if (!instantiated) {
+        throw new Error('Application not found');
       }
+      deployment = await deploymentProvider.buildDeployment(instantiated);
       appRes = `Application ${instantiated.name} restarted`;
     }
+    // user-initiated restart = "make it run now": clear the operator stop lock AND
+    // bump the durable restart generation, so the reconciler restarts a running
+    // container (or starts a stopped one) and honours its election/dependency gates.
+    await driveOperatorCommand(appname, deployment, async (id) => {
+      await appsRuntimeState.setOperatorStopped(id, false);
+      await appsRuntimeState.requestRestart(id);
+    });
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
@@ -407,26 +332,22 @@ async function appKill(req, res) {
     }
 
     const isComponent = appname.includes('_');
+    let deployment = null;
     let appRes;
-
     if (isComponent) {
-      // lock BEFORE the docker op (matching the whole-app path) - crash-safe direction
-      await setAppOperatorStopped(appname, null, true);
-      appRes = await dockerService.appDockerKill(appname);
+      appRes = `Component ${appname} killed`;
     } else {
       const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
       if (!instantiated) {
         throw new Error('Application not found');
       }
-      const deployment = await deploymentProvider.buildDeployment(instantiated);
-      // operator kill persists so the reconciler does not restart it
-      await setAppOperatorStopped(appname, deployment, true);
-      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
-        // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerKill(deployComp.identifier);
-      }
+      deployment = await deploymentProvider.buildDeployment(instantiated);
       appRes = `Application ${instantiated.name} killed`;
     }
+    // operator kill = force-stop now: durable operatorStopped carrying the force
+    // mode (so a crash never downgrades it to the app's graceful window); the
+    // reconciler's desired-stopped branch honours force with appDockerKill.
+    await driveOperatorCommand(appname, deployment, (id) => appsRuntimeState.setOperatorStopped(id, true, { force: true }));
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
