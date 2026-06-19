@@ -633,14 +633,42 @@ async function reconcile(rawIdentifier) {
 
   if (!desired) {
     if (actual.running) {
-      log.info(`appReconciler - ${identifier} desired stopped, stopping`);
-      await dockerService.appDockerStop(identifier);
-      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'stopped', reason });
+      // An operator hard-kill (durable operatorStopForce) skips the graceful
+      // shutdown window; every other stop (controllerDesired, policy) is graceful.
+      const rs = reason === 'operatorStopped' ? await appsRuntimeState.getState(identifier) : null;
+      const forceKill = !!(rs && rs.operatorStopForce);
+      log.info(`appReconciler - ${identifier} desired stopped, ${forceKill ? 'killing' : 'stopping'}`);
+      if (forceKill) await dockerService.appDockerKill(identifier);
+      else await dockerService.appDockerStop(identifier);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'stopped', reason, forced: forceKill });
     }
     return;
   }
 
   if (actual.running) {
+    // A durable restart request (operator restart / mount or network repair) bounces
+    // a running container when the desired generation exceeds the one we last
+    // actuated, then records it. Level-based + idempotent (re-running won't re-bounce);
+    // durable, so an operator's restart survives a crash. Not backoff-paced — a
+    // deliberate bounce, not crash recovery.
+    const restartReq = await appsRuntimeState.getState(identifier);
+    const desiredGen = (restartReq && restartReq.restartGeneration) || 0;
+    const actuatedGen = (restartReq && restartReq.actuatedRestartGeneration) || 0;
+    if (desiredGen > actuatedGen) {
+      log.info(`appReconciler - ${identifier} restart requested (gen ${desiredGen}); restarting`);
+      try {
+        await dockerService.appDockerRestart(identifier);
+      } catch (err) {
+        log.error(`appReconciler - failed to restart ${identifier} (requested): ${err.message}; retrying`);
+        fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartRequestedFailed', reason: err.message });
+        scheduleRetry(identifier, MANAGED_RETRY_MS);
+        return;
+      }
+      await appsRuntimeState.recordRestartGeneration(identifier, desiredGen);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartRequested', generation: desiredGen });
+      notifyContainerStarted(identifier);
+      return;
+    }
     // A running container whose v9 livenessProbe HEALTHCHECK has failed its retries
     // (docker reports unhealthy) is restarted, paced by the SAME backoff ladder as crash
     // restarts so a permanently-unhealthy container is not restart-looped. The ladder
@@ -724,6 +752,11 @@ async function reconcile(rawIdentifier) {
   }
   appInspector.startAppMonitoring(identifier, globalState.appsMonitored);
   if (firstStart) await appsRuntimeState.setSuccessfullyStarted(identifier);
+  // A start satisfies any pending restart request (a "restart" of a stopped
+  // container IS a start), so the running reconcile that follows won't re-bounce it.
+  const pendingGen = (priorRuntimeState && priorRuntimeState.restartGeneration) || 0;
+  const actuatedGen = (priorRuntimeState && priorRuntimeState.actuatedRestartGeneration) || 0;
+  if (pendingGen > actuatedGen) await appsRuntimeState.recordRestartGeneration(identifier, pendingGen);
   log.info(`appReconciler - ${identifier} ${firstStart ? 'started (first start)' : 'restarted'}`);
   fluxEventBus.publish('reconciler:actuated', { identifier, action: firstStart ? 'firstStart' : 'restart', exitCode: actual.exitCode });
   notifyContainerStarted(identifier);
