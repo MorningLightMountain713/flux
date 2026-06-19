@@ -345,7 +345,7 @@ describe('appOperations tests', () => {
     beforeEach(() => {
       let recursionCounter = 0;
       globalStateRef = require('../../ZelBack/src/services/utils/globalState');
-      globalStateRef.activeStandbyCoordinationRunning = false;
+      operationRegistry.clear();
       // the first-run mount-safety gate blocks election until the syncthing
       // monitor's first cycle completes; these tests model a settled node
       globalStateRef.syncthingAppsFirstRun = false;

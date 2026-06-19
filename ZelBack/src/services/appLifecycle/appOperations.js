@@ -1740,7 +1740,11 @@ async function forceAppRemovals() {
 
 async function coordinateActiveStandbyApps() {
   try {
-    globalState.activeStandbyCoordinationRunning = true;
+    // Mark the election cycle in flight (node-global coordinator lease). The
+    // node-wide destructive sweeps (daemon-health wipe, orphan removal) stand
+    // down while we may be starting/stopping standby containers, and the
+    // installer's docker-prune gate checks isHeld(...) for the same reason.
+    operationRegistry.acquire(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY, 'coordinate', 'appOperations', 'activeStandby election cycle');
     // The election cycle iterates every activeStandby app; pause it while any
     // folder-set-changing operation is in flight (install/remove/redeploy/reconcile),
     // node-wide. NOT backup/restore - those are skipped per-app in the loop below,
@@ -2113,7 +2117,7 @@ async function coordinateActiveStandbyApps() {
   } catch (error) {
     log.error(`activeStandby: ${error}`);
   } finally {
-    globalState.activeStandbyCoordinationRunning = false;
+    operationRegistry.release(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY);
     await serviceHelper.delay(config.fluxapps.masterSlaveIntervalMs ?? 30 * 1000);
     coordinateActiveStandbyApps();
   }
