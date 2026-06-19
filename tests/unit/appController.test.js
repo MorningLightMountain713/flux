@@ -12,6 +12,7 @@ const dockerService = require('../../ZelBack/src/services/dockerService');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
+const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 
 function mockInstantiatedSpec(spec) {
@@ -105,32 +106,33 @@ describe('appController tests', () => {
   });
 
   describe('appStart tests', () => {
+    let enqueue;
+    let setOperatorStopped;
     beforeEach(() => {
-      sinon.stub(dockerService, 'appDockerStart').resolves('Flux App TestApp successfully started.');
-      sinon.stub(appInspector, 'startAppMonitoring');
+      enqueue = sinon.stub(appReconciler, 'enqueue');
+      setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
-    it('should start app and return success message', async () => {
+    it('clears the operator lock and enqueues the reconciler (no direct docker start)', async () => {
       verificationHelperStub.resolves(true);
       const instantiated = mockInstantiated({
         name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
       });
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'TestApp', identifier: 'TestApp' },
+      ]));
 
-
-      const req = {
-        params: { appname: 'TestApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
+      const req = { params: { appname: 'TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
 
       await appController.appStart(req, res);
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledOnce(dockerService.appDockerStart);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', false);
+      sinon.assert.calledOnceWithExactly(enqueue, 'TestApp');
+      sinon.assert.callOrder(setOperatorStopped, enqueue);
     });
 
     it('should return error if no app name provided', async () => {
@@ -169,52 +171,41 @@ describe('appController tests', () => {
       expect(result.data.code).to.equal(401);
     });
 
-    it('should handle component start for component names', async () => {
+    it('enqueues a single component without a spec lookup', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
-        name: 'TestApp', version: 4, compose: [{ name: 'Component' }],
-      });
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+      const getInfo = sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
 
-      const req = {
-        params: { appname: 'Component_TestApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
+      const req = { params: { appname: 'Component_TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
 
       await appController.appStart(req, res);
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledOnce(dockerService.appDockerStart);
-      sinon.assert.calledWith(dockerService.appDockerStart, 'Component_TestApp');
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', false);
+      sinon.assert.calledOnceWithExactly(enqueue, 'Component_TestApp');
+      sinon.assert.notCalled(getInfo);
     });
 
-    it('should start all components for version 4+ apps', async () => {
+    it('enqueues every component for a version 4+ app', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
-        name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
-      });
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component1', identifier: 'Component1_ComposedApp' },
+        { name: 'Component2', identifier: 'Component2_ComposedApp' },
+      ]));
 
-
-      const req = {
-        params: { appname: 'ComposedApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
+      const req = { params: { appname: 'ComposedApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
 
       await appController.appStart(req, res);
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledTwice(dockerService.appDockerStart);
-      sinon.assert.calledWith(dockerService.appDockerStart, 'Component1_ComposedApp');
-      sinon.assert.calledWith(dockerService.appDockerStart, 'Component2_ComposedApp');
+      sinon.assert.calledWithExactly(enqueue, 'Component1_ComposedApp');
+      sinon.assert.calledWithExactly(enqueue, 'Component2_ComposedApp');
+      sinon.assert.calledWithExactly(setOperatorStopped, 'Component1_ComposedApp', false);
+      sinon.assert.calledWithExactly(setOperatorStopped, 'Component2_ComposedApp', false);
     });
 
     it('should handle global start parameter', async () => {
@@ -240,145 +231,128 @@ describe('appController tests', () => {
   });
 
   describe('appStop tests', () => {
+    let enqueue;
+    let setOperatorStopped;
     beforeEach(() => {
-      sinon.stub(dockerService, 'appDockerStop').resolves('Flux App TestApp successfully stopped.');
-      sinon.stub(appInspector, 'stopAppMonitoring');
+      enqueue = sinon.stub(appReconciler, 'enqueue');
+      setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
-    it('should stop app and return success message', async () => {
+    it('sets the operator stop lock and enqueues the reconciler (no direct docker stop)', async () => {
       verificationHelperStub.resolves(true);
-      // appStop only calls getGlobalAppInfo for non-component apps
-      // For a simple 'TestApp' (no underscore), it looks up the spec
-      const instantiated = mockInstantiated({
-        name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
-      });
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'TestApp', identifier: 'TestApp' },
+      ]));
 
-
-      const req = {
-        params: { appname: 'TestApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
+      const req = { params: { appname: 'TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
 
       await appController.appStop(req, res);
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledOnce(dockerService.appDockerStop);
-      sinon.assert.calledOnce(appInspector.stopAppMonitoring);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', true);
+      sinon.assert.calledOnceWithExactly(enqueue, 'TestApp');
     });
 
-    it('should stop all components for version 4+ apps in reverse order', async () => {
+    it('locks and enqueues every component for a version 4+ app', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
-        name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
-      });
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component1', identifier: 'Component1_ComposedApp' },
+        { name: 'Component2', identifier: 'Component2_ComposedApp' },
+      ]));
 
-
-      const req = {
-        params: { appname: 'ComposedApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
+      const req = { params: { appname: 'ComposedApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
 
       await appController.appStop(req, res);
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      // Should be called in reverse order
-      sinon.assert.calledTwice(dockerService.appDockerStop);
+      sinon.assert.calledWithExactly(setOperatorStopped, 'Component1_ComposedApp', true);
+      sinon.assert.calledWithExactly(setOperatorStopped, 'Component2_ComposedApp', true);
+      sinon.assert.calledTwice(enqueue);
     });
 
-    it('should handle component stop', async () => {
+    it('locks and enqueues a single component without a spec lookup', async () => {
       verificationHelperStub.resolves(true);
+      const getInfo = sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
 
-      const req = {
-        params: { appname: 'Component_TestApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
+      const req = { params: { appname: 'Component_TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
 
       await appController.appStop(req, res);
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledOnce(dockerService.appDockerStop);
-      sinon.assert.calledWith(dockerService.appDockerStop, 'Component_TestApp');
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true);
+      sinon.assert.calledOnceWithExactly(enqueue, 'Component_TestApp');
+      sinon.assert.notCalled(getInfo);
     });
 
-    it('sets the operator lock BEFORE the docker stop on the component path (crash-safe ordering)', async () => {
-      // the whole-app path already locks first; lock-after means a crash between
-      // the docker stop and the lock write leaves a stopped container the
-      // reconciler will restart against the operator's intent
+    it('records the operator lock BEFORE enqueueing (crash-safe ordering)', async () => {
+      // lock-after would let a crash between enqueue and the lock write leave a
+      // running container the reconciler keeps running against the operator's intent
       verificationHelperStub.resolves(true);
-      const setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
 
       const req = { params: { appname: 'Component_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
       await appController.appStop(req, res);
 
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true);
-      sinon.assert.callOrder(setOperatorStopped, dockerService.appDockerStop);
+      sinon.assert.callOrder(setOperatorStopped, enqueue);
     });
   });
 
   describe('appRestart tests', () => {
+    let enqueue;
+    let setOperatorStopped;
+    let requestRestart;
     beforeEach(() => {
-      sinon.stub(dockerService, 'appDockerRestart').resolves('Flux App TestApp successfully restarted.');
+      enqueue = sinon.stub(appReconciler, 'enqueue');
+      setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
+      requestRestart = sinon.stub(appsRuntimeState, 'requestRestart').resolves();
     });
 
-    it('should restart app and return success message', async () => {
+    it('clears the lock, bumps the restart generation and enqueues (no direct docker restart)', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
-        name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
-      });
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      // a flat (v1-3) app: its single component is identified by the bare app name
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'TestApp', identifier: 'TestApp' },
+      ]));
 
-
-      const req = {
-        params: { appname: 'TestApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
-
+      const req = { params: { appname: 'TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
       await appController.appRestart(req, res);
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledOnce(dockerService.appDockerRestart);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', false);
+      sinon.assert.calledOnceWithExactly(requestRestart, 'TestApp');
+      sinon.assert.calledOnceWithExactly(enqueue, 'TestApp');
+      sinon.assert.callOrder(setOperatorStopped, enqueue);
     });
 
-    it('should restart all components for version 4+ apps', async () => {
+    it('restarts every component of a composed app through the reconciler', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
-        name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
-      });
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component1', identifier: 'Component1_ComposedApp' },
+        { name: 'Component2', identifier: 'Component2_ComposedApp' },
+      ]));
 
-
-      const req = {
-        params: { appname: 'ComposedApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
-
+      const req = { params: { appname: 'ComposedApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
       await appController.appRestart(req, res);
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledTwice(dockerService.appDockerRestart);
+      sinon.assert.calledWithExactly(requestRestart, 'Component1_ComposedApp');
+      sinon.assert.calledWithExactly(requestRestart, 'Component2_ComposedApp');
+      sinon.assert.calledTwice(enqueue);
     });
 
     it('should return unauthorized if user not authorized', async () => {
@@ -399,146 +373,92 @@ describe('appController tests', () => {
       expect(result.data.code).to.equal(401);
     });
 
-    // A user-initiated restart is an explicit "make it run": it must clear the
-    // durable operator stop lock (same semantics and scope as appStart), and
-    // BEFORE the docker operation - if FluxOS dies mid-restart the worst case
-    // is then lock-cleared+stopped, which the reconciler converges to running
-    // (user intent). Without this, stop -> restart leaves the lock set and the
-    // reconciler silently re-stops the app at its next trigger.
-    it('clears the operator stop lock before restarting (single-component app)', async () => {
+    it('restarts only the named component on a component restart (no spec lookup)', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
-      // a flat (v1-3) app: its single component is identified by the bare app name
-      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
-        { name: 'TestApp', identifier: 'TestApp' },
-      ]));
-      const setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
-
-      const req = { params: { appname: 'TestApp' }, query: {} };
-      const res = { json: sinon.fake((param) => param) };
-      await appController.appRestart(req, res);
-
-      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', false);
-      sinon.assert.callOrder(setOperatorStopped, dockerService.appDockerRestart);
-    });
-
-    it('clears every component lock before restarting a composed app', async () => {
-      verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
-      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
-        { name: 'Component1', identifier: 'Component1_ComposedApp' },
-        { name: 'Component2', identifier: 'Component2_ComposedApp' },
-      ]));
-      const setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
-
-      const req = { params: { appname: 'ComposedApp' }, query: {} };
-      const res = { json: sinon.fake((param) => param) };
-      await appController.appRestart(req, res);
-
-      sinon.assert.calledWith(setOperatorStopped, 'Component1_ComposedApp', false);
-      sinon.assert.calledWith(setOperatorStopped, 'Component2_ComposedApp', false);
-      sinon.assert.callOrder(setOperatorStopped, dockerService.appDockerRestart);
-    });
-
-    it('clears only the named component lock on a component restart', async () => {
-      verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
-      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
-        { name: 'Component1', identifier: 'Component1_ComposedApp' },
-        { name: 'Component2', identifier: 'Component2_ComposedApp' },
-      ]));
-      const setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
+      const getInfo = sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
 
       const req = { params: { appname: 'Component1_ComposedApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
       await appController.appRestart(req, res);
 
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component1_ComposedApp', false);
-      sinon.assert.callOrder(setOperatorStopped, dockerService.appDockerRestart);
+      sinon.assert.calledOnceWithExactly(requestRestart, 'Component1_ComposedApp');
+      sinon.assert.calledOnceWithExactly(enqueue, 'Component1_ComposedApp');
+      sinon.assert.notCalled(getInfo);
     });
 
-    // The activeStandby-skip path avoids a direct docker restart of a not-running
-    // component (the election governs it), but the user's stop-veto must still
-    // be lifted so the election MAY start it - appStart's existing semantics.
-    it('still clears the lock when an activeStandby component restart is skipped', async () => {
+    // An activeStandby component restart now routes through the reconciler like any
+    // other: the lock is lifted and a reconcile enqueued; the reconciler's election
+    // gate decides whether it actually runs (no caller-side skip, no docker call).
+    it('routes an activeStandby component restart through the reconciler (no caller-side skip)', async () => {
       verificationHelperStub.resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
-      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
-        { name: 'Gcomp', identifier: 'Gcomp_ComposedApp', activeStandby: true },
-      ]));
-      sinon.stub(dockerService, 'dockerListContainers').resolves([]); // component not running
-      const setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
 
       const req = { params: { appname: 'Gcomp_ComposedApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
       await appController.appRestart(req, res);
 
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Gcomp_ComposedApp', false);
-      sinon.assert.notCalled(dockerService.appDockerRestart); // skip preserved
+      sinon.assert.calledOnceWithExactly(requestRestart, 'Gcomp_ComposedApp');
+      sinon.assert.calledOnceWithExactly(enqueue, 'Gcomp_ComposedApp');
     });
   });
 
   describe('appKill tests', () => {
+    let enqueue;
+    let setOperatorStopped;
     beforeEach(() => {
-      sinon.stub(dockerService, 'appDockerKill').resolves('Flux App TestApp successfully killed.');
+      enqueue = sinon.stub(appReconciler, 'enqueue');
+      setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
-    it('sets the operator lock BEFORE the docker kill on the component path (crash-safe ordering)', async () => {
+    it('sets the durable force-stop lock and enqueues (no direct docker kill)', async () => {
       verificationHelperStub.resolves(true);
-      const setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
 
       const req = { params: { appname: 'Component_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
       await appController.appKill(req, res);
 
-      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true);
-      sinon.assert.callOrder(setOperatorStopped, dockerService.appDockerKill);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true, { force: true });
+      sinon.assert.calledOnceWithExactly(enqueue, 'Component_TestApp');
+      sinon.assert.callOrder(setOperatorStopped, enqueue);
     });
 
     it('should kill app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
-        name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
-      });
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'TestApp', identifier: 'TestApp' },
+      ]));
 
-
-      const req = {
-        params: { appname: 'TestApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
+      const req = { params: { appname: 'TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
 
       await appController.appKill(req, res);
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledOnce(dockerService.appDockerKill);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', true, { force: true });
+      sinon.assert.calledOnceWithExactly(enqueue, 'TestApp');
     });
 
-    it('should kill all components for version 4+ apps in reverse order', async () => {
+    it('force-stops every component for a version 4+ app', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
-        name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
-      });
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component1', identifier: 'Component1_ComposedApp' },
+        { name: 'Component2', identifier: 'Component2_ComposedApp' },
+      ]));
 
-
-      const req = {
-        params: { appname: 'ComposedApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
+      const req = { params: { appname: 'ComposedApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
 
       await appController.appKill(req, res);
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledTwice(dockerService.appDockerKill);
+      sinon.assert.calledWithExactly(setOperatorStopped, 'Component1_ComposedApp', true, { force: true });
+      sinon.assert.calledWithExactly(setOperatorStopped, 'Component2_ComposedApp', true, { force: true });
+      sinon.assert.calledTwice(enqueue);
     });
 
     it('should return error if app not found', async () => {
@@ -558,6 +478,7 @@ describe('appController tests', () => {
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('error');
       expect(result.data.message).to.include('Application not found');
+      sinon.assert.notCalled(enqueue);
     });
   });
 
