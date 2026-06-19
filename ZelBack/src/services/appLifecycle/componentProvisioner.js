@@ -20,7 +20,6 @@ const appVolumeService = require('./appVolumeService');
 const appSwapPoolService = require('./appSwapPoolService');
 const volumeService = require('../utils/volumeService');
 const telemetryIdentityService = require('../telemetryIdentityService');
-const { startAppMonitoring } = require('../appManagement/appInspector');
 
 const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
 
@@ -228,25 +227,22 @@ async function installComponent(component, options = {}) {
     await telemetryIdentityService.onComponentCreated(component);
   }
 
-  // A hard install (createVolumes) creates fresh empty volumes, so a
-  // component whose data must sync before first start is held for the sync
-  // decider to start once seeded; a component where only one elected
-  // instance may run is held on every install. Soft installs reuse existing
-  // volumes, so sync-before-start components start immediately.
-  const holdStart = component.hasActiveStandbySyncthing()
-    || (createVolumes && component.requiresSyncBeforeStart());
-  if (test || !holdStart) {
+  // A real install only PROVISIONS: the container is left in Docker 'created' and
+  // the reconciler is the sole starter (installApplication enqueues + awaits its
+  // convergence). holdStart is gone — the activeStandby/sync-before-start hold is
+  // already the reconciler's controllerDesired -> awaitingController gate. Test
+  // installs are synchronous and fail-fast: they start inline + run the orbit
+  // health check and never hand off (a test that "passes" without ever starting a
+  // container would be a false positive).
+  if (test) {
     status(`Starting ${id}...`);
     const app = await dockerService.appDockerStart(id);
     if (!app) {
       throw new Error(`Failed to start ${id} container`);
     }
-    if (!test) {
-      startAppMonitoring(id);
-    }
     status(`${id} started`);
 
-    if (test && component.image?.startsWith('runonflux/orbit')) {
+    if (component.image?.startsWith('runonflux/orbit')) {
       const orbitHealth = await checkOrbitAppHealth(component, onStatus);
       if (!orbitHealth.passed) {
         throw new Error(`Orbit deployment failed: ${orbitHealth.reason}`);

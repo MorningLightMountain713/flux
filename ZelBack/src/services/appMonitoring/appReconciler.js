@@ -576,10 +576,13 @@ async function recreateMissing(identifier) {
   }
   try {
     await containerHealthMonitor.recreateMissingContainers(identifier);
-    appInspector.startAppMonitoring(identifier);
-    log.info(`appReconciler - recreated missing container ${identifier}`);
+    log.info(`appReconciler - recreated missing container ${identifier} (created); enqueuing to start`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'recreated' });
-    scheduleRetry(identifier, POST_START_VERIFY_MS); // verify it came up attached
+    // The container is provisioned in Docker 'created' state (installComponent no
+    // longer starts) — enqueue so the reconciler's start branch starts it,
+    // registers monitoring, and emits firstStart. Coalesces into this in-flight
+    // reconcile via dirty, so the start runs on the immediate follow-up pass.
+    enqueue(identifier);
   } catch (err) {
     // Removal must be justified by the state of the world NOW, not at
     // classification time: a whole recreate attempt (image pull - up to
