@@ -460,13 +460,13 @@ describe('appsRuntimeState tests', () => {
       });
     });
 
-    it('merges twins field-wise: lock is OR, histories union, newest exit wins', async () => {
+    it('merges twins field-wise: lock + started-flag are OR, histories union, newest exit wins', async () => {
       docs = [
         {
           identifier: 'www_App', operatorStopped: true, restartHistory: [100, 200], updatedAt: 1000,
         },
         {
-          identifier: 'www_App', restartHistory: [200, 300], lastExitCode: 137, lastDiedAt: 5000, updatedAt: 9000,
+          identifier: 'www_App', restartHistory: [200, 300], lastExitCode: 137, lastDiedAt: 5000, hasSuccessfullyStarted: true, updatedAt: 9000,
         },
       ];
 
@@ -476,6 +476,7 @@ describe('appsRuntimeState tests', () => {
       expect(upserts).to.have.lengthOf(1);
       const merged = upserts[0].set;
       expect(merged.operatorStopped).to.equal(true); // the lock survives the merge
+      expect(merged.hasSuccessfullyStarted).to.equal(true); // started on either twin = started here (gates the rollback)
       expect(merged.restartHistory).to.deep.equal([100, 200, 300]);
       expect(merged.lastExitCode).to.equal(137);
       expect(merged.lastDiedAt).to.equal(5000);
