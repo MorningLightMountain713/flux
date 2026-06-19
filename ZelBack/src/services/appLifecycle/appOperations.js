@@ -51,7 +51,6 @@ const appEventVerifier = require('../appMessaging/appEventVerifier');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const appQueryService = require('../appQuery/appQueryService');
 const { listRunningContainers } = appQueryService;
-const { startAppMonitoring, stopAppMonitoring } = require('../appManagement/appInspector');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appReconciler = require('../appMonitoring/appReconciler');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -655,98 +654,52 @@ async function applyPermissionsFix(appId) {
 }
 
 /**
- * Helper function to start app docker containers
- * @param {string} appname - App name
+ * Resolve an app or component name to the component identifiers the reconciler keys
+ * on: a component name (contains '_') resolves to itself with no spec lookup; a
+ * whole-app name expands to every component via its deployment.
+ * @param {string} appname - App or component name
+ * @returns {Promise<string[]>}
+ */
+async function componentIdentifiersFor(appname) {
+  if (appname.includes('_')) return [appname];
+  const instantiated = await appsRepository.getGlobalAppInfo(appname);
+  if (!instantiated) {
+    throw new Error('Application not found');
+  }
+  const deployment = await deploymentProvider.buildDeployment(instantiated);
+  return deployment.componentEntries().map(([, deployComp]) => deployComp.identifier);
+}
+
+/**
+ * Bring an app's (or single component's) containers up — used by the restore flow
+ * after it has swapped in the data. Drives run-state THROUGH the reconciler (the
+ * sole actuator) and blocks until converged; never touches Docker. An operator-
+ * stopped component correctly settles stopped rather than being force-started.
+ * @param {string} appname - App or component name
  * @returns {Promise<void>}
  */
 async function startApplication(appname) {
   try {
-    const mainAppName = appname.split('_')[1] || appname;
-    const isComponent = appname.includes('_');
-    if (isComponent) {
-      await dockerService.appDockerStart(appname);
-      startAppMonitoring(appname);
-    } else {
-      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-      if (!instantiated) {
-        throw new Error('Application not found');
-      }
-      const deployment = await deploymentProvider.buildDeployment(instantiated);
-      for (const [, deployComp] of deployment.componentEntries()) {
-        // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerStart(deployComp.identifier);
-        startAppMonitoring(deployComp.identifier);
-      }
-    }
+    const ids = await componentIdentifiersFor(appname);
+    await appReconciler.drive(ids, 'running');
   } catch (error) {
     log.error(error);
   }
 }
 
 /**
- * Helper function to stop app docker containers
- * @param {string} appname - App name
+ * Take an app's (or single component's) containers down and BLOCK until they are
+ * actually stopped — used by backup/restore before they read or replace the volume.
+ * Drives run-state through the reconciler (the sole actuator) via a transient hold;
+ * never touches Docker. The hold is transient, so a crash mid-operation lets the app
+ * recover rather than stay wrongly stopped.
+ * @param {string} appname - App or component name
  * @returns {Promise<void>}
  */
 async function stopApplication(appname) {
   try {
-    const mainAppName = appname.split('_')[1] || appname;
-    const isComponent = appname.includes('_');
-    if (isComponent) {
-      await dockerService.appDockerStop(appname);
-      stopAppMonitoring(appname, false);
-    } else {
-      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-      if (!instantiated) {
-        throw new Error('Application not found');
-      }
-      const deployment = await deploymentProvider.buildDeployment(instantiated);
-      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
-        // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerStop(deployComp.identifier);
-        stopAppMonitoring(deployComp.identifier, false);
-      }
-    }
-  } catch (error) {
-    log.error(error);
-  }
-}
-
-/**
- * Helper function to restart app docker containers
- * Ensures mount paths exist before restarting (important after Syncthing cleanup)
- * @param {string} appname - App name
- * @returns {Promise<void>}
- */
-async function restartApplication(appname) {
-  try {
-    const mainAppName = appname.split('_')[1] || appname;
-    const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-    if (!instantiated) {
-      throw new Error('Application not found');
-    }
-    const deployment = await deploymentProvider.buildDeployment(instantiated);
-    const isComponent = appname.includes('_');
-    if (isComponent) {
-      const componentName = appname.split('_')[0];
-      const deployComp = deployment.getComponent(componentName);
-      if (deployComp?.mounts?.length) {
-        await appVolumeService.ensureMountSourcesExist(deployComp);
-      }
-      await dockerService.appDockerRestart(appname);
-      startAppMonitoring(appname);
-    } else {
-      for (const [compName] of deployment.componentEntries()) {
-        const deployComp = deployment.getComponent(compName);
-        if (deployComp?.mounts?.length) {
-          // eslint-disable-next-line no-await-in-loop
-          await appVolumeService.ensureMountSourcesExist(deployComp);
-        }
-        // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerRestart(deployComp.identifier);
-        startAppMonitoring(deployComp.identifier);
-      }
-    }
+    const ids = await componentIdentifiersFor(appname);
+    await appReconciler.drive(ids, 'stopped');
   } catch (error) {
     log.error(error);
   }
@@ -2219,5 +2172,4 @@ module.exports = {
   getPeerAppsInstallingErrorMessages,
   startApplication,
   stopApplication,
-  restartApplication,
 };
