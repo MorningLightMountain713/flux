@@ -1139,9 +1139,9 @@ async function reconcile(rawIdentifier) {
     // `docker start` repairs it - only a recreate clears the stale endpoint.
     // Verify the attachment (from the inspect dockerActual already did) before
     // trusting "running"; heal by recreating, confirmed in-pass and paced. This
-    // check runs before the health one: a detached container can only be fixed
-    // by the heal (no restart repairs a stale endpoint), so health-first would
-    // restart-loop it while the detachment persists.
+    // check runs before the restart-shaped ones below: a detached container can
+    // only be fixed by the heal (no restart repairs a stale endpoint), so a
+    // bounce or health restart first would loop while the detachment persists.
     if (dockerService.isContainerDetachedFromNetwork(actual.attachment)) {
       await healDetachedNetwork(identifier, mainAppName, spec);
       return;
