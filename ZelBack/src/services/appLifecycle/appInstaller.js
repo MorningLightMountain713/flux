@@ -9,26 +9,20 @@ const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appUninstaller = require('./appUninstaller');
+const componentProvisioner = require('./componentProvisioner');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { storeAppInstallingErrorMessage } = require('../appMessaging/messageStore');
 const { systemArchitecture, checkPlacement, checkNodeResources } = require('../appRequirements/hwRequirements');
 const { isImageBlocked, verifyRepository } = require('../appSecurity/imageManager');
-const { startAppMonitoring } = require('../appManagement/appInspector');
-const imageVerifier = require('../utils/imageVerifier');
 // pgpService is used in commented out code
 // eslint-disable-next-line no-unused-vars
 const pgpService = require('../pgpService');
-const registryCredentialHelper = require('../utils/registryCredentialHelper');
-const upnpService = require('../upnpService');
 const operationRegistry = require('../utils/operationRegistry');
 const admissionControl = require('../utils/admissionControl');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const telemetrySinkCache = require('../telemetrySinkCache');
-const telemetryIdentityService = require('../telemetryIdentityService');
 const telemetryConfigService = require('../telemetryConfigService');
-const appVolumeService = require('./appVolumeService');
-const appSwapPoolService = require('./appSwapPoolService');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -37,7 +31,6 @@ const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
 const { localAppsInformation } = require('../utils/appConstants');
 const fluxEventBus = require('../utils/fluxEventBus');
-const volumeService = require('../utils/volumeService');
 const config = require('config');
 
 /**
@@ -64,13 +57,6 @@ const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Je
 // Reserve them in the free-octet scan so a non-legacy app can't take one before
 // the legacy app heals onto its fixed octet.
 const legacyPinnedOctets = appsThatMightBeUsingOldGatewayIpAssignment.map((name) => name.charCodeAt(name.length - 1));
-
-// Helper functions and constants for installComponent
-const util = require('util');
-
-const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
-
-const supportedArchitectures = ['amd64', 'arm64'];
 
 /**
  * Perform Docker cleanup (prune containers, networks, volumes, images)
@@ -100,54 +86,6 @@ async function performDockerCleanup(onStatus) {
 }
 
 /**
- * Setup firewall and UPnP ports for application/component
- * @param {object} appSpec - App or component specifications
- * @param {string} appName - Application name
- * @param {boolean} isComponent - Whether this is a component
- * @param {object} res - Response object for streaming
- * @param {boolean} test - Whether this is a test installation (skips port setup if true)
- * @returns {Promise<void>}
- */
-async function setupApplicationPorts(comp, appName, isComponent, onStatus, test = false) {
-  const label = isComponent ? `Allowing component ${comp.name} of Flux App ${appName} ports...` : `Allowing Flux App ${appName} ports...`;
-  log.info(label);
-  if (onStatus) onStatus({ status: label });
-
-  const ports = test ? [] : comp.hostPorts();
-  if (ports.length === 0) return;
-
-  const firewallActive = await fluxNetworkHelper.isFirewallActive();
-  if (firewallActive) {
-    for (const port of ports) {
-      // eslint-disable-next-line no-await-in-loop
-      const portResponse = await fluxNetworkHelper.allowPort(port);
-      if (portResponse.status === true) {
-        log.info(`Port ${port} OK`);
-        if (onStatus) onStatus({ status: `Port ${port} OK` });
-      } else {
-        throw new Error(`Error: Port ${port} FAILed to open.`);
-      }
-    }
-  } else {
-    log.info('Firewall not active, application ports are open');
-  }
-
-  const isUPNP = upnpService.isUPNP();
-  if (isUPNP) {
-    log.info('Custom port specified, mapping ports');
-    for (const port of ports) {
-      // eslint-disable-next-line no-await-in-loop
-      const portResponse = await upnpService.mapUpnpPort(port, `Flux_App_${appName}`);
-      if (portResponse === true) {
-        log.info(`Port ${port} mapped OK`);
-        if (onStatus) onStatus({ status: `Port ${port} mapped OK` });
-      } else {
-        throw new Error(`Error: Port ${port} FAILed to map.`);
-      }
-    }
-  }
-}
-
 /**
  * Ensures the per-app docker network (fluxDockerNetwork_<appName>) exists,
  * creating it with a free /24 (172.23.<octet>.0/24) if absent. Safe to call on
@@ -425,7 +363,7 @@ async function installApplication(instantiated, options = {}) {
 
       for (const [, component] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
-        await installComponent(component, {
+        await componentProvisioner.installComponent(component, {
           onStatus,
           test,
           createVolumes,
@@ -531,236 +469,6 @@ async function installApplication(instantiated, options = {}) {
   }
   return { status: InstallStatus.INSTALLED, reason: null };
 }
-
-/**
- * Checks Orbit (Deploy with Git) app health by polling its /api/status endpoint.
- * Waits for initialTestStatus to become true, then checks if the deployment failed.
- * @param {object} appSpec - Component specifications containing repotag and ports
- * @param {string} appName - Application name
- * @param {boolean} isComponent - Whether this is a component
- * @param {object} res - Response object for streaming status updates
- * @returns {Promise<{passed: boolean, reason: string|null}>} Result with passed status and failure reason
- */
-async function checkOrbitAppHealth(component, onStatus) {
-  if (!component.hostPorts || !component.hostPorts.length) {
-    return { passed: false, reason: 'No ports configured for Orbit component' };
-  }
-  const hostPort = component.hostPorts[0];
-  const statusUrl = `http://127.0.0.1:${hostPort}/api/status`;
-  const pollInterval = 5000;
-  const maxAttempts = 24;
-  const initialWait = 5000;
-
-  const id = component.identifier;
-
-  const msg = `Checking Orbit deployment status for ${id} on port ${hostPort}...`;
-  log.info(msg);
-  if (onStatus) onStatus(msg);
-
-  // Wait for Orbit to initialize before first poll
-  await serviceHelper.delay(initialWait);
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    let pollStatus = '';
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const response = await serviceHelper.axiosGet(statusUrl, { timeout: 5000 });
-
-      if (response.data && response.data.initialTestStatus === true) {
-        if (response.data.failed === true) {
-          const reason = response.data.failure_reason || 'Unknown failure';
-          return { passed: false, reason };
-        }
-        // initialTestStatus is true and failed is false - test passed
-        const successStatus = {
-          status: `Orbit initial test passed for ${identifier}`,
-        };
-        log.info(successStatus);
-        log.info(successStatus);
-        if (onStatus) onStatus(successStatus);
-        return { passed: true, reason: null };
-      }
-
-      pollStatus = ` | response: ${JSON.stringify(response.data)}`;
-    } catch (error) {
-      pollStatus = ` | error: ${error.message}`;
-      log.info(`Orbit status poll attempt ${attempt}/${maxAttempts} for ${id}: ${error.message}`);
-    }
-
-    const elapsed = attempt * 5;
-    const waitMsg = `Waiting for Orbit initial test... (${elapsed}s/${maxAttempts * 5}s)${pollStatus}`;
-    if (onStatus) onStatus(waitMsg);
-
-    // eslint-disable-next-line no-await-in-loop
-    await serviceHelper.delay(pollInterval);
-  }
-
-  return { passed: false, reason: 'Orbit health check timed out: initial test did not complete within 2 minutes' };
-}
-
-/**
- * Install a single app component (pull image, create volume, create + start container).
- * @param {object} component - DeploymentComponent to install
- * @param {object} options - { owner, onStatus, test, createVolumes, burstEligible, restartPolicy, extraEnv, syslogTarget, crossAppLogCollector }
- * @returns {Promise<void>}
- */
-async function installComponent(component, options = {}) {
-  const onStatus = options.onStatus || null;
-  const test = options.test || false;
-  const createVolumes = options.createVolumes || false;
-  const burstEligible = options.burstEligible || false;
-  const restartPolicy = options.restartPolicy || null;
-  const extraEnv = options.extraEnv || [];
-  const syslogTarget = options.syslogTarget || null;
-  const crossAppLogCollector = options.crossAppLogCollector || null;
-  const { owner } = options;
-
-  // owner is load-bearing: flux-shutdownd keys each app's shutdown plan on it,
-  // so a blank runonflux.owner label silently breaks drain/preStop at node
-  // shutdown. Refuse rather than stamp an empty owner. Test installs are
-  // ephemeral and carry no plan, so they are exempt.
-  if (!test && !owner) {
-    throw new Error(`installComponent: owner required for ${component.identifier}`);
-  }
-
-  const id = component.identifier;
-  const appName = component.appName;
-
-  const status = (msg) => {
-    log.info(msg);
-    if (onStatus) onStatus(msg);
-  };
-
-  status(`Allowing ${id} ports...`);
-  if (!test) {
-    const firewallActive = await fluxNetworkHelper.isFirewallActive();
-    const isUPNP = upnpService.isUPNP();
-    // eslint-disable-next-line no-restricted-syntax
-    for (const port of component.hostPorts) {
-      if (firewallActive) {
-        // eslint-disable-next-line no-await-in-loop
-        const portResponse = await fluxNetworkHelper.allowPort(port);
-        if (portResponse.status !== true) {
-          throw new Error(`Error: Port ${port} FAILed to open.`);
-        }
-      }
-      if (isUPNP) {
-        // eslint-disable-next-line no-await-in-loop
-        const mapped = await upnpService.mapUpnpPort(port, `Flux_App_${appName}`);
-        if (mapped !== true) {
-          throw new Error(`Error: Port ${port} FAILed to map.`);
-        }
-      }
-      status(`Port ${port} OK`);
-    }
-  }
-
-  const architecture = await systemArchitecture();
-  if (!supportedArchitectures.includes(architecture)) {
-    throw new Error(`Invalid architecture ${architecture} detected.`);
-  }
-
-  const imgVerifier = new imageVerifier.ImageVerifier(
-    component.image,
-    { maxImageSize: config.fluxapps.maxImageSize, architecture, architectureSet: supportedArchitectures },
-  );
-
-  const pullConfig = { repoTag: component.image };
-
-  if (component.imageAuth) {
-    const credentials = await registryCredentialHelper.getCredentials(
-      component.image,
-      component.imageAuth,
-      appName,
-    );
-    if (!credentials) {
-      throw new Error('Unable to get credentials');
-    }
-    imgVerifier.addCredentials(credentials);
-    pullConfig.authToken = `${credentials.username}:${credentials.password}`;
-  }
-
-  await imgVerifier.verifyImage();
-  imgVerifier.throwIfError();
-
-  if (!imgVerifier.supported) {
-    throw new Error(`Architecture ${architecture} not supported by ${component.image}`);
-  }
-
-  pullConfig.provider = imgVerifier.provider;
-  await dockerPullStreamPromise(pullConfig, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null);
-  status(`Pulling ${id} was successful`);
-
-  if (createVolumes) {
-    await appVolumeService.createAppVolume(component, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null, test);
-
-    status(`Verifying volume mount for ${id}...`);
-    await volumeService.verifyAppVolumeMount(appName, id !== appName, component.name);
-    status(`Volume mount verified for ${id}`);
-  }
-
-  // Ensure the dedicated app-swap pool covers all installed apps' swap before the
-  // container is created, so its memory.swap.max has live backing. Idempotent; a
-  // no-op on nodes without the new-mechanism host config.
-  await appSwapPoolService.reconcile();
-  // Measure the pulled image's on-disk size so the writable-layer (StorageOpt) cap
-  // can be rootFsGb - imageSize for v9. 0 (inspect failed) falls back to full rootFsGb.
-  const measuredImageSizeBytes = await dockerService.appDockerImageSize(component.image);
-  // Authoritative rootFs-fit reject: the decompressed image must leave room within
-  // the component's rootFs budget, else its writable layer has none. Version-blind
-  // (legacy is never charged); 0 (inspect failed) skips so create still proceeds.
-  if (measuredImageSizeBytes && !component.imageFitsRootFs(measuredImageSizeBytes)) {
-    throw new Error(
-      `Component '${component.name}' image (${component.image}) is ${(measuredImageSizeBytes / 1e9).toFixed(2)}GB on disk, `
-      + `which exceeds its rootFsGb budget of ${component.rootFsGb}GB. `
-      + 'rootFsGb must budget the image plus writable-layer headroom.',
-    );
-  }
-  status(`Creating ${id}...`);
-  await dockerService.appDockerCreate(component, {
-    test,
-    burstEligible,
-    restartPolicy,
-    extraEnv,
-    syslogTarget,
-    crossAppLogCollector,
-    owner,
-    measuredImageSizeBytes,
-  });
-
-  // Set the log ACL and announce identity to flux-telemetryd before the
-  // container starts (Arcane-only; no-op for non-telemetry apps).
-  if (!test) {
-    await telemetryIdentityService.onComponentCreated(component);
-  }
-
-  // A hard install (createVolumes) creates fresh empty volumes, so a
-  // component whose data must sync before first start is held for the sync
-  // decider to start once seeded; a component where only one elected
-  // instance may run is held on every install. Soft installs reuse existing
-  // volumes, so sync-before-start components start immediately.
-  const holdStart = component.hasActiveStandbySyncthing()
-    || (createVolumes && component.requiresSyncBeforeStart());
-  if (test || !holdStart) {
-    status(`Starting ${id}...`);
-    const app = await dockerService.appDockerStart(id);
-    if (!app) {
-      throw new Error(`Failed to start ${id} container`);
-    }
-    if (!test) {
-      startAppMonitoring(id);
-    }
-    status(`${id} started`);
-
-    if (test && component.image?.startsWith('runonflux/orbit')) {
-      const orbitHealth = await checkOrbitAppHealth(component, onStatus);
-      if (!orbitHealth.passed) {
-        throw new Error(`Orbit deployment failed: ${orbitHealth.reason}`);
-      }
-    }
-  }
-}
-
 
 /**
  * Install application locally - Main API entry point
@@ -899,7 +607,6 @@ async function testInstallApplicationAPI(req, res) {
 module.exports = {
   InstallStatus,
   installApplication,
-  installComponent,
   installApplicationAPI,
   ensureAppDockerNetwork,
   testInstallApplicationAPI,
