@@ -52,8 +52,6 @@ describe('appStartupManager tests', () => {
       waitForDbReady: sinon.stub().resolves(),
       waitForDaemonReady: sinon.stub().resolves(),
       waitForBootContainerStateSettled: sinon.stub().resolves(),
-      backupInProgress: [],
-      restoreInProgress: [],
       appsMonitored: new Map(),
     };
 
