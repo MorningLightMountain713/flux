@@ -31,8 +31,13 @@ const { enqueue, scheduleRetry, canonical } = reconcilerQueue;
 // container events via containerEventBridge, stream reconnect, hourly tick, boot,
 // post-install, and the masterSlave/syncthing deciders) just enqueues a component
 // identifier; one reconcile per identifier drives the actual Docker state toward the
-// desired state. This is the ONLY place that calls appDockerStart/appDockerStop. It also
-// force-removes and recreates a container that came up detached from its own
+// desired state. This is the sole authority for MANAGED-APP run-state — the only
+// other Docker run-state mutations are named exceptions: the uninstaller's terminal
+// teardown (destruction), the test-install inline start (componentProvisioner), the
+// non-Flux janitor (appController.stopAllNonFluxRunningApps), and the watchtower
+// cleanup (imageUpdateService). The set is grep-enforced by
+// reconcilerRunAuthority.guard.test.js.
+// It also force-removes and recreates a container that came up detached from its own
 // docker network (a stale libnetwork endpoint), which a start alone cannot fix.
 //
 // Desired state inputs:
