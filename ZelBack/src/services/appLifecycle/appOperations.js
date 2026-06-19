@@ -57,7 +57,7 @@ const appReconciler = require('../appMonitoring/appReconciler');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appVolumeService = require('./appVolumeService');
 const appUninstaller = require('./appUninstaller');
-const appInstaller = require('./appInstaller');
+const componentProvisioner = require('./componentProvisioner');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const appNetworkLinker = require('./appNetworkLinker');
@@ -299,7 +299,7 @@ async function redeployComponent(appName, componentName, options = {}) {
     await hwRequirements.checkNodeResources(freshDeployment);
 
     status(`Installing ${deployComp.identifier}...`);
-    await appInstaller.installComponent(deployComp, {
+    await componentProvisioner.installComponent(deployComp, {
       createVolumes,
       specVersion: instantiated.version,
       owner: instantiated.owner,
@@ -390,7 +390,7 @@ async function redeployApplication(appName, options = {}) {
     for (const [, deployComp] of freshDeployment.componentEntries()) {
       status(`Installing ${deployComp.identifier}...`);
       // eslint-disable-next-line no-await-in-loop
-      await appInstaller.installComponent(deployComp, {
+      await componentProvisioner.installComponent(deployComp, {
         createVolumes,
         specVersion: instantiated.version,
         owner: instantiated.owner,
@@ -1475,7 +1475,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       const createVolumes = hard.includes(name) || added.includes(name);
       log.info(`Installing ${deployComp.identifier} (${createVolumes ? 'with' : 'without'} volumes)...`);
       // eslint-disable-next-line no-await-in-loop
-      await appInstaller.installComponent(deployComp, {
+      await componentProvisioner.installComponent(deployComp, {
         createVolumes,
         specVersion: registrySpec.version,
         owner: registrySpec.owner,
