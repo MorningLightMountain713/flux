@@ -91,6 +91,7 @@ describe('appReconciler tests', () => {
         recordRestart: sinon.stub().resolves(),
         recordExit: sinon.stub().resolves(),
         getState: sinon.stub().resolves(null),
+        setSuccessfullyStarted: sinon.stub().resolves(),
       },
       appQueryService: {
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
@@ -426,6 +427,20 @@ describe('appReconciler tests', () => {
       expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
       expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
       expect(stubs.appInspector.startAppMonitoring.calledOnce).to.be.true;
+    });
+
+    it('marks hasSuccessfullyStarted on a first start (the durable signal that gates firstStart vs the install-window rollback)', async () => {
+      // getState resolves null by default — never started here, so this is a first start.
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.setSuccessfullyStarted.calledOnceWith('www_App')).to.be.true;
+    });
+
+    it('does not re-mark hasSuccessfullyStarted when restarting a component that has run here before', async () => {
+      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasSuccessfullyStarted: true });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.setSuccessfullyStarted.called).to.be.false;
     });
 
     it('re-seeds the telemetry sink on every successful deployment build', async () => {
