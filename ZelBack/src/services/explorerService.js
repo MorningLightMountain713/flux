@@ -15,6 +15,7 @@ const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const chainUtilities = require('./utils/chainUtilities');
 const messageVerifier = require('./appMessaging/messageVerifier');
 const registryManager = require('./appDatabase/registryManager');
+const appUninstaller = require('./appLifecycle/appUninstaller');
 const appOperations = require('./appLifecycle/appOperations');
 const benchmarkService = require('./benchmarkService');
 const fluxNetworkhelper = require('./fluxNetworkHelper');
@@ -746,7 +747,7 @@ async function processBlock(blockHeight, isInsightExplorer) {
 
       if (globalState.dbReady && blockDataVerbose.height >= config.fluxapps.epochstart) {
         if (blockHeight % (2 * speedMultiplier) === 0) {
-          await registryManager.expireGlobalApplications();
+          await appUninstaller.expireGlobalApplications();
         }
         if (blockHeight % (updateFluxAppsPeriod * speedMultiplier) === 0) {
           appOperations.reconcileInstalledApps();
@@ -795,7 +796,7 @@ async function processBlock(blockHeight, isInsightExplorer) {
       fluxEventBus.publish('block:processed', { height: scannedHeight });
     } else if (blockDataVerbose.height % 500 === 0) {
       log.info(`Processing Explorer Number of Transactions: ${appsTransactions.length}.`);
-      await registryManager.expireGlobalApplications(); // in case node was shutdown for a while and it is started
+      await appUninstaller.expireGlobalApplications(); // in case node was shutdown for a while and it is started
       await insertTransactions(appsTransactions, database);
       await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
       fluxEventBus.publish('block:processed', { height: scannedHeight });
