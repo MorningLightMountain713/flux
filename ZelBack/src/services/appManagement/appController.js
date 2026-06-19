@@ -5,7 +5,7 @@ const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const appsRuntimeState = require('./appsRuntimeState');
-const appReconciler = require('../appMonitoring/appReconciler');
+const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -103,7 +103,7 @@ async function driveOperatorCommand(appname, deployment, recordIntent) {
   for (const id of ids) {
     // eslint-disable-next-line no-await-in-loop
     await recordIntent(id);
-    appReconciler.enqueue(id);
+    reconcilerQueue.enqueue(id);
   }
 }
 
