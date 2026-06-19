@@ -242,7 +242,6 @@ async function redeployComponent(appName, componentName, options = {}) {
   const createVolumes = options.createVolumes || false;
   const onStatus = options.onStatus || null;
 
-  const stateFlag = createVolumes ? 'hardRedeployInProgress' : 'softRedeployInProgress';
   const leaseType = createVolumes ? 'hardRedeploy' : 'softRedeploy';
   const label = createVolumes ? 'rebuild' : 'redeploy';
 
@@ -256,11 +255,9 @@ async function redeployComponent(appName, componentName, options = {}) {
     return;
   }
 
-  globalState[stateFlag] = true;
-  // Dual-write the redeploy lease alongside the soft/hard flag (Stage 1). The
-  // flag write goes through a computed key (globalState[stateFlag]) and a
-  // successful whole-app redeploy never calls install/remove, so this app-scoped
-  // lease is the ONLY registry record of an in-flight redeploy.
+  // A successful whole-app redeploy loops uninstall/installComponent (no
+  // app-level install/remove lease), so this app-scoped lease is the only
+  // registry record of an in-flight redeploy.
   operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
 
   try {
@@ -297,12 +294,10 @@ async function redeployComponent(appName, componentName, options = {}) {
     });
 
     status(`Component ${deployComp.identifier} ${label} complete`);
-    globalState[stateFlag] = false;
     operationRegistry.release(appName);
   } catch (error) {
     log.error(error);
     log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployComponent)`);
-    globalState[stateFlag] = false;
     operationRegistry.release(appName);
     await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true });
   }
@@ -334,12 +329,9 @@ async function redeployApplication(appName, options = {}) {
     return;
   }
 
-  const stateFlag = createVolumes ? 'hardRedeployInProgress' : 'softRedeployInProgress';
   const leaseType = createVolumes ? 'hardRedeploy' : 'softRedeploy';
-  globalState[stateFlag] = true;
-  // Dual-write the redeploy lease alongside the soft/hard flag (Stage 1) — see
-  // redeployComponent: the success path loops uninstall/installComponent (no
-  // app-level install/remove lease), so this is the sole registry record.
+  // See redeployComponent: the success path loops uninstall/installComponent
+  // (no app-level install/remove lease), so this is the sole registry record.
   operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
 
   try {
@@ -410,12 +402,10 @@ async function redeployApplication(appName, options = {}) {
     }
 
     status(`Application ${appName} ${label} complete`);
-    globalState[stateFlag] = false;
     operationRegistry.release(appName);
   } catch (error) {
     log.error(error);
     log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployApplication)`);
-    globalState[stateFlag] = false;
     operationRegistry.release(appName);
     await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval });
     log.info(`Cleanup completed for ${appName} after ${label} failure`);
@@ -827,11 +817,8 @@ async function appendBackupTask(req, res) {
   try {
     const authorized = res ? await verificationHelper.verifyPrivilege('appownerabove', req, appname) : true;
     if (authorized === true) {
-      globalState.backupInProgress.push(appname);
-      // Dual-write the operation registry alongside the flag array (Stage 1: the
-      // array is still authoritative; nothing reads the registry yet). backup is
-      // an app-scoped lease on the same key as install/remove/reconcile — at
-      // Stage 2 that makes it mutually exclusive with them (no feature carve-out).
+      // backup is an app-scoped lease on the same key as install/remove/
+      // reconcile, so it's mutually exclusive with them (no feature carve-out).
       operationRegistry.acquire(appname, 'backup', 'appOperations', `backup ${appname}`);
       const backupDeployment = await deploymentProvider.getInstalledDeployment(appname);
       const hasSyncthing = backupDeployment && backupDeployment.componentEntries().some(([, comp]) => comp.hasSyncthing());
@@ -885,8 +872,6 @@ async function appendBackupTask(req, res) {
       }
       await sendChunk(res, 'Finalizing...\n');
       await serviceHelper.delay(5 * 1000);
-      const indexToRemove = globalState.backupInProgress.indexOf(appname);
-      globalState.backupInProgress.splice(indexToRemove, 1);
       operationRegistry.release(appname);
       res.end();
       return true;
@@ -897,10 +882,6 @@ async function appendBackupTask(req, res) {
     }
   } catch (error) {
     log.error(error);
-    const indexToRemove = globalState.backupInProgress.indexOf(appname);
-    if (indexToRemove >= 0) {
-      globalState.backupInProgress.splice(indexToRemove, 1);
-    }
     operationRegistry.release(appname);
     await sendChunk(res, `${error?.message}\n`);
     res.end();
@@ -949,10 +930,8 @@ async function appendRestoreTask(req, res) {
     const authorized = res ? await verificationHelper.verifyPrivilege('appownerabove', req, appname) : true;
     if (authorized === true) {
       const componentItem = restore.map((restoreItem) => restoreItem);
-      globalState.restoreInProgress.push(appname);
-      // Dual-write the operation registry alongside the flag array (Stage 1: the
-      // array is still authoritative; nothing reads the registry yet). Same
-      // app-scoped key as backup/install/remove/reconcile.
+      // restore is an app-scoped lease on the same key as backup/install/
+      // remove/reconcile.
       operationRegistry.acquire(appname, 'restore', 'appOperations', `restore ${appname}`);
       const restoreDeployment = await deploymentProvider.getInstalledDeployment(appname);
       const restoreHasSyncthing = restoreDeployment && restoreDeployment.componentEntries().some(([, comp]) => comp.hasSyncthing());
@@ -1047,8 +1026,6 @@ async function appendRestoreTask(req, res) {
       }
       await sendChunk(res, 'Finalizing...\n');
       await serviceHelper.delay(5 * 1000);
-      const indexToRemove = globalState.restoreInProgress.indexOf(appname);
-      globalState.restoreInProgress.splice(indexToRemove, 1);
       operationRegistry.release(appname);
       res.end();
       return true;
@@ -1059,10 +1036,6 @@ async function appendRestoreTask(req, res) {
     }
   } catch (error) {
     log.error(error);
-    const indexToRemove = globalState.restoreInProgress.indexOf(appname);
-    if (indexToRemove >= 0) {
-      globalState.restoreInProgress.splice(indexToRemove, 1);
-    }
     operationRegistry.release(appname);
     await sendChunk(res, `${error?.message}\n`);
     res.end();
@@ -1623,11 +1596,8 @@ async function reconcileApp(installed, registrySpec) {
     return;
   }
 
-  globalState.reconciliationInProgress = true;
-  // Dual-write the registry alongside the reconciliationInProgress expando
-  // (Stage 1: the flag is still authoritative; nothing reads the registry yet).
   // reconcile is an app-scoped lease on the same key as install/remove/backup/
-  // restore — mutually exclusive with them once readers migrate (Stage 2).
+  // restore — mutually exclusive with them.
   operationRegistry.acquire(installed.name, 'reconcile', 'appOperations', `reconcile ${installed.name}`);
   try {
     log.info(`Application ${installed.name} version is obsolete, reconciling...`);
@@ -1639,7 +1609,6 @@ async function reconcileApp(installed, registrySpec) {
     await appUninstaller.uninstallApplication(installed.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
     log.info(`Cleanup completed for ${installed.name} after reconciliation failure`);
   } finally {
-    globalState.reconciliationInProgress = false;
     operationRegistry.release(installed.name);
   }
 }
