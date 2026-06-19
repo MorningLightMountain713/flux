@@ -88,13 +88,52 @@ async function setFields(rawIdentifier, fields) {
  * @param {string} identifier
  * @param {boolean} stopped
  */
-async function setOperatorStopped(identifier, stopped) {
+async function setOperatorStopped(identifier, stopped, opts = {}) {
   // No catch: the lock is the contract that the reconciler will not restart the
   // app. Swallowing a write failure would let the API report success while the
   // lock never persisted - the caller must surface the failure instead.
   const fields = { operatorStopped: stopped };
-  if (!stopped) fields.restartHistory = [];
+  if (stopped) {
+    // force = an operator hard-kill: skip the (possibly hours-long) graceful
+    // shutdown window. Durable so a crash mid-kill never silently downgrades the
+    // operator's "kill now" to a graceful drain (decision #1). Cleared on restart.
+    fields.operatorStopForce = opts.force === true;
+  } else {
+    fields.operatorStopForce = false;
+    fields.restartHistory = [];
+  }
   await setFields(identifier, fields);
+}
+
+/**
+ * Bump the desired restart generation — a durable, level-based "bounce this
+ * container" request (operator restart, or a mount/network repair). The reconciler
+ * restarts a running container when the desired generation exceeds the one it last
+ * actuated, then records the new value; durable so an operator's restart survives a
+ * crash. Idempotent at the reconciler: re-running never re-bounces. NOT a catch —
+ * an operator restart that silently failed to persist must surface to the caller.
+ *
+ * @param {string} identifier
+ */
+async function requestRestart(identifier) {
+  const state = await getState(identifier);
+  const next = ((state && state.restartGeneration) || 0) + 1;
+  await setFields(identifier, { restartGeneration: next });
+}
+
+/**
+ * Records the restart generation the reconciler just actuated, so it won't bounce
+ * the same generation again. Best-effort: a lost write at worst re-bounces once.
+ *
+ * @param {string} identifier
+ * @param {number} generation
+ */
+async function recordRestartGeneration(identifier, generation) {
+  try {
+    await setFields(identifier, { actuatedRestartGeneration: generation });
+  } catch (err) {
+    log.error(`appsRuntimeState - failed to record restart generation for ${identifier}: ${err.message}`);
+  }
 }
 
 /**
@@ -259,8 +298,13 @@ async function prepareCollection() {
           identifier,
           // a lock anywhere is a lock: never auto-start a deliberately stopped app
           operatorStopped: twins.some((t) => t.operatorStopped === true),
+          // a force on any twin is a force (honoured only while operatorStopped)
+          operatorStopForce: twins.some((t) => t.operatorStopForce === true),
           // started on any twin = has started here (gates firstStart-vs-restart + the install-window rollback)
           hasSuccessfullyStarted: twins.some((t) => t.hasSuccessfullyStarted === true),
+          // highest desired vs highest actuated restart generation across twins
+          restartGeneration: Math.max(0, ...twins.map((t) => t.restartGeneration || 0)),
+          actuatedRestartGeneration: Math.max(0, ...twins.map((t) => t.actuatedRestartGeneration || 0)),
           restartHistory: [...new Set(twins.flatMap((t) => t.restartHistory || []))].sort((a, b) => a - b).slice(-MAX_HISTORY),
           updatedAt: Math.max(...twins.map((t) => t.updatedAt || 0)),
         };
@@ -289,6 +333,8 @@ module.exports = {
   isOperatorStopped,
   recordRestart,
   setSuccessfullyStarted,
+  requestRestart,
+  recordRestartGeneration,
   restartWaitMs,
   recordExit,
   remove,
