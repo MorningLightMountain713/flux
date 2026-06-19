@@ -33,115 +33,12 @@ describe('appOperations tests', () => {
     });
   });
 
-  describe('setInstallationInProgress and getInstallationInProgress tests', () => {
-    it('should set installation in progress', () => {
-      appOperations.setInstallationInProgressTrue();
-
-      const inProgress = appOperations.getInstallationInProgress();
-      expect(inProgress).to.be.true;
-    });
-
-    it('should reset installation in progress', () => {
-      appOperations.setInstallationInProgressTrue();
-      appOperations.installationInProgressReset();
-
-      const inProgress = appOperations.getInstallationInProgress();
-      expect(inProgress).to.be.false;
-    });
-
-    it('should set specific app installation in progress', () => {
-      appOperations.setInstallationInProgress('TestApp', true);
-
-      const inProgress = appOperations.getInstallationInProgress();
-      // When setting specific app, function returns the app name, not just true
-      expect(inProgress).to.equal('TestApp');
-    });
-  });
-
-  describe('setRemovalInProgress and getRemovalInProgress tests', () => {
-    it('should set removal in progress', () => {
-      appOperations.setRemovalInProgressToTrue();
-
-      const inProgress = appOperations.getRemovalInProgress();
-      expect(inProgress).to.be.true;
-    });
-
-    it('should reset removal in progress', () => {
-      appOperations.setRemovalInProgressToTrue();
-      appOperations.removalInProgressReset();
-
-      const inProgress = appOperations.getRemovalInProgress();
-      expect(inProgress).to.be.false;
-    });
-
-    it('should set specific app removal in progress', () => {
-      appOperations.setRemovalInProgress('TestApp', true);
-
-      const inProgress = appOperations.getRemovalInProgress();
-      // When setting specific app, function returns the app name, not just true
-      expect(inProgress).to.equal('TestApp');
-    });
-  });
-
-  describe('addToRestoreProgress and removeFromRestoreProgress tests', () => {
-    beforeEach(() => {
-      // eslint-disable-next-line global-require
-      const globalState = require('../../ZelBack/src/services/utils/globalState');
-      globalState.restoreInProgress = [];
-      operationRegistry.clear();
-    });
-
-    it('should add app to restore progress', () => {
-      appOperations.addToRestoreProgress('TestApp');
-
-      // eslint-disable-next-line global-require
-      const globalState = require('../../ZelBack/src/services/utils/globalState');
-      expect(globalState.restoreInProgress).to.include('TestApp');
-    });
-
-    it('should remove app from restore progress', () => {
-      appOperations.addToRestoreProgress('TestApp');
-      appOperations.removeFromRestoreProgress('TestApp');
-
-      // eslint-disable-next-line global-require
-      const globalState = require('../../ZelBack/src/services/utils/globalState');
-      expect(globalState.restoreInProgress).to.not.include('TestApp');
-    });
-
-    it('should not duplicate apps in restore progress', () => {
-      appOperations.addToRestoreProgress('TestApp');
-      appOperations.addToRestoreProgress('TestApp');
-
-      // eslint-disable-next-line global-require
-      const globalState = require('../../ZelBack/src/services/utils/globalState');
-      const count = globalState.restoreInProgress.filter((app) => app === 'TestApp').length;
-      expect(count).to.equal(1);
-    });
-
-    it('mirrors the restore lease into the operation registry (Stage-1 dual-write)', () => {
-      appOperations.addToRestoreProgress('TestApp');
-      expect(operationRegistry.get('TestApp')?.type, 'add must hold a restore lease on the app').to.equal('restore');
-
-      appOperations.removeFromRestoreProgress('TestApp');
-      expect(operationRegistry.isHeld('TestApp'), 'remove must release the restore lease').to.be.false;
-    });
-  });
-
   describe('redeployComponentAPI tests', () => {
     let req;
     let res;
-    let globalState;
     let verificationHelper;
 
     beforeEach(() => {
-      // eslint-disable-next-line global-require
-      globalState = require('../../ZelBack/src/services/utils/globalState');
-      globalState.removalInProgress = false;
-      globalState.installationInProgress = false;
-      globalState.softRedeployInProgress = false;
-      globalState.hardRedeployInProgress = false;
-      globalState.restoreInProgress = [];
-
       // eslint-disable-next-line global-require
       verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
@@ -197,7 +94,7 @@ describe('appOperations tests', () => {
       req.params.component = 'frontend';
 
       // A restore (or any operation) holding the app lease must skip the redeploy.
-      appOperations.addToRestoreProgress('myapp');
+      operationRegistry.acquire('myapp', 'restore', 'test', 'restore myapp');
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
 
@@ -240,16 +137,7 @@ describe('appOperations tests', () => {
   });
 
   describe('redeployComponent (redeploy) tests', () => {
-    let globalState;
-
     beforeEach(() => {
-      // eslint-disable-next-line global-require
-      globalState = require('../../ZelBack/src/services/utils/globalState');
-      globalState.removalInProgress = false;
-      globalState.installationInProgress = false;
-      globalState.softRedeployInProgress = false;
-      globalState.hardRedeployInProgress = false;
-      globalState.reconciliationInProgress = false;
       operationRegistry.clear();
     });
 
@@ -261,7 +149,7 @@ describe('appOperations tests', () => {
       expect(messages[0]).to.include('Another operation is in progress');
     });
 
-    it('holds a softRedeploy lease during the redeploy and releases it (Stage-1 dual-write)', async () => {
+    it('holds a softRedeploy lease during the redeploy and releases it', async () => {
       let leaseTypeDuring = null;
       // The lease is acquired before the first await; observe it as getInstalledDeployment
       // runs, then return null so the catch path releases it (and calls uninstallApplication).
@@ -283,7 +171,7 @@ describe('appOperations tests', () => {
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
-      expect(globalState.softRedeployInProgress).to.be.false;
+      expect(operationRegistry.isHeld('myapp'), 'the redeploy lease must release on error').to.be.false;
       expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
     });
 
@@ -295,22 +183,13 @@ describe('appOperations tests', () => {
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
-      expect(globalState.softRedeployInProgress).to.be.false;
+      expect(operationRegistry.isHeld('myapp'), 'the redeploy lease must release on error').to.be.false;
       expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
     });
   });
 
   describe('redeployComponent (rebuild) tests', () => {
-    let globalState;
-
     beforeEach(() => {
-      // eslint-disable-next-line global-require
-      globalState = require('../../ZelBack/src/services/utils/globalState');
-      globalState.removalInProgress = false;
-      globalState.installationInProgress = false;
-      globalState.softRedeployInProgress = false;
-      globalState.hardRedeployInProgress = false;
-      globalState.reconciliationInProgress = false;
       operationRegistry.clear();
     });
 
@@ -322,7 +201,7 @@ describe('appOperations tests', () => {
       expect(messages[0]).to.include('Another operation is in progress');
     });
 
-    it('holds a hardRedeploy lease during the rebuild and releases it (Stage-1 dual-write)', async () => {
+    it('holds a hardRedeploy lease during the rebuild and releases it', async () => {
       let leaseTypeDuring = null;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').callsFake(async () => {
         leaseTypeDuring = operationRegistry.get('myapp')?.type ?? null;
@@ -343,7 +222,7 @@ describe('appOperations tests', () => {
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
-      expect(globalState.hardRedeployInProgress).to.be.false;
+      expect(operationRegistry.isHeld('myapp'), 'the rebuild lease must release on error').to.be.false;
       expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
     });
 
@@ -355,17 +234,17 @@ describe('appOperations tests', () => {
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
-      expect(globalState.hardRedeployInProgress).to.be.false;
+      expect(operationRegistry.isHeld('myapp'), 'the rebuild lease must release on error').to.be.false;
       expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
     });
 
-    it('should reset hardRedeployInProgress on error', async () => {
+    it('should release the rebuild lease on error', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
       sinon.stub(appUninstaller, 'uninstallApplication').resolves();
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
-      expect(globalState.hardRedeployInProgress).to.be.false;
+      expect(operationRegistry.isHeld('myapp'), 'the rebuild lease must release on error').to.be.false;
     });
   });
 
@@ -472,11 +351,6 @@ describe('appOperations tests', () => {
       globalStateRef.syncthingAppsFirstRun = false;
       const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
       sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
-      globalStateRef.installationInProgress = false;
-      globalStateRef.removalInProgress = false;
-      globalStateRef.softRedeployInProgress = false;
-      globalStateRef.hardRedeployInProgress = false;
-      globalStateRef.reconciliationInProgress = false;
 
       const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
       serviceHelperDelayStub = sinon.stub(serviceHelper, 'delay').callsFake(async () => {

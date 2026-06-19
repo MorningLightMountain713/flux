@@ -3,12 +3,6 @@ const { AsyncGate } = require('./asyncGate');
 // Global state variables for apps service
 // These need to be shared across all modules to maintain the original business logic
 
-let removalInProgress = false;
-let installationInProgress = false;
-let softRedeployInProgress = false;
-let hardRedeployInProgress = false;
-let reinstallationOfOldAppsInProgress = false;
-let masterSlaveAppsRunning = false;
 const daemonReadyGate = new AsyncGate();
 const bootContainerStateSettledGate = new AsyncGate();
 const dbReadyGate = new AsyncGate();
@@ -19,8 +13,6 @@ const dbReadyGate = new AsyncGate();
 let capabilityVerdict = null;
 let updateSyncthingRunning = false;
 let syncthingAppsFirstRun = true;
-const backupInProgress = [];
-const restoreInProgress = [];
 
 // Apps monitored state
 let appsMonitored = {};
@@ -43,9 +35,6 @@ let pendingAppUpdatesCache = null;
 
 // Running apps cache - tracks app names that have been broadcasted as running
 const runningAppsCache = new Set();
-
-// Containers intentionally stopped by FluxOS — crash recovery skips die events for these
-const stoppingContainers = new Set();
 
 // Apps this node is draining/stopping for graceful shutdown — appName ->
 // { state: 'draining'|'stopping', expiresAt: epoch ms }. Written by the
@@ -72,24 +61,6 @@ function initializeCaches(cacheManager) {
 
 module.exports = {
   // State getters/setters
-  get removalInProgress() { return removalInProgress; },
-  set removalInProgress(value) { removalInProgress = value; },
-
-  get installationInProgress() { return installationInProgress; },
-  set installationInProgress(value) { installationInProgress = value; },
-
-  get softRedeployInProgress() { return softRedeployInProgress; },
-  set softRedeployInProgress(value) { softRedeployInProgress = value; },
-
-  get hardRedeployInProgress() { return hardRedeployInProgress; },
-  set hardRedeployInProgress(value) { hardRedeployInProgress = value; },
-
-  get reinstallationOfOldAppsInProgress() { return reinstallationOfOldAppsInProgress; },
-  set reinstallationOfOldAppsInProgress(value) { reinstallationOfOldAppsInProgress = value; },
-
-  get masterSlaveAppsRunning() { return masterSlaveAppsRunning; },
-  set masterSlaveAppsRunning(value) { masterSlaveAppsRunning = value; },
-
   get daemonReady() { return daemonReadyGate.ready; },
   set daemonReady(value) { if (value) daemonReadyGate.open(); else daemonReadyGate.close(); },
   waitForDaemonReady() { return daemonReadyGate.wait(); },
@@ -117,9 +88,6 @@ module.exports = {
   get syncthingAppsFirstRun() { return syncthingAppsFirstRun; },
   set syncthingAppsFirstRun(value) { syncthingAppsFirstRun = value; },
 
-  get backupInProgress() { return backupInProgress; },
-  get restoreInProgress() { return restoreInProgress; },
-
   get appsMonitored() { return appsMonitored; },
   set appsMonitored(value) { appsMonitored = value; },
 
@@ -142,7 +110,6 @@ module.exports = {
   get syncthingDevicesIDCache() { return syncthingDevicesIDCache; },
   get folderHealthCache() { return folderHealthCache; },
   get runningAppsCache() { return runningAppsCache; },
-  get stoppingContainers() { return stoppingContainers; },
 
   /**
    * Record an app's load-balancer lifecycle state with an expiry.
@@ -202,16 +169,6 @@ module.exports = {
 
   get trySpawningGlobalAppCache() { return trySpawningGlobalAppCache; },
   set trySpawningGlobalAppCache(value) { trySpawningGlobalAppCache = value; },
-
-  // Helper functions to match original API
-  removalInProgressReset() { removalInProgress = false; },
-  setRemovalInProgressToTrue() { removalInProgress = true; },
-  installationInProgressReset() { installationInProgress = false; },
-  setInstallationInProgressTrue() { installationInProgress = true; },
-  softRedeployInProgressReset() { softRedeployInProgress = false; },
-  setSoftRedeployInProgressTrue() { softRedeployInProgress = true; },
-  hardRedeployInProgressReset() { hardRedeployInProgress = false; },
-  setHardRedeployInProgressTrue() { hardRedeployInProgress = true; },
 
   // Clear functions
   clearAppsMonitored() { appsMonitored = {}; },
