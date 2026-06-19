@@ -282,6 +282,12 @@ async function redeployComponent(appName, componentName, options = {}) {
       throw new Error(`Component ${componentName} not found in application ${appName}`);
     }
 
+    // Pre-flight: prove the image is pullable BEFORE tearing down the running version,
+    // so a broken redeploy (bad ref/tag/arch/size/non-whitelisted) aborts here with the
+    // old version still running (the throw lands in the catch, which only releases +
+    // hands off — nothing was torn down). Manifest check only, no pull, no disk cost.
+    await componentProvisioner.verifyComponentImage(deployComp);
+
     if (createVolumes) {
       log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployComponent)`);
     }
@@ -356,6 +362,14 @@ async function redeployApplication(appName, options = {}) {
     }
 
     status(`Beginning ${label} of ${appName}...`);
+
+    // Pre-flight: prove every component's image is pullable BEFORE tearing anything
+    // down, so a broken redeploy aborts with the old version still running (see
+    // redeployComponent). Manifest check only — no pull, no transient disk cost.
+    for (const [, deployComp] of deployment.componentEntries()) {
+      // eslint-disable-next-line no-await-in-loop
+      await componentProvisioner.verifyComponentImage(deployComp);
+    }
 
     for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
       if (createVolumes) {
@@ -1389,6 +1403,16 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     } else {
       hard.push(name);
     }
+  }
+
+  // Pre-flight: prove every NEW component image is pullable BEFORE tearing the old
+  // versions down, so a broken update aborts (caught by reconcileApp, which releases
+  // + hands off — no destroy) with the old versions still running. Manifest check
+  // only — no pull, no transient disk cost.
+  for (const name of [...soft, ...hard, ...added]) {
+    const newComp = newDeployment.getComponent(name);
+    // eslint-disable-next-line no-await-in-loop
+    if (newComp) await componentProvisioner.verifyComponentImage(newComp);
   }
 
   const toUninstall = [...removed, ...hard, ...soft];
