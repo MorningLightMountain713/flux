@@ -19,8 +19,14 @@ const appSwapPoolService = require('../appLifecycle/appSwapPoolService');
 const containerHealthMonitor = require('./containerHealthMonitor');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
-const { AsyncGate } = require('../utils/asyncGate');
 const telemetrySinkCache = require('../telemetrySinkCache');
+const reconcilerQueue = require('./reconcilerQueue');
+
+// The lightweight scheduling seam this engine drives: enqueue/scheduleRetry/canonical
+// live there, and the engine registers its reconcile + onSettled below. A producer
+// that only needs to enqueue depends on reconcilerQueue directly and never pulls this
+// engine's heavy dependency tree (the import-hub that made every producer a cycle risk).
+const { enqueue, scheduleRetry, canonical, applyIntent } = reconcilerQueue;
 
 // The single, level-based actuator for app containers. Every trigger (docker
 // container events via containerEventBridge, stream reconnect, hourly tick, boot,
@@ -78,15 +84,6 @@ const operationDesired = new Map();
 // its appdata mount before the wipe (mirrors the sync layer's prior 500ms delay).
 const DATA_CLEAR_SETTLE_MS = 500;
 
-// id -> promise of the pass (or intent write) currently holding this key. A Map
-// rather than a Set so a caller can WAIT for the holder: applyIntent below needs
-// to know when a pass has finished, not merely that one is running.
-const inFlight = new Map(); // per-key single-flight
-const dirty = new Set(); // ids re-requested while in flight -> reconcile again
-const bootPending = new Set(); // ids enqueued before the boot gate opened
-const backoffTimers = new Map(); // id -> scheduled retry timeout
-const unhandledFailures = new Map(); // id -> consecutive passes that threw
-
 // Install converge-wait (Stage 5b): installApplication registers a per-component
 // waiter via awaitConvergence and blocks on it. runReconcile resolves 'settled'
 // once the reconciler stops trying to change a component (running | legitimately
@@ -101,32 +98,30 @@ const convergeBackstops = new Map(); // id -> backstop timer
 const CONVERGE_FAIL_ATTEMPTS = config.fluxapps.convergeFailAttempts ?? 2;
 const CONVERGE_BACKSTOP_MS = config.fluxapps.convergeBackstopMs ?? 5 * 60 * 1000;
 
-// The boot-drain gate: opens once every boot-held component has completed ONE
-// reconcile pass (started, backoff-deferred, awaiting-controller, or failed
-// loudly) - NOT "all containers running". The first apprunning broadcast waits
-// on it so the snapshot doesn't race the boot starts (rows the snapshot misses
-// expire on the ~7min sigterm TTL and the app respawns elsewhere). Capped so a
-// wedged reconcile can never suppress the node's network presence.
-const BOOT_DRAIN_SETTLE_CAP_MS = 2 * 60 * 1000;
-const bootDrainGate = new AsyncGate();
-const bootDraining = new Set(); // boot-held ids still on their first pass
-let bootDrainCapTimer = null;
+// A container start is information the network wants immediately: a backoff
+// straggler that starts minutes after boot must refresh its appsLocations row
+// inside the sigterm TTL window, not at the next hourly broadcast.
+// serviceManager wires this to the peer broadcast (which coalesces bursts),
+// mirroring appInstaller.setOnInstallComplete.
+let onContainerStarted = null;
 
-function settleBootDrain(reason) {
-  if (bootDrainGate.ready) return;
-  if (bootDrainCapTimer) {
-    clearTimeout(bootDrainCapTimer);
-    bootDrainCapTimer = null;
+function setOnContainerStarted(callback) {
+  onContainerStarted = callback;
+}
+
+function notifyContainerStarted(identifier) {
+  if (!onContainerStarted) return;
+  try {
+    onContainerStarted(identifier);
+  } catch (err) {
+    log.error(`appReconciler - onContainerStarted callback failed for ${identifier}: ${err.message}`);
   }
-  bootDraining.clear();
-  bootDrainGate.open();
-  log.info(`appReconciler - boot drain settled (${reason})`);
 }
 
 // while an install/remove/redeploy/backup/restore or a deliberate stop owns a
 // container, defer and re-check shortly (the operation also re-enqueues on
 // completion, so this is just a backstop)
-const MANAGED_RETRY_MS = 5000;
+const { MANAGED_RETRY_MS } = reconcilerQueue;
 
 // How many consecutive passes may throw before the component is left to the
 // hourly sweep. A pass that throws is by definition one whose failure nobody
@@ -137,8 +132,6 @@ const MANAGED_RETRY_MS = 5000;
 // container could keep running for an hour after a stop reported success.
 // Retrying is safe because a pass is level-based: it re-derives desired against
 // actual rather than resuming half-finished work. The bound is what keeps a
-// permanent fault from becoming a five-second log loop forever.
-const UNHANDLED_FAILURE_RETRIES = 3;
 
 // an unmountable volume usually means its host filesystem is still coming up
 // (e.g. the encrypted data partition after a reboot) - retry on a pace that
@@ -241,15 +234,6 @@ function trackSilentHold(identifier, reason) {
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'silentHoldWarned', reason, heldMs });
   }
 }
-
-// The reconciler's canonical id is the bare component identifier
-// (`{component}_{app}`). Deciders disagree on the form they pass — masterSlave
-// uses the bare identifier, the syncthing flow passes the flux-prefixed docker
-// name — so we normalise every inbound id here, at the boundary, the same way
-// dockerService normalises to the prefixed form for docker calls. This keeps the
-// spec lookup and all in-memory state (controllerDesired/backoff/runtime) keyed
-// consistently no matter which decider triggered the reconcile.
-const canonical = (id) => dockerService.getBaseAppName(id);
 
 // --- restart policy ------------------------------------------------------
 // getRestartPolicy is the ONLY place the policy source lives: the v9
@@ -1373,157 +1357,6 @@ async function reconcile(rawIdentifier) {
   }
 }
 
-// --- workqueue (per-key single-flight, boot-gated) -----------------------
-
-function scheduleRetry(identifier, delayMs) {
-  if (backoffTimers.has(identifier)) clearTimeout(backoffTimers.get(identifier));
-  const timer = setTimeout(() => {
-    backoffTimers.delete(identifier);
-    enqueue(identifier);
-  }, delayMs);
-  if (timer.unref) timer.unref();
-  backoffTimers.set(identifier, timer);
-}
-
-function runReconcile(identifier) {
-  const pass = reconcile(identifier)
-    .then(() => {
-      // A pass that got through is the only evidence the fault has cleared.
-      unhandledFailures.delete(identifier);
-    })
-    .catch((err) => {
-      const attempt = (unhandledFailures.get(identifier) || 0) + 1;
-      unhandledFailures.set(identifier, attempt);
-      const retrying = attempt <= UNHANDLED_FAILURE_RETRIES;
-      log.error(
-        `appReconciler - reconcile ${identifier} failed: ${err.message}`
-        + (retrying
-          ? `; retrying (${attempt}/${UNHANDLED_FAILURE_RETRIES})`
-          : `; ${attempt} consecutive failures, leaving it to the hourly sweep`),
-      );
-      // Published for every unhandled failure rather than at each throw site: the
-      // sites that can throw are the ones nobody thought to guard, so an event
-      // added per site would miss exactly the same ones the retry did.
-      fluxEventBus.publish('reconciler:actuated', {
-        identifier, action: 'reconcileFailed', reason: err.message, attempt, retrying,
-      });
-      if (retrying) scheduleRetry(identifier, MANAGED_RETRY_MS);
-    })
-    .finally(() => {
-      inFlight.delete(identifier);
-      // one completed pass (actuated or deferred) is all the boot drain needs
-      if (bootDraining.delete(identifier) && bootDraining.size === 0) {
-        settleBootDrain('all boot reconciles completed a pass');
-      }
-      if (dirty.has(identifier)) {
-        dirty.delete(identifier);
-        setImmediate(() => enqueue(identifier));
-        return;
-      }
-      // Final pass for this id: a converging component with no retry armed has
-      // reached a settled verdict (running | legitimately held | stopped-by-policy).
-      if (convergeWaiters.has(identifier) && !backoffTimers.has(identifier)) {
-        resolveConverge(identifier, 'settled');
-      }
-    });
-  // Registered synchronously: promise callbacks are microtasks, so the finally
-  // above cannot run before this line and clear an entry that is not there yet.
-  inFlight.set(identifier, pass);
-  return pass;
-}
-
-/**
- * Schedule a reconcile of one component. Coalesces: if a reconcile for the
- * same identifier is in flight, it re-runs once when that finishes. Held until
- * the boot gate opens so nothing actuates before daemon/DB are ready.
- */
-function enqueue(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
-  if (!globalState.bootContainerStateSettled) {
-    bootPending.add(identifier);
-    return null;
-  }
-  if (inFlight.has(identifier)) {
-    dirty.add(identifier);
-    // The pass already running was started against state older than whatever
-    // just changed, so it is NOT the pass a caller wanting actuation should
-    // wait on. The re-run this marks dirty is, and it has no promise yet.
-    return null;
-  }
-  return runReconcile(identifier);
-}
-
-/**
- * Change what a component is supposed to be doing, without racing a pass that is
- * deciding what to do about it.
- *
- * A reconcile reads the desired state, then acts on that answer some
- * milliseconds later once docker has answered. An intent written in that gap is
- * not seen: the pass starts a container an operator has just stopped, and the
- * next pass stops it again. The lock is written correctly and early - the
- * problem is that the check and the action are not atomic against a concurrent
- * writer, so narrowing the gap with a second check before acting would leave the
- * same defect with a smaller window.
- *
- * Instead the write takes the same per-key slot a pass takes. It waits out a
- * pass already deciding, holds the key while it writes so `enqueue` marks the
- * key dirty rather than starting one, and enqueues on release so the next pass
- * reads the intent it just wrote. The two can no longer interleave because they
- * are mutually exclusive by construction.
- *
- * The wait is one pass of ONE component - a docker probe and at most one action -
- * so an operator's command is never behind unrelated work. That is a BOUND only
- * while passes terminate, and the docker calls a pass makes carry no timeout of
- * their own: a daemon that HANGS rather than fails leaves the pass unfinished and
- * this wait with nothing to wake it.
- *
- * What that costs is durability, not correctness: nothing wrong is recorded, and
- * the caller's request hangs on a wedged daemon regardless. What is lost is a
- * FluxOS restart during the hang - the write has not landed, so the intent does
- * not survive one.
- *
- * Bounding THIS wait is not the repair - giving up on it and writing anyway
- * restores the interleave described above, which is the defect this exists to
- * fix. Bounding the docker calls is, and that is fleet-wide work rather than
- * something this function can do alone.
- * @param {string} rawIdentifier Component identifier.
- * @param {Function} mutate Writes the new intent. Awaited while the key is held.
- * @param {object} [opts]
- * @param {boolean} [opts.awaitPass] Wait for the reconcile that follows, so a
- *   caller can report what was DONE rather than what was asked for. The pass is
- *   awaited to completion, actuated or deferred - it never throws here, since
- *   runReconcile absorbs its own failures.
- * @returns {Promise<boolean>} True when a pass ran to completion. False when the
- *   intent is durable but nothing has acted on it yet - the boot gate is shut,
- *   or another pass is mid-flight and the re-run has not started. Callers that
- *   report to a user must not present false as success.
- */
-async function applyIntent(rawIdentifier, mutate, { awaitPass = false } = {}) {
-  const identifier = canonical(rawIdentifier);
-
-  // A loop, not a single await: releasing the key lets a queued pass start
-  // before this continues, and that pass would be reading the state we are
-  // about to replace.
-  // eslint-disable-next-line no-await-in-loop
-  while (inFlight.has(identifier)) await inFlight.get(identifier).catch(() => {});
-
-  let release;
-  const held = new Promise((resolve) => { release = resolve; });
-  inFlight.set(identifier, held);
-  try {
-    await mutate();
-  } finally {
-    inFlight.delete(identifier);
-    release();
-  }
-
-  const pass = enqueue(identifier);
-  if (!awaitPass) return Boolean(pass);
-  if (!pass) return false;
-  await pass;
-  return true;
-}
-
 /**
  * The component identifiers of a set of installed apps.
  *
@@ -1584,6 +1417,16 @@ async function componentIdsOf(installed) {
 }
 
 // --- install converge-wait (direct observer; resolved by the reconcile loop) ---
+
+// Registered with reconcilerQueue: called after each reconcile pass that armed no
+// retry and is not re-running (the final pass for that id). A converging component
+// that reached a settled verdict (running | legitimately held | stopped-by-policy)
+// resolves here. The queue owns the pass loop; the verdict reads engine state.
+function onSettled(identifier, { retryArmed }) {
+  if (convergeWaiters.has(identifier) && !retryArmed) {
+    resolveConverge(identifier, 'settled');
+  }
+}
 
 function resolveConverge(identifier, verdict) {
   const resolve = convergeWaiters.get(identifier);
@@ -1805,7 +1648,7 @@ function forgetDesiredState(rawIdentifier) {
   // and a reinstall under the same name would otherwise start part-way up the
   // count and reach the sweep sooner than a first failure should - or, for the
   // noted maps, have a new fault swallowed as one already recorded.
-  unhandledFailures.delete(identifier);
+  reconcilerQueue.forgetFailures(identifier);
   volumeFaultNoted.delete(identifier);
   networkDetachedNoted.delete(identifier);
   networkPrunedNoted.delete(identifier);
@@ -1865,35 +1708,13 @@ async function start() {
   await appSwapPoolService.reconcile().catch((error) => {
     log.warn(`appReconciler - boot swap-pool reconcile failed: ${error.message}`);
   });
-  // drain everything enqueued during boot now that daemon/DB are ready
-  const pending = [...bootPending];
-  bootPending.clear();
-  if (pending.length === 0) {
-    settleBootDrain('nothing to drain');
-    return;
-  }
-  pending.forEach((id) => bootDraining.add(id));
-  bootDrainCapTimer = setTimeout(() => {
-    log.warn(`appReconciler - boot drain cap reached with ${bootDraining.size} reconcile(s) still in flight: ${[...bootDraining].join(', ')}`);
-    settleBootDrain('cap reached');
-  }, BOOT_DRAIN_SETTLE_CAP_MS);
-  if (bootDrainCapTimer.unref) bootDrainCapTimer.unref();
-  pending.forEach((id) => enqueue(id));
+  // hand the boot-held queue to the scheduling seam to drain, now that daemon/DB are ready
+  reconcilerQueue.beginBootDrain();
 }
 
 function stop() {
   started = false;
-  backoffTimers.forEach((t) => clearTimeout(t));
-  backoffTimers.clear();
-  unhandledFailures.clear();
-  if (bootDrainCapTimer) {
-    clearTimeout(bootDrainCapTimer);
-    bootDrainCapTimer = null;
-  }
-  bootDraining.clear();
-  inFlight.clear();
-  dirty.clear();
-  bootPending.clear();
+  reconcilerQueue.stopQueue();
   // resolve any in-flight install waiters so a stopped reconciler never hangs an
   // install; 'provisional' never rolls back (the app is provisioned, just unstarted).
   convergeBackstops.forEach((timer) => clearTimeout(timer));
@@ -1901,6 +1722,12 @@ function stop() {
   convergeWaiters.clear();
   convergeBackstops.clear();
 }
+
+// Wire the engine into the scheduling seam: the queue drives reconcile() and hands
+// each final pass to onSettled() for converge resolution. One-way (queue never
+// imports the engine), so producers can depend on the queue without this heavy tree.
+reconcilerQueue.setReconcile(reconcile);
+reconcilerQueue.setOnSettled(onSettled);
 
 module.exports = {
   enqueue,
@@ -1917,7 +1744,8 @@ module.exports = {
   releaseStarting,
   committedIdentifiers,
   requestStopAndClearData,
-  waitForBootDrainSettled: () => bootDrainGate.wait(),
+  setOnContainerStarted,
+  waitForBootDrainSettled: reconcilerQueue.waitForBootDrainSettled,
   start,
   stop,
   // The one answer to "what is this container actually doing" - it probes the
