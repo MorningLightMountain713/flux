@@ -39,16 +39,13 @@ function resetGlobalState() {
   for (const key of Object.keys(globalState)) {
     const value = globalState[key];
     if (value instanceof Map || value instanceof Set) value.clear();
-    // A frozen array is a defensive copy the module hands out - backupInProgress
-    // and restoreInProgress are only meant to be changed through tryStart/finish,
-    // so they are emptied that way below rather than written to here.
+    // A frozen array is a defensive copy the module hands out, so there is
+    // nothing to reset in it.
     else if (Array.isArray(value)) { if (!Object.isFrozen(value)) value.length = 0; }
     else if (value && typeof value === 'object' && value.constructor === Object) {
       for (const own of Object.keys(value)) delete value[own];
     }
   }
-  for (const appname of globalState.backupInProgress) globalState.finishBackup(appname);
-  for (const appname of globalState.restoreInProgress) globalState.finishRestore(appname);
   return globalState;
 }
 

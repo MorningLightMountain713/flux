@@ -1,6 +1,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const { resetGlobalState } = require('./fixtures/globalState');
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const { EventEmitter } = require('node:events');
 const proxyquire = require('proxyquire').noCallThru();
 
@@ -122,6 +123,7 @@ describe('residentialNodeDosService tests', () => {
   });
 
   afterEach(() => {
+    operationRegistry.clear();
     service.stop();
     sinon.restore();
   });
@@ -640,7 +642,7 @@ describe('residentialNodeDosService tests', () => {
       // installationProgress some way before its database record exists for the
       // app list to see.
       installedApps = [];
-      globalStateStub.installationInProgress = true;
+      operationRegistry.acquire('someapp', 'install', 'test');
 
       const { decided } = await service.enforceResidentialPolicy(deps);
 
@@ -650,7 +652,7 @@ describe('residentialNodeDosService tests', () => {
 
     it('DOSes an empty node once no install is in flight', async () => {
       installedApps = [];
-      globalStateStub.installationInProgress = false;
+      operationRegistry.clear();
 
       await service.enforceResidentialPolicy(deps);
 

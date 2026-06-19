@@ -59,13 +59,7 @@ describe('appUninstaller tests', () => {
       findInDatabase: sinon.stub(),
     };
 
-    globalStateStub = {
-      removalInProgress: false,
-      installationInProgress: false,
-      setRemovalInProgress: sinon.stub(),
-      resetRemovalInProgress: sinon.stub(),
-      getRemovalInProgress: sinon.stub().returns(false),
-    };
+    globalStateStub = {};
 
     dockerServiceStub = {
       appDockerStop: sinon.stub().resolves(),

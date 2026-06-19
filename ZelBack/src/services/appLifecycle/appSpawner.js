@@ -64,6 +64,12 @@ const { getSpecBackend } = require('../utils/specLibs');
 const { ensureProvidersRegistered } = require('../utils/specCutover');
 const { appsFolder } = require('../utils/appConstants');
 const globalState = require('../utils/globalState');
+const operationRegistry = require('../utils/operationRegistry');
+
+// The node-wide app operations the spawner gives way to - the same set
+// appOperations and syncthingMonitor stand down for. Per-app leases like
+// 'backup' and 'stopping' are not on it: they hold one app, not the node.
+const NODE_WIDE_OPERATIONS = ['install', 'remove', 'softRedeploy', 'hardRedeploy', 'reconcile'];
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const { FluxCacheManager } = require('../utils/cacheManager');
 const appInstaller = require('./appInstaller');
@@ -941,8 +947,9 @@ async function trySpawningGlobalApplication() {
     // when the pass comes back for its node - leaving the app it tore down with
     // nothing to rebuild it. The claim is withdrawn rather than held, so another
     // node can take the placement now instead of waiting this one out.
-    const heldBy = globalState.operationHolding();
-    if (heldBy) {
+    const held = operationRegistry.list().find((lease) => NODE_WIDE_OPERATIONS.includes(lease.type));
+    if (held) {
+      const heldBy = `${held.type} of ${held.key}`;
       log.info(`trySpawningGlobalApplication - Application ${appToRun} not installed, this node is undergoing ${heldBy}`);
       await withdrawInstallingClaim(`node is undergoing ${heldBy}`);
       globalState.trySpawningGlobalAppCache.delete(appHash);

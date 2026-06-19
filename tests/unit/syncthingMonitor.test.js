@@ -104,11 +104,7 @@ describe('syncthingMonitor tests', () => {
 
   beforeEach(() => {
     mockState = {
-      installationInProgress: false,
-      removalInProgress: false,
       updateSyncthingRunning: false,
-      backupInProgress: [],
-      restoreInProgress: [],
       syncthingDevicesIDCache: new Map(),
       receiveOnlySyncthingAppsCache: new Map(),
       syncthingAppsFirstRun: false,

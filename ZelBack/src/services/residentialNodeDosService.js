@@ -28,6 +28,7 @@ const benchmarkService = require('./benchmarkService');
 const { CLASSIFICATION } = require('./utils/networkClassifier');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const globalState = require('./utils/globalState');
+const operationRegistry = require('./utils/operationRegistry');
 const { compareInstanceSeniority } = require('./utils/instanceOrdering');
 const { socketAddressesMatch } = require('./utils/socketAddressUtils');
 const fluxEventBus = require('./utils/fluxEventBus');
@@ -715,7 +716,7 @@ async function runResidentialPolicy(deps) {
     // resolves on that timescale. Bounded today by appInstaller writing its
     // database entry before creating the container, so no volume exists in the
     // window - nothing here referenced that ordering, and nothing tested it.
-    if (globalState.installationInProgress) {
+    if (operationRegistry.anyHeldOfType('install')) {
       log.info('residentialNodeDos - an install is in flight, not treating this node as empty yet');
       return false;
     }

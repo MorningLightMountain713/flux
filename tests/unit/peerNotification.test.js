@@ -98,8 +98,6 @@ describe('peerNotification tests', () => {
         onMessageCapabilityChange: sinon.stub(),
       },
       '../utils/globalState': {
-        backupInProgress: [],
-        restoreInProgress: [],
         runningAppsCache: new Set(),
         getAppLbState: (appName) => drainingAppsMap.get(appName) ?? null,
       },

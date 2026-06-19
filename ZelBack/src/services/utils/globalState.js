@@ -4,12 +4,6 @@ const { AsyncLock } = require('./asyncLock');
 // Global state variables for apps service
 // These need to be shared across all modules to maintain the original business logic
 
-let removalInProgress = false;
-let installationInProgress = false;
-let softRedeployInProgress = false;
-let hardRedeployInProgress = false;
-let reinstallationOfOldAppsInProgress = false;
-let masterSlaveAppsRunning = false;
 const daemonReadyGate = new AsyncGate();
 const bootContainerStateSettledGate = new AsyncGate();
 const dbReadyGate = new AsyncGate();
@@ -22,8 +16,6 @@ let appStateAuthoritative = false;
 let capabilityVerdict = null;
 let updateSyncthingRunning = false;
 let syncthingAppsFirstRun = true;
-const backupInProgress = [];
-const restoreInProgress = [];
 
 // Apps monitored state
 let appsMonitored = {};
@@ -126,10 +118,6 @@ const departingApps = {
     return departingCounts.size;
   },
 };
-
-// Containers intentionally stopped by FluxOS — crash recovery skips die events for these
-const stoppingContainers = new Set();
-
 // Containers FluxOS removed and has not created again — who removed the container,
 // which is the only thing the tampering decision turns on. Docker names, keyed as
 // stoppingContainers is.
@@ -199,45 +187,6 @@ function initializeCaches(cacheManager) {
 
 module.exports = {
   // State getters/setters
-  get removalInProgress() { return removalInProgress; },
-  set removalInProgress(value) { removalInProgress = value; },
-
-  get installationInProgress() { return installationInProgress; },
-  set installationInProgress(value) { installationInProgress = value; },
-
-  get softRedeployInProgress() { return softRedeployInProgress; },
-  set softRedeployInProgress(value) { softRedeployInProgress = value; },
-
-  get hardRedeployInProgress() { return hardRedeployInProgress; },
-  set hardRedeployInProgress(value) { hardRedeployInProgress = value; },
-
-  get reinstallationOfOldAppsInProgress() { return reinstallationOfOldAppsInProgress; },
-  set reinstallationOfOldAppsInProgress(value) { reinstallationOfOldAppsInProgress = value; },
-
-  // The operation holding this node right now, named, or null. `except` is the
-  // caller's OWN flag: a guard excludes the operation it belongs to and no
-  // others, because a redeploy that asked without excluding itself would refuse
-  // its own reinstall. Order is the order the guards asked in.
-  //
-  // EVERY ENTRY POINT THAT CAN START WORK ASKS THIS, and asks it for all five flags
-  // rather than a subset it picked. A guard that reads only the flags it expects to
-  // meet walks past the one it did not: a spawner that ignores the reinstall pass takes
-  // the node during that pass's own wait and leaves an app torn down that cannot be
-  // rebuilt.
-  operationHolding(except = null) {
-    const held = [
-      ['removal', removalInProgress],
-      ['installation', installationInProgress],
-      ['soft redeploy', softRedeployInProgress],
-      ['hard redeploy', hardRedeployInProgress],
-      ['reinstallation', reinstallationOfOldAppsInProgress],
-    ].find(([name, on]) => on && name !== except);
-    return held ? held[0] : null;
-  },
-
-  get masterSlaveAppsRunning() { return masterSlaveAppsRunning; },
-  set masterSlaveAppsRunning(value) { masterSlaveAppsRunning = value; },
-
   get daemonReady() { return daemonReadyGate.ready; },
   set daemonReady(value) { if (value) daemonReadyGate.open(); else daemonReadyGate.close(); },
   waitForDaemonReady() { return daemonReadyGate.wait(); },
@@ -297,40 +246,6 @@ module.exports = {
   get syncthingAppsFirstRun() { return syncthingAppsFirstRun; },
   set syncthingAppsFirstRun(value) { syncthingAppsFirstRun = value; },
 
-  // A frozen snapshot, not the live array: readers (the monitor, the election,
-  // the reconciler) only ever test membership, and handing out the backing
-  // array let any of them push or splice it and bypass the atomic claim below.
-  // Frozen rather than merely copied so that a stray write throws here instead
-  // of silently mutating a copy nobody reads. The claim and release are the
-  // only writers, and they hold the real arrays.
-  get backupInProgress() { return Object.freeze([...backupInProgress]); },
-  get restoreInProgress() { return Object.freeze([...restoreInProgress]); },
-
-  // Claiming an app for a backup or a restore is a test-and-set, not a read
-  // then a later write: these run to completion before the event loop hands the
-  // next request in, so two overlapping requests for one app cannot both find it
-  // free. The lists stay the observable "this app is busy" signal the monitor,
-  // the election and the reconciler read; only the claim on them is made
-  // indivisible here so a caller cannot split the test from the set.
-  tryStartBackup(appname) {
-    if (backupInProgress.includes(appname)) return false;
-    backupInProgress.push(appname);
-    return true;
-  },
-  finishBackup(appname) {
-    const index = backupInProgress.indexOf(appname);
-    if (index !== -1) backupInProgress.splice(index, 1);
-  },
-  tryStartRestore(appname) {
-    if (restoreInProgress.includes(appname)) return false;
-    restoreInProgress.push(appname);
-    return true;
-  },
-  finishRestore(appname) {
-    const index = restoreInProgress.indexOf(appname);
-    if (index !== -1) restoreInProgress.splice(index, 1);
-  },
-
   get appsMonitored() { return appsMonitored; },
   set appsMonitored(value) { appsMonitored = value; },
 
@@ -360,7 +275,6 @@ module.exports = {
   get departingApps() { return departingApps; },
   get testInstallingApps() { return testInstallingApps; },
   get announceCycle() { return announceCycle; },
-  get stoppingContainers() { return stoppingContainers; },
   get fluxRemovedContainers() { return fluxRemovedContainers; },
 
   /**
@@ -421,16 +335,6 @@ module.exports = {
 
   get trySpawningGlobalAppCache() { return trySpawningGlobalAppCache; },
   set trySpawningGlobalAppCache(value) { trySpawningGlobalAppCache = value; },
-
-  // Helper functions to match original API
-  removalInProgressReset() { removalInProgress = false; },
-  setRemovalInProgressToTrue() { removalInProgress = true; },
-  installationInProgressReset() { installationInProgress = false; },
-  setInstallationInProgressTrue() { installationInProgress = true; },
-  softRedeployInProgressReset() { softRedeployInProgress = false; },
-  setSoftRedeployInProgressTrue() { softRedeployInProgress = true; },
-  hardRedeployInProgressReset() { hardRedeployInProgress = false; },
-  setHardRedeployInProgressTrue() { hardRedeployInProgress = true; },
 
   // Clear functions
   clearAppsMonitored() { appsMonitored = {}; },
