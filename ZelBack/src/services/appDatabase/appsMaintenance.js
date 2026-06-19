@@ -128,7 +128,7 @@ async function repairNanInAppsMessagesDb() {
  * the fork have their post-fork tail multiplied by 4 so they get the same
  * wall-clock lifetime they paid for.
  *
- * Mirrors the JS logic in registryManager.expireGlobalApplications so the
+ * Mirrors the JS logic in appUninstaller.expireGlobalApplications so the
  * count comparison and the rebuild stay consistent.
  *
  * @param {string} heightField mongo field reference, e.g. '$height'
