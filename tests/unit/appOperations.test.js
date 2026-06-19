@@ -8,6 +8,7 @@ const appSpecHistory = require('../../ZelBack/src/services/appDatabase/appSpecHi
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
+const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
@@ -152,12 +153,12 @@ describe('appOperations tests', () => {
     it('holds a softRedeploy lease during the redeploy and releases it', async () => {
       let leaseTypeDuring = null;
       // The lease is acquired before the first await; observe it as getInstalledDeployment
-      // runs, then return null so the catch path releases it (and calls uninstallApplication).
+      // runs, then return null so the catch path releases it (and hands off to the reconciler).
       sinon.stub(deploymentProvider, 'getInstalledDeployment').callsFake(async () => {
         leaseTypeDuring = operationRegistry.get('myapp')?.type ?? null;
         return null;
       });
-      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      sinon.stub(appReconciler, 'enqueue');
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
@@ -165,26 +166,30 @@ describe('appOperations tests', () => {
       expect(operationRegistry.isHeld('myapp'), 'the redeploy lease must release when the operation settles').to.be.false;
     });
 
-    it('should call uninstallApplication when application not found', async () => {
+    it('hands recovery to the reconciler (no destroy) when application not found', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
-      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const enqueue = sinon.stub(appReconciler, 'enqueue');
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
       expect(operationRegistry.isHeld('myapp'), 'the redeploy lease must release on error').to.be.false;
-      expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
+      expect(uninstall.called, 'a redeploy failure must NOT destroy the app').to.be.false;
+      expect(enqueue.calledOnceWith('myapp')).to.be.true;
     });
 
-    it('should call uninstallApplication when component not found in app', async () => {
+    it('hands recovery to the reconciler (no destroy) when component not found in app', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({
         getComponent: () => null,
       });
-      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const enqueue = sinon.stub(appReconciler, 'enqueue');
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
       expect(operationRegistry.isHeld('myapp'), 'the redeploy lease must release on error').to.be.false;
-      expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
+      expect(uninstall.called, 'must not destroy an intact app over a bad component name').to.be.false;
+      expect(enqueue.calledOnceWith('myapp')).to.be.true;
     });
   });
 
@@ -207,7 +212,7 @@ describe('appOperations tests', () => {
         leaseTypeDuring = operationRegistry.get('myapp')?.type ?? null;
         return null;
       });
-      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      sinon.stub(appReconciler, 'enqueue');
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
@@ -216,31 +221,35 @@ describe('appOperations tests', () => {
     });
 
 
-    it('should call uninstallApplication when application not found', async () => {
+    it('hands recovery to the reconciler (no destroy) when application not found', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
-      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const enqueue = sinon.stub(appReconciler, 'enqueue');
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
       expect(operationRegistry.isHeld('myapp'), 'the rebuild lease must release on error').to.be.false;
-      expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
+      expect(uninstall.called).to.be.false;
+      expect(enqueue.calledOnceWith('myapp')).to.be.true;
     });
 
-    it('should call uninstallApplication when component not found in app', async () => {
+    it('hands recovery to the reconciler (no destroy) when component not found in app', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({
         getComponent: () => null,
       });
-      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const enqueue = sinon.stub(appReconciler, 'enqueue');
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
       expect(operationRegistry.isHeld('myapp'), 'the rebuild lease must release on error').to.be.false;
-      expect(appUninstaller.uninstallApplication.calledOnce).to.be.true;
+      expect(uninstall.called).to.be.false;
+      expect(enqueue.calledOnceWith('myapp')).to.be.true;
     });
 
     it('should release the rebuild lease on error', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
-      sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      sinon.stub(appReconciler, 'enqueue');
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 

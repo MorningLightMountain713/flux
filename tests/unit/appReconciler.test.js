@@ -544,13 +544,27 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
-    it('removes the app locally when recreation fails (docker reachable)', async () => {
+    it('removes a NEVER-RAN app when recreation fails (fresh-install rollback)', async () => {
       stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
       stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('boom'));
+      // getState defaults to null -> never ran here -> removable
       await appReconciler.reconcile('www_App');
       expect(stubs.appTamperingDetectionService.recordEvent.calledWithMatch('App', 'recreation_failed')).to.be.true;
       expect(stubs.appUninstaller.uninstallApplication.calledOnceWith('App', { broadcastRemoval: true })).to.be.true;
+    });
+
+    // §14.5: a component that has run here before must NEVER be destroyed on a
+    // failed rebuild (unpullable image, bad update) — it degrades to down + retry,
+    // so a broken update can't delete an established app + its data.
+    it('keeps a HAS-RUN app down and retries instead of removing it when recreation fails', async () => {
+      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
+      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('image not found'));
+      stubs.appsRuntimeState.getState.resolves({ hasSuccessfullyStarted: true });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.appUninstaller.uninstallApplication.called, 'must NOT destroy an app that has run here').to.be.false;
+      expect(stubs.appsRuntimeState.recordRestart.calledWith('www_App')).to.be.true;
     });
 
     it('retries the reconcile when the post-recreate-failure removal is deferred (busy)', async () => {

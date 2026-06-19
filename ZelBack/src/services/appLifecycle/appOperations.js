@@ -297,9 +297,14 @@ async function redeployComponent(appName, componentName, options = {}) {
     appReconciler.enqueue(appName);
   } catch (error) {
     log.error(error);
-    log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployComponent)`);
+    // A redeploy failure must NOT destroy the app: the old version is already torn
+    // down (or never existed), so hand recovery to the reconciler. It recreates the
+    // missing containers and, if they can't be rebuilt, applies the §14.5 gate — a
+    // has-run app degrades to down + retry; only a never-ran one is removed. No
+    // direct uninstall, no fleet-wide removal broadcast over a bad update.
+    log.warn(`${label} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
     operationRegistry.release(appName);
-    await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true });
+    appReconciler.enqueue(appName);
   }
 }
 
@@ -310,12 +315,10 @@ async function redeployComponent(appName, componentName, options = {}) {
  * @param {object} [options]
  * @param {boolean} [options.createVolumes=false] - true = recreate volumes, false = keep
  * @param {Function|null} [options.onStatus] - progress callback
- * @param {boolean} [options.broadcastRemoval=false] - broadcast fluxappremoved on cleanup failure
  */
 async function redeployApplication(appName, options = {}) {
   const createVolumes = options.createVolumes || false;
   const onStatus = options.onStatus || null;
-  const broadcastRemoval = options.broadcastRemoval || false;
 
   const label = createVolumes ? 'rebuild' : 'redeploy';
 
@@ -406,10 +409,11 @@ async function redeployApplication(appName, options = {}) {
     appReconciler.enqueue(appName);
   } catch (error) {
     log.error(error);
-    log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployApplication)`);
+    // See redeployComponent: never destroy on a redeploy failure — hand recovery to
+    // the reconciler (the §14.5 gate decides down-vs-remove on the rebuild attempt).
+    log.warn(`${label} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
     operationRegistry.release(appName);
-    await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval });
-    log.info(`Cleanup completed for ${appName} after ${label} failure`);
+    appReconciler.enqueue(appName);
   }
 }
 
@@ -534,7 +538,6 @@ async function redeployApplicationAPI(req, res) {
         res.write(serviceHelper.ensureString(msg));
         if (res.flush) res.flush();
       },
-      broadcastRemoval: true,
     });
   } catch (error) {
     log.error(error);
@@ -1476,9 +1479,10 @@ async function reconcileApp(installed, registrySpec) {
     log.info(`Application ${installed.name} reconciliation complete`);
   } catch (error) {
     log.error(error);
-    log.warn(`REMOVAL REASON: Reconciliation failure - ${installed.name}: ${error.message}`);
-    await appUninstaller.uninstallApplication(installed.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
-    log.info(`Cleanup completed for ${installed.name} after reconciliation failure`);
+    // A reconcile (spec-update) failure must NOT destroy the app: the finally hands
+    // recovery to the reconciler, which applies the §14.5 gate on the rebuild — a
+    // has-run app degrades to down + retry; only a never-ran one is removed.
+    log.warn(`Reconcile of ${installed.name} failed (${error.message}); handing recovery to the reconciler`);
   } finally {
     operationRegistry.release(installed.name);
     appReconciler.enqueue(installed.name);
