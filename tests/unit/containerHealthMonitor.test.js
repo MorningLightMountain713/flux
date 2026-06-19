@@ -15,7 +15,7 @@ describe('containerHealthMonitor tests', () => {
   let appsRepositoryStub;
   let deploymentProviderStub;
   let dockerServiceStub;
-  let appInstallerStub;
+  let componentProvisionerStub;
   let appVolumeServiceStub;
   let appUninstallerStub;
   let appInspectorStub;
@@ -39,7 +39,7 @@ describe('containerHealthMonitor tests', () => {
     appsRepositoryStub = { getInstalledApp: sinon.stub().resolves(instantiated) };
     deploymentProviderStub = { buildDeployment: sinon.stub().resolves(fakeDeployment) };
     dockerServiceStub = { getDockerContainer: sinon.stub().resolves(null) };
-    appInstallerStub = { installComponent: sinon.stub().resolves() };
+    componentProvisionerStub = { installComponent: sinon.stub().resolves() };
     appVolumeServiceStub = { ensureMountSourcesExist: sinon.stub().resolves() };
     appUninstallerStub = { uninstallApplication: sinon.stub().resolves() };
     appInspectorStub = { startAppMonitoring: sinon.stub() };
@@ -53,7 +53,7 @@ describe('containerHealthMonitor tests', () => {
     containerHealthMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/containerHealthMonitor', {
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       '../dockerService': dockerServiceStub,
-      '../appLifecycle/appInstaller': appInstallerStub,
+      '../appLifecycle/componentProvisioner': componentProvisionerStub,
       '../appLifecycle/appVolumeService': appVolumeServiceStub,
       '../appLifecycle/appUninstaller': appUninstallerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
@@ -85,7 +85,7 @@ describe('containerHealthMonitor tests', () => {
       } catch (e) { err = e; }
       expect(err).to.be.an('error');
       expect(err.message).to.include('not found in local database');
-      expect(appInstallerStub.installComponent.called).to.be.false;
+      expect(componentProvisionerStub.installComponent.called).to.be.false;
     });
 
     it('throws when the component is not part of the app', async () => {
@@ -95,14 +95,14 @@ describe('containerHealthMonitor tests', () => {
       } catch (e) { err = e; }
       expect(err).to.be.an('error');
       expect(err.message).to.include('Component ghost not found');
-      expect(appInstallerStub.installComponent.called).to.be.false;
+      expect(componentProvisionerStub.installComponent.called).to.be.false;
     });
 
     it('keeps existing volumes when the component volume is still mounted', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(true);
       await containerHealthMonitor.recreateMissingContainers('web_testapp');
-      expect(appInstallerStub.installComponent.calledOnce).to.be.true;
-      const [deployComp, opts] = appInstallerStub.installComponent.firstCall.args;
+      expect(componentProvisionerStub.installComponent.calledOnce).to.be.true;
+      const [deployComp, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(deployComp.name).to.equal('web');
       expect(opts.createVolumes).to.be.false;
     });
@@ -113,14 +113,14 @@ describe('containerHealthMonitor tests', () => {
       expect(appVolumeServiceStub.ensureMountSourcesExist.calledOnce).to.be.true;
       expect(appVolumeServiceStub.ensureMountSourcesExist.firstCall.args[0]).to.equal(webComp);
       // the sources must exist before the container is recreated
-      sinon.assert.callOrder(appVolumeServiceStub.ensureMountSourcesExist, appInstallerStub.installComponent);
+      sinon.assert.callOrder(appVolumeServiceStub.ensureMountSourcesExist, componentProvisionerStub.installComponent);
     });
 
     it('recreates volumes when the component volume is gone', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(false);
       await containerHealthMonitor.recreateMissingContainers('web_testapp');
-      expect(appInstallerStub.installComponent.calledOnce).to.be.true;
-      const [, opts] = appInstallerStub.installComponent.firstCall.args;
+      expect(componentProvisionerStub.installComponent.calledOnce).to.be.true;
+      const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.createVolumes).to.be.true;
     });
 
@@ -133,20 +133,20 @@ describe('containerHealthMonitor tests', () => {
     it('treats an unreadable volume state as not mounted', async () => {
       volumeServiceStub.verifyAppVolumeMount.rejects(new Error('mount probe failed'));
       await containerHealthMonitor.recreateMissingContainers('web_testapp');
-      const [, opts] = appInstallerStub.installComponent.firstCall.args;
+      const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.createVolumes).to.be.true;
     });
 
     it('forwards the app owner to the create path (load-bearing shutdown label)', async () => {
       await containerHealthMonitor.recreateMissingContainers('web_testapp');
-      const [, opts] = appInstallerStub.installComponent.firstCall.args;
+      const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.owner).to.equal('1OwnerAddress');
     });
 
     it('recreates every component for a whole-app identifier', async () => {
       await containerHealthMonitor.recreateMissingContainers('testapp');
-      expect(appInstallerStub.installComponent.callCount).to.equal(2);
-      const recreated = appInstallerStub.installComponent.getCalls().map((c) => c.args[0].name);
+      expect(componentProvisionerStub.installComponent.callCount).to.equal(2);
+      const recreated = componentProvisionerStub.installComponent.getCalls().map((c) => c.args[0].name);
       expect(recreated).to.deep.equal(['web', 'db']);
     });
   });
