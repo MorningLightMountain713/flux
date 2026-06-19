@@ -461,9 +461,10 @@ describe('appInstaller tests', () => {
   });
 
   describe('post-install broadcast', () => {
-    it('runs onInstallComplete/app:installed on a successful install', async () => {
+    it('runs onInstallComplete/app:installed and hands off to the reconciler on a successful install', async () => {
       const onInstallComplete = sinon.stub().resolves();
       const fluxEventBusPublish = sinon.stub();
+      const appReconcilerEnqueue = sinon.stub();
 
       const appInstallerFresh = proxyquire.noCallThru().load('../../ZelBack/src/services/appLifecycle/appInstaller', {
         config: configStub,
@@ -535,6 +536,7 @@ describe('appInstaller tests', () => {
         '../utils/specLibs': { getSpecBackend: sinon.stub().resolves({}) },
         '../utils/appUtilities': { findCommonArchitectures: sinon.stub().returns(['amd64']) },
         '../utils/fluxEventBus': { publish: fluxEventBusPublish },
+        '../appMonitoring/appReconciler': { enqueue: appReconcilerEnqueue },
         '../utils/cpuBurstHelper': { getCpuBurstAllowance: sinon.stub().returns(0), isEnterpriseOwner: sinon.stub().returns(false), isCpuBurstSupported: sinon.stub().resolves(false) },
         '../utils/volumeService': { verifyAppVolumeMount: sinon.stub().resolves() },
         '../appRequirements/hwRequirements': hwRequirementsStub,
@@ -564,6 +566,7 @@ describe('appInstaller tests', () => {
       expect(result.status, 'install succeeded').to.equal(appInstaller.InstallStatus.INSTALLED);
       expect(onInstallComplete.calledOnce, 'post-install broadcast fired').to.be.true;
       expect(fluxEventBusPublish.calledWith('app:installed'), 'app:installed event published').to.be.true;
+      expect(appReconcilerEnqueue.calledWith('newapp'), 'reconciler handoff enqueued the installed app').to.be.true;
     });
   });
 
