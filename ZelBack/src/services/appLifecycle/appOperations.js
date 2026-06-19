@@ -1207,90 +1207,6 @@ async function testAppMount() {
  */
 
 /**
- * Set installation progress state
- * @param {boolean} state - Installation progress state
- */
-function setInstallationInProgress(state) {
-  globalState.installationInProgress = state;
-}
-
-/**
- * Set removal progress state
- * @param {boolean} state - Removal progress state
- */
-function setRemovalInProgress(state) {
-  globalState.removalInProgress = state;
-}
-
-/**
- * Get installation progress state
- * @returns {boolean} Current installation state
- */
-function getInstallationInProgress() {
-  return globalState.installationInProgress;
-}
-
-/**
- * Get removal progress state
- * @returns {boolean} Current removal state
- */
-function getRemovalInProgress() {
-  return globalState.removalInProgress;
-}
-
-/**
- * Add app to restore progress
- * @param {string} appname - App name
- */
-function addToRestoreProgress(appname) {
-  if (!globalState.restoreInProgress.includes(appname)) {
-    globalState.restoreInProgress.push(appname);
-  }
-  // Dual-write the registry on every path that mutates the array (Stage 1).
-  operationRegistry.acquire(appname, 'restore', 'appOperations', `restore ${appname}`);
-}
-
-/**
- * Remove app from restore progress
- * @param {string} appname - App name
- */
-function removeFromRestoreProgress(appname) {
-  const index = globalState.restoreInProgress.indexOf(appname);
-  if (index > -1) {
-    globalState.restoreInProgress.splice(index, 1);
-  }
-  operationRegistry.release(appname);
-}
-
-/**
- * Reset removal progress state
- */
-function removalInProgressReset() {
-  globalState.removalInProgress = false;
-}
-
-/**
- * Set removal in progress to true
- */
-function setRemovalInProgressToTrue() {
-  globalState.removalInProgress = true;
-}
-
-/**
- * Reset installation progress state
- */
-function installationInProgressReset() {
-  globalState.installationInProgress = false;
-}
-
-/**
- * Set installation in progress to true
- */
-function setInstallationInProgressTrue() {
-  globalState.installationInProgress = true;
-}
-
-/**
  * Validate and broadcast an app update to the network.
  * Business logic only — no HTTP concerns.
  * @param {object} params - Update parameters
@@ -2289,16 +2205,6 @@ module.exports = {
   appendRestoreTask,
   removeTestAppMount,
   testAppMount,
-  setInstallationInProgress,
-  setRemovalInProgress,
-  getInstallationInProgress,
-  getRemovalInProgress,
-  addToRestoreProgress,
-  removeFromRestoreProgress,
-  removalInProgressReset,
-  setRemovalInProgressToTrue,
-  installationInProgressReset,
-  setInstallationInProgressTrue,
   reconcileInstalledApps,
   shutdownPlanResync,
   forceAppRemovals,
