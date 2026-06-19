@@ -597,12 +597,13 @@ async function recreateMissing(identifier) {
     await appTamperingDetectionService.recordEvent(mainAppName, 'container_vanished', `Container ${identifier} missing, not found in Docker`);
   }
   try {
-    // Created, not started: the pass this enqueues starts it against the desired
-    // state as it is then, which a recreate of minutes may have changed.
-    await containerHealthMonitor.recreateMissingContainers(identifier, { start: false });
-    appInspector.startAppMonitoring(identifier);
-    log.info(`appReconciler - recreated missing container ${identifier}`);
+    await containerHealthMonitor.recreateMissingContainers(identifier);
+    log.info(`appReconciler - recreated missing container ${identifier} (created); enqueuing to start`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'recreated' });
+    // The container is provisioned in Docker 'created' state (installComponent no
+    // longer starts) — enqueue so the reconciler's start branch starts it,
+    // registers monitoring, and emits firstStart. Coalesces into this in-flight
+    // reconcile via dirty, so the start runs on the immediate follow-up pass.
     enqueue(identifier);
     scheduleRetry(identifier, POST_START_VERIFY_MS); // verify it came up attached
   } catch (err) {
