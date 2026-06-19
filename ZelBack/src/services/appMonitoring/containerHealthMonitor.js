@@ -1,5 +1,5 @@
 const log = require('../../lib/log');
-const appInstaller = require('../appLifecycle/appInstaller');
+const componentProvisioner = require('../appLifecycle/componentProvisioner');
 const appVolumeService = require('../appLifecycle/appVolumeService');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -42,7 +42,7 @@ async function recreateMissingContainers(componentIdentifier) {
       // rearchitect (pruner coordination / sources outside the synced tree).
       await appVolumeService.ensureMountSourcesExist(deployComp);
     }
-    await appInstaller.installComponent(deployComp, { createVolumes: !volumeMounted, owner: instantiated.owner });
+    await componentProvisioner.installComponent(deployComp, { createVolumes: !volumeMounted, owner: instantiated.owner });
   }
 
   log.info(`Successfully recreated missing containers for ${componentIdentifier}`);
