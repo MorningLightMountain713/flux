@@ -268,10 +268,8 @@ async function installApplication(instantiated, options = {}) {
       log.error(`An operation is already in progress for ${appName}. Installation not possible.`);
       return { status: InstallStatus.DEFERRED, reason: `An operation is already in progress for ${appName}` };
     }
-    globalState.installationInProgress = true;
-    // Dual-write the operation registry alongside the global flag (Stage 1: the
-    // flag is still authoritative; nothing reads the registry yet). Released in
-    // the finally, mirroring the flag's lifetime.
+    // Acquire the per-app operation lease — the sole record that this app is
+    // mid-install. Released in the finally.
     operationRegistry.acquire(appName, 'install', 'appInstaller', `install ${appName}`);
 
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
@@ -289,7 +287,6 @@ async function installApplication(instantiated, options = {}) {
     log.info('Checking database...');
     if (onStatus) onStatus({ status: 'Checking database...' });
     if (await appsRepository.existsInstalledApp(appName)) {
-      globalState.installationInProgress = false;
       log.error(`Flux App ${appName} already installed`);
       return { status: InstallStatus.SKIPPED, reason: `Flux App ${appName} already installed` };
     }
@@ -311,12 +308,10 @@ async function installApplication(instantiated, options = {}) {
     // blocklist is a deferral (transient - retry rather than admit something unchecked).
     const blockResult = await isImageBlocked(appName, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
     if (blockResult.blocked) {
-      globalState.installationInProgress = false;
       if (onStatus) onStatus(messageHelper.createErrorMessage(blockResult.reason));
       return { status: InstallStatus.REJECTED, reason: blockResult.reason };
     }
     if (blockResult.undetermined) {
-      globalState.installationInProgress = false;
       const reason = `Image blocklist unreachable - cannot verify ${appName} for installation, will retry`;
       if (onStatus) onStatus(messageHelper.createErrorMessage(reason));
       return { status: InstallStatus.DEFERRED, reason };
@@ -496,19 +491,17 @@ async function installApplication(instantiated, options = {}) {
 
     log.info(`Flux App ${appName} successfully installed and launched`);
     if (onStatus) onStatus({ status: `Flux App ${appName} successfully installed and launched` });
-    globalState.installationInProgress = false;
 
-    // Broadcast this node's running apps AFTER releasing the install lock, so the
-    // just-installed app is included in its own announcement (a peer-running-apps
-    // broadcast taken while this install still held the lock could exclude it).
-    // checkAndNotifyPeersOfRunningApps never throws (it catches internally), so
-    // running it after the lock release is safe.
+    // Broadcast this node's running apps now that the app is durably in the DB
+    // (insertInstalledApp ran above): checkAndNotifyPeersOfRunningApps builds its
+    // snapshot from the installed-app records, so the just-installed app is
+    // included in its own announcement. It never throws (it catches internally),
+    // so running it here is safe.
     if (!test && onInstallComplete) {
       await onInstallComplete();
       fluxEventBus.publish('app:installed', { name: appName, hash: instantiated.hash });
     }
   } catch (error) {
-    globalState.installationInProgress = false;
     log.error(error.message || error);
     // Standard error envelope: stream consumers (frontend, harness) detect a
     // failed install by status:"error" chunks, not by parsing prose.
