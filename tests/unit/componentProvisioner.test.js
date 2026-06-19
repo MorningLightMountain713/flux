@@ -90,36 +90,29 @@ describe('componentProvisioner tests', () => {
     });
   });
 
-  describe('install-time start hold for syncing components', () => {
-    it('holds an activeStandby component on a hard install', async () => {
-      await installWith('activeStandby', true);
-      expect(appDockerStartStub.called).to.be.false;
+  describe('provisions but does not start (the reconciler is the sole starter)', () => {
+    it('never starts the container on a real install, for any sync mode', async () => {
+      // The activeStandby / sync-before-start hold is now the reconciler's
+      // controllerDesired -> awaitingController gate, and a plain install no longer
+      // inline-starts at all: installComponent only provisions.
+      // eslint-disable-next-line no-restricted-syntax
+      for (const mode of ['activeStandby', 'syncFirst', 'sync', null]) {
+        // eslint-disable-next-line no-await-in-loop
+        await installWith(mode, true);
+        expect(appDockerStartStub.called, `installer must not start (mode ${mode})`).to.be.false;
+      }
     });
 
-    it('holds an activeStandby component on a soft install', async () => {
-      await installWith('activeStandby', false);
-      expect(appDockerStartStub.called).to.be.false;
-    });
-
-    it('holds a sync-before-start component on a hard install (fresh empty volume)', async () => {
-      await installWith('syncFirst', true);
-      expect(createAppVolumeStub.calledOnce).to.be.true;
-      expect(appDockerStartStub.called).to.be.false;
-    });
-
-    it('starts a sync-before-start component on a soft install (volume already has data)', async () => {
-      await installWith('syncFirst', false);
-      expect(appDockerStartStub.calledOnce).to.be.true;
-    });
-
-    it('starts a plain-sync component even on a hard install', async () => {
+    it('still provisions the container substrate (volume + create) on a hard install', async () => {
       await installWith('sync', true);
-      expect(appDockerStartStub.calledOnce).to.be.true;
+      expect(createAppVolumeStub.calledOnce, 'volume provisioned').to.be.true;
+      expect(appDockerStartStub.called, 'but never started by the installer').to.be.false;
     });
 
-    it('starts a component without sync on a hard install', async () => {
-      await installWith(null, true);
-      expect(appDockerStartStub.calledOnce).to.be.true;
+    it('starts inline on a test install (synchronous, fail-fast, no handoff)', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeComponent(null), { test: true });
+      expect(appDockerStartStub.calledOnceWith('web_syncholdapp')).to.be.true;
     });
 
     it('rejects a component whose measured image exceeds its rootFs budget', async () => {
