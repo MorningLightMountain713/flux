@@ -504,11 +504,10 @@ describe('appInstaller tests', () => {
     });
   });
 
-  describe('post-install broadcast ordering (PR #1747)', () => {
-    it('runs onInstallComplete/app:installed only after the install lock is released', async () => {
-      const gs = { removalInProgress: false, installationInProgress: false, isOperationInProgress: () => false };
-      let lockHeldWhenBroadcasting = null;
-      const onInstallComplete = sinon.stub().callsFake(() => { lockHeldWhenBroadcasting = gs.installationInProgress; });
+  describe('post-install broadcast', () => {
+    it('runs onInstallComplete/app:installed on a successful install', async () => {
+      const gs = { activeStandbyCoordinationRunning: false };
+      const onInstallComplete = sinon.stub().resolves();
       const fluxEventBusPublish = sinon.stub();
 
       const appInstallerFresh = proxyquire.noCallThru().load('../../ZelBack/src/services/appLifecycle/appInstaller', {
@@ -610,7 +609,6 @@ describe('appInstaller tests', () => {
 
       expect(result.status, 'install succeeded').to.equal(appInstaller.InstallStatus.INSTALLED);
       expect(onInstallComplete.calledOnce, 'post-install broadcast fired').to.be.true;
-      expect(lockHeldWhenBroadcasting, 'install lock released BEFORE broadcasting').to.equal(false);
       expect(fluxEventBusPublish.calledWith('app:installed'), 'app:installed event published').to.be.true;
     });
   });

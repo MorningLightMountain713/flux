@@ -452,10 +452,8 @@ async function uninstallApplication(appName, options = {}) {
       return { status: UninstallStatus.DEFERRED, reason: `An operation is already in progress for ${appName}` };
     }
 
-    globalState.removalInProgress = true;
-    // Dual-write the operation registry alongside the global flag (Stage 1: the
-    // flag is still authoritative; nothing reads the registry yet). Released in
-    // the finally with the flag.
+    // Acquire the per-app operation lease — the sole record that this app is
+    // mid-removal. Released in the finally.
     operationRegistry.acquire(appName, 'remove', 'appUninstaller', `remove ${appName}`);
 
     if (!appName) {
@@ -641,7 +639,6 @@ async function uninstallApplication(appName, options = {}) {
     status(`Error: ${error.message}`);
     return { status: UninstallStatus.FAILED, reason: error.message };
   } finally {
-    globalState.removalInProgress = false;
     operationRegistry.release(appName);
   }
 }
