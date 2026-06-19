@@ -12,7 +12,7 @@ const dockerService = require('../../ZelBack/src/services/dockerService');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
-const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
+const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 
 function mockInstantiatedSpec(spec) {
@@ -109,7 +109,7 @@ describe('appController tests', () => {
     let enqueue;
     let setOperatorStopped;
     beforeEach(() => {
-      enqueue = sinon.stub(appReconciler, 'enqueue');
+      enqueue = sinon.stub(reconcilerQueue, 'enqueue');
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
@@ -234,7 +234,7 @@ describe('appController tests', () => {
     let enqueue;
     let setOperatorStopped;
     beforeEach(() => {
-      enqueue = sinon.stub(appReconciler, 'enqueue');
+      enqueue = sinon.stub(reconcilerQueue, 'enqueue');
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
@@ -311,7 +311,7 @@ describe('appController tests', () => {
     let setOperatorStopped;
     let requestRestart;
     beforeEach(() => {
-      enqueue = sinon.stub(appReconciler, 'enqueue');
+      enqueue = sinon.stub(reconcilerQueue, 'enqueue');
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
       requestRestart = sinon.stub(appsRuntimeState, 'requestRestart').resolves();
     });
@@ -407,7 +407,7 @@ describe('appController tests', () => {
     let enqueue;
     let setOperatorStopped;
     beforeEach(() => {
-      enqueue = sinon.stub(appReconciler, 'enqueue');
+      enqueue = sinon.stub(reconcilerQueue, 'enqueue');
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
