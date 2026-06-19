@@ -1190,7 +1190,7 @@ async function reconcile(rawIdentifier) {
         return;
       }
       log.warn(`appReconciler - ${identifier} restarted (was unhealthy)`);
-      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartedUnhealthy' });
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthy' });
       // A restart is a start: it can come up detached the same way (stale endpoint
       // born at start time), so re-verify the attachment shortly rather than
       // waiting for the hourly sweep.
@@ -1289,6 +1289,11 @@ async function reconcile(rawIdentifier) {
     return;
   }
 
+  // firstStart vs restart keys on the durable hasSuccessfullyStarted marker (read
+  // before recordRestart bumps the history): a container that has run here before
+  // is a restart even after a crash; one that never has is a first start.
+  const priorRuntimeState = await appsRuntimeState.getState(identifier);
+  const firstStart = !(priorRuntimeState && priorRuntimeState.hasSuccessfullyStarted);
   await appsRuntimeState.recordRestart(identifier, crashed);
   try {
     await dockerService.appDockerStart(identifier);
@@ -1307,14 +1312,15 @@ async function reconcile(rawIdentifier) {
     return;
   }
   appInspector.startAppMonitoring(identifier);
+  if (firstStart) await appsRuntimeState.setSuccessfullyStarted(identifier);
   // A restart of a container that was already stopped IS this start, so the
   // request is satisfied here. Left pending, the pass that next finds it running
   // would bounce a container the operator has just watched come up.
   const startedState = await appsRuntimeState.getState(identifier);
   const pendingGeneration = (startedState && startedState.restartGeneration) || 0;
   const satisfiesRestart = pendingGeneration > ((startedState && startedState.actuatedRestartGeneration) || 0);
-  log.info(`appReconciler - ${identifier} restarted`);
-  fluxEventBus.publish('reconciler:actuated', { identifier, action: 'started', exitCode: actual.exitCode });
+  log.info(`appReconciler - ${identifier} ${firstStart ? 'started (first start)' : 'restarted'}`);
+  fluxEventBus.publish('reconciler:actuated', { identifier, action: firstStart ? 'firstStart' : 'restart', exitCode: actual.exitCode });
   // A start is exactly when a container can come up attached to no network (a stale
   // endpoint left by an earlier failed start). The attachment we hold was sampled
   // BEFORE this start, so verify the new one shortly - otherwise a detached-at-boot
