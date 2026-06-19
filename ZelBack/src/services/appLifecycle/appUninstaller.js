@@ -12,7 +12,9 @@ const operationRegistry = require('../utils/operationRegistry');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const log = require('../../lib/log');
-const { localAppsInformation, globalAppsInformation, globalAppsMessages } = require('../utils/appConstants');
+const {
+  localAppsInformation, globalAppsInformation, globalAppsMessages, scannedHeightCollection, globalAppsInstallingErrorsLocations,
+} = require('../utils/appConstants');
 const config = require('config');
 const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -731,6 +733,78 @@ async function removeAppLocallyApi(req, res) {
   }
 }
 
+/**
+ * Remove expired applications from the global database and local installations.
+ * A lifecycle maintenance sweep: it reads the explorer height, finds apps past
+ * their expiration, drops their global records, and uninstalls any local install.
+ * Lives here (not in the data-access registry) because removing an app is a
+ * lifecycle action — the data layer must not orchestrate teardown.
+ * @returns {Promise<void>}
+ */
+async function expireGlobalApplications() {
+  // check if synced
+  try {
+    // get current height
+    const dbopen = dbHelper.databaseConnection();
+    const database = dbopen.db(config.database.daemon.database);
+    const query = { generalScannedHeight: { $gte: 0 } };
+    const projection = {
+      projection: {
+        _id: 0,
+        generalScannedHeight: 1,
+      },
+    };
+    const result = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
+    if (!result) {
+      throw new Error('Scanning not initiated');
+    }
+    const explorerHeight = serviceHelper.ensureNumber(result.generalScannedHeight);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const candidates = await appsRepository.listGlobalAppInfo();
+    const appsToExpire = candidates.filter(
+      (is) => is.isExpired(nowSeconds, explorerHeight),
+    );
+    const appNamesToExpire = appsToExpire.map((is) => is.name);
+    // remove appNamesToExpire apps from global database
+    const databaseApps = dbopen.db(config.database.appsglobal.database);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const app of appsToExpire) {
+      log.info(`Expiring application ${app.name}`);
+      // eslint-disable-next-line no-await-in-loop
+      await appsRepository.removeGlobalAppInfo(app.name);
+      // eslint-disable-next-line no-await-in-loop
+      await dbHelper.removeDocumentsFromCollection(databaseApps, globalAppsInstallingErrorsLocations, { name: app.name });
+    }
+
+    const installedApps = await appsRepository.listInstalledApps();
+    const appsToRemoveNames = [];
+    // eslint-disable-next-line no-restricted-syntax
+    for (const app of installedApps) {
+      if (appNamesToExpire.includes(app.name)) {
+        appsToRemoveNames.push(app.name);
+      } else if (!app.height) {
+        appsToRemoveNames.push(app.name);
+      } else if (app.height === 0) {
+        // forever lasting local app — skip
+      } else if (app.isExpired(nowSeconds, explorerHeight)) {
+        appsToRemoveNames.push(app.name);
+      }
+    }
+
+    // eslint-disable-next-line no-restricted-syntax
+    for (const appName of appsToRemoveNames) {
+      log.warn(`Application ${appName} is expired, removing`);
+      log.warn(`REMOVAL REASON: App expired - ${appName} reached expiration date (appUninstaller)`);
+      // eslint-disable-next-line no-await-in-loop
+      await uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true });
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(1 * 60 * 1000); // wait for 1 min
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
 module.exports = {
   UninstallStatus,
   uninstallApplication,
@@ -738,6 +812,7 @@ module.exports = {
   cleanupDeploymentPorts,
   removeAppLocallyApi,
   setOnComponentRemoved,
+  expireGlobalApplications,
   // exposed for tests
   reclaimUnusedImages,
 };
