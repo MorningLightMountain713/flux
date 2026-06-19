@@ -11,7 +11,6 @@ const log = require('../../lib/log');
 const { normalizeSocketAddress, extractIp, extractPort, socketAddressesMatch } = require('../utils/socketAddressUtils');
 
 // Import modular services
-const appQueryService = require('../appQuery/appQueryService');
 const registryManager = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
 const imageManager = require('../appSecurity/imageManager');
@@ -145,12 +144,14 @@ async function trySpawningGlobalApplication() {
       throw new Error('Unable to detect Flux IP address');
     }
 
-    const runningApps = await appQueryService.listRunningApps();
-    if (runningApps.status !== 'success') {
-      throw new Error('trySpawningGlobalApplication - Unable to check running apps on this Flux');
-    }
-    if (runningApps.data.length >= config.fluxapps.maxAppsPerNode) {
-      log.info(`trySpawningGlobalApplication - Node at max apps capacity (${runningApps.data.length}/${config.fluxapps.maxAppsPerNode})`);
+    // Capacity + the already-present filter both count INSTALLED apps (the DB), not
+    // running containers. Post-flip a just-installed app is briefly Docker 'created'
+    // (not running), and an app is one-or-more containers, so "installed" is the clean
+    // per-app unit: a running-container count over-counts multi-component apps and
+    // miscounts during the install->settle window.
+    const installedApps = await appsRepository.listInstalledApps();
+    if (installedApps.length >= config.fluxapps.maxAppsPerNode) {
+      log.info(`trySpawningGlobalApplication - Node at max apps capacity (${installedApps.length}/${config.fluxapps.maxAppsPerNode})`);
       return delayTime;
     }
 
@@ -213,7 +214,7 @@ async function trySpawningGlobalApplication() {
           region: nodeGeo.regionName,
         } : undefined,
       };
-      globalAppNamesLocation = globalAppNamesLocation.filter((c) => !runningApps.data.find((appsRunning) => appsRunning.Names[0].slice(5) === c.instantiated.name)
+      globalAppNamesLocation = globalAppNamesLocation.filter((c) => !installedApps.find((a) => a.name === c.instantiated.name)
         && !globalState.spawnErrorsLongerAppCache.has(c.instantiated.hash)
         && !globalState.trySpawningGlobalAppCache.has(c.instantiated.hash)
         && !appsToBeCheckedLater.some((appAux) => appAux.appName === c.instantiated.name));
