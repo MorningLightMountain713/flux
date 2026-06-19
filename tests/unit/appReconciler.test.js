@@ -74,6 +74,7 @@ describe('appReconciler tests', () => {
         appDockerStart: sinon.stub().resolves(),
         appDockerStop: sinon.stub().resolves(),
         appDockerRestart: sinon.stub().resolves(),
+        appDockerKill: sinon.stub().resolves(),
         getAppIdentifier: (id) => `flux${id}`,
         getAppDockerNameIdentifier: (id) => `/flux${id}`,
         getBaseAppName: (id) => (id.startsWith('flux') ? id.slice(4) : id),
@@ -92,6 +93,7 @@ describe('appReconciler tests', () => {
         recordExit: sinon.stub().resolves(),
         getState: sinon.stub().resolves(null),
         setSuccessfullyStarted: sinon.stub().resolves(),
+        recordRestartGeneration: sinon.stub().resolves(),
       },
       appQueryService: {
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
@@ -450,6 +452,38 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStart.calledWith('www_App')).to.be.true;
       expect(result.converged).to.be.true;
       expect(result.failed).to.deep.equal([]);
+    });
+
+    it('hard-kills (not graceful-stops) a running operator-stopped component when force is set', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      stubs.appsRuntimeState.isOperatorStopped.resolves(true);
+      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ operatorStopForce: true });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerKill.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerStop.called).to.be.false;
+    });
+
+    it('gracefully stops a running operator-stopped component when force is not set', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      stubs.appsRuntimeState.isOperatorStopped.resolves(true);
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerKill.called).to.be.false;
+    });
+
+    it('bounces a running component when a restart is requested (desired generation > actuated)', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ restartGeneration: 1, actuatedRestartGeneration: 0 });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerRestart.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.recordRestartGeneration.calledOnceWith('www_App', 1)).to.be.true;
+    });
+
+    it('does not bounce a running component whose restart generation is already actuated', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ restartGeneration: 2, actuatedRestartGeneration: 2 });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerRestart.called).to.be.false;
     });
 
     it('re-seeds the telemetry sink on every successful deployment build', async () => {
