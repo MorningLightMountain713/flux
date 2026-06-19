@@ -497,28 +497,25 @@ async function appUnpause(req, res) {
 }
 
 /**
- * Docker restart app (internal function)
- * @param {string} appname - Application name
+ * Repair-restart an app (or single component) THROUGH the reconciler: bump the
+ * durable restart generation per component and enqueue, so the reconciler bounces
+ * the running container(s) to pick up an out-of-band change (a node IP change,
+ * recreated mounts). Unlike an operator restart it does NOT touch the operator stop
+ * lock — a deliberately-stopped app stays stopped. Used by fluxNetworkMonitor on
+ * IP change.
+ * @param {string} appname - App or component name
  * @returns {Promise<void>}
  */
-async function appDockerRestart(appname) {
-  try {
-    // mainAppName extracted for potential future use
-    // eslint-disable-next-line no-unused-vars
-    const mainAppName = appname.split('_')[1] || appname;
-    const isComponent = appname.includes('_'); // it is a component restart. Proceed with restarting just component
-    if (isComponent) {
-      await dockerService.appDockerRestart(appname);
-      // Note: startAppMonitoring would need to be injected or called separately
-      log.info(`Component ${appname} restarted successfully`);
-    } else {
-      log.info(`Restarting entire application ${appname}`);
-      await dockerService.appDockerRestart(appname);
+async function requestAppRestart(appname) {
+  let deployment = null;
+  if (!appname.includes('_')) {
+    const instantiated = await appsRepository.getGlobalAppInfo(appname);
+    if (!instantiated) {
+      throw new Error('Application not found');
     }
-  } catch (error) {
-    log.error(`Docker restart failed for ${appname}: ${error.message}`);
-    throw error;
+    deployment = await deploymentProvider.buildDeployment(instantiated);
   }
+  await driveOperatorCommand(appname, deployment, (id) => appsRuntimeState.requestRestart(id));
 }
 
 /**
@@ -587,7 +584,7 @@ module.exports = {
   appKill,
   appPause,
   appUnpause,
-  appDockerRestart,
+  requestAppRestart,
   stopAllNonFluxRunningApps,
   createFluxNetworkAPI,
 };
