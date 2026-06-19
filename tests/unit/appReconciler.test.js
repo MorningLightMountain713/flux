@@ -106,7 +106,16 @@ describe('appReconciler tests', () => {
       telemetrySinkCache: { setSink: sinon.stub(), extractSink: sinon.stub().returns(null) },
     };
 
+    // the lightweight scheduling seam the engine drives; proxyquired with the same
+    // low-level stubs so the queue + engine integrate exactly as in production
+    const reconcilerQueue = proxyquire('../../ZelBack/src/services/appMonitoring/reconcilerQueue', {
+      '../../lib/log': stubs.log,
+      '../utils/globalState': stubs.globalState,
+      '../dockerService': stubs.dockerService,
+    });
+
     appReconciler = proxyquire('../../ZelBack/src/services/appMonitoring/appReconciler', {
+      './reconcilerQueue': reconcilerQueue,
       '../../lib/log': stubs.log,
       '../dockerService': stubs.dockerService,
       '../utils/globalState': stubs.globalState,
