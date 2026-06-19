@@ -172,9 +172,6 @@ describe('appSpawner tests', () => {
         isDaemonSynced: daemonSyncStub,
       },
       '../../lib/log': logStub,
-      '../appQuery/appQueryService': {
-        listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
-      },
       '../appDatabase/registryManager': {
         appLocation: sinon.stub().resolves([]),
         appInstallingLocation: sinon.stub().resolves([]),
@@ -186,6 +183,7 @@ describe('appSpawner tests', () => {
         findUnderProvisionedApps: findUnderProvisionedStub,
         getGlobalAppInfo: sinon.stub().resolves(null),
         existsInstalledApp: sinon.stub().resolves(false),
+        listInstalledApps: opts.installedApps ?? sinon.stub().resolves([]),
       },
       '../utils/specLibs': {
         getSpecBackend: sinon.stub().resolves({
@@ -300,6 +298,16 @@ describe('appSpawner tests', () => {
       const result = await appSpawner.trySpawningGlobalApplication();
       expect(result).to.be.a('number');
       expect(logStub.info.args.some((a) => a[0]?.includes?.('No installable application found'))).to.be.true;
+    });
+
+    it('caps on INSTALLED apps (DB count), not running containers', async () => {
+      // post-flip an app is "installed" before its container runs, and an app is
+      // one-or-more containers - so the cap counts installed apps from the DB
+      const atCapacity = Array.from({ length: 200 }, (unused, i) => ({ name: `app${i}` }));
+      buildModule({ installedApps: sinon.stub().resolves(atCapacity) });
+      const result = await appSpawner.trySpawningGlobalApplication();
+      expect(result).to.be.a('number');
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('Node at max apps capacity'))).to.be.true;
     });
   });
 
