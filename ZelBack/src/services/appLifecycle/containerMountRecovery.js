@@ -12,6 +12,8 @@ const fs = require('fs').promises;
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
+const appsRuntimeState = require('../appManagement/appsRuntimeState');
+const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 
 /**
  * Check if a container started before its mounts were created
@@ -162,8 +164,12 @@ async function restartContainersWithProperMounts(containers) {
   for (const container of containers) {
     try {
       log.info(`containerMountRecovery - Restarting container ${container.name} to ensure proper mounts`);
+      // bounce through the reconciler (the sole actuator): bump the durable restart
+      // generation and enqueue, never restart Docker directly. No operatorStopped
+      // change — a deliberately-stopped container must stay stopped.
       // eslint-disable-next-line no-await-in-loop
-      await dockerService.appDockerRestart(container.name);
+      await appsRuntimeState.requestRestart(container.name);
+      reconcilerQueue.enqueue(container.name);
       results.restarted.push(container.name);
       log.info(`containerMountRecovery - Successfully restarted ${container.name}`);
 

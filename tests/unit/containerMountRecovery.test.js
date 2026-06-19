@@ -8,6 +8,8 @@ describe('containerMountRecovery tests', () => {
   let dockerServiceStub;
   let serviceHelperStub;
   let fsStub;
+  let appsRuntimeStateStub;
+  let reconcilerQueueStub;
 
   beforeEach(() => {
     // Log stub
@@ -21,7 +23,6 @@ describe('containerMountRecovery tests', () => {
     dockerServiceStub = {
       dockerContainerInspect: sinon.stub(),
       dockerListContainers: sinon.stub(),
-      appDockerRestart: sinon.stub(),
     };
 
     // Service helper stub
@@ -34,11 +35,22 @@ describe('containerMountRecovery tests', () => {
       stat: sinon.stub(),
     };
 
+    // repair-restart goes through the reconciler now: bump the durable restart
+    // generation + enqueue, never a direct docker restart
+    appsRuntimeStateStub = {
+      requestRestart: sinon.stub().resolves(),
+    };
+    reconcilerQueueStub = {
+      enqueue: sinon.stub(),
+    };
+
     // Load module with stubs
     containerMountRecovery = proxyquire('../../ZelBack/src/services/appLifecycle/containerMountRecovery', {
       '../../lib/log': logStub,
       '../dockerService': dockerServiceStub,
       '../serviceHelper': serviceHelperStub,
+      '../appManagement/appsRuntimeState': appsRuntimeStateStub,
+      '../appMonitoring/reconcilerQueue': reconcilerQueueStub,
       fs: {
         promises: fsStub,
       },
@@ -408,15 +420,14 @@ describe('containerMountRecovery tests', () => {
         { id: 'def456', name: 'fluxApp2' },
       ];
 
-      dockerServiceStub.appDockerRestart.resolves();
-
       const result = await containerMountRecovery.restartContainersWithProperMounts(containers);
 
       expect(result.restarted).to.have.length(2);
       expect(result.restarted).to.include('fluxApp1');
       expect(result.restarted).to.include('fluxApp2');
       expect(result.failed).to.have.length(0);
-      expect(dockerServiceStub.appDockerRestart.callCount).to.equal(2);
+      expect(appsRuntimeStateStub.requestRestart.callCount).to.equal(2);
+      expect(reconcilerQueueStub.enqueue.callCount).to.equal(2);
       expect(serviceHelperStub.delay.callCount).to.equal(2);
     });
 
@@ -426,8 +437,8 @@ describe('containerMountRecovery tests', () => {
         { id: 'def456', name: 'fluxApp2' },
       ];
 
-      dockerServiceStub.appDockerRestart.onFirstCall().rejects(new Error('Restart failed'));
-      dockerServiceStub.appDockerRestart.onSecondCall().resolves();
+      appsRuntimeStateStub.requestRestart.onFirstCall().rejects(new Error('Restart failed'));
+      appsRuntimeStateStub.requestRestart.onSecondCall().resolves();
 
       const result = await containerMountRecovery.restartContainersWithProperMounts(containers);
 
@@ -442,8 +453,6 @@ describe('containerMountRecovery tests', () => {
       const containers = [
         { id: 'abc123', name: 'fluxApp1' },
       ];
-
-      dockerServiceStub.appDockerRestart.resolves();
 
       await containerMountRecovery.restartContainersWithProperMounts(containers);
 
@@ -462,7 +471,7 @@ describe('containerMountRecovery tests', () => {
         containersNeedingRestart: 0,
         restartResults: null,
       });
-      expect(dockerServiceStub.appDockerRestart.called).to.equal(false);
+      expect(reconcilerQueueStub.enqueue.called).to.equal(false);
     });
 
     it('should restart containers that need it and return results', async () => {
@@ -493,8 +502,6 @@ describe('containerMountRecovery tests', () => {
         birthtime: new Date('2024-01-01T10:05:00Z'),
         mtime: new Date('2024-01-01T10:05:00Z'),
       });
-      dockerServiceStub.appDockerRestart.resolves();
-
       const result = await containerMountRecovery.performContainerMountRecovery();
 
       expect(result.containersNeedingRestart).to.equal(1);
@@ -558,9 +565,6 @@ describe('containerMountRecovery tests', () => {
         birthtime: new Date('2024-01-01T10:05:00Z'),
         mtime: new Date('2024-01-01T10:05:00Z'),
       });
-
-      // First restart succeeds
-      dockerServiceStub.appDockerRestart.resolves();
 
       const result = await containerMountRecovery.performContainerMountRecovery();
 
