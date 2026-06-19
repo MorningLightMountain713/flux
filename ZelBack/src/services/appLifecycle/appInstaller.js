@@ -98,6 +98,8 @@ async function installApplication(instantiated, options = {}) {
   const createVolumes = options.createVolumes !== false;
   const sendRemovalMessage = options.sendRemovalMessage || false;
   const appName = instantiated.name;
+  // Hoisted out of the try so the post-finally converge-wait can read its components.
+  let deployment;
   try {
     // Per-app: defer only if THIS app is already mid-operation. Installs of
     // different apps now run concurrently - the admission semaphore backstops
@@ -131,7 +133,7 @@ async function installApplication(instantiated, options = {}) {
 
     await checkPlacement(instantiated);
 
-    const deployment = await deploymentProvider.buildDeployment(instantiated);
+    deployment = await deploymentProvider.buildDeployment(instantiated);
     // Check resources and reserve them atomically: two concurrent installs of
     // different apps must not both pass before either is accounted (the in-flight
     // double-admit race). The reservation is released once the app is durably in
@@ -371,7 +373,23 @@ async function installApplication(instantiated, options = {}) {
   // Hand off to the reconciler — it converges the now-installed app (the install
   // lease released in the finally above, so this reconcile won't defer). Redundant
   // while installComponent still inline-starts; the sole starter once it doesn't.
-  if (!test) appReconciler.enqueue(appName);
+  // Hand off to the reconciler and await convergence: it starts/holds each
+  // component and resolves a settled verdict (the install lease released in the
+  // finally above, so the reconcile won't defer). A component that exhausts the
+  // install-window start attempts fails the converge -> roll the whole install
+  // back (provisioned-but-not-running) so the fleet re-places it; a node issue
+  // ('provisional' backstop) never rolls back. Redundant happy-path no-op while
+  // installComponent still inline-starts; load-bearing once the flip removes it.
+  if (!test) {
+    const componentIds = deployment.componentEntries().map(([, comp]) => comp.identifier);
+    const { converged, failed } = await appReconciler.awaitConvergence(componentIds);
+    if (!converged) {
+      log.warn(`REMOVAL REASON: ${appName} provisioned but did not converge (${failed.join(', ')}); rolling back (appInstaller)`);
+      if (onStatus) onStatus(messageHelper.createErrorMessage(`App ${appName} failed to start; rolling back`));
+      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
+      return { status: InstallStatus.FAILED, reason: `PROVISIONED-BUT-NOT-RUNNING: ${failed.join(', ')}` };
+    }
+  }
   return { status: InstallStatus.INSTALLED, reason: null };
 }
 

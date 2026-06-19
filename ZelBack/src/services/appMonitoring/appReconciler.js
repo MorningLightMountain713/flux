@@ -1,3 +1,4 @@
+const config = require('config');
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
 const serviceHelper = require('../serviceHelper');
@@ -62,6 +63,20 @@ const inFlight = new Set(); // ids currently reconciling (per-key single-flight)
 const dirty = new Set(); // ids re-requested while in flight -> reconcile again
 const bootPending = new Set(); // ids enqueued before the boot gate opened
 const backoffTimers = new Map(); // id -> scheduled retry timeout
+
+// Install converge-wait (Stage 5b): installApplication registers a per-component
+// waiter via awaitConvergence and blocks on it. runReconcile resolves 'settled'
+// once the reconciler stops trying to change a component (running | legitimately
+// held | stopped-by-policy); a converging component that exhausts the install-window
+// start attempts resolves 'failed' (-> install rollback); a generous backstop
+// resolves 'provisional' (a NODE issue, e.g. docker down: never rolls back). This
+// is a DIRECT in-process observer, never FluxEventBus (a prod no-op).
+const convergeWaiters = new Map(); // id -> (verdict) => void
+const convergeBackstops = new Map(); // id -> backstop timer
+// rollback after this many failed start attempts within the window (default 2 =
+// initial + one retry); a COUNT not a wall clock, so a node issue never rolls back.
+const CONVERGE_FAIL_ATTEMPTS = config.fluxapps.convergeFailAttempts ?? 2;
+const CONVERGE_BACKSTOP_MS = config.fluxapps.convergeBackstopMs ?? 5 * 60 * 1000;
 
 // The boot-drain gate: opens once every boot-held component has completed ONE
 // reconcile pass (started, backoff-deferred, awaiting-controller, or failed
@@ -700,6 +715,7 @@ async function reconcile(rawIdentifier) {
     // so a persistent failure walks the backoff ladder instead of hammering.
     log.error(`appReconciler - failed to start ${identifier}: ${err.message}; retrying`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'startFailed', reason: err.message });
+    await failConvergeIfExhausted(identifier);
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
   }
@@ -734,6 +750,12 @@ function runReconcile(identifier) {
       if (dirty.has(identifier)) {
         dirty.delete(identifier);
         setImmediate(() => enqueue(identifier));
+        return;
+      }
+      // Final pass for this id: a converging component with no retry armed has
+      // reached a settled verdict (running | legitimately held | stopped-by-policy).
+      if (convergeWaiters.has(identifier) && !backoffTimers.has(identifier)) {
+        resolveConverge(identifier, 'settled');
       }
     });
 }
@@ -755,6 +777,63 @@ function enqueue(rawIdentifier) {
   }
   inFlight.add(identifier);
   runReconcile(identifier);
+}
+
+// --- install converge-wait (direct observer; resolved by the reconcile loop) ---
+
+function resolveConverge(identifier, verdict) {
+  const resolve = convergeWaiters.get(identifier);
+  if (!resolve) return;
+  convergeWaiters.delete(identifier);
+  const timer = convergeBackstops.get(identifier);
+  if (timer) {
+    clearTimeout(timer);
+    convergeBackstops.delete(identifier);
+  }
+  resolve(verdict);
+}
+
+// A converging component that has exhausted the install-window start attempts and
+// never started successfully is a failed install — resolve its waiter 'failed' so
+// installApplication rolls it back. A genuine node issue makes no start attempt, so
+// restartHistory never grows and this never fires (the backstop handles that).
+async function failConvergeIfExhausted(identifier) {
+  if (!convergeWaiters.has(identifier)) return;
+  const rs = await appsRuntimeState.getState(identifier);
+  const attempts = rs && rs.restartHistory ? rs.restartHistory.length : 0;
+  if (attempts >= CONVERGE_FAIL_ATTEMPTS && !(rs && rs.hasSuccessfullyStarted)) {
+    resolveConverge(identifier, 'failed');
+  }
+}
+
+/**
+ * Await each just-installed component reaching a settled verdict. Registers a
+ * per-component waiter, enqueues a reconcile, and blocks until each resolves:
+ * 'settled' (running | legitimately held | stopped-by-policy), 'failed' (it
+ * exhausted the install-window start attempts → caller rolls back), or
+ * 'provisional' (the anti-hang backstop — a node issue, never rolls back).
+ *
+ * @param {string[]} rawIdentifiers component identifiers of the installed app
+ * @param {object} [opts]
+ * @param {number} [opts.backstopMs]
+ * @returns {Promise<{converged: boolean, failed: string[]}>}
+ */
+async function awaitConvergence(rawIdentifiers, opts = {}) {
+  const backstopMs = opts.backstopMs ?? CONVERGE_BACKSTOP_MS;
+  const ids = rawIdentifiers.map(canonical);
+  const verdicts = await Promise.all(ids.map((id) => new Promise((resolve) => {
+    convergeWaiters.set(id, resolve);
+    const timer = setTimeout(() => {
+      convergeWaiters.delete(id);
+      convergeBackstops.delete(id);
+      resolve('provisional');
+    }, backstopMs);
+    if (timer.unref) timer.unref();
+    convergeBackstops.set(id, timer);
+    enqueue(id);
+  })));
+  const failed = ids.filter((id, i) => verdicts[i] === 'failed');
+  return { converged: failed.length === 0, failed };
 }
 
 /**
@@ -885,12 +964,19 @@ function stop() {
   inFlight.clear();
   dirty.clear();
   bootPending.clear();
+  // resolve any in-flight install waiters so a stopped reconciler never hangs an
+  // install; 'provisional' never rolls back (the app is provisioned, just unstarted).
+  convergeBackstops.forEach((timer) => clearTimeout(timer));
+  convergeWaiters.forEach((resolve) => resolve('provisional'));
+  convergeWaiters.clear();
+  convergeBackstops.clear();
 }
 
 module.exports = {
   enqueue,
   enqueueAll,
   enqueueDependents,
+  awaitConvergence,
   setControllerDesired,
   clearControllerDesired,
   requestStopAndClearData,
