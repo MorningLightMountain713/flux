@@ -1226,7 +1226,7 @@ async function reconcile(rawIdentifier) {
         return;
       }
       log.warn(`appReconciler - ${identifier} restarted (was unhealthy)`);
-      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartedUnhealthy' });
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthy' });
       // A restart is a start: it can come up detached the same way (stale endpoint
       // born at start time), so re-verify the attachment shortly rather than
       // waiting for the hourly sweep.
@@ -1333,6 +1333,10 @@ async function reconcile(rawIdentifier) {
     log.info(`appReconciler - ${identifier}: a controller opinion was written during this pass, not starting it`);
     return;
   }
+  // firstStart vs restart keys on the durable hasSuccessfullyStarted marker, read
+  // with the restart generation above: a container that has run here before is a
+  // restart even after a crash; one that never has is a first start.
+  const firstStart = !(startingState && startingState.hasSuccessfullyStarted);
   // The attempt is recorded once it is made, whatever it came to: a pass that
   // does not start the component walks no ladder.
   let startError = null;
@@ -1357,11 +1361,12 @@ async function reconcile(rawIdentifier) {
     return;
   }
   appInspector.startAppMonitoring(identifier);
+  if (firstStart) await appsRuntimeState.setSuccessfullyStarted(identifier);
   // A restart of a container that was already stopped IS this start, so the
   // request is satisfied here. Left pending, the pass that next finds it running
   // would bounce a container the operator has just watched come up.
-  log.info(`appReconciler - ${identifier} restarted`);
-  fluxEventBus.publish('reconciler:actuated', { identifier, action: 'started', exitCode: actual.exitCode });
+  log.info(`appReconciler - ${identifier} ${firstStart ? 'started (first start)' : 'restarted'}`);
+  fluxEventBus.publish('reconciler:actuated', { identifier, action: firstStart ? 'firstStart' : 'restart', exitCode: actual.exitCode });
   // A start is exactly when a container can come up attached to no network (a stale
   // endpoint left by an earlier failed start). The attachment we hold was sampled
   // BEFORE this start, so verify the new one shortly - otherwise a detached-at-boot
