@@ -11,7 +11,6 @@ describe('appInstaller tests', () => {
   let dbHelperStub;
   let logStub;
   let configStub;
-  let globalStateStub;
   let hwRequirementsStub;
   let appsRepositoryStub;
 
@@ -52,8 +51,6 @@ describe('appInstaller tests', () => {
         maxImageSize: 10000000000,
       },
     };
-
-    globalStateStub = {};
 
     // Stubs
     verificationHelperStub = {
@@ -183,7 +180,6 @@ describe('appInstaller tests', () => {
         isUPNP: sinon.stub().returns(false),
         mapUpnpPort: sinon.stub().resolves(true),
       },
-      '../utils/globalState': globalStateStub,
       '../../lib/log': logStub,
       '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
         config: configStub,
@@ -233,6 +229,7 @@ describe('appInstaller tests', () => {
 
   afterEach(() => {
     sinon.restore();
+    operationRegistry.clear();
   });
 
   describe('installApplicationAPI', () => {
@@ -434,7 +431,6 @@ describe('appInstaller tests', () => {
         '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
         '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
         '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
-        '../utils/globalState': {},
         '../../lib/log': logStub,
         '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', { config: configStub }),
         '../appDatabase/appsRepository': {
@@ -496,7 +492,6 @@ describe('appInstaller tests', () => {
 
   describe('post-install broadcast', () => {
     it('runs onInstallComplete/app:installed on a successful install', async () => {
-      const gs = { activeStandbyCoordinationRunning: false };
       const onInstallComplete = sinon.stub().resolves();
       const fluxEventBusPublish = sinon.stub();
 
@@ -539,7 +534,6 @@ describe('appInstaller tests', () => {
         '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
         '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
         '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
-        '../utils/globalState': gs,
         '../../lib/log': logStub,
         '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', { config: configStub }),
         '../appDatabase/appsRepository': {
@@ -641,7 +635,6 @@ describe('appInstaller tests', () => {
         '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
         '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
         '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
-        '../utils/globalState': {},
         '../telemetryIdentityService': { onComponentCreated: sinon.stub().resolves() },
         '../../lib/log': logStub,
         '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', { config: configStub }),

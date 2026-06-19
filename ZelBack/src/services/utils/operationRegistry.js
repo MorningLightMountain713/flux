@@ -6,11 +6,15 @@ const log = require('../../lib/log');
 // keyed, owner/TTL-bearing structure that records WHICH app/component is
 // mid-operation instead of a node-wide "something is happening" bit.
 //
-// Two lease scopes, one uniform shape:
+// Three lease scopes, one uniform shape:
 //   app-scoped (key = app name)            : install | remove | softRedeploy |
 //                                            hardRedeploy | reconcile | backup | restore
 //   component-scoped (key = component id)  : stopping  (the reconciler's own
 //                                            stop/restart-in-flight marker, was stoppingContainers)
+//   node-global (reserved key)             : coordinate (the activeStandby election
+//                                            singleton's mid-cycle marker; key
+//                                            ACTIVE_STANDBY_COORDINATOR_KEY, was the
+//                                            globalState.activeStandbyCoordinationRunning expando)
 //
 // In-memory + TTL only, NEVER DB-durable: an in-flight lease is transient intent;
 // a crash between acquire and completion must not persist as "installing" (after a
@@ -31,8 +35,14 @@ const TTL_MS = {
   backup: 60 * 60 * 1000,
   restore: 60 * 60 * 1000,
   stopping: 5 * 60 * 1000,
+  coordinate: 10 * 60 * 1000,
 };
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
+
+// Reserved node-global key: the activeStandby election loop is a node singleton,
+// not an app operation, so it leases a fixed sentinel key. The '__'-bracketed
+// namespace never collides with an app name or component identifier.
+const ACTIVE_STANDBY_COORDINATOR_KEY = '__activeStandbyCoordinator__';
 
 // key -> { type, owner, reason, sinceMs, ttlMs, timer }
 const leases = new Map();
@@ -122,10 +132,11 @@ function list() {
 
 /**
  * Whether ANY lease is currently held — the node-wide "is anything in flight"
- * signal for the few genuinely node-wide consumers (the daemon-health mass-wipe,
- * the orphan sweep, the activeStandby coordinator). Counts EVERY lease, including
- * transient component 'stopping' markers: a node-wide destructive action must
- * never run while anything is mid-operation.
+ * signal for the genuinely node-wide consumers (the daemon-health mass-wipe and
+ * the orphan sweep). Counts EVERY lease: app operations, the transient component
+ * 'stopping' markers, AND the node-global activeStandby 'coordinate' lease — a
+ * node-wide destructive sweep must never run while anything is mid-operation,
+ * including an in-progress activeStandby election cycle.
  * @returns {boolean}
  */
 function anyHeld() {
@@ -166,4 +177,5 @@ function clear() {
 
 module.exports = {
   acquire, release, isHeld, get, list, anyHeld, anyHeldOfType, listByType, clear, TTL_MS,
+  ACTIVE_STANDBY_COORDINATOR_KEY,
 };
