@@ -339,7 +339,7 @@ describe('fluxNetworkMonitor tests', () => {
 
       // Stub appController
       appControllerStub = {
-        appDockerRestart: sinon.stub().resolves(),
+        requestAppRestart: sinon.stub().resolves(),
       };
 
       // Stub specCutover
@@ -379,8 +379,8 @@ describe('fluxNetworkMonitor tests', () => {
       sinon.assert.calledWith(appUninstallerStub.uninstallApplication, 'staticApp');
 
       // Verify normal app was restarted (not uninstalled)
-      sinon.assert.calledOnce(appControllerStub.appDockerRestart);
-      sinon.assert.calledWith(appControllerStub.appDockerRestart, 'normalApp');
+      sinon.assert.calledOnce(appControllerStub.requestAppRestart);
+      sinon.assert.calledWith(appControllerStub.requestAppRestart, 'normalApp');
 
       // Verify geolocation service was called
       sinon.assert.calledOnce(geolocationServiceStub.setNodeGeolocation);
@@ -410,7 +410,7 @@ describe('fluxNetworkMonitor tests', () => {
       };
 
       appControllerStub = {
-        appDockerRestart: sinon.stub().resolves(),
+        requestAppRestart: sinon.stub().resolves(),
       };
 
       // Stub specCutover to return decrypted specs with staticip: true
@@ -478,7 +478,7 @@ describe('fluxNetworkMonitor tests', () => {
       };
 
       appControllerStub = {
-        appDockerRestart: sinon.stub().resolves(),
+        requestAppRestart: sinon.stub().resolves(),
       };
 
       // Stub specCutover to throw error
@@ -512,7 +512,7 @@ describe('fluxNetworkMonitor tests', () => {
 
       // Should skip the app entirely when decryption fails - neither uninstall nor restart
       sinon.assert.notCalled(appUninstallerStub.uninstallApplication);
-      sinon.assert.notCalled(appControllerStub.appDockerRestart);
+      sinon.assert.notCalled(appControllerStub.requestAppRestart);
     });
 
     it('should not uninstall v6 apps even with staticip field', async () => {
@@ -538,7 +538,7 @@ describe('fluxNetworkMonitor tests', () => {
       };
 
       appControllerStub = {
-        appDockerRestart: sinon.stub().resolves(),
+        requestAppRestart: sinon.stub().resolves(),
       };
 
       specCutoverStub = {
@@ -571,7 +571,7 @@ describe('fluxNetworkMonitor tests', () => {
 
       // v6 apps should not be checked for staticip (only v7+)
       sinon.assert.notCalled(appUninstallerStub.uninstallApplication);
-      sinon.assert.calledOnce(appControllerStub.appDockerRestart);
+      sinon.assert.calledOnce(appControllerStub.requestAppRestart);
     });
   });
 
