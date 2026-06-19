@@ -13,7 +13,6 @@ const { collateralOutpoint, nodesNameThisNode } = require('../utils/nodePinning'
 const { compareInstallingClaims, compareInstanceSeniority, describeRanking } = require('../utils/instanceOrdering');
 
 // Import modular services
-const appQueryService = require('../appQuery/appQueryService');
 
 // What this node last concluded about each app: the stage that removed it from
 // the candidate list, or 'candidate' when it survived to the draw.
@@ -215,23 +214,14 @@ async function trySpawningGlobalApplication() {
     // were the same value.
     const localIp = extractIp(localSocketAddr);
 
-    // The other way a spec can name this node. Resolved once per pass beside the
-    // address, because the filters below run inside .filter() and cannot await, and
-    // because obtainNodeCollateralInformation is a daemon RPC per call. A failure
-    // narrows pin matching to addresses rather than stopping the pass.
-    const myOutpoint = collateralOutpoint(
-      await generalService.obtainNodeCollateralInformation().catch((error) => {
-        log.warn(`trySpawningGlobalApplication - could not resolve node collateral, pins naming this node by collateral will not match: ${error.message}`);
-        return null;
-      }),
-    );
-
-    const runningApps = await appQueryService.listRunningApps();
-    if (runningApps.status !== 'success') {
-      throw new Error('trySpawningGlobalApplication - Unable to check running apps on this Flux');
-    }
-    if (runningApps.data.length >= config.fluxapps.maxAppsPerNode) {
-      log.info(`trySpawningGlobalApplication - Node at max apps capacity (${runningApps.data.length}/${config.fluxapps.maxAppsPerNode})`);
+    // Capacity + the already-present filter both count INSTALLED apps (the DB), not
+    // running containers. Post-flip a just-installed app is briefly Docker 'created'
+    // (not running), and an app is one-or-more containers, so "installed" is the clean
+    // per-app unit: a running-container count over-counts multi-component apps and
+    // miscounts during the install->settle window.
+    const installedApps = await appsRepository.listInstalledApps();
+    if (installedApps.length >= config.fluxapps.maxAppsPerNode) {
+      log.info(`trySpawningGlobalApplication - Node at max apps capacity (${installedApps.length}/${config.fluxapps.maxAppsPerNode})`);
       return delayTime;
     }
 
@@ -304,7 +294,7 @@ async function trySpawningGlobalApplication() {
       const nameSet = () => new Set(globalAppNamesLocation.map((c) => c.instantiated.name));
       const stages = [['found', nameSet()]];
 
-      globalAppNamesLocation = globalAppNamesLocation.filter((c) => !runningApps.data.find((appsRunning) => appsRunning.Names[0].slice(5) === c.instantiated.name)
+      globalAppNamesLocation = globalAppNamesLocation.filter((c) => !installedApps.find((a) => a.name === c.instantiated.name)
         && !globalState.spawnErrorsLongerAppCache.has(c.instantiated.hash)
         && !globalState.trySpawningGlobalAppCache.has(c.instantiated.hash)
         && !appsToBeCheckedLater.some((appAux) => appAux.appName === c.instantiated.name));
