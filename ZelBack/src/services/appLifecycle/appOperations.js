@@ -295,6 +295,7 @@ async function redeployComponent(appName, componentName, options = {}) {
 
     status(`Component ${deployComp.identifier} ${label} complete`);
     operationRegistry.release(appName);
+    appReconciler.enqueue(appName);
   } catch (error) {
     log.error(error);
     log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployComponent)`);
@@ -403,6 +404,7 @@ async function redeployApplication(appName, options = {}) {
 
     status(`Application ${appName} ${label} complete`);
     operationRegistry.release(appName);
+    appReconciler.enqueue(appName);
   } catch (error) {
     log.error(error);
     log.warn(`REMOVAL REASON: ${label} failure - ${appName}: ${error.message} (redeployApplication)`);
@@ -1526,6 +1528,7 @@ async function reconcileApp(installed, registrySpec) {
     log.info(`Cleanup completed for ${installed.name} after reconciliation failure`);
   } finally {
     operationRegistry.release(installed.name);
+    appReconciler.enqueue(installed.name);
   }
 }
 

@@ -10,6 +10,7 @@ const messageHelper = require('../messageHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
+const appReconciler = require('../appMonitoring/appReconciler');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { storeAppInstallingErrorMessage } = require('../appMessaging/messageStore');
 const { systemArchitecture, checkPlacement, checkNodeResources } = require('../appRequirements/hwRequirements');
@@ -367,6 +368,10 @@ async function installApplication(instantiated, options = {}) {
       }
     }
   }
+  // Hand off to the reconciler — it converges the now-installed app (the install
+  // lease released in the finally above, so this reconcile won't defer). Redundant
+  // while installComponent still inline-starts; the sole starter once it doesn't.
+  if (!test) appReconciler.enqueue(appName);
   return { status: InstallStatus.INSTALLED, reason: null };
 }
 
