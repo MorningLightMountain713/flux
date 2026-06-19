@@ -9,7 +9,6 @@ const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
-const appUninstaller = require('../appLifecycle/appUninstaller');
 const { validateSubmissionSpec, getSpec, getSpecBackend } = require('../utils/specLibs');
 const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
@@ -763,75 +762,6 @@ function registrationInformation(_req, res) {
 }
 
 /**
- * Remove expired applications from global database and local installations
- * @returns {Promise<void>} Completion status
- */
-async function expireGlobalApplications() {
-  // check if synced
-  try {
-    // get current height
-    const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.database.daemon.database);
-    const query = { generalScannedHeight: { $gte: 0 } };
-    const projection = {
-      projection: {
-        _id: 0,
-        generalScannedHeight: 1,
-      },
-    };
-    const result = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
-    if (!result) {
-      throw new Error('Scanning not initiated');
-    }
-    const explorerHeight = serviceHelper.ensureNumber(result.generalScannedHeight);
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    const candidates = await appsRepository.listGlobalAppInfo();
-    const appsToExpire = candidates.filter(
-      (is) => is.isExpired(nowSeconds, explorerHeight),
-    );
-    const appNamesToExpire = appsToExpire.map((is) => is.name);
-    // remove appNamesToExpire apps from global database
-    // eslint-disable-next-line no-restricted-syntax
-    const databaseApps = dbopen.db(config.database.appsglobal.database);
-    for (const app of appsToExpire) {
-      log.info(`Expiring application ${app.name}`);
-      // eslint-disable-next-line no-await-in-loop
-      await appsRepository.removeGlobalAppInfo(app.name);
-      // eslint-disable-next-line no-await-in-loop
-      await dbHelper.removeDocumentsFromCollection(databaseApps, globalAppsInstallingErrorsLocations, { name: app.name });
-    }
-
-    const installedApps = await appsRepository.listInstalledApps();
-    const appsToRemoveNames = [];
-    for (const app of installedApps) {
-      if (appNamesToExpire.includes(app.name)) {
-        appsToRemoveNames.push(app.name);
-      } else if (!app.height) {
-        appsToRemoveNames.push(app.name);
-      } else if (app.height === 0) {
-        // forever lasting local app — skip
-      } else if (app.isExpired(nowSeconds, explorerHeight)) {
-        appsToRemoveNames.push(app.name);
-      }
-    }
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const appName of appsToRemoveNames) {
-      log.warn(`Application ${appName} is expired, removing`);
-      log.warn(`REMOVAL REASON: App expired - ${appName} reached expiration date (registryManager)`);
-      // eslint-disable-next-line no-await-in-loop
-      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: true });
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(1 * 60 * 1000); // wait for 1 min
-    }
-  } catch (error) {
-    log.error(error);
-  }
-}
-
-
-
-/**
  * Rebuild the global apps information collection from messages collection.
  *
  * Thin wrapper around appsMaintenance.reindexGlobalAppsInformation, which
@@ -1322,7 +1252,6 @@ module.exports = {
   getRunningApps,
   getRunningAppIpList,
   registrationInformation,
-  expireGlobalApplications,
   reindexGlobalAppsInformation,
   reindexGlobalAppsLocation,
   rescanGlobalAppsInformation,

@@ -120,7 +120,7 @@ async function trySpawningGlobalApplication() {
 
     if (globalState.firstExecutionAfterItsSynced === true) {
       log.info('Explorer Synced, checking for expired apps');
-      await registryManager.expireGlobalApplications();
+      await appUninstaller.expireGlobalApplications();
       globalState.firstExecutionAfterItsSynced = false;
     }
 
