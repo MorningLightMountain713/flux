@@ -334,7 +334,16 @@ function isOracleSigner(tx, height) {
 
 async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
   const { dispatch } = await getSpecPolicy();
-  const { kind, message } = dispatch(bytes);
+  let dispatched;
+  try {
+    dispatched = dispatch(bytes);
+  } catch (error) {
+    // A malformed or out-of-range message is rejected at the parse boundary.
+    // Log and skip it — don't apply it, and don't abort the rest of the batch.
+    log.warn(`Rejected soft-fork message ${txid} at height ${height}: ${error.message}`);
+    return;
+  }
+  const { kind, message } = dispatched;
 
   switch (kind) {
     case 'legacy-price': {
