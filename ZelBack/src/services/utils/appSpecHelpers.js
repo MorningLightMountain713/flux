@@ -43,7 +43,9 @@ function getOracleFluxUsdRate() {
 
 /**
  * Get the current fiat markup in basis points from PriceModifierHistory.
- * Returns 0 if no PriceModifierMessage has set the field.
+ * Returns 0 if no PriceModifierMessage has set the field. The value is bounded at
+ * the parse boundary (PriceModifierMessage rejects an out-of-range fiatMarkupBp
+ * on both publish and ingest), so this can trust it without re-checking.
  * @returns {number}
  */
 function getFiatMarkupBp() {
