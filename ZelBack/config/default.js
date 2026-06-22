@@ -139,6 +139,11 @@ module.exports = {
     // and the run length that counts as stable (resets the ladder)
     crashBackoffDelaysMs: [0, 30000, 300000, 900000, 1800000],
     crashBackoffStableRunMs: 600000,
+    // install converge-wait (reconciler): roll an install back after this many
+    // failed start attempts (a COUNT, not a clock); the backstop only stops the
+    // caller hanging and never rolls back.
+    convergeFailAttempts: 2,
+    convergeBackstopMs: 300000, // 5 min
     // in flux main chain per month (blocksLasting)
     price: [
       { // any price fork can be done by adjusting object similarily.
