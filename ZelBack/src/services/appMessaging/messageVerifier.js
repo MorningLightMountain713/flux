@@ -257,6 +257,9 @@ async function computeRegistrationFee(spec, height) {
     const breakdown = await engine.price(spec, {
       height,
       duration: spec.ttl || 0,
+      // Real encryption bit drives the encryptedSpec fee. resolveSpec exposes it:
+      // a cleartext spec reports false, a decrypted-from-encrypted spec reports true.
+      isEncrypted: spec.isEncrypted,
       ...resolveMarketplacePricingCtx(spec, height),
     });
     return BigInt(breakdown.total);
@@ -285,6 +288,7 @@ async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegister
     const oldBreakdown = await oldEngine.price(prevSpec, {
       height: prevHeight,
       duration: prevSpec.ttl || 0,
+      isEncrypted: prevSpec.isEncrypted,
       ...resolveMarketplacePricingCtx(prevSpec, prevHeight),
     });
     const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
@@ -306,6 +310,8 @@ async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegister
       remainingSeconds,
       oldTtl: prevSpec.ttl || 0,
       updateDiscountBp,
+      // priceUpdate prices the new spec internally, so this is the new spec's bit.
+      isEncrypted: spec.isEncrypted,
       ...resolveMarketplacePricingCtx(spec, height),
     });
     return (result && result.free) ? 0n : BigInt(result.total);
