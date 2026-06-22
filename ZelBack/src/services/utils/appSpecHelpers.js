@@ -93,6 +93,9 @@ async function getAppFluxOnChainPrice(appSpecification) {
   const breakdown = await engine.price(spec, {
     height: daemonHeight,
     duration: spec.ttl || 0,
+    // Real encryption bit drives the encryptedSpec fee. resolveSpec exposes it:
+    // a cleartext spec reports false, a decrypted-from-encrypted spec reports true.
+    isEncrypted: spec.isEncrypted,
     ...resolveMarketplacePricingCtx(spec, daemonHeight),
   });
   return breakdown.total / 1e8;
@@ -121,6 +124,7 @@ async function getAppFluxOnChainUpdatePrice(spec, existing, daemonHeight) {
   const oldBreakdown = await oldEngine.price(prevSpec, {
     height: prevHeight,
     duration: prevSpec.ttl || 0,
+    isEncrypted: existing.isEncrypted,
     ...resolveMarketplacePricingCtx(prevSpec, prevHeight),
   });
   const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
@@ -142,6 +146,8 @@ async function getAppFluxOnChainUpdatePrice(spec, existing, daemonHeight) {
     remainingSeconds,
     oldTtl: prevSpec.ttl || 0,
     updateDiscountBp,
+    // priceUpdate prices the new spec internally, so this is the new spec's bit.
+    isEncrypted: spec.isEncrypted,
     ...resolveMarketplacePricingCtx(spec, daemonHeight),
   });
   if (result && result.free) return 0;
