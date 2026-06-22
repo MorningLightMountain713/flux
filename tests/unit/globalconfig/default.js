@@ -117,6 +117,8 @@ module.exports = {
     crashBackoffStableRunMs: 600000,
     restartBurstCount: 5,
     restartBurstWindowMs: 300000,
+    convergeFailAttempts: 2,
+    convergeBackstopMs: 300000,
     // in flux main chain per month (blocksLasting)
     price: [
       { // any price fork can be done by adjusting object similarily.

@@ -281,6 +281,11 @@ module.exports = {
       // is 32 MB/s from each over one 2 s tick.
       minFreeBytes: 64 * 1024 * 1024,
     },
+    // install converge-wait (reconciler): roll an install back after this many
+    // failed start attempts (a COUNT, not a clock); the backstop only stops the
+    // caller hanging and never rolls back.
+    convergeFailAttempts: 2,
+    convergeBackstopMs: 300000, // 5 min
     // in flux main chain per month (blocksLasting)
     price: [
       { // any price fork can be done by adjusting object similarily.
