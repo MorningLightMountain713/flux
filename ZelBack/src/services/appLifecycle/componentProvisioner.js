@@ -1,11 +1,13 @@
 // Per-component provisioner: builds one component's container substrate — ports,
 // image verify/pull, volumes, swap pool, image-size measurement, appDockerCreate,
-// telemetry identity — and (for now) starts it. Extracted from appInstaller so the
-// reconciler's recreate path (containerHealthMonitor) depends on this provisioner
-// primitive rather than on the install orchestrator (installApplication). That
-// breaks the appReconciler -> containerHealthMonitor -> appInstaller import cycle,
-// letting appInstaller hand off to the reconciler directly. installComponent is a
-// pure provisioner: it knows nothing of the reconciler or the operation registry.
+// telemetry identity — and leaves it in Docker `created` for the reconciler to
+// start (a `test` install is the one exception: it starts inline + health-checks).
+// Extracted from appInstaller so the reconciler's recreate path
+// (containerHealthMonitor) depends on this provisioner primitive rather than on the
+// install orchestrator (installApplication). That breaks the appReconciler ->
+// containerHealthMonitor -> appInstaller import cycle, letting appInstaller hand off
+// to the reconciler directly. installComponent is a pure provisioner: it knows
+// nothing of the reconciler or the operation registry.
 const util = require('util');
 const config = require('config');
 const log = require('../../lib/log');
