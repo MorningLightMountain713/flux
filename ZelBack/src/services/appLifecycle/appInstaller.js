@@ -370,16 +370,13 @@ async function installApplication(instantiated, options = {}) {
       }
     }
   }
-  // Hand off to the reconciler — it converges the now-installed app (the install
-  // lease released in the finally above, so this reconcile won't defer). Redundant
-  // while installComponent still inline-starts; the sole starter once it doesn't.
   // Hand off to the reconciler and await convergence: it starts/holds each
   // component and resolves a settled verdict (the install lease released in the
-  // finally above, so the reconcile won't defer). A component that exhausts the
-  // install-window start attempts fails the converge -> roll the whole install
-  // back (provisioned-but-not-running) so the fleet re-places it; a node issue
-  // ('provisional' backstop) never rolls back. Redundant happy-path no-op while
-  // installComponent still inline-starts; load-bearing once the flip removes it.
+  // finally above, so the reconcile won't defer). Load-bearing — the reconciler is
+  // the sole starter, so this is what turns "provisioned" into "running". A
+  // component that exhausts the install-window start attempts fails the converge ->
+  // roll the whole install back (provisioned-but-not-running) so the fleet
+  // re-places it; a node issue ('provisional' backstop) never rolls back.
   if (!test) {
     const componentIds = deployment.componentEntries().map(([, comp]) => comp.identifier);
     const { converged, failed } = await appReconciler.awaitConvergence(componentIds);
