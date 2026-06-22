@@ -42,17 +42,23 @@ function getOracleFluxUsdRate() {
 }
 
 /**
- * Get the current fiat markup in basis points from PriceModifierHistory.
- * Returns 0 if no PriceModifierMessage has set the field. The value is bounded at
- * the parse boundary (PriceModifierMessage rejects an out-of-range fiatMarkupBp
- * on both publish and ingest), so this can trust it without re-checking.
+ * Get the current fiat markup in basis points from PriceModifierHistory. Throws
+ * when pricing state isn't ready (no modifier history / daemon not synced),
+ * matching the fail-loud posture of getAppFluxOnChainPrice rather than silently
+ * pretending there's no markup. Returns 0 only when no PriceModifierMessage has
+ * set the field — a genuine "no markup configured" state. The value is bounded at
+ * the parse boundary, so this trusts it without re-checking.
  * @returns {number}
  */
 function getFiatMarkupBp() {
   const modifierHistory = priceOracleState.getPriceModifierHistory();
-  if (!modifierHistory) return 0;
+  if (!modifierHistory) {
+    throw new Error('Price modifier history is not available.');
+  }
   const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-  if (!syncStatus.data.synced) return 0;
+  if (!syncStatus.data.synced) {
+    throw new Error('Daemon not yet synced.');
+  }
   const resolved = modifierHistory.resolveAt(syncStatus.data.height);
   return resolved.fiatMarkupBp || 0;
 }
