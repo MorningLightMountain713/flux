@@ -84,8 +84,10 @@ function acquire(key, type, owner, reason = null, ttlMs = null) {
 }
 
 /**
- * Release a key's lease. Idempotent. (Stage 4 will also enqueue the app's
- * components on the reconciler from here; for now it only drops the lease.)
+ * Release a key's lease. Idempotent. Deliberately a dumb lease drop: it does NOT
+ * enqueue the reconciler (that would make a passive primitive an orchestrator).
+ * The provision-complete -> reconciler handoff lives in the operation layer
+ * (e.g. appInstaller enqueues + awaits convergence after it releases here).
  *
  * @param {string} key
  * @returns {boolean} whether a lease was released
