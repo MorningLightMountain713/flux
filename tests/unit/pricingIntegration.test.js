@@ -12,6 +12,8 @@ describe('pricing integration — chain messages through PricingEngine', () => {
   let SOFT_FORK_EFFECTIVE_DEPTH;
   let buildPricingEngine, resolveMarketplacePricingCtx;
   let convertMicrodollarsToSats;
+  let usedFeatureKeys;
+  let FluxAppSpecV9;
 
   before(async () => {
     ({
@@ -20,7 +22,9 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       MarketplacePricingMessage, MarketplacePricingHistory,
       SOFT_FORK_EFFECTIVE_DEPTH,
       convertMicrodollarsToSats,
+      usedFeatureKeys,
     } = await import('@runonflux/flux-spec-policy'));
+    ({ FluxAppSpecV9 } = await import('@runonflux/flux-spec'));
     ({ buildPricingEngine, resolveMarketplacePricingCtx } = require('../../ZelBack/src/services/pricing/buildPricingEngine'));
   });
 
@@ -436,6 +440,75 @@ describe('pricing integration — chain messages through PricingEngine', () => {
 
       const without = buildTestHistories();
       expect(without.modifierHistory.resolveAt(without.queryHeight).updateDiscountBp).to.equal(undefined);
+    });
+  });
+
+  describe('free-update feature delta through the FluxOS stack (became-encrypted)', () => {
+    // The flux-spec rule is unit-tested with real specs; this exercises the
+    // FluxOS wiring end-to-end through the real engine + FluxosDiscounter:
+    // priceUpdate derives the new feature set from the new breakdown, the caller
+    // supplies the old set off the old breakdown, and turning encryption on
+    // during an otherwise-identical update adds the encryptedSpec feature, so it
+    // is no longer free.
+    function realSpec() {
+      return FluxAppSpecV9.fromSubmission({
+        version: 9,
+        name: 'encgapapp',
+        description: 'fixture',
+        owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+        instances: 3,
+        ttl: 2_592_000,
+        contacts: { email: ['test@example.com'] },
+        components: {
+          web: {
+            name: 'web',
+            image: 'nginx:latest',
+            cpu: 1,
+            memory: 1000,
+            swapGb: 2,
+            rootFsGb: 2,
+            persistentStorage: { sizeGb: 10, mounts: { '/data': { source: 'data', destination: '/data' } } },
+            ports: { tcp_80: { containerPort: 80, hostPort: 31000, protocol: 'tcp' } },
+          },
+        },
+      });
+    }
+
+    async function priceUpdateThroughStack(newIsEncrypted) {
+      const h = buildTestHistories();
+      stubHistories(h);
+      const spec = realSpec();
+      const engine = await buildPricingEngine(h.queryHeight);
+
+      // Old breakdown priced with the old (cleartext) encryption bit, exactly as
+      // computeUpdateFee does, to derive the old feature set passed via ctx.
+      const oldBreakdown = await engine.price(spec, {
+        height: h.queryHeight, duration: spec.ttl, isEncrypted: false,
+      });
+      const oldFeatures = usedFeatureKeys(oldBreakdown.features);
+
+      return engine.priceUpdate(spec, spec, {
+        height: h.queryHeight,
+        duration: spec.ttl,
+        now: Date.now(),
+        recentEvents: [],
+        oldScaledPriceMicrodollars: oldBreakdown.marketplaceAdjustedMicrodollars,
+        oldFeatures,
+        remainingSeconds: spec.ttl,
+        oldTtl: spec.ttl,
+        isEncrypted: newIsEncrypted,
+      });
+    }
+
+    it('keeps an identical cleartext update free', async () => {
+      const result = await priceUpdateThroughStack(false);
+      expect(result.free).to.equal(true);
+    });
+
+    it('charges when the update turns encryption on (encryptedSpec added)', async () => {
+      const result = await priceUpdateThroughStack(true);
+      expect(result.free).to.not.equal(true);
+      expect(result.total).to.be.above(0);
     });
   });
 });

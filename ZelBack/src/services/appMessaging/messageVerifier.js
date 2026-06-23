@@ -11,7 +11,7 @@ const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
 const { buildPricingEngine, resolveMarketplacePricingCtx } = require('../pricing/buildPricingEngine');
 const priceOracleState = require('../pricing/priceOracleState');
-const { getSpecBackend } = require('../utils/specLibs');
+const { getSpecBackend, getSpecPolicy } = require('../utils/specLibs');
 const { resolveSpec } = require('../utils/specCutover');
 const appsRepository = require('../appDatabase/appsRepository');
 const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
@@ -293,6 +293,13 @@ async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegister
     });
     const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
 
+    // Old spec's feature set, off the breakdown just priced at the old rates
+    // (with the old spec's encryption bit). priceUpdate derives the new set from
+    // the new breakdown; the free-update rule compares the two, so a feature
+    // newly added on this update — including turning encryption on — blocks it.
+    const { usedFeatureKeys } = await getSpecPolicy();
+    const oldFeatures = usedFeatureKeys(oldBreakdown.features);
+
     // Unused wall-clock seconds left on the prior registration.
     const remainingSeconds = Math.max(0, (prevRegisteredAt + (prevSpec.ttl || 0)) - nowBlockTime);
 
@@ -307,6 +314,7 @@ async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegister
       now: Date.now(),
       recentEvents: [],
       oldScaledPriceMicrodollars,
+      oldFeatures,
       remainingSeconds,
       oldTtl: prevSpec.ttl || 0,
       updateDiscountBp,

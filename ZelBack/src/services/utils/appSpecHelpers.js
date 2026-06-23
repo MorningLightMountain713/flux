@@ -4,6 +4,7 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { resolveSpec } = require('./specCutover');
+const { getSpecPolicy } = require('./specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { buildPricingEngine, resolveMarketplacePricingCtx } = require('../pricing/buildPricingEngine');
 const priceOracleState = require('../pricing/priceOracleState');
@@ -137,6 +138,12 @@ async function getAppFluxOnChainUpdatePrice(spec, existing, daemonHeight) {
   });
   const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
 
+  // Old spec's feature set off the breakdown just priced at the old rates (with
+  // the old encryption bit). Mirrors messageVerifier so display == consensus on
+  // the free-update feature check, including the cleartext->encrypted case.
+  const { usedFeatureKeys } = await getSpecPolicy();
+  const oldFeatures = usedFeatureKeys(oldBreakdown.features);
+
   const nowSeconds = Math.floor(Date.now() / 1000);
   const remainingSeconds = Math.max(0, (existing.registeredAt + (prevSpec.ttl || 0)) - nowSeconds);
 
@@ -151,6 +158,7 @@ async function getAppFluxOnChainUpdatePrice(spec, existing, daemonHeight) {
     now: Date.now(),
     recentEvents: [],
     oldScaledPriceMicrodollars,
+    oldFeatures,
     remainingSeconds,
     oldTtl: prevSpec.ttl || 0,
     updateDiscountBp,
