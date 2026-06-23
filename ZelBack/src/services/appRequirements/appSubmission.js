@@ -159,7 +159,7 @@ async function resolveSubmission(appSpecification, {
   // owner's on-chain policy groups do not grant at this height.
   const cleartextSpec = spec.spec || spec;
   if (cleartextSpec.version === 9 && typeof cleartextSpec.toCanonical === 'function') {
-    await entitlementsState.assertSpecEntitled(cleartextSpec, spec.owner, daemonHeight);
+    await entitlementsState.assertSpecEntitled(cleartextSpec, spec.owner, daemonHeight, isEncrypted);
     await assertMatchesMarketplaceTemplate(cleartextSpec);
   }
 
