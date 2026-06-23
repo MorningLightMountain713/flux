@@ -23,13 +23,23 @@ class FluxosDiscounter {
 
   async checkFreeUpdate(oldSpec, newSpec, ctx) {
     const { checkFreeUpdate } = await require('../utils/specLibs').getSpecPolicy();
-    return checkFreeUpdate({
+    const result = checkFreeUpdate({
       oldSpec,
       newSpec,
-      featureFees: ctx.featureFees || {},
+      // Feature sets are computed once by the pricer with each spec's real
+      // encryption flag — newFeatures is injected by PricingEngine.priceUpdate
+      // from the new breakdown; oldFeatures comes from the caller, derived from
+      // the old breakdown it prices for the unused-time credit.
+      oldFeatures: ctx.oldFeatures,
+      newFeatures: ctx.newFeatures,
       recentEvents: ctx.recentEvents || [],
       now: ctx.now || Date.now(),
     });
+    // The helper returns a rich result on BOTH outcomes; the Discounter contract
+    // is "result on free, null on not-free", and priceUpdate's `if (free)` relies
+    // on it. Without this wrap a not-free update returns a truthy {free:false},
+    // short-circuiting the price computation and yielding no total.
+    return result.free ? result : null;
   }
 }
 
