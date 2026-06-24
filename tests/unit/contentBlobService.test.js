@@ -1,8 +1,11 @@
 const { expect } = require('chai');
 const crypto = require('node:crypto');
 const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
+const { aeadEncrypt } = require('../../ZelBack/src/services/utils/aeadCrypto');
 
-const { encryptAndUploadBlob, decryptAndVerifyBlob, MAX_BLOB_BYTES } = contentBlobService;
+const {
+  encryptAndUploadBlob, decryptAndVerifyBlob, resolveBlob, provisionContentBlobs, MAX_BLOB_BYTES,
+} = contentBlobService;
 
 const KEY = crypto.randomBytes(32);
 const NOW_MS = 1_700_000_000_000;
@@ -127,6 +130,80 @@ describe('contentBlobService', () => {
         { appName: 'app', fluxID: '1id', contentHash, framed },
         { benchmark: wrongKey },
       ), /./);
+    });
+  });
+
+  describe('resolveBlob', () => {
+    const bytes = Buffer.from('install me');
+    const contentHash = hashOf(bytes);
+    const validFramed = () => aeadEncrypt(KEY, bytes, Buffer.from(contentHash));
+    const noFluxDrive = { fetchBlobByLocator: async () => null };
+
+    it('resolves from the first healthy peer', async () => {
+      const framed = validFramed();
+      const out = await resolveBlob(
+        { appName: 'app', fluxID: '1id', contentHash, peers: ['p1', 'p2'] },
+        { benchmark: makeBenchmark(), peerFetch: async () => framed, fluxDrive: noFluxDrive },
+      );
+      expect(out.equals(bytes)).to.equal(true);
+    });
+
+    it('falls through a failing peer to the next', async () => {
+      const framed = validFramed();
+      let n = 0;
+      const peerFetch = async () => { n += 1; if (n === 1) throw new Error('peer down'); return framed; };
+      const out = await resolveBlob(
+        { appName: 'app', fluxID: '1id', contentHash, peers: ['p1', 'p2'] },
+        { benchmark: makeBenchmark(), peerFetch, fluxDrive: noFluxDrive },
+      );
+      expect(out.equals(bytes)).to.equal(true);
+      expect(n).to.equal(2);
+    });
+
+    it('skips a peer returning garbage and uses the FluxDrive backstop', async () => {
+      const fluxDrive = { fetchBlobByLocator: async () => validFramed() };
+      const out = await resolveBlob(
+        { appName: 'app', fluxID: '1id', contentHash, peers: ['p1'] },
+        { benchmark: makeBenchmark(), peerFetch: async () => Buffer.alloc(40, 7), fluxDrive },
+      );
+      expect(out.equals(bytes)).to.equal(true);
+    });
+
+    it('throws when no source yields verified content', async () => {
+      await expectReject(resolveBlob(
+        { appName: 'app', fluxID: '1id', contentHash, peers: ['p1'] },
+        { benchmark: makeBenchmark(), peerFetch: async () => null, fluxDrive: noFluxDrive },
+      ), /no source/);
+    });
+  });
+
+  describe('provisionContentBlobs', () => {
+    const deployment = {
+      componentEntries: () => [
+        ['web', { contentBlobMounts: () => [{ source: '/dat/app/config', hash: 'sha256:aaa' }, { source: '/dat/app/seed', hash: 'sha256:bbb' }] }],
+        ['db', { contentBlobMounts: () => [] }],
+      ],
+    };
+
+    it('resolves and writes every content-blob mount, in order', async () => {
+      const writes = [];
+      const resolve = async ({ contentHash }) => Buffer.from(`plain:${contentHash}`);
+      await provisionContentBlobs(
+        deployment,
+        { appName: 'app', fluxID: '1id', peers: ['p1'] },
+        { resolve, writeFile: async (s, b) => writes.push({ source: s, body: b }) },
+      );
+      expect(writes.map((w) => w.source)).to.deep.equal(['/dat/app/config', '/dat/app/seed']);
+      expect(writes[0].body.toString()).to.equal('plain:sha256:aaa');
+    });
+
+    it('propagates a resolve failure (app not installable without its content)', async () => {
+      const resolve = async () => { throw new Error('contentBlob: no source for sha256:aaa'); };
+      await expectReject(provisionContentBlobs(
+        deployment,
+        { appName: 'app', fluxID: '1id', peers: [] },
+        { resolve, writeFile: async () => {} },
+      ), /no source/);
     });
   });
 });
