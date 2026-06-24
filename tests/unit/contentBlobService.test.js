@@ -4,7 +4,8 @@ const contentBlobService = require('../../ZelBack/src/services/appLifecycle/cont
 const { aeadEncrypt } = require('../../ZelBack/src/services/utils/aeadCrypto');
 
 const {
-  encryptAndUploadBlob, decryptAndVerifyBlob, resolveBlob, provisionContentBlobs, MAX_BLOB_BYTES,
+  encryptAndUploadBlob, decryptAndVerifyBlob, resolveBlob, provisionContentBlobs,
+  serveBlob, fetchBlobFromPeer, MAX_BLOB_BYTES,
 } = contentBlobService;
 
 const KEY = crypto.randomBytes(32);
@@ -204,6 +205,55 @@ describe('contentBlobService', () => {
         { appName: 'app', fluxID: '1id', peers: [] },
         { resolve, writeFile: async () => {} },
       ), /no source/);
+    });
+  });
+
+  describe('serveBlob', () => {
+    const bytes = Buffer.from('served content');
+    const contentHash = hashOf(bytes);
+    const deployment = {
+      componentEntries: () => [['web', { contentBlobMounts: () => [{ source: '/dat/app/config', hash: contentHash }] }]],
+    };
+    const getDeployment = async () => deployment;
+    const readFile = async (src) => (src === '/dat/app/config' ? bytes : null);
+
+    it('serves a matching locator as re-encrypted, verifiable ciphertext', async () => {
+      const framed = await serveBlob(
+        { appName: 'app', fluxID: '1id', locator: 'a'.repeat(64) },
+        { benchmark: makeBenchmark(), getDeployment, readFile },
+      );
+      expect(Buffer.isBuffer(framed)).to.equal(true);
+      const out = await decryptAndVerifyBlob({ appName: 'app', fluxID: '1id', contentHash, framed }, { benchmark: makeBenchmark() });
+      expect(out.equals(bytes)).to.equal(true);
+    });
+
+    it('returns null when no mount matches the locator', async () => {
+      const framed = await serveBlob(
+        { appName: 'app', fluxID: '1id', locator: 'b'.repeat(64) },
+        { benchmark: makeBenchmark(), getDeployment, readFile },
+      );
+      expect(framed).to.equal(null);
+    });
+
+    it('returns null when the app is not installed here', async () => {
+      const framed = await serveBlob(
+        { appName: 'app', fluxID: '1id', locator: 'a'.repeat(64) },
+        { benchmark: makeBenchmark(), getDeployment: async () => null, readFile },
+      );
+      expect(framed).to.equal(null);
+    });
+  });
+
+  describe('fetchBlobFromPeer', () => {
+    it('returns the framed bytes on success', async () => {
+      const http = { get: async () => ({ data: Buffer.from('framed-cipher') }) };
+      const out = await fetchBlobFromPeer('1.2.3.4:16127', 'app', 'loc', { http });
+      expect(out.toString()).to.equal('framed-cipher');
+    });
+
+    it('returns null on any error', async () => {
+      const http = { get: async () => { throw new Error('refused'); } };
+      expect(await fetchBlobFromPeer('1.2.3.4:16127', 'app', 'loc', { http })).to.equal(null);
     });
   });
 });
