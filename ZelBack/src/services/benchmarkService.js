@@ -356,6 +356,36 @@ async function attestationPublicKey() {
   return executeCall(rpccall);
 }
 
+// Content blob key (per-blob): the benchmark channel returns the key; FluxOS does
+// the AES-256-GCM locally so bulk bytes never cross the channel.
+async function contentKey(params) {
+  const rpccall = 'contentkey';
+  const rpcparameters = [JSON.stringify(params)];
+  return executeCall(rpccall, rpcparameters);
+}
+
+// Content blob locator (opaque, fleet-deterministic) for FluxDrive indexing.
+async function blobLocator(params) {
+  const rpccall = 'bloblocator';
+  const rpcparameters = [JSON.stringify(params)];
+  return executeCall(rpccall, rpcparameters);
+}
+
+// Arcane upload signature (the anti-abuse factor) over the blob upload message.
+async function signBlobUpload(params) {
+  const rpccall = 'signblobupload';
+  const rpcparameters = [JSON.stringify(params)];
+  return executeCall(rpccall, rpcparameters);
+}
+
+// Transport: HPKE decap + export of the per-submission symmetric key; FluxOS
+// opens the spec ciphertext locally.
+async function transportDecap(params) {
+  const rpccall = 'transportdecap';
+  const rpcparameters = [JSON.stringify(params)];
+  return executeCall(rpccall, rpcparameters);
+}
+
 // == Control ==
 /**
  * To request help message.
@@ -530,6 +560,10 @@ module.exports = {
   unseal,
   transportPublicKey,
   transportOpen,
+  transportDecap,
+  contentKey,
+  blobLocator,
+  signBlobUpload,
   attest,
   attestationPublicKey,
 };
