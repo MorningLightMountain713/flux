@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const benchmarkService = require('../benchmarkService');
+const fluxDriveClient = require('../utils/fluxDriveClient');
 const { aeadEncrypt, aeadDecrypt } = require('../utils/aeadCrypto');
 
 const MAX_BLOB_BYTES = 2 * 1024 * 1024;
@@ -73,9 +74,75 @@ async function decryptAndVerifyBlob(blob, deps) {
   return plaintext;
 }
 
+/**
+ * Resolve a content blob at install time: peers first (by locator), then the
+ * FluxDrive backstop. Every candidate is decrypted and hash-verified before it is
+ * accepted, so a wrong/poisoned/garbage source is skipped and the next is tried.
+ * Throws only when no source yields verified content (deep-cold — the caller
+ * retries later). Peers are tried in the order given; the caller shuffles for
+ * herd-safety.
+ *
+ * @param {object} req - { appName, fluxID, contentHash, peers }
+ * @param {object} deps - { benchmark?, fluxDrive?, peerFetch, maxPeerAttempts? }
+ * @returns {Promise<Buffer>} verified plaintext
+ */
+async function resolveBlob(req, deps) {
+  const { appName, fluxID, contentHash, peers = [] } = req;
+  const {
+    benchmark = benchmarkService, fluxDrive = fluxDriveClient, peerFetch, maxPeerAttempts = 3,
+  } = deps || {};
+
+  const locator = benchmarkField(await benchmark.blobLocator({ appName, fluxID, contentHash }), 'locator');
+  const verify = (framed) => (framed
+    ? decryptAndVerifyBlob({ appName, fluxID, contentHash, framed }, { benchmark }).catch(() => null)
+    : null);
+
+  for (const peer of peers.slice(0, maxPeerAttempts)) {
+    const framed = await peerFetch(peer, appName, locator).catch(() => null);
+    const plain = await verify(framed);
+    if (plain) return plain;
+  }
+
+  const framed = await fluxDrive.fetchBlobByLocator(locator).catch(() => null);
+  const plain = await verify(framed);
+  if (plain) return plain;
+
+  throw new Error(`contentBlob: no source for ${contentHash}`);
+}
+
+/**
+ * Provision every content-blob mount of a deployment at install: resolve the blob
+ * (peers-first, FluxDrive backstop, hash-verified) and write the plaintext to its
+ * host source path. Throws if any declared mount cannot be resolved — an app is
+ * not installable without its declared content. The deployment exposes the
+ * content mounts via its domain accessor (DeploymentComponent.contentBlobMounts).
+ *
+ * @param {object} deployment - DeploymentSpec
+ * @param {object} ctx - { appName, fluxID, peers }
+ * @param {object} deps - { resolve?, writeFile, benchmark?, fluxDrive?, peerFetch }
+ */
+async function provisionContentBlobs(deployment, ctx, deps) {
+  const { appName, fluxID, peers = [] } = ctx;
+  const {
+    resolve = resolveBlob, writeFile, benchmark, fluxDrive, peerFetch,
+  } = deps || {};
+
+  for (const [, comp] of deployment.componentEntries()) {
+    for (const { source, hash } of comp.contentBlobMounts()) {
+      const plaintext = await resolve(
+        { appName, fluxID, contentHash: hash, peers },
+        { benchmark, fluxDrive, peerFetch },
+      );
+      await writeFile(source, plaintext);
+    }
+  }
+}
+
 module.exports = {
   encryptAndUploadBlob,
   decryptAndVerifyBlob,
+  resolveBlob,
+  provisionContentBlobs,
   sha256Hex,
   MAX_BLOB_BYTES,
   FRESHNESS_WINDOW_SECONDS,
