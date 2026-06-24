@@ -1,6 +1,7 @@
 // path is used for dynamic requires in the file
 // eslint-disable-next-line no-unused-vars
 const path = require('path');
+const fsPromises = require('node:fs/promises');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const dockerService = require('../dockerService');
@@ -10,6 +11,7 @@ const messageHelper = require('../messageHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
+const contentBlobService = require('./contentBlobService');
 const appReconciler = require('../appMonitoring/appReconciler');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { storeAppInstallingErrorMessage } = require('../appMessaging/messageStore');
@@ -33,6 +35,14 @@ const appsRepository = require('../appDatabase/appsRepository');
 const { localAppsInformation } = require('../utils/appConstants');
 const fluxEventBus = require('../utils/fluxEventBus');
 const config = require('config');
+
+// Write injected content to a mount source as root-owned read-only (0444) — the
+// safe default for declared content the app should not mutate. Root (FluxOS) can
+// still overwrite on redeploy regardless of mode.
+async function writeInjectedContent(source, bytes) {
+  await fsPromises.writeFile(source, bytes);
+  await fsPromises.chmod(source, 0o444);
+}
 
 /**
  * Outcome of installApplication. Separates a transient deferral (retry later) from a
@@ -281,6 +291,20 @@ async function installApplication(instantiated, options = {}) {
           // eslint-disable-next-line no-await-in-loop
           await appNetworkLinker.connectComponentToLinkedApps(component.identifier, instantiated);
         }
+      }
+
+      // Provision declared content blobs onto the now-created mount sources before
+      // the reconciler starts the containers: resolve each (FluxDrive backstop
+      // today; peers-first once peer-serve lands) and verify it against its signed
+      // hash. A content app is not installable without its content, so a failure
+      // here aborts the install.
+      if (!test && deployment.componentEntries().some(([, c]) => c.hasContentBlobs())) {
+        if (onStatus) onStatus({ status: 'Provisioning content...' });
+        await contentBlobService.provisionContentBlobs(
+          deployment,
+          { appName, fluxID: instantiated.owner, peers: [] },
+          { writeFile: writeInjectedContent },
+        );
       }
 
       // Hand the full shutdown plan to flux-shutdownd (best-effort; Arcane-only
