@@ -482,4 +482,9 @@ module.exports = {
     // v2 marketplace API (versioned v9 templates). Dev/prod switched by the development flag.
     apiBaseUrl: isDevelopment ? 'https://api-dev.marketplace.runonflux.io' : 'https://api.marketplace.runonflux.io',
   },
+  fluxDrive: {
+    // FluxDrive blob API base for content delivery (upload + fetch-by-locator). Set
+    // per environment; empty disables content uploads (the client fails loud).
+    blobApiUrl: '',
+  },
 };
