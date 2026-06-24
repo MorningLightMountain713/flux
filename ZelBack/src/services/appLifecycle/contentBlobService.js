@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const axios = require('axios');
 const benchmarkService = require('../benchmarkService');
 const fluxDriveClient = require('../utils/fluxDriveClient');
 const { aeadEncrypt, aeadDecrypt } = require('../utils/aeadCrypto');
@@ -138,11 +139,67 @@ async function provisionContentBlobs(deployment, ctx, deps) {
   }
 }
 
+/**
+ * Serve a content blob to a peer (the peers-first source): find which of this
+ * app's content mounts matches the requested locator, read its plaintext from
+ * disk, and re-encrypt it with a fresh nonce. Returns the framed ciphertext, or
+ * null if this node has no mount matching the locator. The requester re-verifies
+ * against the signed hash, so a fresh re-encryption is fine.
+ *
+ * @param {object} req - { appName, fluxID, locator }
+ * @param {object} deps - { benchmark?, getDeployment, readFile }
+ * @returns {Promise<Buffer|null>}
+ */
+async function serveBlob(req, deps) {
+  const { appName, fluxID, locator } = req;
+  const { benchmark = benchmarkService, getDeployment, readFile } = deps || {};
+
+  const deployment = await getDeployment(appName);
+  if (!deployment) return null;
+
+  for (const [, comp] of deployment.componentEntries()) {
+    for (const { source, hash } of comp.contentBlobMounts()) {
+      const derived = benchmarkField(await benchmark.blobLocator({ appName, fluxID, contentHash: hash }), 'locator');
+      if (derived !== locator) continue;
+      const plaintext = await readFile(source);
+      const key = Buffer.from(benchmarkField(await benchmark.contentKey({ appName, fluxID, contentHash: hash }), 'key'), 'base64');
+      return aeadEncrypt(key, plaintext, Buffer.from(hash));
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetch a content blob's ciphertext from a peer running the app. Returns the
+ * framed bytes, or null on any error (the resolver falls through to the next
+ * source). This is resolveBlob's peerFetch.
+ *
+ * @param {string} peer - peer host:port
+ * @param {string} appName
+ * @param {string} locator
+ * @param {object} [deps] - { http }
+ * @returns {Promise<Buffer|null>}
+ */
+async function fetchBlobFromPeer(peer, appName, locator, deps = {}) {
+  const http = deps.http || axios;
+  try {
+    const res = await http.get(`http://${peer}/apps/contentblob/${appName}/${locator}`, {
+      responseType: 'arraybuffer',
+      timeout: 10_000,
+    });
+    return Buffer.from(res.data);
+  } catch (error) {
+    return null;
+  }
+}
+
 module.exports = {
   encryptAndUploadBlob,
   decryptAndVerifyBlob,
   resolveBlob,
   provisionContentBlobs,
+  serveBlob,
+  fetchBlobFromPeer,
   sha256Hex,
   MAX_BLOB_BYTES,
   FRESHNESS_WINDOW_SECONDS,
