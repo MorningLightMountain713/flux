@@ -331,24 +331,67 @@ async function getAppInstallingLocation(req, res) {
 }
 
 /**
- * Get application specification via API
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * Resolve an application's stored spec for a caller.
+ *
+ * A cleartext app, or a request with no view credential, returns the sparse
+ * stored spec untouched. An encrypted app is decrypted node-side through its
+ * own storage provider (polymorphic across versions) and re-protected toward
+ * the caller over the channel the client asked for — not by spec version:
+ *   - flux-transport-pubkey -> v9 transport layer: HPKE-seal the canonical
+ *     cleartext toward the caller's ephemeral pubkey, directly through the
+ *     transport provider. Never reencrypt() here — that is the storage layer.
+ *   - enterprise-key        -> v8's single shared encryption (RSA-wrapped AES)
+ *     reapplied toward the caller. Isolated; removed when v8 is retired.
+ *
+ * @param {string} appname
+ * @param {{ recipientPubkeyBase64?: string, enterpriseKey?: string }} [opts]
+ * @returns {Promise<object>} sparse stored spec, a v9 sealed view
+ *   ({ encrypted, appName, timestamp, transportEncrypted }), or a v8 reencrypted spec
  */
-async function getApplicationSpecification(appname, encryptedEnterpriseKey) {
+async function getApplicationSpecification(appname, opts = {}) {
+  const { recipientPubkeyBase64, enterpriseKey } = opts;
+
   const instantiated = await appsRepository.getGlobalAppInfo(appname);
   if (!instantiated) {
     throw new Error(`Application: ${appname} not found`);
   }
 
-  if (!encryptedEnterpriseKey || !instantiated.isEncrypted) {
+  if ((!recipientPubkeyBase64 && !enterpriseKey) || !instantiated.isEncrypted) {
     return instantiated.spec.serialize();
   }
 
+  // A v9 owner always presents flux-transport-pubkey; reject a v9 app on the
+  // legacy enterprise-key channel before doing any crypto work.
+  if (!recipientPubkeyBase64 && instantiated.version >= 9) {
+    throw new Error('A version 9 application must be viewed via the flux-transport-pubkey channel.');
+  }
+
+  // Storage decrypt is polymorphic — the spec's own provider matches its version.
   const backendProvider = await instantiated.spec.createProvider();
   const decrypted = await instantiated.spec.decrypt(backendProvider);
+
+  if (recipientPubkeyBase64) {
+    // v9 transport layer: seal the canonical cleartext toward the caller's
+    // ephemeral pubkey so the owner's frontend gets the full form to re-sign.
+    const { buildSpecViewAad, SPEC_VIEW_INFO } = await getSpec();
+    const viewSpec = decrypted.spec;
+    const timestamp = Date.now();
+    const aad = buildSpecViewAad({ appName: viewSpec.name, timestamp });
+    const provider = await transportCryptoProvider.create(viewSpec.name, viewSpec.owner);
+    const plaintext = Buffer.from(JSON.stringify(viewSpec.toCanonical()), 'utf8');
+    const peerPublicKey = Buffer.from(recipientPubkeyBase64, 'base64');
+    const envelope = await provider.seal({
+      plaintext, aad, peerPublicKey, info: SPEC_VIEW_INFO,
+    });
+    return {
+      encrypted: true, appName: viewSpec.name, timestamp, transportEncrypted: envelope.toJSON(),
+    };
+  }
+
+  // Legacy v8 channel: v8's single shared encryption form, reapplied toward the
+  // caller. Removed when v8 is retired.
   const transportProvider = await legacyTransportProvider.create(
-    instantiated.name, instantiated.owner, encryptedEnterpriseKey,
+    instantiated.name, instantiated.owner, enterpriseKey,
   );
   const reencrypted = await decrypted.reencrypt(transportProvider);
   return reencrypted.serialize();
@@ -370,11 +413,14 @@ async function getApplicationSpecificationAPI(req, res) {
 
     decrypt = req.query.decrypt || decrypt;
 
-    let encryptedEnterpriseKey;
+    let viewOpts = {};
     if (decrypt) {
-      encryptedEnterpriseKey = req.headers['enterprise-key'];
-      if (!encryptedEnterpriseKey) {
-        throw new Error('Header with enterpriseKey is mandatory for enterprise Apps.');
+      // Channel negotiated by which credential the client presents:
+      // flux-transport-pubkey -> v9 HPKE view; enterprise-key -> legacy v8.
+      const recipientPubkeyBase64 = req.headers['flux-transport-pubkey'];
+      const enterpriseKey = req.headers['enterprise-key'];
+      if (!recipientPubkeyBase64 && !enterpriseKey) {
+        throw new Error('Header flux-transport-pubkey or enterprise-key is mandatory to view an encrypted application.');
       }
 
       const mainAppName = appname.split('_')[1] || appname;
@@ -396,9 +442,11 @@ async function getApplicationSpecificationAPI(req, res) {
         res.json(messageHelper.errUnauthorizedMessage());
         return null;
       }
+
+      viewOpts = { recipientPubkeyBase64, enterpriseKey };
     }
 
-    const spec = await getApplicationSpecification(appname, encryptedEnterpriseKey);
+    const spec = await getApplicationSpecification(appname, viewOpts);
     res.json(messageHelper.createDataMessage(spec));
   } catch (error) {
     log.error(error);
@@ -423,13 +471,17 @@ async function getApplicationSpecificationAPI(req, res) {
  * has no storage-ref convention — then runs fromLegacy. When the source was
  * encrypted, or any sensitive value was inlined, the v9 spec is sealed toward
  * the frontend's ephemeral pubkey (view direction) so cleartext never crosses
- * the wire. The owner reviews and signs the returned spec, then submits it as a
- * normal v9 update (priced as a free version-only upgrade).
+ * the wire. The owner reviews the returned draft (completing any missing
+ * required fields), signs it, then submits it as a normal v9 update (priced as
+ * a free version-only upgrade).
  *
  * @param {string} appname
  * @param {{ recipientPubkeyBase64?: string }} opts
- * @returns {Promise<object>} cleartext { encrypted:false, spec, warnings } or
- *   sealed { encrypted:true, appName, timestamp, transportEncrypted, warnings }
+ * @returns {Promise<object>} A draft for owner review: cleartext
+ *   { encrypted:false, spec, complete, errors, warnings } or sealed
+ *   { encrypted:true, appName, timestamp, transportEncrypted, complete, errors, warnings }.
+ *   complete:false means the draft is missing required fields (listed in errors)
+ *   that the owner must fill before it can be signed.
  */
 async function convertApplicationSpecification(appname, opts = {}) {
   const { recipientPubkeyBase64 } = opts;
@@ -458,28 +510,35 @@ async function convertApplicationSpecification(appname, opts = {}) {
 
   const inlinedSensitive = await resolveStorageRefs(v9Blob.components, instantiated.name);
 
-  // Validate + canonicalize the converted spec through the v9 class.
-  const v9Spec = FluxAppSpecV9.fromSubmission(v9Blob);
+  // Convert is a draft generator, so validate without throwing: a fixable gap
+  // (e.g. a contacts-less v8 app) returns a fillable draft with inline errors
+  // for the owner to complete, not a hard failure. Strict fromSubmission stays
+  // at sign-time submission, which requires a valid canonical form anyway.
+  const { valid, errors } = FluxAppSpecV9.validateSchema(v9Blob);
+  const draft = valid ? FluxAppSpecV9.fromSubmission(v9Blob).toCanonical() : v9Blob;
+  const { name, owner } = v9Blob;
 
   const mustEncrypt = instantiated.isEncrypted || inlinedSensitive;
   if (!mustEncrypt) {
-    return { encrypted: false, spec: v9Spec.toCanonical(), warnings };
+    return {
+      encrypted: false, spec: draft, complete: valid, errors, warnings,
+    };
   }
 
   if (!recipientPubkeyBase64) {
     throw new Error('Header flux-transport-pubkey is mandatory to convert an encrypted application.');
   }
   const timestamp = Date.now();
-  const aad = buildSpecViewAad({ appName: v9Spec.name, timestamp });
-  const provider = await transportCryptoProvider.create(v9Spec.name, v9Spec.owner);
-  const plaintext = Buffer.from(JSON.stringify(v9Spec.toCanonical()), 'utf8');
+  const aad = buildSpecViewAad({ appName: name, timestamp });
+  const provider = await transportCryptoProvider.create(name, owner);
+  const plaintext = Buffer.from(JSON.stringify(draft), 'utf8');
   const peerPublicKey = Buffer.from(recipientPubkeyBase64, 'base64');
   const envelope = await provider.seal({
     plaintext, aad, peerPublicKey, info: SPEC_VIEW_INFO,
   });
   const transportEncrypted = envelope.toJSON();
   return {
-    encrypted: true, appName: v9Spec.name, timestamp, transportEncrypted, warnings,
+    encrypted: true, appName: name, timestamp, transportEncrypted, complete: valid, errors, warnings,
   };
 }
 
