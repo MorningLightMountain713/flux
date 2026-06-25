@@ -1328,52 +1328,46 @@ async function updateAppGlobaly(params) {
  * @returns {Promise<void>} Update result
  */
 async function updateAppGlobalyApi(req, res) {
-  let body = '';
-  req.on('data', (data) => {
-    body += data;
-  });
-  req.on('end', async () => {
-    try {
-      const authorized = await verificationHelper.verifyPrivilege('user', req);
-      if (!authorized) {
-        const errMessage = messageHelper.errUnauthorizedMessage();
-        res.json(errMessage);
-        return;
-      }
-      // eslint-disable-next-line global-require
-      const { peerManager } = require('../utils/peerState');
-      if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
-        throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application update');
-      }
-      if (peerManager.inboundCount < config.fluxapps.minIncoming) {
-        throw new Error('Sorry, This Flux does not have enough incoming peers for safe application update');
-      }
-
-      const processedBody = serviceHelper.ensureObject(body);
-      const hash = await updateAppGlobaly({
-        appSpecification: processedBody.appSpecification,
-        timestamp: processedBody.timestamp,
-        signature: processedBody.signature,
-        type: processedBody.type,
-        version: processedBody.version,
-        // v9 (envelope version 2) signs over contentHash and carries the extend
-        // flag; both are required to reconstruct the signed message and verify it.
-        contentHash: processedBody.contentHash,
-        extend: processedBody.extend,
-      });
-
-      const responseHash = messageHelper.createDataMessage(hash);
-      res.json(responseHash);
-    } catch (error) {
-      log.warn(error);
-      const errorResponse = messageHelper.createErrorMessage(
-        error.message || error,
-        error.name,
-        error.code,
-      );
-      res.json(errorResponse);
+  try {
+    const authorized = await verificationHelper.verifyPrivilege('user', req);
+    if (!authorized) {
+      const errMessage = messageHelper.errUnauthorizedMessage();
+      res.json(errMessage);
+      return;
     }
-  });
+    // eslint-disable-next-line global-require
+    const { peerManager } = require('../utils/peerState');
+    if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
+      throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application update');
+    }
+    if (peerManager.inboundCount < config.fluxapps.minIncoming) {
+      throw new Error('Sorry, This Flux does not have enough incoming peers for safe application update');
+    }
+
+    const processedBody = serviceHelper.ensureObject(req.body);
+    const hash = await updateAppGlobaly({
+      appSpecification: processedBody.appSpecification,
+      timestamp: processedBody.timestamp,
+      signature: processedBody.signature,
+      type: processedBody.type,
+      version: processedBody.version,
+      // v9 (envelope version 2) signs over contentHash and carries the extend
+      // flag; both are required to reconstruct the signed message and verify it.
+      contentHash: processedBody.contentHash,
+      extend: processedBody.extend,
+    });
+
+    const responseHash = messageHelper.createDataMessage(hash);
+    res.json(responseHash);
+  } catch (error) {
+    log.warn(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    res.json(errorResponse);
+  }
 }
 
 async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec) {
