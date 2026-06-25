@@ -114,7 +114,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
     // v9 only. v8 encrypted apps are intentionally never gated: they predate
     // attestation and aren't born attested, so rejecting would partition legacy
     // apps off the network — v8 stays accepted as-is, being phased out.
-    if (appEvent.version === 2 && appEvent.isEncrypted && !appEventVerifier.verifyAttestation(appEvent)) {
+    if (appEvent.requiresArcaneAttestation() && !appEventVerifier.verifyAttestation(appEvent)) {
       return new Error('Invalid or missing arcane attestation on encrypted Flux App message');
     }
 
