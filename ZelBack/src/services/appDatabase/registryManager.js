@@ -452,7 +452,7 @@ async function convertApplicationSpecification(appname, opts = {}) {
   }
 
   const { fromLegacy } = await getSpecBackend();
-  const { FluxAppSpecV9, buildSpecViewAad } = await getSpec();
+  const { FluxAppSpecV9, buildSpecViewAad, SPEC_VIEW_INFO } = await getSpec();
 
   const { spec: v9Blob, warnings } = fromLegacy(legacySpec, { confirmationHeight: instantiated.height });
 
@@ -471,9 +471,13 @@ async function convertApplicationSpecification(appname, opts = {}) {
   }
   const timestamp = Date.now();
   const aad = buildSpecViewAad({ appName: v9Spec.name, timestamp });
-  const provider = await transportCryptoProvider.create(v9Spec.name, v9Spec.owner, recipientPubkeyBase64);
+  const provider = await transportCryptoProvider.create(v9Spec.name, v9Spec.owner);
   const plaintext = Buffer.from(JSON.stringify(v9Spec.toCanonical()), 'utf8');
-  const transportEncrypted = await provider.encrypt(plaintext, aad);
+  const peerPublicKey = Buffer.from(recipientPubkeyBase64, 'base64');
+  const envelope = await provider.seal({
+    plaintext, aad, peerPublicKey, info: SPEC_VIEW_INFO,
+  });
+  const transportEncrypted = envelope.toJSON();
   return {
     encrypted: true, appName: v9Spec.name, timestamp, transportEncrypted, warnings,
   };
