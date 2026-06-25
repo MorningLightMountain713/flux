@@ -12,6 +12,7 @@ const socketHandlers = require('./socketHandlers');
 const socketIoHandlers = require('./socketIoHandlers');
 const { FluxWebsocketServer } = require('./socketServer');
 const { FluxSocketIoServer } = require('./socketIoServer');
+const { bodyParser } = require('./bodyParser');
 
 /**
  * Combines an http(s) server, classic websocket server, and socket.io server
@@ -26,7 +27,7 @@ class FluxServer {
   static defaultMiddlewares = [
     compression(),
     morgan('combined'),
-    express.json(),
+    bodyParser,
     cors(),
     analyticsMiddleware,
   ];
