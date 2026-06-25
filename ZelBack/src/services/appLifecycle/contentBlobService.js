@@ -56,6 +56,76 @@ async function encryptAndUploadBlob(blob, deps) {
 }
 
 /**
+ * The plaintext content hashes a decrypted spec declares across every
+ * component's contentRef mounts.
+ */
+function specContentHashes(spec) {
+  const hashes = new Set();
+  const components = typeof spec.componentEntries === 'function'
+    ? spec.componentEntries().map(([, comp]) => comp)
+    : Object.values(spec.components || {});
+  for (const comp of components) {
+    const ps = comp && comp.persistentStorage;
+    if (!ps || typeof ps.getMountsWithContentRef !== 'function') continue;
+    for (const mount of ps.getMountsWithContentRef()) {
+      if (mount.contentRef && mount.contentRef.hash) hashes.add(mount.contentRef.hash);
+    }
+  }
+  return hashes;
+}
+
+/**
+ * Upload every content blob a submission declares — synchronously, so all blobs
+ * are durably stored before the spec enters gossip. Matches the decrypted spec's
+ * contentRef mounts to the supplied blob parts by plaintext hash: every declared
+ * hash must have a blob, and every supplied blob must be referenced by the spec
+ * (a stray blob is an anti-abuse reject). Each match is encrypted, dual-signed,
+ * and uploaded via encryptAndUploadBlob; any mismatch or upload failure throws so
+ * the caller never broadcasts a spec whose content is not stored.
+ *
+ * @param {object} spec - decrypted submission spec (name, owner, components)
+ * @param {Map<string, Buffer>} blobs - plaintext bytes keyed by "sha256:<hex>"
+ * @param {Map<string, { sig: string, timestamp: string|number }>} ownerSigs - owner sig + signed timestamp, keyed by hash
+ * @param {object} deps - { uploader, benchmark?, now? }
+ * @returns {Promise<Array<{ hash: string, locator: string }>>}
+ */
+async function encryptAndUploadBlobs(spec, blobs, ownerSigs, deps) {
+  const { uploader, benchmark, now } = deps || {};
+  const appName = spec.name;
+  const fluxID = spec.owner;
+  const declared = specContentHashes(spec);
+
+  for (const hash of declared) {
+    if (!blobs.has(hash)) throw new Error(`contentBlob: missing blob part for ${hash}`);
+  }
+  for (const hash of blobs.keys()) {
+    if (!declared.has(hash)) throw new Error(`contentBlob: blob ${hash} is not referenced by the spec`);
+  }
+
+  const uploaded = [];
+  for (const hash of declared) {
+    const owner = ownerSigs.get(hash);
+    if (!owner || !owner.sig || owner.timestamp == null) {
+      throw new Error(`contentBlob: missing owner signature for ${hash}`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const { locator } = await encryptAndUploadBlob(
+      {
+        appName,
+        fluxID,
+        contentHash: hash,
+        bytes: blobs.get(hash),
+        ownerSig: owner.sig,
+        timestamp: owner.timestamp,
+      },
+      { uploader, benchmark, now },
+    );
+    uploaded.push({ hash, locator });
+  }
+  return uploaded;
+}
+
+/**
  * Decrypt a fetched blob ciphertext and verify it against the signed content
  * hash — the single load-bearing integrity check. Throws on a failed GCM tag or
  * hash mismatch, so a wrong/poisoned source is rejected and the caller falls
@@ -195,6 +265,7 @@ async function fetchBlobFromPeer(peer, appName, locator, deps = {}) {
 
 module.exports = {
   encryptAndUploadBlob,
+  encryptAndUploadBlobs,
   decryptAndVerifyBlob,
   resolveBlob,
   provisionContentBlobs,

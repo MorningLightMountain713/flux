@@ -13,6 +13,9 @@ const componentProvisioner = require('../../ZelBack/src/services/appLifecycle/co
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+const globalState = require('../../ZelBack/src/services/utils/globalState');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
 
 describe('appOperations tests', () => {
   afterEach(() => {
@@ -32,6 +35,59 @@ describe('appOperations tests', () => {
 
       const result = await appSpecHistory.getPreviousSpec(specifications, verificationTimestamp);
       expect(result).to.be.null;
+    });
+  });
+
+  describe('contentBlobServeApi tests', () => {
+    function makeRes() {
+      const res = {};
+      res.status = sinon.stub().returns(res);
+      res.set = sinon.stub().returns(res);
+      res.send = sinon.stub().returns(res);
+      res.end = sinon.stub().returns(res);
+      return res;
+    }
+
+    it('rejects with 503 when the node is not arcane', async () => {
+      sinon.stub(globalState, 'isArcane').returns(false);
+      const res = makeRes();
+      await appOperations.contentBlobServeApi({ params: { appName: 'myapp', locator: 'loc' } }, res);
+      sinon.assert.calledWith(res.status, 503);
+    });
+
+    it('serves the blob using the installed app owner as the fluxID', async () => {
+      sinon.stub(globalState, 'isArcane').returns(true);
+      sinon.stub(appsRepository, 'getInstalledApp').resolves({ owner: 'owner1' });
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ marker: 'deployment' });
+      const framed = Buffer.from('cipher');
+      const serveBlob = sinon.stub(contentBlobService, 'serveBlob').resolves(framed);
+      const res = makeRes();
+
+      await appOperations.contentBlobServeApi({ params: { appName: 'myapp', locator: 'loc-1' } }, res);
+
+      // the locator is owner-keyed: fluxID must be the installed app's owner
+      const [reqArg] = serveBlob.firstCall.args;
+      expect(reqArg).to.include({ appName: 'myapp', fluxID: 'owner1', locator: 'loc-1' });
+      sinon.assert.calledWith(res.send, framed);
+    });
+
+    it('returns 404 when the app is not installed on this node', async () => {
+      sinon.stub(globalState, 'isArcane').returns(true);
+      sinon.stub(appsRepository, 'getInstalledApp').resolves(null);
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
+      const res = makeRes();
+      await appOperations.contentBlobServeApi({ params: { appName: 'ghost', locator: 'loc' } }, res);
+      sinon.assert.calledWith(res.status, 404);
+    });
+
+    it('returns 404 when no local mount matches the requested locator', async () => {
+      sinon.stub(globalState, 'isArcane').returns(true);
+      sinon.stub(appsRepository, 'getInstalledApp').resolves({ owner: 'owner1' });
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ marker: 'd' });
+      sinon.stub(contentBlobService, 'serveBlob').resolves(null);
+      const res = makeRes();
+      await appOperations.contentBlobServeApi({ params: { appName: 'myapp', locator: 'nope' } }, res);
+      sinon.assert.calledWith(res.status, 404);
     });
   });
 

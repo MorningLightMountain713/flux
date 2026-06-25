@@ -4,9 +4,19 @@ const contentBlobService = require('../../ZelBack/src/services/appLifecycle/cont
 const { aeadEncrypt } = require('../../ZelBack/src/services/utils/aeadCrypto');
 
 const {
-  encryptAndUploadBlob, decryptAndVerifyBlob, resolveBlob, provisionContentBlobs,
+  encryptAndUploadBlob, encryptAndUploadBlobs, decryptAndVerifyBlob, resolveBlob, provisionContentBlobs,
   serveBlob, fetchBlobFromPeer, MAX_BLOB_BYTES,
 } = contentBlobService;
+
+// A submission spec that declares content blobs at the given hashes — the spec
+// side of the upload match. Only the accessors encryptAndUploadBlobs reads
+// (name, owner, componentEntries -> persistentStorage.getMountsWithContentRef)
+// are populated.
+function specDeclaringContent(hashes) {
+  const mounts = hashes.map((hash, i) => ({ source: `mount${i}`, contentRef: { hash } }));
+  const comp = { persistentStorage: { getMountsWithContentRef: () => mounts } };
+  return { name: 'app', owner: '1id', componentEntries: () => [['web', comp]] };
+}
 
 const KEY = crypto.randomBytes(32);
 const NOW_MS = 1_700_000_000_000;
@@ -95,6 +105,60 @@ describe('contentBlobService', () => {
         { appName: 'app', fluxID: '1id', contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: freshTs },
         { benchmark, uploader: makeUploader(), now },
       ), /benchmark channel/);
+    });
+  });
+
+  describe('encryptAndUploadBlobs', () => {
+    it('uploads every declared blob, matched to its mount by hash', async () => {
+      const a = Buffer.from('content-a');
+      const b = Buffer.from('content-b');
+      const ha = hashOf(a);
+      const hb = hashOf(b);
+      const uploader = makeUploader();
+      const ownerSigs = new Map([
+        [ha, { sig: 'sig-a', timestamp: freshTs }],
+        [hb, { sig: 'sig-b', timestamp: freshTs }],
+      ]);
+      const blobs = new Map([[ha, a], [hb, b]]);
+
+      const out = await encryptAndUploadBlobs(
+        specDeclaringContent([ha, hb]), blobs, ownerSigs, { benchmark: makeBenchmark(), uploader, now },
+      );
+
+      expect(out.map((u) => u.hash)).to.have.members([ha, hb]);
+      expect(uploader.calls.length).to.equal(2);
+      expect(uploader.calls.map((c) => c.headers.ownerSig)).to.have.members(['sig-a', 'sig-b']);
+    });
+
+    it('rejects when a declared contentRef has no blob part', async () => {
+      const a = Buffer.from('content-a');
+      const ha = hashOf(a);
+      await expectReject(encryptAndUploadBlobs(
+        specDeclaringContent([ha]), new Map(), new Map([[ha, { sig: 's', timestamp: freshTs }]]),
+        { benchmark: makeBenchmark(), uploader: makeUploader(), now },
+      ), /missing blob part/);
+    });
+
+    it('rejects a stray blob the spec does not reference', async () => {
+      const a = Buffer.from('content-a');
+      const ha = hashOf(a);
+      const stray = Buffer.from('stray');
+      const hs = hashOf(stray);
+      await expectReject(encryptAndUploadBlobs(
+        specDeclaringContent([ha]),
+        new Map([[ha, a], [hs, stray]]),
+        new Map([[ha, { sig: 's', timestamp: freshTs }], [hs, { sig: 's', timestamp: freshTs }]]),
+        { benchmark: makeBenchmark(), uploader: makeUploader(), now },
+      ), /not referenced by the spec/);
+    });
+
+    it('rejects a declared blob with no owner signature', async () => {
+      const a = Buffer.from('content-a');
+      const ha = hashOf(a);
+      await expectReject(encryptAndUploadBlobs(
+        specDeclaringContent([ha]), new Map([[ha, a]]), new Map(),
+        { benchmark: makeBenchmark(), uploader: makeUploader(), now },
+      ), /missing owner signature/);
     });
   });
 
