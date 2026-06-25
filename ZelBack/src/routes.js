@@ -1144,6 +1144,9 @@ module.exports = (app) => {
   app.post('/apps/appupdate', asyncRoute((req, res) => {
     return appOperations.updateAppGlobalyApi(req, res);
   }));
+  app.get('/apps/contentblob/:appName/:locator', asyncRoute((req, res) => {
+    return appOperations.contentBlobServeApi(req, res);
+  }));
   app.post('/apps/getpublickey', asyncRoute((req, res) => {
     return cryptographicKeys.getPublicKey(req, res);
   }));

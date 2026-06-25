@@ -1,6 +1,8 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const express = require('express');
+const request = require('supertest');
 
 describe('appSubmission tests', () => {
   let appSubmission;
@@ -371,6 +373,53 @@ describe('appSubmission tests', () => {
         expect(err.code).to.equal('TEMPLATE_MISMATCH');
         expect(err.message).to.match(/not tiered/);
       });
+    });
+  });
+
+  describe('parseMultipartSubmission', () => {
+    // Drive a real multipart request through formidable to confirm the wire
+    // contract: the `spec` field, `blob:sha256:<hex>` file parts keyed by hash,
+    // and the `ownerSigs` JSON map.
+    function appWithParser() {
+      appSubmission = load();
+      const app = express();
+      app.post('/submit', (req, res) => {
+        appSubmission.parseMultipartSubmission(req).then((parsed) => res.json({
+          spec: parsed.spec,
+          blobHashes: [...parsed.blobs.keys()],
+          blobBytes: Object.fromEntries([...parsed.blobs.entries()].map(([h, b]) => [h, b.toString()])),
+          ownerSigs: Object.fromEntries(parsed.ownerSigs),
+        })).catch((err) => res.status(500).json({ error: err.message }));
+      });
+      return app;
+    }
+
+    it('extracts the spec field, blob parts by hash, and the ownerSigs map', async () => {
+      const specJson = JSON.stringify({ type: 'fluxappregister', version: 2 });
+      const ha = `sha256:${'a'.repeat(64)}`;
+      const ownerSigs = JSON.stringify({ [ha]: { sig: 'owner-sig', timestamp: '1700000000' } });
+
+      const res = await request(appWithParser())
+        .post('/submit')
+        .field('spec', specJson)
+        .field('ownerSigs', ownerSigs)
+        .attach(`blob:${ha}`, Buffer.from('blob-bytes'), { filename: 'content' });
+
+      expect(res.status).to.equal(200);
+      expect(res.body.spec).to.equal(specJson);
+      expect(res.body.blobHashes).to.deep.equal([ha]);
+      expect(res.body.blobBytes[ha]).to.equal('blob-bytes');
+      expect(res.body.ownerSigs[ha]).to.deep.equal({ sig: 'owner-sig', timestamp: '1700000000' });
+    });
+
+    it('returns no blobs and an empty ownerSigs map for a spec-only multipart post', async () => {
+      const res = await request(appWithParser())
+        .post('/submit')
+        .field('spec', JSON.stringify({ type: 'fluxappregister' }));
+
+      expect(res.status).to.equal(200);
+      expect(res.body.blobHashes).to.deep.equal([]);
+      expect(res.body.ownerSigs).to.deep.equal({});
     });
   });
 });
