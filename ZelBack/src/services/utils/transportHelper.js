@@ -1,13 +1,70 @@
 const benchmarkService = require('../benchmarkService');
+const { aeadDecrypt } = require('./aeadCrypto');
 const { getSpec } = require('./specLibs');
 
 /**
- * HPKE-open a v9 transport-encrypted submission to its cleartext spec.
+ * Split-HPKE open core: the benchmark channel performs only the asymmetric decap
+ * + export of the per-submission symmetric key; the spec ciphertext is opened
+ * locally with AES-256-GCM, so bulk bytes never cross the channel. Inputs are the
+ * envelope's raw bytes (ciphertext is ct‖tag); returns the plaintext Buffer.
+ * Throws with a `.code` (MISSING_FIELD | INTERNAL_ERROR | DECRYPT_FAILED | ...)
+ * for peer discipline. Shared by openTransportEnvelope and the transport
+ * CryptoProvider so the open path lives in exactly one place.
+ *
+ * @param {object} args - { appName, fluxID, encapsulatedKey, nonce, ciphertext, aad }
+ * @returns {Promise<Buffer>} plaintext
+ */
+async function decapAndOpen({
+  appName, fluxID, encapsulatedKey, nonce, ciphertext, aad,
+}) {
+  if (!nonce) {
+    const err = new Error('Transport-encrypted payload missing nonce');
+    err.code = 'MISSING_FIELD';
+    throw err;
+  }
+
+  // Asymmetric step only: decap + export the 32-byte per-submission key.
+  const resp = await benchmarkService.transportDecap({
+    appName,
+    fluxID,
+    encapsulatedKey: Buffer.from(encapsulatedKey).toString('base64'),
+  });
+  if (!resp || resp.status !== 'success') {
+    const err = new Error('Transport open failed (benchmark unreachable)');
+    err.code = 'INTERNAL_ERROR';
+    throw err;
+  }
+
+  const decap = typeof resp.data === 'string' ? JSON.parse(resp.data) : resp.data;
+  if (!decap || decap.status !== 'ok' || !decap.key) {
+    const code = (decap && decap.message) || 'INTERNAL_ERROR';
+    const err = new Error(`Transport decap failed: ${code}`);
+    err.code = code;
+    throw err;
+  }
+
+  // Open the spec locally. The envelope ciphertext is ct‖tag and aeadCrypto
+  // frames as nonce‖ct‖tag, so the nonce followed by the ciphertext is exactly
+  // the frame aeadDecrypt expects — no byte re-ordering. A bad key/tag/aad throws.
+  const key = Buffer.from(decap.key, 'base64');
+  const frame = Buffer.concat([Buffer.from(nonce), Buffer.from(ciphertext)]);
+  try {
+    return aeadDecrypt(key, frame, Buffer.from(aad));
+  } catch (decryptError) {
+    const err = new Error('Transport open failed: AEAD authentication failed');
+    err.code = 'DECRYPT_FAILED';
+    throw err;
+  }
+}
+
+/**
+ * Open a v9 transport-encrypted submission to its cleartext spec (split-HPKE).
  *
  * A submission spec carrying `transportEncrypted` keeps cleartext `name` and
  * `owner` alongside it (the per-app transport key is derived from those). The
- * sealed payload is the sparse submission spec — the same shape a non-encrypted
- * submission sends — so the opened result feeds the identical validation path.
+ * encrypted payload is the sparse submission spec — the same shape a
+ * non-encrypted submission sends — so the opened result feeds the identical
+ * validation path.
  *
  * Returns the input unchanged when there is no `transportEncrypted` envelope.
  *
@@ -34,31 +91,19 @@ async function openTransportEnvelope(appSpec, meta) {
     type: meta.type,
   });
 
-  const resp = await benchmarkService.transportOpen({
+  const plaintext = await decapAndOpen({
     appName: name,
     fluxID: owner,
-    encapsulatedKey: Buffer.from(envelope.encapsulatedKey).toString('base64'),
-    ciphertext: Buffer.from(envelope.ciphertext).toString('base64'),
-    aad: Buffer.from(aad).toString('base64'),
+    encapsulatedKey: envelope.encapsulatedKey,
+    nonce: envelope.nonce,
+    ciphertext: envelope.ciphertext,
+    aad,
   });
 
-  if (resp.status !== 'success') {
-    const err = new Error('Transport open failed (benchmark unreachable)');
-    err.code = 'INTERNAL_ERROR';
-    throw err;
-  }
-
-  const opened = typeof resp.data === 'string' ? JSON.parse(resp.data) : resp.data;
-  if (!opened || opened.status !== 'ok') {
-    const code = (opened && opened.message) || 'INTERNAL_ERROR';
-    const err = new Error(`Transport open failed: ${code}`);
-    err.code = code;
-    throw err;
-  }
-
-  return JSON.parse(opened.message);
+  return JSON.parse(plaintext.toString('utf8'));
 }
 
 module.exports = {
   openTransportEnvelope,
+  decapAndOpen,
 };

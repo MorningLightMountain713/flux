@@ -1,25 +1,22 @@
 /**
- * FluxOSTransportProvider — transport CryptoProvider for v9.
+ * FluxOSTransportProvider — transport CryptoProvider for v9 (both directions).
  *
- * decrypt: unseals an HPKE envelope from the submission direction
- *   (frontend → backend) by routing the open through the benchmark service.
+ * encrypt: HPKE single-shot seal toward the frontend's ephemeral X25519 pubkey
+ *   using @hpke/core (view/response direction, backend → frontend) under
+ *   SPEC_VIEW_INFO. The ephemeral keypair is generated and discarded in scope.
+ *   Fully local; the envelope carries no separate nonce.
  *
- * encrypt: HPKE-seals toward the frontend's ephemeral X25519 public key
- *   using @hpke/core (view direction, backend → frontend). The sender's
- *   ephemeral keypair is generated and discarded in scope.
+ * decrypt: opens a submission-direction envelope (frontend → backend) via
+ *   split-HPKE — delegates to utils/transportHelper.decapAndOpen, which decaps +
+ *   exports the per-submission key over the benchmark channel and AES-256-GCM-
+ *   opens the spec locally. The export-mode envelope carries an explicit nonce.
  *
- * The two directions use different HPKE info strings:
- *   - Submission (decrypt): "FLUX_APP_TRANSPORT_v1"
- *   - View (encrypt):       "FLUX_APP_SPEC_VIEW_v1"
- *
- * Usage (validation endpoint):
+ * Usage (appConvert seals the converted spec toward the owner's frontend pubkey):
  *   const provider = await create(appName, owner, frontendPubkeyBase64);
- *   const decrypted = await encryptedSpec.decrypt(provider);
- *   const reencrypted = await decrypted.reencrypt(provider);
- *   const response = reencrypted.serialize();
+ *   const envelope = await provider.encrypt(plaintext, aad);
  */
 
-const benchmarkService = require('../benchmarkService');
+const transportHelper = require('../utils/transportHelper');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 
 let hpkeCache;
@@ -87,35 +84,24 @@ async function create(appName, owner, recipientPubkeyBase64) {
     }
 
     /**
-     * Unseal an HPKE envelope via the benchmark service.
-     * Used for the submission direction.
+     * Open a submission-direction envelope via split-HPKE. Delegates the decap +
+     * local AES-256-GCM to the shared utils/transportHelper.decapAndOpen, so the
+     * open path lives in exactly one place.
      */
     async decrypt(encrypted, aad) {
-      const params = {
+      const { TransportEnvelope } = await getSpec();
+      const envelope = TransportEnvelope.fromJSON(encrypted);
+      const aadBytes = aad
+        ? (Buffer.isBuffer(aad) ? aad : Buffer.from(aad, 'base64'))
+        : Buffer.alloc(0);
+      return transportHelper.decapAndOpen({
         appName: this.#appName,
         fluxID: this.#owner,
-        encapsulatedKey: encrypted.encapsulatedKey,
-        ciphertext: encrypted.ciphertext,
-      };
-      if (aad) {
-        params.aad = Buffer.isBuffer(aad) ? aad.toString('base64') : aad;
-      }
-
-      const rpcResult = await benchmarkService.transportOpen(params);
-      if (rpcResult.status !== 'success') {
-        throw new Error(`transportOpen RPC failed: ${rpcResult.status}`);
-      }
-
-      const rpcData = typeof rpcResult.data === 'string'
-        ? JSON.parse(rpcResult.data) : rpcResult.data;
-      if (rpcData.status !== 'ok') {
-        const code = rpcData.message || rpcData.status;
-        const err = new Error(`transportOpen: ${code}`);
-        err.code = code;
-        throw err;
-      }
-
-      return Buffer.from(rpcData.message, 'utf8');
+        encapsulatedKey: envelope.encapsulatedKey,
+        nonce: envelope.nonce,
+        ciphertext: envelope.ciphertext,
+        aad: aadBytes,
+      });
     }
   }
 

@@ -26,7 +26,7 @@ describe('aeadCrypto', () => {
   });
 
   describe('framing', () => {
-    it('frames as nonce, tag, ciphertext (length is plaintext + 28)', () => {
+    it('frames as nonce, ciphertext, tag (length is plaintext + 28)', () => {
       const pt = Buffer.from('a'.repeat(100));
       expect(aeadEncrypt(key(), pt).length).to.equal(NONCE_BYTES + TAG_BYTES + pt.length);
     });
@@ -39,17 +39,24 @@ describe('aeadCrypto', () => {
   });
 
   describe('authentication', () => {
+    it('rejects a tampered nonce', () => {
+      const k = key();
+      const framed = aeadEncrypt(k, Buffer.from('secret'));
+      framed[0] ^= 0x01;
+      expect(() => aeadDecrypt(k, framed)).to.throw();
+    });
+
     it('rejects a tampered ciphertext', () => {
       const k = key();
       const framed = aeadEncrypt(k, Buffer.from('secret'));
-      framed[framed.length - 1] ^= 0x01;
+      framed[NONCE_BYTES] ^= 0x01; // first ciphertext byte (frame is nonce||ct||tag)
       expect(() => aeadDecrypt(k, framed)).to.throw();
     });
 
     it('rejects a tampered tag', () => {
       const k = key();
       const framed = aeadEncrypt(k, Buffer.from('secret'));
-      framed[NONCE_BYTES] ^= 0x01;
+      framed[framed.length - 1] ^= 0x01; // last byte is the GCM tag
       expect(() => aeadDecrypt(k, framed)).to.throw();
     });
 
