@@ -1282,7 +1282,7 @@ async function updateAppGlobaly(params) {
   // which old nodes still parse — they must not carry an unknown arcaneAttestation
   // key. v9 messages are rejected by old nodes before parsing.
   let arcaneAttestation;
-  if (cleanTypeVersion === 2 && appEvent.isEncrypted) {
+  if (appEvent.requiresArcaneAttestation()) {
     arcaneAttestation = await appEventVerifier.requestAttestation(cleanContentHash);
   }
 

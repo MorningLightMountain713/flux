@@ -13,7 +13,6 @@ const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArc
 const { validateSubmissionSpec, getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
 const { deserializeSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
-const cryptoProvider = require('../providers/FluxOSCryptoProvider');
 const appsRepository = require('../appDatabase/appsRepository');
 const entitlementsState = require('../entitlementsState');
 const marketplaceTemplateCache = require('../marketplace/marketplaceTemplateCache');
@@ -166,10 +165,11 @@ async function resolveSubmission(appSpecification, {
   // STAGE 5 — wire form for broadcast/storage; never cleartext for encrypted apps
   let broadcastBlob;
   if (wasTransportEncrypted) {
-    // v9 transport submission — backend-encrypt the validated cleartext for storage
-    const { EncryptedSpecV9 } = await getSpecBackend();
-    const backendProvider = await cryptoProvider.create(spec.name, spec.owner);
-    const encryptedSpec = await EncryptedSpecV9.fromSpec(spec, backendProvider);
+    // v9 transport submission — backend-encrypt the validated cleartext for
+    // storage. sealForStorage owns version dispatch + provider sourcing in
+    // flux-spec, so no spec version is named here.
+    const { sealForStorage } = await getSpecBackend();
+    const encryptedSpec = await sealForStorage(spec);
     broadcastBlob = encryptedSpec.serialize();
   } else if (wireSpec.isEncrypted) {
     // v8 enterprise — the submitted blob is already the stored (encrypted) form
@@ -376,7 +376,7 @@ async function registerAppGlobalyApi(req, res) {
       // arcaneAttestation key. v9 messages (version 2) are rejected by old nodes
       // before parsing, so the field only ever rides messages they ignore.
       let arcaneAttestation;
-      if (typeVersion === 2 && signedEvent.isEncrypted) {
+      if (signedEvent.requiresArcaneAttestation()) {
         arcaneAttestation = await appEventVerifier.requestAttestation(contentHash);
       }
 
