@@ -154,13 +154,12 @@ async function resolveSubmission(appSpecification, {
   // STAGE 3 — runtime image registry + architecture checks
   await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner, isEncrypted });
 
-  // STAGE 4 — feature entitlements gate (v9 only): reject gated features the
-  // owner's on-chain policy groups do not grant at this height.
+  // STAGE 4 — feature entitlements + marketplace-template gate. Total across
+  // versions: a v1-v8 spec exposes no gated features and carries no marketplace
+  // block, so both calls are a no-op for legacy specs — no version branch needed.
   const cleartextSpec = spec.spec || spec;
-  if (cleartextSpec.version === 9 && typeof cleartextSpec.toCanonical === 'function') {
-    await entitlementsState.assertSpecEntitled(cleartextSpec, spec.owner, daemonHeight, isEncrypted);
-    await assertMatchesMarketplaceTemplate(cleartextSpec);
-  }
+  await entitlementsState.assertSpecEntitled(cleartextSpec, spec.owner, daemonHeight, isEncrypted);
+  await assertMatchesMarketplaceTemplate(cleartextSpec);
 
   // STAGE 5 — wire form for broadcast/storage; never cleartext for encrypted apps
   let broadcastBlob;
@@ -244,13 +243,8 @@ async function validateAppUpdate(appSpecification, meta = {}) {
   await assertUpdateInvariants(previousSpec, spec);
 
   const { latestSupportedSpecVersion } = config.fluxapps;
-  if (previousSpec.version !== spec.version && spec.version !== latestSupportedSpecVersion) {
-    throw new Error(
-      `Application update rejected: Version changes are only allowed when updating to version ${latestSupportedSpecVersion} (current latest supported version). `
-      + `Current version: ${previousSpec.version}, Attempted version: ${spec.version}. `
-      + `To update this application, please use version ${latestSupportedSpecVersion} specifications.`,
-    );
-  }
+  const { UpdatePolicy } = await getSpec();
+  UpdatePolicy.assertVersionTransition(previousSpec, spec, latestSupportedSpecVersion);
 
   return broadcastBlob;
 }
