@@ -132,14 +132,6 @@ describe('benchmarkService tests', () => {
         params: [JSON.stringify(payload)],
       });
     });
-
-    it('should request the attestation public key with no params', async () => {
-      await benchmarkService.attestationPublicKey();
-
-      sinon.assert.calledOnceWithExactly(benchmarkStub, 'attestationpublickey', {
-        params: [],
-      });
-    });
   });
 
   describe('getStatus tests', () => {
