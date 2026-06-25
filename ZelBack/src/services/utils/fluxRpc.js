@@ -127,7 +127,6 @@ class FluxRpc {
       ['decryptrsamessage', null],
       ['encryptmessage', null],
       ['transportpublickey', null],
-      ['transportopen', null],
       ['appencrypt', null],
       ['appdecrypt', null],
       ['contentkey', null],
