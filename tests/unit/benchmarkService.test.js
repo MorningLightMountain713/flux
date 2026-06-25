@@ -98,14 +98,14 @@ describe('benchmarkService tests', () => {
       });
     });
 
-    it('should send the transport open payload as a single stringified param', async () => {
+    it('should send the transport decap payload as a single stringified param', async () => {
       const payload = {
-        appName: 'myapp', fluxID: '1xyz', encapsulatedKey: 'ek', ciphertext: 'ct', aad: 'aad',
+        appName: 'myapp', fluxID: '1xyz', encapsulatedKey: 'ek',
       };
 
-      await benchmarkService.transportOpen(payload);
+      await benchmarkService.transportDecap(payload);
 
-      sinon.assert.calledOnceWithExactly(benchmarkStub, 'transportopen', {
+      sinon.assert.calledOnceWithExactly(benchmarkStub, 'transportdecap', {
         params: [JSON.stringify(payload)],
       });
     });
