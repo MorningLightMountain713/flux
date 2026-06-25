@@ -122,7 +122,6 @@ class FluxRpc {
       ['help', null],
       ['stop', null],
       ['getinfo', null],
-      ['decryptmessage', null],
       ['getpublickey', null],
       ['decryptrsamessage', null],
       ['encryptmessage', null],
@@ -134,7 +133,6 @@ class FluxRpc {
       ['signblobupload', null],
       ['transportdecap', null],
       ['attest', null],
-      ['attestationpublickey', null],
     ]),
   };
 

@@ -273,16 +273,6 @@ async function signFluxTransactionPost(req, res) {
 }
 
 /**
- * Ask FLuxBench to decrypt message
- * @param {object} message message object with information to be decrypted.
- */
-async function decryptMessage(message) {
-  const rpccall = 'decryptmessage';
-  const rpcparameters = [message];
-  return executeCall(rpccall, rpcparameters);
-}
-
-/**
  * Ask FLuxBench to decrypt rsa message
  * @param {object} message message object with information to be decrypted.
  */
@@ -326,9 +316,8 @@ async function unseal(params) {
   return executeCall(rpccall, rpcparameters);
 }
 
-// Transport methods take a single string param over the benchmark RPC: a
-// query string for the public-key call, the JSON body for the open call (the
-// same opaque string-param convention as the other proxy methods).
+// transportPublicKey takes a single query-string param over the benchmark RPC
+// (the same opaque string-param convention as the other proxy methods).
 async function transportPublicKey({ appName, fluxID }) {
   const rpccall = 'transportpublickey';
   const query = `appName=${encodeURIComponent(appName)}&fluxID=${encodeURIComponent(fluxID)}`;
@@ -338,17 +327,11 @@ async function transportPublicKey({ appName, fluxID }) {
 
 // Arcane attestation: sign a message proving an encrypted spec was processed
 // by a genuine instance. The sign call takes the JSON body as a single string
-// param (same convention as the other proxy methods); the public-key call takes
-// no params.
+// param (same convention as the other proxy methods).
 async function attest(params) {
   const rpccall = 'attest';
   const rpcparameters = [JSON.stringify(params)];
   return executeCall(rpccall, rpcparameters);
-}
-
-async function attestationPublicKey() {
-  const rpccall = 'attestationpublickey';
-  return executeCall(rpccall);
 }
 
 // Content blob key (per-blob): the benchmark channel returns the key; FluxOS does
@@ -547,7 +530,6 @@ module.exports = {
   // == UPNP FluxBecnh ==
   executeUpnpBench,
   //
-  decryptMessage,
   getPublicKey,
   decryptRSAMessage,
   encryptMessage,
@@ -559,5 +541,4 @@ module.exports = {
   blobLocator,
   signBlobUpload,
   attest,
-  attestationPublicKey,
 };
