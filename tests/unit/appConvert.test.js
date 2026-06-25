@@ -5,15 +5,18 @@ const proxyquire = require('proxyquire').noCallThru();
 // Orchestration tests for registryManager.convertApplicationSpecification /
 // appConvertApi. fromLegacy + the v9 class + the crypto providers are tested in
 // flux-spec; here we exercise the FluxOS glue: load, decrypt-if-encrypted,
-// resolve storage refs, and seal-if-sensitive, with full control over branches.
+// resolve storage refs, validate (non-throwing draft), and seal-if-sensitive,
+// with full control over branches.
 
 describe('appConvert (registryManager) tests', () => {
   let getGlobalAppInfo;
   let resolveStorageRefs;
   let fromLegacy;
+  let validateSchema;
   let fromSubmission;
   let transportCreate;
-  let encrypt;
+  let seal;
+  let sealEnvelope;
   let specDecrypt;
   let registryManager;
 
@@ -25,8 +28,9 @@ describe('appConvert (registryManager) tests', () => {
         validateSubmissionSpec: sinon.stub(),
         getSpecBackend: async () => ({ fromLegacy }),
         getSpec: async () => ({
-          FluxAppSpecV9: { fromSubmission: fromSubmission },
+          FluxAppSpecV9: { fromSubmission, validateSchema },
           buildSpecViewAad: () => Buffer.from('aad'),
+          SPEC_VIEW_INFO: 'FLUX_APP_SPEC_VIEW_v1',
         }),
       },
       '../providers/FluxOSTransportProvider': { create: transportCreate },
@@ -36,14 +40,21 @@ describe('appConvert (registryManager) tests', () => {
   beforeEach(() => {
     getGlobalAppInfo = sinon.stub();
     resolveStorageRefs = sinon.stub().resolves(false);
-    fromLegacy = sinon.stub().returns({ spec: { components: { web: {} } }, warnings: ['w1'] });
+    // fromLegacy always emits a blob carrying the cleartext name/owner metadata;
+    // convert reads those off the blob, so an incomplete blob still names itself.
+    fromLegacy = sinon.stub().returns({
+      spec: { name: 'myapp', owner: 'owner1', components: { web: {} } },
+      warnings: ['w1'],
+    });
+    validateSchema = sinon.stub().returns({ valid: true, errors: [] });
     fromSubmission = sinon.stub().returns({
       name: 'myapp',
       owner: 'owner1',
       toCanonical: () => ({ version: 9, name: 'myapp' }),
     });
-    encrypt = sinon.stub().resolves({ algorithm: 'HPKE', encapsulatedKey: 'ek', ciphertext: 'ct' });
-    transportCreate = sinon.stub().resolves({ encrypt });
+    sealEnvelope = { toJSON: () => ({ algorithm: 'HPKE', encapsulatedKey: 'ek', ciphertext: 'ct' }) };
+    seal = sinon.stub().resolves(sealEnvelope);
+    transportCreate = sinon.stub().resolves({ seal });
     specDecrypt = sinon.stub().resolves({ spec: { v8cleartext: true } });
     registryManager = loadWith();
   });
@@ -56,12 +67,14 @@ describe('appConvert (registryManager) tests', () => {
     };
   }
 
-  it('returns a cleartext v9 spec when nothing sensitive is inlined', async () => {
+  it('returns a complete cleartext v9 spec when nothing sensitive is inlined', async () => {
     getGlobalAppInfo.resolves(cleartextApp());
 
     const result = await registryManager.convertApplicationSpecification('myapp', {});
 
     expect(result.encrypted).to.equal(false);
+    expect(result.complete).to.equal(true);
+    expect(result.errors).to.deep.equal([]);
     expect(result.spec).to.deep.equal({ version: 9, name: 'myapp' });
     expect(result.warnings).to.deep.equal(['w1']);
     // fromLegacy got the cleartext legacy spec + the confirmation height.
@@ -72,6 +85,22 @@ describe('appConvert (registryManager) tests', () => {
     expect(transportCreate.called).to.equal(false);
   });
 
+  it('returns a fillable draft with inline errors when the converted spec is incomplete', async () => {
+    getGlobalAppInfo.resolves(cleartextApp());
+    validateSchema.returns({ valid: false, errors: [{ field: 'contacts', message: 'contacts is required' }] });
+
+    const result = await registryManager.convertApplicationSpecification('myapp', {});
+
+    expect(result.encrypted).to.equal(false);
+    expect(result.complete).to.equal(false);
+    expect(result.errors).to.deep.equal([{ field: 'contacts', message: 'contacts is required' }]);
+    // the draft is the sparse v9 blob itself; strict fromSubmission is never
+    // run on an invalid blob (it would throw).
+    expect(result.spec).to.deep.equal({ name: 'myapp', owner: 'owner1', components: { web: {} } });
+    expect(fromSubmission.called).to.equal(false);
+    expect(result.warnings).to.deep.equal(['w1']);
+  });
+
   it('seals the spec toward the frontend when a storage ref was inlined', async () => {
     getGlobalAppInfo.resolves(cleartextApp());
     resolveStorageRefs.resolves(true);
@@ -79,11 +108,37 @@ describe('appConvert (registryManager) tests', () => {
     const result = await registryManager.convertApplicationSpecification('myapp', { recipientPubkeyBase64: 'PUB' });
 
     expect(result.encrypted).to.equal(true);
+    expect(result.complete).to.equal(true);
     expect(result.transportEncrypted).to.deep.equal({ algorithm: 'HPKE', encapsulatedKey: 'ek', ciphertext: 'ct' });
     expect(result.appName).to.equal('myapp');
     expect(result.timestamp).to.be.a('number');
-    expect(transportCreate.calledOnceWith('myapp', 'owner1', 'PUB')).to.equal(true);
-    expect(encrypt.calledOnce).to.equal(true);
+    // create takes only (name, owner); the recipient pubkey is a seal arg.
+    expect(transportCreate.calledOnceWith('myapp', 'owner1')).to.equal(true);
+    expect(seal.calledOnce).to.equal(true);
+    const sealArg = seal.firstCall.args[0];
+    expect(sealArg.peerPublicKey).to.deep.equal(Buffer.from('PUB', 'base64'));
+    expect(sealArg.info).to.equal('FLUX_APP_SPEC_VIEW_v1');
+  });
+
+  it('seals the sparse draft when the source was encrypted but the conversion is incomplete', async () => {
+    const createProvider = sinon.stub().resolves({});
+    getGlobalAppInfo.resolves(cleartextApp({
+      isEncrypted: true,
+      spec: { createProvider, decrypt: specDecrypt },
+    }));
+    validateSchema.returns({ valid: false, errors: [{ field: 'contacts', message: 'contacts is required' }] });
+
+    const result = await registryManager.convertApplicationSpecification('myapp', { recipientPubkeyBase64: 'PUB' });
+
+    expect(result.encrypted).to.equal(true);
+    expect(result.complete).to.equal(false);
+    expect(result.errors).to.have.length(1);
+    // the sealed plaintext is the sparse draft blob, not a canonical form.
+    const sealArg = seal.firstCall.args[0];
+    expect(JSON.parse(sealArg.plaintext.toString('utf8'))).to.deep.equal({
+      name: 'myapp', owner: 'owner1', components: { web: {} },
+    });
+    expect(fromSubmission.called).to.equal(false);
   });
 
   it('requires a transport pubkey when the result must be encrypted', async () => {
