@@ -64,8 +64,10 @@ const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const hwRequirements = require('../appRequirements/hwRequirements');
-const { resolveSubmission, assertSecretsNotConflicting } = require('../appRequirements/appSubmission');
+const { resolveSubmission, assertSecretsNotConflicting, parseMultipartSubmission } = require('../appRequirements/appSubmission');
 const globalState = require('../utils/globalState');
+const contentBlobService = require('./contentBlobService');
+const fluxDriveClient = require('../utils/fluxDriveClient');
 const operationRegistry = require('../utils/operationRegistry');
 
 // Legacy apps that use old gateway IP assignment method
@@ -1191,7 +1193,7 @@ async function testAppMount() {
  */
 async function updateAppGlobaly(params) {
   const {
-    appSpecification, timestamp, signature, type: messageType, version: typeVersion,
+    appSpecification, timestamp, signature, type: messageType, version: typeVersion, blobCtx,
   } = params;
 
   if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
@@ -1267,6 +1269,14 @@ async function updateAppGlobaly(params) {
   UpdatePolicy.assertVersionTransition(previousSpec, spec, latestSupportedSpecVersion);
   UpdatePolicy.assertCompatible(previousSpec, spec);
 
+  // Content blobs ride alongside the spec as plaintext multipart parts; upload
+  // them synchronously so they are durably stored before the spec is gossiped.
+  if (blobCtx) {
+    await contentBlobService.encryptAndUploadBlobs(spec, blobCtx.blobs, blobCtx.ownerSigs, {
+      uploader: fluxDriveClient,
+    });
+  }
+
   const messageHASH = await appEventVerifier.computeOutboundHash({
     type: cleanMessageType,
     envelopeVersion: cleanTypeVersion,
@@ -1327,38 +1337,56 @@ async function updateAppGlobaly(params) {
  * @param {object} res - Response object
  * @returns {Promise<void>} Update result
  */
-async function updateAppGlobalyApi(req, res) {
+/**
+ * Authorize and run an app update from a parsed submission. Shared by the JSON
+ * and multipart paths; the multipart path passes blobCtx so its content blobs
+ * upload synchronously once the spec validates. res.json is sent here on
+ * success/unauthorized; validation failures throw to the caller's handler.
+ */
+async function submitAppUpdate(req, res, processedBody, blobCtx) {
+  const authorized = await verificationHelper.verifyPrivilege('user', req);
+  if (!authorized) {
+    res.json(messageHelper.errUnauthorizedMessage());
+    return;
+  }
+  // eslint-disable-next-line global-require
+  const { peerManager } = require('../utils/peerState');
+  if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
+    throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application update');
+  }
+  if (peerManager.inboundCount < config.fluxapps.minIncoming) {
+    throw new Error('Sorry, This Flux does not have enough incoming peers for safe application update');
+  }
+
+  const hash = await updateAppGlobaly({
+    appSpecification: processedBody.appSpecification,
+    timestamp: processedBody.timestamp,
+    signature: processedBody.signature,
+    type: processedBody.type,
+    version: processedBody.version,
+    // v9 (envelope version 2) signs over contentHash and carries the extend
+    // flag; both are required to reconstruct the signed message and verify it.
+    contentHash: processedBody.contentHash,
+    extend: processedBody.extend,
+    blobCtx,
+  });
+
+  res.json(messageHelper.createDataMessage(hash));
+}
+
+/**
+ * Multipart update: parse the spec + content-blob parts, gate blob uploads to
+ * arcane nodes, then run the shared update flow with the blobs.
+ */
+async function handleMultipartAppUpdate(req, res) {
   try {
-    const authorized = await verificationHelper.verifyPrivilege('user', req);
-    if (!authorized) {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-      return;
+    const { spec, blobs, ownerSigs } = await parseMultipartSubmission(req);
+    if (blobs.size > 0 && !globalState.isArcane()) {
+      throw new Error('Content blob uploads require an arcane node');
     }
-    // eslint-disable-next-line global-require
-    const { peerManager } = require('../utils/peerState');
-    if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
-      throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application update');
-    }
-    if (peerManager.inboundCount < config.fluxapps.minIncoming) {
-      throw new Error('Sorry, This Flux does not have enough incoming peers for safe application update');
-    }
-
-    const processedBody = serviceHelper.ensureObject(req.body);
-    const hash = await updateAppGlobaly({
-      appSpecification: processedBody.appSpecification,
-      timestamp: processedBody.timestamp,
-      signature: processedBody.signature,
-      type: processedBody.type,
-      version: processedBody.version,
-      // v9 (envelope version 2) signs over contentHash and carries the extend
-      // flag; both are required to reconstruct the signed message and verify it.
-      contentHash: processedBody.contentHash,
-      extend: processedBody.extend,
-    });
-
-    const responseHash = messageHelper.createDataMessage(hash);
-    res.json(responseHash);
+    const processedBody = serviceHelper.ensureObject(spec);
+    const blobCtx = blobs.size > 0 ? { blobs, ownerSigs } : null;
+    await submitAppUpdate(req, res, processedBody, blobCtx);
   } catch (error) {
     log.warn(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -1367,6 +1395,78 @@ async function updateAppGlobalyApi(req, res) {
       error.code,
     );
     res.json(errorResponse);
+  }
+}
+
+async function updateAppGlobalyApi(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  if (contentType.startsWith('multipart/form-data')) {
+    return handleMultipartAppUpdate(req, res);
+  }
+  try {
+    const processedBody = serviceHelper.ensureObject(req.body);
+    await submitAppUpdate(req, res, processedBody, null);
+  } catch (error) {
+    log.warn(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    res.json(errorResponse);
+  }
+  return undefined;
+}
+
+const MAX_CONTENT_SERVES = 4;
+let activeContentServes = 0;
+
+/**
+ * Serve a content blob to a peer by locator — the peers-first source for other
+ * nodes installing this app. Anti-abuse only: the content is opaque ciphertext
+ * and integrity is the requester's own hash-check, so this gates on a
+ * concurrency cap (429 over the limit), not auth. Only arcane nodes can
+ * re-encrypt (the per-blob key comes over the benchmark channel). fluxID is the
+ * installed app's owner — the same identity the locator was derived from at
+ * upload/provision time, so the served mount matches the requested locator.
+ * @param {object} req - Request object (params: appName, locator)
+ * @param {object} res - Response object
+ */
+async function contentBlobServeApi(req, res) {
+  try {
+    if (!globalState.isArcane()) {
+      res.status(503).end();
+      return;
+    }
+    if (activeContentServes >= MAX_CONTENT_SERVES) {
+      res.status(429).end();
+      return;
+    }
+    activeContentServes += 1;
+    try {
+      const { appName, locator } = req.params;
+      const installed = await appsRepository.getInstalledApp(appName);
+      const deployment = await deploymentProvider.getInstalledDeployment(appName);
+      if (!installed || !deployment) {
+        res.status(404).end();
+        return;
+      }
+      const framed = await contentBlobService.serveBlob(
+        { appName, fluxID: installed.owner, locator },
+        { getDeployment: async () => deployment, readFile: (source) => fs.readFile(source) },
+      );
+      if (!framed) {
+        res.status(404).end();
+        return;
+      }
+      res.set('Content-Type', 'application/octet-stream');
+      res.send(framed);
+    } finally {
+      activeContentServes -= 1;
+    }
+  } catch (error) {
+    log.error(error);
+    res.status(500).end();
   }
 }
 
@@ -2176,6 +2276,7 @@ module.exports = {
   redeployComponentAPI,
   updateAppGlobaly,
   updateAppGlobalyApi,
+  contentBlobServeApi,
   appendBackupTask,
   appendRestoreTask,
   removeTestAppMount,

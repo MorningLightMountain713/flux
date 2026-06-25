@@ -1385,6 +1385,9 @@ module.exports = (app) => {
   app.post('/apps/appupdate', (req, res) => {
     appOperations.updateAppGlobalyApi(req, res);
   });
+  app.get('/apps/contentblob/:appName/:locator', (req, res) => {
+    appOperations.contentBlobServeApi(req, res);
+  });
   app.post('/apps/getpublickey', (req, res) => {
     cryptographicKeys.getPublicKey(req, res);
   });
