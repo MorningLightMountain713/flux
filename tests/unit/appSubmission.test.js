@@ -132,8 +132,29 @@ describe('appSubmission tests', () => {
       expect(result.broadcastBlob).to.deep.equal({ form: 'v8-enterprise-blob' });
       sinon.assert.calledOnce(wireSpec.decrypt);
       sinon.assert.calledWith(stubs.specLibs.validateSubmissionSpec, { inner: 'cleartext' }, { height: 100 });
-      // v8 is not a gated-feature carrier
-      sinon.assert.notCalled(stubs.entitlementsState.assertSpecEntitled);
+      // the entitlements gate runs for every version now (no version branch); v8
+      // carries no gated features, so it is a no-op rather than skipped
+      sinon.assert.calledOnce(stubs.entitlementsState.assertSpecEntitled);
+    });
+
+    it('runs the entitlements gate for a legacy v8 spec without a version branch', async () => {
+      appSubmission = load();
+      const spec = {
+        name: 'myapp', owner: 'owner1', version: 8, serialize: sinon.stub().returns({ form: 'v8-cleartext' }),
+      };
+      stubs.transportHelper.openTransportEnvelope.resolves({ version: 8, name: 'myapp', owner: 'owner1' });
+      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+
+      const result = await appSubmission.resolveSubmission({ version: 8, name: 'myapp', owner: 'owner1' }, {
+        timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
+      });
+
+      expect(result.broadcastBlob).to.deep.equal({ form: 'v8-cleartext' });
+      // the gate executes for v8 (proving no version branch) and no-ops: it is
+      // entitlement-checked but carries no marketplace block to verify
+      sinon.assert.calledOnceWithExactly(stubs.entitlementsState.assertSpecEntitled, spec, 'owner1', 100, false);
+      sinon.assert.notCalled(stubs.marketplaceTemplateCache.getTemplate);
     });
 
     it('rejects when the signed contentHash does not match the decrypted content', async () => {
@@ -207,15 +228,23 @@ describe('appSubmission tests', () => {
       }
     });
 
-    it('rejects a version change that is not to the latest supported version', async () => {
+    it('delegates the version-transition gate to UpdatePolicy and propagates its rejection', async () => {
+      const assertVersionTransition = sinon.stub().throws(
+        new Error('Application update rejected: Version changes are only allowed when updating to version 9 (current latest supported version).'),
+      );
+      stubs.specLibs.getSpec = sinon.stub().resolves({
+        FluxAppSpecV9: { fromSubmission: sinon.stub().returns({ templateSpec: true }) },
+        UpdatePolicy: { assertVersionTransition },
+      });
       appSubmission = load();
       const updateSpec = {
         name: 'myapp', owner: 'owner1', version: 8, serialize: sinon.stub().returns({ form: 'v8' }),
       };
+      const previousSpec = { name: 'myapp', owner: 'owner1', version: 7 };
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 8 });
       stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(updateSpec);
-      stubs.appSpecHistory.getPreviousSpec.resolves({ name: 'myapp', owner: 'owner1', version: 7 });
+      stubs.appSpecHistory.getPreviousSpec.resolves(previousSpec);
 
       try {
         await appSubmission.validateAppUpdate({ version: 8 }, {});
@@ -223,6 +252,9 @@ describe('appSubmission tests', () => {
       } catch (err) {
         expect(err.message).to.include('Version changes are only allowed');
       }
+      // the gate is delegated to flux-spec with the prior spec, the proposed
+      // spec, and the network's latest supported version.
+      sinon.assert.calledOnceWithExactly(assertVersionTransition, previousSpec, updateSpec, 9);
     });
   });
 

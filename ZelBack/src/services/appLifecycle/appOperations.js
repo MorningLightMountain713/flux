@@ -1263,15 +1263,8 @@ async function updateAppGlobaly(params) {
   });
 
   const { latestSupportedSpecVersion } = config.fluxapps;
-  if (appInfo.version !== spec.version && spec.version !== latestSupportedSpecVersion) {
-    throw new Error(
-      `Application update rejected: Version changes are only allowed when updating to version ${latestSupportedSpecVersion} (current latest supported version). `
-      + `Current version: ${appInfo.version}, Attempted version: ${spec.version}. `
-      + `To update this application, please use version ${latestSupportedSpecVersion} specifications.`,
-    );
-  }
-
   const { UpdatePolicy } = await getSpec();
+  UpdatePolicy.assertVersionTransition(previousSpec, spec, latestSupportedSpecVersion);
   UpdatePolicy.assertCompatible(previousSpec, spec);
 
   const messageHASH = await appEventVerifier.computeOutboundHash({
