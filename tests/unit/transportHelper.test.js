@@ -35,8 +35,14 @@ describe('transportHelper tests', () => {
       TransportEnvelope: { fromJSON: fromJSONStub },
       buildTransportAad: buildTransportAadStub,
     });
-    transportHelper = proxyquire('../../ZelBack/src/services/utils/transportHelper', {
+    // The open path now lives in the transport provider; load the real provider
+    // (real aeadCrypto + flux-spec) with only the benchmark channel stubbed, so
+    // openTransportEnvelope still exercises the real split-HPKE open.
+    const transportProvider = proxyquire('../../ZelBack/src/services/providers/FluxOSTransportProvider', {
       '../benchmarkService': benchmarkServiceStub,
+    });
+    transportHelper = proxyquire('../../ZelBack/src/services/utils/transportHelper', {
+      '../providers/FluxOSTransportProvider': transportProvider,
       './specLibs': { getSpec: getSpecStub },
     });
   });
