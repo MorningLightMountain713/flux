@@ -1,3 +1,5 @@
+const fs = require('node:fs');
+const { formidable } = require('formidable');
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
@@ -16,6 +18,9 @@ const transportHelper = require('../utils/transportHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const entitlementsState = require('../entitlementsState');
 const marketplaceTemplateCache = require('../marketplace/marketplaceTemplateCache');
+const contentBlobService = require('../appLifecycle/contentBlobService');
+const fluxDriveClient = require('../utils/fluxDriveClient');
+const globalState = require('../utils/globalState');
 const { peerManager } = require('../utils/peerState');
 
 /**
@@ -262,131 +267,193 @@ async function verifyAppUpdateApi(req, res) {
   }
 }
 
-async function registerAppGlobalyApi(req, res) {
+/**
+ * Validate and broadcast a parsed registration submission. Shared by the JSON
+ * and multipart paths. The multipart path passes blobCtx so its content blobs
+ * are uploaded synchronously (durable before gossip) once the spec validates.
+ * res.json is sent here on success/unauthorized; validation failures throw to
+ * the caller's handler.
+ */
+async function submitAppRegistration(req, res, processedBody, blobCtx) {
+  const authorized = await verificationHelper.verifyPrivilege('user', req);
+  if (!authorized) {
+    res.json(messageHelper.errUnauthorizedMessage());
+    return;
+  }
+
+  if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
+    throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application registration');
+  }
+  if (peerManager.inboundCount < config.fluxapps.minIncoming) {
+    throw new Error('Sorry, This Flux does not have enough incoming peers for safe application registration');
+  }
+
+  let { appSpecification, timestamp, signature } = processedBody;
+  const { contentHash, extend } = processedBody;
+  let messageType = processedBody.type;
+  let typeVersion = processedBody.version;
+
+  if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
+    throw new Error('Incomplete message received. Check if appSpecification, type, version, timestamp and signature are provided.');
+  }
+
+  if (messageType !== 'zelappregister' && messageType !== 'fluxappregister') {
+    throw new Error('Invalid type of message');
+  }
+
+  // envelope version 1 = legacy v1-v8, 2 = v9 (AppEventV2 / contentHash signing)
+  if (typeVersion !== 1 && typeVersion !== 2) {
+    throw new Error('Invalid version of message');
+  }
+
+  appSpecification = serviceHelper.ensureObject(appSpecification);
+  timestamp = serviceHelper.ensureNumber(timestamp);
+  signature = serviceHelper.ensureString(signature);
+  messageType = serviceHelper.ensureString(messageType);
+  typeVersion = serviceHelper.ensureNumber(typeVersion);
+
+  const timestampNow = Date.now();
+  if (timestamp < timestampNow - 1000 * 3600) {
+    throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
+  } else if (timestamp > timestampNow + 1000 * 60 * 5) {
+    throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
+  }
+
+  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  if (!syncStatus.data.synced) {
+    throw new Error('Daemon not yet synced.');
+  }
+
+  const daemonHeight = syncStatus.data.height;
+
+  const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
+    contentHash, timestamp, type: messageType, daemonHeight,
+  });
+
+  await registryManager.checkApplicationRegistrationNameConflicts(spec);
+
+  // Content blobs ride alongside the spec as plaintext multipart parts; upload
+  // them synchronously so they are durably stored before the spec is gossiped.
+  if (blobCtx) {
+    await contentBlobService.encryptAndUploadBlobs(spec, blobCtx.blobs, blobCtx.ownerSigs, {
+      uploader: fluxDriveClient,
+    });
+  }
+
+  const signedEvent = await appEventVerifier.deserializeTempMessage({
+    type: messageType,
+    version: typeVersion,
+    appSpecifications: broadcastBlob,
+    contentHash,
+    timestamp,
+    extend,
+    signature,
+  });
+  await appEventVerifier.authorize({
+    appEvent: signedEvent,
+    daemonHeight,
+    verifyHash: false,
+  });
+
+  const messageHASH = await appEventVerifier.computeOutboundHash({
+    type: messageType,
+    envelopeVersion: typeVersion,
+    specBlob: broadcastBlob,
+    contentHash,
+    timestamp,
+    extend,
+    signature,
+  });
+
+  // v9 only (envelope version 2). v8 enterprise messages are envelope
+  // version 1, which old nodes still parse — they must not carry an unknown
+  // arcaneAttestation key. v9 messages (version 2) are rejected by old nodes
+  // before parsing, so the field only ever rides messages they ignore.
+  let arcaneAttestation;
+  if (signedEvent.requiresArcaneAttestation()) {
+    arcaneAttestation = await appEventVerifier.requestAttestation(contentHash);
+  }
+
+  const temporaryAppMessage = {
+    type: messageType,
+    version: typeVersion,
+    appSpecifications: broadcastBlob,
+    hash: messageHASH,
+    contentHash,
+    timestamp,
+    extend,
+    signature,
+    arcaneAttestation,
+  };
+  await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
+  await serviceHelper.delay(1200);
+  await messageVerifier.requestAppMessage(messageHASH);
+  await serviceHelper.delay(1200);
+  let tempMessage = await appsRepository.getTempMessage(messageHASH);
+  for (let i = 0; i < 20; i += 1) {
+    if (!tempMessage) {
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(500);
+      // eslint-disable-next-line no-await-in-loop
+      tempMessage = await appsRepository.getTempMessage(messageHASH);
+    }
+  }
+  if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
+    const responseHash = messageHelper.createDataMessage(tempMessage.hash);
+    res.json(responseHash);
+    return;
+  }
+  throw new Error('Unable to register application on the network. Try again later.');
+}
+
+/**
+ * Read a multipart/form-data submission: the `spec` field (the signed
+ * submission JSON), one `blob:sha256:<hex>` file part per content blob, and an
+ * `ownerSigs` field (JSON map of hash -> { sig, timestamp }). Each blob is read
+ * into memory (formidable caps each part at MAX_BLOB_BYTES) and its temp file
+ * removed. The spec part is opened/validated downstream by resolveSubmission.
+ *
+ * @returns {Promise<{ spec: string, blobs: Map<string, Buffer>, ownerSigs: Map<string, object> }>}
+ */
+async function parseMultipartSubmission(req) {
+  const form = formidable({
+    maxFileSize: contentBlobService.MAX_BLOB_BYTES,
+    multiples: true,
+    keepExtensions: false,
+  });
+  const [fields, files] = await form.parse(req);
+  const first = (value) => (Array.isArray(value) ? value[0] : value);
+
+  const spec = first(fields.spec);
+  const ownerSigsObj = serviceHelper.ensureObject(first(fields.ownerSigs) || '{}');
+  const ownerSigs = new Map(Object.entries(ownerSigsObj));
+
+  const blobs = new Map();
+  for (const [field, fileList] of Object.entries(files)) {
+    if (!field.startsWith('blob:')) continue;
+    const file = first(fileList);
+    // eslint-disable-next-line no-await-in-loop
+    const bytes = await fs.promises.readFile(file.filepath);
+    blobs.set(field.slice('blob:'.length), bytes);
+    // eslint-disable-next-line no-await-in-loop
+    await fs.promises.unlink(file.filepath).catch(() => {});
+  }
+  return { spec, blobs, ownerSigs };
+}
+
+/**
+ * Multipart registration: parse the spec + content-blob parts, gate blob
+ * uploads to arcane nodes, then run the shared submission flow with the blobs.
+ */
+async function handleMultipartAppRegister(req, res) {
   try {
-    const authorized = await verificationHelper.verifyPrivilege('user', req);
-    if (!authorized) {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-      return;
+    const { spec, blobs, ownerSigs } = await parseMultipartSubmission(req);
+    if (blobs.size > 0 && !globalState.isArcane()) {
+      throw new Error('Content blob uploads require an arcane node');
     }
-
-    if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
-      throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application registration');
-    }
-    if (peerManager.inboundCount < config.fluxapps.minIncoming) {
-      throw new Error('Sorry, This Flux does not have enough incoming peers for safe application registration');
-    }
-
-    const processedBody = serviceHelper.ensureObject(req.body);
-    let { appSpecification, timestamp, signature } = processedBody;
-    const { contentHash, extend } = processedBody;
-    let messageType = processedBody.type;
-    let typeVersion = processedBody.version;
-
-    if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
-      throw new Error('Incomplete message received. Check if appSpecification, type, version, timestamp and signature are provided.');
-    }
-
-    if (messageType !== 'zelappregister' && messageType !== 'fluxappregister') {
-      throw new Error('Invalid type of message');
-    }
-
-    // envelope version 1 = legacy v1-v8, 2 = v9 (AppEventV2 / contentHash signing)
-    if (typeVersion !== 1 && typeVersion !== 2) {
-      throw new Error('Invalid version of message');
-    }
-
-    appSpecification = serviceHelper.ensureObject(appSpecification);
-    timestamp = serviceHelper.ensureNumber(timestamp);
-    signature = serviceHelper.ensureString(signature);
-    messageType = serviceHelper.ensureString(messageType);
-    typeVersion = serviceHelper.ensureNumber(typeVersion);
-
-    const timestampNow = Date.now();
-    if (timestamp < timestampNow - 1000 * 3600) {
-      throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
-    } else if (timestamp > timestampNow + 1000 * 60 * 5) {
-      throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
-    }
-
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-    if (!syncStatus.data.synced) {
-      throw new Error('Daemon not yet synced.');
-    }
-
-    const daemonHeight = syncStatus.data.height;
-
-    const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
-      contentHash, timestamp, type: messageType, daemonHeight,
-    });
-
-    await registryManager.checkApplicationRegistrationNameConflicts(spec);
-
-    const signedEvent = await appEventVerifier.deserializeTempMessage({
-      type: messageType,
-      version: typeVersion,
-      appSpecifications: broadcastBlob,
-      contentHash,
-      timestamp,
-      extend,
-      signature,
-    });
-    await appEventVerifier.authorize({
-      appEvent: signedEvent,
-      daemonHeight,
-      verifyHash: false,
-    });
-
-    const messageHASH = await appEventVerifier.computeOutboundHash({
-      type: messageType,
-      envelopeVersion: typeVersion,
-      specBlob: broadcastBlob,
-      contentHash,
-      timestamp,
-      extend,
-      signature,
-    });
-
-    // v9 only (envelope version 2). v8 enterprise messages are envelope
-    // version 1, which old nodes still parse — they must not carry an unknown
-    // arcaneAttestation key. v9 messages (version 2) are rejected by old nodes
-    // before parsing, so the field only ever rides messages they ignore.
-    let arcaneAttestation;
-    if (signedEvent.requiresArcaneAttestation()) {
-      arcaneAttestation = await appEventVerifier.requestAttestation(contentHash);
-    }
-
-    const temporaryAppMessage = {
-      type: messageType,
-      version: typeVersion,
-      appSpecifications: broadcastBlob,
-      hash: messageHASH,
-      contentHash,
-      timestamp,
-      extend,
-      signature,
-      arcaneAttestation,
-    };
-    await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
-    await serviceHelper.delay(1200);
-    await messageVerifier.requestAppMessage(messageHASH);
-    await serviceHelper.delay(1200);
-    let tempMessage = await appsRepository.getTempMessage(messageHASH);
-    for (let i = 0; i < 20; i += 1) {
-      if (!tempMessage) {
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.delay(500);
-        // eslint-disable-next-line no-await-in-loop
-        tempMessage = await appsRepository.getTempMessage(messageHASH);
-      }
-    }
-    if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
-      const responseHash = messageHelper.createDataMessage(tempMessage.hash);
-      res.json(responseHash);
-      return;
-    }
-    throw new Error('Unable to register application on the network. Try again later.');
+    const processedBody = serviceHelper.ensureObject(spec);
+    const blobCtx = blobs.size > 0 ? { blobs, ownerSigs } : null;
+    await submitAppRegistration(req, res, processedBody, blobCtx);
   } catch (error) {
     log.warn(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -396,6 +463,26 @@ async function registerAppGlobalyApi(req, res) {
     );
     res.json(errorResponse);
   }
+}
+
+async function registerAppGlobalyApi(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  if (contentType.startsWith('multipart/form-data')) {
+    return handleMultipartAppRegister(req, res);
+  }
+  try {
+    const processedBody = serviceHelper.ensureObject(req.body);
+    await submitAppRegistration(req, res, processedBody, null);
+  } catch (error) {
+    log.warn(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    res.json(errorResponse);
+  }
+  return undefined;
 }
 
 function normalizePGPSecret(pgpMessage) {
@@ -451,5 +538,6 @@ module.exports = {
   validateAppUpdate,
   verifyAppUpdateApi,
   registerAppGlobalyApi,
+  parseMultipartSubmission,
   assertSecretsNotConflicting,
 };
