@@ -1,23 +1,25 @@
 /**
- * FluxOSTransportProvider — transport CryptoProvider for v9 (both directions).
+ * FluxOSTransportProvider — the node-side TransportCryptoProvider (both
+ * directions) for v9.
  *
- * encrypt: HPKE single-shot seal toward the frontend's ephemeral X25519 pubkey
- *   using @hpke/core (view/response direction, backend → frontend) under
- *   SPEC_VIEW_INFO. The ephemeral keypair is generated and discarded in scope.
- *   Fully local; the envelope carries no separate nonce.
+ * seal: view/response direction (node -> frontend). HPKE single-shot seal toward
+ *   the frontend's ephemeral X25519 pubkey via @hpke/core. Fully local; the
+ *   returned TransportEnvelope carries no nonce (HPKE manages it internally).
  *
- * decrypt: opens a submission-direction envelope (frontend → backend) via
- *   split-HPKE — delegates to utils/transportHelper.decapAndOpen, which decaps +
- *   exports the per-submission key over the benchmark channel and AES-256-GCM-
- *   opens the spec locally. The export-mode envelope carries an explicit nonce.
+ * open: submission direction (frontend -> node). Split-HPKE — the asymmetric
+ *   decap + per-submission key export run over the benchmark channel; the bulk
+ *   AES-256-GCM open runs locally, so spec bytes never cross the channel. The
+ *   appName/owner the transport key derives from are construction-time state.
  *
  * Usage (appConvert seals the converted spec toward the owner's frontend pubkey):
- *   const provider = await create(appName, owner, frontendPubkeyBase64);
- *   const envelope = await provider.encrypt(plaintext, aad);
+ *   const provider = await create(appName, owner);
+ *   const envelope = await provider.seal({ plaintext, aad, peerPublicKey, info });
+ *   const wire = envelope.toJSON();
  */
 
-const transportHelper = require('../utils/transportHelper');
-const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const benchmarkService = require('../benchmarkService');
+const { aeadDecrypt } = require('../utils/aeadCrypto');
+const { getSpec } = require('../utils/specLibs');
 
 let hpkeCache;
 
@@ -36,77 +38,96 @@ async function getHpke() {
 }
 
 /**
- * Create a v9 transport CryptoProvider.
+ * Create a v9 transport provider for one app.
  *
- * @param {string} appName - App name (key derivation input)
+ * @param {string} appName - app name (transport key derivation input)
  * @param {string} owner   - fluxID / owner address
- * @param {string} recipientPubkeyBase64 - Frontend's ephemeral X25519 pubkey (for encrypt/view direction)
- * @returns {Promise<import('@runonflux/flux-spec-backend').CryptoProvider>}
+ * @returns {Promise<import('@runonflux/flux-spec').TransportCryptoProvider>}
  */
-async function create(appName, owner, recipientPubkeyBase64) {
-  const { CryptoProvider: Base } = await getSpecBackend();
+async function create(appName, owner) {
+  const { TransportCryptoProvider, TransportEnvelope, TRANSPORT_ALGORITHM } = await getSpec();
 
-  class FluxOSTransportProvider extends Base {
+  class FluxOSTransportProvider extends TransportCryptoProvider {
     #appName;
     #owner;
-    #recipientPubkeyBytes;
 
-    constructor(app, own, pubkeyBytes) {
+    constructor(app, own) {
       super();
       this.#appName = app;
       this.#owner = own;
-      this.#recipientPubkeyBytes = pubkeyBytes;
     }
 
     /**
-     * HPKE-seal plaintext toward the frontend's ephemeral pubkey.
-     * Used for the view/response direction.
+     * HPKE single-shot seal toward a recipient's ephemeral pubkey (view
+     * direction). Returns a TransportEnvelope — no nonce, HPKE owns its own.
      */
-    async encrypt(plaintext, aad) {
+    async seal({
+      plaintext, aad, peerPublicKey, info,
+    }) {
       const { suite, DhkemX25519HkdfSha256: Kem } = await getHpke();
-      const { TRANSPORT_ALGORITHM, SPEC_VIEW_INFO } = await getSpec();
-      const recipientPublicKey = await new Kem().deserializePublicKey(this.#recipientPubkeyBytes);
-      const info = new TextEncoder().encode(SPEC_VIEW_INFO);
-
+      const recipientPublicKey = await new Kem().deserializePublicKey(peerPublicKey);
       const sender = await suite.createSenderContext({
         recipientPublicKey,
-        info,
+        info: new TextEncoder().encode(info),
       });
-
-      const aadBytes = aad || new Uint8Array(0);
-      const ct = await sender.seal(plaintext, aadBytes);
-
-      return {
+      const ct = await sender.seal(plaintext, aad || new Uint8Array(0));
+      return new TransportEnvelope({
         algorithm: TRANSPORT_ALGORITHM,
-        encapsulatedKey: Buffer.from(sender.enc).toString('base64'),
-        ciphertext: Buffer.from(ct).toString('base64'),
-      };
+        encapsulatedKey: new Uint8Array(sender.enc),
+        ciphertext: new Uint8Array(ct),
+      });
     }
 
     /**
-     * Open a submission-direction envelope via split-HPKE. Delegates the decap +
-     * local AES-256-GCM to the shared utils/transportHelper.decapAndOpen, so the
-     * open path lives in exactly one place.
+     * Open a submission-direction envelope via split-HPKE: the benchmark channel
+     * performs only the asymmetric decap + per-submission key export; the spec
+     * ciphertext is opened locally with AES-256-GCM. Throws with a `.code`
+     * (MISSING_FIELD | INTERNAL_ERROR | DECRYPT_FAILED | ...) for peer discipline.
      */
-    async decrypt(encrypted, aad) {
-      const { TransportEnvelope } = await getSpec();
-      const envelope = TransportEnvelope.fromJSON(encrypted);
-      const aadBytes = aad
-        ? (Buffer.isBuffer(aad) ? aad : Buffer.from(aad, 'base64'))
-        : Buffer.alloc(0);
-      return transportHelper.decapAndOpen({
+    async open({ envelope, aad }) {
+      if (!envelope.nonce) {
+        const err = new Error('Transport-encrypted payload missing nonce');
+        err.code = 'MISSING_FIELD';
+        throw err;
+      }
+
+      // Asymmetric step only: decap + export the 32-byte per-submission key.
+      const resp = await benchmarkService.transportDecap({
         appName: this.#appName,
         fluxID: this.#owner,
-        encapsulatedKey: envelope.encapsulatedKey,
-        nonce: envelope.nonce,
-        ciphertext: envelope.ciphertext,
-        aad: aadBytes,
+        encapsulatedKey: Buffer.from(envelope.encapsulatedKey).toString('base64'),
       });
+      if (!resp || resp.status !== 'success') {
+        const err = new Error('Transport open failed (benchmark unreachable)');
+        err.code = 'INTERNAL_ERROR';
+        throw err;
+      }
+
+      const decap = typeof resp.data === 'string' ? JSON.parse(resp.data) : resp.data;
+      if (!decap || decap.status !== 'ok' || !decap.key) {
+        const code = (decap && decap.message) || 'INTERNAL_ERROR';
+        const err = new Error(`Transport decap failed: ${code}`);
+        err.code = code;
+        throw err;
+      }
+
+      // The envelope ciphertext is ct‖tag and aeadCrypto frames as nonce‖ct‖tag,
+      // so the nonce followed by the ciphertext is exactly the frame aeadDecrypt
+      // expects — no byte re-ordering. A bad key/tag/aad throws.
+      const key = Buffer.from(decap.key, 'base64');
+      const frame = Buffer.concat([Buffer.from(envelope.nonce), Buffer.from(envelope.ciphertext)]);
+      const aadBuf = aad ? Buffer.from(aad) : Buffer.alloc(0);
+      try {
+        return aeadDecrypt(key, frame, aadBuf);
+      } catch (decryptError) {
+        const err = new Error('Transport open failed: AEAD authentication failed');
+        err.code = 'DECRYPT_FAILED';
+        throw err;
+      }
     }
   }
 
-  const pubkeyBytes = Buffer.from(recipientPubkeyBase64, 'base64');
-  return new FluxOSTransportProvider(appName, owner, pubkeyBytes);
+  return new FluxOSTransportProvider(appName, owner);
 }
 
 module.exports = {

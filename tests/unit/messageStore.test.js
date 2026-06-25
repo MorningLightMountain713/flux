@@ -24,6 +24,7 @@ describe('messageStore tests', () => {
       isRegistration: message.type === 'fluxappregister' || message.type === 'zelappregister',
       isUpdate: message.type === 'fluxappupdate' || message.type === 'zelappupdate',
       isEncrypted: false,
+      requiresArcaneAttestation: () => false,
       serialize: () => ({
         type: message.type,
         version: message.version,
@@ -313,6 +314,7 @@ describe('messageStore tests', () => {
           timestamp: Date.now(),
           version,
           isEncrypted: true,
+          requiresArcaneAttestation: () => version === 2,
           isRegistration: true,
           isUpdate: false,
           spec: { ...specs, serialize: () => specs },

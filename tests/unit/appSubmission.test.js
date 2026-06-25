@@ -28,7 +28,6 @@ describe('appSubmission tests', () => {
       '../appSecurity/imageArchitectureValidator': stubs.imageArchitectureValidator,
       '../entitlementsState': stubs.entitlementsState,
       '../marketplace/marketplaceTemplateCache': stubs.marketplaceTemplateCache,
-      '../providers/FluxOSCryptoProvider': stubs.cryptoProvider,
       '../appDatabase/registryManager': stubs.registryManager,
       '../daemonService/daemonServiceMiscRpcs': stubs.daemonServiceMiscRpcs,
       '../appDatabase/appSpecHistory': stubs.appSpecHistory,
@@ -55,7 +54,6 @@ describe('appSubmission tests', () => {
       imageArchitectureValidator: { verifyImageRegistryAndArchitectures: sinon.stub().resolves() },
       entitlementsState: { assertSpecEntitled: sinon.stub().resolves() },
       marketplaceTemplateCache: { getTemplate: sinon.stub().resolves({ spec: { version: 9 }, userConfigurable: [] }) },
-      cryptoProvider: { create: sinon.stub().resolves({ provider: true }) },
       registryManager: { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
       daemonServiceMiscRpcs: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
       appSpecHistory: { getPreviousSpec: sinon.stub() },
@@ -97,8 +95,8 @@ describe('appSubmission tests', () => {
       stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
       const encryptedSpec = { serialize: sinon.stub().returns({ form: 'EncryptedSpecV9' }) };
-      const EncryptedSpecV9 = { fromSpec: sinon.stub().resolves(encryptedSpec) };
-      stubs.specLibs.getSpecBackend.resolves({ EncryptedSpecV9 });
+      const sealForStorage = sinon.stub().resolves(encryptedSpec);
+      stubs.specLibs.getSpecBackend.resolves({ sealForStorage });
 
       const result = await appSubmission.resolveSubmission(submission, {
         contentHash: 'HASH123', timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
@@ -108,9 +106,8 @@ describe('appSubmission tests', () => {
       expect(result.broadcastBlob).to.deep.equal({ form: 'EncryptedSpecV9' });
       // the cleartext serialize must never become the wire form
       sinon.assert.notCalled(spec.serialize);
-      sinon.assert.calledOnce(EncryptedSpecV9.fromSpec);
-      sinon.assert.calledWith(EncryptedSpecV9.fromSpec, spec, { provider: true });
-      sinon.assert.calledWith(stubs.cryptoProvider.create, 'myapp', 'owner1');
+      sinon.assert.calledOnce(sealForStorage);
+      sinon.assert.calledWith(sealForStorage, spec);
     });
 
     it('decrypts a v8 enterprise blob, validates the inner spec, and keeps the encrypted wire form', async () => {
