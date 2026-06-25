@@ -7,6 +7,10 @@ const registryManager = require('../../ZelBack/src/services/appDatabase/registry
 // eslint-disable-next-line no-unused-vars
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
+const transportCryptoProvider = require('../../ZelBack/src/services/providers/FluxOSTransportProvider');
+const legacyTransportProvider = require('../../ZelBack/src/services/providers/FluxOSLegacyTransportProvider');
 const { requireMongo } = require('./dbTestHelper');
 
 describe('registryManager tests', () => {
@@ -296,6 +300,115 @@ describe('registryManager tests', () => {
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('error');
       expect(result.data.message).to.include('Daemon not yet synced');
+    });
+
+    describe('encrypted spec view channel negotiation', () => {
+      let fakeDecrypted;
+      let fakeInstantiated;
+
+      const buildReq = (headers) => ({
+        params: { appname: 'TestApp', decrypt: 'true' },
+        query: {},
+        headers,
+      });
+
+      beforeEach(() => {
+        fakeDecrypted = {
+          spec: {
+            name: 'TestApp',
+            owner: 'owner123',
+            toCanonical: () => ({ name: 'TestApp', version: 9, owner: 'owner123' }),
+          },
+          reencrypt: sinon.fake.resolves({ serialize: () => ({ reencrypted: true }) }),
+        };
+        fakeInstantiated = {
+          isEncrypted: true,
+          version: 9,
+          name: 'TestApp',
+          owner: 'owner123',
+          spec: {
+            createProvider: sinon.fake.resolves({}),
+            decrypt: sinon.fake.resolves(fakeDecrypted),
+            serialize: () => ({ sparse: true }),
+          },
+        };
+        sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(fakeInstantiated);
+        sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      });
+
+      it('should require a view credential when decrypt is requested', async () => {
+        const res = { json: sinon.fake((param) => param) };
+
+        await registryManager.getApplicationSpecificationAPI(buildReq({}), res);
+
+        const result = res.json.firstCall.args[0];
+        expect(result.status).to.equal('error');
+        expect(result.data.message).to.include('flux-transport-pubkey or enterprise-key');
+      });
+
+      it('should seal a v9 encrypted spec toward the caller over the transport layer', async () => {
+        const fakeEnvelope = { toJSON: () => ({ algorithm: 'HPKE', encapsulatedKey: 'enc', ciphertext: 'ct' }) };
+        const seal = sinon.fake.resolves(fakeEnvelope);
+        sinon.stub(transportCryptoProvider, 'create').resolves({ seal });
+        const pubkey = Buffer.alloc(32, 7).toString('base64');
+        const res = { json: sinon.fake((param) => param) };
+
+        await registryManager.getApplicationSpecificationAPI(buildReq({ 'flux-transport-pubkey': pubkey }), res);
+
+        const result = res.json.firstCall.args[0];
+        expect(result.status).to.equal('success');
+        expect(result.data.encrypted).to.equal(true);
+        expect(result.data.appName).to.equal('TestApp');
+        expect(result.data).to.have.property('timestamp');
+        expect(result.data.transportEncrypted).to.deep.equal({ algorithm: 'HPKE', encapsulatedKey: 'enc', ciphertext: 'ct' });
+        // the storage decrypt ran, and the transport seal — not the storage
+        // reencrypt — produced the view payload
+        sinon.assert.calledOnce(fakeInstantiated.spec.decrypt);
+        sinon.assert.notCalled(fakeDecrypted.reencrypt);
+        const sealArg = seal.firstCall.args[0];
+        expect(sealArg.peerPublicKey).to.deep.equal(Buffer.from(pubkey, 'base64'));
+        expect(sealArg.info).to.be.a('string').that.is.not.empty;
+        expect(sealArg.aad).to.exist;
+      });
+
+      it('should reencrypt a v8 encrypted spec over the legacy enterprise channel', async () => {
+        fakeInstantiated.version = 8;
+        const legacyCreate = sinon.stub(legacyTransportProvider, 'create').resolves({ tag: 'legacy' });
+        const res = { json: sinon.fake((param) => param) };
+
+        await registryManager.getApplicationSpecificationAPI(buildReq({ 'enterprise-key': 'wrappedKeyBase64' }), res);
+
+        const result = res.json.firstCall.args[0];
+        expect(result.status).to.equal('success');
+        expect(result.data).to.deep.equal({ reencrypted: true });
+        sinon.assert.calledOnceWithExactly(legacyCreate, 'TestApp', 'owner123', 'wrappedKeyBase64');
+        sinon.assert.calledOnce(fakeDecrypted.reencrypt);
+      });
+
+      it('should reject a v9 app that arrives on the legacy enterprise channel', async () => {
+        fakeInstantiated.version = 9;
+        const res = { json: sinon.fake((param) => param) };
+
+        await registryManager.getApplicationSpecificationAPI(buildReq({ 'enterprise-key': 'wrappedKeyBase64' }), res);
+
+        const result = res.json.firstCall.args[0];
+        expect(result.status).to.equal('error');
+        expect(result.data.message).to.include('flux-transport-pubkey channel');
+        // rejected before any crypto work
+        sinon.assert.notCalled(fakeInstantiated.spec.decrypt);
+      });
+
+      it('should return the sparse stored spec when no decrypt is requested', async () => {
+        const req = { params: { appname: 'TestApp' }, query: {}, headers: {} };
+        const res = { json: sinon.fake((param) => param) };
+
+        await registryManager.getApplicationSpecificationAPI(req, res);
+
+        const result = res.json.firstCall.args[0];
+        expect(result.status).to.equal('success');
+        expect(result.data).to.deep.equal({ sparse: true });
+        sinon.assert.notCalled(fakeInstantiated.spec.decrypt);
+      });
     });
   });
 
