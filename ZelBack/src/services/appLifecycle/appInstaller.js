@@ -400,10 +400,20 @@ async function installApplication(instantiated, options = {}) {
       // here aborts the install.
       if (!test && deployment.componentEntries().some(([, c]) => c.hasContentBlobs())) {
         if (onStatus) onStatus({ status: 'Provisioning content...' });
+        // Peers-first resolution: nodes already running this app are likely
+        // sources for its content blobs (FluxDrive is the backstop). Locations
+        // are normalized ip:port, usable directly as peer URLs; shuffle so
+        // installing nodes don't all hit the same peer first (herd-safety).
+        const locations = await appsRepository.listLocationsByApp(appName);
+        const peers = locations.map((loc) => loc.ip).filter(Boolean);
+        for (let i = peers.length - 1; i > 0; i -= 1) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [peers[i], peers[j]] = [peers[j], peers[i]];
+        }
         await contentBlobService.provisionContentBlobs(
           deployment,
-          { appName, fluxID: instantiated.owner, peers: [] },
-          { writeFile: writeInjectedContent },
+          { appName, fluxID: instantiated.owner, peers },
+          { writeFile: writeInjectedContent, peerFetch: contentBlobService.fetchBlobFromPeer },
         );
       }
 
