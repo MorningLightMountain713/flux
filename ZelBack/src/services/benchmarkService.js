@@ -335,16 +335,10 @@ async function transportPublicKey({ appName, fluxID }) {
   return executeCall(rpccall, rpcparameters);
 }
 
-async function transportOpen(params) {
-  const rpccall = 'transportopen';
-  const rpcparameters = [JSON.stringify(params)];
-  return executeCall(rpccall, rpcparameters);
-}
-
 // Arcane attestation: sign a message proving an encrypted spec was processed
 // by a genuine instance. The sign call takes the JSON body as a single string
-// param (same convention as seal/transportOpen); the public-key call takes no
-// params.
+// param (same convention as the other proxy methods); the public-key call takes
+// no params.
 async function attest(params) {
   const rpccall = 'attest';
   const rpcparameters = [JSON.stringify(params)];
@@ -559,7 +553,6 @@ module.exports = {
   seal,
   unseal,
   transportPublicKey,
-  transportOpen,
   transportDecap,
   contentKey,
   blobLocator,
