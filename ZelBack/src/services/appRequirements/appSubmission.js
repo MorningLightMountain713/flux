@@ -181,43 +181,37 @@ async function resolveSubmission(appSpecification, {
 }
 
 async function verifyAppRegistrationParameters(req, res) {
-  let body = '';
-  req.on('data', (data) => {
-    body += data;
-  });
-  req.on('end', async () => {
-    try {
-      const processedBody = serviceHelper.ensureObject(body);
-      // A transport-encrypted preflight nests the spec under appSpecification
-      // and carries the signed-envelope metadata alongside; a cleartext
-      // preflight is just the spec object.
-      const appSpecification = serviceHelper.ensureObject(processedBody.appSpecification || processedBody);
-      const { contentHash, timestamp, type } = processedBody;
+  try {
+    const processedBody = serviceHelper.ensureObject(req.body);
+    // A transport-encrypted preflight nests the spec under appSpecification
+    // and carries the signed-envelope metadata alongside; a cleartext
+    // preflight is just the spec object.
+    const appSpecification = serviceHelper.ensureObject(processedBody.appSpecification || processedBody);
+    const { contentHash, timestamp, type } = processedBody;
 
-      const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-      if (!syncStatus.data.synced) {
-        throw new Error('Daemon not yet synced.');
-      }
-      const daemonHeight = syncStatus.data.height;
-
-      const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
-        contentHash, timestamp, type: type || 'fluxappregister', daemonHeight,
-      });
-
-      await registryManager.checkApplicationRegistrationNameConflicts(spec);
-
-      const respondPrice = messageHelper.createDataMessage(broadcastBlob);
-      res.json(respondPrice);
-    } catch (error) {
-      log.warn(error);
-      const errorResponse = messageHelper.createErrorMessage(
-        error.message || error,
-        error.name,
-        error.code,
-      );
-      res.json(errorResponse);
+    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    if (!syncStatus.data.synced) {
+      throw new Error('Daemon not yet synced.');
     }
-  });
+    const daemonHeight = syncStatus.data.height;
+
+    const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
+      contentHash, timestamp, type: type || 'fluxappregister', daemonHeight,
+    });
+
+    await registryManager.checkApplicationRegistrationNameConflicts(spec);
+
+    const respondPrice = messageHelper.createDataMessage(broadcastBlob);
+    res.json(respondPrice);
+  } catch (error) {
+    log.warn(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    res.json(errorResponse);
+  }
 }
 
 async function validateAppUpdate(appSpecification, meta = {}) {
@@ -250,170 +244,158 @@ async function validateAppUpdate(appSpecification, meta = {}) {
 }
 
 async function verifyAppUpdateApi(req, res) {
-  let body = '';
-  req.on('data', (data) => {
-    body += data;
-  });
-  req.on('end', async () => {
-    try {
-      const processedBody = serviceHelper.ensureObject(serviceHelper.ensureObject(body));
-      const appSpecification = serviceHelper.ensureObject(processedBody.appSpecification || processedBody);
-      const { contentHash, timestamp, type } = processedBody;
-      const appSpecFormatted = await validateAppUpdate(appSpecification, { contentHash, timestamp, type });
-      const respondPrice = messageHelper.createDataMessage(appSpecFormatted);
-      res.json(respondPrice);
-    } catch (error) {
-      log.warn(error);
-      const errorResponse = messageHelper.createErrorMessage(
-        error.message || error,
-        error.name,
-        error.code,
-      );
-      res.json(errorResponse);
-    }
-  });
+  try {
+    const processedBody = serviceHelper.ensureObject(req.body);
+    const appSpecification = serviceHelper.ensureObject(processedBody.appSpecification || processedBody);
+    const { contentHash, timestamp, type } = processedBody;
+    const appSpecFormatted = await validateAppUpdate(appSpecification, { contentHash, timestamp, type });
+    const respondPrice = messageHelper.createDataMessage(appSpecFormatted);
+    res.json(respondPrice);
+  } catch (error) {
+    log.warn(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    res.json(errorResponse);
+  }
 }
 
 async function registerAppGlobalyApi(req, res) {
-  let body = '';
-  req.on('data', (data) => {
-    body += data;
-  });
-  req.on('end', async () => {
-    try {
-      const authorized = await verificationHelper.verifyPrivilege('user', req);
-      if (!authorized) {
-        const errMessage = messageHelper.errUnauthorizedMessage();
-        res.json(errMessage);
-        return;
-      }
-
-      if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
-        throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application registration');
-      }
-      if (peerManager.inboundCount < config.fluxapps.minIncoming) {
-        throw new Error('Sorry, This Flux does not have enough incoming peers for safe application registration');
-      }
-
-      const processedBody = serviceHelper.ensureObject(body);
-      let { appSpecification, timestamp, signature } = processedBody;
-      const { contentHash, extend } = processedBody;
-      let messageType = processedBody.type;
-      let typeVersion = processedBody.version;
-
-      if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
-        throw new Error('Incomplete message received. Check if appSpecification, type, version, timestamp and signature are provided.');
-      }
-
-      if (messageType !== 'zelappregister' && messageType !== 'fluxappregister') {
-        throw new Error('Invalid type of message');
-      }
-
-      // envelope version 1 = legacy v1-v8, 2 = v9 (AppEventV2 / contentHash signing)
-      if (typeVersion !== 1 && typeVersion !== 2) {
-        throw new Error('Invalid version of message');
-      }
-
-      appSpecification = serviceHelper.ensureObject(appSpecification);
-      timestamp = serviceHelper.ensureNumber(timestamp);
-      signature = serviceHelper.ensureString(signature);
-      messageType = serviceHelper.ensureString(messageType);
-      typeVersion = serviceHelper.ensureNumber(typeVersion);
-
-      const timestampNow = Date.now();
-      if (timestamp < timestampNow - 1000 * 3600) {
-        throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
-      } else if (timestamp > timestampNow + 1000 * 60 * 5) {
-        throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
-      }
-
-      const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-      if (!syncStatus.data.synced) {
-        throw new Error('Daemon not yet synced.');
-      }
-
-      const daemonHeight = syncStatus.data.height;
-
-      const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
-        contentHash, timestamp, type: messageType, daemonHeight,
-      });
-
-      await registryManager.checkApplicationRegistrationNameConflicts(spec);
-
-      const signedEvent = await appEventVerifier.deserializeTempMessage({
-        type: messageType,
-        version: typeVersion,
-        appSpecifications: broadcastBlob,
-        contentHash,
-        timestamp,
-        extend,
-        signature,
-      });
-      await appEventVerifier.authorize({
-        appEvent: signedEvent,
-        daemonHeight,
-        verifyHash: false,
-      });
-
-      const messageHASH = await appEventVerifier.computeOutboundHash({
-        type: messageType,
-        envelopeVersion: typeVersion,
-        specBlob: broadcastBlob,
-        contentHash,
-        timestamp,
-        extend,
-        signature,
-      });
-
-      // v9 only (envelope version 2). v8 enterprise messages are envelope
-      // version 1, which old nodes still parse — they must not carry an unknown
-      // arcaneAttestation key. v9 messages (version 2) are rejected by old nodes
-      // before parsing, so the field only ever rides messages they ignore.
-      let arcaneAttestation;
-      if (signedEvent.requiresArcaneAttestation()) {
-        arcaneAttestation = await appEventVerifier.requestAttestation(contentHash);
-      }
-
-      const temporaryAppMessage = {
-        type: messageType,
-        version: typeVersion,
-        appSpecifications: broadcastBlob,
-        hash: messageHASH,
-        contentHash,
-        timestamp,
-        extend,
-        signature,
-        arcaneAttestation,
-      };
-      await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
-      await serviceHelper.delay(1200);
-      await messageVerifier.requestAppMessage(messageHASH);
-      await serviceHelper.delay(1200);
-      let tempMessage = await appsRepository.getTempMessage(messageHASH);
-      for (let i = 0; i < 20; i += 1) {
-        if (!tempMessage) {
-          // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(500);
-          // eslint-disable-next-line no-await-in-loop
-          tempMessage = await appsRepository.getTempMessage(messageHASH);
-        }
-      }
-      if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
-        const responseHash = messageHelper.createDataMessage(tempMessage.hash);
-        res.json(responseHash);
-        return;
-      }
-      throw new Error('Unable to register application on the network. Try again later.');
-    } catch (error) {
-      log.warn(error);
-      const errorResponse = messageHelper.createErrorMessage(
-        error.message || error,
-        error.name,
-        error.code,
-      );
-      res.json(errorResponse);
+  try {
+    const authorized = await verificationHelper.verifyPrivilege('user', req);
+    if (!authorized) {
+      const errMessage = messageHelper.errUnauthorizedMessage();
+      res.json(errMessage);
+      return;
     }
-  });
+
+    if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
+      throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application registration');
+    }
+    if (peerManager.inboundCount < config.fluxapps.minIncoming) {
+      throw new Error('Sorry, This Flux does not have enough incoming peers for safe application registration');
+    }
+
+    const processedBody = serviceHelper.ensureObject(req.body);
+    let { appSpecification, timestamp, signature } = processedBody;
+    const { contentHash, extend } = processedBody;
+    let messageType = processedBody.type;
+    let typeVersion = processedBody.version;
+
+    if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
+      throw new Error('Incomplete message received. Check if appSpecification, type, version, timestamp and signature are provided.');
+    }
+
+    if (messageType !== 'zelappregister' && messageType !== 'fluxappregister') {
+      throw new Error('Invalid type of message');
+    }
+
+    // envelope version 1 = legacy v1-v8, 2 = v9 (AppEventV2 / contentHash signing)
+    if (typeVersion !== 1 && typeVersion !== 2) {
+      throw new Error('Invalid version of message');
+    }
+
+    appSpecification = serviceHelper.ensureObject(appSpecification);
+    timestamp = serviceHelper.ensureNumber(timestamp);
+    signature = serviceHelper.ensureString(signature);
+    messageType = serviceHelper.ensureString(messageType);
+    typeVersion = serviceHelper.ensureNumber(typeVersion);
+
+    const timestampNow = Date.now();
+    if (timestamp < timestampNow - 1000 * 3600) {
+      throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
+    } else if (timestamp > timestampNow + 1000 * 60 * 5) {
+      throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
+    }
+
+    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    if (!syncStatus.data.synced) {
+      throw new Error('Daemon not yet synced.');
+    }
+
+    const daemonHeight = syncStatus.data.height;
+
+    const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
+      contentHash, timestamp, type: messageType, daemonHeight,
+    });
+
+    await registryManager.checkApplicationRegistrationNameConflicts(spec);
+
+    const signedEvent = await appEventVerifier.deserializeTempMessage({
+      type: messageType,
+      version: typeVersion,
+      appSpecifications: broadcastBlob,
+      contentHash,
+      timestamp,
+      extend,
+      signature,
+    });
+    await appEventVerifier.authorize({
+      appEvent: signedEvent,
+      daemonHeight,
+      verifyHash: false,
+    });
+
+    const messageHASH = await appEventVerifier.computeOutboundHash({
+      type: messageType,
+      envelopeVersion: typeVersion,
+      specBlob: broadcastBlob,
+      contentHash,
+      timestamp,
+      extend,
+      signature,
+    });
+
+    // v9 only (envelope version 2). v8 enterprise messages are envelope
+    // version 1, which old nodes still parse — they must not carry an unknown
+    // arcaneAttestation key. v9 messages (version 2) are rejected by old nodes
+    // before parsing, so the field only ever rides messages they ignore.
+    let arcaneAttestation;
+    if (signedEvent.requiresArcaneAttestation()) {
+      arcaneAttestation = await appEventVerifier.requestAttestation(contentHash);
+    }
+
+    const temporaryAppMessage = {
+      type: messageType,
+      version: typeVersion,
+      appSpecifications: broadcastBlob,
+      hash: messageHASH,
+      contentHash,
+      timestamp,
+      extend,
+      signature,
+      arcaneAttestation,
+    };
+    await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
+    await serviceHelper.delay(1200);
+    await messageVerifier.requestAppMessage(messageHASH);
+    await serviceHelper.delay(1200);
+    let tempMessage = await appsRepository.getTempMessage(messageHASH);
+    for (let i = 0; i < 20; i += 1) {
+      if (!tempMessage) {
+        // eslint-disable-next-line no-await-in-loop
+        await serviceHelper.delay(500);
+        // eslint-disable-next-line no-await-in-loop
+        tempMessage = await appsRepository.getTempMessage(messageHASH);
+      }
+    }
+    if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
+      const responseHash = messageHelper.createDataMessage(tempMessage.hash);
+      res.json(responseHash);
+      return;
+    }
+    throw new Error('Unable to register application on the network. Try again later.');
+  } catch (error) {
+    log.warn(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    res.json(errorResponse);
+  }
 }
 
 function normalizePGPSecret(pgpMessage) {
