@@ -4,21 +4,48 @@ const serviceHelper = require('../services/serviceHelper');
 /**
  * API body-parsing middleware, gated by an allowlist of migrated routes.
  *
- * Legacy POST handlers read the raw request stream themselves
- * (req.on('data')) and run the accumulated body through ensureObject. As each
- * handler is migrated to read the middleware-parsed req.body, its route is
- * added to MIGRATED_ROUTES; every other route keeps today's behaviour (plain
- * express.json) untouched.
+ * --- Why this exists ---
+ * Half the POST handlers historically parsed the body themselves by listening
+ * on the raw request stream (req.on('data') + ensureObject), instead of reading
+ * the middleware-parsed req.body. That pattern is fragile (it hangs if a body
+ * parser ran first and already drained the stream) and is what we are removing.
+ * This middleware is the gate that lets us migrate those handlers one at a time
+ * rather than in one risky all-at-once sweep.
  *
- * TRANSITIONAL: the migrated routes reproduce the legacy ensureObject parse
- * (JSON first, urlencoded fallback) rather than committing to a single
- * express parser by content-type. The current frontend posts a JSON.stringify
- * body with no explicit content-type, which axios labels urlencoded — so
- * trusting the content-type and running express.urlencoded would qs-parse the
- * JSON string into garbage (qs.parse never throws). JSON-first/qs-fallback is
- * correct in every case. Once clients send a proper application/json
- * content-type, a migrated route can drop to plain express.json and, when the
- * allowlist covers every POST route, this gate can be removed entirely.
+ * --- How it works ---
+ * It sits in the global middleware slot (replacing the bare express.json) and
+ * branches on a single question: is req.path in MIGRATED_ROUTES?
+ *   - NOT migrated  -> plain express.json(), i.e. exactly today's behaviour, so
+ *                      every un-touched handler keeps working unchanged.
+ *   - migrated      -> capture the raw body and set req.body = ensureObject(raw);
+ *                      the handler then reads req.body and owns no stream logic.
+ * Migrating a handler = change it to read req.body + add its route here.
+ *
+ * --- Why ensureObject and not express.json/urlencoded by content-type ---
+ * The current frontend posts JSON.stringify(body) with no explicit content-type,
+ * which axios labels application/x-www-form-urlencoded. Trusting that header and
+ * running express.urlencoded would qs-parse the JSON string into garbage, and
+ * qs.parse never throws, so a "trust the header, fall back on error" scheme would
+ * never reach the fallback. ensureObject's JSON-first / urlencoded-fallback order
+ * is correct in every case (JSON.parse throws cleanly on a real form), so it
+ * reproduces the legacy parse and stays transparent to the current frontend with
+ * no frontend change required.
+ *
+ * --- Multipart ---
+ * multipart/form-data bodies are deliberately left untouched (the stream is not
+ * read here) so the content-blob file parser on the submission handlers can read
+ * the blob parts directly.
+ *
+ * --- Future / removal path (this is a transitional shim) ---
+ * 1. Build the content-blob multipart branch on the submission handlers.
+ * 2. Fix the frontend to send a proper application/json content-type.
+ * 3. Once a route's clients send correct content-types, drop that route from the
+ *    ensureObject path to plain express.json.
+ * 4. Migrate the remaining legacy req.on('data') handlers the same way, adding
+ *    each route to MIGRATED_ROUTES.
+ * 5. When the allowlist covers every POST route, delete the gate and make
+ *    express.json({ type }) + express.urlencoded unconditional (the clean end
+ *    state). Nothing here is meant to be permanent.
  */
 
 // Routes whose handlers read req.body (migrated off the raw-stream listener).
