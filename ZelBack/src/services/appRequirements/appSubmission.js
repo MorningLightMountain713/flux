@@ -19,6 +19,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const entitlementsState = require('../entitlementsState');
 const marketplaceTemplateCache = require('../marketplace/marketplaceTemplateCache');
 const contentBlobService = require('../appLifecycle/contentBlobService');
+const contentSlotService = require('../appLifecycle/contentSlotService');
 const fluxDriveClient = require('../utils/fluxDriveClient');
 const globalState = require('../utils/globalState');
 const { peerManager } = require('../utils/peerState');
@@ -269,12 +270,12 @@ async function verifyAppUpdateApi(req, res) {
 
 /**
  * Validate and broadcast a parsed registration submission. Shared by the JSON
- * and multipart paths. The multipart path passes blobCtx so its content blobs
- * are uploaded synchronously (durable before gossip) once the spec validates.
- * res.json is sent here on success/unauthorized; validation failures throw to
- * the caller's handler.
+ * and multipart paths. The multipart path passes contentCtx (the HPKE-sealed
+ * content envelope) so its content is opened + uploaded synchronously (durable
+ * before gossip) once the spec validates. res.json is sent here on
+ * success/unauthorized; validation failures throw to the caller's handler.
  */
-async function submitAppRegistration(req, res, processedBody, blobCtx) {
+async function submitAppRegistration(req, res, processedBody, contentCtx) {
   const authorized = await verificationHelper.verifyPrivilege('user', req);
   if (!authorized) {
     res.json(messageHelper.errUnauthorizedMessage());
@@ -332,11 +333,12 @@ async function submitAppRegistration(req, res, processedBody, blobCtx) {
 
   await registryManager.checkApplicationRegistrationNameConflicts(spec);
 
-  // Content blobs ride alongside the spec as plaintext multipart parts; upload
-  // them synchronously so they are durably stored before the spec is gossiped.
-  if (blobCtx) {
-    await contentBlobService.encryptAndUploadBlobs(spec, blobCtx.blobs, blobCtx.ownerSigs, {
-      uploader: fluxDriveClient,
+  // Content rides as ONE HPKE-sealed envelope — never plaintext in transit. Open it
+  // toward this node's per-app transport key and upload synchronously so it is
+  // durably stored before the spec is gossiped.
+  if (contentCtx) {
+    await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
+      ref: contentHash, timestamp,
     });
   }
 
@@ -407,17 +409,23 @@ async function submitAppRegistration(req, res, processedBody, blobCtx) {
 }
 
 /**
- * Read a multipart/form-data submission: the `spec` field (the signed
- * submission JSON), one `blob:sha256:<hex>` file part per content blob, and an
- * `ownerSigs` field (JSON map of hash -> { sig, timestamp }). Each blob is read
- * into memory (formidable caps each part at MAX_BLOB_BYTES) and its temp file
- * removed. The spec part is opened/validated downstream by resolveSubmission.
+ * Read a multipart/form-data submission: the `spec` field (the signed submission
+ * JSON), an optional `content` file part, and an `ownerSigs` field (JSON map of
+ * hash -> { sig, timestamp }).
  *
- * @returns {Promise<{ spec: string, blobs: Map<string, Buffer>, ownerSigs: Map<string, object> }>}
+ * The `content` part is ONE HPKE-sealed TransportEnvelope over { blobs, manifest? }
+ * — a content app is always encrypted, so its content is sealed toward the node's
+ * per-app transport key and is never plaintext in transit or to any relay. It is
+ * parsed back into the envelope object here; opening (toward the node's transport
+ * key) happens downstream once resolveSubmission has the cleartext name/owner +
+ * contentHash. The temp file is read into memory (capped at MAX_CONTENT_BYTES) and
+ * removed.
+ *
+ * @returns {Promise<{ spec: string, content: object|null, ownerSigs: Map<string, object> }>}
  */
 async function parseMultipartSubmission(req) {
   const form = formidable({
-    maxFileSize: contentBlobService.MAX_BLOB_BYTES,
+    maxFileSize: contentBlobService.MAX_CONTENT_BYTES,
     multiples: true,
     keepExtensions: false,
   });
@@ -428,32 +436,88 @@ async function parseMultipartSubmission(req) {
   const ownerSigsObj = serviceHelper.ensureObject(first(fields.ownerSigs) || '{}');
   const ownerSigs = new Map(Object.entries(ownerSigsObj));
 
-  const blobs = new Map();
-  for (const [field, fileList] of Object.entries(files)) {
-    if (!field.startsWith('blob:')) continue;
-    const file = first(fileList);
-    // eslint-disable-next-line no-await-in-loop
-    const bytes = await fs.promises.readFile(file.filepath);
-    blobs.set(field.slice('blob:'.length), bytes);
-    // eslint-disable-next-line no-await-in-loop
-    await fs.promises.unlink(file.filepath).catch(() => {});
+  let content = null;
+  const contentFile = files.content ? first(files.content) : null;
+  if (contentFile) {
+    const raw = await fs.promises.readFile(contentFile.filepath);
+    content = serviceHelper.ensureObject(raw.toString('utf8'));
+    await fs.promises.unlink(contentFile.filepath).catch(() => {});
   }
-  return { spec, blobs, ownerSigs };
+  return { spec, content, ownerSigs };
 }
 
 /**
- * Multipart registration: parse the spec + content-blob parts, gate blob
- * uploads to arcane nodes, then run the shared submission flow with the blobs.
+ * Open a submission's HPKE-sealed content envelope toward this node's per-app
+ * transport key and upload its content — content never travels in the clear. The
+ * envelope seals { blobs: { hash: base64 }, manifest? }; contentRef blobs (declared
+ * in the immutable spec) upload here, and the AAD is bound to the submission via
+ * `ref` (the signed contentHash) so a captured envelope can't be replayed onto a
+ * different submission. Any non-contentRef blobs belong to content-slot mounts and
+ * are returned (with the manifest) for the slot path. Shared by register + update.
+ *
+ * @param {object} spec - resolved submission spec (name, owner, contentRef mounts)
+ * @param {object} content - the sealed TransportEnvelope JSON
+ * @param {Map} ownerSigs - per-blob owner signatures
+ * @param {object} bind - { ref, timestamp } for the transport AAD
+ * @returns {Promise<{ payload: object, blobs: Map<string, Buffer> }>}
+ */
+async function uploadSealedContent(spec, content, ownerSigs, { ref, timestamp }) {
+  const opened = await transportHelper.openContentEnvelope(content, {
+    appName: spec.name, owner: spec.owner, ref, timestamp,
+  });
+  const payload = serviceHelper.ensureObject(opened.toString('utf8'));
+  const blobs = new Map(Object.entries(payload.blobs || {}).map(([h, b64]) => [h, Buffer.from(b64, 'base64')]));
+
+  const refHashes = contentBlobService.specContentHashes(spec);
+  const refBlobs = new Map([...blobs].filter(([h]) => refHashes.has(h)));
+  await contentBlobService.encryptAndUploadBlobs(spec, refBlobs, ownerSigs, { uploader: fluxDriveClient });
+
+  // A slot app bundles its INITIAL owner-signed manifest with the submission: upload
+  // the slot blobs, store the manifest, and gossip it so the network has the slots'
+  // starting content alongside the spec. Without this an app would register declaring
+  // slots with no content for the install-hold to find. A slot app always forces an
+  // encrypted spec (flux-spec validation), so the gossiped slots payload is sealed.
+  if (payload.manifest) {
+    const db = contentSlotService.appsGlobalDb();
+    const slotHashes = new Set(Object.values(payload.manifest.slots || {}).map((s) => s.hash));
+    const slotBlobs = new Map([...blobs].filter(([h]) => slotHashes.has(h)));
+    const gossipManifest = await contentSlotService.processManifestSubmission(
+      {
+        manifest: payload.manifest, spec, owner: spec.owner, encrypted: true, blobs: slotBlobs, ownerSigs,
+      },
+      { db, uploader: fluxDriveClient },
+    );
+    await contentSlotService.storeManifest(db, gossipManifest);
+    await fluxCommunicationMessagesSender.broadcastMessageToAll({
+      type: 'fluxappcontentmanifest', appName: spec.name, manifest: gossipManifest,
+    });
+    // Populate the FluxDrive backstop at register too — the first installing instance
+    // has no peers, so FluxDrive is its only manifest source. Best-effort; the owner
+    // PUT-sig rides the sealed payload (frontend-produced at submission).
+    await contentSlotService.backstopManifest(gossipManifest, {
+      appName: spec.name,
+      version: payload.manifest.version,
+      timestamp: payload.manifest.timestamp,
+      manifestPutSig: payload.manifestPutSig,
+    }, {});
+  }
+
+  return { payload, blobs };
+}
+
+/**
+ * Multipart registration: parse the spec + sealed content envelope, gate content
+ * uploads to arcane nodes, then run the shared submission flow with the content.
  */
 async function handleMultipartAppRegister(req, res) {
   try {
-    const { spec, blobs, ownerSigs } = await parseMultipartSubmission(req);
-    if (blobs.size > 0 && !globalState.isArcane()) {
-      throw new Error('Content blob uploads require an arcane node');
+    const { spec, content, ownerSigs } = await parseMultipartSubmission(req);
+    if (content && !globalState.isArcane()) {
+      throw new Error('Content uploads require an arcane node');
     }
     const processedBody = serviceHelper.ensureObject(spec);
-    const blobCtx = blobs.size > 0 ? { blobs, ownerSigs } : null;
-    await submitAppRegistration(req, res, processedBody, blobCtx);
+    const contentCtx = content ? { content, ownerSigs } : null;
+    await submitAppRegistration(req, res, processedBody, contentCtx);
   } catch (error) {
     log.warn(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -539,5 +603,6 @@ module.exports = {
   verifyAppUpdateApi,
   registerAppGlobalyApi,
   parseMultipartSubmission,
+  uploadSealedContent,
   assertSecretsNotConflicting,
 };

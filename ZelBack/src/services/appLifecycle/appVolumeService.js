@@ -136,8 +136,6 @@ async function createAppVolume(deployComp, res, test = false) {
         emitStatus(res, { status: `Creating file mount: ${sourceName}...` });
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.runCommand('touch', { params: [mount.Source], runAsRoot: true });
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
         emitStatus(res, { status: `File mount created: ${sourceName}` });
       } else {
         emitStatus(res, { status: `Creating directory: ${sourceName}...` });
@@ -154,7 +152,7 @@ async function createAppVolume(deployComp, res, test = false) {
     for (const mount of deployComp.mounts) {
       if (mount.Source === `${compDir}/appdata`) continue;
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
+      await applyMountPerms(mount);
     }
     emitStatus(res, { status: 'Permissions adjusted' });
 
@@ -163,7 +161,7 @@ async function createAppVolume(deployComp, res, test = false) {
       await serviceHelper.runCommand('mkdir', { params: ['-p', `${compDir}/.stfolder`], runAsRoot: true });
       emitStatus(res, { status: '.stfolder created' });
 
-      await fs.writeFile(`${compDir}/.stignore`, '/backup\n');
+      await writeStignore(deployComp);
       emitStatus(res, { status: '.stignore created' });
     }
 
@@ -213,23 +211,83 @@ async function createAppVolume(deployComp, res, test = false) {
 }
 
 /**
+ * Apply a bind-mount source's effective ownership/permissions, resolved by
+ * flux-spec into `mount.perms`. `null` is the data-mount role default — world-
+ * writable, today's behavior (no regression). An object pins owner + mode so
+ * injected content (root-owned `0444`) is never left world-readable/writable in the
+ * container. One helper for every site, so the rule lives in exactly one place.
+ *
+ * @param {object} mount - a DeploymentComponent mount ({ Source, perms })
+ */
+async function applyMountPerms(mount) {
+  if (!mount.perms) {
+    await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
+    return;
+  }
+  const { uid, gid, mode } = mount.perms;
+  await serviceHelper.runCommand('chown', { params: [`${uid}:${gid}`, mount.Source], runAsRoot: true });
+  await serviceHelper.runCommand('chmod', { params: [mode, mount.Source], runAsRoot: true });
+}
+
+/**
+ * (Re)generate a component's `.stignore` from its current spec — the single source
+ * of truth, idempotent (full overwrite), so it never goes stale across a redeploy
+ * that keeps the volume (where `createAppVolume` does not run). Reserved entries
+ * come FIRST (syncthing is first-match-wins), so the owner's `sync.exclude` can
+ * extend the set but can never un-exclude `/backup` or an injected content path.
+ * Injected content is node-local — content delivery writes it on every node — and
+ * must never replicate. No-op when the component has no syncthing folder.
+ *
+ * @param {object} deployComp - DeploymentComponent (carries dir, sync, injected views)
+ */
+async function writeStignore(deployComp) {
+  if (!deployComp.sync || !deployComp.dir) return;
+  const compDir = deployComp.dir;
+  const injected = deployComp.injectedSyncExcludes().map((source) => `/${path.relative(compDir, source)}`);
+  const ownerExcludes = deployComp.sync.exclude || [];
+  const lines = [...new Set(['/backup', ...injected, ...ownerExcludes].filter(Boolean))];
+  await fs.writeFile(`${compDir}/.stignore`, `${lines.join('\n')}\n`);
+}
+
+/**
+ * Delete injected content a spec update dropped. A volume-keeping redeploy reuses
+ * the old mount sources, so a removed `contentRef`/`contentSlot` would otherwise
+ * keep being served from the kept volume — including a stale slot file left inside
+ * a still-mounted shared atomic managed dir. Diffs the OLD vs NEW injected FILE set
+ * and removes only what was injected and no longer is, never owner data.
+ *
+ * @param {object} oldComp - the pre-update DeploymentComponent
+ * @param {object} newComp - the post-update DeploymentComponent
+ */
+async function removeOrphanedInjectedContent(oldComp, newComp) {
+  const keep = new Set(newComp.injectedContentFiles());
+  const orphans = oldComp.injectedContentFiles().filter((source) => !keep.has(source));
+  for (const source of orphans) {
+    // eslint-disable-next-line no-await-in-loop
+    await serviceHelper.runCommand('rm', { params: ['-f', source], runAsRoot: true });
+  }
+}
+
+/**
  * Ensure every bind-mount source for a component exists before its container is
  * (re)created on the soft/volume-reuse path. The operations are unconditional and
  * idempotent (`mkdir -p` / `touch`), so there is no check-then-act (TOCTOU) window
- * inside this helper.
+ * inside this helper. Also regenerates `.stignore` so a volume-keeping redeploy
+ * picks up an added/removed injected exclude (decoupled from `createAppVolume`).
  */
 async function ensureMountSourcesExist(deployComp) {
   for (const mount of deployComp.mounts) {
     if (mount.sourceType === 'file') {
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.runCommand('touch', { params: [mount.Source], runAsRoot: true });
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
     } else {
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.runCommand('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
     }
+    // eslint-disable-next-line no-await-in-loop
+    await applyMountPerms(mount);
   }
+  await writeStignore(deployComp);
 }
 
 async function removeSyncthingFolder(appComponentName, res) {
@@ -270,5 +328,8 @@ async function removeSyncthingFolder(appComponentName, res) {
 module.exports = {
   createAppVolume,
   ensureMountSourcesExist,
+  applyMountPerms,
+  writeStignore,
+  removeOrphanedInjectedContent,
   removeSyncthingFolder,
 };
