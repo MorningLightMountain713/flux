@@ -1120,6 +1120,24 @@ async function appDockerKill(idOrName) {
 }
 
 /**
+ * Sends an explicit unix signal to an app's container (e.g. SIGHUP to reload
+ * config after a content slot update). Distinct from appDockerKill, which is a
+ * SIGKILL termination: this is a benign in-container reload, so it takes no
+ * operation-registry lease — it doesn't change the container's run-state.
+ *
+ * @param {string} idOrName
+ * @param {string} signal - e.g. 'SIGHUP', 'SIGUSR1', 'SIGUSR2'
+ * @returns {string} message
+ */
+async function appDockerSignal(idOrName, signal) {
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
+
+  await dockerContainer.kill({ signal });
+  return `Flux App ${idOrName} successfully signalled ${signal}.`;
+}
+
+/**
  * Removes app's docker.
  *
  * @param {string} idOrName
@@ -1658,6 +1676,7 @@ module.exports = {
   appDockerImageRemove,
   appDockerImageSize,
   appDockerKill,
+  appDockerSignal,
   appDockerPause,
   appDockerRemove,
   appDockerForceRemove,
