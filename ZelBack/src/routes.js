@@ -38,6 +38,7 @@ const appController = require('./services/appManagement/appController');
 const appInstaller = require('./services/appLifecycle/appInstaller');
 const appUninstaller = require('./services/appLifecycle/appUninstaller');
 const appOperations = require('./services/appLifecycle/appOperations');
+const contentSlotService = require('./services/appLifecycle/contentSlotService');
 const imageManager = require('./services/appSecurity/imageManager');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
@@ -1146,6 +1147,12 @@ module.exports = (app) => {
   }));
   app.get('/apps/contentblob/:appName/:locator', asyncRoute((req, res) => {
     return appOperations.contentBlobServeApi(req, res);
+  }));
+  app.post('/apps/contentupdate', asyncRoute((req, res) => {
+    return contentSlotService.submitContentUpdateApi(req, res);
+  }));
+  app.get('/apps/contentmanifest/:appname', asyncRoute((req, res) => {
+    return contentSlotService.getContentManifestApi(req, res);
   }));
   app.post('/apps/getpublickey', asyncRoute((req, res) => {
     return cryptographicKeys.getPublicKey(req, res);

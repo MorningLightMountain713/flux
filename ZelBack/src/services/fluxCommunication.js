@@ -21,6 +21,7 @@ const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
 const { extractIp, extractPort, parseSocketAddress, socketAddressesMatch } = require('./utils/socketAddressUtils');
 const registryManager = require('./appDatabase/registryManager');
+const contentSlotService = require('./appLifecycle/contentSlotService');
 const fluxEventBus = require('./utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const { INTENT } = require('./utils/messageIntent');
@@ -717,21 +718,30 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
   if (verifyResult === VerifyResult.OK) {
     const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(msgObj, currentTimeStamp);
     if (timestampOK === true) {
-      const handler = handlerFor(msgObj.data.type);
-      if (!handler) {
-        log.warn(`Unrecognised message type of ${msgObj.data.type}`);
-      } else if (isOrdered(msgObj.data.type)) {
-        // It reached the wrong pipeline: the socket routes these to the per-peer queue
-        // when they are wanted, so arriving here means nobody asked for it.
-        log.warn(`Unsolicited ${msgObj.data.type} from ${peerSocket.direction} peer ${peerSocket.key}`);
-      } else {
-        setImmediate(() => {
-          try {
-            handler(msgObj, peerSocket);
-          } catch (e) {
-            log.error(e);
-          }
-        });
+      try {
+        if (msgObj.data.type === 'zelappregister' || msgObj.data.type === 'zelappupdate' || msgObj.data.type === 'fluxappregister' || msgObj.data.type === 'fluxappupdate') {
+          setImmediate(() => handleAppMessages(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxapprequest') {
+          setImmediate(() => fluxCommunicationMessagesSender.respondWithAppMessage(msgObj, peerSocket));
+        } else if (msgObj.data.type === 'fluxapprunning') {
+          setImmediate(() => handleAppRunningMessage(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxipchanged') {
+          setImmediate(() => handleIPChangedMessage(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxappremoved') {
+          setImmediate(() => handleAppRemovedMessage(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxappinstalling') {
+          setImmediate(() => handleAppInstallingMessage(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxappinstallingerror') {
+          setImmediate(() => handleAppInstallingErrorMessage(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxnodesigterm') {
+          setImmediate(() => handleNodeSigtermMessage(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxappcontentmanifest') {
+          setImmediate(() => contentSlotService.handleIncomingManifest(msgObj));
+        } else {
+          log.warn(`Unrecognised message type of ${msgObj.data.type}`);
+        }
+      } catch (e) {
+        log.error(e);
       }
     } else {
       // Signed by a real node and outside the window, which is what a replay looks like.
