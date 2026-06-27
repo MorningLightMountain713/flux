@@ -22,6 +22,7 @@ const { getSpec } = require('../utils/specLibs');
 const { sha256Hex } = contentBlobService;
 
 const manifestsCollection = config.database.appsglobal.collections.appContentManifests;
+const MANIFEST_GOSSIP_TYPE = 'fluxappcontentmanifest';
 
 // A manifest received before its app's spec is locally available can't be
 // owner-verified yet, so it is held quarantined (confirmed:false) with this TTL and
@@ -204,16 +205,36 @@ async function processManifestSubmission(input, deps) {
  * index make this an atomic latest-wins guard (a slower, lower-version writer loses
  * the race on the unique index). Returns true if stored.
  *
+ * The row stores the SIGNED payload verbatim (`data`) plus the signature wrapper
+ * (`envelope`) — split exactly like apprunning's appStateEvents, never a second copy
+ * of the body. `opts.broadcast` is the signed node broadcast the manifest arrived in
+ * (gossip / boot-sync) or that we minted to gossip it (originate); its `data` is kept
+ * verbatim so a boot-sync re-serve verifies byte-exact, and `envelope` lets the
+ * requester node-envelope-verify it (batchVerifyBroadcasts) on top of the manifest's
+ * intrinsic owner signature. A catch-up body (no broadcast) gets a bare `data` wrapper
+ * and no `envelope`: it serves install/apply locally but can't be re-served over
+ * boot-sync (a node that does hold the envelope serves it instead). The manifest body
+ * is always at `row.data.manifest`. `appName`/`version` are denormalized index/floor
+ * scalars, not a copy of the body.
+ *
  * @param {object} db - appsglobal database handle
  * @param {object} manifest - gossip-form manifest
+ * @param {object} [opts] - { confirmed?, now?, broadcast? }
  * @returns {Promise<boolean>}
  */
 async function storeManifest(db, manifest, opts = {}) {
   const confirmed = opts.confirmed !== false; // default true (verified store); explicit false = quarantine
   const { appName, version } = manifest;
+  const data = opts.broadcast ? opts.broadcast.data : { type: MANIFEST_GOSSIP_TYPE, appName, manifest };
   const base = {
-    appName, version, manifest, confirmed, receivedAt: new Date(),
+    appName, version, confirmed, receivedAt: new Date(), data,
   };
+  if (opts.broadcast) {
+    const b = opts.broadcast;
+    base.envelope = {
+      version: b.version, timestamp: b.timestamp, pubKey: b.pubKey, signature: b.signature,
+    };
+  }
   let filter;
   let update;
   if (confirmed) {
@@ -308,7 +329,7 @@ async function receiveManifest(msgObj, deps = {}) {
   const info = await getApp(appName);
   if (!info) {
     if (prior && gossipManifest.version <= prior.version) return; // already hold this version (quarantined)
-    await storeManifest(db, gossipManifest, { confirmed: false });
+    await storeManifest(db, gossipManifest, { confirmed: false, broadcast: msgObj });
     return;
   }
   const { owner, isEncrypted: encrypted, spec } = info;
@@ -324,7 +345,7 @@ async function receiveManifest(msgObj, deps = {}) {
     return;
   }
 
-  const stored = await storeManifest(db, gossipManifest, { confirmed: true });
+  const stored = await storeManifest(db, gossipManifest, { confirmed: true, broadcast: msgObj });
   if (!stored) return; // lost the race to a same/higher version (or it is already confirmed)
 
   await rebroadcast(msgObj.data);
@@ -350,6 +371,69 @@ async function handleIncomingManifest(msgObj, deps = {}) {
     const appName = msgObj && msgObj.data && msgObj.data.manifest && msgObj.data.manifest.appName;
     log.error(`contentSlot: failed handling manifest for ${appName || 'unknown'} - ${error.message ?? error}`);
   }
+}
+
+/**
+ * Ingest a batch of synced manifest broadcasts (the boot-sync receive path). Each
+ * `broadcast` was already node-envelope-verified upstream (batchVerifyBroadcasts);
+ * here we apply the SAME owner-sig + spec gate as receiveManifest — minus the
+ * rebroadcast and the apply-to-running-app — and reuse storeManifest, so the row
+ * shape and the latest-wins/quarantine guards are identical to the gossip path: a
+ * verified one is stored confirmed, one whose spec isn't local yet is quarantined
+ * (promoted on spec-confirm), and a forged / stale / duplicate one is skipped.
+ * Returns { stored } — the count newly stored or quarantined.
+ *
+ * @param {Array<object>} broadcasts - signed node broadcasts { version, timestamp, pubKey, signature, data: { manifest } }
+ * @param {object} deps - { db?, getApp?, getLatest?, store?, verify?, provider? }
+ * @returns {Promise<{stored: number}>}
+ */
+async function storeBatchContentManifests(broadcasts, deps = {}) {
+  const {
+    db = appsGlobalDb(),
+    getApp = appsRepository.getGlobalAppInfo,
+    getLatest = getLatestManifest,
+    store = storeManifest,
+    verify,
+    provider,
+  } = deps;
+
+  let stored = 0;
+  for (const broadcast of broadcasts || []) {
+    const manifest = broadcast && broadcast.data && broadcast.data.manifest;
+    if (!manifest || !manifest.appName || manifest.version == null) continue;
+    const { appName } = manifest;
+
+    // eslint-disable-next-line no-await-in-loop
+    const prior = await getLatest(db, appName);
+    if (prior && manifest.version < prior.version) continue; // stale
+    if (prior && manifest.version === prior.version && prior.confirmed !== false) continue; // already confirmed
+
+    // eslint-disable-next-line no-await-in-loop
+    const info = await getApp(appName);
+    if (!info) {
+      // Spec not local yet — quarantine (promoted when the spec confirms), unless we
+      // already hold this version quarantined.
+      if (prior && manifest.version <= prior.version) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const okQ = await store(db, manifest, { confirmed: false, broadcast });
+      if (okQ) stored += 1;
+      continue;
+    }
+    const { owner, isEncrypted: encrypted, spec } = info;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const plaintext = await openManifestSlots(manifest, { owner, encrypted }, { provider });
+      // eslint-disable-next-line no-await-in-loop
+      await verifyManifest(plaintext, { owner, spec }, { verify });
+    } catch (error) {
+      log.warn(`contentSlot: dropping invalid synced manifest for ${appName} - ${error.message ?? error}`);
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const okC = await store(db, manifest, { confirmed: true, broadcast });
+    if (okC) stored += 1;
+  }
+  return { stored };
 }
 
 /** Delete a quarantined (confirmed:false) manifest row — used when it fails
@@ -382,18 +466,22 @@ async function promoteQuarantinedManifest(appName, deps = {}) {
     verify, provider,
   } = deps;
   const stored = await getLatest(db, appName);
-  if (!stored || !stored.manifest || stored.confirmed !== false) return false; // nothing quarantined
+  if (!stored || !stored.data || stored.confirmed !== false) return false; // nothing quarantined
   const info = await getApp(appName);
   if (!info) return false; // spec still not available — stays quarantined (or TTL-reaped)
   const { owner, isEncrypted: encrypted, spec } = info;
+  const heldManifest = stored.data.manifest;
   try {
-    const plaintext = await openManifestSlots(stored.manifest, { owner, encrypted }, { provider });
+    const plaintext = await openManifestSlots(heldManifest, { owner, encrypted }, { provider });
     await verifyManifest(plaintext, { owner, spec }, { verify });
   } catch (error) {
     await drop(db, appName);
     return false;
   }
-  return store(db, stored.manifest, { confirmed: true });
+  // Preserve the node-signed broadcast captured at quarantine (rebuilt from the stored
+  // envelope + verbatim data) so the promoted row stays boot-sync-servable.
+  const broadcast = stored.envelope ? { ...stored.envelope, data: stored.data } : undefined;
+  return store(db, heldManifest, { confirmed: true, broadcast });
 }
 
 /** The IPs of nodes currently running an app, for peers-first content resolution. */
@@ -480,11 +568,11 @@ async function getContentManifestApi(req, res) {
     const stored = await getLatestManifest(appsGlobalDb(), appname);
     // Serve only a CONFIRMED manifest — never a quarantined (unverified) one, so a
     // catching-up peer can't adopt a manifest this node hasn't verified yet.
-    if (!stored || !stored.manifest || stored.confirmed === false) {
+    if (!stored || !stored.data || stored.confirmed === false) {
       res.status(404).json(messageHelper.createErrorMessage(`No content manifest for ${appname}`));
       return;
     }
-    res.json(messageHelper.createDataMessage(stored.manifest));
+    res.json(messageHelper.createDataMessage(stored.data.manifest));
   } catch (error) {
     log.error(error);
     res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
@@ -671,17 +759,19 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
   // valid manifest ⇒ throw, so the install holds rather than serving empty slots.
   let plaintext;
   const stored = await getLatest(db, appName);
-  if (stored && stored.manifest && stored.confirmed !== false) {
+  const storedManifest = stored && stored.data ? stored.data.manifest : null;
+  if (storedManifest && stored.confirmed !== false) {
     // Already verified (confirmed) — use directly.
-    plaintext = await openManifestSlots(stored.manifest, { owner, encrypted }, { provider });
-  } else if (stored && stored.manifest) {
+    plaintext = await openManifestSlots(storedManifest, { owner, encrypted }, { provider });
+  } else if (storedManifest) {
     // Quarantined locally (it arrived before the spec). We now HAVE the spec, so
     // verify it and promote it in place — no catch-up round-trip. A squatter's /
     // corrupt manifest fails verification and falls through to catch-up below.
     try {
-      plaintext = await openManifestSlots(stored.manifest, { owner, encrypted }, { provider });
+      plaintext = await openManifestSlots(storedManifest, { owner, encrypted }, { provider });
       await verifyManifest(plaintext, { owner, spec }, { verify });
-      await store(db, stored.manifest, { confirmed: true });
+      const broadcast = stored.envelope ? { ...stored.envelope, data: stored.data } : undefined;
+      await store(db, storedManifest, { confirmed: true, broadcast });
     } catch (error) {
       plaintext = null;
     }
@@ -796,8 +886,10 @@ async function submitContentUpdate(body, deps = {}) {
     { db, uploader, benchmark, now, verify, provider },
   );
 
-  await storeManifest(db, gossipManifest);
-  await broadcast({ type: 'fluxappcontentmanifest', appName, manifest: gossipManifest });
+  // Broadcast first: broadcastMessageToAll returns the exact signed node broadcast it
+  // relayed, so we store that same envelope (one signature) for boot-sync re-serving.
+  const signedBroadcast = await broadcast({ type: MANIFEST_GOSSIP_TYPE, appName, manifest: gossipManifest });
+  await storeManifest(db, gossipManifest, { broadcast: signedBroadcast });
 
   // Populate the FluxDrive backstop so a cold-start node with no running peer can
   // still provision (best-effort; gossip + boot-sync are primary). The owner PUT-sig
@@ -877,6 +969,7 @@ module.exports = {
   openManifestSlots,
   processManifestSubmission,
   storeManifest,
+  storeBatchContentManifests,
   getLatestManifest,
   appsGlobalDb,
   receiveManifest,
