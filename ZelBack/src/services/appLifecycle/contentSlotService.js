@@ -235,19 +235,24 @@ async function storeManifest(db, manifest, opts = {}) {
       version: b.version, timestamp: b.timestamp, pubKey: b.pubKey, signature: b.signature,
     };
   }
+  // A store WITHOUT a broadcast is a catch-up body — it must carry no envelope. Clear any
+  // stale one left by a row it promotes/advances over, else the kept envelope would sign
+  // the OLD data and the row would be served-then-rejected over boot-sync.
+  const clearEnvelope = !opts.broadcast;
   let filter;
   let update;
   if (confirmed) {
     // A verified store advances a strictly-older row OR promotes a same-version
     // quarantined row in place (flipping confirmed:false -> true, clearing the TTL).
     filter = { appName, $or: [{ version: { $lt: version } }, { version, confirmed: false }] };
-    update = { $set: base, $unset: { expireAt: '' } };
+    update = { $set: base, $unset: clearEnvelope ? { expireAt: '', envelope: '' } : { expireAt: '' } };
   } else {
     // Quarantine: hold only if strictly newer than what we have; reaped by the TTL
     // index if its spec never arrives.
     const now = opts.now || Date.now();
     filter = { appName, version: { $lt: version } };
     update = { $set: { ...base, expireAt: new Date(now + QUARANTINE_TTL_MS) } };
+    if (clearEnvelope) update.$unset = { envelope: '' };
   }
   try {
     await db.collection(manifestsCollection).updateOne(filter, update, { upsert: true });
@@ -718,13 +723,14 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
 
 /**
  * Provision a slot app's content at INSTALL time, before its container starts: get
- * the latest manifest (this node's store, else catch-up from up to 3 running peers)
- * and stage + write every declared slot — NO reaction (the container isn't running
- * yet; it reads the content on first start). This is the install-hold: it THROWS
- * when no manifest is reachable, so the install defers and retries rather than
- * starting with empty or stale slots (an app is not installable without its
- * content). A no-op for an app that declares no slots. Mirrors provisionContentBlobs;
- * the difference is a slot's hash comes from the manifest, not the signed spec.
+ * the latest manifest (this node's store, else catch-up from up to 3 running peers,
+ * else the FluxDrive deep backstop for the first-install / no-peer cold start) and
+ * stage + write every declared slot — NO reaction (the container isn't running yet; it
+ * reads the content on first start). This is the install-hold: it THROWS when no
+ * manifest is reachable, so the install defers and retries rather than starting with
+ * empty or stale slots (an app is not installable without its content). A no-op for an
+ * app that declares no slots. Mirrors provisionContentBlobs; the difference is a slot's
+ * hash comes from the manifest, not the signed spec.
  *
  * @param {object} deployment - DeploymentSpec for the app being installed
  * @param {object} ctx - { appName, peers? }
@@ -741,6 +747,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
     getLatest = getLatestManifest,
     getPeers = listAppPeers,
     fetchPeers = fetchManifestFromPeers,
+    fetchFromDrive = fluxDriveClient.fetchManifest,
     store = storeManifest,
     stageApply = stageAndApplySlots,
     verify, provider,
@@ -778,11 +785,32 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
   }
   if (!plaintext) {
     const fetched = await fetchPeers(appName, peers, { owner, encrypted, spec }, { verify, provider });
-    if (!fetched) {
+    if (fetched) {
+      await store(db, fetched.gossip);
+      plaintext = fetched.plaintext;
+    } else {
+      // No running peer served it (the first-install / no-peer cold start). Fall back to
+      // the FluxDrive deep backstop. FluxDrive is an untrusted single-host store, so the
+      // fetched manifest gets the SAME owner-sig + decrypt gate as a peer pull before we
+      // adopt it; it lands as a catch-up body (no node broadcast to re-serve over sync).
+      // The fetch is inside the try so a backstop error (unreachable / unconfigured /
+      // forged copy) is treated as "no manifest" and falls through to the install-hold
+      // below, mirroring the peer path (fetchManifestFromPeer also swallows + returns null).
+      try {
+        const fromDrive = await fetchFromDrive(appName);
+        if (fromDrive && fromDrive.manifest) {
+          const opened = await openManifestSlots(fromDrive.manifest, { owner, encrypted }, { provider });
+          await verifyManifest(opened, { owner, spec }, { verify });
+          await store(db, fromDrive.manifest);
+          plaintext = opened;
+        }
+      } catch (error) {
+        log.warn(`contentSlot: FluxDrive backstop did not yield a usable manifest for ${appName} - ${error.message ?? error}`);
+      }
+    }
+    if (!plaintext) {
       throw new Error(`contentSlot: no manifest available to provision ${appName} - holding install until content is present`);
     }
-    await store(db, fetched.gossip);
-    plaintext = fetched.plaintext;
   }
 
   await stageApply(deployment, plaintext, { appName, owner, peers }, resolveDeps);
