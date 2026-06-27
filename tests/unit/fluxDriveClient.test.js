@@ -1,5 +1,7 @@
 const { expect } = require('chai');
-const { uploadBlob, fetchBlobByLocator } = require('../../ZelBack/src/services/utils/fluxDriveClient');
+const {
+  uploadBlob, fetchBlobByLocator, putManifest, fetchManifest,
+} = require('../../ZelBack/src/services/utils/fluxDriveClient');
 
 const BASE = 'https://drive.example';
 
@@ -57,6 +59,51 @@ describe('fluxDriveClient', () => {
       let threw = false;
       try {
         await fetchBlobByLocator('loc', { http, baseUrl: BASE });
+      } catch (e) {
+        threw = e.message === 'boom';
+      }
+      expect(threw).to.equal(true);
+    });
+  });
+
+  describe('putManifest', () => {
+    it('PUTs the JSON manifest body to /api/v1/manifest/:appName', async () => {
+      const calls = [];
+      const http = { put: async (url, body, opts) => { calls.push({ url, body, opts }); return { status: 200 }; } };
+      await putManifest('my-app', {
+        version: 3, timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig', manifest: { version: 3, slots: { sealed: {} } },
+      }, { http, baseUrl: BASE });
+      expect(calls.length).to.equal(1);
+      expect(calls[0].url).to.equal(`${BASE}/api/v1/manifest/my-app`);
+      expect(calls[0].body).to.deep.include({ version: 3, timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig' });
+      expect(calls[0].body.manifest).to.deep.equal({ version: 3, slots: { sealed: {} } });
+    });
+
+    it('url-encodes the appName', async () => {
+      const calls = [];
+      const http = { put: async (url) => { calls.push(url); return {}; } };
+      await putManifest('a b/c', { version: 1 }, { http, baseUrl: BASE });
+      expect(calls[0]).to.equal(`${BASE}/api/v1/manifest/a%20b%2Fc`);
+    });
+  });
+
+  describe('fetchManifest', () => {
+    it('returns the { version, manifest } body', async () => {
+      const http = { get: async () => ({ data: { version: 5, manifest: { slots: {} } } }) };
+      const out = await fetchManifest('app', { http, baseUrl: BASE });
+      expect(out).to.deep.equal({ version: 5, manifest: { slots: {} } });
+    });
+
+    it('returns null on 404', async () => {
+      const http = { get: async () => { const e = new Error('nf'); e.response = { status: 404 }; throw e; } };
+      expect(await fetchManifest('app', { http, baseUrl: BASE })).to.equal(null);
+    });
+
+    it('rethrows non-404 errors', async () => {
+      const http = { get: async () => { const e = new Error('boom'); e.response = { status: 502 }; throw e; } };
+      let threw = false;
+      try {
+        await fetchManifest('app', { http, baseUrl: BASE });
       } catch (e) {
         threw = e.message === 'boom';
       }

@@ -248,6 +248,15 @@ async function prepareDatabaseSchema() {
     { key: { name: 1, ip: 1 }, name: 'query for getting flux app install location based on specs name and node ip' },
   ]);
   log.info('Flux Apps installing locations prepared');
+  // Content-slot manifests: one row per app (unique appName — the atomic
+  // compare-and-set guard storeManifest relies on), plus a PARTIAL TTL that
+  // auto-reaps quarantined (unverified, confirmed:false) rows by their expireAt;
+  // confirmed rows carry no expireAt and persist.
+  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appContentManifests), [
+    { key: { appName: 1 }, name: 'appName', unique: true },
+    { key: { expireAt: 1 }, name: 'manifest_quarantine_ttl', expireAfterSeconds: 0, partialFilterExpression: { confirmed: false } },
+  ]);
+  log.info('App content manifests collection prepared');
   await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations), [
     { key: { expireAt: 1 }, expireAfterSeconds: 0 },
     { key: { name: 1 }, name: 'query for getting flux app install errors location based on specs name' },
