@@ -387,6 +387,41 @@ async function respondWithAppInstallingErrorsMessages(peer, sinceTimestamp = 0) 
   });
 }
 
+/**
+ * Serve a boot-sync request for content-slot manifests. Unlike the time-windowed
+ * broadcast collections, the manifest set is one-row-per-app and tiny, so the full
+ * confirmed set is resent (sinceTimestamp windowing is unnecessary). Only rows that
+ * carry a node `envelope` are servable — the verbatim signed broadcast is re-served as
+ * { ...envelope, data } so the requester verifies it with batchVerifyBroadcasts on top
+ * of the manifest's intrinsic owner signature, exactly like apprunning/appinstalling.
+ */
+async function respondWithContentManifests(peer) {
+  try {
+    const db = dbHelper.databaseConnection();
+    const database = db.db(config.database.appsglobal.database);
+    const cursor = database.collection(config.database.appsglobal.collections.appContentManifests)
+      .find({ confirmed: true, envelope: { $exists: true } }, { projection: { _id: 0, envelope: 1, data: 1 } });
+
+    const batchSize = 2000;
+    let batch = [];
+    let total = 0;
+    for await (const row of cursor) {
+      batch.push({ ...row.envelope, data: row.data });
+      if (batch.length >= batchSize) {
+        log.info(`respondWithContentManifests - Sending chunk of ${batch.length} to ${peer.key}`);
+        // eslint-disable-next-line no-await-in-loop
+        await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: batch, done: false }, peer, { awaitDrain: true });
+        total += batch.length;
+        batch = [];
+      }
+    }
+    log.info(`respondWithContentManifests - Sending final ${batch.length} to ${peer.key} (total: ${total + batch.length})`);
+    await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: batch, done: true }, peer, { awaitDrain: true });
+  } catch (error) {
+    log.error(error);
+  }
+}
+
 module.exports = {
   relay,
   sendSignedMessage,
@@ -395,6 +430,7 @@ module.exports = {
   respondWithAppRunningMessages,
   respondWithAppInstallingMessages,
   respondWithAppInstallingErrorsMessages,
+  respondWithContentManifests,
   serialiseAndSignFluxBroadcast,
   getFluxMessageSignature,
   broadcastMessageToOutgoingFromUser,

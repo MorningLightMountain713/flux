@@ -35,9 +35,9 @@ const HASH_SYNC_MAX_RETRIES = config.fluxapps.hashSyncMaxRetries ?? 3;
 const HASH_SYNC_RETRY_MS = config.fluxapps.hashSyncRetryMs ?? 300000;
 const FALLBACK_RECHECK_BLOCKS = config.fluxapps.hashSyncFallbackRecheckBlocks ?? 100;
 
-// The three counted ephemeral sync types. Temp messages are requested with
-// the initial batch but are best-effort and never counted toward readiness.
-const SYNC_TYPES = Object.freeze(['apprunning', 'appinstalling', 'apperrors']);
+// The counted ephemeral sync types — each gates boot readiness. Temp messages are
+// requested with the initial batch but are best-effort and never counted toward it.
+const SYNC_TYPES = Object.freeze(['apprunning', 'appinstalling', 'apperrors', 'appcontentmanifest']);
 
 class AppSyncOrchestrator {
   #state = STATES.INITIALIZING;
@@ -71,7 +71,9 @@ class AppSyncOrchestrator {
   // (disconnected or past its deadline) keeps its delivered types counted in
   // #syncCompletions; only what it never delivered is re-asked elsewhere.
   #peerProgress = new Map();
-  #syncCompletions = { apprunning: 0, appinstalling: 0, apperrors: 0 };
+  #syncCompletions = {
+    apprunning: 0, appinstalling: 0, apperrors: 0, appcontentmanifest: 0,
+  };
   #stateSyncComplete = false;
   #syncRoundAbandoned = false;
   #syncPeerLostHandler = null;
@@ -196,7 +198,8 @@ class AppSyncOrchestrator {
     });
     if (this.#syncCompletions.apprunning >= MIN_SYNC_COMPLETIONS
       && this.#syncCompletions.appinstalling >= MIN_SYNC_COMPLETIONS
-      && this.#syncCompletions.apperrors >= MIN_SYNC_COMPLETIONS) {
+      && this.#syncCompletions.apperrors >= MIN_SYNC_COMPLETIONS
+      && this.#syncCompletions.appcontentmanifest >= MIN_SYNC_COMPLETIONS) {
       this.#stateSyncComplete = true;
       this.#clearSyncRequested();
       this.#peerProgress.clear();
@@ -205,6 +208,7 @@ class AppSyncOrchestrator {
         apprunning: this.#syncCompletions.apprunning,
         appinstalling: this.#syncCompletions.appinstalling,
         apperrors: this.#syncCompletions.apperrors,
+        appcontentmanifest: this.#syncCompletions.appcontentmanifest,
       });
       this.#checkReadiness();
     }
@@ -262,7 +266,9 @@ class AppSyncOrchestrator {
     if (this.#stateSyncComplete || this.#syncRoundAbandoned) return;
     if (this.#askedPeers.size === 0) return;
 
-    const pending = { apprunning: 0, appinstalling: 0, apperrors: 0 };
+    const pending = {
+      apprunning: 0, appinstalling: 0, apperrors: 0, appcontentmanifest: 0,
+    };
     let anyLivePending = false;
     for (const progress of this.#peerProgress.values()) {
       if (progress.failed) continue;
@@ -392,6 +398,7 @@ class AppSyncOrchestrator {
       apprunning: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, encode: peerCodec.encodeRequestAppRunning },
       appinstalling: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING, encode: peerCodec.encodeRequestAppInstalling },
       apperrors: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING_ERRORS, encode: peerCodec.encodeRequestAppInstallingErrors },
+      appcontentmanifest: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_CONTENT_MANIFESTS, encode: peerCodec.encodeRequestAppContentManifests },
     };
     for (const type of types) {
       const { msgType, encode } = codecs[type];
@@ -421,7 +428,9 @@ class AppSyncOrchestrator {
     this.#askedPeers.clear();
     this.#peerProgress.clear();
     this.#clearSyncRequested();
-    this.#syncCompletions = { apprunning: 0, appinstalling: 0, apperrors: 0 };
+    this.#syncCompletions = {
+      apprunning: 0, appinstalling: 0, apperrors: 0, appcontentmanifest: 0,
+    };
     this.#stateSyncComplete = false;
     this.#syncRoundAbandoned = false;
     this.#hashSyncAttempts = 0;
