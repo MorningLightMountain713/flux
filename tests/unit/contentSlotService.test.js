@@ -248,6 +248,31 @@ describe('contentSlotService', () => {
       expect(c.update.$set.expireAt).to.be.instanceOf(Date);
     });
 
+    it('splits a node broadcast into verbatim data + envelope (boot-sync re-serve), never a second copy of the body', async () => {
+      const { service } = load();
+      const db = fakeDb();
+      const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: manifest() };
+      const bc = {
+        version: 1, timestamp: 7, pubKey: 'pk', signature: 'sig', data,
+      };
+      await service.storeManifest(db, manifest(), { broadcast: bc });
+      const { $set } = db.calls[0].update;
+      expect($set.data).to.deep.equal(data); // signed payload kept verbatim
+      expect($set.envelope).to.deep.equal({
+        version: 1, timestamp: 7, pubKey: 'pk', signature: 'sig',
+      });
+      expect($set).to.not.have.property('manifest'); // body lives only at data.manifest
+    });
+
+    it('stores a catch-up body as a bare data wrapper with no envelope (not boot-sync-servable)', async () => {
+      const { service } = load();
+      const db = fakeDb();
+      await service.storeManifest(db, manifest());
+      const { $set } = db.calls[0].update;
+      expect($set.data.manifest).to.deep.equal(manifest());
+      expect($set).to.not.have.property('envelope');
+    });
+
     it('maps a unique-index collision (stale version) to false', async () => {
       const { service } = load();
       const err = new Error('E11000 duplicate key');
@@ -266,7 +291,14 @@ describe('contentSlotService', () => {
   });
 
   function msg(gossipManifest = manifest()) {
-    return { data: { type: 'fluxappcontentmanifest', appName: gossipManifest.appName, manifest: gossipManifest } };
+    // A full signed node broadcast (envelope + data), as it arrives off the wire.
+    return {
+      version: 1,
+      timestamp: NOW_MS,
+      pubKey: 'node-pubkey',
+      signature: 'node-sig',
+      data: { type: 'fluxappcontentmanifest', appName: gossipManifest.appName, manifest: gossipManifest },
+    };
   }
   function recvDeps(overrides = {}) {
     return {
@@ -332,6 +364,76 @@ describe('contentSlotService', () => {
     });
   });
 
+  describe('storeBatchContentManifests (boot-sync ingest)', () => {
+    function bc(gossipManifest = manifest()) {
+      return {
+        version: 1,
+        timestamp: NOW_MS,
+        pubKey: 'pk',
+        signature: 'sig',
+        data: { type: 'fluxappcontentmanifest', appName: gossipManifest.appName, manifest: gossipManifest },
+      };
+    }
+    function batchDeps(overrides = {}) {
+      return {
+        db: fakeDb(),
+        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: specWithSlots(['app-config']) }),
+        getLatest: async () => null,
+        store: sinon.stub().resolves(true),
+        verify: () => true,
+        provider: fakeProvider(),
+        ...overrides,
+      };
+    }
+
+    it('stores a verified manifest broadcast as confirmed, preserving its envelope', async () => {
+      const { service } = load();
+      const store = sinon.stub().resolves(true);
+      const broadcast = bc();
+      const { stored } = await service.storeBatchContentManifests([broadcast], batchDeps({ store }));
+      expect(stored).to.equal(1);
+      const [, m, opts] = store.firstCall.args;
+      expect(m).to.deep.equal(manifest()); // the manifest body from broadcast.data.manifest
+      expect(opts).to.deep.equal({ confirmed: true, broadcast });
+    });
+
+    it('quarantines a broadcast whose spec is not local yet (confirmed:false)', async () => {
+      const { service } = load();
+      const store = sinon.stub().resolves(true);
+      const { stored } = await service.storeBatchContentManifests([bc()], batchDeps({ store, getApp: async () => null }));
+      expect(stored).to.equal(1);
+      expect(store.firstCall.args[2].confirmed).to.equal(false);
+    });
+
+    it('drops a forged broadcast (owner sig fails) without storing', async () => {
+      const { service } = load();
+      const store = sinon.stub().resolves(true);
+      const { stored } = await service.storeBatchContentManifests([bc()], batchDeps({ store, verify: () => false }));
+      expect(stored).to.equal(0);
+      sinon.assert.notCalled(store);
+    });
+
+    it('skips a stale broadcast (version below the stored floor)', async () => {
+      const { service } = load();
+      const store = sinon.stub().resolves(true);
+      const { stored } = await service.storeBatchContentManifests(
+        [bc(manifest({ version: 2 }))],
+        batchDeps({ store, getLatest: async () => ({ version: 5, confirmed: true }) }),
+      );
+      expect(stored).to.equal(0);
+      sinon.assert.notCalled(store);
+    });
+
+    it('counts only the manifests it stored across a mixed batch', async () => {
+      const { service } = load();
+      const store = sinon.stub().resolves(true);
+      const good = bc(manifest());
+      const bad = bc(manifest({ appName: 'other' })); // verifyManifest rejects appName != spec
+      const { stored } = await service.storeBatchContentManifests([good, bad], batchDeps({ store }));
+      expect(stored).to.equal(1);
+    });
+  });
+
   describe('promoteQuarantinedManifest (spec-confirm hook for non-running nodes)', () => {
     const info = { owner: '1id', isEncrypted: true, spec: specWithSlots(['app-config']) };
 
@@ -340,24 +442,27 @@ describe('contentSlotService', () => {
       const provider = fakeProvider();
       const store = sinon.stub().resolves(true);
       const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const env = { version: 1, timestamp: 7, pubKey: 'pk', signature: 's' };
+      const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: sealed };
       const ok = await service.promoteQuarantinedManifest('app', {
         db: fakeDb(),
         getApp: async () => info,
-        getLatest: async () => ({ manifest: sealed, version: 2, confirmed: false }),
+        getLatest: async () => ({ data, envelope: env, version: 2, confirmed: false }),
         store,
         provider,
         verify: () => true,
       });
       expect(ok).to.equal(true);
-      sinon.assert.calledWith(store, sinon.match.any, sealed, { confirmed: true });
+      // Promotes in place AND rebuilds the captured node broadcast (stays sync-servable).
+      sinon.assert.calledWith(store, sinon.match.any, sealed, { confirmed: true, broadcast: { ...env, data } });
     });
 
-    it('is a no-op when nothing is quarantined (already confirmed or absent)', async () => {
+    it('is a no-op when nothing is quarantined (already confirmed)', async () => {
       const { service } = load();
       const store = sinon.spy();
       const ok = await service.promoteQuarantinedManifest('app', {
         db: fakeDb(),
-        getLatest: async () => ({ manifest: {}, version: 2, confirmed: true }),
+        getLatest: async () => ({ data: { manifest: {} }, version: 2, confirmed: true }),
         store,
       });
       expect(ok).to.equal(false);
@@ -370,7 +475,7 @@ describe('contentSlotService', () => {
       const ok = await service.promoteQuarantinedManifest('app', {
         db: fakeDb(),
         getApp: async () => null,
-        getLatest: async () => ({ manifest: {}, version: 2, confirmed: false }),
+        getLatest: async () => ({ data: { manifest: {} }, version: 2, confirmed: false }),
         store,
       });
       expect(ok).to.equal(false);
@@ -383,10 +488,11 @@ describe('contentSlotService', () => {
       const drop = sinon.spy();
       const store = sinon.spy();
       const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: sealed };
       const ok = await service.promoteQuarantinedManifest('app', {
         db: fakeDb(),
         getApp: async () => info,
-        getLatest: async () => ({ manifest: sealed, version: 2, confirmed: false }),
+        getLatest: async () => ({ data, version: 2, confirmed: false }),
         drop,
         store,
         provider,
@@ -438,6 +544,22 @@ describe('contentSlotService', () => {
       sinon.assert.calledOnce(deps.broadcast);
       expect(deps.broadcast.firstCall.args[0]).to.include({ type: 'fluxappcontentmanifest', appName: 'app' });
       expect(deps.uploader.calls[0].headers.source).to.equal('slot');
+    });
+
+    it('stores the exact signed broadcast it gossiped (envelope + verbatim data) for boot-sync re-serving', async () => {
+      const { service } = load();
+      const db = fakeDb();
+      const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: { sealed: true } };
+      const signed = {
+        version: 1, timestamp: 7, pubKey: 'pk', signature: 's', data,
+      };
+      const deps = subDeps({ db, broadcast: sinon.stub().resolves(signed) });
+      await service.submitContentUpdate(subBody(), deps);
+      const write = db.calls.find((c) => c.op === 'updateOne');
+      expect(write.update.$set.envelope).to.deep.equal({
+        version: 1, timestamp: 7, pubKey: 'pk', signature: 's',
+      });
+      expect(write.update.$set.data).to.equal(data); // the gossiped payload, verbatim
     });
 
     it('rejects when the cleartext meta does not match the sealed manifest', async () => {
@@ -676,7 +798,7 @@ describe('contentSlotService', () => {
       await service.provisionContentSlots(deployment(), { appName: 'app', peers: ['p1'] }, {
         db: fakeDb(),
         getApp: async () => info,
-        getLatest: async () => ({ manifest: sealed, version: 2 }),
+        getLatest: async () => ({ data: { manifest: sealed }, version: 2 }),
         fetchPeers,
         stageApply,
         provider,
@@ -696,10 +818,12 @@ describe('contentSlotService', () => {
       const store = sinon.spy();
       const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
 
+      const env = { version: 1, timestamp: 7, pubKey: 'pk', signature: 's' };
+      const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: sealed };
       await service.provisionContentSlots(deployment(), { appName: 'app', peers: ['p1'] }, {
         db: fakeDb(),
         getApp: async () => info,
-        getLatest: async () => ({ manifest: sealed, version: 2, confirmed: false }), // quarantined
+        getLatest: async () => ({ data, envelope: env, version: 2, confirmed: false }), // quarantined
         fetchPeers,
         store,
         stageApply,
@@ -708,7 +832,7 @@ describe('contentSlotService', () => {
       });
 
       sinon.assert.notCalled(fetchPeers); // promoted locally — no catch-up
-      sinon.assert.calledWith(store, sinon.match.any, sealed, { confirmed: true }); // promoted in place
+      sinon.assert.calledWith(store, sinon.match.any, sealed, { confirmed: true, broadcast: { ...env, data } }); // promoted in place, envelope preserved
       sinon.assert.calledOnce(stageApply);
     });
 
@@ -722,7 +846,7 @@ describe('contentSlotService', () => {
       await service.provisionContentSlots(deployment(), { appName: 'app', peers: ['p1'] }, {
         db: fakeDb(),
         getApp: async () => info,
-        getLatest: async () => ({ manifest: sealed, version: 2, confirmed: false }),
+        getLatest: async () => ({ data: { manifest: sealed }, version: 2, confirmed: false }),
         fetchPeers: async () => fetched,
         store: sinon.spy(),
         stageApply,
