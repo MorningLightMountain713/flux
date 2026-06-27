@@ -14,6 +14,8 @@ const dockerService = require('../dockerService');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const appsRepository = require('../appDatabase/appsRepository');
+const networkStateService = require('../networkStateService');
+const fluxNetworkHelper = require('../fluxNetworkHelper');
 const transportHelper = require('../utils/transportHelper');
 const fluxDriveClient = require('../utils/fluxDriveClient');
 const globalState = require('../utils/globalState');
@@ -697,14 +699,75 @@ async function applyManifest(deployment, manifest, ctx, deps = {}) {
   }
 }
 
+/** Resolve a node's globally-unique, stable collateral txid from its ip:port via the
+ *  in-memory network state (a map lookup, not a network call). null if unknown. */
+async function resolveNodeCollateral(socketAddress) {
+  const node = await networkStateService.getFluxnodeBySocketAddress(socketAddress);
+  return node && node.collateral ? node.collateral : null;
+}
+
 /**
- * Bridge from a verified manifest to application on this node's installed app: look
- * up the installed DeploymentSpec + the app's running peers, then apply. Rollout
- * strategies (immediate/scheduled/staggered) are layered on in S6; today this
- * applies immediately.
+ * This node's staggered activation delay (ms within [0, staggerSeconds*1000)). The app's
+ * running instances are ordered by their globally-unique, stable collateral txid — the
+ * same ordering on every node — so the slots are evenly spread and reproducible (security
+ * scan N7: ordinal-based, not hash%window which would birthday-collide). delay = (i/N) *
+ * staggerSeconds, i = this node's ordinal in that set, N = spec.instances (clamped up to
+ * the observed count so a transient over-count can't push a slot past the window). Call
+ * this AT activateAt: a synced node has a converged view of the running set by then, so
+ * the ordinal is well-defined (sync readiness is the guard, not a thin-view special-case).
  *
- * @param {object} manifest - plaintext manifest
- * @param {object} spec - the app's stored spec (for the owner)
+ * @param {string} appName
+ * @param {number} instances - spec.instances (the fleet target)
+ * @param {number} staggerSeconds
+ * @param {object} deps - { getLocations?, resolveCollateral?, getSelfAddress? }
+ * @returns {Promise<number>} delay in milliseconds
+ */
+async function computeStaggerDelayMs(appName, instances, staggerSeconds, deps = {}) {
+  const {
+    getLocations = appsRepository.listLocationsByApp,
+    resolveCollateral = resolveNodeCollateral,
+    getSelfAddress = fluxNetworkHelper.getLocalSocketAddress,
+  } = deps;
+
+  const selfAddress = await getSelfAddress();
+  const selfCollateral = selfAddress ? await resolveCollateral(selfAddress) : null;
+  // Can't place ourselves in the ordering — apply at activateAt (degenerate single-node case).
+  if (!selfCollateral) return 0;
+
+  const collaterals = new Set([selfCollateral]); // always include self
+  const locations = (await getLocations(appName)) || [];
+  for (const loc of locations) {
+    if (!loc || !loc.ip) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const collateral = await resolveCollateral(loc.ip);
+    if (collateral) collaterals.add(collateral);
+  }
+
+  const sorted = [...collaterals].sort();
+  const i = sorted.indexOf(selfCollateral);
+  const observed = sorted.length;
+  const target = Number(instances) > 0 ? Number(instances) : observed;
+  const n = Math.max(target, observed); // clamp so a brief over-count can't exceed the window
+  return Math.floor((i / n) * staggerSeconds * 1000);
+}
+
+/**
+ * Apply a verified manifest to this node's installed app, honoring the manifest's rollout
+ * strategy. Only for an app that is ALREADY RUNNING (the owner pushed a content update) —
+ * first-install / boot content goes onto disk before the container starts via
+ * provisionContentSlots, not here.
+ *  - immediate  → apply now.
+ *  - scheduled  → apply at activateAt (wall-clock-synchronized across the fleet); already
+ *                 past ⇒ apply now (a node catching up after the moment).
+ *  - staggered  → at activateAt, compute this node's collateral ordinal and apply after
+ *                 (i/N)*staggerSeconds, so instances restart one-at-a-time across the window.
+ * Re-checks the app is still installed before applying (it can expire mid-window). The wait
+ * is an in-memory timer; a rollout interrupted by a restart is re-armed by boot-recovery.
+ * flux-spec validates the rollout sizing (activateAt lead, staggerSeconds floor/24h cap),
+ * so it is consumed here, not re-checked.
+ *
+ * @param {object} manifest - plaintext manifest (carries the cleartext rollout field)
+ * @param {object} spec - the app's stored spec (owner + instances)
  * @param {object} deps
  */
 async function scheduleContentApplication(manifest, spec, deps = {}) {
@@ -712,13 +775,125 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
     getDeployment = deploymentProvider.getInstalledDeployment,
     getPeers = listAppPeers,
     apply = applyManifest,
+    now = Date.now,
+    setTimer = setTimeout,
+    computeDelay = computeStaggerDelayMs,
     ...applyDeps
   } = deps;
   const { appName } = manifest;
+  const rollout = manifest.rollout || { strategy: 'immediate' };
+
+  // Apply now, re-checking the app is still installed here (discard if it expired mid-window).
+  const runApply = async () => {
+    const deployment = await getDeployment(appName);
+    if (!deployment) return;
+    const peers = await getPeers(appName);
+    await apply(deployment, manifest, { appName, owner: spec.owner, peers }, applyDeps);
+  };
+  const runApplyDetached = () => runApply().catch((error) => log.warn(`contentSlot: deferred rollout apply for ${appName} failed - ${error.message ?? error}`));
+
+  if (rollout.strategy !== 'scheduled' && rollout.strategy !== 'staggered') {
+    await runApply(); // immediate (and the safe default for an unknown strategy)
+    return;
+  }
+
+  const activateAtMs = Number(rollout.activateAt) * 1000;
+  const staggerMs = (Number(rollout.staggerSeconds) || 0) * 1000;
+  // Past the whole window (scheduled: past activateAt; staggered: past activateAt+stagger):
+  // a node catching up after the moment applies the current content immediately.
+  if (now() >= activateAtMs + staggerMs) {
+    await runApply();
+    return;
+  }
+
+  // At activateAt, freeze this node's slot (0 for scheduled) and apply when it arrives.
+  const atActivate = async () => {
+    let slotMs = 0;
+    if (rollout.strategy === 'staggered') {
+      slotMs = await computeDelay(appName, spec && spec.instances, Number(rollout.staggerSeconds) || 0, deps);
+    }
+    const waitMs = Math.max(0, (activateAtMs + slotMs) - now()); // 0 if our slot is already past (catch-up)
+    if (waitMs === 0) runApplyDetached();
+    else setTimer(runApplyDetached, waitMs);
+  };
+
+  const untilActivate = activateAtMs - now();
+  if (untilActivate <= 0) {
+    await atActivate(); // already at/after activateAt — compute the slot against the current (converged) view
+  } else {
+    setTimer(
+      () => atActivate().catch((error) => log.warn(`contentSlot: rollout scheduling for ${appName} failed - ${error.message ?? error}`)),
+      untilActivate,
+    );
+  }
+}
+
+/**
+ * Boot-time content recovery for an already-installed slot app, run AFTER the node has
+ * synced and BEFORE its container (re)starts (the boot gate opens only once the boot
+ * reconcile loop returns, so writing content here lands before any container starts).
+ * Brings the on-disk slot content to what should be live right now:
+ *  - the latest stored manifest's rollout is DUE (immediate / activateAt passed, or no
+ *    rollout) → provision that content before start (idempotent in steady state; catches
+ *    up a version published while the node was down);
+ *  - the rollout's activateAt is still in the FUTURE → leave the on-disk (currently-live)
+ *    content untouched, do NOT apply the new version early, and re-arm
+ *    scheduleContentApplication so it lands at activateAt on the now-running app.
+ * A no-op for an app with no content slots. Best-effort by contract: the caller (boot
+ * reconcile) catches failures so the app still starts on its persisted on-disk content.
+ *
+ * @param {string} appName
+ * @param {object} deps
+ */
+async function reconcileBootContent(appName, deps = {}) {
+  const {
+    db = appsGlobalDb(),
+    getDeployment = deploymentProvider.getInstalledDeployment,
+    getApp = appsRepository.getGlobalAppInfo,
+    getLatest = getLatestManifest,
+    getPeers = listAppPeers,
+    provision = provisionContentSlots,
+    schedule = scheduleContentApplication,
+    now = Date.now,
+    restarting = true,
+    provider,
+  } = deps;
+
   const deployment = await getDeployment(appName);
-  if (!deployment) return; // not installed here (or torn down mid-flight) — nothing to apply
+  if (!deployment || !deployment.componentEntries().some(([, comp]) => comp.hasContentSlots())) return;
+
+  // The don't-apply-early decision is on the CLEARTEXT rollout and needs no verification,
+  // so read it from the stored manifest regardless of `confirmed` — otherwise a still-
+  // quarantined future-dated row would slip through to provision and be applied early.
+  const stored = await getLatest(db, appName);
+  const manifest = stored && stored.data ? stored.data.manifest : null;
+  const rollout = manifest && manifest.rollout;
+  const deferred = rollout
+    && (rollout.strategy === 'scheduled' || rollout.strategy === 'staggered')
+    && Number(rollout.activateAt) * 1000 > now();
+
+  if (deferred) {
+    // A future-dated rollout: never apply it early — the on-disk content (live before the
+    // restart) stays. Re-arm it to land at activateAt (its in-memory timer died with the
+    // process), but only if it is confirmed (verified): a quarantined row is left for the
+    // normal confirm/gossip path, never applied early. Re-arm runs whether the container
+    // was stopped (machine reboot) or survived (FluxOS process restart).
+    if (stored.confirmed === false) return;
+    const info = await getApp(appName);
+    if (!info) return;
+    const { owner, isEncrypted: encrypted, spec } = info;
+    const plaintext = await openManifestSlots(manifest, { owner, encrypted }, { provider });
+    await schedule(plaintext, spec, deps);
+    return;
+  }
+
+  // Due (or no rollout): stage the current content before the container starts — but only
+  // for a container that is actually (re)starting. A surviving, still-running container is
+  // not re-written here (the steady-state gossip apply handles a missed update with its
+  // proper reaction); for it we only needed to re-arm a future rollout above.
+  if (!restarting) return;
   const peers = await getPeers(appName);
-  await apply(deployment, manifest, { appName, owner: spec.owner, peers }, applyDeps);
+  await provision(deployment, { appName, peers }, deps);
 }
 
 /**
@@ -1006,6 +1181,8 @@ module.exports = {
   stageAndApplySlots,
   applyManifest,
   scheduleContentApplication,
+  computeStaggerDelayMs,
+  reconcileBootContent,
   provisionContentSlots,
   listAppPeers,
   fetchManifestFromPeer,

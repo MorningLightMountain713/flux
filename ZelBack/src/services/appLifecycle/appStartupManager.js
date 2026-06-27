@@ -16,6 +16,7 @@ const appReconciler = require('../appMonitoring/appReconciler');
 const nodeDosState = require('../nodeDosState');
 const appUninstaller = require('./appUninstaller');
 const appNetworkLinker = require('./appNetworkLinker');
+const contentSlotService = require('./contentSlotService');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const telemetryIdentityService = require('../telemetryIdentityService');
@@ -107,24 +108,37 @@ async function reconcileAppsOnBoot() {
     // Create a set for quick lookup of installed app names
     const installedAppNames = new Set(installedApps.map((app) => app.name));
 
-    // Get all stopped Flux containers
+    // Get all stopped Flux containers + the apps they belong to.
     const stoppedContainers = await getStoppedFluxContainers();
+    const appsWithStoppedContainers = new Set();
+    for (const container of stoppedContainers) {
+      const { appName } = parseContainerName(container.Names[0]);
+      appsWithStoppedContainers.add(appName);
+    }
+
+    // Boot content recovery for EVERY installed app, BEFORE any container (re)starts (the
+    // boot gate opens only after this function returns, so content writes land before any
+    // start). Re-arms a pending future-dated rollout whose in-memory timer died with the
+    // process — for a surviving container (a FluxOS process restart) as well as a stopped
+    // one (a machine reboot) — and stages current content before start for a container that
+    // is actually restarting. Runs even when nothing is stopped (the re-arm still matters).
+    // Best-effort per app: a content failure must never block the app from starting on its
+    // persisted on-disk content.
+    for (const app of installedApps) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await contentSlotService.reconcileBootContent(app.name, { restarting: appsWithStoppedContainers.has(app.name) });
+      } catch (contentError) {
+        log.warn(`appStartupManager - boot content recovery for ${app.name} failed (starting on on-disk content) - ${contentError.message ?? contentError}`);
+      }
+    }
+
     if (stoppedContainers.length === 0) {
       log.info('appStartupManager - No stopped containers found');
       return results;
     }
 
-    log.info(`appStartupManager - Found ${stoppedContainers.length} stopped Flux containers`);
-
-    // Get unique app names from stopped containers
-    const appsWithStoppedContainers = new Set();
-    for (const container of stoppedContainers) {
-      const containerName = container.Names[0];
-      const { appName } = parseContainerName(containerName);
-      appsWithStoppedContainers.add(appName);
-    }
-
-    log.info(`appStartupManager - Stopped containers belong to ${appsWithStoppedContainers.size} app(s)`);
+    log.info(`appStartupManager - Found ${stoppedContainers.length} stopped Flux containers, belonging to ${appsWithStoppedContainers.size} app(s)`);
 
     // Get this node's IP for location checks
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
