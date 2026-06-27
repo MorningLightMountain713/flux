@@ -12,6 +12,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
 const contentBlobService = require('./contentBlobService');
+const contentSlotService = require('./contentSlotService');
 const appReconciler = require('../appMonitoring/appReconciler');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { storeAppInstallingErrorMessage } = require('../appMessaging/messageStore');
@@ -293,28 +294,41 @@ async function installApplication(instantiated, options = {}) {
         }
       }
 
-      // Provision declared content blobs onto the now-created mount sources before
-      // the reconciler starts the containers: resolve each (FluxDrive backstop
-      // today; peers-first once peer-serve lands) and verify it against its signed
-      // hash. A content app is not installable without its content, so a failure
-      // here aborts the install.
-      if (!test && deployment.componentEntries().some(([, c]) => c.hasContentBlobs())) {
-        if (onStatus) onStatus({ status: 'Provisioning content...' });
-        // Peers-first resolution: nodes already running this app are likely
-        // sources for its content blobs (FluxDrive is the backstop). Locations
-        // are normalized ip:port, usable directly as peer URLs; shuffle so
-        // installing nodes don't all hit the same peer first (herd-safety).
-        const locations = await appsRepository.listLocationsByApp(appName);
-        const peers = locations.map((loc) => loc.ip).filter(Boolean);
-        for (let i = peers.length - 1; i > 0; i -= 1) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [peers[i], peers[j]] = [peers[j], peers[i]];
+      // Provision declared content — blobs and slots — onto the now-created mount
+      // sources before the reconciler starts the containers. Each is resolved
+      // peers-first by locator (FluxDrive is the backstop) and hash-verified. A
+      // content app is not installable without its content, so a failure here aborts
+      // the install (the reconciler retries) rather than starting on empty/stale
+      // content. Blobs take their hash from the signed spec; slots take theirs from
+      // the latest owner-signed manifest (this node's store, else a running peer).
+      if (!test) {
+        const hasBlobs = deployment.componentEntries().some(([, c]) => c.hasContentBlobs());
+        const hasSlots = deployment.componentEntries().some(([, c]) => c.hasContentSlots());
+        if (hasBlobs || hasSlots) {
+          if (onStatus) onStatus({ status: 'Provisioning content...' });
+          // Locations are normalized ip:port, usable directly as peer URLs; shuffle
+          // so installing nodes don't all hit the same peer first (herd-safety).
+          const locations = await appsRepository.listLocationsByApp(appName);
+          const peers = locations.map((loc) => loc.ip).filter(Boolean);
+          for (let i = peers.length - 1; i > 0; i -= 1) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [peers[i], peers[j]] = [peers[j], peers[i]];
+          }
+          if (hasBlobs) {
+            await contentBlobService.provisionContentBlobs(
+              deployment,
+              { appName, fluxID: instantiated.owner, peers },
+              { writeFile: writeInjectedContent, peerFetch: contentBlobService.fetchBlobFromPeer },
+            );
+          }
+          if (hasSlots) {
+            await contentSlotService.provisionContentSlots(
+              deployment,
+              { appName, peers },
+              { peerFetch: contentBlobService.fetchBlobFromPeer },
+            );
+          }
         }
-        await contentBlobService.provisionContentBlobs(
-          deployment,
-          { appName, fluxID: instantiated.owner, peers },
-          { writeFile: writeInjectedContent, peerFetch: contentBlobService.fetchBlobFromPeer },
-        );
       }
 
       // Hand the full shutdown plan to flux-shutdownd (best-effort; Arcane-only
