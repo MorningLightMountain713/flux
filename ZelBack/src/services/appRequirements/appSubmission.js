@@ -487,10 +487,13 @@ async function uploadSealedContent(spec, content, ownerSigs, { ref, timestamp })
       },
       { db, uploader: fluxDriveClient },
     );
-    await contentSlotService.storeManifest(db, gossipManifest);
-    await fluxCommunicationMessagesSender.broadcastMessageToAll({
+    // Broadcast first: broadcastMessageToAll returns the exact signed node broadcast it
+    // relayed, so the stored row carries that same envelope (one signature) and is
+    // boot-sync-servable to a fresh node.
+    const signedBroadcast = await fluxCommunicationMessagesSender.broadcastMessageToAll({
       type: 'fluxappcontentmanifest', appName: spec.name, manifest: gossipManifest,
     });
+    await contentSlotService.storeManifest(db, gossipManifest, { broadcast: signedBroadcast });
     // Populate the FluxDrive backstop at register too — the first installing instance
     // has no peers, so FluxDrive is its only manifest source. Best-effort; the owner
     // PUT-sig rides the sealed payload (frontend-produced at submission).
