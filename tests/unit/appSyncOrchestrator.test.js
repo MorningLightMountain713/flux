@@ -176,12 +176,15 @@ describe('AppSyncOrchestrator', () => {
       },
       '../utils/globalState': globalStateStub,
       '../utils/peerCodec': {
-        MSG_TYPE: { REQUEST_TEMP_MESSAGES: 0x20, REQUEST_APP_RUNNING: 0x21, REQUEST_APP_INSTALLING: 0x22, REQUEST_APP_INSTALLING_ERRORS: 0x23 },
+        MSG_TYPE: {
+          REQUEST_TEMP_MESSAGES: 0x20, REQUEST_APP_RUNNING: 0x21, REQUEST_APP_INSTALLING: 0x22, REQUEST_APP_INSTALLING_ERRORS: 0x23, REQUEST_APP_CONTENT_MANIFESTS: 0x24,
+        },
         buildSyncSignatureMessage: sinon.stub().returns('testmsg'),
         encodeRequestTempMessages: sinon.stub().returns(Buffer.alloc(9, 0x20)),
         encodeRequestAppRunning: sinon.stub().returns(Buffer.alloc(9, 0x21)),
         encodeRequestAppInstalling: sinon.stub().returns(Buffer.alloc(9, 0x22)),
         encodeRequestAppInstallingErrors: sinon.stub().returns(Buffer.alloc(9, 0x23)),
+        encodeRequestAppContentManifests: sinon.stub().returns(Buffer.alloc(9, 0x24)),
       },
       '../utils/nodeSigner': {
         nodeSigner: async () => {
@@ -349,7 +352,7 @@ describe('AppSyncOrchestrator', () => {
   });
 
   describe('sync requests', () => {
-    it('should send all 4 request types to eligible peers', async () => {
+    it('should send all 5 request types to eligible peers', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
 
@@ -359,7 +362,7 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       for (const peer of peers) {
-        expect(peer.send.callCount).to.equal(4);
+        expect(peer.send.callCount).to.equal(5);
       }
     });
 
@@ -436,7 +439,7 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       for (const peer of peers) {
-        expect(peer.send.callCount).to.equal(4);
+        expect(peer.send.callCount).to.equal(5);
       }
     });
 
@@ -1929,7 +1932,7 @@ describe('AppSyncOrchestrator', () => {
   });
 
   describe('state sync readiness', () => {
-    it('should reach READY when all 3 sync types complete from 3 peers', async () => {
+    it('should reach READY when all sync types complete from 3 peers', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
 
@@ -1946,7 +1949,12 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       // Complete all syncs from 3 peers
-      completeAllTypes(3);
+      for (let i = 0; i < 3; i += 1) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appcontentmanifest');
+      }
       await clock.tickAsync(0);
 
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -1965,10 +1973,14 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
 
-      // Only 2 apprunning, but 3 of every other stream
-      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', '10.0.0.1:16127');
-      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', '10.0.0.2:16127');
-      completeAllTypes(3, ['appinstalling', 'apperrors', 'apptemp']);
+      // Only 2 apprunning, but 3 of the others — apprunning short is the sole gate.
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+      for (let i = 0; i < 3; i += 1) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appcontentmanifest');
+      }
       await clock.tickAsync(0);
 
       expect(orchestrator.state).to.equal(STATES.SYNCING);
@@ -2009,7 +2021,12 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       // Complete all syncs → READY
-      completeAllTypes(3);
+      for (let i = 0; i < 3; i += 1) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appcontentmanifest');
+      }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
 
@@ -2049,6 +2066,7 @@ describe('AppSyncOrchestrator', () => {
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peerKey);
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', peerKey);
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', peerKey);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appcontentmanifest', peerKey);
     }
 
     beforeEach(() => {
@@ -2059,7 +2077,7 @@ describe('AppSyncOrchestrator', () => {
     it('should replace a disconnected peer with one fresh peer asking only the undelivered types', async () => {
       const peers = makeEligiblePeers(5);
       await startWithAskedPeers(peers);
-      expect(peers[2].send.callCount).to.equal(4);
+      expect(peers[2].send.callCount).to.equal(5); // temp + 4 sync types
       expect(peers[3].send.called).to.be.false;
 
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key);
@@ -2067,10 +2085,10 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       // One replacement peer, asked only for what is still short after the
-      // delivered apprunning completion was banked
-      expect(peers[3].send.callCount).to.equal(2);
+      // delivered apprunning completion was banked (appinstalling, apperrors, appcontentmanifest)
+      expect(peers[3].send.callCount).to.equal(3);
       const sentTypes = peers[3].send.args.map((args) => args[0][0]);
-      expect(sentTypes).to.deep.equal([0x22, 0x23]);
+      expect(sentTypes).to.deep.equal([0x22, 0x23, 0x24]);
       expect(peers[4].send.called).to.be.false;
     });
 
@@ -2091,14 +2109,14 @@ describe('AppSyncOrchestrator', () => {
 
       peerEmitter.emit('syncPeerLost', peers[0].key);
       await clock.tickAsync(0);
-      expect(peers[3].send.callCount).to.equal(3);
+      expect(peers[3].send.callCount).to.equal(4); // replacement asked all 4 types (none delivered)
 
       // The lost peer reconnects and is eligible again; its replacement dies too
       peerEmitter.emit('syncPeerLost', peers[3].key);
       await clock.tickAsync(0);
 
-      expect(peers[4].send.callCount).to.equal(3);
-      expect(peers[0].send.callCount).to.equal(4);
+      expect(peers[4].send.callCount).to.equal(4);
+      expect(peers[0].send.callCount).to.equal(5); // initial ask: temp + 4 sync types
     });
 
     it('should fail a silent peer at its deadline, stop accepting it, and replace it', async () => {
@@ -2112,7 +2130,7 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       sinon.assert.calledWith(completeSyncRequestStub, peers[2].key);
-      expect(peers[3].send.callCount).to.equal(3);
+      expect(peers[3].send.callCount).to.equal(4); // replacement asked all 4 still-short types
       expect(logStub.warn.args.some((args) => String(args[0]).includes('missed the 120s deadline'))).to.be.true;
     });
 
@@ -2128,7 +2146,7 @@ describe('AppSyncOrchestrator', () => {
       blockEmitter.emit('blocksProcessed', 2555001);
       await clock.tickAsync(0);
 
-      expect(latecomer.send.callCount).to.equal(3);
+      expect(latecomer.send.callCount).to.equal(4); // asked all 4 types (none delivered)
     });
 
     it('should stop after the peer budget and abandon the round so the block timer takes over', async () => {
@@ -2142,8 +2160,8 @@ describe('AppSyncOrchestrator', () => {
       }
 
       // 3 initial + 2 replacements exhausts the budget of 5 distinct peers
-      expect(peers[3].send.callCount).to.equal(3);
-      expect(peers[4].send.callCount).to.equal(3);
+      expect(peers[3].send.callCount).to.equal(4);
+      expect(peers[4].send.callCount).to.equal(4);
       expect(peers[5].send.called).to.be.false;
       expect(logStub.warn.args.some((args) => String(args[0]).includes('State sync abandoned'))).to.be.true;
       expect(clearSyncRequestedStub.called).to.be.true;
