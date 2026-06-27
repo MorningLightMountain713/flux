@@ -24,6 +24,7 @@ describe('appSubmission tests', () => {
   function load() {
     return proxyquire('../../ZelBack/src/services/appRequirements/appSubmission', {
       config: { fluxapps: { latestSupportedSpecVersion: 9, minOutgoing: 0, minIncoming: 0 } },
+      '../appLifecycle/contentBlobService': stubs.contentBlobService,
       '../utils/transportHelper': stubs.transportHelper,
       '../utils/specCutover': stubs.specCutover,
       '../utils/specLibs': stubs.specLibs,
@@ -45,7 +46,13 @@ describe('appSubmission tests', () => {
 
   beforeEach(() => {
     stubs = {
-      transportHelper: { openTransportEnvelope: sinon.stub() },
+      contentBlobService: {
+        MAX_CONTENT_BYTES: 64 * 1024 * 1024,
+        MAX_BLOB_BYTES: 2 * 1024 * 1024,
+        specContentHashes: sinon.stub().returns(new Set()),
+        encryptAndUploadBlobs: sinon.stub().resolves([]),
+      },
+      transportHelper: { openTransportEnvelope: sinon.stub(), openContentEnvelope: sinon.stub() },
       specCutover: { deserializeSpec: sinon.stub() },
       specLibs: {
         validateSubmissionSpec: sinon.stub(),
@@ -378,48 +385,80 @@ describe('appSubmission tests', () => {
 
   describe('parseMultipartSubmission', () => {
     // Drive a real multipart request through formidable to confirm the wire
-    // contract: the `spec` field, `blob:sha256:<hex>` file parts keyed by hash,
-    // and the `ownerSigs` JSON map.
+    // contract: the `spec` field, ONE sealed `content` file part (an HPKE
+    // TransportEnvelope over { blobs, manifest? } — never plaintext content), and
+    // the `ownerSigs` JSON map.
     function appWithParser() {
       appSubmission = load();
       const app = express();
       app.post('/submit', (req, res) => {
         appSubmission.parseMultipartSubmission(req).then((parsed) => res.json({
           spec: parsed.spec,
-          blobHashes: [...parsed.blobs.keys()],
-          blobBytes: Object.fromEntries([...parsed.blobs.entries()].map(([h, b]) => [h, b.toString()])),
+          content: parsed.content,
           ownerSigs: Object.fromEntries(parsed.ownerSigs),
         })).catch((err) => res.status(500).json({ error: err.message }));
       });
       return app;
     }
 
-    it('extracts the spec field, blob parts by hash, and the ownerSigs map', async () => {
+    it('extracts the spec field, the sealed content envelope, and the ownerSigs map', async () => {
       const specJson = JSON.stringify({ type: 'fluxappregister', version: 2 });
       const ha = `sha256:${'a'.repeat(64)}`;
       const ownerSigs = JSON.stringify({ [ha]: { sig: 'owner-sig', timestamp: '1700000000' } });
+      // A stand-in TransportEnvelope; parseMultipartSubmission does not open it.
+      const envelope = { algorithm: 'x', encapsulatedKey: 'k', nonce: 'n', ciphertext: 'c' };
 
       const res = await request(appWithParser())
         .post('/submit')
         .field('spec', specJson)
         .field('ownerSigs', ownerSigs)
-        .attach(`blob:${ha}`, Buffer.from('blob-bytes'), { filename: 'content' });
+        .attach('content', Buffer.from(JSON.stringify(envelope)), { filename: 'content.json' });
 
       expect(res.status).to.equal(200);
       expect(res.body.spec).to.equal(specJson);
-      expect(res.body.blobHashes).to.deep.equal([ha]);
-      expect(res.body.blobBytes[ha]).to.equal('blob-bytes');
+      expect(res.body.content).to.deep.equal(envelope);
       expect(res.body.ownerSigs[ha]).to.deep.equal({ sig: 'owner-sig', timestamp: '1700000000' });
     });
 
-    it('returns no blobs and an empty ownerSigs map for a spec-only multipart post', async () => {
+    it('returns null content and an empty ownerSigs map for a spec-only multipart post', async () => {
       const res = await request(appWithParser())
         .post('/submit')
         .field('spec', JSON.stringify({ type: 'fluxappregister' }));
 
       expect(res.status).to.equal(200);
-      expect(res.body.blobHashes).to.deep.equal([]);
+      expect(res.body.content).to.equal(null);
       expect(res.body.ownerSigs).to.deep.equal({});
+    });
+  });
+
+  describe('uploadSealedContent', () => {
+    const HA = `sha256:${'a'.repeat(64)}`;
+    const HSLOT = `sha256:${'b'.repeat(64)}`;
+    const envelope = { algorithm: 'x', encapsulatedKey: 'k', nonce: 'n', ciphertext: 'c' };
+    const spec = { name: 'myapp', owner: '1id' };
+
+    it('transport-opens the sealed envelope (never plaintext) bound to the submission, and uploads only contentRef blobs', async () => {
+      appSubmission = load();
+      // Sealed payload carries a contentRef blob (HA) and a slot blob (HSLOT).
+      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({
+        blobs: { [HA]: Buffer.from('ref-bytes').toString('base64'), [HSLOT]: Buffer.from('slot-bytes').toString('base64') },
+      })));
+      stubs.contentBlobService.specContentHashes.returns(new Set([HA])); // only HA is a contentRef
+
+      const ownerSigs = new Map([[HA, { sig: 's', timestamp: '1700000000' }]]);
+      const out = await appSubmission.uploadSealedContent(spec, envelope, ownerSigs, { ref: 'HASH123', timestamp: 1 });
+
+      // Opened toward this node's per-app transport key, AAD-bound to the submission.
+      sinon.assert.calledOnceWithExactly(stubs.transportHelper.openContentEnvelope, envelope, {
+        appName: 'myapp', owner: '1id', ref: 'HASH123', timestamp: 1,
+      });
+      // Only the contentRef blob (HA) is uploaded; the slot blob (HSLOT) is left for the slot path.
+      sinon.assert.calledOnce(stubs.contentBlobService.encryptAndUploadBlobs);
+      const refBlobs = stubs.contentBlobService.encryptAndUploadBlobs.firstCall.args[1];
+      expect([...refBlobs.keys()]).to.deep.equal([HA]);
+      expect(refBlobs.get(HA).toString()).to.equal('ref-bytes');
+      // The full opened payload (incl. the slot blob) is returned for the manifest path.
+      expect([...out.blobs.keys()]).to.have.members([HA, HSLOT]);
     });
   });
 });

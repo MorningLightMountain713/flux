@@ -64,7 +64,9 @@ const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const hwRequirements = require('../appRequirements/hwRequirements');
-const { resolveSubmission, assertSecretsNotConflicting, parseMultipartSubmission } = require('../appRequirements/appSubmission');
+const {
+  resolveSubmission, assertSecretsNotConflicting, parseMultipartSubmission, uploadSealedContent,
+} = require('../appRequirements/appSubmission');
 const globalState = require('../utils/globalState');
 const contentBlobService = require('./contentBlobService');
 const fluxDriveClient = require('../utils/fluxDriveClient');
@@ -652,22 +654,43 @@ async function changeSyncthingFolderType(folderId, folderType) {
  * @param {string} appId - Application ID
  * @returns {Promise<boolean>} - true if successful, false otherwise
  */
-async function applyPermissionsFix(appId) {
+async function applyPermissionsFix(appname, appId) {
   try {
-    // Fix permissions on entire app directory to cover appdata and all additional mounts
     const appPath = `${appsFolder}${appId}`;
+    log.info(`Applying permissions fix for app: ${appname}`);
 
-    log.info(`Applying permissions fix for app: ${appId}`);
+    const deployment = await deploymentProvider.getInstalledDeployment(appname);
+    const mounts = deployment
+      ? deployment.componentEntries().flatMap(([, comp]) => comp.mounts)
+      : [];
+    const hasContent = mounts.some((mount) => mount.perms);
 
-    // Apply 777 permissions to entire app directory recursively
-    // This covers both appdata (primary mount) and all additional mounts at the same level
-    const execPERM = `sudo chmod -R 777 ${appPath}`;
-    await cmdAsync(execPERM);
+    if (!hasContent) {
+      // No injected content to protect: the blanket recursive fix, unchanged. The
+      // root-owned synced data tree (syncthing runs as root) must be accessible to a
+      // container that may run as a non-root uid.
+      await serviceHelper.runCommand('chmod', { params: ['-R', '777', appPath], runAsRoot: true });
+    } else {
+      // The container only sees its bind-mounted sources, so fix each in ONE pass —
+      // never recursively 777 the whole tree and walk content back. A data/synced
+      // tree gets the recursive 777; injected content gets its own root-owned 0444
+      // (world-readable so the container reads it, never writable). No path twice.
+      await serviceHelper.runCommand('chmod', { params: ['777', appPath], runAsRoot: true });
+      for (const mount of mounts) {
+        if (mount.perms) {
+          // eslint-disable-next-line no-await-in-loop
+          await appVolumeService.applyMountPerms(mount);
+        } else {
+          // eslint-disable-next-line no-await-in-loop
+          await serviceHelper.runCommand('chmod', { params: ['-R', '777', mount.Source], runAsRoot: true });
+        }
+      }
+    }
 
-    log.info(`Successfully applied permissions fix for app: ${appId} (includes appdata and all mount points)`);
+    log.info(`Successfully applied permissions fix for app: ${appname}`);
     return true;
   } catch (error) {
-    log.error(`Error applying permissions fix for ${appId}: ${error.message}`);
+    log.error(`Error applying permissions fix for ${appname}: ${error.message}`);
     return false;
   }
 }
@@ -744,7 +767,7 @@ async function promoteApplicationToPrimary(appname, appId) {
 
     // Step 2: Apply permissions fix on persistent container data
     log.info(`Step 2: Applying permissions fix for ${appname}`);
-    const permissionsApplied = await applyPermissionsFix(appId);
+    const permissionsApplied = await applyPermissionsFix(appname, appId);
     if (!permissionsApplied) {
       log.error(`Failed to apply permissions fix for ${appname}, aborting container start`);
       return;
@@ -1193,7 +1216,7 @@ async function testAppMount() {
  */
 async function updateAppGlobaly(params) {
   const {
-    appSpecification, timestamp, signature, type: messageType, version: typeVersion, blobCtx,
+    appSpecification, timestamp, signature, type: messageType, version: typeVersion, contentCtx,
   } = params;
 
   if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
@@ -1269,11 +1292,12 @@ async function updateAppGlobaly(params) {
   UpdatePolicy.assertVersionTransition(previousSpec, spec, latestSupportedSpecVersion);
   UpdatePolicy.assertCompatible(previousSpec, spec);
 
-  // Content blobs ride alongside the spec as plaintext multipart parts; upload
-  // them synchronously so they are durably stored before the spec is gossiped.
-  if (blobCtx) {
-    await contentBlobService.encryptAndUploadBlobs(spec, blobCtx.blobs, blobCtx.ownerSigs, {
-      uploader: fluxDriveClient,
+  // Content rides as ONE HPKE-sealed envelope — never plaintext in transit. Open it
+  // toward this node's per-app transport key and upload synchronously so it is
+  // durably stored before the spec is gossiped.
+  if (contentCtx) {
+    await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
+      ref: cleanContentHash, timestamp: cleanTimestamp,
     });
   }
 
@@ -1339,11 +1363,12 @@ async function updateAppGlobaly(params) {
  */
 /**
  * Authorize and run an app update from a parsed submission. Shared by the JSON
- * and multipart paths; the multipart path passes blobCtx so its content blobs
- * upload synchronously once the spec validates. res.json is sent here on
+ * and multipart paths; the multipart path passes contentCtx (the HPKE-sealed
+ * content envelope) so its content uploads synchronously once the spec validates.
+ * res.json is sent here on
  * success/unauthorized; validation failures throw to the caller's handler.
  */
-async function submitAppUpdate(req, res, processedBody, blobCtx) {
+async function submitAppUpdate(req, res, processedBody, contentCtx) {
   const authorized = await verificationHelper.verifyPrivilege('user', req);
   if (!authorized) {
     res.json(messageHelper.errUnauthorizedMessage());
@@ -1368,25 +1393,25 @@ async function submitAppUpdate(req, res, processedBody, blobCtx) {
     // flag; both are required to reconstruct the signed message and verify it.
     contentHash: processedBody.contentHash,
     extend: processedBody.extend,
-    blobCtx,
+    contentCtx,
   });
 
   res.json(messageHelper.createDataMessage(hash));
 }
 
 /**
- * Multipart update: parse the spec + content-blob parts, gate blob uploads to
- * arcane nodes, then run the shared update flow with the blobs.
+ * Multipart update: parse the spec + sealed content envelope, gate content uploads
+ * to arcane nodes, then run the shared update flow with the content.
  */
 async function handleMultipartAppUpdate(req, res) {
   try {
-    const { spec, blobs, ownerSigs } = await parseMultipartSubmission(req);
-    if (blobs.size > 0 && !globalState.isArcane()) {
-      throw new Error('Content blob uploads require an arcane node');
+    const { spec, content, ownerSigs } = await parseMultipartSubmission(req);
+    if (content && !globalState.isArcane()) {
+      throw new Error('Content uploads require an arcane node');
     }
     const processedBody = serviceHelper.ensureObject(spec);
-    const blobCtx = blobs.size > 0 ? { blobs, ownerSigs } : null;
-    await submitAppUpdate(req, res, processedBody, blobCtx);
+    const contentCtx = content ? { content, ownerSigs } : null;
+    await submitAppUpdate(req, res, processedBody, contentCtx);
   } catch (error) {
     log.warn(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -1478,17 +1503,19 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   const added = [...newNames].filter((n) => !oldNames.has(n));
   const kept = [...oldNames].filter((n) => newNames.has(n));
 
-  const soft = [];
-  const hard = [];
+  // A changed kept component keeps its volume when only non-storage fields differ;
+  // a storage change forces a volume recreate (the loop volume is resized).
+  const keepVolume = [];
+  const recreateVolume = [];
   for (const name of kept) {
     const oldComp = oldDeployment.getComponent(name);
     const newComp = newDeployment.getComponent(name);
     if (oldComp.equals(newComp)) {
       log.info(`Component ${name} of ${appName} unchanged, skipping`);
     } else if (oldComp.storage === newComp.storage) {
-      soft.push(name);
+      keepVolume.push(name);
     } else {
-      hard.push(name);
+      recreateVolume.push(name);
     }
   }
 
@@ -1496,18 +1523,18 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // versions down, so a broken update aborts (caught by reconcileApp, which releases
   // + hands off — no destroy) with the old versions still running. Manifest check
   // only — no pull, no transient disk cost.
-  for (const name of [...soft, ...hard, ...added]) {
+  for (const name of [...keepVolume, ...recreateVolume, ...added]) {
     const newComp = newDeployment.getComponent(name);
     // eslint-disable-next-line no-await-in-loop
     if (newComp) await componentProvisioner.verifyComponentImage(newComp);
   }
 
-  const toUninstall = [...removed, ...hard, ...soft];
+  const toUninstall = [...removed, ...recreateVolume, ...keepVolume];
   if (toUninstall.length > 0) {
     for (const name of toUninstall.reverse()) {
       const deployComp = oldDeployment.getComponent(name);
       if (!deployComp) continue;
-      const removeVolumes = removed.includes(name) || hard.includes(name);
+      const removeVolumes = removed.includes(name) || recreateVolume.includes(name);
       if (removeVolumes) {
         log.warn(`REMOVAL REASON: Reconciliation - ${deployComp.identifier} ${removed.includes(name) ? 'removed from spec' : 'storage changed'}`);
       }
@@ -1516,6 +1543,20 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
     }
+  }
+
+  // A kept-volume component keeps its old mount sources, so injected content the
+  // new spec dropped (a removed contentRef/contentSlot, or a slot left inside a
+  // still-mounted shared atomic dir) survives and would keep being served. Remove
+  // the orphaned injected files — only what was injected and no longer is, never
+  // owner data — before the containers come back up. recreateVolume wipes the
+  // whole volume already; removed components were fully uninstalled above.
+  for (const name of keepVolume) {
+    const oldComp = oldDeployment.getComponent(name);
+    const newComp = newDeployment.getComponent(name);
+    if (!oldComp || !newComp) continue;
+    // eslint-disable-next-line no-await-in-loop
+    await appVolumeService.removeOrphanedInjectedContent(oldComp, newComp);
   }
 
   const wireSpec = registrySpec.serialize();
@@ -1536,12 +1577,12 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     telemetryIdentityService.resyncAll();
   }
 
-  const toInstall = [...soft, ...hard, ...added];
+  const toInstall = [...keepVolume, ...recreateVolume, ...added];
   if (freshDeployment && toInstall.length > 0) {
     for (const name of toInstall) {
       const deployComp = freshDeployment.getComponent(name);
       if (!deployComp) continue;
-      const createVolumes = hard.includes(name) || added.includes(name);
+      const createVolumes = recreateVolume.includes(name) || added.includes(name);
       log.info(`Installing ${deployComp.identifier} (${createVolumes ? 'with' : 'without'} volumes)...`);
       // eslint-disable-next-line no-await-in-loop
       await componentProvisioner.installComponent(deployComp, {
