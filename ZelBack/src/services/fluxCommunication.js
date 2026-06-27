@@ -391,6 +391,30 @@ function announceToPeers(message, excludeKey) {
   peerManager.broadcastHash(messageHash, excludeKey);
 }
 
+async function handleContentManifestSyncResponse(message, peerKey) {
+  try {
+    if (!peerManager.isSyncRequested(peerKey)) return;
+    if (!message.data || message.data.type !== 'fluxappcontentmanifestsync') return;
+    const { messages, done } = message.data;
+    if (!Array.isArray(messages) || messages.length > 2500) return;
+    log.info(`handleContentManifestSyncResponse - Received ${messages.length} manifests from ${peerKey} (done: ${!!done})`);
+    // batchVerifyBroadcasts verifies the relaying node's envelope; storeBatchContentManifests
+    // then applies the manifest owner-sig + spec gate before storing (or quarantining) each.
+    const verified = await batchVerifyBroadcasts(messages, 'handleContentManifestSyncResponse');
+    if (verified.length > 0) {
+      const { stored } = await contentSlotService.storeBatchContentManifests(verified);
+      log.info(`handleContentManifestSyncResponse - Stored ${stored} of ${verified.length} verified manifests`);
+      fluxEventBus.publish('sync:chunkVerified', { syncType: 'appcontentmanifest', peer: peerKey, verified: verified.length, stored });
+    }
+    if (done) {
+      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appcontentmanifest', peerKey);
+      log.info('handleContentManifestSyncResponse - Sync complete');
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
 async function handleCheckMessageHashPresent(messageHash, fromIP, port) {
   try {
     // The filter, not the store: the question is whether this node already has the
@@ -785,12 +809,26 @@ const syncChunkQueues = new Map();
 // a peer signed what it sent is a statement about the peer and the deadline
 // waiting on it needs the answer at arrival, not at the back of a queue.
 async function processSyncChunk(msgObj, peerSocket) {
-  const handler = handlerFor(msgObj.data.type);
-  if (!handler) {
-    log.warn(`Unknown sync response type: ${msgObj.data.type}`);
-    return;
+  const { type } = msgObj.data;
+  switch (type) {
+    case 'fluxapptempsync':
+      await handleTempSyncResponse(msgObj, peerSocket);
+      break;
+    case 'fluxapprunningsync':
+      await handleAppRunningSyncResponse(msgObj, peerSocket);
+      break;
+    case 'fluxappinstallingsync':
+      await handleAppInstallingSyncResponse(msgObj, peerSocket);
+      break;
+    case 'fluxappinstallingerrorssync':
+      await handleAppInstallingErrorsSyncResponse(msgObj, peerSocket);
+      break;
+    case 'fluxappcontentmanifestsync':
+      await handleContentManifestSyncResponse(msgObj, peerKey);
+      break;
+    default:
+      log.warn(`Unknown sync response type: ${type}`);
   }
-  await handler(msgObj, peerSocket);
 }
 
 /**
@@ -1005,6 +1043,16 @@ peerManager.hashHandlers = {
     setImmediate(async () => {
       if (!await verifySyncRequest(peer, decoded)) return;
       fluxCommunicationMessagesSender.respondWithAppInstallingErrorsMessages(peer, decoded.sinceTimestamp);
+    });
+  },
+  handleAppContentManifestsRequest: (peer, decoded) => {
+    const now = Date.now();
+    const last = peer.lastAppContentManifestsSyncResponse || 0;
+    if (now - last < (config.fluxapps.syncResponseThrottleMs ?? 300000)) return;
+    peer.lastAppContentManifestsSyncResponse = now;
+    setImmediate(async () => {
+      if (!await verifySyncRequest(peer, decoded)) return;
+      fluxCommunicationMessagesSender.respondWithContentManifests(peer);
     });
   },
 };

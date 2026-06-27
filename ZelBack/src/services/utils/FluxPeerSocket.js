@@ -485,9 +485,14 @@ class FluxPeerSocket {
         return;
       }
 
-      // Around the gossip pipeline: these keep their arrival order.
-      if (isOrdered(msgObj.data?.type)) {
-        if (manager.syncResponseDispatcher && manager.isSyncResponseWanted(this)) {
+      // Route sync responses directly — bypass the gossip pipeline
+      const syncType = msgObj.data?.type;
+      if (syncType === 'fluxapptempsync'
+        || syncType === 'fluxapprunningsync'
+        || syncType === 'fluxappinstallingsync'
+        || syncType === 'fluxappinstallingerrorssync'
+        || syncType === 'fluxappcontentmanifestsync') {
+        if (manager.syncResponseDispatcher && manager.isSyncRequested(this.key)) {
           setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
           return;
         }
