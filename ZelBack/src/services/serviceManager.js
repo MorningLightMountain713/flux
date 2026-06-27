@@ -291,6 +291,14 @@ async function startFluxFunctions() {
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsBroadcasts), { 'data.name': 1, 'data.hash': 1, 'data.ip': 1 }, { unique: true });
     log.info('Signed app installing errors broadcasts collection prepared');
 
+    // Content-slot manifests: one row per app (unique appName — the atomic
+    // compare-and-set guard storeManifest relies on), plus a PARTIAL TTL that
+    // auto-reaps quarantined (unverified, confirmed:false) rows by their expireAt;
+    // confirmed rows carry no expireAt and persist.
+    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appContentManifests), { appName: 1 }, { name: 'appName', unique: true });
+    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appContentManifests), { expireAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { confirmed: false }, name: 'manifest_quarantine_ttl' });
+    log.info('App content manifests collection prepared');
+
     // This fixes an issue where the appsMessage db has NaN for valueSat. Once db is repaired on all nodes,
     // we can remove this.
     await appsMaintenance.repairNanInAppsMessagesDb();

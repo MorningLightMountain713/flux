@@ -20,6 +20,7 @@ const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
 const { extractIp, extractPort, parseSocketAddress, socketAddressesMatch } = require('./utils/socketAddressUtils');
 const registryManager = require('./appDatabase/registryManager');
+const contentSlotService = require('./appLifecycle/contentSlotService');
 const fluxEventBus = require('./utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
@@ -606,6 +607,8 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
           setImmediate(() => handleAppInstallingErrorMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxnodesigterm') {
           setImmediate(() => handleNodeSigtermMessage(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxappcontentmanifest') {
+          setImmediate(() => contentSlotService.handleIncomingManifest(msgObj));
         } else {
           log.warn(`Unrecognised message type of ${msgObj.data.type}`);
         }

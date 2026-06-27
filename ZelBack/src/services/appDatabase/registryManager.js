@@ -14,6 +14,7 @@ const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvi
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
 const { resolveStorageRefs } = require('../utils/fluxStorageRefs');
 const fluxEventBus = require('../utils/fluxEventBus');
+const contentSlotService = require('../appLifecycle/contentSlotService');
 const {
   SIGTERM_EXPIRY_MS,
   globalAppsInformation,
@@ -1262,6 +1263,11 @@ async function insertAppSpecifications(appSpecs) {
     if (existing && existing.height >= appSpecs.height) return true;
     await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, { upsert: true });
     fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
+    // Best-effort, decoupled from the hot path: now that this app's spec is known,
+    // promote any manifest we were holding quarantined for it (the non-running-node
+    // case, §9.2c). setImmediate isolates the benchmark-channel unseal from app-message
+    // processing; a failure is logged, never blocks or fails the spec store.
+    setImmediate(() => contentSlotService.promoteQuarantinedManifest(appSpecs.name).catch((e) => log.warn(`contentSlot: promote-on-confirm for ${appSpecs.name} failed - ${e.message ?? e}`)));
     await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsLocations, { name: appSpecs.name });
     await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsBroadcasts, { 'data.name': appSpecs.name });
     return true;
@@ -1281,6 +1287,11 @@ async function updateAppSpecifications(appSpecs) {
     if (!appInfo || appInfo.height >= appSpecs.height) return true;
     await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, { upsert: false });
     fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
+    // Best-effort, decoupled from the hot path: now that this app's spec is known,
+    // promote any manifest we were holding quarantined for it (the non-running-node
+    // case, §9.2c). setImmediate isolates the benchmark-channel unseal from app-message
+    // processing; a failure is logged, never blocks or fails the spec store.
+    setImmediate(() => contentSlotService.promoteQuarantinedManifest(appSpecs.name).catch((e) => log.warn(`contentSlot: promote-on-confirm for ${appSpecs.name} failed - ${e.message ?? e}`)));
     await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsLocations, { name: appSpecs.name });
     await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsBroadcasts, { 'data.name': appSpecs.name });
     return true;

@@ -5,6 +5,10 @@ const fluxDriveClient = require('../utils/fluxDriveClient');
 const { aeadEncrypt, aeadDecrypt } = require('../utils/aeadCrypto');
 
 const MAX_BLOB_BYTES = 2 * 1024 * 1024;
+// Upper bound on the single HPKE-sealed content envelope a submission carries (it
+// holds every blob's base64 ciphertext + the manifest). The per-blob 2 MB cap is
+// re-checked after the envelope is opened; this just bounds the transit payload.
+const MAX_CONTENT_BYTES = 64 * 1024 * 1024;
 const FRESHNESS_WINDOW_SECONDS = 300;
 
 function sha256Hex(input) {
@@ -53,6 +57,21 @@ async function encryptAndUploadBlob(blob, deps) {
     locator, appName, timestamp, arcaneSig, ownerSig, source,
   });
   return { locator };
+}
+
+/**
+ * Take the arcane (fleet anti-abuse) signature over an arbitrary message via the
+ * benchmark channel — the message-agnostic signer the blob upload already uses (the
+ * channel neither knows nor cares whether the message is a blob or a manifest token).
+ * Used by the manifest backstop PUT to sign sha256(appName:version:timestamp).
+ *
+ * @param {string} message - the message to sign (a sha256 hex digest)
+ * @param {object} [deps] - { benchmark? }
+ * @returns {Promise<string>} the base64 arcane signature
+ */
+async function signUploadMessage(message, deps = {}) {
+  const { benchmark = benchmarkService } = deps || {};
+  return benchmarkField(await benchmark.signBlobUpload({ message }), 'signature');
 }
 
 /**
@@ -266,12 +285,15 @@ async function fetchBlobFromPeer(peer, appName, locator, deps = {}) {
 module.exports = {
   encryptAndUploadBlob,
   encryptAndUploadBlobs,
+  signUploadMessage,
   decryptAndVerifyBlob,
   resolveBlob,
   provisionContentBlobs,
   serveBlob,
   fetchBlobFromPeer,
+  specContentHashes,
   sha256Hex,
   MAX_BLOB_BYTES,
+  MAX_CONTENT_BYTES,
   FRESHNESS_WINDOW_SECONDS,
 };
