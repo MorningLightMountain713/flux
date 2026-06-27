@@ -275,6 +275,30 @@ async function handleAppInstallingErrorsSyncResponse(message, peerKey) {
   }
 }
 
+async function handleContentManifestSyncResponse(message, peerKey) {
+  try {
+    if (!peerManager.isSyncRequested(peerKey)) return;
+    if (!message.data || message.data.type !== 'fluxappcontentmanifestsync') return;
+    const { messages, done } = message.data;
+    if (!Array.isArray(messages) || messages.length > 2500) return;
+    log.info(`handleContentManifestSyncResponse - Received ${messages.length} manifests from ${peerKey} (done: ${!!done})`);
+    // batchVerifyBroadcasts verifies the relaying node's envelope; storeBatchContentManifests
+    // then applies the manifest owner-sig + spec gate before storing (or quarantining) each.
+    const verified = await batchVerifyBroadcasts(messages, 'handleContentManifestSyncResponse');
+    if (verified.length > 0) {
+      const { stored } = await contentSlotService.storeBatchContentManifests(verified);
+      log.info(`handleContentManifestSyncResponse - Stored ${stored} of ${verified.length} verified manifests`);
+      fluxEventBus.publish('sync:chunkVerified', { syncType: 'appcontentmanifest', peer: peerKey, verified: verified.length, stored });
+    }
+    if (done) {
+      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appcontentmanifest', peerKey);
+      log.info('handleContentManifestSyncResponse - Sync complete');
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
 async function handleCheckMessageHashPresent(messageHash, fromIP, port) {
   try {
     if (!messageCache.has(messageHash)) {
@@ -670,6 +694,9 @@ async function processSyncChunk(msgObj, peerKey) {
     case 'fluxappinstallingerrorssync':
       await handleAppInstallingErrorsSyncResponse(msgObj, peerKey);
       break;
+    case 'fluxappcontentmanifestsync':
+      await handleContentManifestSyncResponse(msgObj, peerKey);
+      break;
     default:
       log.warn(`Unknown sync response type: ${type}`);
   }
@@ -775,6 +802,16 @@ peerManager.hashHandlers = {
     setImmediate(async () => {
       if (!await verifySyncRequest(peer, decoded)) return;
       fluxCommunicationMessagesSender.respondWithAppInstallingErrorsMessages(peer, decoded.sinceTimestamp);
+    });
+  },
+  handleAppContentManifestsRequest: (peer, decoded) => {
+    const now = Date.now();
+    const last = peer.lastAppContentManifestsSyncResponse || 0;
+    if (now - last < (config.fluxapps.syncResponseThrottleMs ?? 300000)) return;
+    peer.lastAppContentManifestsSyncResponse = now;
+    setImmediate(async () => {
+      if (!await verifySyncRequest(peer, decoded)) return;
+      fluxCommunicationMessagesSender.respondWithContentManifests(peer);
     });
   },
 };
