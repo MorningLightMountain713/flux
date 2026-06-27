@@ -43,6 +43,31 @@ async function openTransportEnvelope(appSpec, meta) {
   return JSON.parse(plaintext.toString('utf8'));
 }
 
+/**
+ * Open one CONTENT transport envelope — a sealed blob part or the sealed manifest —
+ * to its plaintext bytes, through the same split-HPKE path the spec uses. A content
+ * app is always encrypted (contentRef/contentSlot force it), so every content part
+ * arrives sealed toward the node's per-app transport key and is opened ONLY here:
+ * content is never in the clear in transit or to any relay. `ref` (the blob's
+ * plaintext contentHash, or `manifest:v<version>`) binds the AAD so a captured or
+ * mislabeled part can't be opened in another app/blob/version context.
+ *
+ * @param {object} sealed - TransportEnvelope JSON ({ algorithm, encapsulatedKey, nonce, ciphertext })
+ * @param {object} ctx - { appName, owner, ref, timestamp }
+ * @returns {Promise<Buffer>} plaintext bytes (blob content, or manifest JSON utf8)
+ * @throws {Error} with `.code` (DECRYPT_FAILED | MISSING_FIELD | INTERNAL_ERROR) for peer discipline
+ */
+async function openContentEnvelope(sealed, {
+  appName, owner, ref, timestamp,
+}) {
+  const { TransportEnvelope, buildContentTransportAad } = await getSpec();
+  const envelope = TransportEnvelope.fromJSON(sealed);
+  const aad = buildContentTransportAad({ appName, ref, timestamp });
+  const provider = await transportCryptoProvider.create(appName, owner);
+  return provider.open({ envelope, aad });
+}
+
 module.exports = {
   openTransportEnvelope,
+  openContentEnvelope,
 };

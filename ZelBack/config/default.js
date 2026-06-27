@@ -77,6 +77,7 @@ module.exports = {
         appStateEvents: 'appstateevents', // event log for running app state (apprunning, sigterm, appremoved, evicted)
         appsInstallingBroadcasts: 'fluxappinstallingbroadcasts', // stores signed appinstalling broadcasts for sync
         appsInstallingErrorsBroadcasts: 'fluxappinstallingerrorsbroadcasts', // stores signed appinstalling error broadcasts for sync
+        appContentManifests: 'appcontentmanifests', // latest owner-signed content-slot manifest per app (one doc per app, version-monotonic)
       },
     },
     marketplace: {
