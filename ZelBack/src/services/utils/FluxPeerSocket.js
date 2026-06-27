@@ -383,7 +383,8 @@ class FluxPeerSocket {
       if (syncType === 'fluxapptempsync'
         || syncType === 'fluxapprunningsync'
         || syncType === 'fluxappinstallingsync'
-        || syncType === 'fluxappinstallingerrorssync') {
+        || syncType === 'fluxappinstallingerrorssync'
+        || syncType === 'fluxappcontentmanifestsync') {
         if (manager.syncResponseDispatcher && manager.isSyncRequested(this.key)) {
           setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
           return;

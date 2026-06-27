@@ -1110,6 +1110,14 @@ class FluxPeerManager extends EventEmitter {
           }
           break;
         }
+        case peerCodec.MSG_TYPE.REQUEST_APP_CONTENT_MANIFESTS: {
+          const decoded = peerCodec.decodeSignedSyncRequest(buf);
+          if (!decoded) break;
+          if (this.hashHandlers?.handleAppContentManifestsRequest) {
+            this.hashHandlers.handleAppContentManifestsRequest(peer, decoded);
+          }
+          break;
+        }
         default:
           // Unknown type — ignore for forward compatibility
           break;
