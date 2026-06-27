@@ -751,6 +751,245 @@ describe('contentSlotService', () => {
       );
       sinon.assert.notCalled(apply);
     });
+
+    // A controllable timer harness: records timers, then fires them FIFO advancing a
+    // virtual clock by each delay (flushing the detached apply between).
+    function fakeScheduler(startMs = 0) {
+      const state = { t: startMs, timers: [] };
+      return {
+        now: () => state.t,
+        setTimer: (cb, ms) => { state.timers.push({ cb, ms }); },
+        timers: state.timers,
+        async run() {
+          while (state.timers.length) {
+            const { cb, ms } = state.timers.shift();
+            state.t += ms;
+            // eslint-disable-next-line no-await-in-loop
+            await cb();
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise((resolve) => { setImmediate(resolve); });
+          }
+        },
+      };
+    }
+    const dep = { componentEntries: () => [] };
+    const schedDeps = (sched, over = {}) => ({
+      getDeployment: async () => dep, getPeers: async () => [], now: sched.now, setTimer: sched.setTimer, ...over,
+    });
+
+    it('immediate rollout applies now, no timer', async () => {
+      const { service } = load();
+      const apply = sinon.spy();
+      const sched = fakeScheduler(1000);
+      await service.scheduleContentApplication(manifest({ rollout: { strategy: 'immediate' } }), { owner: '1id' }, schedDeps(sched, { apply }));
+      sinon.assert.calledOnce(apply);
+      expect(sched.timers.length).to.equal(0);
+    });
+
+    it('scheduled rollout defers to activateAt, then applies', async () => {
+      const { service } = load();
+      const apply = sinon.spy();
+      const sched = fakeScheduler(1000); // now = 1000ms
+      const m = manifest({ rollout: { strategy: 'scheduled', activateAt: 2 } }); // activateAt = 2000ms
+      await service.scheduleContentApplication(m, { owner: '1id' }, schedDeps(sched, { apply }));
+      expect(sched.timers.length).to.equal(1);
+      expect(sched.timers[0].ms).to.equal(1000); // activateAt - now
+      sinon.assert.notCalled(apply);
+      await sched.run();
+      sinon.assert.calledOnce(apply);
+    });
+
+    it('scheduled rollout already past activateAt applies immediately (catch-up)', async () => {
+      const { service } = load();
+      const apply = sinon.spy();
+      const sched = fakeScheduler(5000); // well past activateAt
+      const m = manifest({ rollout: { strategy: 'scheduled', activateAt: 2 } });
+      await service.scheduleContentApplication(m, { owner: '1id' }, schedDeps(sched, { apply }));
+      sinon.assert.calledOnce(apply);
+      expect(sched.timers.length).to.equal(0);
+    });
+
+    it('staggered rollout computes the ordinal slot at activateAt and applies after it', async () => {
+      const { service } = load();
+      const apply = sinon.spy();
+      const computeDelay = sinon.stub().resolves(5000); // this node's slot is 5s into the window
+      const sched = fakeScheduler(1000);
+      const m = manifest({ rollout: { strategy: 'staggered', activateAt: 2, staggerSeconds: 30 } });
+      await service.scheduleContentApplication(m, { owner: '1id', instances: 10 }, schedDeps(sched, { apply, computeDelay }));
+      expect(sched.timers.length).to.equal(1); // first a timer to activateAt
+      sinon.assert.notCalled(computeDelay); // slot is computed only when activateAt arrives (snapshot-at-activateAt)
+      await sched.run();
+      sinon.assert.calledOnce(computeDelay);
+      expect(computeDelay.firstCall.args.slice(0, 3)).to.deep.equal(['app', 10, 30]);
+      sinon.assert.calledOnce(apply);
+    });
+
+    it('staggered rollout past the whole window applies immediately (late joiner)', async () => {
+      const { service } = load();
+      const apply = sinon.spy();
+      const computeDelay = sinon.stub().resolves(5000);
+      const sched = fakeScheduler(40000); // past activateAt + staggerSeconds
+      const m = manifest({ rollout: { strategy: 'staggered', activateAt: 2, staggerSeconds: 30 } });
+      await service.scheduleContentApplication(m, { owner: '1id', instances: 10 }, schedDeps(sched, { apply, computeDelay }));
+      sinon.assert.calledOnce(apply);
+      sinon.assert.notCalled(computeDelay);
+      expect(sched.timers.length).to.equal(0);
+    });
+  });
+
+  describe('computeStaggerDelayMs', () => {
+    function staggerDeps(selfCollateral, locToCollateral) {
+      return {
+        getSelfAddress: async () => 'self:16127',
+        resolveCollateral: async (addr) => (addr === 'self:16127' ? selfCollateral : (locToCollateral[addr] || null)),
+        getLocations: async () => Object.keys(locToCollateral).map((ip) => ({ ip })),
+      };
+    }
+
+    it('orders instances by collateral txid and returns this node\'s evenly-spaced slot', async () => {
+      const { service } = load();
+      // sorted collaterals: aaaa,bbbb,cccc(self),dddd → i=2 of N=4 → (2/4)*40s
+      const deps = staggerDeps('cccc', { 'p1:16127': 'aaaa', 'p2:16127': 'bbbb', 'p3:16127': 'dddd' });
+      expect(await service.computeStaggerDelayMs('app', 4, 40, deps)).to.equal(20000);
+    });
+
+    it('returns 0 when this node\'s own collateral cannot be resolved (degenerate)', async () => {
+      const { service } = load();
+      const deps = staggerDeps(null, { 'p1:16127': 'aaaa' });
+      expect(await service.computeStaggerDelayMs('app', 4, 40, deps)).to.equal(0);
+    });
+
+    it('clamps N up to the observed count so a slot never exceeds the window', async () => {
+      const { service } = load();
+      // instances=2 but 4 observed (transient over-count): N=max(2,4)=4, self 'dddd' i=3 → (3/4)*40s
+      const deps = staggerDeps('dddd', { 'p1:16127': 'aaaa', 'p2:16127': 'bbbb', 'p3:16127': 'cccc' });
+      expect(await service.computeStaggerDelayMs('app', 2, 40, deps)).to.equal(30000);
+    });
+  });
+
+  describe('reconcileBootContent (boot before-start recovery)', () => {
+    const slotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => true }]] };
+    const noSlotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => false }]] };
+
+    it('is a no-op for an app with no content slots', async () => {
+      const { service } = load();
+      const provision = sinon.spy();
+      const schedule = sinon.spy();
+      await service.reconcileBootContent('app', { db: {}, getDeployment: async () => noSlotDeployment, provision, schedule });
+      sinon.assert.notCalled(provision);
+      sinon.assert.notCalled(schedule);
+    });
+
+    it('provisions the current content before start when the latest rollout is due', async () => {
+      const { service } = load();
+      const provision = sinon.spy();
+      const schedule = sinon.spy();
+      await service.reconcileBootContent('app', {
+        db: {},
+        getDeployment: async () => slotDeployment,
+        getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ rollout: { strategy: 'immediate' } }) } }),
+        getPeers: async () => ['p1'],
+        provision,
+        schedule,
+        now: () => 0,
+      });
+      sinon.assert.calledOnce(provision);
+      expect(provision.firstCall.args[0]).to.equal(slotDeployment);
+      expect(provision.firstCall.args[1]).to.deep.equal({ appName: 'app', peers: ['p1'] });
+      sinon.assert.notCalled(schedule);
+    });
+
+    it('does NOT apply a future-dated rollout early — re-arms it instead (on-disk content stays)', async () => {
+      const { service } = load();
+      const provision = sinon.spy();
+      const schedule = sinon.spy();
+      const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1000 } }); // 1000s, far future
+      await service.reconcileBootContent('app', {
+        db: {},
+        getDeployment: async () => slotDeployment,
+        getLatest: async () => ({ confirmed: true, data: { manifest: future } }),
+        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: { owner: '1id', instances: 3 } }),
+        provision,
+        schedule,
+        now: () => 0,
+        provider: fakeProvider(),
+      });
+      sinon.assert.notCalled(provision); // not applied early
+      sinon.assert.calledOnce(schedule); // re-armed to land at activateAt
+      expect(schedule.firstCall.args[0].rollout.strategy).to.equal('scheduled');
+    });
+
+    it('provisions a past-due rollout (activateAt passed during downtime) before start', async () => {
+      const { service } = load();
+      const provision = sinon.spy();
+      const schedule = sinon.spy();
+      const past = manifest({ rollout: { strategy: 'scheduled', activateAt: 1 } }); // 1s
+      await service.reconcileBootContent('app', {
+        db: {},
+        getDeployment: async () => slotDeployment,
+        getLatest: async () => ({ confirmed: true, data: { manifest: past } }),
+        getPeers: async () => [],
+        provision,
+        schedule,
+        now: () => 5000, // past activateAt
+      });
+      sinon.assert.calledOnce(provision);
+      sinon.assert.notCalled(schedule);
+    });
+
+    it('does NOT apply a still-quarantined future rollout early, nor re-arm it (unverified)', async () => {
+      const { service } = load();
+      const provision = sinon.spy();
+      const schedule = sinon.spy();
+      const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1000 } }); // 1000s
+      await service.reconcileBootContent('app', {
+        db: {},
+        getDeployment: async () => slotDeployment,
+        getLatest: async () => ({ confirmed: false, data: { manifest: future } }), // quarantined
+        provision,
+        schedule,
+        now: () => 0,
+      });
+      sinon.assert.notCalled(provision); // read from cleartext rollout regardless of confirmed -> never applied early
+      sinon.assert.notCalled(schedule); // unverified -> left for the normal confirm/gossip path
+    });
+
+    it('re-arms a surviving container\'s future rollout without re-provisioning its running mount', async () => {
+      const { service } = load();
+      const provision = sinon.spy();
+      const schedule = sinon.spy();
+      const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1000 } });
+      await service.reconcileBootContent('app', {
+        db: {},
+        getDeployment: async () => slotDeployment,
+        getLatest: async () => ({ confirmed: true, data: { manifest: future } }),
+        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: { owner: '1id', instances: 3 } }),
+        provision,
+        schedule,
+        now: () => 0,
+        provider: fakeProvider(),
+        restarting: false, // FluxOS process restart, container survived
+      });
+      sinon.assert.calledOnce(schedule); // re-armed (its in-memory timer died with the process)
+      sinon.assert.notCalled(provision); // running mount not re-written
+    });
+
+    it('does NOT re-provision a surviving container with a due rollout (re-arm-only on a process restart)', async () => {
+      const { service } = load();
+      const provision = sinon.spy();
+      const schedule = sinon.spy();
+      await service.reconcileBootContent('app', {
+        db: {},
+        getDeployment: async () => slotDeployment,
+        getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ rollout: { strategy: 'immediate' } }) } }),
+        provision,
+        schedule,
+        now: () => 0,
+        restarting: false,
+      });
+      sinon.assert.notCalled(provision);
+      sinon.assert.notCalled(schedule);
+    });
   });
 
   describe('fetchManifestFromPeers', () => {
