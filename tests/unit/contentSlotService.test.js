@@ -234,7 +234,8 @@ describe('contentSlotService', () => {
       expect(c.opts.upsert).to.equal(true);
       expect(c.update.$set.confirmed).to.equal(true);
       expect(c.update.$set.version).to.equal(2);
-      expect(c.update.$unset).to.deep.equal({ expireAt: '' });
+      // No broadcast → a catch-up body: clears the TTL AND any stale envelope it promotes over.
+      expect(c.update.$unset).to.deep.equal({ expireAt: '', envelope: '' });
     });
 
     it('quarantines an unverified manifest with a TTL (confirmed:false)', async () => {
@@ -262,15 +263,17 @@ describe('contentSlotService', () => {
         version: 1, timestamp: 7, pubKey: 'pk', signature: 'sig',
       });
       expect($set).to.not.have.property('manifest'); // body lives only at data.manifest
+      expect(db.calls[0].update.$unset).to.deep.equal({ expireAt: '' }); // envelope kept (a broadcast store)
     });
 
     it('stores a catch-up body as a bare data wrapper with no envelope (not boot-sync-servable)', async () => {
       const { service } = load();
       const db = fakeDb();
       await service.storeManifest(db, manifest());
-      const { $set } = db.calls[0].update;
+      const { $set, $unset } = db.calls[0].update;
       expect($set.data.manifest).to.deep.equal(manifest());
       expect($set).to.not.have.property('envelope');
+      expect($unset).to.have.property('envelope', ''); // clears any stale envelope it promotes over
     });
 
     it('maps a unique-index collision (stale version) to false', async () => {
@@ -878,7 +881,58 @@ describe('contentSlotService', () => {
       expect(stageApply.firstCall.args[1]).to.equal(fetched.plaintext);
     });
 
-    it('holds the install (throws) when no manifest is stored and no peer yields one', async () => {
+    it('falls back to the FluxDrive backstop when no running peer yields one (cold start)', async () => {
+      const { service } = load();
+      const provider = fakeProvider();
+      const store = sinon.spy();
+      const stageApply = sinon.spy();
+      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const fetchFromDrive = sinon.stub().resolves({ version: 2, manifest: sealed });
+
+      await service.provisionContentSlots(deployment(), { appName: 'app', peers: [] }, {
+        db: fakeDb(),
+        getApp: async () => info,
+        getLatest: async () => null,
+        fetchPeers: async () => null, // no running peer
+        fetchFromDrive,
+        store,
+        stageApply,
+        provider,
+        verify: () => true,
+      });
+
+      sinon.assert.calledOnce(fetchFromDrive);
+      // Stored as a catch-up body (no broadcast envelope from the FluxDrive backstop).
+      sinon.assert.calledWith(store, sinon.match.any, sealed);
+      sinon.assert.calledOnce(stageApply);
+      expect(stageApply.firstCall.args[1].slots).to.deep.equal(manifest().slots); // verified + opened
+    });
+
+    it('rejects a forged FluxDrive backstop manifest (re-verified, untrusted) and holds the install', async () => {
+      const { service } = load();
+      const provider = fakeProvider();
+      const stageApply = sinon.spy();
+      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const fetchFromDrive = sinon.stub().resolves({ version: 2, manifest: sealed });
+
+      await expectReject(
+        service.provisionContentSlots(deployment(), { appName: 'app', peers: [] }, {
+          db: fakeDb(),
+          getApp: async () => info,
+          getLatest: async () => null,
+          fetchPeers: async () => null,
+          fetchFromDrive,
+          store: sinon.spy(),
+          stageApply,
+          provider,
+          verify: () => false, // FluxDrive copy fails owner-sig verification -> dropped
+        }),
+        /no manifest available/,
+      );
+      sinon.assert.notCalled(stageApply);
+    });
+
+    it('holds the install (throws) when no manifest is stored, no peer, and FluxDrive 404s', async () => {
       const { service } = load();
       await expectReject(
         service.provisionContentSlots(deployment(), { appName: 'app', peers: [] }, {
@@ -886,10 +940,28 @@ describe('contentSlotService', () => {
           getApp: async () => info,
           getLatest: async () => null,
           fetchPeers: async () => null,
+          fetchFromDrive: async () => null, // FluxDrive has nothing either
           stageApply: sinon.spy(),
         }),
         /no manifest available/,
       );
+    });
+
+    it('holds the install when the FluxDrive backstop errors (unreachable/unconfigured -> treated as no manifest)', async () => {
+      const { service } = load();
+      const stageApply = sinon.spy();
+      await expectReject(
+        service.provisionContentSlots(deployment(), { appName: 'app', peers: [] }, {
+          db: fakeDb(),
+          getApp: async () => info,
+          getLatest: async () => null,
+          fetchPeers: async () => null,
+          fetchFromDrive: async () => { throw new Error('fluxdrive 502'); }, // swallowed -> fall through to hold
+          stageApply,
+        }),
+        /no manifest available/,
+      );
+      sinon.assert.notCalled(stageApply);
     });
 
     it('is a no-op for an app that declares no slots', async () => {
