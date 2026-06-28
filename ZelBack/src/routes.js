@@ -1160,6 +1160,9 @@ module.exports = (app) => {
   app.get('/apps/transportpubkey/:appname', asyncRoute((req, res) => {
     return cryptographicKeys.getTransportPublicKey(req, res);
   }));
+  app.post('/apps/bloblocator', asyncRoute((req, res) => {
+    return cryptographicKeys.getBlobLocator(req, res);
+  }));
 
   // POST PROTECTED API - FluxNode owner level
 
