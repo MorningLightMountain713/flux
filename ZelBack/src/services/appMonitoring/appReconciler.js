@@ -518,7 +518,7 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
   // restart that races the daemon's signal stage). Take no action while the LB
   // state holds — it self-expires at deadline+slack, and clear/expiry enqueue a
   // reconcile, so recovery resumes the moment the pipeline ends.
-  const appName = spec.comp.appName;
+  const { appName } = spec.comp;
   if (globalState.getAppLbState(appName)) return { desired: null, reason: 'shutdownPipeline' };
   // Only decider-owned components hold for a controller opinion: activeStandby
   // (the election decides which instance runs) and sync-before-start (the sync
@@ -1380,6 +1380,14 @@ async function reconcile(rawIdentifier) {
   const satisfiesRestart = pendingGeneration > ((startingState && startingState.actuatedRestartGeneration) || 0);
 
   await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.RECONCILER_BEFORE_START, identifier);
+  // condemned can also land during the awaits above (a cancel/expiry between this
+  // reconcile's entry-time condemned read and now). Re-read at actuation so a start never
+  // races a teardown's condemn — a container started here that the teardown then can't
+  // gracefully remove. The teardown drives its own removal, so aborting needs no retry.
+  if (await appsRuntimeState.isCondemned(identifier)) {
+    log.info(`appReconciler - ${identifier} condemned during reconcile, aborting start`);
+    return;
+  }
   // A decider writes its opinion outside this single-flight, so one may have been
   // written during the awaits above; starting on what this pass read would undo it
   // (a folder a decider has just stopped, or wiped). The writer's own enqueue
