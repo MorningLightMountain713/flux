@@ -362,7 +362,11 @@ async function handleExpiredApp(name) {
     log.warn(`REMOVAL REASON: App expired - ${name} update received after expiration (messageVerifier)`);
     // eslint-disable-next-line global-require
     const appUninstaller = require('../appLifecycle/appUninstaller');
-    await appUninstaller.uninstallApplication(name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
+    // background: at-tip cancel enforcement — the prelude condemns + removes the row
+    // fast; the destructive teardown runs deferred.
+    await appUninstaller.uninstallApplication(name, {
+      forceKill: true, skipGuard: true, broadcastRemoval: true, background: true,
+    });
   }
 }
 
@@ -444,7 +448,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
     // reads the cleartext components (DeploymentSpec.fromSpec), so an encrypted
     // (enterprise) spec must be decrypted first. Identity/lookups still use the
     // encrypted wire form (no decrypt needed).
-    const spec = instantiated.spec;
+    const { spec } = instantiated;
     const pricingSpec = instantiated.isEncrypted
       ? await resolveSpec(instantiated.serialize())
       : spec;
