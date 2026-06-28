@@ -965,7 +965,6 @@ describe('dockerService tests', () => {
 
   describe('appDockerCreate tests', () => {
     let dockerStub;
-    const appName = 'fluxwebsite';
     // Use the same path that dockerService will compute at runtime
     let volumeStub;
     const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
@@ -1118,6 +1117,44 @@ describe('dockerService tests', () => {
       const badComp = { testing: 'testing' };
 
       await expect(dockerService.appDockerCreate(badComp)).to.eventually.be.rejected;
+    });
+  });
+
+  describe('dockerPullStream (abortable pull + error propagation)', () => {
+    // The module's docker.modem is an instance of docker-modem's Modem; reach its prototype
+    // through a Dockerode instance so the stubs cover the module's docker without a direct
+    // (extraneous) docker-modem dependency.
+    const modemProto = Object.getPrototypeOf(new Dockerode().modem);
+
+    it('propagates a followProgress error to the callback (a failed pull is NOT reported as success)', (done) => {
+      const pullStub = sinon.stub(Dockerode.prototype, 'pull').callsFake((repoTag, opts, cb) => cb(null, 'STREAM'));
+      const followStub = sinon.stub(modemProto, 'followProgress').callsFake((stream, onFinished) => onFinished(new Error('layer download failed')));
+      dockerService.dockerPullStream({ repoTag: 'nginx:latest' }, null, (err) => {
+        try {
+          expect(err, 'the stream error reaches the callback, not a null success').to.be.an('error');
+          expect(err.message).to.include('layer download failed');
+          done();
+        } catch (assertErr) {
+          done(assertErr);
+        } finally {
+          pullStub.restore();
+          followStub.restore();
+        }
+      });
+    });
+
+    it('threads abortSignal onto the docker.pull options (abortable pull)', () => {
+      const pullStub = sinon.stub(Dockerode.prototype, 'pull').callsFake((repoTag, opts, cb) => cb(null, 'STREAM'));
+      const followStub = sinon.stub(modemProto, 'followProgress').callsFake((stream, onFinished) => onFinished(null, 'done'));
+      try {
+        const ac = new AbortController();
+        dockerService.dockerPullStream({ repoTag: 'nginx:latest', abortSignal: ac.signal }, null, sinon.stub());
+        expect(pullStub.calledOnce).to.be.true;
+        expect(pullStub.firstCall.args[1].abortSignal, 'abortSignal passed through to docker.pull').to.equal(ac.signal);
+      } finally {
+        pullStub.restore();
+        followStub.restore();
+      }
     });
   });
 });

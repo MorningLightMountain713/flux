@@ -160,4 +160,31 @@ describe('globalState tests', () => {
       expect(resolved).to.equal(true);
     });
   });
+
+  describe('in-flight install abort registry (cancel-vs-install)', () => {
+    it('installingApps is a Map', () => {
+      expect(globalState.installingApps).to.be.instanceOf(Map);
+    });
+
+    it('installAborted is false when no install is registered', () => {
+      expect(globalState.installAborted('app')).to.equal(false);
+    });
+
+    it('installAborted is false for a registered-but-not-aborted install', () => {
+      globalState.installingApps.set('app', new AbortController());
+      expect(globalState.installAborted('app')).to.equal(false);
+    });
+
+    it('abortInstall latches the signal so installAborted then reports true', () => {
+      const controller = new AbortController();
+      globalState.installingApps.set('app', controller);
+      expect(globalState.abortInstall('app'), 'aborted an in-flight install').to.equal(true);
+      expect(controller.signal.aborted, 'the signal latched').to.equal(true);
+      expect(globalState.installAborted('app'), 'observable from the install catch').to.equal(true);
+    });
+
+    it('abortInstall is a no-op (returns false) when nothing is in flight', () => {
+      expect(globalState.abortInstall('ghost')).to.equal(false);
+    });
+  });
 });
