@@ -1029,6 +1029,62 @@ async function backstopManifest(gossipManifest, ctx, deps = {}) {
 }
 
 /**
+ * Push the slot app's live locator set to FluxDrive after a content update, so the GC
+ * tombstones the now-superseded slot blobs (CONTENT_SLOTS §11; security scan N2/N4/F1).
+ * The owner reconcile-sig over sha256(appName:slot:version) rides the sealed content
+ * payload (frontend-produced at submission — the owner is online only then); the node
+ * mints the arcane sig over the same token. liveLocators are the current manifest's slot
+ * locators, derived over the benchmark channel exactly as resolveBlob/serveBlob derive
+ * them — the manifest carries every declared slot, so this is the FULL live set, not a
+ * delta. FluxDrive ADDS new locators + tombstones this app's other slot locators with
+ * grace (never blind-replace), gated by the per-(appName, 'slot') monotonic version floor,
+ * so a duplicate or stale push is an idempotent 409. Best-effort: a failed push leaves the
+ * superseded blobs pinned until the next update's reconcile (self-healing) or app death
+ * (lifecycle GC) — never fatal to the update.
+ *
+ * The first manifest (version 1, register) supersedes nothing — no prior version exists,
+ * and any earlier incarnation's blobs were already reclaimed by lifecycle GC at expiry — so
+ * it is skipped (it would also 404, the app not being in the confirmed feed at register).
+ *
+ * @param {object} plaintextManifest - the plaintext manifest (slots = { name: { hash } })
+ * @param {object} ctx - { appName, owner, version, reconcileSig }
+ * @param {object} deps - { benchmark?, deriveLocator?, sign?, reconcile? }
+ * @returns {Promise<boolean>} true if the push was sent
+ */
+async function reconcileSlots(plaintextManifest, ctx, deps = {}) {
+  const { appName, owner, version, reconcileSig } = ctx;
+  const {
+    benchmark,
+    deriveLocator = contentBlobService.deriveLocator,
+    sign = contentBlobService.signUploadMessage,
+    reconcile = fluxDriveClient.reconcile,
+  } = deps;
+  // No owner reconcile-sig (frontend didn't supply one) → can't authenticate the push; and
+  // the first version supersedes nothing.
+  if (!reconcileSig || Number(version) <= 1) return false;
+  try {
+    const liveLocators = [];
+    for (const slot of Object.values(plaintextManifest.slots || {})) {
+      if (!slot || !slot.hash) continue;
+      // eslint-disable-next-line no-await-in-loop
+      liveLocators.push(await deriveLocator(benchmark, { appName, fluxID: owner, contentHash: slot.hash }));
+    }
+    // Never push an empty live set — it would tombstone every slot blob. A slot app always
+    // declares at least one slot, so this only guards a malformed manifest.
+    if (!liveLocators.length) return false;
+    const token = sha256Hex(`${appName}:slot:${version}`);
+    const arcaneSig = await sign(token, { benchmark });
+    await reconcile(appName, {
+      source: 'slot', version, arcaneSig, ownerSig: reconcileSig, liveLocators,
+    });
+    return true;
+  } catch (error) {
+    log.warn(`contentSlot: slot reconcile push failed for ${appName} (superseded blobs reclaimed on the next update or at app death) - ${error.message ?? error}`);
+    return false;
+  }
+}
+
+/**
  * Process a standalone content-update submission (the already-JSON-parsed
  * POST /apps/contentupdate body). The whole content payload — the manifest (with
  * plaintext slot hashes) and every blob's bytes — arrives in ONE HPKE-sealed
@@ -1053,6 +1109,7 @@ async function submitContentUpdate(body, deps = {}) {
     uploader = fluxDriveClient,
     benchmark, now, verify, provider, schedule = scheduleContentApplication,
     backstop = backstopManifest,
+    reconcile = reconcileSlots,
   } = deps;
 
   const {
@@ -1075,7 +1132,9 @@ async function submitContentUpdate(body, deps = {}) {
     appName, owner, ref: `manifest:v${ver}`, timestamp: ts,
   });
   const payload = JSON.parse(plaintext.toString('utf8'));
-  const { manifest, blobs: blobsObj, manifestPutSig } = payload || {};
+  const {
+    manifest, blobs: blobsObj, manifestPutSig, reconcileSig,
+  } = payload || {};
   if (!manifest || !blobsObj) throw new Error('contentSlot: sealed content payload missing manifest or blobs');
   if (manifest.appName !== appName || manifest.version !== ver || manifest.timestamp !== ts) {
     throw new Error('contentSlot: content-update meta does not match the sealed manifest');
@@ -1099,6 +1158,13 @@ async function submitContentUpdate(body, deps = {}) {
   // rides the sealed payload (frontend-produced at submission); the node mints its arcane sig.
   await backstop(gossipManifest, {
     appName, version: ver, timestamp: ts, manifestPutSig,
+  }, { benchmark });
+
+  // Tell FluxDrive's GC the new live slot-locator set so the superseded blobs are
+  // reclaimed (CONTENT_SLOTS §11). Best-effort; the owner reconcile-sig rides the sealed
+  // payload, the node mints the arcane sig. Derives locators from the plaintext manifest.
+  await reconcile(manifest, {
+    appName, owner, version: ver, reconcileSig,
   }, { benchmark });
 
   // The submitter applies locally if it runs the app — gossip doesn't loop back.
@@ -1166,6 +1232,7 @@ module.exports = {
   submitContentUpdate,
   submitContentUpdateApi,
   backstopManifest,
+  reconcileSlots,
   canonicalManifest,
   verifyManifest,
   sealManifestSlots,

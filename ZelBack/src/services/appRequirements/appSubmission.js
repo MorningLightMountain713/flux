@@ -503,6 +503,14 @@ async function uploadSealedContent(spec, content, ownerSigs, { ref, timestamp })
       timestamp: payload.manifest.timestamp,
       manifestPutSig: payload.manifestPutSig,
     }, {});
+    // Reconcile the live slot-locator set with FluxDrive's GC so an update that supersedes
+    // slot content reclaims the old blobs (a no-op at register: version 1 supersedes nothing).
+    await contentSlotService.reconcileSlots(payload.manifest, {
+      appName: spec.name,
+      owner: spec.owner,
+      version: payload.manifest.version,
+      reconcileSig: payload.reconcileSig,
+    }, {});
   }
 
   return { payload, blobs };

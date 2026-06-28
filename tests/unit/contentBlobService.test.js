@@ -320,4 +320,26 @@ describe('contentBlobService', () => {
       expect(await fetchBlobFromPeer('1.2.3.4:16127', 'app', 'loc', { http })).to.equal(null);
     });
   });
+
+  describe('deriveLocator', () => {
+    const { deriveLocator } = contentBlobService;
+
+    it('unwraps the benchmark blobLocator reply for the given content hash', async () => {
+      const calls = [];
+      const benchmark = makeBenchmark({
+        blobLocator: async (ref) => { calls.push(ref); return ok({ locator: 'L'.repeat(64) }); },
+      });
+      const locator = await deriveLocator(benchmark, { appName: 'app', fluxID: '1id', contentHash: 'sha256:abc' });
+      expect(locator).to.equal('L'.repeat(64));
+      expect(calls).to.deep.equal([{ appName: 'app', fluxID: '1id', contentHash: 'sha256:abc' }]);
+    });
+
+    it('throws when the benchmark channel rejects the request', async () => {
+      const benchmark = makeBenchmark({ blobLocator: async () => ({ status: 'error' }) });
+      await expectReject(
+        deriveLocator(benchmark, { appName: 'app', fluxID: '1id', contentHash: 'sha256:abc' }),
+        /benchmark channel/,
+      );
+    });
+  });
 });
