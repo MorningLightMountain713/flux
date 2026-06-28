@@ -480,6 +480,10 @@ async function dependencyConditionMet(condition, identifier, actual) {
  * @returns {Promise<{desired: boolean|null, reason: string, force: boolean}>}
  */
 async function effectiveDesiredRunning(identifier, spec, exitCode) {
+  // condemned wins over everything: a being-torn-down component must stay stopped
+  // (the deferred teardown worker removes it once the reconciler has stopped it) and
+  // must never be started, even where the operator lock or a controller would run it.
+  if (await appsRuntimeState.isCondemned(identifier)) return { desired: false, reason: 'condemned' };
   const operatorStop = await appsRuntimeState.operatorStopState(identifier);
   if (operatorStop.stopped) return { desired: false, reason: 'operatorStopped', force: operatorStop.force };
   // A transient operation hold (backup/restore driving run-state through drive())
@@ -1086,7 +1090,11 @@ async function reconcile(rawIdentifier) {
   // loss window). Stop first - an rm -rf under a live container corrupts it - then
   // wipe, then drop the flag. The wipe path is keyed by the on-disk (flux-prefixed)
   // folder name, while the stop takes the bare id (dockerService re-prefixes).
-  if (dataDesired.get(identifier) === 'clear') {
+  // Skipped for a condemned component: the teardown is about to rm -rf its whole
+  // volume, so wiping the appdata first is pointless AND races the teardown's
+  // unmount (byte-level corruption). The condemned gate below stops it; the worker
+  // removes it and its volume.
+  if (dataDesired.get(identifier) === 'clear' && !(await appsRuntimeState.isCondemned(identifier))) {
     try {
       if (actual.running) {
         log.info(`appReconciler - ${identifier} stopping before local appdata clear`);
@@ -1131,11 +1139,19 @@ async function reconcile(rawIdentifier) {
 
   if (!desired) {
     if (actual.running) {
-      // A hard kill skips the graceful shutdown window, and only an operator asks
-      // for one - every other stop reason is a drain. The flag arrives with the
-      // decision that read it, from the same document and the same read as the
-      // lock itself, so there is no second read here to disagree with the first.
-      const forceKill = force === true;
+      // A hard-kill skips the graceful shutdown window: an operator stop carrying the
+      // durable operatorStopForce, or a condemned-with-force (operator hard-cancel,
+      // durable condemnedForce). Every other stop (controllerDesired, policy, a
+      // graceful condemn) is a graceful appDockerStop.
+      //
+      // The operator's flag arrives with the decision that read it, from the same
+      // document and the same read as the lock itself, so there is no second read on
+      // that path to disagree with the first. Only a condemn needs one, because the
+      // condemned stamp carries its mode in a field the lock read does not return.
+      const condemnedState = reason === 'condemned' ? await appsRuntimeState.getState(identifier) : null;
+      const forceKill = reason === 'condemned'
+        ? !!(condemnedState && condemnedState.condemnedForce)
+        : force === true;
       log.info(`appReconciler - ${identifier} desired stopped, ${forceKill ? 'killing' : 'stopping'}`);
       if (forceKill) {
         await dockerService.appDockerKill(identifier);
