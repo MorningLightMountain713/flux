@@ -7,6 +7,9 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
+const transportHelper = require('../../ZelBack/src/services/utils/transportHelper');
+const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
 describe('cryptographicKeys tests', () => {
   let req;
@@ -443,6 +446,109 @@ describe('cryptographicKeys tests', () => {
       await callGetPublicKey(req, res, '{invalid json}');
 
       sinon.assert.calledOnce(res.json);
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+    });
+  });
+
+  describe('getBlobLocator tests', () => {
+    const CALLER = '1CallerZelidXXXXXXXXXXXXXXXXXXXXXXX';
+    const HASH = `sha256:${'a'.repeat(64)}`;
+
+    // Stub the full happy path: a logged-in arcane caller, a sealed payload that opens
+    // to a valid contentHash, and a derived locator. ensureObject is called twice — the
+    // zelidauth header, then the decrypted payload.
+    const stubHappyPath = () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      const ensureObjectStub = sinon.stub(serviceHelper, 'ensureObject');
+      ensureObjectStub.onFirstCall().returns({ zelid: CALLER }); // zelidauth header
+      ensureObjectStub.onSecondCall().returns({ contentHash: HASH }); // decrypted payload
+      sinon.stub(specLibs, 'getSpec').resolves({ CONTENT_LOCATOR_AAD_REF: 'bloblocator' });
+      sinon.stub(transportHelper, 'openContentEnvelope').resolves(Buffer.from(JSON.stringify({ contentHash: HASH })));
+      sinon.stub(contentBlobService, 'deriveLocator').resolves('derived-locator');
+      sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
+      sinon.stub(messageHelper, 'createErrorMessage').callsFake((msg) => ({ status: 'error', data: { message: msg } }));
+      sinon.stub(messageHelper, 'errUnauthorizedMessage').returns({ status: 'error', data: { code: 401 } });
+    };
+
+    it('derives the locator for the AUTHENTICATED caller, never a fluxID the body names', async () => {
+      stubHappyPath();
+      req.headers.zelidauth = { zelid: CALLER, signature: 's', loginPhrase: 'p' };
+      // The body even tries to name a victim fluxID — it must be ignored.
+      req.body = {
+        appName: 'myapp', timestamp: 1700000000, sealed: { algorithm: 'x' }, fluxID: '1VICTIMzelidYYYYYYYYYYYYYYYYYYYYYYY',
+      };
+
+      await cryptographicKeys.getBlobLocator(req, res);
+
+      const deriveArgs = contentBlobService.deriveLocator.firstCall.args[1];
+      expect(deriveArgs).to.deep.equal({ appName: 'myapp', fluxID: CALLER, contentHash: HASH });
+      sinon.assert.calledOnce(res.json);
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+      expect(res.json.firstCall.args[0].data).to.deep.equal({ locator: 'derived-locator' });
+    });
+
+    it('opens the sealed payload with the locator AAD ref toward the caller identity', async () => {
+      stubHappyPath();
+      req.headers.zelidauth = { zelid: CALLER };
+      req.body = { appName: 'myapp', timestamp: 1700000000, sealed: { algorithm: 'x' } };
+
+      await cryptographicKeys.getBlobLocator(req, res);
+
+      const openArgs = transportHelper.openContentEnvelope.firstCall.args[1];
+      expect(openArgs).to.include({
+        appName: 'myapp', owner: CALLER, ref: 'bloblocator', timestamp: 1700000000,
+      });
+    });
+
+    it('returns unauthorized when the user session is invalid', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
+      sinon.stub(messageHelper, 'errUnauthorizedMessage').returns({ status: 'error', data: { code: 401 } });
+      req.body = { appName: 'a', timestamp: 1, sealed: {} };
+
+      await cryptographicKeys.getBlobLocator(req, res);
+
+      sinon.assert.calledOnce(res.json);
+      expect(res.json.firstCall.args[0].data.code).to.equal(401);
+    });
+
+    it('errors on a non-arcane node', async () => {
+      globalState.isArcane.returns(false);
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      sinon.stub(messageHelper, 'createErrorMessage').callsFake((msg) => ({ status: 'error', data: { message: msg } }));
+      req.body = { appName: 'a', timestamp: 1, sealed: {} };
+
+      await cryptographicKeys.getBlobLocator(req, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+      expect(res.json.firstCall.args[0].data.message).to.include('arcane');
+    });
+
+    it('rejects a sealed payload that does not carry a valid contentHash', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      const ensureObjectStub = sinon.stub(serviceHelper, 'ensureObject');
+      ensureObjectStub.onFirstCall().returns({ zelid: CALLER });
+      ensureObjectStub.onSecondCall().returns({ contentHash: 'not-a-hash' });
+      sinon.stub(specLibs, 'getSpec').resolves({ CONTENT_LOCATOR_AAD_REF: 'bloblocator' });
+      sinon.stub(transportHelper, 'openContentEnvelope').resolves(Buffer.from('{}'));
+      sinon.stub(messageHelper, 'createErrorMessage').callsFake((msg) => ({ status: 'error', data: { message: msg } }));
+      req.headers.zelidauth = { zelid: CALLER };
+      req.body = { appName: 'a', timestamp: 1, sealed: { x: 1 } };
+
+      await cryptographicKeys.getBlobLocator(req, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+      expect(res.json.firstCall.args[0].data.message).to.include('sha256');
+    });
+
+    it('errors when required fields are missing', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      sinon.stub(serviceHelper, 'ensureObject').returns({ zelid: CALLER });
+      sinon.stub(messageHelper, 'createErrorMessage').callsFake((msg) => ({ status: 'error', data: { message: msg } }));
+      req.headers.zelidauth = { zelid: CALLER };
+      req.body = { appName: 'a' }; // missing timestamp + sealed
+
+      await cryptographicKeys.getBlobLocator(req, res);
+
       expect(res.json.firstCall.args[0].status).to.equal('error');
     });
   });
