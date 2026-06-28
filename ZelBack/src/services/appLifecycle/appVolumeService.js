@@ -2,21 +2,20 @@ const config = require('config');
 const fs = require('node:fs/promises');
 const util = require('util');
 const path = require('node:path');
-const df = require('node-df');
-const nodecmd = require('node-cmd');
 const systemcrontab = require('crontab');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const messageHelper = require('../messageHelper');
-const hwRequirements = require('../appRequirements/hwRequirements');
-const resourceQueryService = require('../appQuery/resourceQueryService');
+const deviceHelper = require('../deviceHelper');
 const syncthingService = require('../syncthingService');
+const { withHostMutationLock } = require('../utils/hostMutationLock');
+const appsRuntimeState = require('../appManagement/appsRuntimeState');
+const pendingTeardownStore = require('./pendingTeardownStore');
 const log = require('../../lib/log');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
 const appsFolder = `${appsFolderPath}/`;
-const cmdAsync = util.promisify(nodecmd.run);
 const crontabLoad = util.promisify(systemcrontab.load);
 
 function emitStatus(res, status) {
@@ -28,68 +27,28 @@ function emitStatus(res, status) {
 }
 
 async function createAppVolume(deployComp, res, test = false) {
-  const dfAsync = util.promisify(df);
-  const identifier = deployComp.identifier;
+  const { identifier } = deployComp;
   const appId = dockerService.getAppIdentifier(identifier);
   const effectiveHdd = test ? 2 : deployComp.storage;
 
   emitStatus(res, { status: 'Searching available space...' });
 
-  const dfOptions = {
-    prefixMultiplier: 'GB',
-    isDisplayPrefixMultiplier: false,
-    precision: 0,
-  };
-
-  const dfres = await dfAsync(dfOptions);
-  const okVolumes = [];
-  dfres.forEach((volume) => {
-    if (volume.filesystem.includes('/dev/') && !volume.filesystem.includes('loop') && !volume.mount.includes('boot')) {
-      okVolumes.push(volume);
-    } else if (volume.filesystem.includes('loop') && volume.mount === '/') {
-      okVolumes.push(volume);
-    }
-  });
-
-  const nodeSpecs = await hwRequirements.getNodeSpecs();
-  const totalSpaceOnNode = nodeSpecs.ssdStorage;
-  const useableSpaceOnNode = totalSpaceOnNode * 0.95 - config.lockedSystemResources.hdd - config.lockedSystemResources.extrahdd;
-  const resourcesLocked = await resourceQueryService.appsResources();
-  if (resourcesLocked.status !== 'success') {
-    throw new Error('Unable to obtain locked system resources by Flux App. Aborting.');
-  }
-  const hddLockedByApps = resourcesLocked.data.appsHddLocked;
-  // Add this app's own reservation back (appsHddLocked already counts it) so the
-  // check measures free space as if it weren't yet reserved. Use the full host-disk
-  // reservation to stay consistent with resourceQueryService.appsResources.
-  const availableSpaceForApps = useableSpaceOnNode - hddLockedByApps + deployComp.reservableHostDiskGb();
-  if (effectiveHdd >= availableSpaceForApps) {
-    throw new Error('Insufficient space on Flux Node to spawn an application');
-  }
-
-  let usedSpace = 0;
-  let availableSpace = 0;
-  okVolumes.forEach((volume) => {
-    usedSpace += serviceHelper.ensureNumber(volume.used);
-    availableSpace += serviceHelper.ensureNumber(volume.available);
-  });
-  const fluxSystemReserve = config.lockedSystemResources.hdd + config.lockedSystemResources.extrahdd - usedSpace > 0
-    ? config.lockedSystemResources.hdd + config.lockedSystemResources.extrahdd - usedSpace : 0;
-  const minSystemReserve = Math.max(config.lockedSystemResources.extrahdd, fluxSystemReserve);
-  const totalAvailableSpaceLeft = availableSpace - minSystemReserve;
-  if (effectiveHdd >= totalAvailableSpaceLeft) {
-    throw new Error('Insufficient space on Flux Node. Space is already assigned to system files');
-  }
-
-  let useThisVolume = null;
-  for (let i = 0; i < okVolumes.length; i += 1) {
-    if (okVolumes[i].available > effectiveHdd + minSystemReserve) {
-      useThisVolume = okVolumes[i];
-      break;
-    }
-  }
-  if (!useThisVolume) {
-    throw new Error('Insufficient space on Flux Node. No useable volume found.');
+  // The FLUXFSVOL loop file MUST live on the filesystem that hosts the apps folder — on
+  // Arcane that is /dat (the encrypted data partition), on legacy whatever FLUX_APPS_FOLDER
+  // resolves to; NEVER the root/overlay disk. Resolve that one filesystem directly
+  // (findmnt --target the apps folder) instead of scanning every mount and guessing — the
+  // old node-df scan could land a small app on /mnt/root. Logical resource admission
+  // already ran (admissionControl.checkNodeResources, before createAppVolume is reached),
+  // so this only confirms the chosen disk physically has room (a small reserve keeps the
+  // system off a disk with no headroom). mkdir the apps base first so findmnt can resolve
+  // its mountpoint on a fresh node.
+  const bytesPerGb = 1024 ** 3;
+  const needBytes = effectiveHdd * bytesPerGb;
+  const reserveBytes = config.lockedSystemResources.extrahdd * bytesPerGb;
+  await serviceHelper.runCommand('mkdir', { params: ['-p', appsFolderPath], runAsRoot: true });
+  const useThisVolume = await deviceHelper.mountForTarget(appsFolderPath);
+  if (useThisVolume.availableBytes < needBytes + reserveBytes) {
+    throw new Error(`Insufficient space on ${useThisVolume.target} for ${identifier}: needs ${effectiveHdd}GB + reserve, ${Math.floor(useThisVolume.availableBytes / bytesPerGb)}GB free`);
   }
 
   emitStatus(res, { status: 'Space found' });
@@ -98,31 +57,48 @@ async function createAppVolume(deployComp, res, test = false) {
     emitStatus(res, { status: 'Allocating space...' });
 
     let volumeFile;
-    if (useThisVolume.mount === '/') {
-      await cmdAsync(`sudo mkdir -p ${fluxDirPath}appvolumes`);
+    if (useThisVolume.target === '/') {
+      await serviceHelper.runCommand('mkdir', { params: ['-p', `${fluxDirPath}appvolumes`], runAsRoot: true });
       volumeFile = `${fluxDirPath}appvolumes/${appId}FLUXFSVOL`;
     } else {
-      volumeFile = `${useThisVolume.mount}/${appId}FLUXFSVOL`;
+      volumeFile = `${useThisVolume.target}/${appId}FLUXFSVOL`;
     }
 
-    await cmdAsync(`sudo fallocate -l ${effectiveHdd}G ${volumeFile}`);
-    emitStatus(res, { status: 'Space allocated' });
-
-    emitStatus(res, { status: 'Creating filesystem...' });
-    await cmdAsync(`sudo mke2fs -t ext4 ${volumeFile}`);
-    emitStatus(res, { status: 'Filesystem created' });
-
-    emitStatus(res, { status: 'Making directory...' });
-    await cmdAsync(`sudo mkdir -p ${appsFolder + appId}`);
-    emitStatus(res, { status: 'Directory made' });
-
-    emitStatus(res, { status: 'Mounting volume...' });
+    // The @reboot remount command, hoisted out of the locked region below so the crontab
+    // step (which runs outside the lock) can use it.
     const execMount = `while [ ! -f ${volumeFile} ]; do sleep 5; done && sudo mount -o loop ${volumeFile} ${appsFolder + appId}`;
-    await cmdAsync(`sudo mount -o loop ${volumeFile} ${appsFolder + appId}`);
-    emitStatus(res, { status: 'Volume mounted' });
+
+    // Build the loop-mounted FLUXFSVOL under the node-wide host-mutation lock — the same
+    // lock a same-app cancel's teardown holds for its umount + rm -rf of this volume.
+    // Without it, a register racing a cancel could mke2fs a volume the teardown is mid
+    // rm -rf'ing (byte-level corruption). Re-check condemned/teardown-owed at the top of
+    // the locked region: if the cancel won the lock first, abort rather than recreate a
+    // volume its teardown already passed (componentProvisioner's pre-create backstop
+    // covers the reverse order). These are bounded host ops (seconds) — the same class
+    // the teardown holds the lock across — so the lock's no-unbounded-wait rule holds;
+    // createAppVolume's only caller is a bare call, so it never nests the lock.
+    await withHostMutationLock(async () => {
+      if (await appsRuntimeState.isCondemned(identifier) || await pendingTeardownStore.teardownOwedFor(deployComp.appName)) {
+        throw new Error(`createAppVolume of ${identifier} aborted: a removal/cancel of ${deployComp.appName} arrived before volume creation`);
+      }
+      await serviceHelper.runCommand('fallocate', { params: ['-l', `${effectiveHdd}G`, volumeFile], runAsRoot: true });
+      emitStatus(res, { status: 'Space allocated' });
+
+      emitStatus(res, { status: 'Creating filesystem...' });
+      await serviceHelper.runCommand('mke2fs', { params: ['-t', 'ext4', volumeFile], runAsRoot: true });
+      emitStatus(res, { status: 'Filesystem created' });
+
+      emitStatus(res, { status: 'Making directory...' });
+      await serviceHelper.runCommand('mkdir', { params: ['-p', appsFolder + appId], runAsRoot: true });
+      emitStatus(res, { status: 'Directory made' });
+
+      emitStatus(res, { status: 'Mounting volume...' });
+      await serviceHelper.runCommand('mount', { params: ['-o', 'loop', volumeFile, appsFolder + appId], runAsRoot: true });
+      emitStatus(res, { status: 'Volume mounted' });
+    });
 
     emitStatus(res, { status: 'Creating appdata directory...' });
-    await cmdAsync(`sudo mkdir -p ${appsFolder + appId}/appdata`);
+    await serviceHelper.runCommand('mkdir', { params: ['-p', `${appsFolder + appId}/appdata`], runAsRoot: true });
     emitStatus(res, { status: 'Appdata directory created' });
 
     emitStatus(res, { status: 'Making application data directories and files...' });
@@ -194,17 +170,18 @@ async function createAppVolume(deployComp, res, test = false) {
     clearInterval(global.allocationInterval);
     clearInterval(global.verificationInterval);
     emitStatus(res, { status: 'ERROR OCCURED: Pre-removal cleaning...' });
-    await cmdAsync(`sudo umount ${appsFolder + appId}`).catch(() => {
+    const umountResult = await serviceHelper.runCommand('umount', { params: [appsFolder + appId], runAsRoot: true, logError: false });
+    if (umountResult.error) {
       log.warn('Volume not mounted or already unmounted during cleanup');
-    });
+    }
     let volumeFilePath;
-    if (useThisVolume.mount === '/') {
+    if (useThisVolume.target === '/') {
       volumeFilePath = `${fluxDirPath}appvolumes/${appId}FLUXFSVOL`;
     } else {
-      volumeFilePath = `${useThisVolume.mount}/${appId}FLUXFSVOL`;
+      volumeFilePath = `${useThisVolume.target}/${appId}FLUXFSVOL`;
     }
-    await cmdAsync(`sudo rm -rf ${volumeFilePath}`).catch((e) => log.error(e));
-    await cmdAsync(`sudo rm -rf ${appsFolder + appId}`).catch((e) => log.error(e));
+    await serviceHelper.runCommand('rm', { params: ['-rf', volumeFilePath], runAsRoot: true });
+    await serviceHelper.runCommand('rm', { params: ['-rf', appsFolder + appId], runAsRoot: true });
     emitStatus(res, { status: 'Pre-removal cleaning completed. Forcing removal.' });
     throw error;
   }
