@@ -377,7 +377,7 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
   // restart that races the daemon's signal stage). Take no action while the LB
   // state holds — it self-expires at deadline+slack, and clear/expiry enqueue a
   // reconcile, so recovery resumes the moment the pipeline ends.
-  const appName = spec.comp.appName;
+  const { appName } = spec.comp;
   if (globalState.getAppLbState(appName)) return { desired: null, reason: 'shutdownPipeline' };
   // Only decider-owned components hold for a controller opinion: activeStandby
   // (the election decides which instance runs) and sync-before-start (the sync
@@ -753,6 +753,15 @@ async function reconcile(rawIdentifier) {
   // enqueue drives the follow-up reconcile, so aborting here needs no retry.
   if ((spec.comp.hasActiveStandbySyncthing() || spec.comp.requiresSyncBeforeStart()) && controllerDesired.get(identifier) !== 'running') {
     log.info(`appReconciler - ${identifier} controller verdict changed during reconcile, aborting start`);
+    return;
+  }
+
+  // condemned can also land during the awaits above (a cancel/expiry between this
+  // reconcile's entry-time condemned read and now). Re-read at actuation so a start never
+  // races a teardown's condemn — a container started here that the teardown then can't
+  // gracefully remove. The teardown drives its own removal, so aborting needs no retry.
+  if (await appsRuntimeState.isCondemned(identifier)) {
+    log.info(`appReconciler - ${identifier} condemned during reconcile, aborting start`);
     return;
   }
 

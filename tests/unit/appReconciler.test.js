@@ -482,6 +482,14 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
+    it('aborts the start when condemned lands mid-reconcile (actuation-time re-read)', async () => {
+      // not condemned at the entry gate, but condemned by the time we re-read at actuation
+      stubs.appsRuntimeState.isCondemned.onCall(0).resolves(false);
+      stubs.appsRuntimeState.isCondemned.onCall(1).resolves(true);
+      await appReconciler.reconcile('www_App'); // a stopped component that would otherwise start
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
     it('starts a stopped plain component that should run (default always policy)', async () => {
       await appReconciler.reconcile('www_App');
       expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
