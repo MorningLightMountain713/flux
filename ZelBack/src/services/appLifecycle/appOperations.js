@@ -261,7 +261,7 @@ async function redeployComponent(appName, componentName, options = {}) {
   // A successful whole-app redeploy loops uninstall/installComponent (no
   // app-level install/remove lease), so this app-scoped lease is the only
   // registry record of an in-flight redeploy.
-  operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
+  const redeployToken = operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
 
   try {
     const deployment = await deploymentProvider.getInstalledDeployment(appName);
@@ -303,7 +303,7 @@ async function redeployComponent(appName, componentName, options = {}) {
     });
 
     status(`Component ${deployComp.identifier} ${label} complete`);
-    operationRegistry.release(appName);
+    operationRegistry.release(appName, redeployToken);
     appReconciler.enqueue(appName);
   } catch (error) {
     log.error(error);
@@ -313,7 +313,7 @@ async function redeployComponent(appName, componentName, options = {}) {
     // has-run app degrades to down + retry; only a never-ran one is removed. No
     // direct uninstall, no fleet-wide removal broadcast over a bad update.
     log.warn(`${label} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
-    operationRegistry.release(appName);
+    operationRegistry.release(appName, redeployToken);
     appReconciler.enqueue(appName);
   }
 }
@@ -345,7 +345,7 @@ async function redeployApplication(appName, options = {}) {
   const leaseType = createVolumes ? 'hardRedeploy' : 'softRedeploy';
   // See redeployComponent: the success path loops uninstall/installComponent
   // (no app-level install/remove lease), so this is the sole registry record.
-  operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
+  const redeployToken = operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
 
   try {
     const deployment = await deploymentProvider.getInstalledDeployment(appName);
@@ -423,14 +423,14 @@ async function redeployApplication(appName, options = {}) {
     }
 
     status(`Application ${appName} ${label} complete`);
-    operationRegistry.release(appName);
+    operationRegistry.release(appName, redeployToken);
     appReconciler.enqueue(appName);
   } catch (error) {
     log.error(error);
     // See redeployComponent: never destroy on a redeploy failure — hand recovery to
     // the reconciler (the §14.5 gate decides down-vs-remove on the rebuild attempt).
     log.warn(`${label} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
-    operationRegistry.release(appName);
+    operationRegistry.release(appName, redeployToken);
     appReconciler.enqueue(appName);
   }
 }
@@ -788,6 +788,8 @@ async function promoteApplicationToPrimary(appname, appId) {
 async function appendBackupTask(req, res) {
   let appname;
   let backup;
+  // Hoisted so the catch releases ONLY a lease this call acquired (null = no-op).
+  let taskToken = null;
   try {
     const processedBody = serviceHelper.ensureObject(req.body);
     log.info(processedBody);
@@ -816,7 +818,7 @@ async function appendBackupTask(req, res) {
     if (authorized === true) {
       // backup is an app-scoped lease on the same key as install/remove/
       // reconcile, so it's mutually exclusive with them (no feature carve-out).
-      operationRegistry.acquire(appname, 'backup', 'appOperations', `backup ${appname}`);
+      taskToken = operationRegistry.acquire(appname, 'backup', 'appOperations', `backup ${appname}`);
       const backupDeployment = await deploymentProvider.getInstalledDeployment(appname);
       const hasSyncthing = backupDeployment && backupDeployment.componentEntries().some(([, comp]) => comp.hasSyncthing());
       if (hasSyncthing) {
@@ -869,7 +871,7 @@ async function appendBackupTask(req, res) {
       }
       await sendChunk(res, 'Finalizing...\n');
       await serviceHelper.delay(5 * 1000);
-      operationRegistry.release(appname);
+      operationRegistry.release(appname, taskToken);
       res.end();
       return true;
       // eslint-disable-next-line no-else-return
@@ -879,7 +881,7 @@ async function appendBackupTask(req, res) {
     }
   } catch (error) {
     log.error(error);
-    operationRegistry.release(appname);
+    operationRegistry.release(appname, taskToken);
     await sendChunk(res, `${error?.message}\n`);
     res.end();
     return false;
@@ -898,6 +900,8 @@ async function appendRestoreTask(req, res) {
   let appname;
   let restore;
   let type;
+  // Hoisted so the catch releases ONLY a lease this call acquired (null = no-op).
+  let taskToken = null;
   try {
     const processedBody = serviceHelper.ensureObject(req.body);
     log.info(processedBody);
@@ -929,7 +933,7 @@ async function appendRestoreTask(req, res) {
       const componentItem = restore.map((restoreItem) => restoreItem);
       // restore is an app-scoped lease on the same key as backup/install/
       // remove/reconcile.
-      operationRegistry.acquire(appname, 'restore', 'appOperations', `restore ${appname}`);
+      taskToken = operationRegistry.acquire(appname, 'restore', 'appOperations', `restore ${appname}`);
       const restoreDeployment = await deploymentProvider.getInstalledDeployment(appname);
       const restoreHasSyncthing = restoreDeployment && restoreDeployment.componentEntries().some(([, comp]) => comp.hasSyncthing());
       if (restoreHasSyncthing) {
@@ -1023,7 +1027,7 @@ async function appendRestoreTask(req, res) {
       }
       await sendChunk(res, 'Finalizing...\n');
       await serviceHelper.delay(5 * 1000);
-      operationRegistry.release(appname);
+      operationRegistry.release(appname, taskToken);
       res.end();
       return true;
       // eslint-disable-next-line no-else-return
@@ -1033,7 +1037,7 @@ async function appendRestoreTask(req, res) {
     }
   } catch (error) {
     log.error(error);
-    operationRegistry.release(appname);
+    operationRegistry.release(appname, taskToken);
     await sendChunk(res, `${error?.message}\n`);
     res.end();
     return false;
@@ -1624,7 +1628,7 @@ async function reconcileApp(installed, registrySpec) {
 
   // reconcile is an app-scoped lease on the same key as install/remove/backup/
   // restore — mutually exclusive with them.
-  operationRegistry.acquire(installed.name, 'reconcile', 'appOperations', `reconcile ${installed.name}`);
+  const reconcileToken = operationRegistry.acquire(installed.name, 'reconcile', 'appOperations', `reconcile ${installed.name}`);
   try {
     log.info(`Application ${installed.name} version is obsolete, reconciling...`);
     await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec);
@@ -1636,7 +1640,7 @@ async function reconcileApp(installed, registrySpec) {
     // has-run app degrades to down + retry; only a never-ran one is removed.
     log.warn(`Reconcile of ${installed.name} failed (${error.message}); handing recovery to the reconciler`);
   } finally {
-    operationRegistry.release(installed.name);
+    operationRegistry.release(installed.name, reconcileToken);
     appReconciler.enqueue(installed.name);
   }
 }
@@ -1845,12 +1849,14 @@ async function forceAppRemovals() {
 }
 
 async function coordinateActiveStandbyApps() {
+  // Hoisted so the finally releases ONLY a lease this cycle acquired.
+  let coordinateToken = null;
   try {
     // Mark the election cycle in flight (node-global coordinator lease). The
     // node-wide destructive sweeps (daemon-health wipe, orphan removal) stand
     // down while we may be starting/stopping standby containers, and the
     // installer's docker-prune gate checks isHeld(...) for the same reason.
-    operationRegistry.acquire(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY, 'coordinate', 'appOperations', 'activeStandby election cycle');
+    coordinateToken = operationRegistry.acquire(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY, 'coordinate', 'appOperations', 'activeStandby election cycle');
     // The election cycle iterates every activeStandby app; pause it while any
     // folder-set-changing operation is in flight (install/remove/redeploy/reconcile),
     // node-wide. NOT backup/restore - those are skipped per-app in the loop below,
@@ -2223,7 +2229,7 @@ async function coordinateActiveStandbyApps() {
   } catch (error) {
     log.error(`activeStandby: ${error}`);
   } finally {
-    operationRegistry.release(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY);
+    operationRegistry.release(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY, coordinateToken);
     await serviceHelper.delay(config.fluxapps.masterSlaveIntervalMs ?? 30 * 1000);
     coordinateActiveStandbyApps();
   }
