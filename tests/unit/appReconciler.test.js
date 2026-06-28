@@ -88,6 +88,7 @@ describe('appReconciler tests', () => {
       appInspector: { startAppMonitoring: sinon.stub(), stopAppMonitoring: sinon.stub() },
       appsRuntimeState: {
         isOperatorStopped: sinon.stub().resolves(false),
+        isCondemned: sinon.stub().resolves(false),
         restartWaitMs: sinon.stub().resolves(0),
         recordRestart: sinon.stub().resolves(),
         recordExit: sinon.stub().resolves(),
@@ -430,6 +431,54 @@ describe('appReconciler tests', () => {
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
       await appReconciler.reconcile('www_App'); // inspect default: stopped
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
+    it('gracefully stops a running condemned container and never starts it (tombstoning)', async () => {
+      stubs.appsRuntimeState.isCondemned.resolves(true);
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerKill.called).to.be.false;
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
+    it('leaves an already-stopped condemned container alone (no re-stop)', async () => {
+      stubs.appsRuntimeState.isCondemned.resolves(true);
+      await appReconciler.reconcile('www_App'); // inspect default: stopped
+      expect(stubs.dockerService.appDockerStop.called).to.be.false;
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
+    it('condemned wins over the operator lock and stays graceful (operatorStopForce must not leak to a condemn)', async () => {
+      stubs.appsRuntimeState.isCondemned.resolves(true);
+      stubs.appsRuntimeState.isOperatorStopped.resolves(true);
+      // operator force is set, but the reason is 'condemned' so only condemnedForce applies
+      stubs.appsRuntimeState.getState.resolves({ operatorStopForce: true });
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerKill.called).to.be.false;
+    });
+
+    it('force-kills a condemned-with-force container (operator hard-cancel)', async () => {
+      stubs.appsRuntimeState.isCondemned.resolves(true);
+      stubs.appsRuntimeState.getState.resolves({ condemnedForce: true });
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerKill.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerStop.called).to.be.false;
+    });
+
+    it('skips the data-clear wipe for a condemned component (never races the teardown rm -rf)', async () => {
+      stubs.appsRuntimeState.isCondemned.resolves(true);
+      appReconciler.requestStopAndClearData('www_App', 'test'); // dataDesired = 'clear'
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.false;
+      // still stopped (condemned desired:false), just not wiped (calledWith, not
+      // calledOnce: requestStopAndClearData also enqueues a reconcile)
+      expect(stubs.dockerService.appDockerStop.calledWith('www_App')).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
