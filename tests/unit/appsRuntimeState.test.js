@@ -51,6 +51,39 @@ describe('appsRuntimeState tests', () => {
     });
   });
 
+  describe('condemned', () => {
+    it('persists the condemned stamp and reads it back', async () => {
+      await appsRuntimeState.setCondemned('www_App', true);
+      expect(await appsRuntimeState.isCondemned('www_App')).to.be.true;
+    });
+
+    it('defaults to not-condemned for an unknown component', async () => {
+      expect(await appsRuntimeState.isCondemned('nope_App')).to.be.false;
+    });
+
+    it('records a durable force mode for an operator hard-cancel', async () => {
+      await appsRuntimeState.setCondemned('www_App', true, { force: true });
+      expect(store.get('www_App').condemnedForce).to.be.true;
+    });
+
+    it('a graceful condemn carries no force', async () => {
+      await appsRuntimeState.setCondemned('www_App', true);
+      expect(store.get('www_App').condemnedForce).to.be.false;
+    });
+
+    it('clearing the stamp also clears the force mode', async () => {
+      await appsRuntimeState.setCondemned('www_App', true, { force: true });
+      await appsRuntimeState.setCondemned('www_App', false);
+      expect(await appsRuntimeState.isCondemned('www_App')).to.be.false;
+      expect(store.get('www_App').condemnedForce).to.be.false;
+    });
+
+    it('is a separate axis from operatorStopped (condemning does not set the operator lock)', async () => {
+      await appsRuntimeState.setCondemned('www_App', true);
+      expect(await appsRuntimeState.isOperatorStopped('www_App')).to.be.false;
+    });
+  });
+
   describe('restartHistory + backoff', () => {
     it('caps restartHistory at the ladder length', async () => {
       for (let i = 0; i < appsRuntimeState.MAX_HISTORY + 5; i += 1) {
@@ -512,6 +545,21 @@ describe('appsRuntimeState tests', () => {
       sinon.assert.calledOnce(createIndexStub);
       expect(createIndexStub.firstCall.args[0]).to.deep.equal({ identifier: 1 });
       expect(createIndexStub.firstCall.args[1]).to.deep.include({ unique: true });
+    });
+
+    it('OR-merges the condemned stamp + force so a boot dedupe never un-condemns a being-torn-down app', async () => {
+      docs = [
+        { identifier: 'www_App', restartHistory: [100], updatedAt: 1000 },
+        {
+          identifier: 'www_App', condemned: true, condemnedForce: true, updatedAt: 2000,
+        },
+      ];
+
+      await prepState.prepareCollection();
+
+      const merged = upserts[0].set;
+      expect(merged.condemned).to.equal(true); // condemned on either twin = condemned (teardown intent survives)
+      expect(merged.condemnedForce).to.equal(true);
     });
   });
 });
