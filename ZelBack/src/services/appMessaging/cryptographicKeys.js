@@ -6,6 +6,11 @@ const benchmarkService = require('../benchmarkService');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
+const transportHelper = require('../utils/transportHelper');
+const contentBlobService = require('../appLifecycle/contentBlobService');
+const specLibs = require('../utils/specLibs');
+
+const CONTENT_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
 
 /**
  * Get application public key for encryption
@@ -125,8 +130,76 @@ async function getTransportPublicKey(req, res) {
   }
 }
 
+/**
+ * POST /apps/bloblocator — derive a content blob's locator for the app owner (the
+ * frontend), so they can owner-sign the dual-sig upload over
+ * sha256(locator:appName:timestamp). The locator is fleet-secret-derived (the owner
+ * can't compute it), and an OPEN endpoint would be a confirmation-of-file oracle —
+ * appName + owner are public, so an attacker need only supply a guessed contentHash to
+ * test whether a victim app uses a known file (CONTENT_BLOBS §4.5: the locator must stay
+ * un-testable against a known file). Two controls close that:
+ *  - the contentHash (the fingerprint the locator scheme hides) rides HPKE-sealed toward
+ *    THIS node's per-app transport key — never in the clear — and is opened only here;
+ *  - the locator is derived for fluxID = the AUTHENTICATED caller's zelid (the caller can't
+ *    even name another identity), so you can only derive locators for your OWN content.
+ * Arcane-only (the fleet secret lives in the benchmark channel).
+ *
+ * Body: { appName, timestamp, sealed } — sealed = TransportEnvelope JSON over
+ * { contentHash }, AAD = buildContentTransportAad({ appName, ref: CONTENT_LOCATOR_AAD_REF,
+ * timestamp }).
+ */
+async function getBlobLocator(req, res) {
+  try {
+    const authorized = await verificationHelper.verifyPrivilege('user', req);
+    if (!authorized) {
+      res.json(messageHelper.errUnauthorizedMessage());
+      return;
+    }
+    if (!globalState.isArcane()) {
+      throw new Error('Locator derivation requires an arcane node');
+    }
+    const auth = serviceHelper.ensureObject(req.headers.zelidauth);
+    const callerZelid = auth && auth.zelid;
+    if (!callerZelid) {
+      res.json(messageHelper.errUnauthorizedMessage());
+      return;
+    }
+
+    const { appName, timestamp, sealed } = req.body || {};
+    if (!appName || timestamp == null || !sealed) {
+      throw new Error('bloblocator requires appName, timestamp, and the sealed contentHash');
+    }
+
+    // Open the sealed contentHash toward this node's per-app transport key for the
+    // CALLER's identity; the AAD ref distinguishes a locator request from a submission part.
+    const { CONTENT_LOCATOR_AAD_REF } = await specLibs.getSpec();
+    const plaintext = await transportHelper.openContentEnvelope(sealed, {
+      appName, owner: callerZelid, ref: CONTENT_LOCATOR_AAD_REF, timestamp: Number(timestamp),
+    });
+    const { contentHash } = serviceHelper.ensureObject(plaintext.toString('utf8'));
+    if (!CONTENT_HASH_PATTERN.test(contentHash || '')) {
+      throw new Error('sealed payload must carry a contentHash of the form sha256:<64 hex>');
+    }
+
+    // Derive for the caller's OWN identity — never a fluxID the caller named.
+    const locator = await contentBlobService.deriveLocator(benchmarkService, {
+      appName, fluxID: callerZelid, contentHash,
+    });
+    res.json(messageHelper.createDataMessage({ locator }));
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    res.json(errorResponse);
+  }
+}
+
 module.exports = {
   getAppPublicKey,
   getPublicKey,
   getTransportPublicKey,
+  getBlobLocator,
 };
