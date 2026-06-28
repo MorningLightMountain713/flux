@@ -781,16 +781,32 @@ async function expireGlobalApplications() {
     }
 
     const installedApps = await appsRepository.listInstalledApps();
+    // Expiry is a property of the network-confirmed spec, so evaluate each installed
+    // app against the AUTHORITATIVE global row, not the lazily-refreshed local install
+    // row: a stale shorter local expire would wrongly remove a renewed, still-paid app
+    // (a stale longer one would skip a cancelled one). The local rows only scope WHICH
+    // apps this node runs. Scope the global read to those names so a renewed app
+    // excluded from the height-filtered `candidates` above is still re-evaluated here.
+    const installedNames = installedApps.map((app) => app.name);
+    const globalRows = installedNames.length
+      ? await appsRepository.listGlobalAppInfo({ filter: { name: { $in: installedNames } } })
+      : [];
+    const globalByName = new Map(globalRows.map((spec) => [spec.name, spec]));
     const appsToRemoveNames = [];
     // eslint-disable-next-line no-restricted-syntax
     for (const app of installedApps) {
+      // Prefer the authoritative global spec; fall back to the local row only when the
+      // app has no global registration (forever/manual installs, or one a prior sweep
+      // already removed from global — the appNamesToExpire branch still reaps those).
+      const authoritative = globalByName.get(app.name) || app;
       if (appNamesToExpire.includes(app.name)) {
         appsToRemoveNames.push(app.name);
-      } else if (!app.height) {
+      } else if (authoritative.height === 0) {
+        // forever-lasting app — never expires. Checked BEFORE !height so a height-0
+        // app is not swallowed by the !height branch (which would force-expire it).
+      } else if (!authoritative.height) {
         appsToRemoveNames.push(app.name);
-      } else if (app.height === 0) {
-        // forever lasting local app — skip
-      } else if (app.isExpired(nowSeconds, explorerHeight)) {
+      } else if (authoritative.isExpired(nowSeconds, explorerHeight)) {
         appsToRemoveNames.push(app.name);
       }
     }
