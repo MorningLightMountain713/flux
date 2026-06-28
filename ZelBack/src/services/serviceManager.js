@@ -544,10 +544,19 @@ async function startFluxFunctions() {
       networkStateReady: () => networkStateService.waitStarted(),
       fluxVersion,
     });
-    // The orchestrator issues the sync requests and holds their deadlines, so
-    // it is the only thing that knows whether an arriving answer is still
-    // wanted. The peer manager asks rather than keeping its own copy.
-    peerManager.syncResponseWanted = (peerSocket) => orchestrator.isSyncResponseWanted(peerSocket);
+    // Whether an arriving sync response is still wanted. The record of what this
+    // node asked for is the peer manager's own asked-peers ledger, written by the
+    // orchestrator through markSyncRequested and cleared by completeSyncRequest, so
+    // that is what the question is answered from.
+    //
+    // REBASE-ADAPTER (D12): development answers this from the orchestrator, per
+    // CONNECTION - a peer that reconnects keeps its ip:port while becoming a
+    // different connection, and nothing arriving on the new one answers a request
+    // written into the old one. That rule belongs to #1797's orchestrator, which is
+    // not the one this branch runs; until D12 ports it, the answer is keyed by
+    // ip:port like every other v9 caller of the ledger. Replace this line when D12
+    // lands, not before.
+    peerManager.syncResponseWanted = (peerSocket) => peerManager.isSyncRequested(peerSocket.key);
 
     // The other half of the peer-gated fallback. The orchestrator stops a node
     // whose peer set keeps collapsing from ever reaching READY, which is silent;

@@ -135,6 +135,32 @@ async function setOperatorStopped(identifier, stopped, opts = {}) {
 }
 
 /**
+ * Sets the condemned stamp — the durable record that this component is being torn
+ * down. Like operatorStopped it keeps the reconciler from running the container
+ * (effectiveDesiredRunning returns desired:false, reason 'condemned'), but the
+ * intent differs: operatorStopped means "keep it, stopped"; condemned means "stop
+ * it AND destroy it" — the deferred teardown worker reads it as "safe to remove",
+ * and boot recovery re-stamps it so a crash mid-teardown never restarts an app
+ * whose containers are being removed. Cleared only by remove() when teardown ends.
+ *
+ * @param {string} identifier
+ * @param {boolean} condemned
+ * @param {object} [opts]
+ * @param {boolean} [opts.force] - operator hard-cancel: the reconciler's stop skips
+ *        the (possibly hours-long) graceful window and kills. Durable, like
+ *        operatorStopForce, so a crash mid-cancel never downgrades it to a drain.
+ */
+async function setCondemned(identifier, condemned, opts = {}) {
+  // No catch: like the operator lock, the condemned stamp is a contract — that the
+  // reconciler will not restart a being-torn-down app and the worker may destroy it.
+  // A swallowed write would let a removal proceed with no durable "going away" record,
+  // so boot recovery would restart the app whose containers the worker is removing.
+  const fields = { condemned };
+  fields.condemnedForce = condemned ? opts.force === true : false;
+  await setFields(identifier, fields);
+}
+
+/**
  * Raises the component's restart generation, which is how an operator restart is
  * expressed as desired state rather than as a docker call from the handler.
  *
@@ -194,6 +220,20 @@ async function recordRestartGeneration(identifier, generation) {
 async function isOperatorStopped(identifier) {
   const state = await getState(identifier);
   return state?.operatorStopped === true;
+}
+
+/**
+ * Whether this component is condemned (being torn down). The reconciler stands it
+ * down (desired:false, reason 'condemned') and the teardown worker treats it as
+ * safe to destroy. Reads fail OPEN (false on a DB error): a transient read blip
+ * must not let the reconciler believe a live app is being removed.
+ *
+ * @param {string} identifier
+ * @returns {Promise<boolean>}
+ */
+async function isCondemned(identifier) {
+  const state = await getState(identifier);
+  return state?.condemned === true;
 }
 
 /**
@@ -641,6 +681,10 @@ async function prepareCollection() {
           // a force anywhere is a force: a kill must never be merged down into a
           // graceful stop the operator did not ask for
           operatorStopForce: twins.some((t) => t.operatorStopForce === true),
+          // a condemned stamp anywhere is condemned: never restart a being-torn-down
+          // app, and never lose the "teardown owed" intent on a boot dedupe
+          condemned: twins.some((t) => t.condemned === true),
+          condemnedForce: twins.some((t) => t.condemnedForce === true),
           // the highest request wins and the lowest actuation does, so a restart
           // asked for on either doc still bounces the container once
           restartGeneration: Math.max(0, ...twins.map((t) => t.restartGeneration || 0)),
@@ -681,6 +725,8 @@ module.exports = {
   getState,
   setOperatorStopped,
   isOperatorStopped,
+  setCondemned,
+  isCondemned,
   operatorStopState,
   operatorStoppedIdentifiers,
   recordRestart,
