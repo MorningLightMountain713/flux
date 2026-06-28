@@ -429,9 +429,10 @@ async function uninstallComponent(component, options = {}) {
 }
 
 /**
- * Remove an application (or one component) from the local node.
- * @param {string} appName - App name, or a component identifier (component_app).
- * @param {object} [options] - forceKill, skipGuard, broadcastRemoval, onStatus.
+ * Remove a whole application from the local node (a single component is removed via
+ * uninstallComponent — this never takes a component identifier).
+ * @param {string} appName - the app name.
+ * @param {object} [options] - forceKill, skipGuard, broadcastRemoval, background, onStatus.
  * @returns {Promise<{status: string, reason: string|null}>} status is an UninstallStatus
  *   value: REMOVED (torn down), SKIPPED (not installed - nothing to remove), DEFERRED
  *   (another op in progress, retry later), FAILED (teardown started then errored).
@@ -454,10 +455,14 @@ async function uninstallApplication(appName, options = {}) {
   // token stays null on the deferred early-return (an own-checked no-op), and two
   // same-app skipGuard removes that share one slot can never clobber a later lease.
   let removeToken = null;
+  // Hoisted: the durable teardown record (set once the prelude persists it) + whether the
+  // deferred teardown has started — so the catch can drive a committed-but-interrupted
+  // teardown in-process without re-driving one that already began.
+  let teardownDoc = null;
+  let teardownStarted = false;
   try {
-    // Normalise to the bare identifier this function reasons about: a caller may
-    // pass the flux-prefixed docker name (e.g. the syncthing flow), which would
-    // otherwise mis-derive the component as `flux{component}` below.
+    // Normalise to the bare app name this function reasons about: a caller may pass a
+    // flux-prefixed docker name (e.g. the syncthing flow); strip the prefix.
     // eslint-disable-next-line no-param-reassign
     appName = appName ? dockerService.getBaseAppName(appName) : appName;
 
@@ -482,21 +487,17 @@ async function uninstallApplication(appName, options = {}) {
       throw new Error('No App specified');
     }
 
-    const isComponent = appName.includes('_');
-    const resolvedAppName = isComponent ? appName.split('_')[1] : appName;
-    const appComponent = appName.split('_')[0];
-
-    let spec = await appsRepository.getInstalledApp(resolvedAppName);
+    let spec = await appsRepository.getInstalledApp(appName);
     if (!spec) {
       if (!skipGuard) {
         status('Flux App not found');
         return { status: UninstallStatus.SKIPPED, reason: 'Flux App not found' };
       }
-      spec = await appsRepository.getGlobalAppInfo(resolvedAppName);
+      spec = await appsRepository.getGlobalAppInfo(appName);
       if (!spec) {
         const globalApps = await appsRepository.listGlobalAppInfo();
         const localApps = await appsRepository.listInstalledApps();
-        spec = [...globalApps, ...localApps].find((a) => a.name === resolvedAppName) || null;
+        spec = [...globalApps, ...localApps].find((a) => a.name === appName) || null;
         if (!spec) {
           const dbopen = dbHelper.databaseConnection();
           const database = dbopen.db(config.database.appsglobal.database);
@@ -505,7 +506,7 @@ async function uninstallApplication(appName, options = {}) {
           );
           const appMessages = messages.filter((message) => {
             const s = message.appSpecifications;
-            return s && s.name === resolvedAppName;
+            return s && s.name === appName;
           });
           let latest;
           appMessages.forEach((message) => {
@@ -524,56 +525,36 @@ async function uninstallApplication(appName, options = {}) {
       return { status: UninstallStatus.SKIPPED, reason: 'Flux App not found' };
     }
 
-    // Tear down components via the normalized DeploymentSpec (mirrors
-    // installApplication -> installComponent; the deployment resolves images
-    // and host ports across spec versions). Fall back to best-effort container
-    // removal if the deployment can't be built (orphaned app / missing record).
-    // Resolve the deployment to capture per-component teardown descriptors. The
+    // Capture each component's teardown descriptors off the normalized deployment. The
     // durable record below carries everything the deferred worker needs, so the local
-    // row can be deleted in the prelude (every reader then sees the app as gone).
-    const deployment = await deploymentProvider.getInstalledDeployment(resolvedAppName);
-
-    const teardownComponents = [];
-    if (deployment && isComponent) {
-      const component = deployment.getComponent(appComponent);
-      if (!component) {
-        throw new Error(`Flux App component ${appComponent} not found in ${resolvedAppName}`);
-      }
-      teardownComponents.push(component);
-    } else if (deployment) {
+    // install row can be deleted up front (every reader then sees the app as gone). An
+    // app whose deployment can't be built falls back to one best-effort descriptor.
+    const deployment = await deploymentProvider.getInstalledDeployment(appName);
+    const components = [];
+    if (deployment) {
       // eslint-disable-next-line no-restricted-syntax
-      for (const [, component] of deployment.componentEntries({ reverse: true })) {
-        teardownComponents.push(component);
+      for (const [, c] of deployment.componentEntries({ reverse: true })) {
+        components.push({
+          identifier: c.identifier,
+          appId: dockerService.getAppIdentifier(c.identifier),
+          componentName: c.name,
+          label: c.name === appName ? appName : `component ${c.name} of ${appName}`,
+          ports: c.hostPorts || [],
+          image: c.image || null,
+        });
       }
     }
-
-    const components = teardownComponents.map((c) => ({
-      identifier: c.identifier,
-      appId: dockerService.getAppIdentifier(c.identifier),
-      componentName: c.name,
-      label: c.name === resolvedAppName ? resolvedAppName : `component ${c.name} of ${resolvedAppName}`,
-      ports: c.hostPorts || [],
-      image: c.image || null,
-    }));
-    // Orphaned app / unresolvable deployment: a single best-effort descriptor off the
-    // bare identifier so the worker still removes whatever container/network exists.
     if (components.length === 0) {
       components.push({
-        identifier: appName,
-        appId: dockerService.getAppIdentifier(appName),
-        componentName: resolvedAppName,
-        label: resolvedAppName,
-        ports: [],
-        image: null,
+        identifier: appName, appId: dockerService.getAppIdentifier(appName), componentName: appName, label: appName, ports: [], image: null,
       });
     }
 
     // The durable owed-teardown record — the crash-safe handoff to the deferred worker.
-    const teardownDoc = {
-      key: appName, // app name (whole-app) or component identifier (component-scoped)
-      name: resolvedAppName,
-      networkName: resolvedAppName,
-      isComponent,
+    teardownDoc = {
+      key: appName,
+      name: appName,
+      networkName: appName,
       forceKill,
       broadcastRemoval,
       owner: spec.owner,
@@ -582,55 +563,67 @@ async function uninstallApplication(appName, options = {}) {
       components,
     };
 
-    // PHASE A — the fast, durable prelude. Order is load-bearing.
-    // (1) Persist the owed-teardown record FIRST and fail CLOSED: once the local row is
-    //     gone (step 4) this doc is the SOLE record of the cleanup owed, so a write
-    //     failure must abort the removal (it throws to the catch) before any row delete.
+    // The removal prelude — fast and durable, order load-bearing.
+    // Persist the owed-teardown record FIRST and fail CLOSED: once the local install row
+    // is gone (below) this record is the SOLE record of the cleanup owed, so a write
+    // failure must abort the removal (it throws to the catch) before any row delete.
     await pendingTeardownStore.writeTeardown(teardownDoc);
-    // (2) Condemn every component (durable): the reconciler stands it down and never
-    //     restarts it, boot recovery re-stamps it, and the worker reads it as safe to
-    //     destroy. NOT appsRuntimeState.remove yet — that is the LAST teardown step.
+    // Condemn every component (durable): the reconciler stands it down and never restarts
+    // it, boot recovery re-stamps it, and the worker reads it as safe to destroy. The
+    // runtime-state row (carrying the stamp) is dropped LAST, by the teardown itself.
     // eslint-disable-next-line no-restricted-syntax
     for (const c of components) {
       // eslint-disable-next-line no-await-in-loop
       await appsRuntimeState.setCondemned(c.identifier, true, { force: forceKill });
     }
-    fluxEventBus.publish('app:removed', { name: resolvedAppName });
-    // (3) Tell the network it's gone NOW — fire-and-forget, never block the prelude on a
-    //     broadcast — and drop it from the local running-apps cache.
+    fluxEventBus.publish('app:removed', { name: appName });
+    // Tell the network it's gone NOW — fire-and-forget, never blocking the prelude on a
+    // broadcast — and drop it from the local running-apps cache.
     if (broadcastRemoval) {
       const ip = await fluxNetworkHelper.getLocalSocketAddress();
       if (ip) {
         const appRemovedMessage = {
-          type: 'fluxappremoved', version: 1, appName: resolvedAppName, ip, broadcastedAt: Date.now(),
+          type: 'fluxappremoved', version: 1, appName, ip, broadcastedAt: Date.now(),
         };
         log.info('Broadcasting appremoved message to the network');
         fluxCommunicationMessagesSender.broadcastMessageToAll(appRemovedMessage)
           .catch((e) => log.warn(`appremoved broadcast failed: ${e.message}`));
         const { runningAppsCache } = globalState;
-        if (runningAppsCache.has(resolvedAppName)) runningAppsCache.delete(resolvedAppName);
+        if (runningAppsCache.has(appName)) runningAppsCache.delete(appName);
       }
     }
-    // (4) Delete the local install row so every reader sees the app as gone with zero
-    //     filtering (whole-app only; a component-scoped teardown leaves the app row).
-    if (!isComponent) {
-      const appsDatabase = dbHelper.databaseConnection().db(config.database.appslocal.database);
-      await dbHelper.findOneAndDeleteInDatabase(appsDatabase, localAppsInformation, { name: resolvedAppName }, {});
-    }
+    // Delete the local install row so every reader sees the app as gone with zero filtering.
+    const appsDatabase = dbHelper.databaseConnection().db(config.database.appslocal.database);
+    await dbHelper.findOneAndDeleteInDatabase(appsDatabase, localAppsInformation, { name: appName }, {});
 
-    // PHASE B — the deferred destructive teardown. background (cancel/expiry) fires it
-    // and returns now; foreground (redeploy/rollback/REST) awaits it to completion.
+    // Drive the deferred destructive teardown. A background removal (cancel/expiry) fires
+    // it and returns now; a foreground removal (redeploy/rollback/REST) awaits it.
+    teardownStarted = true;
     if (background) {
-      runTeardown(teardownDoc).catch((e) => log.error(`Deferred teardown of ${resolvedAppName} failed: ${e.message}`));
-      status(`Removal queued: Flux App ${resolvedAppName} condemned; teardown deferred`);
+      // Hand the per-app 'remove' lease to the detached teardown so a same-name install is
+      // deferred (isHeld) through the destructive rm -rf — the serialization the old
+      // synchronous remove gave. Null the token so the finally no-ops; the detached chain
+      // releases when the teardown finishes.
+      const heldToken = removeToken;
+      removeToken = null;
+      runTeardown(teardownDoc)
+        .catch((e) => log.error(`Deferred teardown of ${appName} failed: ${e.message}`))
+        .finally(() => operationRegistry.release(appName, heldToken));
+      status(`Removal queued: Flux App ${appName} condemned; teardown deferred`);
     } else {
-      await runTeardown(teardownDoc);
-      status(`Removal step done. Result: Flux App ${resolvedAppName} was successfully removed`);
+      await runTeardown(teardownDoc, { onStatus });
+      status(`Removal step done. Result: Flux App ${appName} was successfully removed`);
     }
     return { status: UninstallStatus.REMOVED, reason: null };
   } catch (error) {
     log.error(`Error removing app ${appName}: ${error.message}`);
     status(`Error: ${error.message}`);
+    // If the owed-teardown record was already persisted (the removal is committed — the
+    // local row may already be gone) and the teardown never started, drive it in-process
+    // rather than leaving an orphan until the next boot recovery.
+    if (teardownDoc && !teardownStarted) {
+      runTeardown(teardownDoc).catch((e) => log.error(`Recovery teardown of ${appName} failed: ${e.message}`));
+    }
     return { status: UninstallStatus.FAILED, reason: error.message };
   } finally {
     operationRegistry.release(appName, removeToken);
@@ -638,8 +631,8 @@ async function uninstallApplication(appName, options = {}) {
 }
 
 /**
- * Phase B — the deferred destructive teardown. Reads a durable owed-teardown record
- * (from the prelude, or replayed by boot recovery) and tears the app down for good:
+ * The deferred destructive teardown. Reads a durable owed-teardown record (from the
+ * removal prelude, or replayed by boot recovery) and tears the app down for good:
  * graceful stop OUTSIDE the node-wide lock (an unbounded wait must never serialize the
  * lock), then container removal + host cleanup + the cross-app network removal under
  * ONE hostMutationLock per app, then drops the condemned stamps and clears the record
@@ -648,16 +641,20 @@ async function uninstallApplication(appName, options = {}) {
  * boot recovery.
  *
  * @param {object} doc - a pendingAppTeardowns record
+ * @param {object} [opts]
+ * @param {Function|null} [opts.onStatus] - progress callback (the foreground REST path)
  */
-async function runTeardown(doc) {
+async function runTeardown(doc, { onStatus = null } = {}) {
   const {
-    key, name, networkName, isComponent, forceKill, owner, components,
+    key, name, networkName, forceKill, owner, components,
   } = doc;
   const list = components || [];
+  const status = (msg) => { log.info(msg); if (onStatus) onStatus(msg); };
 
   // Graceful stop, OUTSIDE the lock. The container is removed below; stopping it first
   // makes the remove a clean (non-SIGKILL) teardown and releases its volume before the
   // unmount. appUninstaller is the run-authority's terminal-teardown exception.
+  status(`Stopping ${name} container(s)...`);
   // eslint-disable-next-line no-restricted-syntax
   for (const c of list) {
     stopAppMonitoring(c.identifier, true);
@@ -670,9 +667,12 @@ async function runTeardown(doc) {
     }
   }
 
-  // Destructive host teardown under ONE node-wide lock for the whole app. Each
-  // component is isolated (a throw in one never skips the others); the cross-app docker
-  // network removal is serialized inside the same lock.
+  // Destructive host teardown under ONE node-wide lock for the whole app. Each component
+  // is isolated (a throw in one never skips the others); the cross-app docker network
+  // removal (networkWith consumers attach it) is serialized inside the same lock. Only the
+  // lock's own resources (ufw / UPnP / image store / network) run under it — the swap-pool
+  // reconcile runs after release.
+  status(`Removing ${name} container(s) and host state...`);
   await withHostMutationLock(async () => {
     // eslint-disable-next-line no-restricted-syntax
     for (const c of list) {
@@ -698,28 +698,26 @@ async function runTeardown(doc) {
         log.error(`Host teardown of ${c.identifier} failed (continuing): ${err.message}`);
       }
     }
-    // Reclaim now-unneeded swap-pool capacity + the app's images (reference-gated).
-    await appSwapPoolService.reconcile().catch((e) => log.warn(`swap pool reconcile: ${e.message}`));
-    await reclaimUnusedImages(list.map((c) => c.image), (m) => log.info(m));
-    // Whole-app docker network — cross-app (networkWith consumers attach it), so its
-    // removal is serialized here inside the lock.
-    if (!isComponent) {
-      if (forceKill) {
-        await dockerService.forceRemoveFluxAppDockerNetwork(networkName).catch((e) => log.error(`force network removal ${networkName}: ${e.message}`));
-      } else {
-        await dockerService.removeFluxAppDockerNetwork(networkName).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
-      }
+    // Reclaim the app's images (reference-gated) — an image-store mutation, so under the lock.
+    await reclaimUnusedImages(list.map((c) => c.image), status);
+    status('Cleaning up docker network...');
+    if (forceKill) {
+      await dockerService.forceRemoveFluxAppDockerNetwork(networkName).catch((e) => log.error(`force network removal ${networkName}: ${e.message}`));
+    } else {
+      await dockerService.removeFluxAppDockerNetwork(networkName).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
     }
   });
 
+  // Reclaim now-unneeded swap-pool capacity — self-serializing on its own chain and none
+  // of the lock's resources, so it runs OUTSIDE the lock.
+  await appSwapPoolService.reconcile().catch((e) => log.warn(`swap pool reconcile: ${e.message}`));
+
   // App-level, non-host cleanup.
-  if (!isComponent) {
-    telemetrySinkCache.deleteSink(name);
-    if (!telemetrySinkCache.hasAnyTelemetryApps()) {
-      await telemetryConfigService.remove().catch((e) => log.warn(`telemetry config remove: ${e.message}`));
-    }
-    if (owner) await fluxShutdowndClient.deleteAppPlanBestEffort(name, owner);
+  telemetrySinkCache.deleteSink(name);
+  if (!telemetrySinkCache.hasAnyTelemetryApps()) {
+    await telemetryConfigService.remove().catch((e) => log.warn(`telemetry config remove: ${e.message}`));
   }
+  if (owner) await fluxShutdowndClient.deleteAppPlanBestEffort(name, owner);
 
   // FINISH — drop every component's runtime state (incl. the condemned stamp), then
   // clear the durable record, but ONLY when every stamp dropped: a surviving stamp
