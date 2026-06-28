@@ -22,10 +22,32 @@ const appVolumeService = require('./appVolumeService');
 const appSwapPoolService = require('./appSwapPoolService');
 const volumeService = require('../utils/volumeService');
 const telemetryIdentityService = require('../telemetryIdentityService');
+const appsRuntimeState = require('../appManagement/appsRuntimeState');
+const pendingTeardownStore = require('./pendingTeardownStore');
 
 const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
 
 const supportedArchitectures = ['amd64', 'arm64'];
+
+/**
+ * Cancel-during-install backstop. The abortable image pull closes the in-pull window;
+ * this closes the gaps AFTER it — before the volume is created and again before the
+ * container is created — so an install can never build a volume/container that a
+ * concurrent cancel's teardown is about to rm -rf. A cancel/removal of this app condemns
+ * its components and writes a durable owed-teardown doc the moment its prelude runs.
+ * teardownOwedFor is the robust signal (the install cannot erase it) and fails CLOSED
+ * (a read blip aborts rather than races a live rm -rf); isCondemned is a fail-OPEN
+ * secondary (a blip returns false, never a spurious abort). Read-only and idempotent: a
+ * no-op on every normal install (this app's own teardown cleared its doc at finish, and
+ * the install passed the teardown-owed interlock at entry).
+ * @param {object} component deployment component being provisioned
+ */
+async function throwIfCancelledMidInstall(component) {
+  const owed = await pendingTeardownStore.teardownOwedFor(component.appName);
+  if (owed || await appsRuntimeState.isCondemned(component.identifier)) {
+    throw new Error(`Install of ${component.identifier} aborted: a removal/cancel of ${component.appName} arrived mid-install`);
+  }
+}
 
 /**
  * Checks Orbit (Deploy with Git) app health by polling its /api/status endpoint.
@@ -68,7 +90,7 @@ async function checkOrbitAppHealth(component, onStatus) {
         }
         // initialTestStatus is true and failed is false - test passed
         const successStatus = {
-          status: `Orbit initial test passed for ${identifier}`,
+          status: `Orbit initial test passed for ${id}`,
         };
         log.info(successStatus);
         log.info(successStatus);
@@ -159,6 +181,7 @@ async function installComponent(component, options = {}) {
   const extraEnv = options.extraEnv || [];
   const syslogTarget = options.syslogTarget || null;
   const crossAppLogCollector = options.crossAppLogCollector || null;
+  const abortSignal = options.abortSignal || null;
   const { owner } = options;
 
   // owner is load-bearing: flux-shutdownd keys each app's shutdown plan on it,
@@ -170,7 +193,7 @@ async function installComponent(component, options = {}) {
   }
 
   const id = component.identifier;
-  const appName = component.appName;
+  const { appName } = component;
 
   const status = (msg) => {
     log.info(msg);
@@ -202,8 +225,15 @@ async function installComponent(component, options = {}) {
   }
 
   const pullConfig = await verifyComponentImage(component);
+  // Thread the install's abort signal so a concurrent cancel/removal of this app ends the
+  // in-flight download (docker-modem >=5 makes the pull abortable). null on a test install.
+  if (abortSignal) pullConfig.abortSignal = abortSignal;
   await dockerPullStreamPromise(pullConfig, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null);
   status(`Pulling ${id} was successful`);
+
+  // Post-pull backstop: a cancel that landed while/after the pull ran (the abort is then a
+  // no-op) must not let us build a volume the cancel's teardown is about to rm -rf.
+  if (!test) await throwIfCancelledMidInstall(component);
 
   if (createVolumes) {
     await appVolumeService.createAppVolume(component, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null, test);
@@ -230,6 +260,10 @@ async function installComponent(component, options = {}) {
       + 'rootFsGb must budget the image plus writable-layer headroom.',
     );
   }
+  // Pre-create backstop: re-check immediately before the container is created. A data
+  // (r:/g:) app skips the test-only start block below, so for a real install this is the
+  // last guard between volume-create and appDockerCreate against a racing cancel.
+  if (!test) await throwIfCancelledMidInstall(component);
   status(`Creating ${id}...`);
   await dockerService.appDockerCreate(component, {
     test,

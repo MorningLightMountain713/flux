@@ -81,7 +81,9 @@ describe('appUninstaller tombstoning teardown', () => {
       operationRegistry: {
         isHeld: sinon.stub().returns(false), acquire: sinon.stub().returns('tok'), release: sinon.stub(),
       },
-      globalState: { runningAppsCache: new Map(), receiveOnlySyncthingAppsCache: new Map() },
+      globalState: {
+        runningAppsCache: new Map(), receiveOnlySyncthingAppsCache: new Map(), abortInstall: sinon.stub().returns(false),
+      },
       fluxEventBus: { publish: sinon.stub() },
     };
 
@@ -169,7 +171,7 @@ describe('appUninstaller tombstoning teardown', () => {
   describe('uninstallApplication (the removal prelude)', () => {
     it('records the owed-teardown doc BEFORE deleting the local row, condemns, and awaits teardown (foreground)', async () => {
       const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
-      expect(res.status).to.equal('removed');
+      expect(res.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
       expect(stubs.pendingTeardownStore.writeTeardown.calledOnce, 'doc written').to.be.true;
       expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', true), 'component condemned').to.be.true;
       expect(stubs.dbHelper.findOneAndDeleteInDatabase.calledOnce, 'local row deleted').to.be.true;
@@ -177,12 +179,14 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.pendingTeardownStore.writeTeardown.calledBefore(stubs.dbHelper.findOneAndDeleteInDatabase)).to.be.true;
       // foreground (background:false default) actually runs the destructive teardown
       expect(stubs.dockerService.appDockerRemove.called).to.be.true;
+      // the prelude aborts any in-flight install of the same app (cancel-vs-install)
+      expect(stubs.globalState.abortInstall.calledWith('app'), 'in-flight install aborted').to.be.true;
     });
 
     it('fails CLOSED: a doc-persist failure aborts the removal WITHOUT deleting the local row', async () => {
       stubs.pendingTeardownStore.writeTeardown.rejects(new Error('db down'));
       const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
-      expect(res.status).to.equal('failed');
+      expect(res.status).to.equal(appUninstaller.UninstallStatus.FAILED);
       expect(stubs.dbHelper.findOneAndDeleteInDatabase.called, 'row must NOT be deleted with no durable record').to.be.false;
       expect(stubs.dockerService.appDockerRemove.called, 'nothing torn down').to.be.false;
     });
@@ -192,14 +196,14 @@ describe('appUninstaller tombstoning teardown', () => {
       stubs.fluxCommunicationMessagesSender.broadcastMessageToAll.returns(new Promise((r) => { resolveBroadcast = r; }));
       // foreground teardown still completes even though the broadcast promise never resolves
       const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
-      expect(res.status).to.equal('removed');
+      expect(res.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
       expect(stubs.fluxCommunicationMessagesSender.broadcastMessageToAll.calledOnce).to.be.true;
       if (resolveBroadcast) resolveBroadcast();
     });
 
     it('background removal holds the remove lease until the deferred teardown finishes', async () => {
       const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true, background: true });
-      expect(res.status).to.equal('removed'); // returns fast, before the destructive teardown
+      expect(res.status).to.equal(appUninstaller.UninstallStatus.REMOVED); // returns fast, before the teardown destroys anything
       // let the detached teardown chain run
       await new Promise((r) => { setImmediate(r); });
       await new Promise((r) => { setImmediate(r); });
