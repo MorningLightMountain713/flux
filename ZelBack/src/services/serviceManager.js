@@ -1,5 +1,4 @@
 const config = require('config');
-const https = require('https');
 
 // we import this first so the caches are instantiated before any other modules
 // are imported
@@ -61,8 +60,6 @@ const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const imageUpdateService = require('./imageUpdateService');
 const appsMaintenance = require('./appDatabase/appsMaintenance');
-const appsRepository = require('./appDatabase/appsRepository');
-const { rebuildPriceOracleState } = require('./pricing/priceOracleState');
 const marketplaceTemplateCache = require('./marketplace/marketplaceTemplateCache');
 const telemetryIdentityService = require('./telemetryIdentityService');
 const { version: fluxVersion } = require('../../../package.json');
@@ -75,14 +72,12 @@ const apiPort = userconfig.initial.apiport || config.server.apiport;
 const development = userconfig.initial.development || false;
 const fluxTransactionCollection = config.database.daemon.collections.fluxTransactions;
 
-const bootDelayMultiplier = config.fluxapps.bootDelayMultiplier;
+const { bootDelayMultiplier } = config.fluxapps;
 function bootDelay(ms) { return Math.round(ms * bootDelayMultiplier); }
 
-const portRestoreIntervalMs = config.fluxapps.portRestoreIntervalMs;
-const cpuCheckIntervalMs = config.fluxapps.cpuCheckIntervalMs;
-const imageComplianceIntervalMs = config.fluxapps.imageComplianceIntervalMs;
-const forceRemovalIntervalMs = config.fluxapps.forceRemovalIntervalMs;
-const tempMsgTtlS = config.fluxapps.tempMsgTtlS;
+const {
+  portRestoreIntervalMs, cpuCheckIntervalMs, imageComplianceIntervalMs, forceRemovalIntervalMs, tempMsgTtlS,
+} = config.fluxapps;
 
 // State objects for monitoring services
 const dosState = {
@@ -212,6 +207,11 @@ async function startFluxFunctions() {
     // appsRuntimeState (localzelapps): merge any pre-unique-index duplicate docs,
     // then enforce one doc per component identifier
     await appsRuntimeState.prepareCollection();
+    // Replay any owed teardowns that survived a crash: re-condemn their components
+    // (synchronously, before the reconciler starts) then drain them in the background,
+    // so an interrupted removal always completes and a being-torn-down app is never
+    // restarted from reconcile cycle 0.
+    await appUninstaller.recoverOwedTeardowns();
     log.info('Local database prepared');
     log.info('Preparing temporary database...');
     // no need to drop temporary messages
@@ -452,7 +452,7 @@ async function startFluxFunctions() {
 
     // Services that read from zelappsinformation wait for the orchestrator
     // to finish rebuilding it rather than guessing a setTimeout delay.
-    async function startDbDependentServices() {
+    const startDbDependentServices = async () => {
       await globalState.waitForDbReady();
       log.info('DB ready - starting db-dependent services');
       // Warm the marketplace template cache (best-effort; cache-miss fetch covers any gaps).
@@ -471,7 +471,7 @@ async function startFluxFunctions() {
       setInterval(() => {
         portManager.restorePortsSupport();
       }, portRestoreIntervalMs);
-    }
+    };
     startDbDependentServices();
     log.info('Starting setting Node Geolocation');
     geolocationService.setNodeGeolocation();
