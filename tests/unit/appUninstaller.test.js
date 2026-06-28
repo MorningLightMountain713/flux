@@ -12,6 +12,8 @@ describe('appUninstaller tests', () => {
   let configStub;
   let globalStateStub;
   let dockerServiceStub;
+  let dbHelperStub;
+  let appsRepositoryStub;
 
   beforeEach(() => {
     configStub = {
@@ -35,6 +37,11 @@ describe('appUninstaller tests', () => {
           database: 'globalapps',
         },
       },
+      fluxapps: {
+        newMinBlocksAllowance: 22000,
+        newMinBlocksAllowanceBlock: 1000000,
+        minBlocksAllowance: 5000,
+      },
     };
 
     verificationHelperStub = {
@@ -53,10 +60,11 @@ describe('appUninstaller tests', () => {
       warn: sinon.stub(),
     };
 
-    const dbHelperStub = {
+    dbHelperStub = {
       databaseConnection: sinon.stub(),
       findOneInDatabase: sinon.stub(),
       findInDatabase: sinon.stub(),
+      removeDocumentsFromCollection: sinon.stub().resolves(),
     };
 
     globalStateStub = {};
@@ -70,6 +78,16 @@ describe('appUninstaller tests', () => {
       getBaseAppName: sinon.stub().callsFake((id) => id),
     };
 
+    appsRepositoryStub = {
+      getInstalledApp: sinon.stub().resolves(null),
+      getGlobalAppInfo: sinon.stub().resolves(null),
+      getAppMessage: sinon.stub().resolves(null),
+      removeInstalledApp: sinon.stub().resolves(),
+      listInstalledApps: sinon.stub().resolves([]),
+      listGlobalAppInfo: sinon.stub().resolves([]),
+      removeGlobalAppInfo: sinon.stub().resolves(),
+    };
+
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
       config: configStub,
       '../verificationHelper': verificationHelperStub,
@@ -77,6 +95,8 @@ describe('appUninstaller tests', () => {
       '../serviceHelper': {
         ensureString: sinon.stub().returnsArg(0),
         ensureBoolean: sinon.stub().returnsArg(0),
+        ensureNumber: sinon.stub().callsFake((v) => Number(v)),
+        delay: sinon.stub().resolves(),
       },
       '../dbHelper': dbHelperStub,
       '../dockerService': dockerServiceStub,
@@ -106,11 +126,7 @@ describe('appUninstaller tests', () => {
       '../appDatabase/registryManager': {
         availableApps: sinon.stub().resolves([]),
       },
-      '../appDatabase/appsRepository': {
-        getInstalledApp: sinon.stub().resolves(null),
-        getGlobalAppInfo: sinon.stub().resolves(null),
-        getAppMessage: sinon.stub().resolves(null),
-      },
+      '../appDatabase/appsRepository': appsRepositoryStub,
       '../providers/FluxOSLegacyCryptoProvider': {
         create: sinon.stub().resolves({
           decrypt: sinon.stub().resolves(Buffer.from('{}')),
@@ -232,6 +248,56 @@ describe('appUninstaller tests', () => {
     it('no-ops on an empty list without listing containers', async () => {
       await appUninstaller.reclaimUnusedImages([], noop);
       expect(dockerServiceStub.dockerListContainers.called).to.be.false;
+    });
+  });
+
+  describe('expireGlobalApplications (authoritative-global expiry decision)', () => {
+    // listInstalledApps/listGlobalAppInfo return hydrated specs exposing .name,
+    // .height and .isExpired(nowSeconds, explorerHeight) - we control all three so the
+    // decision is exercised in isolation. Selection is observed via the
+    // "Application <name> is expired, removing" warn emitted BEFORE uninstallApplication.
+    const spec = (name, height, expired) => ({ name, height, isExpired: () => expired });
+    const wasSelected = (name) => logStub.warn.getCalls()
+      .some((c) => c.args[0] === `Application ${name} is expired, removing`);
+
+    beforeEach(() => {
+      dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns({}) });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 1000000 });
+    });
+
+    it('does NOT remove a renewed app whose authoritative GLOBAL spec is unexpired (F6-G stale-local)', async () => {
+      // The local install row carries a stale shorter expire (says expired); the
+      // authoritative global spec is renewed (says alive). Must trust global.
+      appsRepositoryStub.listInstalledApps.resolves([spec('renewed', 100, true)]);
+      appsRepositoryStub.listGlobalAppInfo.callsFake(({ filter } = {}) => (
+        filter && filter.name && filter.name.$in
+          ? Promise.resolve([spec('renewed', 100, false)]) // authoritative: not expired
+          : Promise.resolve([]) // height-filtered candidates exclude the renewed app
+      ));
+      await appUninstaller.expireGlobalApplications();
+      expect(wasSelected('renewed')).to.equal(false);
+    });
+
+    it('does NOT remove a forever app (height===0) - checked before !height (F6-H)', async () => {
+      appsRepositoryStub.listInstalledApps.resolves([spec('forever', 0, false)]);
+      appsRepositoryStub.listGlobalAppInfo.resolves([]); // no global row -> local fallback (height 0)
+      await appUninstaller.expireGlobalApplications();
+      expect(wasSelected('forever')).to.equal(false);
+    });
+
+    it('removes an app the authoritative global confirms expired', async () => {
+      const expiredSpec = spec('expiredapp', 50, true);
+      appsRepositoryStub.listInstalledApps.resolves([expiredSpec]);
+      appsRepositoryStub.listGlobalAppInfo.resolves([expiredSpec]); // candidates + $in both expired
+      await appUninstaller.expireGlobalApplications();
+      expect(wasSelected('expiredapp')).to.equal(true);
+    });
+
+    it('falls back to the local row when the app has no global registration', async () => {
+      appsRepositoryStub.listInstalledApps.resolves([spec('manual', 100, true)]);
+      appsRepositoryStub.listGlobalAppInfo.resolves([]); // absent from global -> evaluate off local
+      await appUninstaller.expireGlobalApplications();
+      expect(wasSelected('manual')).to.equal(true);
     });
   });
 
