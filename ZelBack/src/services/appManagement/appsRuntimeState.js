@@ -221,6 +221,32 @@ async function releaseOperatorStart(rawIdentifier) {
 }
 
 /**
+ * Sets the condemned stamp — the durable record that this component is being torn
+ * down. Like operatorStopped it keeps the reconciler from running the container
+ * (effectiveDesiredRunning returns desired:false, reason 'condemned'), but the
+ * intent differs: operatorStopped means "keep it, stopped"; condemned means "stop
+ * it AND destroy it" — the deferred teardown worker reads it as "safe to remove",
+ * and boot recovery re-stamps it so a crash mid-teardown never restarts an app
+ * whose containers are being removed. Cleared only by remove() when teardown ends.
+ *
+ * @param {string} identifier
+ * @param {boolean} condemned
+ * @param {object} [opts]
+ * @param {boolean} [opts.force] - operator hard-cancel: the reconciler's stop skips
+ *        the (possibly hours-long) graceful window and kills. Durable, like
+ *        operatorStopForce, so a crash mid-cancel never downgrades it to a drain.
+ */
+async function setCondemned(identifier, condemned, opts = {}) {
+  // No catch: like the operator lock, the condemned stamp is a contract — that the
+  // reconciler will not restart a being-torn-down app and the worker may destroy it.
+  // A swallowed write would let a removal proceed with no durable "going away" record,
+  // so boot recovery would restart the app whose containers the worker is removing.
+  const fields = { condemned };
+  fields.condemnedForce = condemned ? opts.force === true : false;
+  await setFields(identifier, fields);
+}
+
+/**
  * Raises the component's restart generation, which is how an operator restart is
  * expressed as desired state rather than as a docker call from the handler.
  *
@@ -301,6 +327,38 @@ async function recordRestartGeneration(identifier, generation) {
  * `startRequested` is a start the operator has asked for and the election has
  * not yet decided; the lock stands until it has. `asPrimary` is whether this
  * node was the component's primary when it was stopped.
+ *
+ * @param {string} identifier
+ * @returns {Promise<boolean>}
+ */
+async function isOperatorStopped(identifier) {
+  const state = await getState(identifier);
+  return state?.operatorStopped === true;
+}
+
+/**
+ * Whether this component is condemned (being torn down). The reconciler stands it
+ * down (desired:false, reason 'condemned') and the teardown worker treats it as
+ * safe to destroy. Reads fail OPEN (false on a DB error): a transient read blip
+ * must not let the reconciler believe a live app is being removed.
+ *
+ * @param {string} identifier
+ * @returns {Promise<boolean>}
+ */
+async function isCondemned(identifier) {
+  const state = await getState(identifier);
+  return state?.condemned === true;
+}
+
+/**
+ * The operator's stop lock and the mode they asked for, from ONE read.
+ *
+ * They are two fields of one document, and a caller needing both must not ask
+ * twice: getState returns null for a read failure exactly as it does for "no
+ * record", so a second read that failed reported no force flag and turned the
+ * operator's "kill now" into a drain they did not ask for. Answering both from a
+ * single read is a window that cannot open - and one round-trip fewer on every
+ * stop the reconciler performs.
  *
  * @param {string} identifier
  * @returns {Promise<{stopped: boolean, force: boolean, startRequested: boolean, asPrimary: boolean}>}
@@ -800,6 +858,9 @@ module.exports = {
   requestOperatorStart,
   releaseOperatorStart,
   operatorStoppedOrThrow,
+  isOperatorStopped,
+  setCondemned,
+  isCondemned,
   operatorStopState,
   operatorHeldIdentifiers,
   recordRestart,
