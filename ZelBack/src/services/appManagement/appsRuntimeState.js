@@ -295,17 +295,24 @@ async function recordExit(identifier, exitCode) {
 }
 
 /**
- * Drops all runtime state for a component (on uninstall).
+ * Drops all runtime state for a component (on uninstall) — including the condemned
+ * stamp. Returns whether the drop succeeded: the teardown worker clears its durable
+ * owed-teardown record ONLY when every component's state dropped, so a swallowed DB
+ * error (stamp survives) keeps the record for boot recovery rather than orphaning a
+ * condemned component.
  *
  * @param {string} identifier
+ * @returns {Promise<boolean>} whether the state was dropped
  */
 async function remove(rawIdentifier) {
   const identifier = canonical(rawIdentifier);
   try {
     const database = collection();
     await dbHelper.removeDocumentsFromCollection(database, appsRuntimeState, { identifier });
+    return true;
   } catch (err) {
     log.error(`appsRuntimeState - failed to remove state for ${identifier}: ${err.message}`);
+    return false;
   }
 }
 
