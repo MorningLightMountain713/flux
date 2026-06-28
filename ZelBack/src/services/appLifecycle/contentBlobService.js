@@ -26,6 +26,19 @@ function benchmarkField(resp, field) {
 }
 
 /**
+ * Derive a content blob's locator over the benchmark channel — the single place the
+ * blobLocator RPC reply is unwrapped, shared by upload, resolve, serve, and the slot
+ * reconcile push, so they all key on byte-identical locators.
+ *
+ * @param {object} [benchmark] - the benchmark channel (defaults to the singleton)
+ * @param {object} ref - { appName, fluxID, contentHash }
+ * @returns {Promise<string>} the locator
+ */
+async function deriveLocator(benchmark = benchmarkService, { appName, fluxID, contentHash }) {
+  return benchmarkField(await benchmark.blobLocator({ appName, fluxID, contentHash }), 'locator');
+}
+
+/**
  * Encrypt a content blob and upload it to FluxDrive — synchronous, so the blob is
  * durably stored before the spec enters gossip. The owner's freshness-bound
  * signature is supplied by the caller (signed client-side); the arcane signature
@@ -46,7 +59,7 @@ async function encryptAndUploadBlob(blob, deps) {
   if (bytes.length > MAX_BLOB_BYTES) throw new Error(`contentBlob: blob exceeds ${MAX_BLOB_BYTES} bytes`);
   if (Math.abs(now() / 1000 - Number(timestamp)) > FRESHNESS_WINDOW_SECONDS) throw new Error('contentBlob: owner signature is stale');
 
-  const locator = benchmarkField(await benchmark.blobLocator({ appName, fluxID, contentHash }), 'locator');
+  const locator = await deriveLocator(benchmark, { appName, fluxID, contentHash });
   const key = Buffer.from(benchmarkField(await benchmark.contentKey({ appName, fluxID, contentHash }), 'key'), 'base64');
   const framed = aeadEncrypt(key, bytes, Buffer.from(contentHash));
 
@@ -182,7 +195,7 @@ async function resolveBlob(req, deps) {
     benchmark = benchmarkService, fluxDrive = fluxDriveClient, peerFetch, maxPeerAttempts = 3,
   } = deps || {};
 
-  const locator = benchmarkField(await benchmark.blobLocator({ appName, fluxID, contentHash }), 'locator');
+  const locator = await deriveLocator(benchmark, { appName, fluxID, contentHash });
   const verify = (framed) => (framed
     ? decryptAndVerifyBlob({ appName, fluxID, contentHash, framed }, { benchmark }).catch(() => null)
     : null);
@@ -248,7 +261,7 @@ async function serveBlob(req, deps) {
 
   for (const [, comp] of deployment.componentEntries()) {
     for (const { source, hash } of comp.contentBlobMounts()) {
-      const derived = benchmarkField(await benchmark.blobLocator({ appName, fluxID, contentHash: hash }), 'locator');
+      const derived = await deriveLocator(benchmark, { appName, fluxID, contentHash: hash });
       if (derived !== locator) continue;
       const plaintext = await readFile(source);
       const key = Buffer.from(benchmarkField(await benchmark.contentKey({ appName, fluxID, contentHash: hash }), 'key'), 'base64');
@@ -285,6 +298,7 @@ async function fetchBlobFromPeer(peer, appName, locator, deps = {}) {
 module.exports = {
   encryptAndUploadBlob,
   encryptAndUploadBlobs,
+  deriveLocator,
   signUploadMessage,
   decryptAndVerifyBlob,
   resolveBlob,

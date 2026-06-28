@@ -643,6 +643,91 @@ describe('contentSlotService', () => {
     });
   });
 
+  describe('reconcileSlots', () => {
+    it('derives the live slot locators, mints the arcane sig over the token, and POSTs the reconcile', async () => {
+      const { service } = load();
+      const reconcile = sinon.spy();
+      const sign = sinon.stub().resolves('arcane-sig');
+      const deriveLocator = sinon.stub().resolves('loc-cfg');
+      const ok = await service.reconcileSlots(
+        manifest({ version: 3 }),
+        { appName: 'app', owner: '1id', version: 3, reconcileSig: 'owner-rsig' },
+        { reconcile, sign, deriveLocator },
+      );
+      expect(ok).to.equal(true);
+      sinon.assert.calledWithMatch(deriveLocator, sinon.match.any, { appName: 'app', fluxID: '1id', contentHash: CFG_HASH });
+      const token = crypto.createHash('sha256').update('app:slot:3').digest('hex');
+      sinon.assert.calledWith(sign, token);
+      sinon.assert.calledOnce(reconcile);
+      const [appName, body] = reconcile.firstCall.args;
+      expect(appName).to.equal('app');
+      expect(body).to.deep.equal({
+        source: 'slot', version: 3, arcaneSig: 'arcane-sig', ownerSig: 'owner-rsig', liveLocators: ['loc-cfg'],
+      });
+    });
+
+    it('derives one locator per slot for a multi-slot manifest', async () => {
+      const { service } = load();
+      const reconcile = sinon.spy();
+      const sign = sinon.stub().resolves('arcane-sig');
+      const deriveLocator = sinon.stub();
+      deriveLocator.onFirstCall().resolves('loc-a').onSecondCall().resolves('loc-b');
+      const m = manifest({
+        version: 3,
+        slots: { a: { hash: `sha256:${'1'.repeat(64)}` }, b: { hash: `sha256:${'2'.repeat(64)}` } },
+      });
+      const ok = await service.reconcileSlots(
+        m, { appName: 'app', owner: '1id', version: 3, reconcileSig: 'sig' }, { reconcile, sign, deriveLocator },
+      );
+      expect(ok).to.equal(true);
+      expect(reconcile.firstCall.args[1].liveLocators).to.deep.equal(['loc-a', 'loc-b']);
+    });
+
+    it('skips when the frontend supplied no owner reconcile-sig', async () => {
+      const { service } = load();
+      const reconcile = sinon.spy();
+      const ok = await service.reconcileSlots(
+        manifest({ version: 3 }), { appName: 'app', owner: '1id', version: 3, reconcileSig: undefined }, { reconcile },
+      );
+      expect(ok).to.equal(false);
+      sinon.assert.notCalled(reconcile);
+    });
+
+    it('skips the first manifest version — nothing to supersede', async () => {
+      const { service } = load();
+      const reconcile = sinon.spy();
+      const ok = await service.reconcileSlots(
+        manifest({ version: 1 }), { appName: 'app', owner: '1id', version: 1, reconcileSig: 'sig' }, { reconcile },
+      );
+      expect(ok).to.equal(false);
+      sinon.assert.notCalled(reconcile);
+    });
+
+    it('never pushes an empty live set (would tombstone every slot blob)', async () => {
+      const { service } = load();
+      const reconcile = sinon.spy();
+      const deriveLocator = sinon.stub().resolves('x');
+      const ok = await service.reconcileSlots(
+        { ...manifest({ version: 3 }), slots: {} },
+        { appName: 'app', owner: '1id', version: 3, reconcileSig: 'sig' },
+        { reconcile, deriveLocator },
+      );
+      expect(ok).to.equal(false);
+      sinon.assert.notCalled(reconcile);
+    });
+
+    it('is best-effort: a failed reconcile returns false and never throws', async () => {
+      const { service } = load();
+      const reconcile = sinon.stub().rejects(new Error('fluxdrive down'));
+      const sign = sinon.stub().resolves('arcane-sig');
+      const deriveLocator = sinon.stub().resolves('loc-cfg');
+      const ok = await service.reconcileSlots(
+        manifest({ version: 3 }), { appName: 'app', owner: '1id', version: 3, reconcileSig: 'sig' }, { reconcile, sign, deriveLocator },
+      );
+      expect(ok).to.equal(false);
+    });
+  });
+
   describe('handleIncomingManifest (fire-and-forget boundary)', () => {
     it('swallows an unexpected failure without rejecting and without rebroadcasting', async () => {
       const { service } = load();

@@ -89,6 +89,35 @@ async function putManifest(appName, body, deps = {}) {
 }
 
 /**
+ * Push a slot app's live locator set to FluxDrive's reconcile endpoint (the GC
+ * update-case, CONTENT_BLOBS §10.1c). FluxDrive verifies the dual-signature over
+ * sha256(appName:source:version) — the node's arcane sig + the owner's reconcile-sig —
+ * enforces the per-(appName, source) monotonic version floor, then ADDS new locators
+ * and tombstones this app's superseded ones of that source (orphan-with-grace), never
+ * a blind replace. A duplicate / stale version is an idempotent 409.
+ *
+ * @param {string} appName
+ * @param {object} body - { source, version, arcaneSig, ownerSig, liveLocators }
+ * @param {object} [deps] - { http, baseUrl }
+ */
+async function reconcile(appName, body, deps = {}) {
+  const http = deps.http || axios;
+  const base = blobApiBase(deps.baseUrl);
+  await http.post(
+    `${base}/api/v1/blob/reconcile`,
+    {
+      appName,
+      source: body.source,
+      version: body.version,
+      arcaneSig: body.arcaneSig,
+      ownerSig: body.ownerSig,
+      liveLocators: body.liveLocators,
+    },
+    { timeout: 30_000 },
+  );
+}
+
+/**
  * Fetch the confirmed manifest from the FluxDrive backstop (the cold-start fallback
  * when no running peer is reachable). Returns `{ version, manifest }`, or null when
  * none is stored (404). The caller re-verifies the owner sig + highest-version-wins,
@@ -111,5 +140,5 @@ async function fetchManifest(appName, deps = {}) {
 }
 
 module.exports = {
-  uploadBlob, fetchBlobByLocator, putManifest, fetchManifest,
+  uploadBlob, fetchBlobByLocator, putManifest, reconcile, fetchManifest,
 };

@@ -1,6 +1,6 @@
 const { expect } = require('chai');
 const {
-  uploadBlob, fetchBlobByLocator, putManifest, fetchManifest,
+  uploadBlob, fetchBlobByLocator, putManifest, reconcile, fetchManifest,
 } = require('../../ZelBack/src/services/utils/fluxDriveClient');
 
 const BASE = 'https://drive.example';
@@ -84,6 +84,31 @@ describe('fluxDriveClient', () => {
       const http = { put: async (url) => { calls.push(url); return {}; } };
       await putManifest('a b/c', { version: 1 }, { http, baseUrl: BASE });
       expect(calls[0]).to.equal(`${BASE}/api/v1/manifest/a%20b%2Fc`);
+    });
+  });
+
+  describe('reconcile', () => {
+    it('POSTs the reconcile body to /api/v1/blob/reconcile', async () => {
+      const calls = [];
+      const http = { post: async (url, body, opts) => { calls.push({ url, body, opts }); return { status: 200 }; } };
+      await reconcile('my-app', {
+        source: 'slot', version: 4, arcaneSig: 'asig', ownerSig: 'osig', liveLocators: ['l1', 'l2'],
+      }, { http, baseUrl: BASE });
+      expect(calls.length).to.equal(1);
+      expect(calls[0].url).to.equal(`${BASE}/api/v1/blob/reconcile`);
+      expect(calls[0].body).to.deep.equal({
+        appName: 'my-app', source: 'slot', version: 4, arcaneSig: 'asig', ownerSig: 'osig', liveLocators: ['l1', 'l2'],
+      });
+    });
+
+    it('throws when the base URL is not configured', async () => {
+      let threw = false;
+      try {
+        await reconcile('app', { source: 'slot', version: 1 }, { http: { post: async () => {} } });
+      } catch (e) {
+        threw = /not configured/.test(e.message);
+      }
+      expect(threw).to.equal(true);
     });
   });
 
