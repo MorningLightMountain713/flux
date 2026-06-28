@@ -40,7 +40,7 @@ describe('reconciler run-authority guard', () => {
     // A count mismatch (new call in an owner) fails just like a brand-new offender file.
     const owners = {
       'appMonitoring/appReconciler.js': 6, // the sole authority: data-clear stop, force kill, graceful stop, restart-gen bounce, unhealthy restart, start
-      'appLifecycle/appUninstaller.js': 3, // terminal teardown: kill + two stops
+      'appLifecycle/appUninstaller.js': 4, // terminal teardown: uninstallComponent (redeploy) kill+stop, runTeardown worker kill+stop
       'appLifecycle/componentProvisioner.js': 1, // test-install inline start (synchronous fail-fast)
       'appManagement/appController.js': 1, // stopAllNonFluxRunningApps janitor (foreign, non-Flux containers)
     };
