@@ -1,5 +1,4 @@
 const config = require('config');
-const https = require('https');
 
 // we import this first so the caches are instantiated before any other modules
 // are imported
@@ -83,8 +82,6 @@ const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const appPlacements = require('./appManagement/appPlacements');
 const imageUpdateService = require('./imageUpdateService');
 const appsMaintenance = require('./appDatabase/appsMaintenance');
-const appsRepository = require('./appDatabase/appsRepository');
-const { rebuildPriceOracleState } = require('./pricing/priceOracleState');
 const marketplaceTemplateCache = require('./marketplace/marketplaceTemplateCache');
 const telemetryIdentityService = require('./telemetryIdentityService');
 const { version: fluxVersion } = require('../../../package.json');
@@ -362,6 +359,11 @@ async function startFluxFunctions() {
     fluxadmService.start();
     log.info('Fluxadm access service initiated');
     await untilSucceeds('Database schema preparation', prepareDatabaseSchema);
+    // Replay any owed teardowns that survived a crash: re-condemn their components
+    // (synchronously, before the reconciler starts) then drain them in the background,
+    // so an interrupted removal always completes and a being-torn-down app is never
+    // restarted from reconcile cycle 0.
+    await appUninstaller.recoverOwedTeardowns();
     const db = dbHelper.databaseConnection();
 
     // The location table this node already holds, brought back as soon as the

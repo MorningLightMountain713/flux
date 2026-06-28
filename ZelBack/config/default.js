@@ -103,6 +103,7 @@ module.exports = {
         appsInformation: 'zelappsinformation',
         appsRuntimeState: 'zelappsruntimestate', // node-local per-component controller state: desiredState, restartHistory (crash backoff), last exit
         appsPlacements: 'zelappsplacements', // when this node took each app it holds, kept through redeploys
+        pendingAppTeardowns: 'zelappspendingteardowns', // durable owed-teardown records: the crash-safe handoff between the removal prelude and the deferred destructive teardown
       },
     },
     appsglobal: {

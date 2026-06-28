@@ -707,15 +707,25 @@ async function removeControllerState(rawIdentifier) {
 }
 
 /**
- * Drops all runtime state for a component (on uninstall). Rejects when the
- * delete fails: a stop lock left behind holds a later reinstall stopped.
+ * Drops all runtime state for a component (on uninstall) — including the condemned
+ * stamp. Returns whether the drop succeeded: the teardown worker clears its durable
+ * owed-teardown record ONLY when every component's state dropped, so a swallowed DB
+ * error (stamp survives) keeps the record for boot recovery rather than orphaning a
+ * condemned component.
  *
  * @param {string} identifier
+ * @returns {Promise<boolean>} whether the state was dropped
  */
 async function remove(rawIdentifier) {
   const identifier = canonical(rawIdentifier);
-  const database = collection();
-  await dbHelper.removeDocumentsFromCollection(database, appsRuntimeState, { identifier });
+  try {
+    const database = collection();
+    await dbHelper.removeDocumentsFromCollection(database, appsRuntimeState, { identifier });
+    return true;
+  } catch (err) {
+    log.error(`appsRuntimeState - failed to remove state for ${identifier}: ${err.message}`);
+    return false;
+  }
 }
 
 /**
