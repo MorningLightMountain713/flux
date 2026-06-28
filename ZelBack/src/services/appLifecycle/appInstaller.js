@@ -22,6 +22,8 @@ const { isImageBlocked, verifyRepository } = require('../appSecurity/imageManage
 // eslint-disable-next-line no-unused-vars
 const pgpService = require('../pgpService');
 const operationRegistry = require('../utils/operationRegistry');
+const globalState = require('../utils/globalState');
+const pendingTeardownStore = require('./pendingTeardownStore');
 const admissionControl = require('../utils/admissionControl');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -33,7 +35,6 @@ const { getSpecBackend } = require('../utils/specLibs');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
-const { localAppsInformation } = require('../utils/appConstants');
 const fluxEventBus = require('../utils/fluxEventBus');
 const config = require('config');
 
@@ -115,6 +116,10 @@ async function installApplication(instantiated, options = {}) {
   // token stays null on the deferred early-return (an own-checked no-op), so a
   // deferred install can never clobber the holder's lease.
   let installToken = null;
+  // Hoisted so the finally drops ONLY a controller this call registered: an early bail
+  // (already installed / teardown owed) returns before registration, and an unconditional
+  // delete-by-name would evict a different same-name install's controller.
+  let controllerRegistered = false;
   try {
     // Per-app: defer only if THIS app is already mid-operation. Installs of
     // different apps now run concurrently - the admission semaphore backstops
@@ -126,6 +131,17 @@ async function installApplication(instantiated, options = {}) {
     // Acquire the per-app operation lease — the sole record that this app is
     // mid-install. Released in the finally.
     installToken = operationRegistry.acquire(appName, 'install', 'appInstaller', `install ${appName}`);
+
+    // Register this install's AbortController BEFORE the awaited pre-pull work (own-IP,
+    // DB reads, the teardown-owed gate) so a cancel arriving during that I/O finds the
+    // controller and can abort the upcoming image pull — closing the abort TOCTOU. A
+    // cancel/removal of this app calls globalState.abortInstall(appName); the signal is
+    // threaded into each component's pull and the controller is cleared in the finally.
+    // Test installs are synchronous and ephemeral, so they do not participate.
+    if (!test) {
+      globalState.installingApps.set(appName, new AbortController());
+      controllerRegistered = true;
+    }
 
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     if (!localSocketAddr) {
@@ -144,6 +160,18 @@ async function installApplication(instantiated, options = {}) {
     if (await appsRepository.existsInstalledApp(appName)) {
       log.error(`Flux App ${appName} already installed`);
       return { status: InstallStatus.SKIPPED, reason: `Flux App ${appName} already installed` };
+    }
+
+    // Install-side interlock (cancel-vs-install): refuse to adopt a name while a teardown
+    // of it is still owed. A forced cancel runs its teardown in the background — its
+    // prelude already deleted the local row (so the check above misses it) while the
+    // detached umount + rm -rf of the volume keep running. Starting now would create a
+    // fresh volume that teardown promptly rm -rf's. Defer; the spawner retries once the
+    // teardown clears its doc. teardownOwedFor fails CLOSED, so a read blip defers rather
+    // than races a live teardown — the safe direction here.
+    if (await pendingTeardownStore.teardownOwedFor(appName)) {
+      log.warn(`Flux App ${appName} is still being torn down; deferring installation until teardown completes`);
+      return { status: InstallStatus.DEFERRED, reason: `Flux App ${appName} is still being torn down; deferring installation` };
     }
 
     await checkPlacement(instantiated);
@@ -261,7 +289,7 @@ async function installApplication(instantiated, options = {}) {
         if (telemetrySink) await telemetryConfigService.ensureNode();
       }
 
-      const owner = instantiated.owner;
+      const { owner } = instantiated;
       const burstEligible = owner
         && cpuBurstHelper.isEnterpriseOwner(owner)
         && await cpuBurstHelper.isCpuBurstSupported();
@@ -290,6 +318,9 @@ async function installApplication(instantiated, options = {}) {
           syslogTarget,
           crossAppLogCollector,
           owner: instantiated.owner,
+          // Abort the in-flight image pull if a concurrent cancel/removal of this app
+          // fires (globalState.abortInstall). null for a test install (no controller).
+          abortSignal: globalState.installingApps.get(appName)?.signal || null,
         });
         // Attach the freshly created container to every linked app's network.
         if (!test) {
@@ -350,7 +381,18 @@ async function installApplication(instantiated, options = {}) {
         }
       }
     } catch (error) {
-      if (!test) {
+      // A concurrent cancel/expiry of THIS app aborts the in-flight install (its image
+      // pull, or a mid-install condemned/teardown-owed backstop) and rethrows here —
+      // before the outer catch classifies the unwind as DEFERRED. Do NOT broadcast a
+      // network-wide fluxappinstallingerror for an app we are deliberately tearing down:
+      // peers count it as a real install failure for that hash. Suppress the store +
+      // broadcast on the same cancel signals the outer catch defers on — installAborted
+      // latches the instant the cancel fires (so it is observable here), with the
+      // owed-teardown doc as a fail-closed fallback. A genuine failure (no cancel) still
+      // broadcasts. Always rethrow so the outer catch runs its classification.
+      const cancelInFlight = globalState.installAborted(appName)
+        || await pendingTeardownStore.teardownOwedFor(appName);
+      if (!test && !cancelInFlight) {
         const errorResponse = messageHelper.createErrorMessage(
           error.message || error,
           error.name,
@@ -400,6 +442,20 @@ async function installApplication(instantiated, options = {}) {
     if (onStatus) onStatus(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
 
     if (!test) {
+      // Was this throw a concurrent cancel/expiry of THIS app (it aborted the in-flight
+      // pull, or a mid-install backstop fired) rather than a genuine install failure?
+      // Returning FAILED would make the spawner 7-day-poison the hash (never cleared),
+      // stranding a pinned enterprise app. Defer instead — and do NOT run our own
+      // teardown: the in-flight cancel already owns it, so a second uninstall would race
+      // it. installAborted latches the instant the cancel fires (so a fast detached
+      // teardown cannot out-race it clear), with the owed-teardown doc as a fail-closed
+      // fallback.
+      const cancelInFlight = globalState.installAborted(appName)
+        || await pendingTeardownStore.teardownOwedFor(appName);
+      if (cancelInFlight) {
+        log.warn(`Install of ${appName} deferred: a concurrent cancel/removal owns its teardown`);
+        return { status: InstallStatus.DEFERRED, reason: `A concurrent cancel/removal owns ${appName}'s teardown` };
+      }
       log.info(`Error occured. Initiating Flux App ${appName} removal`);
       if (onStatus) onStatus(messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appName} removal`));
       await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
@@ -409,6 +465,10 @@ async function installApplication(instantiated, options = {}) {
     return { status: InstallStatus.FAILED, reason: error.message || serviceHelper.ensureString(error) };
   } finally {
     operationRegistry.release(appName, installToken);
+    // Drop ONLY a controller this call registered: an early bail before registration
+    // must not evict a different same-name install's controller, which would leave a
+    // concurrent cancel unable to abort that install's pull.
+    if (controllerRegistered) globalState.installingApps.delete(appName);
     // Safety net for every pre-insert failure/early-return path: a reserved-but-
     // not-installed app must never leak its pending resources. Idempotent with the
     // explicit release after insertInstalledApp.
@@ -433,6 +493,15 @@ async function installApplication(instantiated, options = {}) {
     const componentIds = deployment.componentEntries().map(([, comp]) => comp.identifier);
     const { converged, failed } = await appReconciler.awaitConvergence(componentIds);
     if (!converged) {
+      // A concurrent cancel during convergence condemns the components — the reconciler
+      // then refuses to start them, so they never converge — and owns their teardown.
+      // Classify that as a deferral, not a 7-day-poisoning rollback (and skip our own
+      // teardown, which would race the cancel's). The install's controller is already
+      // cleared by the finally above, so the durable owed-teardown doc is the signal.
+      if (await pendingTeardownStore.teardownOwedFor(appName)) {
+        log.warn(`Convergence of ${appName} aborted by a concurrent cancel/removal; deferring`);
+        return { status: InstallStatus.DEFERRED, reason: `A concurrent cancel/removal owns ${appName}'s teardown` };
+      }
       log.warn(`REMOVAL REASON: ${appName} provisioned but did not converge (${failed.join(', ')}); rolling back (appInstaller)`);
       if (onStatus) onStatus(messageHelper.createErrorMessage(`App ${appName} failed to start; rolling back`));
       await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
@@ -498,10 +567,10 @@ async function testInstallApplication(appname) {
   const { PendingSpec } = await getSpecBackend();
   const pending = PendingSpec.fromTempMessage(tempMessage);
 
-  let spec = pending.spec;
+  let { spec } = pending;
   if (pending.isEncrypted) {
     const provider = await spec.createProvider();
-    spec = (await spec.decrypt(provider)).spec;
+    ({ spec } = await spec.decrypt(provider));
   }
 
   const localArch = await systemArchitecture();

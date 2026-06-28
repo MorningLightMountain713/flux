@@ -3,7 +3,6 @@ const stream = require('stream');
 const Docker = require('dockerode');
 const path = require('path');
 const serviceHelper = require('./serviceHelper');
-const pgpService = require('./pgpService');
 const deviceHelper = require('./deviceHelper');
 const hostStorageCapability = require('./utils/hostStorageCapability');
 const generalService = require('./generalService');
@@ -278,17 +277,17 @@ async function dockerContainerChanges(idOrName) {
  * @param {function} callback Callback.
  */
 function dockerPullStream(pullConfig, res, callback) {
-  const { repoTag, provider, authToken } = pullConfig;
-  let pullOptions;
+  const {
+    repoTag, provider, authToken, abortSignal,
+  } = pullConfig;
+  const pullOptions = {};
 
   // fix this auth token stuff upstream
   if (authToken) {
     if (authToken.includes(':')) { // specified by username:token
-      pullOptions = {
-        authconfig: {
-          username: authToken.split(':')[0],
-          password: authToken.split(':')[1],
-        },
+      pullOptions.authconfig = {
+        username: authToken.split(':')[0],
+        password: authToken.split(':')[1],
       };
       if (provider) {
         pullOptions.authconfig.serveraddress = provider;
@@ -297,10 +296,19 @@ function dockerPullStream(pullConfig, res, callback) {
       throw new Error('Invalid login credentials for docker provided');
     }
   }
+  // Abortable pull (cancel-during-install): docker-modem (>=5) threads abortSignal
+  // onto the request and makes the response stream abortable, so controller.abort()
+  // ends the pull and surfaces an error through followProgress's onFinished below.
+  if (abortSignal) {
+    pullOptions.abortSignal = abortSignal;
+  }
   docker.pull(repoTag, pullOptions, (err, mystream) => {
     function onFinished(error, output) {
       if (error) {
-        callback(err);
+        // Propagate the stream/abort error - NOT the (null) outer `err`, which would
+        // report an aborted/failed pull as success and let the install proceed onto a
+        // missing image. The abort relies on this.
+        callback(error);
       } else {
         callback(null, output);
       }
@@ -697,17 +705,16 @@ async function appDockerCreate(deployComp, options = {}) {
   const burstEligible = options.burstEligible || false;
   const restartPolicyOverride = options.restartPolicy || null;
   const extraEnv = options.extraEnv || [];
-  const syslogTarget = options.syslogTarget || null;
+  let syslogTarget = options.syslogTarget || null;
   const crossAppLogCollector = options.crossAppLogCollector || null;
   const measuredImageSizeBytes = options.measuredImageSizeBytes || 0;
   // Managed-storage host (host-swap fence + flux-apps.slice + xfs/prjquota). Cached, local check.
   const managedStorage = await hostStorageCapability.supportsManagedStorage();
 
   const { appName } = deployComp;
-  const identifier = deployComp.identifier;
+  const { identifier } = deployComp;
 
   const effectiveCpu = test ? 0.2 : deployComp.cpu;
-  const effectiveMemoryMb = test ? 300 : deployComp.memory;
 
   const portBindings = deployComp.toDockerPortBindings();
   const exposedPorts = deployComp.toDockerExposedPorts();
