@@ -12,7 +12,6 @@ describe('appInstaller tests', () => {
   let logStub;
   let configStub;
   let hwRequirementsStub;
-  let appsRepositoryStub;
 
   beforeEach(() => {
     // Config stub
@@ -78,12 +77,6 @@ describe('appInstaller tests', () => {
       checkNodeResources: sinon.stub().resolves(),
     };
 
-    appsRepositoryStub = {
-      getGlobalAppInfo: sinon.stub().resolves(null),
-      existsInstalledApp: sinon.stub().resolves(false),
-      getTempMessageByName: sinon.stub().resolves(null),
-    };
-
     logStub = {
       error: sinon.stub(),
       info: sinon.stub(),
@@ -145,6 +138,7 @@ describe('appInstaller tests', () => {
       './appUninstaller': {
         uninstallApplication: sinon.stub().resolves(),
       },
+      './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(false) },
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),
         broadcastMessageToIncoming: sinon.stub().resolves(),
@@ -378,7 +372,13 @@ describe('appInstaller tests', () => {
         },
         '../serviceHelper': { ensureString: sinon.stub().returnsArg(0), ensureNumber: sinon.stub().returnsArg(0), delay: sinon.stub().resolves() },
         '../generalService': { nodeTier: sinon.stub().resolves('cumulus'), checkSynced: sinon.stub().resolves(true) },
-        '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'), getNumberOfPeers: sinon.stub().returns(15), isFirewallActive: sinon.stub().resolves(false), allowPort: sinon.stub().resolves({ status: true }), removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true) },
+        '../fluxNetworkHelper': {
+          getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
+          getNumberOfPeers: sinon.stub().returns(15),
+          isFirewallActive: sinon.stub().resolves(false),
+          allowPort: sinon.stub().resolves({ status: true }),
+          removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true),
+        },
         '../geolocationService': { isStaticIP: sinon.stub().returns(true) },
         '../dockerService': {
           dockerListContainers: sinon.stub().resolves([]),
@@ -395,6 +395,7 @@ describe('appInstaller tests', () => {
           dockerPullStream: sinon.stub().yields(null, 'pulled'),
         },
         './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
+        './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(false) },
         '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves() },
         '../appMessaging/messageStore': { storeAppInstallingErrorMessage: sinon.stub().resolves() },
         '../appSecurity/imageManager': { isImageBlocked: sinon.stub().resolves(false), verifyRepository: sinon.stub().resolves({ verified: true, supportedArchitectures: ['amd64'] }) },
@@ -462,12 +463,55 @@ describe('appInstaller tests', () => {
   });
 
   describe('post-install broadcast + converge-wait', () => {
-    function loadFresh(convergeResult) {
+    // The one component every fresh-install path provisions. Carries just the surface
+    // installApplication reads: ports/image, the content predicates, the syslog env scan.
+    const mockComponent = {
+      identifier: 'web_newapp',
+      name: 'web',
+      appName: 'newapp',
+      hostPorts: [],
+      image: 'nginx:latest',
+      hasContentBlobs: () => false,
+      hasContentSlots: () => false,
+      toDockerEnv: () => [],
+    };
+
+    function loadFresh(opts = {}) {
+      const {
+        converge = { converged: true, failed: [] },
+        installAborted = false,
+        // teardownOwed: a boolean, or an array consumed per call (interlock first, then the
+        // catch / converge-rollback) so a test can pass the entry gate yet trip a later check.
+        teardownOwed = false,
+        installComponentError = null,
+        components = [],
+      } = opts;
+
       const onInstallComplete = sinon.stub().resolves();
       const fluxEventBusPublish = sinon.stub();
       const appReconcilerEnqueue = sinon.stub();
-      const appReconcilerAwaitConvergence = sinon.stub().resolves(convergeResult);
+      const appReconcilerAwaitConvergence = sinon.stub().resolves(converge);
       const uninstallApplication = sinon.stub().resolves();
+      const broadcastMessageToAll = sinon.stub().resolves();
+      const storeAppInstallingErrorMessage = sinon.stub().resolves();
+      const installComponent = installComponentError
+        ? sinon.stub().rejects(installComponentError)
+        : sinon.stub().resolves();
+      const abortInstall = sinon.stub();
+      const teardownOwedFor = sinon.stub();
+      if (Array.isArray(teardownOwed)) {
+        teardownOwed.forEach((v, i) => teardownOwedFor.onCall(i).resolves(v));
+        teardownOwedFor.resolves(teardownOwed[teardownOwed.length - 1] || false);
+      } else {
+        teardownOwedFor.resolves(teardownOwed);
+      }
+      const deployment = {
+        totalResources: () => ({ cpu: 1, memory: 500, storage: 10 }),
+        reservableHostDiskGb: () => 10,
+        allHostPorts: () => [],
+        allImages: () => [],
+        componentEntries: () => components,
+      };
 
       const appInstallerFresh = proxyquire.noCallThru().load('../../ZelBack/src/services/appLifecycle/appInstaller', {
         config: configStub,
@@ -481,7 +525,13 @@ describe('appInstaller tests', () => {
         },
         '../serviceHelper': { ensureString: sinon.stub().returnsArg(0), ensureNumber: sinon.stub().returnsArg(0), delay: sinon.stub().resolves() },
         '../generalService': { nodeTier: sinon.stub().resolves('cumulus'), checkSynced: sinon.stub().resolves(true) },
-        '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'), getNumberOfPeers: sinon.stub().returns(15), isFirewallActive: sinon.stub().resolves(false), allowPort: sinon.stub().resolves({ status: true }), removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true) },
+        '../fluxNetworkHelper': {
+          getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
+          getNumberOfPeers: sinon.stub().returns(15),
+          isFirewallActive: sinon.stub().resolves(false),
+          allowPort: sinon.stub().resolves({ status: true }),
+          removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true),
+        },
         '../geolocationService': { isStaticIP: sinon.stub().returns(true) },
         '../dockerService': {
           dockerListContainers: sinon.stub().resolves([]),
@@ -498,11 +548,16 @@ describe('appInstaller tests', () => {
           dockerPullStream: sinon.stub().yields(null, 'pulled'),
         },
         './appUninstaller': { uninstallApplication },
+        './pendingTeardownStore': { teardownOwedFor },
+        './componentProvisioner': { installComponent },
+        '../utils/globalState': {
+          installingApps: new Map(), installAborted: sinon.stub().returns(installAborted), abortInstall, runningAppsCache: new Set(),
+        },
         // appNetworkLinker.reconnectLinkedApps runs on the success path (the call kept during
         // the rebase); without this stub the install throws before reaching the broadcast.
         './appNetworkLinker': { reconnectLinkedApps: sinon.stub().resolves(), checkAppNetworkRequirements: sinon.stub().resolves(), connectComponentToLinkedApps: sinon.stub().resolves(), findLinkedAppLogCollector: sinon.stub().returns(null) },
-        '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves(), broadcastMessageToAll: sinon.stub().resolves() },
-        '../appMessaging/messageStore': { storeAppInstallingErrorMessage: sinon.stub().resolves(), storeAppRunningMessage: sinon.stub().resolves() },
+        '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves(), broadcastMessageToAll },
+        '../appMessaging/messageStore': { storeAppInstallingErrorMessage, storeAppRunningMessage: sinon.stub().resolves() },
         '../appSecurity/imageManager': { isImageBlocked: sinon.stub().resolves(false), verifyRepository: sinon.stub().resolves({ verified: true, supportedArchitectures: ['amd64'] }) },
         '../appManagement/appInspector': { startAppMonitoring: sinon.stub() },
         '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
@@ -520,20 +575,8 @@ describe('appInstaller tests', () => {
         },
         '../appRuntime/deploymentProvider': {
           listInstalledDeployments: sinon.stub().resolves([]),
-          getInstalledDeployment: sinon.stub().resolves({
-            totalResources: () => ({ cpu: 1, memory: 500, storage: 10 }),
-            reservableHostDiskGb: () => 10,
-            allHostPorts: () => [],
-            allImages: () => [],
-            componentEntries: () => [],
-          }),
-          buildDeployment: sinon.stub().resolves({
-            totalResources: () => ({ cpu: 1, memory: 500, storage: 10 }),
-            reservableHostDiskGb: () => 10,
-            allHostPorts: () => [],
-            allImages: () => [],
-            componentEntries: () => [],
-          }),
+          getInstalledDeployment: sinon.stub().resolves(deployment),
+          buildDeployment: sinon.stub().resolves(deployment),
         },
         './appVolumeService': { createAppVolume: sinon.stub().resolves() },
         '../utils/specLibs': { getSpecBackend: sinon.stub().resolves({}) },
@@ -550,7 +593,16 @@ describe('appInstaller tests', () => {
 
       appInstallerFresh.setOnInstallComplete(onInstallComplete);
       return {
-        installer: appInstallerFresh, onInstallComplete, fluxEventBusPublish, appReconcilerAwaitConvergence, uninstallApplication,
+        installer: appInstallerFresh,
+        onInstallComplete,
+        fluxEventBusPublish,
+        appReconcilerAwaitConvergence,
+        uninstallApplication,
+        broadcastMessageToAll,
+        storeAppInstallingErrorMessage,
+        installComponent,
+        abortInstall,
+        teardownOwedFor,
       };
     }
 
@@ -571,7 +623,7 @@ describe('appInstaller tests', () => {
     it('runs onInstallComplete/app:installed and hands off to the reconciler on a successful install', async () => {
       const {
         installer, onInstallComplete, fluxEventBusPublish, appReconcilerAwaitConvergence,
-      } = loadFresh({ converged: true, failed: [] });
+      } = loadFresh({ converge: { converged: true, failed: [] }, components: [['web', mockComponent]] });
 
       const result = await installer.installApplication(mockInstantiated, {});
 
@@ -582,13 +634,75 @@ describe('appInstaller tests', () => {
     });
 
     it('rolls back and returns PROVISIONED-BUT-NOT-RUNNING when a component fails to converge', async () => {
-      const { installer, uninstallApplication } = loadFresh({ converged: false, failed: ['web_newapp'] });
+      const { installer, uninstallApplication } = loadFresh({ converge: { converged: false, failed: ['web_newapp'] }, components: [['web', mockComponent]] });
 
       const result = await installer.installApplication(mockInstantiated, {});
 
       expect(result.status, 'install failed the converge-wait').to.equal(appInstaller.InstallStatus.FAILED);
       expect(result.reason).to.include('PROVISIONED-BUT-NOT-RUNNING');
       expect(uninstallApplication.calledWith('newapp'), 'a non-converging install is rolled back').to.be.true;
+    });
+
+    // cancel-vs-install: a cancel/expiry of an app racing its own install must DEFER the
+    // install (retry later), never FAIL it — a FAILED status 7-day-poisons the spawner cache
+    // and strands a pinned enterprise app. These guard the classification at each gate.
+    describe('cancel-vs-install classification', () => {
+      it('install-side interlock: defers (not installs) when a teardown is already owed', async () => {
+        const { installer, installComponent } = loadFresh({ teardownOwed: true, components: [['web', mockComponent]] });
+
+        const result = await installer.installApplication(mockInstantiated, {});
+
+        expect(result.status, 'deferred, not installed/failed').to.equal(appInstaller.InstallStatus.DEFERRED);
+        expect(installComponent.called, 'never provisioned anything').to.be.false;
+      });
+
+      it('classifies a cancel-aborted install as DEFERRED — no teardown, no network-wide error broadcast', async () => {
+        const {
+          installer, uninstallApplication, broadcastMessageToAll, storeAppInstallingErrorMessage,
+        } = loadFresh({
+          installAborted: true, // the cancel latched the abort signal mid-install
+          installComponentError: new Error('pull aborted'),
+          components: [['web', mockComponent]],
+        });
+
+        const result = await installer.installApplication(mockInstantiated, {});
+
+        expect(result.status, 'a cancel-unwind defers, never fails').to.equal(appInstaller.InstallStatus.DEFERRED);
+        expect(uninstallApplication.called, 'does NOT run its own teardown (the cancel owns it)').to.be.false;
+        expect(broadcastMessageToAll.called, 'no fluxappinstallingerror broadcast for a deliberately torn-down app').to.be.false;
+        expect(storeAppInstallingErrorMessage.called, 'no install-error stored either').to.be.false;
+      });
+
+      it('a genuine install failure (no cancel) still FAILS, tears down, and broadcasts the error', async () => {
+        const {
+          installer, uninstallApplication, broadcastMessageToAll,
+        } = loadFresh({
+          installAborted: false,
+          teardownOwed: false,
+          installComponentError: new Error('image pull 500'),
+          components: [['web', mockComponent]],
+        });
+
+        const result = await installer.installApplication(mockInstantiated, {});
+
+        expect(result.status, 'a real failure fails').to.equal(appInstaller.InstallStatus.FAILED);
+        expect(uninstallApplication.calledWith('newapp'), 'a real failure rolls back').to.be.true;
+        expect(broadcastMessageToAll.called, 'a real failure broadcasts the install error').to.be.true;
+      });
+
+      it('converge-rollback: a cancel landing during convergence defers instead of poisoning', async () => {
+        const { installer, uninstallApplication } = loadFresh({
+          converge: { converged: false, failed: ['web_newapp'] },
+          // false at the entry interlock, true at the converge-rollback re-check
+          teardownOwed: [false, true],
+          components: [['web', mockComponent]],
+        });
+
+        const result = await installer.installApplication(mockInstantiated, {});
+
+        expect(result.status, 'cancel during converge defers').to.equal(appInstaller.InstallStatus.DEFERRED);
+        expect(uninstallApplication.called, 'no rollback teardown — the cancel owns it').to.be.false;
+      });
     });
   });
 

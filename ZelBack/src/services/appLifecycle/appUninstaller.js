@@ -571,6 +571,12 @@ async function uninstallApplication(appName, options = {}) {
       // eslint-disable-next-line no-await-in-loop
       await appsRuntimeState.setCondemned(c.identifier, true, { force: forceKill });
     }
+    // A concurrent install of this same app may be mid-flight (its image pull). Abort it
+    // now that the owed-teardown doc + condemned stamps are durable: the install's pull
+    // rejects, its catch sees installAborted/teardownOwedFor and classifies the unwind as
+    // a deferral (not a 7-day-poisoning failure), and its own rollback converges
+    // idempotently with this teardown. No-op when no install is in flight.
+    globalState.abortInstall(appName);
     fluxEventBus.publish('app:removed', { name: appName });
     // Tell the network it's gone NOW — fire-and-forget, never blocking the prelude on a
     // broadcast — and drop it from the local running-apps cache.
