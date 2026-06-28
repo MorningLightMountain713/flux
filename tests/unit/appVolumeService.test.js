@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
+const proxyquire = require('proxyquire').noCallThru();
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -89,5 +90,62 @@ describe('appVolumeService.removeOrphanedInjectedContent', () => {
     await appVolumeService.removeOrphanedInjectedContent(comp, comp);
 
     expect(run.called).to.equal(false);
+  });
+});
+
+describe('appVolumeService.createAppVolume (findmnt disk selection + in-lock recheck)', () => {
+  const GiB = 1024 ** 3;
+  const deployComp = {
+    identifier: 'web_testapp', appName: 'testapp', storage: 10, mounts: [],
+  };
+
+  function load({ mount, condemned = false, teardownOwed = false } = {}) {
+    const runCommand = sinon.stub().resolves({ error: null });
+    const fakeCrontab = {
+      jobs: () => [], create: () => ({ isValid: () => true }), save: () => {}, remove: () => {},
+    };
+    const svc = proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
+      config: { lockedSystemResources: { extrahdd: 5 } },
+      crontab: { load: (cb) => cb(null, fakeCrontab) },
+      '../serviceHelper': { ensureString: (x) => x, runCommand },
+      '../dockerService': { getAppIdentifier: (id) => id },
+      '../deviceHelper': { mountForTarget: sinon.stub().resolves(mount) },
+      '../utils/hostMutationLock': { withHostMutationLock: (fn) => fn() },
+      '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(condemned) },
+      './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
+      '../syncthingService': {},
+      '../messageHelper': { createSuccessMessage: (m) => ({ status: 'success', data: m }) },
+      '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+    });
+    return { svc, runCommand };
+  }
+
+  // [{ cmd, params }] for every runCommand call
+  const cmdCalls = (runCommand) => runCommand.getCalls().map((c) => ({ cmd: c.args[0], params: (c.args[1] || {}).params || [] }));
+
+  it('places the FLUXFSVOL on the apps-folder filesystem and builds it (fallocate/mke2fs/mount)', async () => {
+    const { svc, runCommand } = load({ mount: { source: '/dev/mapper/flux_crypt', target: '/dat', availableBytes: 500 * GiB } });
+    await svc.createAppVolume(deployComp, null, false);
+    const calls = cmdCalls(runCommand);
+    expect(calls.some((c) => c.cmd === 'fallocate' && c.params.some((p) => String(p).includes('/dat/'))), 'allocated the volume file on /dat').to.be.true;
+    expect(calls.some((c) => c.cmd === 'mke2fs'), 'made the filesystem').to.be.true;
+    expect(calls.some((c) => c.cmd === 'mount' && c.params.includes('loop')), 'mounted it').to.be.true;
+  });
+
+  it('aborts inside the lock without allocating when the app is condemned', async () => {
+    const { svc, runCommand } = load({ mount: { source: '/dev/mapper/flux_crypt', target: '/dat', availableBytes: 500 * GiB }, condemned: true });
+    let threw = null;
+    try { await svc.createAppVolume(deployComp, null, false); } catch (e) { threw = e; }
+    expect(threw, 'aborted').to.be.an('error');
+    expect(threw.message).to.include('arrived before volume creation');
+    expect(cmdCalls(runCommand).some((c) => c.cmd === 'fallocate'), 'never allocated for a condemned app').to.be.false;
+  });
+
+  it('throws when the apps-folder disk has no room for the volume', async () => {
+    const { svc } = load({ mount: { source: '/dev/mapper/flux_crypt', target: '/dat', availableBytes: 1 * GiB } });
+    let threw = null;
+    try { await svc.createAppVolume(deployComp, null, false); } catch (e) { threw = e; }
+    expect(threw, 'aborted').to.be.an('error');
+    expect(threw.message).to.include('Insufficient space');
   });
 });
