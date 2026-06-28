@@ -36,6 +36,14 @@ let pendingAppUpdatesCache = null;
 // Running apps cache - tracks app names that have been broadcasted as running
 const runningAppsCache = new Set();
 
+// In-flight installs keyed by bare app name -> AbortController. The install registers
+// its controller right after acquiring its operation lease and clears it in its own
+// finally; a concurrent cancel/removal of the app aborts the in-flight image pull via
+// installingApps.get(name).abort() (the removal prelude). The AbortSignal latches
+// `aborted` permanently, so it is the one cancel-vs-install signal a fast detached
+// teardown cannot out-race clear.
+const installingApps = new Map();
+
 // Apps this node is draining/stopping for graceful shutdown — appName ->
 // { state: 'draining'|'stopping', expiresAt: epoch ms }. Written by the
 // flux-shutdownd drain socket; read when stamping the LB lifecycle state onto
@@ -55,7 +63,7 @@ function initializeCaches(cacheManager) {
   if (cacheManager && cacheManager.appSpawnErrorCache && cacheManager.appSpawnCache) {
     spawnErrorsLongerAppCache = cacheManager.appSpawnErrorCache;
     trySpawningGlobalAppCache = cacheManager.appSpawnCache;
-    pendingAppUpdatesCache = cacheManager.pendingAppUpdatesCache;
+    ({ pendingAppUpdatesCache } = cacheManager);
   }
 }
 
@@ -110,6 +118,37 @@ module.exports = {
   get syncthingDevicesIDCache() { return syncthingDevicesIDCache; },
   get folderHealthCache() { return folderHealthCache; },
   get runningAppsCache() { return runningAppsCache; },
+  get installingApps() { return installingApps; },
+
+  /**
+   * Did a concurrent cancel/removal abort THIS app's in-flight install? A cancel calls
+   * abortInstall(name) -> installingApps.get(name).abort(); the AbortSignal latches
+   * `aborted` permanently, so this is the one cancel-vs-install signal that cannot be
+   * out-raced by a fast detached teardown clearing the durable owed-teardown doc. The
+   * controller lives in the map until the install's own finally, so it is observable
+   * from the install's catch when classifying a thrown install as deferred (cancel) vs
+   * failed.
+   * @param {string} name bare app name
+   * @returns {boolean}
+   */
+  installAborted(name) {
+    const controller = installingApps.get(name);
+    return Boolean(controller && controller.signal && controller.signal.aborted);
+  },
+
+  /**
+   * Abort an app's in-flight install if one is registered (the removal prelude calls
+   * this so a cancel ends a racing install's image pull). No-op when nothing is in
+   * flight. The install's own finally drops the controller.
+   * @param {string} name bare app name
+   * @returns {boolean} whether an in-flight install was aborted
+   */
+  abortInstall(name) {
+    const controller = installingApps.get(name);
+    if (!controller) return false;
+    controller.abort();
+    return true;
+  },
 
   /**
    * Record an app's load-balancer lifecycle state with an expiry.
