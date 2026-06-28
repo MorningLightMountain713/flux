@@ -54,6 +54,7 @@ const MIGRATED_ROUTES = new Set([
   '/apps/appupdate',
   '/apps/verifyappregistrationspecifications',
   '/apps/verifyappupdatespecifications',
+  '/apps/bloblocator',
 ]);
 
 // App specs can carry a large transport-encrypted base64 payload, and the
