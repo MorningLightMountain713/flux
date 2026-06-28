@@ -4,13 +4,16 @@ const proxyquire = require('proxyquire').noCallThru();
 
 describe('componentProvisioner tests', () => {
   let appDockerStartStub;
+  let appDockerCreateStub;
   let createAppVolumeStub;
   let appDockerImageSizeStub;
 
   // installComponent isolated behind its provisioning deps. noCallThru + every
   // require stubbed, so nothing touches a real service.
-  function loadProvisioner() {
+  function loadProvisioner(opts = {}) {
+    const { teardownOwed = false, isCondemnedStub = null } = opts;
     appDockerStartStub = sinon.stub().resolves('ok');
+    appDockerCreateStub = sinon.stub().resolves();
     createAppVolumeStub = sinon.stub().resolves();
     appDockerImageSizeStub = sinon.stub().resolves(0);
     return proxyquire.load('../../ZelBack/src/services/appLifecycle/componentProvisioner', {
@@ -18,7 +21,7 @@ describe('componentProvisioner tests', () => {
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       '../serviceHelper': { delay: sinon.stub().resolves(), axiosGet: sinon.stub().resolves({ data: {} }) },
       '../dockerService': {
-        appDockerCreate: sinon.stub().resolves(),
+        appDockerCreate: appDockerCreateStub,
         appDockerImageSize: appDockerImageSizeStub,
         appDockerStart: appDockerStartStub,
         dockerPullStream: sinon.stub(),
@@ -33,6 +36,8 @@ describe('componentProvisioner tests', () => {
       '../utils/volumeService': { verifyAppVolumeMount: sinon.stub().resolves() },
       '../telemetryIdentityService': { onComponentCreated: sinon.stub().resolves() },
       '../appManagement/appInspector': { startAppMonitoring: sinon.stub() },
+      '../appManagement/appsRuntimeState': { isCondemned: isCondemnedStub || sinon.stub().resolves(false) },
+      './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
       util: { promisify: () => async () => 'pulled' },
     });
   }
@@ -155,6 +160,8 @@ describe('componentProvisioner tests', () => {
         '../utils/volumeService': {},
         '../telemetryIdentityService': {},
         '../appManagement/appInspector': {},
+        '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(false) },
+        './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(false) },
         util: { promisify: () => async () => 'pulled' },
       });
       let threw = false;
@@ -165,6 +172,44 @@ describe('componentProvisioner tests', () => {
         expect(err.message).to.include('image not found');
       }
       expect(threw, 'verifyComponentImage must throw on an unusable image').to.be.true;
+    });
+  });
+
+  // A cancel/removal racing this install condemns its components + writes a durable
+  // owed-teardown doc. These backstops abort the install AFTER the pull so it can never
+  // build a volume/container the cancel's teardown is about to rm -rf.
+  describe('cancel-during-install backstop', () => {
+    async function tryInstall(provisioner) {
+      let threw = null;
+      try {
+        await provisioner.installComponent(makeComponent('sync'), { owner: 'owner1', createVolumes: true });
+      } catch (error) {
+        threw = error;
+      }
+      return threw;
+    }
+
+    it('aborts after the pull (before the volume) when a teardown is owed for the app', async () => {
+      const provisioner = loadProvisioner({ teardownOwed: true });
+      const threw = await tryInstall(provisioner);
+      expect(threw, 'install aborted').to.be.an('error');
+      expect(threw.message).to.include('arrived mid-install');
+      expect(createAppVolumeStub.called, 'no volume built for an app being torn down').to.be.false;
+      expect(appDockerCreateStub.called, 'no container created').to.be.false;
+    });
+
+    it('aborts before container-create when a cancel condemns the app after the volume is built', async () => {
+      // isCondemned: false at the post-pull check, true at the pre-create check — a cancel
+      // landing in the createAppVolume -> appDockerCreate window.
+      const isCondemnedStub = sinon.stub();
+      isCondemnedStub.onCall(0).resolves(false);
+      isCondemnedStub.resolves(true);
+      const provisioner = loadProvisioner({ isCondemnedStub });
+      const threw = await tryInstall(provisioner);
+      expect(threw, 'install aborted').to.be.an('error');
+      expect(threw.message).to.include('arrived mid-install');
+      expect(createAppVolumeStub.called, 'the volume WAS built (post-pull check passed)').to.be.true;
+      expect(appDockerCreateStub.called, 'but the container was NOT created').to.be.false;
     });
   });
 });
