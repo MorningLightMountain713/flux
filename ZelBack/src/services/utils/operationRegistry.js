@@ -44,8 +44,15 @@ const DEFAULT_TTL_MS = 30 * 60 * 1000;
 // namespace never collides with an app name or component identifier.
 const ACTIVE_STANDBY_COORDINATOR_KEY = '__activeStandbyCoordinator__';
 
-// key -> { type, owner, reason, sinceMs, ttlMs, timer }
+// key -> { type, owner, reason, sinceMs, ttlMs, timer, token }
 const leases = new Map();
+
+// Monotonic, process-local source for the opaque release token. acquire returns a
+// token; release(key, token) deletes ONLY when it matches the held lease, so a
+// stale releaser — a same-app skipGuard sibling, or a deferred/early-return path
+// that never acquired — can never delete a lease it does not own and clobber a
+// later operation's lease on that key.
+let nextToken = 0;
 
 /**
  * Acquire an operation lease on a key (an app name for app-scoped operations, a
@@ -59,7 +66,9 @@ const leases = new Map();
  * @param {string} owner - acquiring call-site, for diagnostics
  * @param {string|null} [reason]
  * @param {number|null} [ttlMs] - override the per-type TTL
- * @returns {boolean} true if acquired (or already held by the same owner+type)
+ * @returns {string|null} an opaque release token on success (or the existing
+ *   token if already held by the same owner+type); null if a DIFFERENT operation
+ *   holds the key. Pass the token to release for an own-lease-only delete.
  */
 function acquire(key, type, owner, reason = null, ttlMs = null) {
   const existing = leases.get(key);
@@ -67,9 +76,9 @@ function acquire(key, type, owner, reason = null, ttlMs = null) {
     if (existing.type === type && existing.owner === owner) {
       existing.reason = reason;
       existing.sinceMs = Date.now();
-      return true;
+      return existing.token;
     }
-    return false;
+    return null;
   }
   const ttl = ttlMs ?? TTL_MS[type] ?? DEFAULT_TTL_MS;
   const timer = setTimeout(() => {
@@ -77,24 +86,36 @@ function acquire(key, type, owner, reason = null, ttlMs = null) {
     log.warn(`operationRegistry - lease '${key}' (${type}, owner=${owner}) exceeded ${Math.round(ttl / 1000)}s TTL; force-released (leak)`);
   }, ttl);
   if (timer.unref) timer.unref();
+  nextToken += 1;
+  const token = `lease-${nextToken}`;
   leases.set(key, {
-    type, owner, reason, sinceMs: Date.now(), ttlMs: ttl, timer,
+    type, owner, reason, sinceMs: Date.now(), ttlMs: ttl, timer, token,
   });
-  return true;
+  return token;
 }
 
 /**
- * Release a key's lease. Idempotent. Deliberately a dumb lease drop: it does NOT
- * enqueue the reconciler (that would make a passive primitive an orchestrator).
- * The provision-complete -> reconciler handoff lives in the operation layer
- * (e.g. appInstaller enqueues + awaits convergence after it releases here).
+ * Release a key's lease. Own-lease-only when a token is given: a release whose
+ * token does not match the currently-held lease is a NO-OP, so a stale releaser —
+ * two same-app skipGuard removes sharing one slot, or a deferred/early-return path
+ * that never acquired (token still null) — can never delete a lease it does not
+ * own and clobber a later install/operation lease on that key. A release with NO
+ * token (undefined) is unconditional: the decoupled component 'stopping' markers,
+ * whose acquire and release live in different functions, pass none. Idempotent.
+ * Deliberately a dumb lease drop: it does NOT enqueue the reconciler (that would
+ * make a passive primitive an orchestrator). The provision-complete -> reconciler
+ * handoff lives in the operation layer (e.g. appInstaller enqueues + awaits
+ * convergence after it releases here).
  *
  * @param {string} key
+ * @param {string} [token] - the token returned by acquire; when provided, the
+ *   release no-ops unless it matches the held lease (own-lease-only delete)
  * @returns {boolean} whether a lease was released
  */
-function release(key) {
+function release(key, token) {
   const lease = leases.get(key);
   if (!lease) return false;
+  if (token !== undefined && lease.token !== token) return false;
   if (lease.timer) clearTimeout(lease.timer);
   leases.delete(key);
   return true;
