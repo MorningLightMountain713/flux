@@ -2,12 +2,12 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-// Two-phase ("tombstoning") teardown: the prelude (Phase A) records a durable
-// owed-teardown doc + condemns + deletes the local row, and the deferred worker
-// (runTeardown / Phase B) stops, removes, tears down the host state, and clears the
-// record LAST. The order is load-bearing (see the adversarial-gate checklist).
+// Tombstoning teardown: the removal prelude records a durable owed-teardown doc +
+// condemns + deletes the local row, and the deferred worker (runTeardown) stops,
+// removes, tears down the host state, and clears the record LAST. The order is
+// load-bearing (see the adversarial-gate checklist).
 
-describe('appUninstaller tombstoning (two-phase teardown)', () => {
+describe('appUninstaller tombstoning teardown', () => {
   let appUninstaller;
   let stubs;
 
@@ -119,12 +119,11 @@ describe('appUninstaller tombstoning (two-phase teardown)', () => {
 
   afterEach(() => sinon.restore());
 
-  describe('runTeardown (Phase B worker)', () => {
+  describe('runTeardown (the deferred worker)', () => {
     const doc = () => ({
       key: 'app',
       name: 'app',
       networkName: 'app',
-      isComponent: false,
       forceKill: false,
       owner: 'owner1',
       components: [{
@@ -167,7 +166,7 @@ describe('appUninstaller tombstoning (two-phase teardown)', () => {
     });
   });
 
-  describe('uninstallApplication (Phase A prelude)', () => {
+  describe('uninstallApplication (the removal prelude)', () => {
     it('records the owed-teardown doc BEFORE deleting the local row, condemns, and awaits teardown (foreground)', async () => {
       const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
       expect(res.status).to.equal('removed');
@@ -197,11 +196,23 @@ describe('appUninstaller tombstoning (two-phase teardown)', () => {
       expect(stubs.fluxCommunicationMessagesSender.broadcastMessageToAll.calledOnce).to.be.true;
       if (resolveBroadcast) resolveBroadcast();
     });
+
+    it('background removal holds the remove lease until the deferred teardown finishes', async () => {
+      const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true, background: true });
+      expect(res.status).to.equal('removed'); // returns fast, before the destructive teardown
+      // let the detached teardown chain run
+      await new Promise((r) => { setImmediate(r); });
+      await new Promise((r) => { setImmediate(r); });
+      expect(stubs.dockerService.appDockerRemove.called, 'the deferred worker ran').to.be.true;
+      // the detached chain (NOT the finally's null no-op) released the real lease token,
+      // so the lease was held through the destructive teardown — deferring a same-name install
+      expect(stubs.operationRegistry.release.calledWith('app', 'tok'), 'lease released by the chain').to.be.true;
+    });
   });
 
   describe('recoverOwedTeardowns (boot recovery)', () => {
     const owedDoc = {
-      key: 'app', name: 'app', networkName: 'app', isComponent: false, forceKill: false, owner: 'o', components: [{ identifier: 'web_app', appId: 'web_app', label: 'app', ports: [], image: null }],
+      key: 'app', name: 'app', networkName: 'app', forceKill: false, owner: 'o', components: [{ identifier: 'web_app', appId: 'web_app', label: 'app', ports: [], image: null }],
     };
 
     it('re-condemns owed components then drives their teardown', async () => {

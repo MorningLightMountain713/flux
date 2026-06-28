@@ -3,8 +3,8 @@ const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 
 // Durable record of an app's OWED teardown — the crash-safe handoff between the
-// removal prelude (Phase A: stamp condemned + delete the local row) and the
-// deferred destructive teardown (Phase B: container remove + host cleanup). Once
+// removal prelude (stamp condemned + delete the local row) and the deferred
+// destructive teardown (container remove + host cleanup). Once
 // the local row is gone this doc is the SOLE record that cleanup is owed, so it is
 // written (fail-CLOSED) BEFORE any row delete and cleared only when the teardown
 // has fully finished (every condemned stamp dropped). Boot recovery re-drives any
@@ -23,9 +23,9 @@ function collection() {
  * prelude must fail CLOSED — never delete the local row (after which this doc is
  * the sole record of owed cleanup) if the record could not be persisted.
  *
- * @param {object} doc - { key, name, networkName, isComponent, forceKill,
- *   broadcastRemoval, createdAt, attempts, components: [{ identifier, appId,
- *   componentName, label, ports, image }] }
+ * @param {object} doc - { key, name, networkName, forceKill, broadcastRemoval,
+ *   createdAt, attempts, components: [{ identifier, appId, componentName, label,
+ *   ports, image }] }
  */
 async function writeTeardown(doc) {
   const database = collection();
