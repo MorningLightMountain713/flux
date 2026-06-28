@@ -1,25 +1,35 @@
 const serviceHelper = require('./serviceHelper');
 
 /**
- * This is no longer required
- * @param {string} directory The mount source
- * @returns {Promise<string>} The mount target
+ * The single mounted filesystem that HOSTS `target` (its containing mountpoint), with
+ * byte-level free space — `findmnt --target`. Replaces the old node-df "scan every disk
+ * and pick one" probe: an app's FLUXFSVOL must live on the filesystem that holds the
+ * apps folder (on Arcane that is /dat, NEVER the root/overlay disk), so we resolve that
+ * one filesystem directly instead of guessing. `target` must be an existing path (a
+ * non-existent leaf resolves to no mount on modern findmnt). Throws on findmnt failure
+ * or an unresolvable path so a caller never silently places a volume on the wrong disk.
+ * @param {string} target an existing path
+ * @returns {Promise<{source: string, target: string, fstype: string, availableBytes: number}>}
  */
-// async function getDfDevice(directory) {
-//   const { stdout } = await serviceHelper.runCommand('df', {
-//     params: ['--output=source,target', directory],
-//   });
-
-//   const lines = stdout.trim().split('\n');
-//   for (let i = 1; i < lines.length; i += 1) {
-//     const columns = lines[i].split(/\s+/);
-//     if (columns[0] !== '') {
-//       return columns[0];
-//     }
-//   }
-
-//   return '';
-// }
+async function mountForTarget(target) {
+  const res = await serviceHelper.runCommand('findmnt', {
+    logError: false,
+    params: ['--target', target, '--bytes', '--json', '--output', 'SOURCE,TARGET,FSTYPE,AVAIL'],
+  });
+  if (res.error) {
+    throw new Error(`findmnt --target ${target} failed: ${res.error.message || res.error}`);
+  }
+  const [mount] = JSON.parse(res.stdout || '{}').filesystems || [];
+  if (!mount) {
+    throw new Error(`findmnt --target ${target} resolved no mounted filesystem`);
+  }
+  return {
+    source: mount.source,
+    target: mount.target,
+    fstype: mount.fstype,
+    availableBytes: Number(mount.avail),
+  };
+}
 
 /**
  * Determines if mount target has a filesystem quota
@@ -64,4 +74,5 @@ if (require.main === module) {
 
 module.exports = {
   hasQuotaOptionForMountTarget,
+  mountForTarget,
 };
