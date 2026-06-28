@@ -111,6 +111,10 @@ async function installApplication(instantiated, options = {}) {
   const appName = instantiated.name;
   // Hoisted out of the try so the post-finally converge-wait can read its components.
   let deployment;
+  // Hoisted so the finally releases ONLY a lease this call actually acquired — the
+  // token stays null on the deferred early-return (an own-checked no-op), so a
+  // deferred install can never clobber the holder's lease.
+  let installToken = null;
   try {
     // Per-app: defer only if THIS app is already mid-operation. Installs of
     // different apps now run concurrently - the admission semaphore backstops
@@ -121,7 +125,7 @@ async function installApplication(instantiated, options = {}) {
     }
     // Acquire the per-app operation lease — the sole record that this app is
     // mid-install. Released in the finally.
-    operationRegistry.acquire(appName, 'install', 'appInstaller', `install ${appName}`);
+    installToken = operationRegistry.acquire(appName, 'install', 'appInstaller', `install ${appName}`);
 
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     if (!localSocketAddr) {
@@ -404,7 +408,7 @@ async function installApplication(instantiated, options = {}) {
 
     return { status: InstallStatus.FAILED, reason: error.message || serviceHelper.ensureString(error) };
   } finally {
-    operationRegistry.release(appName);
+    operationRegistry.release(appName, installToken);
     // Safety net for every pre-insert failure/early-return path: a reserved-but-
     // not-installed app must never leak its pending resources. Idempotent with the
     // explicit release after insertInstalledApp.

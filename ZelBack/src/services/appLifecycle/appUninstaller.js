@@ -439,6 +439,10 @@ async function uninstallApplication(appName, options = {}) {
     if (onStatus) onStatus(msg);
   };
 
+  // Hoisted so the finally releases ONLY a lease this call actually acquired — the
+  // token stays null on the deferred early-return (an own-checked no-op), and two
+  // same-app skipGuard removes that share one slot can never clobber a later lease.
+  let removeToken = null;
   try {
     // Normalise to the bare identifier this function reasons about: a caller may
     // pass the flux-prefixed docker name (e.g. the syncthing flow), which would
@@ -461,7 +465,7 @@ async function uninstallApplication(appName, options = {}) {
 
     // Acquire the per-app operation lease — the sole record that this app is
     // mid-removal. Released in the finally.
-    operationRegistry.acquire(appName, 'remove', 'appUninstaller', `remove ${appName}`);
+    removeToken = operationRegistry.acquire(appName, 'remove', 'appUninstaller', `remove ${appName}`);
 
     if (!appName) {
       throw new Error('No App specified');
@@ -646,7 +650,7 @@ async function uninstallApplication(appName, options = {}) {
     status(`Error: ${error.message}`);
     return { status: UninstallStatus.FAILED, reason: error.message };
   } finally {
-    operationRegistry.release(appName);
+    operationRegistry.release(appName, removeToken);
   }
 }
 
