@@ -3,7 +3,7 @@
 // It seals one HPKE content envelope over the blobs + initial manifest, owner-signs
 // every door, and POSTs spec + content + ownerSigs as multipart/form-data.
 import { authenticate } from '../auth.js';
-import { appOwnerKey } from './keys.js';
+import { appOwnerKey, userKey } from './keys.js';
 import benchCrypto from '../../daemon-stub/benchCrypto.js';
 import * as tk from './content-crypto-v9.js';
 
@@ -148,6 +148,28 @@ export async function pushContentUpdate(nodeUrl, opts) {
     method: 'POST', headers: { zelidauth: auth.zelidauth }, body: form,
   });
   return res.json();
+}
+
+/**
+ * Inject a content manifest with a FORGED owner signature into the network via a peer
+ * stub, modelling a Byzantine peer relaying a manifest it never owner-verified (honest
+ * nodes never do this). The stub node-signs the gossip envelope with its own trusted node
+ * key, so the relay check passes; the manifest is owner-signed by a NON-owner key, so a
+ * receiving node's owner-sig verification fails and it drops the manifest, emitting
+ * content:manifestDropped{forged_signature}.
+ *
+ * @param {object} stub - a stubPeerClient (an env.stubPeerClients value)
+ * @param {object} opts - { appName, version, slots: [{ name, bytes }], forgerKey? }
+ * @returns {Promise<object>} the stub /broadcast result ({ status, sent })
+ */
+export async function injectForgedManifestGossip(stub, opts) {
+  const forgerKey = opts.forgerKey || userKey(); // a non-owner key, so the owner-sig check fails
+  const slotMap = {};
+  for (const s of opts.slots || []) slotMap[s.name] = { hash: tk.blobHash(s.bytes) };
+  const manifest = await tk.buildOwnerSignedManifest({
+    appName: opts.appName, version: opts.version, slots: slotMap, ownerKey: forgerKey,
+  });
+  return stub.broadcast({ type: 'fluxappcontentmanifest', appName: opts.appName, manifest });
 }
 
 /**
