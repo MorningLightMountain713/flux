@@ -17,26 +17,17 @@ globalThis.userconfig = {
 
 const chai = require('chai');
 const sinon = require('sinon');
-const proxyquire = require('proxyquire');
 const WebSocket = require('ws');
-const path = require('path');
 const chaiAsPromised = require('chai-as-promised');
-const fs = require('fs').promises;
 const util = require('util');
 const log = require('../../ZelBack/src/lib/log');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
-const daemonServiceWalletRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceWalletRpcs');
-const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
-const networkStateService = require('../../ZelBack/src/services/networkStateService');
-const dbHelper = require('../../ZelBack/src/services/dbHelper');
-const { requireMongo } = require('./dbTestHelper');
 const upnpService = require('../../ZelBack/src/services/upnpService');
 
 const net = require('node:net');
@@ -229,6 +220,10 @@ describe('fluxNetworkHelper tests', () => {
 
     beforeEach(() => {
       benchStub = sinon.stub(benchmarkService, 'getBenchmarks');
+      // Reset the own-IP freshness cache so it never leaks across tests — a warm cache
+      // would make getLocalSocketAddress skip the benchmark stub a test set up. Setting
+      // null clears both the value and the freshness deadline.
+      fluxNetworkHelper.setLocalSocketAddress(null);
     });
 
     afterEach(() => {
@@ -309,6 +304,40 @@ describe('fluxNetworkHelper tests', () => {
       const result = await fluxNetworkHelper.getLocalSocketAddress();
 
       expect(result).to.equal('85.159.213.248:16147');
+    });
+
+    it('serves the cached own-IP without a second benchmark RPC while fresh', async () => {
+      benchStub.resolves({ status: 'success', data: { ipaddress: '85.159.213.248:16127' } });
+
+      const first = await fluxNetworkHelper.getLocalSocketAddress();
+      const second = await fluxNetworkHelper.getLocalSocketAddress();
+
+      expect(first).to.equal('85.159.213.248:16127');
+      expect(second).to.equal('85.159.213.248:16127');
+      // the freshness cache short-circuits the second call — a batch pays ONE RPC, not N
+      sinon.assert.calledOnce(benchStub);
+    });
+
+    it('re-benchmarks after the cache is invalidated (setLocalSocketAddress null)', async () => {
+      benchStub.resolves({ status: 'success', data: { ipaddress: '85.159.213.248:16127' } });
+
+      await fluxNetworkHelper.getLocalSocketAddress();
+      fluxNetworkHelper.setLocalSocketAddress(null); // clears the value + the freshness deadline
+      await fluxNetworkHelper.getLocalSocketAddress();
+
+      sinon.assert.calledTwice(benchStub);
+    });
+
+    it('does not cache a null (unresolved) own-IP — keeps probing', async () => {
+      benchStub.resolves({ status: 'error' });
+
+      const first = await fluxNetworkHelper.getLocalSocketAddress();
+      const second = await fluxNetworkHelper.getLocalSocketAddress();
+
+      expect(first).to.be.null;
+      expect(second).to.be.null;
+      // a null result is never cached, so every call re-probes until fluxbench resolves
+      sinon.assert.calledTwice(benchStub);
     });
   });
 
@@ -1460,7 +1489,10 @@ describe('fluxNetworkHelper tests', () => {
       const fluxUptime = fluxNetworkHelper.fluxUptime();
 
       expect(fluxUptime.status).to.equal('success');
-      expect(fluxUptime.data).to.be.gte(ut);
+      // fluxUptime floors process.uptime(); uptime only increases, so the floored value
+      // at the call is >= the floor of the uptime captured earlier and <= the raw uptime
+      // now. (Comparing to the un-floored earlier value flakes when uptime < 1s: floor->0.)
+      expect(fluxUptime.data).to.be.gte(Math.floor(ut));
       const utb = process.uptime();
       expect(fluxUptime.data).to.be.lte(utb);
     });
