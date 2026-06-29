@@ -21,7 +21,7 @@ function specDeclaringContent(hashes) {
 const KEY = crypto.randomBytes(32);
 const NOW_MS = 1_700_000_000_000;
 const now = () => NOW_MS;
-const freshTs = String(NOW_MS / 1000);
+const freshTs = String(NOW_MS);
 
 const hashOf = (buf) => `sha256:${crypto.createHash('sha256').update(buf).digest('hex')}`;
 // executeCall shape: { status: 'success', data: { status: 'ok', <field> } }
@@ -93,7 +93,7 @@ describe('contentBlobService', () => {
     it('rejects a stale owner timestamp', async () => {
       const bytes = Buffer.from('data');
       await expectReject(encryptAndUploadBlob(
-        { appName: 'app', fluxID: '1id', contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: String(NOW_MS / 1000 - 1000) },
+        { appName: 'app', fluxID: '1id', contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: String(NOW_MS - 6 * 60 * 1000) },
         { benchmark: makeBenchmark(), uploader: makeUploader(), now },
       ), /stale/);
     });
