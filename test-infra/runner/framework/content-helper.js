@@ -45,7 +45,7 @@ export async function deployContentApp(nodeUrl, opts) {
     components: opts.components,
     contentRefHash,
     contentSlots: contentSlots.map((s) => ({
-      name: s.name, destination: s.destination, source: s.source, onUpdate: s.onUpdate, atomic: s.atomic,
+      name: s.name, destination: s.destination, source: s.source, onUpdate: s.onUpdate, atomic: s.atomic, uid: s.uid, gid: s.gid, mode: s.mode,
     })),
   });
 
