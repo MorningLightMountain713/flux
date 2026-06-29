@@ -367,11 +367,12 @@ async function installApplication(instantiated, options = {}) {
       }
 
       // Hand the full shutdown plan to flux-shutdownd (best-effort; Arcane-only
-      // — the socket is absent elsewhere and the call no-ops). Per-container
-      // labels were stamped at docker-create; this carries the richer plan
-      // (preStop argv, drain config) the labels can't hold. The whole handoff is
-      // guarded — building or pushing the plan must never break an install.
-      if (!test) {
+      // — the socket is absent elsewhere and the call no-ops). Only graceful apps
+      // get a plan: the predicate is feature-driven, mirroring the budget labels.
+      // Per-container labels were stamped at docker-create; this carries the
+      // richer plan (preStop argv, drain config) the labels can't hold. The whole
+      // handoff is guarded — building or pushing the plan must never break an install.
+      if (!test && shutdownPlan.appRequiresDaemonShutdown(deployment)) {
         try {
           await fluxShutdowndClient.upsertAppPlanBestEffort(
             shutdownPlan.buildShutdownPlan(instantiated, deployment),
