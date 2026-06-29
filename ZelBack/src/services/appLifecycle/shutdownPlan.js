@@ -23,6 +23,48 @@ function maxDrainTimeout(deployComp) {
   return max;
 }
 
+/** Per-component shutdown budget: drain + preStop + graceful (10s default). */
+function componentBudgetSeconds(deployComp) {
+  const drain = maxDrainTimeout(deployComp);
+  const preStop = deployComp.preStop ? deployComp.preStop.timeout : 0;
+  const graceful = deployComp.shutdown ? deployComp.shutdown.gracefulTimeout : 10;
+  return drain + preStop + graceful;
+}
+
+/**
+ * The app-wide graceful-shutdown budget (seconds): the sum of every component's
+ * drain + preStop + graceful. Single source of truth shared with
+ * `buildShutdownPlan`, so the daemon's deadline and the FluxOS-side budget agree.
+ *
+ * @param {object} deployment - a DeploymentSpec
+ * @returns {number}
+ */
+function appShutdownBudgetSeconds(deployment) {
+  let budget = 0;
+  for (const [, deployComp] of deployment.componentEntries()) {
+    budget += componentBudgetSeconds(deployComp);
+  }
+  return budget;
+}
+
+/**
+ * Whether an app uses any graceful-shutdown feature (shutdown, preStop, or a port
+ * drain) and therefore needs a flux-shutdownd plan + the `runonflux.shutdown.*`
+ * budget labels. Keyed on FEATURE USAGE, not `isEncrypted`: a graceful-shutdown
+ * app is necessarily encrypted (the spec forces it), but a secrets-only encrypted
+ * app with no shutdown config must NOT get a plan, and a graceful app must always
+ * get one. Reads the same getters `buildShutdownPlan` consumes, so they can't drift.
+ *
+ * @param {object} deployment - a DeploymentSpec
+ * @returns {boolean}
+ */
+function appRequiresDaemonShutdown(deployment) {
+  return deployment.componentEntries().some(([, deployComp]) => {
+    if (deployComp.shutdown || deployComp.preStop) return true;
+    return maxDrainTimeout(deployComp) > 0;
+  });
+}
+
 /**
  * The `runonflux.*` labels stamped on a container so flux-shutdownd can find it
  * and read its shutdown budget without consulting FluxOS at shutdown time.
@@ -77,10 +119,7 @@ function buildShutdownPlan(instantiated, deployment) {
   const components = [];
   let budget = 0;
   for (const [, deployComp] of deployment.componentEntries()) {
-    const drain = maxDrainTimeout(deployComp);
-    const preStop = deployComp.preStop ? deployComp.preStop.timeout : 0;
-    const graceful = deployComp.shutdown ? deployComp.shutdown.gracefulTimeout : 10;
-    budget += drain + preStop + graceful;
+    budget += componentBudgetSeconds(deployComp);
     components.push({
       name: deployComp.name,
       shutdown: deployComp.shutdown
@@ -109,4 +148,6 @@ function buildShutdownPlan(instantiated, deployment) {
 module.exports = {
   componentShutdownLabels,
   buildShutdownPlan,
+  appShutdownBudgetSeconds,
+  appRequiresDaemonShutdown,
 };
