@@ -49,6 +49,7 @@ function databaseConfig(prefix) {
         appsLocations: 'zelappslocation',
         appsInstallingLocations: 'appsinstallinglocations',
         appsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
+        appContentManifests: 'appcontentmanifests',
       },
     },
     chainparams: {
