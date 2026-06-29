@@ -181,7 +181,7 @@ describe('appSpawner tests', () => {
       },
       '../appDatabase/appsRepository': {
         findUnderProvisionedApps: findUnderProvisionedStub,
-        getGlobalAppInfo: sinon.stub().resolves(null),
+        getGlobalAppInfo: opts.globalAppInfoStub ?? sinon.stub().resolves(null),
         existsInstalledApp: sinon.stub().resolves(false),
         listInstalledApps: opts.installedApps ?? sinon.stub().resolves([]),
       },
@@ -784,6 +784,82 @@ describe('appSpawner tests', () => {
 
       sinon.assert.called(installStub);
       sinon.assert.calledWith(delayStub, 5000); // installCollisionWaitMs
+    });
+  });
+
+  describe('isPinnedContended', () => {
+    beforeEach(() => buildModule());
+
+    const placementWith = (targetIps = [], targetOutpoints = [], targetOperators = []) => ({
+      targetIps, targetOutpoints, targetOperators,
+    });
+
+    it('is true when pinned to MORE nodes than required instances (real multi-node contention)', () => {
+      expect(appSpawner.isPinnedContended(placementWith(['a', 'b']), 1)).to.equal(true);
+      expect(appSpawner.isPinnedContended(placementWith(['a', 'b', 'c']), 2)).to.equal(true);
+    });
+
+    it('is false when pinned to as many or fewer nodes than required (a sole installer)', () => {
+      expect(appSpawner.isPinnedContended(placementWith(['a']), 1)).to.equal(false);
+      expect(appSpawner.isPinnedContended(placementWith(['a', 'b']), 2)).to.equal(false);
+      expect(appSpawner.isPinnedContended(placementWith(['a']), 3)).to.equal(false);
+    });
+
+    it('is false for an unpinned app (open contention is not handled by the off-loop defer)', () => {
+      expect(appSpawner.isPinnedContended(placementWith(), 1)).to.equal(false);
+      expect(appSpawner.isPinnedContended(undefined, 1)).to.equal(false);
+      expect(appSpawner.isPinnedContended(null, 1)).to.equal(false);
+    });
+
+    it('is mutually exclusive with isSoleRequiredInstaller', () => {
+      const placement = placementWith(['a', 'b', 'c']);
+      expect(appSpawner.isPinnedContended(placement, 2)).to.equal(true);
+      expect(appSpawner.isSoleRequiredInstaller(placement, 2)).to.equal(false);
+    });
+  });
+
+  describe('pinned-contended collision window runs OFF the serial spawn loop', () => {
+    const contendedPlacement = () => ({
+      targetIps: ['192.168.1.1', '10.0.0.7'], // 2 pins, 1 instance -> real contention
+      hasTargets: () => true,
+      matchesTarget: () => true,
+    });
+
+    it('first pass: a pinned-contended app is deferred (collisionDeferred) and does NOT install inline', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      const candidate = makeCandidate({ name: 'conApp', hash: 'con1', required: 1, placement: contendedPlacement() });
+      buildModule({ candidates: [candidate], installStub });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      // the collision window is taken OFF the loop: the app is queued (collisionDeferred) instead of
+      // installed-with-an-inline-wait, so contention-free apps behind it are not blocked.
+      const queued = globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conApp');
+      expect(queued, 'pinned-contended app must be deferred onto appsToBeCheckedLater').to.exist;
+      expect(queued.collisionDeferred).to.equal(true);
+      expect(installStub.called, 'install must NOT run on the deferring first pass').to.equal(false);
+    });
+
+    it('second pass: the deferred (collisionDeferred) app installs without re-deferring', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      buildModule({
+        // a placeholder keeps numberOfGlobalApps > 0 so the deferred-queue branch is reached
+        candidates: [makeCandidate({ name: 'placeholder', hash: 'ph1' })],
+        installStub,
+        globalAppInfoStub,
+        globalStateOverrides: {
+          appsToBeCheckedLater: [{
+            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true,
+          }],
+        },
+      });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      // window already elapsed off-loop -> it installs this time, and is spliced out (not re-queued).
+      expect(installStub.called, 'a collisionDeferred app back from the queue must install').to.equal(true);
+      expect(globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conApp'), 'must not re-defer').to.not.exist;
     });
   });
 });
