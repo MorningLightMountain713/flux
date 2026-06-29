@@ -19,6 +19,7 @@ describe('appsRepository', () => {
       findInDatabase: sinon.stub(),
       replaceOneInDatabase: sinon.stub(),
       removeDocumentsFromCollection: sinon.stub(),
+      updateOneInDatabase: sinon.stub().resolves({ acknowledged: true }),
       aggregateInDatabase: sinon.stub().resolves([]),
     };
 
@@ -75,6 +76,7 @@ describe('appsRepository', () => {
             appsInformation: 'zelappsinformation',
             appsMessages: 'zelappsmessages',
             appsLocations: 'zelappslocation',
+            appContentManifests: 'zelappcontentmanifests',
           },
         },
         appslocal: {
@@ -393,6 +395,109 @@ describe('appsRepository', () => {
       const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
       const sortStage = pipeline.find((stage) => stage.$sort);
       expect(sortStage.$sort).to.deep.equal({ name: 1 });
+    });
+  });
+
+  describe('content manifests', () => {
+    it('upsert: a confirmed store advances a higher version OR promotes a same-version quarantined row', async () => {
+      const row = { appName: 'app', version: 2, data: { d: 1 } };
+      const ok = await appsRepository.upsertContentManifest(row, { confirmed: true, clearEnvelope: true });
+      expect(ok).to.equal(true);
+      const [, collection, filter, update, opts] = dbHelperStub.updateOneInDatabase.firstCall.args;
+      expect(collection).to.equal('zelappcontentmanifests');
+      expect(filter).to.deep.equal({ appName: 'app', $or: [{ version: { $lt: 2 } }, { version: 2, confirmed: false }] });
+      expect(opts).to.deep.equal({ upsert: true });
+      expect(update.$set).to.include({ appName: 'app', version: 2, confirmed: true });
+      expect(update.$set.data).to.deep.equal({ d: 1 });
+      expect(update.$set.receivedAt).to.be.instanceOf(Date);
+      expect(update.$unset).to.deep.equal({ expireAt: '', envelope: '' }); // catch-up clears both
+    });
+
+    it('upsert: a quarantine store holds a strictly-newer version and carries the TTL', async () => {
+      const expireAt = new Date(123456);
+      await appsRepository.upsertContentManifest(
+        { appName: 'app', version: 3, data: {} }, { confirmed: false, expireAt, clearEnvelope: true },
+      );
+      const [, , filter, update] = dbHelperStub.updateOneInDatabase.firstCall.args;
+      expect(filter).to.deep.equal({ appName: 'app', version: { $lt: 3 } });
+      expect(update.$set.confirmed).to.equal(false);
+      expect(update.$set.expireAt).to.equal(expireAt);
+      expect(update.$unset).to.deep.equal({ envelope: '' });
+    });
+
+    it('upsert: a broadcast store keeps its envelope (clears only the TTL)', async () => {
+      const envelope = { version: 1, timestamp: 7, pubKey: 'pk', signature: 'sig' };
+      await appsRepository.upsertContentManifest(
+        { appName: 'app', version: 2, data: { d: 1 }, envelope }, { confirmed: true, clearEnvelope: false },
+      );
+      const [, , , update] = dbHelperStub.updateOneInDatabase.firstCall.args;
+      expect(update.$set.envelope).to.deep.equal(envelope);
+      expect(update.$unset).to.deep.equal({ expireAt: '' });
+    });
+
+    it('upsert: maps a unique-index collision (a same/higher version already won) to false', async () => {
+      const err = new Error('E11000 duplicate key');
+      err.code = 11000;
+      dbHelperStub.updateOneInDatabase.rejects(err);
+      const ok = await appsRepository.upsertContentManifest({ appName: 'app', version: 2, data: {} });
+      expect(ok).to.equal(false);
+    });
+
+    it('getContentManifest reads one row by appName', async () => {
+      dbHelperStub.findOneInDatabase.resolves({ appName: 'app', version: 4 });
+      const out = await appsRepository.getContentManifest('app');
+      expect(out.version).to.equal(4);
+      const [, collection, query] = dbHelperStub.findOneInDatabase.firstCall.args;
+      expect(collection).to.equal('zelappcontentmanifests');
+      expect(query).to.deep.equal({ appName: 'app' });
+    });
+
+    it('deleteQuarantinedContentManifest removes only the confirmed:false row', async () => {
+      await appsRepository.deleteQuarantinedContentManifest('app');
+      const [, collection, query] = dbHelperStub.removeDocumentsFromCollection.firstCall.args;
+      expect(collection).to.equal('zelappcontentmanifests');
+      expect(query).to.deep.equal({ appName: 'app', confirmed: false });
+    });
+
+    it('listConfirmedContentManifestVersions returns the (appName, version) vector of confirmed rows', async () => {
+      dbHelperStub.findInDatabase.resolves([{ appName: 'a', version: 2 }, { appName: 'b', version: 5 }]);
+      const out = await appsRepository.listConfirmedContentManifestVersions();
+      expect(out).to.deep.equal([{ appName: 'a', version: 2 }, { appName: 'b', version: 5 }]);
+      const [, , query, options] = dbHelperStub.findInDatabase.firstCall.args;
+      expect(query).to.deep.equal({ confirmed: true });
+      expect(options.projection).to.deep.equal({ _id: 0, appName: 1, version: 1 });
+    });
+
+    it('listConfirmedContentManifestBroadcasts rebuilds {...envelope, data}, optionally scoped to appNames', async () => {
+      const env = { version: 1, timestamp: 7, pubKey: 'pk', signature: 'sig' };
+      dbHelperStub.findInDatabase.resolves([{ envelope: env, data: { m: 1 } }]);
+      const out = await appsRepository.listConfirmedContentManifestBroadcasts(['a']);
+      expect(out).to.deep.equal([{ ...env, data: { m: 1 } }]);
+      const [, , query] = dbHelperStub.findInDatabase.firstCall.args;
+      expect(query).to.deep.equal({ confirmed: true, envelope: { $exists: true }, appName: { $in: ['a'] } });
+    });
+
+    it('reapOrphanedContentManifests deletes confirmed manifests whose app left the global set', async () => {
+      const distinctStub = sinon.stub().resolves(['live', 'dead']);
+      mockDb.db.returns({ collection: sinon.stub().returns({ distinct: distinctStub }) });
+      dbHelperStub.findInDatabase.resolves([{ name: 'live' }]); // listExistingGlobalAppNames -> only 'live' survives
+      dbHelperStub.removeDocumentsFromCollection.resolves({ deletedCount: 1 });
+
+      const { reaped, orphans } = await appsRepository.reapOrphanedContentManifests();
+      expect(orphans).to.deep.equal(['dead']);
+      expect(reaped).to.equal(1);
+      const [, collection, query] = dbHelperStub.removeDocumentsFromCollection.firstCall.args;
+      expect(collection).to.equal('zelappcontentmanifests');
+      expect(query).to.deep.equal({ appName: { $in: ['dead'] }, confirmed: true });
+    });
+
+    it('reapOrphanedContentManifests is a no-op when every manifest app is still live', async () => {
+      const distinctStub = sinon.stub().resolves(['live']);
+      mockDb.db.returns({ collection: sinon.stub().returns({ distinct: distinctStub }) });
+      dbHelperStub.findInDatabase.resolves([{ name: 'live' }]);
+      const { reaped } = await appsRepository.reapOrphanedContentManifests();
+      expect(reaped).to.equal(0);
+      sinon.assert.notCalled(dbHelperStub.removeDocumentsFromCollection);
     });
   });
 });
