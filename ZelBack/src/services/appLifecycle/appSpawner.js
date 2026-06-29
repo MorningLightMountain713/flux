@@ -30,10 +30,41 @@ const fluxEventBus = require('../utils/fluxEventBus');
 let appsCountAvailableToInstallOnMyNode = 0;
 
 const collisionWaitMs = config.fluxapps.installCollisionWaitMs;
-const spawnReconfirmDelayMs = config.fluxapps.spawnReconfirmDelayMs;
+const { spawnReconfirmDelayMs } = config.fluxapps;
 const unencryptedSpawnDelayMs = config.fluxapps.unencryptedSpawnDelayMs ?? 2 * 60 * 1000;
 
 let spawnLoopRunning = false;
+
+/**
+ * Number of nodes a spec pins via the placement model (IP / outpoint / operator
+ * targets) - the v9 successor to the flat v8 `nodes` IP list. Summing the three
+ * target arrays can over-count when one physical node is pinned by two identifiers
+ * (e.g. IP and outpoint); that is conservative - it only ever demotes a true
+ * sole-installer to "contended" (losing the fast path), never the reverse, so it
+ * cannot cause an instance overshoot.
+ * @param {object} placement - the spec's Placement
+ * @returns {number}
+ */
+function placementPinCount(placement) {
+  if (!placement) return 0;
+  return placement.targetIps.length + placement.targetOutpoints.length + placement.targetOperators.length;
+}
+
+/**
+ * A node-pinned app whose pin set is no larger than its required instance count has
+ * no installation contention: every pinned node is a mandatory installer, so the
+ * collision-avoidance election (and the two propagation waits that feed it - the
+ * pre-install collision wait and the post-install over-instance self-evict) has
+ * nothing to resolve. Owner- and flag-agnostic; provably safe because no overshoot
+ * is possible when eligible installers do not exceed required instances.
+ * @param {object} placement - the spec's Placement (carries the pin targets)
+ * @param {number} minInstances - required instance count for the app
+ * @returns {boolean}
+ */
+function isSoleRequiredInstaller(placement, minInstances) {
+  const pinCount = placementPinCount(placement);
+  return pinCount > 0 && pinCount <= minInstances;
+}
 
 function initialize() {
   appSyncEvents.on(SYNC_EVENTS.SPAWNER_READY, () => {
@@ -220,7 +251,7 @@ async function trySpawningGlobalApplication() {
         && !appsToBeCheckedLater.some((appAux) => appAux.appName === c.instantiated.name));
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.matches(nodeInfo));
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
-        const owner = c.instantiated.owner;
+        const { owner } = c.instantiated;
         const isEnterpriseOwner = enterpriseNetwork.isEnterpriseAppOwner(owner);
         const eligible = isEnterpriseNode ? isEnterpriseOwner : !isEnterpriseOwner;
         return eligible;
@@ -321,11 +352,11 @@ async function trySpawningGlobalApplication() {
       return shortDelayTime;
     }
 
-    let spec = instantiated.spec;
+    let { spec } = instantiated;
     if (instantiated.isEncrypted) {
       try {
         const provider = await spec.createProvider();
-        spec = (await spec.decrypt(provider)).spec;
+        ({ spec } = await spec.decrypt(provider));
       } catch (error) {
         // Decrypt failures are node-local state (provider registration, the
         // benchmark channel), never a verdict on the app — caching the hash
@@ -608,6 +639,9 @@ async function trySpawningGlobalApplication() {
     }
 
     // an application was selected and checked that it can run on this node. try to install and run it locally
+    // A pinned app with no install contention skips the two propagation waits below
+    // (collision election + post-install over-instance check) - see isSoleRequiredInstaller.
+    const soleRequiredInstaller = isSoleRequiredInstaller(specPlacement, minInstances);
     // lets broadcast to the network the app is going to be installed on this node, so we don't get lot's of intances installed when it's not needed
     let broadcastedAt = Date.now();
     const newAppInstallingMessage = {
@@ -625,7 +659,10 @@ async function trySpawningGlobalApplication() {
     const fluxCommMessagesSender = require('../fluxCommunicationMessagesSender');
     await fluxCommMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
 
-    await serviceHelper.delay(collisionWaitMs); // give it 1.5m so messages are propagated on the network
+    if (!soleRequiredInstaller) {
+      // collision election needs peers' installing-broadcasts to propagate first
+      await serviceHelper.delay(collisionWaitMs); // give it 1.5m so messages are propagated on the network
+    }
 
     // double check if app is installed in more of the instances requested
     runningAppList = await registryManager.appLocation(appToRun);
@@ -695,7 +732,10 @@ async function trySpawningGlobalApplication() {
       return shortDelayTime;
     }
 
-    await serviceHelper.delay(1 * 60 * 1000); // await 1 minute to give time for messages to be propagated on the network
+    if (!soleRequiredInstaller) {
+      // over-instance self-evict needs peers' running-broadcasts to propagate first
+      await serviceHelper.delay(1 * 60 * 1000); // await 1 minute to give time for messages to be propagated on the network
+    }
     // double check if app is installed in more of the instances requested
     runningAppList = await registryManager.appLocation(appToRun);
     if (runningAppList.length > minInstances) {
@@ -740,4 +780,5 @@ async function trySpawningGlobalApplication() {
 module.exports = {
   initialize,
   trySpawningGlobalApplication,
+  isSoleRequiredInstaller,
 };
