@@ -580,10 +580,14 @@ async function getContentManifestApi(req, res) {
   }
 }
 
-/** Injected content is read-only (no world-write). Spec-driven uid/gid/mode + root
- * ownership replace this default via the shared mount-perms helper (S5c). */
-async function defaultInjectedPerms(target) {
-  await fs.chmod(target, 0o444);
+/** Apply an injected file's ownership + mode: the slot mount's resolved perms —
+ * the declared per-mount uid/gid/mode, or root-owned 0444 by default (DeploymentSpec
+ * resolveMountPerms). Both are set here so a declared mode is honored rather than
+ * dropped by a blanket chmod. The node runs as root, so chown/chmod apply directly. */
+async function defaultInjectedPerms(target, mount) {
+  const { uid, gid, mode } = (mount && mount.perms) || { uid: 0, gid: 0, mode: '0444' };
+  await fs.chown(target, Number(uid), Number(gid));
+  await fs.chmod(target, parseInt(mode, 8));
 }
 
 /** Run a container reaction (signal/restart) without rolling back written content —
@@ -640,14 +644,14 @@ async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
       // eslint-disable-next-line no-await-in-loop
       await writeFile(tmp, bytes);
       // eslint-disable-next-line no-await-in-loop
-      await applyPerms(tmp);
+      await applyPerms(tmp, mount);
       // eslint-disable-next-line no-await-in-loop
       await rename(tmp, mount.source); // atomic swap within the managed dir
     } else {
       // eslint-disable-next-line no-await-in-loop
       await writeFile(mount.source, bytes); // in-place overwrite of the single-file bind
       // eslint-disable-next-line no-await-in-loop
-      await applyPerms(mount.source);
+      await applyPerms(mount.source, mount);
     }
   }
 
