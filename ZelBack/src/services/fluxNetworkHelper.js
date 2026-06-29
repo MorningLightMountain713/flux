@@ -3,7 +3,6 @@ const config = require('config');
 const { decodeWIF, privKeyToPubKey } = require('./utils/fluxCryptoUtils');
 const nodecmd = require('node-cmd');
 const fs = require('fs').promises;
-const path = require('path');
 const os = require('os');
 const dgram = require('dgram');
 const { EventEmitter, once } = require('events');
