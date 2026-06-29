@@ -29,6 +29,7 @@ const imageManager = require('../appSecurity/imageManager');
 const fluxEventBus = require('../utils/fluxEventBus');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const pendingTeardownStore = require('./pendingTeardownStore');
+const shutdownPlan = require('./shutdownPlan');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
@@ -423,6 +424,7 @@ async function uninstallApplication(appName, options = {}) {
     broadcastRemoval = false,
     background = false,
     onStatus = null,
+    reason = null,
   } = options;
 
   const status = (msg) => {
@@ -537,6 +539,10 @@ async function uninstallApplication(appName, options = {}) {
       forceKill,
       broadcastRemoval,
       owner: spec.owner,
+      // The stop reason + budget the deferred teardown hands flux-shutdownd. Persisted
+      // because the authoritative spec may be gone by teardown time.
+      reason,
+      shutdownBudgetSeconds: deployment ? shutdownPlan.appShutdownBudgetSeconds(deployment) : 0,
       createdAt: Date.now(),
       attempts: 0,
       components,
@@ -631,18 +637,37 @@ async function uninstallApplication(appName, options = {}) {
  */
 async function runTeardown(doc, { onStatus = null } = {}) {
   const {
-    key, name, networkName, forceKill, owner, components,
+    key, name, networkName, forceKill, owner, components, reason, shutdownBudgetSeconds,
   } = doc;
   const list = components || [];
   const status = (msg) => { log.info(msg); if (onStatus) onStatus(msg); };
 
-  // Graceful stop, OUTSIDE the lock. The container is removed below; stopping it first
-  // makes the remove a clean (non-SIGKILL) teardown and releases its volume before the
-  // unmount. appUninstaller is the run-authority's terminal-teardown exception.
+  // Route the stop through flux-shutdownd first: on Arcane it owns every app stop (a
+  // graceful drain, or a zero-budget force), so the local stop below is skipped. On a
+  // non-Arcane node, or when the daemon is unreachable, beginAppStop short-circuits and
+  // the local stop does the work. A node-wide shutdown owning the node defers this
+  // teardown to boot recovery (the node drain stops the app as it goes down).
+  const stopReason = reason || fluxShutdowndClient.SHUTDOWN_REASON.TTL_EXPIRED;
+  const budgetSeconds = forceKill ? 0 : (shutdownBudgetSeconds || 0);
+  const stopDeadline = Math.floor(Date.now() / 1000) + budgetSeconds;
+  const stop = await fluxShutdowndClient.beginAppStop(owner, name, stopReason, {
+    force: Boolean(forceKill),
+    deadline: stopDeadline,
+  });
+  if (stop.outcome === 'rejected_pipeline_active') {
+    status(`${name} teardown deferred: a node-wide shutdown owns the stop; boot recovery will re-drive`);
+    return;
+  }
+  const daemonStopped = stop.outcome === 'complete' || stop.outcome === 'deadline' || stop.outcome === 'superseded';
+
+  // Stop OUTSIDE the lock (skipped when the daemon already did it): the container is
+  // removed below, so stopping it first makes the remove a clean (non-SIGKILL) teardown
+  // and releases its volume before the unmount.
   status(`Stopping ${name} container(s)...`);
   // eslint-disable-next-line no-restricted-syntax
   for (const c of list) {
     stopAppMonitoring(c.identifier, true);
+    if (daemonStopped) continue; // flux-shutdownd already stopped it on Arcane
     if (forceKill) {
       // eslint-disable-next-line no-await-in-loop
       await dockerService.appDockerKill(c.appId).catch((e) => log.warn(`kill ${c.appId}: ${e.message}`));
@@ -949,9 +974,11 @@ async function expireGlobalApplications() {
       // background: the prelude condemns + records + deletes the row fast, then the
       // destructive teardown runs deferred (serialized by the host-mutation lock), so
       // the at-tip sweep enforces every expiry promptly instead of blocking ~1 min/app.
+      // forceKill:false so the deferred teardown drains the app gracefully via
+      // flux-shutdownd (or a local appDockerStop) — never a bare SIGKILL on expiry/cancel.
       // eslint-disable-next-line no-await-in-loop
       await uninstallApplication(appName, {
-        forceKill: true, skipGuard: true, broadcastRemoval: true, background: true,
+        forceKill: false, skipGuard: true, broadcastRemoval: true, background: true,
       });
     }
   } catch (error) {
