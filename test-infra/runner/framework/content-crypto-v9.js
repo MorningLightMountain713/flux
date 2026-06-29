@@ -78,6 +78,9 @@ export function buildV9ContentSpec({
       contentSlot: slot.name,
       ...(slot.onUpdate !== undefined ? { onUpdate: slot.onUpdate } : {}),
       ...(slot.atomic !== undefined ? { atomic: slot.atomic } : {}),
+      ...(slot.uid !== undefined ? { uid: slot.uid } : {}),
+      ...(slot.gid !== undefined ? { gid: slot.gid } : {}),
+      ...(slot.mode !== undefined ? { mode: slot.mode } : {}),
     };
   }
   return {
