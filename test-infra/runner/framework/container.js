@@ -110,6 +110,48 @@ export async function restartFluxos(container, { apiPort = 16127, readyTimeoutMs
   throw new Error(`restartFluxos: FluxOS did not cycle down and back up within ${readyTimeoutMs}ms`);
 }
 
+// ── Content bind-mount inspectors ──────────────────────────────────────
+// Read/stat a path INSIDE an app container (the node is the DinD host, so this is
+// `docker exec <appContainer> ...`). The inspected component needs coreutils
+// (cat/stat) — e.g. nginx/busybox, not the freestanding signal fixture.
+
+export { appContainerName };
+
+export async function readFileInContainer(container, appName, componentName, path) {
+  const name = appContainerName(appName, componentName);
+  const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} cat ${path}`);
+  return { content: stdout, exitCode };
+}
+
+// Owner/perms of an injected file as the node wrote them. Injected content defaults
+// to root:root 0444; data/appdata/component dirs stay 777.
+export async function statFileInContainer(container, appName, componentName, path) {
+  const name = appContainerName(appName, componentName);
+  const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} stat -c '%u %g %a' ${path}`);
+  const [uid, gid, mode] = stdout.trim().split(/\s+/);
+  return { uid, gid, mode, exitCode };
+}
+
+// The inode of a path inside the container — for the atomic-swap check (a managed
+// atomic delivery changes the inode under /io.runonflux/; an in-place single-file
+// bind keeps the same inode). Returns null when absent.
+export async function inodeInContainer(container, appName, componentName, path) {
+  const name = appContainerName(appName, componentName);
+  const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} stat -c '%i' ${path} 2>/dev/null || echo ""`);
+  const v = stdout.trim();
+  return exitCode === 0 && v !== '' ? Number(v) : null;
+}
+
+// ROOT gate: confirm the FluxOS process runs as uid 0 and root file ops (the
+// chown root:root + chmod 0444 every injected content write does) succeed on the
+// appdata volume. Run in the first content suite's boot before any content assertion;
+// if the node isn't root in the DinD container, every injected write fails silently.
+export async function assertNodeRunsAsRoot(container) {
+  const uidRes = await execInContainer(container, "awk '/^Uid:/{print $2}' /proc/\"$(cat /tmp/fluxos.pid)\"/status 2>/dev/null || echo unknown");
+  const probe = await execInContainer(container, 'f=/mnt/appdata/.e2e-roottest; touch "$f" && chown root:root "$f" && chmod 0444 "$f" && stat -c \'%u %g %a\' "$f"; rc=$?; rm -f "$f"; exit $rc');
+  return { fluxosUid: uidRes.stdout.trim(), rootOpsOk: probe.exitCode === 0, statLine: probe.stdout.trim() };
+}
+
 export async function getContainerImageDigest(container, appName, componentName) {
   const containerName = `flux${componentName}_${appName}`;
   const { stdout } = await execInContainer(container,
