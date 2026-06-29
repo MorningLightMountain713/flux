@@ -32,6 +32,36 @@ async function mountForTarget(target) {
 }
 
 /**
+ * Every mounted real (block-backed) filesystem with its byte-level usage — the
+ * `df`-equivalent view, sourced from `findmnt --real --list` (one flat row per
+ * mount, no mount-tree nesting). Replaces the old `node-df` probe wherever a full
+ * mount list is needed (total node capacity, locating an app's FLUXFSVOL by its
+ * mount path). `--real` drops pseudo filesystems (proc/sysfs/cgroup/tmpfs); loop
+ * devices ARE real, so an app's loop-mounted FLUXFSVOL appears here. Returns []
+ * if findmnt fails or finds nothing (the callers treat "no disks" as no space).
+ * @returns {Promise<Array<{source: string, target: string, fstype: string, sizeBytes: number, usedBytes: number, availableBytes: number, usePercent: number}>>}
+ */
+async function listMountedFilesystems() {
+  const res = await serviceHelper.runCommand('findmnt', {
+    logError: false,
+    params: ['--real', '--list', '--bytes', '--json', '--output', 'SOURCE,TARGET,FSTYPE,SIZE,USED,AVAIL,USE%'],
+  });
+  if (res.error) {
+    throw new Error(`findmnt --real --list failed: ${res.error.message || res.error}`);
+  }
+  const filesystems = JSON.parse(res.stdout || '{}').filesystems || [];
+  return filesystems.map((fs) => ({
+    source: fs.source,
+    target: fs.target,
+    fstype: fs.fstype,
+    sizeBytes: Number(fs.size),
+    usedBytes: Number(fs.used),
+    availableBytes: Number(fs.avail),
+    usePercent: Number(String(fs['use%'] || '').replace('%', '')),
+  }));
+}
+
+/**
  * Determines if mount target has a filesystem quota
  * @param {string} target The mount target
  * @returns {Promise<Boolean>} If the device has a quota
@@ -75,4 +105,5 @@ if (require.main === module) {
 module.exports = {
   hasQuotaOptionForMountTarget,
   mountForTarget,
+  listMountedFilesystems,
 };

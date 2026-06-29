@@ -14,15 +14,13 @@
  */
 const config = require('config');
 const fs = require('node:fs/promises');
-const util = require('util');
-const df = require('node-df');
 const path = require('node:path');
-const nodecmd = require('node-cmd');
 const axios = require('axios');
 const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
+const deviceHelper = require('../deviceHelper');
 const dockerService = require('../dockerService');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
@@ -31,21 +29,17 @@ const generalService = require('../generalService');
 // eslint-disable-next-line no-unused-vars
 const upnpService = require('../upnpService');
 const {
-  localAppsInformation,
-  globalAppsInformation,
   globalAppsInstallingErrorsLocations,
   appsFolder,
-  appVolumesPath,
-  legacyAppVolumesPath,
+  appsFolderPath,
 } = require('../utils/appConstants');
 const {
-  extractIp, extractPort, socketAddressesMatch, ipsMatch, DEFAULT_API_PORT,
+  extractIp, extractPort, ipsMatch, DEFAULT_API_PORT,
 } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
 const { isNewestInstance } = require('../utils/appUtilities');
 const https = require('https');
-const { deserializeSpec } = require('../utils/specCutover');
 const { getSpec, assertUpdateInvariants } = require('../utils/specLibs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const messageVerifier = require('../appMessaging/messageVerifier');
@@ -69,31 +63,13 @@ const {
 } = require('../appRequirements/appSubmission');
 const globalState = require('../utils/globalState');
 const contentBlobService = require('./contentBlobService');
-const fluxDriveClient = require('../utils/fluxDriveClient');
 const operationRegistry = require('../utils/operationRegistry');
-
-// Legacy apps that use old gateway IP assignment method
-const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated', 'isokosse', 'ChainBraryDApp', 'health', 'ethercalc'];
 
 // Active-standby app tracking
 const activePrimaryByIdentifier = new Map();
 const scheduledPrimaryStart = new Map();
 
-// Promisified functions
-const cmdAsync = util.promisify(nodecmd.run);
-
-/**
- * Runs a command as root via execFile (no shell, args passed as params) and
- * throws on failure, preserving the throw-to-cleanup flow of volume
- * construction.
- * @param {string} cmd Binary to run.
- * @param {string[]} params Arguments.
- * @returns {Promise<void>}
- */
-async function execAsRoot(cmd, params) {
-  const result = await serviceHelper.runCommand(cmd, { runAsRoot: true, params });
-  if (result.error) throw result.error;
-}
+const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 
 // We need to avoid circular dependency, so we'll implement getInstalledAppsForDocker locally
 // eslint-disable-next-line no-unused-vars
@@ -106,16 +82,6 @@ function getInstalledAppsForDocker() {
   } catch (error) {
     log.error('Error getting installed apps:', error);
     return [];
-  }
-}
-
-
-async function getStrictApplicationSpecifications(appName) {
-  try {
-    return await appsRepository.getGlobalAppInfo(appName);
-  } catch (error) {
-    log.error(`Error getting strict app specifications for ${appName}:`, error);
-    return null;
   }
 }
 
@@ -201,49 +167,6 @@ async function getMasterIpFromFdm(appName, axiosOptions) {
 let dosMountMessage = '';
 
 
-/**
- * Clean up database after app removal
- * @param {object} appsDatabase - Database connection
- * @param {string} appName - Application name
- * @param {object} res - Response object for streaming
- * @returns {Promise<void>}
- */
-async function cleanupAppDatabase(appsDatabase, appName, res) {
-  const databaseStatus = {
-    status: 'Cleaning up database...',
-  };
-  log.info(databaseStatus);
-  if (res) {
-    res.write(serviceHelper.ensureString(databaseStatus));
-    if (res.flush) res.flush();
-  }
-
-  const appsQuery = { name: appName };
-  const appsProjection = {};
-  await dbHelper.findOneAndDeleteInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-
-  const databaseStatus2 = {
-    status: 'Database cleaned',
-  };
-  log.info(databaseStatus2);
-  if (res) {
-    res.write(serviceHelper.ensureString(databaseStatus2));
-    if (res.flush) res.flush();
-  }
-
-  const appRemovalResponseDone = messageHelper.createSuccessMessage(`Removal step done. Result: Flux App ${appName} was partially removed`);
-  log.info(appRemovalResponseDone);
-  if (res) {
-    res.write(serviceHelper.ensureString(appRemovalResponseDone));
-    if (res.flush) res.flush();
-  }
-}
-
-/**
- * To remove an app locally (including any components) without storage and cache deletion (keeps mounted volumes and cron job). First finds app specifications in database and then deletes the app from database. For app reload. Only for internal usage. We are throwing in functions using this.
- * @param {string} app App name.
- * @param {object} res Response.
- */
 /**
  * Redeploy a single component of an application.
  *
@@ -874,7 +797,7 @@ async function appendBackupTask(req, res) {
       if (!hasSyncthing) {
         await startApplication(appname);
       } else {
-        for (const [compName, comp] of appSpec.componentEntries()) {
+        for (const [compName, comp] of backupDeployment.componentEntries()) {
           if (comp.persistentStorage?.sync?.mode !== 'activeStandby') {
             // eslint-disable-next-line no-await-in-loop
             await startApplication(`${compName}_${appname}`);
@@ -1010,7 +933,7 @@ async function appendRestoreTask(req, res) {
             // eslint-disable-next-line no-await-in-loop
             await IOUtils.removeFile(tarGzPath);
           }
-          const restoreComp = restoreSpec?.components?.[component.component];
+          const restoreComp = restoreDeployment?.componentEntries().find(([name]) => name === component.component)?.[1];
           const syncthingAux = restoreComp?.hasSyncthing();
           if (syncthingAux) {
             // eslint-disable-next-line global-require
@@ -1030,7 +953,7 @@ async function appendRestoreTask(req, res) {
       await serviceHelper.delay(1 * 5 * 1000);
       await sendChunk(res, 'Starting application...\n');
       await startApplication(appname);
-      if (syncthing) {
+      if (restoreHasSyncthing) {
         await sendChunk(res, 'Redeploying other instances...\n');
         // eslint-disable-next-line global-require
         const appController = require('../appManagement/appController');
@@ -1064,28 +987,28 @@ async function appendRestoreTask(req, res) {
 async function removeTestAppMount(specifiedVolume) {
   try {
     const appId = 'flux_fluxTestVol';
-    const appDir = path.join(appsFolder, appId);
     log.info('Mount Test: Unmounting volume');
-    const unmount = await serviceHelper.runCommand('umount', { runAsRoot: true, params: [appDir], logError: false });
-    if (unmount.error) {
-      log.info('Mount Test: Volume not mounted. Continuing. Most likely false positive.');
+    const umountResult = await serviceHelper.runCommand('umount', { params: [appsFolder + appId], runAsRoot: true, logError: false });
+    if (umountResult.error) {
+      log.error(umountResult.error);
+      log.error('Mount Test: An error occured while unmounting volume. Continuing. Most likely false positive.');
     } else {
       log.info('Mount Test: Volume unmounted');
     }
 
     log.info('Mount Test: Cleaning up data');
-    await serviceHelper.runCommand('rm', { runAsRoot: true, params: ['-rf', appDir] });
+    const removeDataResult = await serviceHelper.runCommand('rm', { params: ['-rf', appsFolder + appId], runAsRoot: true, logError: false });
+    if (removeDataResult.error) {
+      log.error(removeDataResult.error);
+      log.error('Mount Test: An error occured while cleaning up data. Continuing. Most likely false positive.');
+    }
     log.info('Mount Test: Data cleaned');
     log.info('Mount Test: Cleaning up data volume');
-    const volumesToRemove = specifiedVolume
-      ? [specifiedVolume]
-      // no volume given: remove from both the current location and the legacy
-      // glued location a previous FluxOS version may have left an image at
-      : [path.join(appVolumesPath, `${appId}FLUXFSVOL`), path.join(legacyAppVolumesPath, `${appId}FLUXFSVOL`)];
-    // eslint-disable-next-line no-restricted-syntax
-    for (const volumeToRemove of volumesToRemove) {
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.runCommand('rm', { runAsRoot: true, params: ['-rf', volumeToRemove] });
+    const volumeToRemove = specifiedVolume || `${fluxDirPath}appvolumes/${appId}FLUXFSVOL`;
+    const removeVolumeResult = await serviceHelper.runCommand('rm', { params: ['-rf', volumeToRemove], runAsRoot: true, logError: false });
+    if (removeVolumeResult.error) {
+      log.error(removeVolumeResult.error);
+      log.error('Mount Test: An error occured while cleaning up volume. Continuing. Most likely false positive.');
     }
     log.info('Mount Test: Volume cleaned');
   } catch (error) {
@@ -1102,42 +1025,22 @@ async function testAppMount() {
   try {
     // before running, try to remove first
     await removeTestAppMount();
-    const appSize = 1;
-    const overHeadRequired = 2;
-    const dfAsync = util.promisify(df);
+    const appSize = 1; // GB
+    const overHeadRequired = 2; // GB
     const appId = 'flux_fluxTestVol';
 
     log.info('Mount Test: started');
     log.info('Mount Test: Searching available space...');
 
-    // we want whole numbers in GB
-    const options = {
-      prefixMultiplier: 'GB',
-      isDisplayPrefixMultiplier: false,
-      precision: 0,
-    };
-
-    const dfres = await dfAsync(options);
-    const okVolumes = [];
-    dfres.forEach((volume) => {
-      if (volume.filesystem.includes('/dev/') && !volume.filesystem.includes('loop') && !volume.mount.includes('boot')) {
-        okVolumes.push(volume);
-      } else if (volume.filesystem.includes('loop') && volume.mount === '/') {
-        okVolumes.push(volume);
-      }
-    });
-
-    // check if space is not sharded in some bad way. Always count the fluxSystemReserve
-    let useThisVolume = null;
-    const totalVolumes = okVolumes.length;
-    for (let i = 0; i < totalVolumes; i += 1) {
-      // check available volumes one by one. If a sufficient is found. Use this one.
-      if (okVolumes[i].available > appSize + overHeadRequired) {
-        useThisVolume = okVolumes[i];
-        break;
-      }
-    }
-    if (!useThisVolume) {
+    // The mount test must exercise the same filesystem real app volumes land on (the
+    // apps folder's own disk — /dat on Arcane, never the root/overlay disk), so resolve
+    // that one filesystem directly instead of scanning every mount and taking the first
+    // with room (which could allocate the test volume on /mnt/root). mkdir the apps base
+    // first so findmnt can resolve its mountpoint on a fresh node.
+    await serviceHelper.runCommand('mkdir', { params: ['-p', appsFolderPath], runAsRoot: true });
+    const useThisVolume = await deviceHelper.mountForTarget(appsFolderPath);
+    const bytesPerGb = 1024 ** 3;
+    if (useThisVolume.availableBytes < (appSize + overHeadRequired) * bytesPerGb) {
       // no useable volume has such a big space for the app
       log.warn('Mount Test: Insufficient space on Flux Node. No useable volume found.');
       // node marked OK
@@ -1149,26 +1052,26 @@ async function testAppMount() {
     log.info('Mount Test: Space found');
     log.info('Mount Test: Allocating space...');
 
-    let volumePath = path.join(useThisVolume.mount, `${appId}FLUXFSVOL`); // eg /mnt/sthMounted
-    if (useThisVolume.mount === '/') {
-      await execAsRoot('mkdir', ['-p', appVolumesPath]);
-      volumePath = path.join(appVolumesPath, `${appId}FLUXFSVOL`); // if root mount then temp file is in flux folder/appvolumes
+    let volumePath = `${useThisVolume.target}/${appId}FLUXFSVOL`;
+    if (useThisVolume.target === '/') {
+      await serviceHelper.runCommand('mkdir', { params: ['-p', `${fluxDirPath}appvolumes`], runAsRoot: true });
+      volumePath = `${fluxDirPath}appvolumes/${appId}FLUXFSVOL`; // if root mount then temp file is in flux folder/appvolumes
     }
 
-    await execAsRoot('fallocate', ['-l', `${appSize}G`, volumePath]);
+    await serviceHelper.runCommand('fallocate', { params: ['-l', `${appSize}G`, volumePath], runAsRoot: true });
 
     log.info('Mount Test: Space allocated');
     log.info('Mount Test: Creating filesystem...');
 
-    await execAsRoot('mke2fs', ['-t', 'ext4', volumePath]);
+    await serviceHelper.runCommand('mke2fs', { params: ['-t', 'ext4', volumePath], runAsRoot: true });
     log.info('Mount Test: Filesystem created');
     log.info('Mount Test: Making directory...');
 
-    await execAsRoot('mkdir', ['-p', path.join(appsFolder, appId)]);
+    await serviceHelper.runCommand('mkdir', { params: ['-p', appsFolder + appId], runAsRoot: true });
     log.info('Mount Test: Directory made');
     log.info('Mount Test: Mounting volume...');
 
-    await execAsRoot('mount', ['-o', 'loop', volumePath, path.join(appsFolder, appId)]);
+    await serviceHelper.runCommand('mount', { params: ['-o', 'loop', volumePath, appsFolder + appId], runAsRoot: true });
     log.info('Mount Test: Volume mounted. Test completed.');
     dosMountMessage = '';
     // run removal
@@ -1924,10 +1827,10 @@ async function coordinateActiveStandbyApps() {
       }
     }
 
-    const receiveOnlySyncthingAppsCache = globalState.receiveOnlySyncthingAppsCache;
+    const { receiveOnlySyncthingAppsCache } = globalState;
 
     for (const deployment of deployments) {
-      const appName = deployment.appName;
+      const { appName } = deployment;
       let fdmOk = true;
       let identifier;
       let needsToBeChecked = false;
@@ -1939,7 +1842,7 @@ async function coordinateActiveStandbyApps() {
       }
       for (const [, deployComp] of deployment.componentEntries()) {
         if (deployComp.hasActiveStandbySyncthing()) {
-          identifier = deployComp.identifier;
+          ({ identifier } = deployComp);
           appId = dockerService.getAppIdentifier(identifier);
           needsToBeChecked = true;
           break;

@@ -3,12 +3,12 @@ const sinon = require('sinon');
 const chaiAsPromised = require('chai-as-promised');
 const proxyquire = require('proxyquire');
 const fs = require('fs');
-const util = require('util');
 const log = require('../../ZelBack/src/lib/log');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
+const deviceHelper = require('../../ZelBack/src/services/deviceHelper');
 const { requireMongo } = require('./dbTestHelper');
 
 const adminConfig = {
@@ -1170,6 +1170,10 @@ describe('idService tests', () => {
   });
 
   describe('getSpaceAvailableForFluxShare tests', () => {
+    // Sizes are kept in whole GB in the test data and converted to the bytes that
+    // findmnt (listMountedFilesystems) reports, so the assertions read in GB.
+    const gb = (n) => n * (1024 ** 3);
+
     beforeEach(() => {
       sinon.stub(generalService, 'getNewNodeTier').returns('stratus');
     });
@@ -1179,17 +1183,9 @@ describe('idService tests', () => {
     });
 
     it('should properly return free space on the node if all volumes are proper', async () => {
-      sinon.stub(util, 'promisify').returns(() => [
-        {
-          filesystem: '/dev/',
-          mount: 'test',
-          size: '1000',
-        },
-        {
-          filesystem: '/dev/',
-          mount: 'test',
-          size: '2010',
-        },
+      sinon.stub(deviceHelper, 'listMountedFilesystems').resolves([
+        { source: '/dev/sda1', target: '/mnt/a', sizeBytes: gb(1000) },
+        { source: '/dev/sda2', target: '/mnt/b', sizeBytes: gb(2010) },
       ]);
 
       const result = await fluxshareService.getSpaceAvailableForFluxShare();
@@ -1198,17 +1194,9 @@ describe('idService tests', () => {
     });
 
     it('should properly return free space on the node if one of the volumes is not /dev/ filesystem', async () => {
-      sinon.stub(util, 'promisify').returns(() => [
-        {
-          filesystem: '/dev/',
-          mount: 'test',
-          size: '1000',
-        },
-        {
-          filesystem: 'test',
-          mount: 'test',
-          size: '2010',
-        },
+      sinon.stub(deviceHelper, 'listMountedFilesystems').resolves([
+        { source: '/dev/sda1', target: '/mnt/a', sizeBytes: gb(1000) },
+        { source: 'tmpfs', target: '/mnt/b', sizeBytes: gb(2010) },
       ]);
 
       const result = await fluxshareService.getSpaceAvailableForFluxShare();
@@ -1217,17 +1205,9 @@ describe('idService tests', () => {
     });
 
     it('should properly return free space on the node if all of the volumes are not /dev/ filesystem', async () => {
-      sinon.stub(util, 'promisify').returns(() => [
-        {
-          filesystem: 'test',
-          mount: 'test',
-          size: '1000',
-        },
-        {
-          filesystem: 'test',
-          mount: 'test',
-          size: '2010',
-        },
+      sinon.stub(deviceHelper, 'listMountedFilesystems').resolves([
+        { source: 'tmpfs', target: '/mnt/a', sizeBytes: gb(1000) },
+        { source: 'tmpfs', target: '/mnt/b', sizeBytes: gb(2010) },
       ]);
 
       const result = await fluxshareService.getSpaceAvailableForFluxShare();
@@ -1236,17 +1216,9 @@ describe('idService tests', () => {
     });
 
     it('should properly return free space on the node if one of the volumes has loop in the filesystem', async () => {
-      sinon.stub(util, 'promisify').returns(() => [
-        {
-          filesystem: '/dev/',
-          mount: 'test',
-          size: '1000',
-        },
-        {
-          filesystem: '/dev/loop',
-          mount: 'test',
-          size: '2010',
-        },
+      sinon.stub(deviceHelper, 'listMountedFilesystems').resolves([
+        { source: '/dev/sda1', target: '/mnt/a', sizeBytes: gb(1000) },
+        { source: '/dev/loop2', target: '/mnt/b', sizeBytes: gb(2010) },
       ]);
 
       const result = await fluxshareService.getSpaceAvailableForFluxShare();
@@ -1255,17 +1227,9 @@ describe('idService tests', () => {
     });
 
     it('should properly return free space on the node if one of the volumes has boot in the mount', async () => {
-      sinon.stub(util, 'promisify').returns(() => [
-        {
-          filesystem: '/dev/',
-          mount: 'test',
-          size: '1000',
-        },
-        {
-          filesystem: '/dev/',
-          mount: 'boot',
-          size: '2010',
-        },
+      sinon.stub(deviceHelper, 'listMountedFilesystems').resolves([
+        { source: '/dev/sda1', target: '/mnt/a', sizeBytes: gb(1000) },
+        { source: '/dev/sda2', target: '/boot/efi', sizeBytes: gb(2010) },
       ]);
 
       const result = await fluxshareService.getSpaceAvailableForFluxShare();
@@ -1273,18 +1237,10 @@ describe('idService tests', () => {
       expect(result).to.equal(122);
     });
 
-    it('should properly return free space on the node if one of the volumes has loop in the filesystem and / in the mount', async () => {
-      sinon.stub(util, 'promisify').returns(() => [
-        {
-          filesystem: '/dev/',
-          mount: 'test',
-          size: '1000',
-        },
-        {
-          filesystem: '/dev/boot',
-          mount: '/',
-          size: '2010',
-        },
+    it('should properly count a loop-backed root filesystem (legacy nodes)', async () => {
+      sinon.stub(deviceHelper, 'listMountedFilesystems').resolves([
+        { source: '/dev/sda1', target: '/mnt/a', sizeBytes: gb(1000) },
+        { source: '/dev/loop0', target: '/', sizeBytes: gb(2010) },
       ]);
 
       const result = await fluxshareService.getSpaceAvailableForFluxShare();
@@ -1299,17 +1255,10 @@ describe('idService tests', () => {
     beforeEach(async () => {
       verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
       sinon.stub(generalService, 'getNewNodeTier').returns('stratus');
-      sinon.stub(util, 'promisify').returns(() => [
-        {
-          filesystem: '/dev/',
-          mount: 'test',
-          size: '1000',
-        },
-        {
-          filesystem: '/dev/',
-          mount: 'test',
-          size: '2010',
-        },
+      const gb = (n) => n * (1024 ** 3);
+      sinon.stub(deviceHelper, 'listMountedFilesystems').resolves([
+        { source: '/dev/sda1', target: '/mnt/a', sizeBytes: gb(1000) },
+        { source: '/dev/sda2', target: '/mnt/b', sizeBytes: gb(2010) },
       ]);
       sinon.stub(fs, 'readdirSync').returns(['file1', 'file2']);
       sinon.stub(fs, 'statSync').returns({
