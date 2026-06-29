@@ -236,7 +236,7 @@ describe('appSpawner tests', () => {
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),
         broadcastMessageToIncoming: sinon.stub().resolves(),
-        broadcastMessageToAll: sinon.stub().resolves(),
+        broadcastMessageToAll: opts.broadcastAllStub || sinon.stub().resolves(),
       },
       '../utils/appConstants': {
         globalAppsInformation: 'appsInformation',
@@ -1031,6 +1031,92 @@ describe('appSpawner tests', () => {
 
       expect(delayCalls).to.equal(1);
       expect(findUnderProvisionedStub.callCount).to.equal(1);
+    });
+  });
+
+  describe('spawn loop wake latch (mid-cycle wake)', () => {
+    const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+    const MY_ADDR = '192.168.1.1';
+
+    afterEach(() => {
+      appSyncEvents.removeAllListeners();
+    });
+
+    function waitForLoopExits(n, timeoutMs = 2000) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Expected ${n} loop exit(s)`)), timeoutMs);
+        const check = () => {
+          const count = logStub.info.getCalls().filter((c) => c.args[0] === 'Spawn loop exited (paused)').length;
+          if (count >= n) { clearTimeout(timer); resolve(); } else { setTimeout(check, 5); }
+        };
+        check();
+      });
+    }
+
+    it('latches a wake that fires mid-cycle and skips the next idle delay', async () => {
+      buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
+
+      const events = []; // ordered record of 'cycleN' and 'delay'
+      let cycle = 0;
+      findUnderProvisionedStub.resetBehavior();
+      findUnderProvisionedStub.callsFake(async () => {
+        cycle += 1;
+        events.push(`cycle${cycle}`);
+        if (cycle === 1) {
+          // Fire the wake DURING cycle 1, when idleWakeResolve is null (it is only set inside
+          // the inter-cycle Promise.race AFTER trySpawning returns). Await it so the async gate
+          // resolves and wakeIdleLoop latches wakePending BEFORE cycle 1 returns - the latch
+          // must then skip cycle 1's park. The cycle has already cached this node's address,
+          // so the pin-match passes.
+          await appSpawner.notifySpecStored({
+            name: 'edingoa', owner: 'enterpriseOwnerX', instances: 1,
+            placement: { targetIps: [MY_ADDR], targetOutpoints: [], targetOperators: [], matchesTarget: ({ ip, ipMatcher }) => ipMatcher(MY_ADDR, ip) },
+          });
+        }
+        return [];
+      });
+      delayStub.resetBehavior();
+      delayStub.callsFake(() => {
+        events.push('delay');
+        globalStateStub.spawnerPaused = true; // pause as soon as a delay actually runs
+        return Promise.resolve();
+      });
+
+      appSpawner.initialize();
+      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      await waitForLoopExits(1);
+
+      // With the latch: cycle1 -> (latched wake -> skip delay) -> cycle2 -> delay -> pause.
+      // Without it: cycle1 -> delay -> pause, and cycle2 never runs (the wake was dropped).
+      expect(events).to.include('cycle2');
+      expect(events.indexOf('cycle2')).to.be.lessThan(events.indexOf('delay'));
+    });
+  });
+
+  describe('installing-broadcast fire-and-forget on sole-installer', () => {
+    const MY_ADDR = '192.168.1.1';
+    const solePlacement = () => ({ targetIps: [MY_ADDR], hasTargets: () => true, matchesTarget: () => true });
+
+    it('sole path: install proceeds even if the broadcast REJECTS (fire-and-forget)', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      const candidate = makeCandidate({ name: 'soleApp', hash: 'sole1', required: 1, placement: solePlacement() });
+      buildModule({ candidates: [candidate], installStub, broadcastAllStub: sinon.stub().rejects(new Error('broadcast down')) });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      // soleRequiredInstaller -> the broadcast is fire-and-forget (.catch), so a broadcast
+      // failure does NOT abort: the install still runs.
+      expect(installStub.called, 'install should proceed despite the broadcast failing').to.equal(true);
+    });
+
+    it('non-sole path: a broadcast REJECT aborts before install (awaited)', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      const candidate = makeCandidate({ required: 3 }); // non-pinned: legacy inline election awaits the broadcast
+      buildModule({ candidates: [candidate], installStub, broadcastAllStub: sinon.stub().rejects(new Error('broadcast down')) });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(installStub.called, 'a rejected awaited broadcast must abort before install').to.equal(false);
     });
   });
 });
