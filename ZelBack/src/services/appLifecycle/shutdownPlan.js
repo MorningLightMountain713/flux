@@ -66,25 +66,39 @@ function appRequiresDaemonShutdown(deployment) {
 }
 
 /**
- * The `runonflux.*` labels stamped on a container so flux-shutdownd can find it
- * and read its shutdown budget without consulting FluxOS at shutdown time.
- * `owner` is provenance supplied by the caller (it isn't on DeploymentComponent);
- * the rest comes from the component itself.
+ * Identity labels stamped on EVERY flux app container (graceful or not), so
+ * flux-shutdownd can enumerate and stop any app on the node — they must never be
+ * gated. `owner` is provenance supplied by the caller (it isn't on
+ * DeploymentComponent).
  *
  * @param {object} deployComp - a DeploymentComponent
  * @param {string} [owner] - the app owner's flux id
  * @returns {Object<string, string>}
  */
-function componentShutdownLabels(deployComp, owner) {
+function componentIdentityLabels(deployComp, owner) {
   const labels = {
     'runonflux.app': deployComp.appName,
     'runonflux.component': deployComp.name,
+  };
+  if (owner) labels['runonflux.owner'] = owner;
+  return labels;
+}
+
+/**
+ * Budget labels carrying a component's drain/preStop/graceful timing, read by the
+ * daemon to size each drain stage. Stamped only for apps that use a graceful
+ * feature; a plain app drains on the daemon's defaults — which equal these values
+ * for a plain component anyway, so gating them is about intent, not behavior.
+ *
+ * @param {object} deployComp - a DeploymentComponent
+ * @returns {Object<string, string>}
+ */
+function componentBudgetLabels(deployComp) {
+  return {
     'runonflux.shutdown.drain-s': String(maxDrainTimeout(deployComp)),
     'runonflux.shutdown.prestop-s': String(deployComp.preStop ? deployComp.preStop.timeout : 0),
     'runonflux.shutdown.graceful-s': String(deployComp.shutdown ? deployComp.shutdown.gracefulTimeout : 10),
   };
-  if (owner) labels['runonflux.owner'] = owner;
-  return labels;
 }
 
 function buildPorts(deployComp) {
@@ -146,7 +160,8 @@ function buildShutdownPlan(instantiated, deployment) {
 }
 
 module.exports = {
-  componentShutdownLabels,
+  componentIdentityLabels,
+  componentBudgetLabels,
   buildShutdownPlan,
   appShutdownBudgetSeconds,
   appRequiresDaemonShutdown,
