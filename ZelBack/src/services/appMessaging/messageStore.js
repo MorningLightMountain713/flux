@@ -126,7 +126,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
         validationBlob = decrypted.spec.serialize();
       }
     } else {
-      validationBlob = message.appSpecifications || message.zelAppSpecifications;
+      validationBlob = message.appSpecifications;
     }
 
     if (validationBlob) {
