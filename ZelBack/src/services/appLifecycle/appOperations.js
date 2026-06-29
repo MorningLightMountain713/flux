@@ -51,6 +51,7 @@ const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appVolumeService = require('./appVolumeService');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
+const pendingTeardownStore = require('./pendingTeardownStore');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const appNetworkLinker = require('./appNetworkLinker');
@@ -218,8 +219,11 @@ async function redeployComponent(appName, componentName, options = {}) {
     if (createVolumes) {
       log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployComponent)`);
     }
+    // Same-spec redeploy: the port set is identical, so leave the app's ufw/UPnP rules
+    // in place across the teardown+reinstall (no firewall flap, no ~1s/port UPnP re-map).
     await appUninstaller.uninstallComponent(deployComp, {
       removeVolumes: createVolumes,
+      skipPorts: true,
       onStatus,
     });
 
@@ -233,6 +237,7 @@ async function redeployComponent(appName, componentName, options = {}) {
     status(`Installing ${deployComp.identifier}...`);
     await componentProvisioner.installComponent(deployComp, {
       createVolumes,
+      skipPorts: true,
       specVersion: instantiated.version,
       owner: instantiated.owner,
     });
@@ -298,6 +303,9 @@ async function redeployApplication(appName, options = {}) {
       await componentProvisioner.verifyComponentImage(deployComp);
     }
 
+    // Same-spec redeploy: every component's port set is unchanged, so leave the app's
+    // ufw/UPnP rules in place across the teardown+reinstall (no firewall flap, no UPnP
+    // re-map churn). skipPorts on both the teardown and the reinstall below.
     for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
       if (createVolumes) {
         log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployApplication)`);
@@ -305,6 +313,7 @@ async function redeployApplication(appName, options = {}) {
       // eslint-disable-next-line no-await-in-loop
       await appUninstaller.uninstallComponent(deployComp, {
         removeVolumes: createVolumes,
+        skipPorts: true,
         onStatus,
       });
       // eslint-disable-next-line no-await-in-loop
@@ -336,6 +345,7 @@ async function redeployApplication(appName, options = {}) {
       // eslint-disable-next-line no-await-in-loop
       await componentProvisioner.installComponent(deployComp, {
         createVolumes,
+        skipPorts: true,
         specVersion: instantiated.version,
         owner: instantiated.owner,
       });
@@ -1436,6 +1446,23 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     if (newComp) await componentProvisioner.verifyComponentImage(newComp);
   }
 
+  // Port delta over the whole app: move only the ufw/UPnP rules that actually change.
+  // Close ports the new spec dropped (old−new), open ports it added (new−old), and leave
+  // every unchanged port's mapping in place — no firewall flap, no ~1s/port UPnP re-map.
+  // The per-component teardown/reinstall below skip ports (skipPorts), so this is the
+  // single place ports move for an update.
+  const collectHostPorts = (deployment) => {
+    const ports = new Set();
+    for (const [, comp] of deployment.componentEntries()) {
+      for (const port of (comp.hostPorts || [])) ports.add(port);
+    }
+    return ports;
+  };
+  const oldPorts = collectHostPorts(oldDeployment);
+  const newPorts = collectHostPorts(newDeployment);
+  const portsToClose = [...oldPorts].filter((port) => !newPorts.has(port));
+  const portsToOpen = [...newPorts].filter((port) => !oldPorts.has(port));
+
   const toUninstall = [...removed, ...recreateVolume, ...keepVolume];
   if (toUninstall.length > 0) {
     for (const name of toUninstall.reverse()) {
@@ -1446,10 +1473,17 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
         log.warn(`REMOVAL REASON: Reconciliation - ${deployComp.identifier} ${removed.includes(name) ? 'removed from spec' : 'storage changed'}`);
       }
       // eslint-disable-next-line no-await-in-loop
-      await appUninstaller.uninstallComponent(deployComp, { removeVolumes });
+      await appUninstaller.uninstallComponent(deployComp, { removeVolumes, skipPorts: true });
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
     }
+  }
+
+  // Close the dropped ports now (before the reinstall): no surviving component uses them,
+  // so closing is always safe, and doing it here means a failed reinstall can't leak them
+  // (the reconciler reopens survivors' ports on recovery but never sweeps a stale deny).
+  if (portsToClose.length) {
+    await appUninstaller.denyPorts(portsToClose, appName);
   }
 
   // A kept-volume component keeps its old mount sources, so injected content the
@@ -1494,11 +1528,26 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       // eslint-disable-next-line no-await-in-loop
       await componentProvisioner.installComponent(deployComp, {
         createVolumes,
+        skipPorts: true,
         specVersion: registrySpec.version,
         owner: registrySpec.owner,
       });
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+    }
+  }
+
+  // Open the added ports now that the new containers are up. Gate the open on the same
+  // teardown-owed signal the install interlock uses: a forced same-name cancel can race
+  // this reinstall (force bypasses the per-app gate) — it writes a teardown doc, deletes
+  // the row, and tears its ports down; opening here would orphan ufw/UPnP rules for an
+  // app that is gone (there is no periodic deny-sweep). The close above always ran
+  // (closing is safe); only the open is gated.
+  if (portsToOpen.length) {
+    if (await pendingTeardownStore.teardownOwedFor(appName)) {
+      log.info(`reconcileComponents: teardown owed for ${appName}; skipping redeploy port-open (${portsToOpen.join(',')})`);
+    } else {
+      await componentProvisioner.openHostPorts(portsToOpen, appName);
     }
   }
 
@@ -2222,6 +2271,7 @@ async function getPeerAppsInstallingErrorMessages() {
 module.exports = {
   redeployComponent,
   redeployApplication,
+  reconcileComponents,
   redeployApplicationAPI,
   redeployComponentAPI,
   updateAppGlobaly,
