@@ -478,14 +478,13 @@ async function uploadSealedContent(spec, content, ownerSigs, { ref, timestamp })
   // slots with no content for the install-hold to find. A slot app always forces an
   // encrypted spec (flux-spec validation), so the gossiped slots payload is sealed.
   if (payload.manifest) {
-    const db = contentSlotService.appsGlobalDb();
     const slotHashes = new Set(Object.values(payload.manifest.slots || {}).map((s) => s.hash));
     const slotBlobs = new Map([...blobs].filter(([h]) => slotHashes.has(h)));
     const gossipManifest = await contentSlotService.processManifestSubmission(
       {
         manifest: payload.manifest, spec, owner: spec.owner, encrypted: true, blobs: slotBlobs, ownerSigs,
       },
-      { db, uploader: fluxDriveClient },
+      { uploader: fluxDriveClient },
     );
     // Broadcast first: broadcastMessageToAll returns the exact signed node broadcast it
     // relayed, so the stored row carries that same envelope (one signature) and is
@@ -493,7 +492,7 @@ async function uploadSealedContent(spec, content, ownerSigs, { ref, timestamp })
     const signedBroadcast = await fluxCommunicationMessagesSender.broadcastMessageToAll({
       type: 'fluxappcontentmanifest', appName: spec.name, manifest: gossipManifest,
     });
-    await contentSlotService.storeManifest(db, gossipManifest, { broadcast: signedBroadcast });
+    await contentSlotService.storeManifest(gossipManifest, { broadcast: signedBroadcast });
     // Populate the FluxDrive backstop at register too — the first installing instance
     // has no peers, so FluxDrive is its only manifest source. Best-effort; the owner
     // PUT-sig rides the sealed payload (frontend-produced at submission).
