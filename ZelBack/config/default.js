@@ -579,9 +579,9 @@ module.exports = {
     complianceRetryMaxMs: 3600000,
     forceRemovalIntervalMs: 7200000,
     installCollisionWaitMs: 90000,
+    portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
     portTestBindDelayMs: 5000,
     portTestPropagationDelayMs: 10000,
-    portTestPeerTimeoutMs: 30000,
     portTestMaxAttempts: 5,
     // Asking the other Flux nodes at our own public address which ports they
     // hold. Short: they are one hop away, and a sibling that does not answer
@@ -592,6 +592,8 @@ module.exports = {
     // bounded by siblingPortsTimeoutMs; the rest is allowance for two nodes
     // that were never required to agree on the time.
     siblingAskValidityMs: 60000,
+    portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct /16, excluding our own
+    portTestMaxRounds: 3, // max retry rounds when a round is inconclusive (no peer answered)
     spawnReconfirmDelayMs: 7500000,
     unencryptedSpawnDelayMs: 120000,
     globalCmdDelayMs: 500,
