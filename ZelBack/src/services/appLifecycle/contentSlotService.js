@@ -79,9 +79,20 @@ async function canonicalManifest(manifest) {
  * @param {object} deps - { verify? }
  */
 async function verifyManifest(manifest, ctx, deps = {}) {
-  const { owner, spec } = ctx;
+  const { owner } = ctx;
+  let { spec } = ctx;
   const { verify = signatureVerifier.verifySignature } = deps;
   const { assertValidContentManifest } = await getSpec();
+
+  // A spec read from the registry is the sealed EncryptedSpec for an encrypted app
+  // (all content-slot apps are encrypted), whose declared slots aren't visible while
+  // sealed. Decrypt it to its DecryptedCanonicalSpec and operate through that class.
+  // The submission path passes an already-cleartext spec (isEncrypted === false),
+  // which is left untouched.
+  if (spec.isEncrypted) {
+    const provider = deps.provider || await spec.createProvider();
+    spec = await spec.decrypt(provider);
+  }
 
   assertValidContentManifest(manifest);
 
