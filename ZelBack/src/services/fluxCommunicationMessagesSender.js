@@ -397,26 +397,22 @@ async function respondWithAppInstallingErrorsMessages(peer, sinceTimestamp = 0) 
  */
 async function respondWithContentManifests(peer) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const cursor = database.collection(config.database.appsglobal.collections.appContentManifests)
-      .find({ confirmed: true, envelope: { $exists: true } }, { projection: { _id: 0, envelope: 1, data: 1 } });
+    // eslint-disable-next-line global-require
+    const appsRepository = require('./appDatabase/appsRepository');
+    const broadcasts = await appsRepository.listConfirmedContentManifestBroadcasts();
 
     const batchSize = 2000;
-    let batch = [];
-    let total = 0;
-    for await (const row of cursor) {
-      batch.push({ ...row.envelope, data: row.data });
-      if (batch.length >= batchSize) {
-        log.info(`respondWithContentManifests - Sending chunk of ${batch.length} to ${peer.key}`);
-        // eslint-disable-next-line no-await-in-loop
-        await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: batch, done: false }, peer, { awaitDrain: true });
-        total += batch.length;
-        batch = [];
-      }
+    if (broadcasts.length === 0) {
+      await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: [], done: true }, peer, { awaitDrain: true });
+      return;
     }
-    log.info(`respondWithContentManifests - Sending final ${batch.length} to ${peer.key} (total: ${total + batch.length})`);
-    await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: batch, done: true }, peer, { awaitDrain: true });
+    for (let i = 0; i < broadcasts.length; i += batchSize) {
+      const batch = broadcasts.slice(i, i + batchSize);
+      const done = i + batchSize >= broadcasts.length;
+      log.info(`respondWithContentManifests - Sending ${batch.length} to ${peer.key} (done: ${done})`);
+      // eslint-disable-next-line no-await-in-loop
+      await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: batch, done }, peer, { awaitDrain: true });
+    }
   } catch (error) {
     log.error(error);
   }
