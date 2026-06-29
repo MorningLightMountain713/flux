@@ -198,6 +198,7 @@ const FDM_IP = subnet.fdm;
 // createTestEnv({ initialHeight }). See chain-start.cjs for why the default is
 // where it is.
 const { DEFAULT_INITIAL_HEIGHT } = chainStart;
+const FLUXDRIVE_IP = subnet.fluxDrive;
 
 // Per-run-all label. run-all.sh exports E2E_RUN_LABEL (unique per invocation) and
 // scopes its between-suite cleanup to it, so concurrent run-all invocations only
@@ -1005,6 +1006,9 @@ export async function createTestEnv({
   // adds its own on top. true for every node, or a list of node indices. Off
   // unless E2E_FIREWALL=1 turns it on for the whole run.
   firewall = process.env.E2E_FIREWALL === '1',
+  // v9 content and encrypted apps need the arcane verdict; opt-in per suite so the
+  // legacy-verdict suites are unchanged.
+  arcane = false,
 } = {}) {
   if (syncthing !== 'stub' && syncthing !== 'binary') {
     throw new Error(`createTestEnv: syncthing must be 'stub' or 'binary', got '${syncthing}'`);
@@ -1311,7 +1315,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1340,7 +1344,7 @@ function mergeConfigs(base, override) {
   return result;
 }
 
-async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, pm2Nodes = {}, pausedSyncthingNodes = [], sharedKeys = {}, networkShapes = {}, globalIpv6 = [], dnsRecords = [], firewall = false, collateralOf = {}, syncthingFaults = {}, configuredIp = {}, nodeImageTags = {}, freezableDockerRoot = [], symlinkedAppsFolder = []) {
+async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, pm2Nodes = {}, pausedSyncthingNodes = [], sharedKeys = {}, networkShapes = {}, globalIpv6 = [], dnsRecords = [], firewall = false, collateralOf = {}, syncthingFaults = {}, configuredIp = {}, nodeImageTags = {}, freezableDockerRoot = [], symlinkedAppsFolder = [], arcane = false) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -1489,6 +1493,20 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
   started.push(fdmStub);
   containers.fdmStub = fdmStub;
   watchInfra(env, 'fdmStub', fdmStub);
+
+  const fluxDriveStub = await new StaticIpContainer('flux-e2e-fluxdrive-stub')
+    .withStaticIp(networkName, FLUXDRIVE_IP)
+    .withEnvironment({ FLUXDRIVE_PORT: '16140', CONTROL_PORT: '16141' })
+    .withWaitStrategy(new HttpPollWaitStrategy(`http://${FLUXDRIVE_IP}:16141/health`))
+    .withHealthCheck({
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:16141/health', r => { r.on('data', () => {}); r.statusCode === 200 ? process.exit(0) : process.exit(1) })"],
+      interval: 3000,
+      timeout: 2000,
+      retries: 10,
+    })
+    .start();
+  started.push(fluxDriveStub);
+  containers.fluxDriveStub = fluxDriveStub;
 
   if (!dataCenter) {
     for (let i = 1; i <= nodes; i++) {
@@ -1732,6 +1750,11 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
     if (!aptSeeded && isLegacy) nodeEnv.FLUX_APT_SEEDED = 'false';
     if (aptBadSource && isLegacy) nodeEnv.FLUX_APT_BAD_SOURCE = 'true';
     if (firewall === true || (Array.isArray(firewall) && firewall.includes(i))) nodeEnv.FLUX_FIREWALL = 'true';
+    // v9 content and encrypted apps need the arcane verdict, which
+    // resolveNodeCapability gates on FLUX_ARCANE_NODE plus an 'arcane' getnodetype
+    // (the daemon stub answers arcane).
+    if (arcane && !isLegacy) nodeEnv.FLUX_ARCANE_NODE = 'true';
+    if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files carry the default 31.200.0 addresses; this is written into the node's
     // config directory as local.js, which node-config loads after them, so under a
@@ -1810,6 +1833,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
         // started for the suites that asked for it.
         discoveryAutostart,
       },
+      fluxDrive: { blobApiUrl: `http://${FLUXDRIVE_IP}:16140` },
     };
     const nodeConfig = mergeConfigs(infraOverride, mergeConfigs(configOverrides, nodeConfigOverrides[i]));
     // The fleet's own registry serves the file operation image unless the suite
