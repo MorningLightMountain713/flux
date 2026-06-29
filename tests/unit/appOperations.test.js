@@ -5,11 +5,12 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
 const appSpecHistory = require('../../ZelBack/src/services/appDatabase/appSpecHistory');
-const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
-const appInstaller = require('../../ZelBack/src/services/appLifecycle/appInstaller');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const componentProvisioner = require('../../ZelBack/src/services/appLifecycle/componentProvisioner');
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+const deviceHelper = require('../../ZelBack/src/services/deviceHelper');
+const log = require('../../ZelBack/src/lib/log');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
@@ -422,9 +423,7 @@ describe('appOperations tests', () => {
   // These tests use a counter to prevent infinite recursion after the first iteration.
   describe('coordinateActiveStandbyApps tests', () => {
     let globalStateRef;
-    let serviceHelperDelayStub;
     let deploymentProviderStub;
-    let listRunningContainersStub;
 
     beforeEach(() => {
       let recursionCounter = 0;
@@ -437,7 +436,7 @@ describe('appOperations tests', () => {
       sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
 
       const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-      serviceHelperDelayStub = sinon.stub(serviceHelper, 'delay').callsFake(async () => {
+      sinon.stub(serviceHelper, 'delay').callsFake(async () => {
         recursionCounter += 1;
         if (recursionCounter > 1) {
           return new Promise(() => {});
@@ -455,7 +454,7 @@ describe('appOperations tests', () => {
       deploymentProviderStub = sinon.stub(dp, 'listInstalledDeployments').resolves([]);
 
       const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
-      listRunningContainersStub = sinon.stub(appQueryService, 'listRunningContainers').resolves([]);
+      sinon.stub(appQueryService, 'listRunningContainers').resolves([]);
 
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
@@ -638,6 +637,63 @@ describe('appOperations tests', () => {
       const { mod, client } = loadWith({ arcane: false });
       await mod.shutdownPlanResync();
       expect(client.listAppPlans.called).to.be.false;
+    });
+  });
+
+  describe('testAppMount tests', () => {
+    let runCommandStub;
+    let mountForTargetStub;
+
+    beforeEach(() => {
+      runCommandStub = sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: '', stderr: '' });
+      mountForTargetStub = sinon.stub(deviceHelper, 'mountForTarget');
+      sinon.stub(log, 'info');
+      sinon.stub(log, 'warn');
+      sinon.stub(log, 'error');
+    });
+
+    // The trailing cleanup (removeTestAppMount) is fire-and-forget; flush the
+    // microtask queue so its stubbed runCommand calls land before sinon.restore,
+    // never against the real host.
+    const flush = () => new Promise((resolve) => { setImmediate(resolve); });
+
+    const fallocateCall = () => runCommandStub.getCalls().find((c) => c.args[0] === 'fallocate');
+
+    const oneGb = 1024 ** 3;
+
+    it('builds the test volume on the apps-folder disk that findmnt resolved, never a scanned disk', async () => {
+      mountForTargetStub.resolves({ target: '/dat', availableBytes: 500 * oneGb });
+
+      await appOperations.testAppMount();
+      await flush();
+
+      // findmnt --target the apps folder decided the disk — no node-df-style scan.
+      sinon.assert.calledOnce(mountForTargetStub);
+      const fallocate = fallocateCall();
+      expect(fallocate, 'fallocate must run when space is sufficient').to.not.equal(undefined);
+      expect(fallocate.args[1]).to.eql({ params: ['-l', '1G', '/dat/flux_fluxTestVolFLUXFSVOL'], runAsRoot: true });
+      sinon.assert.calledWith(runCommandStub, 'mke2fs', sinon.match({ params: ['-t', 'ext4', '/dat/flux_fluxTestVolFLUXFSVOL'], runAsRoot: true }));
+    });
+
+    it('skips the build when the apps-folder disk lacks room', async () => {
+      mountForTargetStub.resolves({ target: '/dat', availableBytes: 1 * oneGb });
+
+      await appOperations.testAppMount();
+      await flush();
+
+      expect(fallocateCall(), 'no allocation when space is insufficient').to.equal(undefined);
+    });
+
+    it('places the loop file under the flux dir when the apps folder is on the root mount (legacy)', async () => {
+      mountForTargetStub.resolves({ target: '/', availableBytes: 500 * oneGb });
+
+      await appOperations.testAppMount();
+      await flush();
+
+      const fallocate = fallocateCall();
+      expect(fallocate, 'fallocate must run when space is sufficient').to.not.equal(undefined);
+      expect(fallocate.args[1].params[2]).to.include('appvolumes/flux_fluxTestVolFLUXFSVOL');
+      expect(fallocate.args[1].params[2]).to.not.equal('//flux_fluxTestVolFLUXFSVOL');
     });
   });
 
