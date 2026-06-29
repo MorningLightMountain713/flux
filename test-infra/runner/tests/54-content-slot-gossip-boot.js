@@ -2,7 +2,9 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { deployContentApp, pushContentUpdate, assertManifestSynced } from '../framework/content-helper.js';
+import {
+  deployContentApp, pushContentUpdate, assertManifestSynced, injectForgedManifestGossip,
+} from '../framework/content-helper.js';
 import { getFluxDriveState, resetFluxDrive } from '../framework/fluxdrive-control.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
@@ -21,15 +23,16 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 //   2. manifest-before-spec quarantine — at submission the manifest gossips ahead of
 //      the (unconfirmed) spec, so non-origin nodes QUARANTINE it
 //      (content:manifestStored{confirmed:false}) rather than dropping it.
-//   3. forged owner-signature drop — documented as pending (no harness primitive to
-//      inject a node-signed gossip broadcast carrying a forged owner sig; see below).
+//   3. forged owner-signature drop — a peer stub gossips a manifest whose owner sig is
+//      from a non-owner key; a spec-holding node drops it (manifestDropped{forged_signature}).
 //   4. boot recovery — a node down while a version is published catches it up on boot
 //      and stages it before its container starts (content:bootReconcile).
 //   5. FluxDrive backstop — the first (cold, peerless) installer provisions its slot
 //      content from the FluxDrive deep backstop, not a peer.
 //
-// nodes:5 satisfies the submission minOutgoing>=4 peer gate; arcane:true so the node
-// accepts content apps and runs the benchmark crypto.
+// nodes:6 (five real nodes + one peer stub at index 5, used to inject the forged-sig
+// gossip) satisfies the submission minOutgoing>=4 peer gate; arcane:true so the nodes
+// accept content apps and run the benchmark crypto.
 
 describe('content slots: manifest gossip propagation + boot recovery', function () {
   let env;
@@ -47,7 +50,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
   before(async function () {
     this.timeout(420000);
     env = await createTestEnv({
-      hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
+      hookCtx: this, nodes: 6, stubPeers: [5], tickerAutostart: false, arcane: true,
     });
     await bootAndPeer(env);
     await pushImage(appName, 'v1');
@@ -189,17 +192,37 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     );
   });
 
-  it('forged owner-signature is dropped on gossip receipt (content:manifestDropped{forged_signature})');
-  // PENDING — no harness primitive exists to stage this. content:manifestDropped{
-  // reason:'forged_signature'} is emitted ONLY by the live gossip receive path
-  // (receiveManifest), which runs only after the relaying node's envelope signature is
-  // verified by the P2P layer. Nodes relay only manifests they have already
-  // owner-verified, and there is no control plane to open a peer websocket and inject a
-  // node-signed broadcast carrying a manifest with a forged owner sig. The submission
-  // path (/apps/contentupdate) and the FluxDrive/boot-sync ingest paths reject a bad
-  // owner sig WITHOUT emitting this event (they throw to the submitter / log-and-skip).
-  // Needs a new primitive (e.g. a daemon-stub or node debug endpoint that broadcasts a
-  // raw fluxappcontentmanifest gossip message with caller-supplied bytes). See return.
+  it('drops a forged owner-signature gossiped by a peer (content:manifestDropped{forged_signature})', async function () {
+    this.timeout(120000);
+    // The peer stub (a trusted node-list member at index 5) gossips a manifest at a
+    // fresh-high version — clearing the latest-wins floor — whose owner signature is from
+    // a NON-owner key. The stub's node envelope is valid so the relay check passes; the
+    // owner-sig check then fails and the spec-holding node drops it. Models a Byzantine
+    // peer relaying an owner-unverified manifest, which honest nodes never do.
+    const stub = env.stubPeerClients.get(5);
+    const target = env.clients[1];
+    const beforeId = target.getLastEventId();
+
+    const res = await injectForgedManifestGossip(stub, {
+      appName,
+      version: 99,
+      slots: [{ name: slotName, bytes: Buffer.from('forged slot bytes') }],
+    });
+    expect(res.sent, 'stub pushed the gossip to at least one connected node').to.be.greaterThan(0);
+
+    const dropped = await target.waitForEvent(
+      'content:manifestDropped',
+      (d) => d.appName === appName && d.reason === 'forged_signature',
+      45000,
+      { afterId: beforeId },
+    );
+    expect(dropped.data.reason).to.equal('forged_signature');
+
+    // Dropped, not stored: the forged manifest never advanced the register.
+    const row = await dbClients[1].getContentManifest(appName);
+    expect(row, 'node 1 still holds its manifest row').to.exist;
+    expect(row.version, 'the dropped forged manifest never advanced the register').to.be.below(99);
+  });
 
   it('recovers on boot: a node down while v3 is published catches it up and stages it before start', async function () {
     this.timeout(300000);
