@@ -299,10 +299,9 @@ module.exports = {
     imageComplianceIntervalMs: 3600000,
     forceRemovalIntervalMs: 7200000,
     installCollisionWaitMs: 90000,
-    portTestBindDelayMs: 5000,
-    portTestPropagationDelayMs: 10000,
-    portTestPeerTimeoutMs: 30000,
-    portTestMaxAttempts: 5,
+    portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
+    portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct /16, excluding our own
+    portTestMaxRounds: 3, // max retry rounds when a round is inconclusive (no peer answered)
     spawnReconfirmDelayMs: 7500000,
     unencryptedSpawnDelayMs: 120000,
     globalCmdDelayMs: 500,
