@@ -7,9 +7,7 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
-const appEventVerifier = require('../appMessaging/appEventVerifier');
-const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
-const { validateSubmissionSpec, getSpec, getSpecBackend } = require('../utils/specLibs');
+const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
 const { resolveStorageRefs } = require('../utils/fluxStorageRefs');
@@ -30,6 +28,49 @@ const {
 } = require('../utils/appConstants');
 
 let reindexRunning = false;
+
+// Control-plane hook fired after a global app spec is committed. Wired by
+// serviceManager to the spawner so a spec this node must install can wake the
+// spawn loop immediately instead of waiting for the next poll. Distinct from the
+// fluxEventBus 'app:specStored' event (test-observability only, a no-op in prod).
+let onSpecStored = null;
+
+/**
+ * Register the spec-stored control hook. Single-slot (last wins), matching the
+ * setOn* idiom used by appInstaller/appReconciler/appUninstaller.
+ * @param {(specDoc: object) => void} callback
+ */
+function setOnSpecStored(callback) {
+  onSpecStored = callback;
+}
+
+/**
+ * Fire the spec-stored hook with the committed spec doc. Best-effort: a throwing
+ * hook is logged and swallowed so it can never break the spec-store path.
+ * @param {object} specDoc - the spec doc just written to globalAppsInformation
+ */
+function emitSpecStored(specDoc) {
+  if (!onSpecStored) return;
+  try {
+    onSpecStored(specDoc);
+  } catch (error) {
+    log.error(`emitSpecStored callback error: ${error.message}`);
+  }
+}
+
+/**
+ * The single funnel for every global app-spec write: persist through the registry,
+ * then fire the spec-stored hook. Routing all four store paths through here keeps
+ * the spawner-wake notification from being forgotten by any one of them, and keeps
+ * the write going through appsRepository rather than raw dbHelper.
+ * @param {object} specDoc - serialized spec doc to persist
+ * @param {{upsert?: boolean}} [options] - upsert:false for update-only writes
+ * @returns {Promise<void>}
+ */
+async function storeGlobalSpec(specDoc, options) {
+  await appsRepository.upsertGlobalAppInfo(specDoc, options);
+  emitSpecStored(specDoc);
+}
 
 /**
  * Get all app hashes from the blockchain
@@ -745,7 +786,7 @@ async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash)
 async function updateAppSpecsForRescanReindex(appSpecs) {
   const existingHeight = await appsRepository.getGlobalAppHeight(appSpecs.name);
   if (existingHeight === null || existingHeight < appSpecs.height) {
-    await appsRepository.upsertGlobalAppInfo(appSpecs);
+    await storeGlobalSpec(appSpecs);
   }
   return true;
 }
@@ -757,7 +798,7 @@ async function updateAppSpecsForRescanReindex(appSpecs) {
  */
 async function storeAppSpecificationInPermanentStorage(appSpec) {
   try {
-    await appsRepository.upsertGlobalAppInfo(appSpec);
+    await storeGlobalSpec(appSpec);
     log.info(`App specification stored permanently for ${appSpec.name}`);
     return { status: 'success', message: 'App specification stored' };
   } catch (error) {
@@ -1207,7 +1248,12 @@ async function appLocationFromEvents(options = {}) {
             cond: {
               $and: [
                 { $let: { vars: { v2Ts: { $first: { $filter: { input: '$v2Timestamps', as: 't', cond: { $eq: ['$$t._id', '$$entry.ip'] } } } } }, in: { $or: [{ $eq: ['$$v2Ts', null] }, { $gt: ['$$entry.broadcastedAt', '$$v2Ts.latestV2'] }] } } },
-                { $let: { vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$$entry.ip'] } } } } }, in: { $or: [{ $eq: ['$$sd', null] }, { $gte: ['$$entry.broadcastedAt', '$$sd.eventAt'] }, { $and: [{ $eq: ['$$sd.type', 'sigterm'] }, { $gt: [{ $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] }, now] }] }] } } },
+                {
+                  $let: {
+                    vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$$entry.ip'] } } } } },
+                    in: { $or: [{ $eq: ['$$sd', null] }, { $gte: ['$$entry.broadcastedAt', '$$sd.eventAt'] }, { $and: [{ $eq: ['$$sd.type', 'sigterm'] }, { $gt: [{ $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] }, now] }] }] },
+                  },
+                },
               ],
             },
           },
@@ -1219,7 +1265,20 @@ async function appLocationFromEvents(options = {}) {
         fromV2: [
           { $unwind: '$_v2Filtered' }, { $unwind: '$_v2Filtered.apps' },
           ...(nameMatch ? [{ $match: { '_v2Filtered.apps.name': nameMatch } }] : []),
-          { $project: { _id: 0, name: '$_v2Filtered.apps.name', hash: '$_v2Filtered.apps.hash', ip: '$_v2Filtered.ip', broadcastedAt: '$_v2Filtered.broadcastedAt', runningSince: { $ifNull: ['$_v2Filtered.apps.runningSince', '$_v2Filtered.runningSince'] }, osUptime: '$_v2Filtered.osUptime', staticIp: '$_v2Filtered.staticIp', removals: 1, ipChanges: 1 } },
+          {
+            $project: {
+              _id: 0,
+              name: '$_v2Filtered.apps.name',
+              hash: '$_v2Filtered.apps.hash',
+              ip: '$_v2Filtered.ip',
+              broadcastedAt: '$_v2Filtered.broadcastedAt',
+              runningSince: { $ifNull: ['$_v2Filtered.apps.runningSince', '$_v2Filtered.runningSince'] },
+              osUptime: '$_v2Filtered.osUptime',
+              staticIp: '$_v2Filtered.staticIp',
+              removals: 1,
+              ipChanges: 1,
+            },
+          },
           { $addFields: { _removedAt: { $ifNull: [{ $let: { vars: { r: { $first: { $filter: { input: '$removals', as: 'r', cond: { $and: [{ $eq: ['$$r._id.ip', '$ip'] }, { $eq: ['$$r._id.name', '$name'] }] } } } } }, in: '$$r.removedAt' } }, new Date(0)] } } },
           { $match: { $expr: { $gt: ['$broadcastedAt', '$_removedAt'] } } },
           { $addFields: { _ipChange: { $first: { $filter: { input: '$ipChanges', as: 'c', cond: { $eq: ['$$c._id', '$ip'] } } } } } },
@@ -1258,10 +1317,9 @@ async function insertAppSpecifications(appSpecs) {
   try {
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.appsglobal.database);
-    const query = { name: appSpecs.name };
-    const existing = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, { projection: { _id: 0, height: 1 } });
-    if (existing && existing.height >= appSpecs.height) return true;
-    await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, { upsert: true });
+    const existingHeight = await appsRepository.getGlobalAppHeight(appSpecs.name);
+    if (existingHeight !== null && existingHeight >= appSpecs.height) return true;
+    await storeGlobalSpec(appSpecs);
     fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
     // Best-effort, decoupled from the hot path: now that this app's spec is known,
     // promote any manifest we were holding quarantined for it (the non-running-node
@@ -1281,11 +1339,9 @@ async function updateAppSpecifications(appSpecs) {
   try {
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.appsglobal.database);
-    const query = { name: appSpecs.name };
-    const projection = { projection: { _id: 0 } };
-    const appInfo = await dbHelper.findOneInDatabase(database, globalAppsInformation, query, projection);
-    if (!appInfo || appInfo.height >= appSpecs.height) return true;
-    await dbHelper.replaceOneInDatabase(database, globalAppsInformation, query, appSpecs, { upsert: false });
+    const existingHeight = await appsRepository.getGlobalAppHeight(appSpecs.name);
+    if (existingHeight === null || existingHeight >= appSpecs.height) return true;
+    await storeGlobalSpec(appSpecs, { upsert: false });
     fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
     // Best-effort, decoupled from the hot path: now that this app's spec is known,
     // promote any manifest we were holding quarantined for it (the non-running-node
@@ -1302,6 +1358,7 @@ async function updateAppSpecifications(appSpecs) {
 }
 
 module.exports = {
+  setOnSpecStored,
   getAppHashes,
   appLocation,
   appInstallingLocation,

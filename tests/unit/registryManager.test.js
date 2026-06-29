@@ -971,4 +971,76 @@ describe('registryManager tests', () => {
       expect(result).to.be.an('array').with.lengthOf(0);
     });
   });
+
+  describe('spec-stored wake hook (setOnSpecStored)', () => {
+    afterEach(() => {
+      registryManager.setOnSpecStored(null);
+    });
+
+    it('fires the hook with the stored spec after a permanent store', async () => {
+      const upsert = sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
+      const hook = sinon.stub();
+      registryManager.setOnSpecStored(hook);
+
+      const spec = { name: 'HookApp', height: 100, hash: 'h1', owner: 'o' };
+      const res = await registryManager.storeAppSpecificationInPermanentStorage(spec);
+
+      expect(res.status).to.equal('success');
+      sinon.assert.calledOnce(upsert);
+      sinon.assert.calledWith(upsert, spec);
+      sinon.assert.calledOnce(hook);
+      sinon.assert.calledWith(hook, spec);
+    });
+
+    it('insert routes through the registry (not raw dbHelper) and fires the hook', async () => {
+      sinon.stub(appsRepository, 'getGlobalAppHeight').resolves(null);
+      const upsert = sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
+      const replaceOne = sinon.stub(dbHelper, 'replaceOneInDatabase').resolves();
+      sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves();
+      const hook = sinon.stub();
+      registryManager.setOnSpecStored(hook);
+
+      const spec = { name: 'RouteApp', height: 10, hash: 'h2' };
+      await registryManager.insertAppSpecifications(spec);
+
+      sinon.assert.calledOnce(upsert); // went through the registry
+      sinon.assert.calledWith(upsert, spec);
+      sinon.assert.notCalled(replaceOne); // did NOT hand-roll the dbHelper spec write
+      sinon.assert.calledOnce(hook);
+      sinon.assert.calledWith(hook, spec);
+    });
+
+    it('update routes through the registry with upsert:false and fires the hook', async () => {
+      sinon.stub(appsRepository, 'getGlobalAppHeight').resolves(50); // exists, older than the update
+      const upsert = sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
+      const replaceOne = sinon.stub(dbHelper, 'replaceOneInDatabase').resolves();
+      sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves();
+      const hook = sinon.stub();
+      registryManager.setOnSpecStored(hook);
+
+      const spec = { name: 'UpdRoute', height: 100, hash: 'h3' };
+      await registryManager.updateAppSpecifications(spec);
+
+      sinon.assert.calledWith(upsert, spec, { upsert: false });
+      sinon.assert.notCalled(replaceOne);
+      sinon.assert.calledOnce(hook);
+    });
+
+    it('a throwing hook does not break the store', async () => {
+      sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
+      registryManager.setOnSpecStored(() => { throw new Error('hook boom'); });
+
+      const res = await registryManager.storeAppSpecificationInPermanentStorage({ name: 'SafeApp', height: 1, hash: 'h' });
+      expect(res.status).to.equal('success'); // store succeeded despite the throwing hook
+    });
+
+    it('does not fire when no hook is registered', async () => {
+      registryManager.setOnSpecStored(null);
+      const upsert = sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
+
+      await registryManager.storeAppSpecificationInPermanentStorage({ name: 'NoHook', height: 1, hash: 'h' });
+
+      sinon.assert.calledOnce(upsert); // store still happened, just no hook
+    });
+  });
 });
