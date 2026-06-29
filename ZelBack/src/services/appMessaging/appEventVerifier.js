@@ -137,11 +137,15 @@ async function requestAttestation(contentHash) {
   const backend = await getSpecBackend();
   const message = backend.buildArcaneAttestMessage(contentHash);
   const response = await benchmarkService.attest({ message });
-  if (response.status !== 'success' || !response.data || !response.data.signature) {
-    const detail = (response.data && response.data.message) || response.data || 'unknown error';
+  // A successful benchmark reply rides as a JSON string in data (the same shape
+  // contentBlobService unwraps); parse it before reading the signature.
+  const ok = response && response.status === 'success';
+  const data = ok && typeof response.data === 'string' ? JSON.parse(response.data) : response && response.data;
+  if (!ok || !data || !data.signature) {
+    const detail = (data && data.message) || (response && response.data) || 'unknown error';
     throw new Error(`Failed to obtain arcane attestation: ${detail}`);
   }
-  return response.data.signature;
+  return data.signature;
 }
 
 /**
