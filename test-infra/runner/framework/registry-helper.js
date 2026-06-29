@@ -12,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const caCert = readFileSync(join(__dirname, '..', '..', 'fixtures', 'registry-tls', 'ca.pem'));
 
 // The host pushes to the registry's IP (it can't resolve the Docker network alias),
-// but the cert is bound to DNS:fluxregistry — so connect to the IP yet verify the
+// but the cert is bound to DNS:fluxregistry.test — so connect to the IP yet verify the
 // cert against the alias name. Nodes pull via the alias directly. Base-independent.
 const REGISTRY = `https://${getSubnetConfig().registry}:5000`;
 
