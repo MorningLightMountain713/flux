@@ -14,6 +14,7 @@ describe('containerHealthMonitor tests', () => {
   let containerHealthMonitor;
   let appsRepositoryStub;
   let deploymentProviderStub;
+  let shutdownPlanStub;
   let dockerServiceStub;
   let componentProvisionerStub;
   let appVolumeServiceStub;
@@ -38,6 +39,7 @@ describe('containerHealthMonitor tests', () => {
 
     appsRepositoryStub = { getInstalledApp: sinon.stub().resolves(instantiated) };
     deploymentProviderStub = { buildDeployment: sinon.stub().resolves(fakeDeployment) };
+    shutdownPlanStub = { appRequiresDaemonShutdown: sinon.stub().returns(true) };
     dockerServiceStub = { getDockerContainer: sinon.stub().resolves(null) };
     componentProvisionerStub = { installComponent: sinon.stub().resolves() };
     appVolumeServiceStub = { ensureMountSourcesExist: sinon.stub().resolves() };
@@ -58,6 +60,7 @@ describe('containerHealthMonitor tests', () => {
       '../appLifecycle/appUninstaller': appUninstallerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
+      '../appLifecycle/shutdownPlan': shutdownPlanStub,
       '../appManagement/appInspector': appInspectorStub,
       '../appTamperingDetectionService': tamperingStub,
       '../utils/globalState': globalStateStub,
@@ -141,6 +144,21 @@ describe('containerHealthMonitor tests', () => {
       await containerHealthMonitor.recreateMissingContainers('web_testapp');
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.owner).to.equal('1OwnerAddress');
+    });
+
+    it('recomputes the graceful-shutdown gate and forwards it, so a recreate keeps its budget labels', async () => {
+      shutdownPlanStub.appRequiresDaemonShutdown.returns(true);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      expect(shutdownPlanStub.appRequiresDaemonShutdown.calledWith(fakeDeployment)).to.be.true;
+      const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
+      expect(opts.requiresEncryption).to.equal(true);
+    });
+
+    it('forwards requiresEncryption=false for a non-graceful app (budget labels skipped)', async () => {
+      shutdownPlanStub.appRequiresDaemonShutdown.returns(false);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
+      expect(opts.requiresEncryption).to.equal(false);
     });
 
     it('recreates every component for a whole-app identifier', async () => {
