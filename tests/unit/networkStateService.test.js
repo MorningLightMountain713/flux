@@ -335,6 +335,23 @@ describe('networkStateService tests', () => {
     expect(allPassed).to.be.true;
   });
 
+  it('should forward sample options to the manager (distinctPrefixes collapses one /16)', async () => {
+    const blockEmitter = new EventEmitter();
+    fluxnodeRpcStub.resolves(defaultNetworkState);
+
+    await networkStateService.start({ stateEmitter: blockEmitter });
+
+    // All three nodes share the 47.199 /16, so distinctPrefixes must collapse the
+    // request to a single address - proving count + options reach the manager (without
+    // forwarding distinctPrefixes the sample would be all 3).
+    const sample = await networkStateService.getRandomSocketAddressSample(3, { distinctPrefixes: true });
+
+    await networkStateService.stop();
+
+    expect(sample).to.have.lengthOf(1);
+    expect(['47.199.51.61:16137', '47.199.51.61:16147', '47.199.51.62:16147']).to.include(sample[0]);
+  });
+
   it('should throttle daemon calls when fetched within 30 seconds', async () => {
     const blockEmitter = new EventEmitter();
     fluxnodeRpcStub.resolves(defaultNetworkState);
