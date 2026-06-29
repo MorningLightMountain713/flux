@@ -7,15 +7,21 @@ describe('componentProvisioner tests', () => {
   let appDockerCreateStub;
   let createAppVolumeStub;
   let appDockerImageSizeStub;
+  let allowPortStub;
+  let mapUpnpPortStub;
 
   // installComponent isolated behind its provisioning deps. noCallThru + every
   // require stubbed, so nothing touches a real service.
   function loadProvisioner(opts = {}) {
-    const { teardownOwed = false, isCondemnedStub = null } = opts;
+    const {
+      teardownOwed = false, isCondemnedStub = null, firewallActive = false, isUPNP = false,
+    } = opts;
     appDockerStartStub = sinon.stub().resolves('ok');
     appDockerCreateStub = sinon.stub().resolves();
     createAppVolumeStub = sinon.stub().resolves();
     appDockerImageSizeStub = sinon.stub().resolves(0);
+    allowPortStub = sinon.stub().resolves({ status: true });
+    mapUpnpPortStub = sinon.stub().resolves(true);
     return proxyquire.load('../../ZelBack/src/services/appLifecycle/componentProvisioner', {
       config: { fluxapps: { maxImageSize: 10000000000 } },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
@@ -26,8 +32,8 @@ describe('componentProvisioner tests', () => {
         appDockerStart: appDockerStartStub,
         dockerPullStream: sinon.stub(),
       },
-      '../fluxNetworkHelper': { isFirewallActive: sinon.stub().resolves(false), allowPort: sinon.stub().resolves({ status: true }) },
-      '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
+      '../fluxNetworkHelper': { isFirewallActive: sinon.stub().resolves(firewallActive), allowPort: allowPortStub },
+      '../upnpService': { isUPNP: sinon.stub().returns(isUPNP), mapUpnpPort: mapUpnpPortStub },
       '../appRequirements/hwRequirements': { systemArchitecture: sinon.stub().resolves('amd64') },
       '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
       '../utils/registryCredentialHelper': { getCredentials: sinon.stub().resolves(null) },
@@ -210,6 +216,54 @@ describe('componentProvisioner tests', () => {
       expect(threw.message).to.include('arrived mid-install');
       expect(createAppVolumeStub.called, 'the volume WAS built (post-pull check passed)').to.be.true;
       expect(appDockerCreateStub.called, 'but the container was NOT created').to.be.false;
+    });
+  });
+
+  describe('host port management (redeploy port-delta support)', () => {
+    it('openHostPorts opens each port on ufw and UPnP', async () => {
+      const provisioner = loadProvisioner({ firewallActive: true, isUPNP: true });
+
+      await provisioner.openHostPorts([8080, 9090], 'myapp');
+
+      expect(allowPortStub.calledWith(8080)).to.be.true;
+      expect(allowPortStub.calledWith(9090)).to.be.true;
+      expect(mapUpnpPortStub.calledWith(8080, 'Flux_App_myapp')).to.be.true;
+      expect(mapUpnpPortStub.calledWith(9090, 'Flux_App_myapp')).to.be.true;
+    });
+
+    it('openHostPorts throws if a port fails to open', async () => {
+      const provisioner = loadProvisioner({ firewallActive: true });
+      allowPortStub.resolves({ status: false });
+
+      let threw;
+      try {
+        await provisioner.openHostPorts([8080], 'myapp');
+      } catch (error) {
+        threw = error;
+      }
+      expect(threw).to.be.an('error');
+      expect(threw.message).to.include('FAILed to open');
+    });
+
+    it('installComponent opens the component ports on a normal install', async () => {
+      const provisioner = loadProvisioner({ firewallActive: true });
+      const component = makeComponent('none', { hostPorts: [8080] });
+
+      await provisioner.installComponent(component, { owner: 'owner1', createVolumes: false });
+
+      expect(allowPortStub.calledWith(8080), 'a normal install opens its ports').to.be.true;
+    });
+
+    it('installComponent leaves the ufw/UPnP rules untouched when skipPorts is set (redeploy)', async () => {
+      const provisioner = loadProvisioner({ firewallActive: true, isUPNP: true });
+      const component = makeComponent('none', { hostPorts: [8080] });
+
+      await provisioner.installComponent(component, { owner: 'owner1', createVolumes: false, skipPorts: true });
+
+      expect(allowPortStub.called, 'skipPorts must not touch ufw').to.be.false;
+      expect(mapUpnpPortStub.called, 'skipPorts must not touch UPnP').to.be.false;
+      // The container is still created — only the ufw/UPnP open is skipped.
+      expect(appDockerCreateStub.called, 'the container is still provisioned').to.be.true;
     });
   });
 });

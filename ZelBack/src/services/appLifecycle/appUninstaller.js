@@ -78,10 +78,9 @@ function setOnComponentRemoved(callback) {
  * Stop Syncthing app and clean up cache
  * @param {string} monitoredName - Monitored app name
  * @param {string} appId - Application ID
- * @param {object} res - Response object for streaming
  * @returns {Promise<void>}
  */
-async function stopSyncthingAndCleanup(monitoredName, appId, res) {
+async function stopSyncthingAndCleanup(monitoredName, appId) {
   // Hard removal - the data is going, so what this node says about it goes first
   // and unconditionally. Stopping syncthing can fail; the volume is deleted either
   // way, and state describing it must not outlive it on the strength of that.
@@ -95,9 +94,8 @@ async function stopSyncthingAndCleanup(monitoredName, appId, res) {
   // outranking a node that still holds the app and seeding an empty folder in its
   // place.
   globalState.folderHoldings?.delete(appId);
-
   try {
-    await appVolumeService.removeSyncthingFolder(monitoredName, res);
+    await appVolumeService.removeSyncthingFolder(monitoredName);
 
     // Hard removal - delete syncthing cache since data will be deleted
     // eslint-disable-next-line no-shadow, global-require
@@ -115,104 +113,75 @@ async function stopSyncthingAndCleanup(monitoredName, appId, res) {
 /**
  * Unmount volume for application or component
  * @param {string} appId - Application ID
- * @param {string} entityName - Entity name for logging
- * @param {object} res - Response object for streaming
+ * @param {object} [options]
+ * @param {string} [options.entityName] - label for progress messages (defaults to appId)
+ * @param {Function|null} [options.onStatus] - progress callback
  * @returns {Promise<void>}
  */
-async function unmountVolume(appId, entityName, res) {
-  log.info(`Unmounting volume of ${entityName}...`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Unmounting volume of ${entityName}...` }));
-    if (res.flush) res.flush();
-  }
+async function unmountVolume(appId, options = {}) {
+  const { entityName = appId, onStatus = null } = options;
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
+  };
 
-  // The unmount carries on either way - a volume that will not unmount is not
-  // a reason to hold an uninstall open - but only one of these two lines is
-  // true, and the stream is the only account an operator gets of what is still
-  // mounted.
-  const unmount = await serviceHelper.runCommand('umount', {
-    runAsRoot: true, params: [appsFolder + appId], logError: false,
-  });
-  if (unmount.error) {
-    log.error(unmount.error);
-    log.info(`An error occurred while unmounting ${entityName} storage. Continuing...`);
-    if (res) {
-      res.write(serviceHelper.ensureString({ status: `An error occured while unmounting ${entityName} storage. Continuing...` }));
-      if (res.flush) res.flush();
-    }
-    return;
-  }
-
-  log.info(`Volume of ${entityName} unmounted`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Volume of ${entityName} unmounted` }));
-    if (res.flush) res.flush();
+  status(`Unmounting volume of ${entityName}...`);
+  const result = await serviceHelper.runCommand('umount', { params: [appsFolder + appId], runAsRoot: true, logError: false });
+  if (result.error) {
+    log.error(result.error);
+    status(`An error occured while unmounting ${entityName} storage. Continuing...`);
+  } else {
+    status(`Volume of ${entityName} unmounted`);
   }
 }
 
 /**
  * Clean up application data directory
  * @param {string} appId - Application ID
- * @param {string} entityName - Entity name for logging
- * @param {object} res - Response object for streaming
+ * @param {object} [options]
+ * @param {string} [options.entityName] - label for progress messages (defaults to appId)
+ * @param {Function|null} [options.onStatus] - progress callback
  * @returns {Promise<void>}
  */
-async function cleanupAppData(appId, entityName, res) {
-  log.info(`Cleaning up ${entityName} data...`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Cleaning up ${entityName} data...` }));
-    if (res.flush) res.flush();
-  }
+async function cleanupAppData(appId, options = {}) {
+  const { entityName = appId, onStatus = null } = options;
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
+  };
 
   // the bare mountpoint is kept immutable while unmounted (set at volume
   // creation); clear the flag or the removal below fails
   await serviceHelper.runCommand('chattr', { runAsRoot: true, params: ['-i', appsFolder + appId], logError: false });
 
-  // The removal carries on either way - data left behind is not a reason to
-  // hold an uninstall open - but only one of these two lines is true, and the
-  // stream is the only account an operator gets of what is still on the disk.
-  const removal = await serviceHelper.runCommand('rm', {
-    runAsRoot: true, params: ['-rf', appsFolder + appId], logError: false,
-  });
-  if (removal.error) {
-    log.error(removal.error);
-    log.info(`An error occured while cleaning ${entityName} data. Continuing...`);
-    if (res) {
-      res.write(serviceHelper.ensureString({ status: `An error occured while cleaning ${entityName} data. Continuing...` }));
-      if (res.flush) res.flush();
-    }
-    return;
+  status(`Cleaning up ${entityName} data...`);
+  const result = await serviceHelper.runCommand('rm', { params: ['-rf', appsFolder + appId], runAsRoot: true, logError: false });
+  if (result.error) {
+    log.error(result.error);
+    status(`An error occured while cleaning ${entityName} data. Continuing...`);
   }
-
-  log.info(`Data of ${entityName} cleaned`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Data of ${entityName} cleaned` }));
-    if (res.flush) res.flush();
-  }
+  status(`Data of ${entityName} cleaned`);
 }
 
 /**
  * Clean up crontab entry for application
  * @param {string} appId - Application ID
- * @param {object} res - Response object for streaming
+ * @param {object} [options]
+ * @param {Function|null} [options.onStatus] - progress callback
  * @returns {Promise<string|null>} Volume path if found, null otherwise
  */
-async function cleanupCrontab(appId, res) {
+async function cleanupCrontab(appId, options = {}) {
+  const { onStatus = null } = options;
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
+  };
   let volumepath = null;
 
-  log.info('Adjusting crontab...');
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: 'Adjusting crontab...' }));
-    if (res.flush) res.flush();
-  }
-
+  status('Adjusting crontab...');
   const crontab = await crontabLoad().catch((e) => {
     log.error(e);
-    log.info('An error occured while loading crontab. Continuing...');
-    if (res) {
-      res.write(serviceHelper.ensureString({ status: 'An error occured while loading crontab. Continuing...' }));
-      if (res.flush) res.flush();
-    }
+    status('An error occured while loading crontab. Continuing...');
   });
 
   if (crontab) {
@@ -239,23 +208,11 @@ async function cleanupCrontab(appId, res) {
         crontab.save();
       } catch (e) {
         log.error(e);
-        log.info('An error occured while saving crontab. Continuing...');
-        if (res) {
-          res.write(serviceHelper.ensureString({ status: 'An error occured while saving crontab. Continuing...' }));
-          if (res.flush) res.flush();
-        }
+        status('An error occured while saving crontab. Continuing...');
       }
-      log.info('Crontab Adjusted.');
-      if (res) {
-        res.write(serviceHelper.ensureString({ status: 'Crontab Adjusted.' }));
-        if (res.flush) res.flush();
-      }
+      status('Crontab Adjusted.');
     } else {
-      log.info('Crontab not found.');
-      if (res) {
-        res.write(serviceHelper.ensureString({ status: 'Crontab not found.' }));
-        if (res.flush) res.flush();
-      }
+      status('Crontab not found.');
     }
   }
 
@@ -265,74 +222,49 @@ async function cleanupCrontab(appId, res) {
 /**
  * Clean up volume path
  * @param {string} volumepath - Volume path to clean
- * @param {string} entityName - Entity name for logging
- * @param {object} res - Response object for streaming
- * @param {boolean} [conclusive=true] - Whether the search that produced
- *   `volumepath` covered everywhere it should have. False with no path means
- *   an image may be on disk that nothing will account for again, which is
- *   said rather than passed over; the default suits a caller that did not
- *   search.
+ * @param {object} [options]
+ * @param {string} [options.entityName] - label for progress messages (defaults to the volume path)
+ * @param {Function|null} [options.onStatus] - progress callback
  * @returns {Promise<void>}
  */
-async function cleanupVolumePath(volumepath, entityName, res, conclusive = true) {
-  if (!volumepath) {
-    // Nothing to delete and nowhere left to look are different answers, and
-    // only the first of them means the disk is clear. An image whose location
-    // could not be established outlives the app's last record of itself, so
-    // the one chance to say it is here.
-    if (!conclusive) {
-      log.warn(`Data volume of ${entityName} could not be located and is left on disk`);
-      if (res) {
-        res.write(serviceHelper.ensureString({ status: `Data volume of ${entityName} could not be located and is left on disk` }));
-        if (res.flush) res.flush();
-      }
-    }
-    return;
-  }
+async function cleanupVolumePath(volumepath, options = {}) {
+  if (!volumepath) return;
+  const { entityName = volumepath, onStatus = null } = options;
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
+  };
 
-  log.info(`Cleaning up data volume of ${entityName}...`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Cleaning up data volume of ${entityName}...` }));
-    if (res.flush) res.flush();
+  status(`Cleaning up data volume of ${entityName}...`);
+  const result = await serviceHelper.runCommand('rm', { params: ['-rf', volumepath], runAsRoot: true, logError: false });
+  if (result.error) {
+    log.error(result.error);
+    status(`An error occured while cleaning ${entityName} volume. Continuing...`);
   }
-
-  // Passed as an argument rather than interpolated into a command string. The
-  // path can come from the recorded image now, which reached this node as a
-  // kernel string and went through the database - so whitespace in it would
-  // turn one removal into several, and `rm -rf` is not a thing to be wrong
-  // about.
-  const removal = await serviceHelper.runCommand('rm', { runAsRoot: true, params: ['-rf', volumepath], logError: false });
-  // The removal carries on either way - an image left behind is not a reason
-  // to hold an uninstall open - but only one of these two is true, and the
-  // stream is the only account an operator gets of what is still on the disk.
-  if (removal.error) {
-    log.error(removal.error);
-    log.info(`An error occured while cleaning ${entityName} volume. Continuing...`);
-    if (res) {
-      res.write(serviceHelper.ensureString({ status: `An error occured while cleaning ${entityName} volume. Continuing...` }));
-      if (res.flush) res.flush();
-    }
-    return;
-  }
-
-  log.info(`Volume of ${entityName} cleaned`);
-  if (res) {
-    res.write(serviceHelper.ensureString({ status: `Volume of ${entityName} cleaned` }));
-    if (res.flush) res.flush();
-  }
+  status(`Volume of ${entityName} cleaned`);
 }
-// Deny a component's host ports (ufw + UPnP). These are leaf host mutations on the
-// shared firewall ruleset / IGD session, so the deferred teardown worker calls this
-// from inside the node-wide hostMutationLock; pass the bare port list so the worker
-// can deny ports off the durable teardown descriptor without a live deployComp.
-async function denyPorts(ports, appName, entityName, res) {
-  const portStatus = { status: `Denying ${entityName} ports...` };
-  log.info(portStatus);
-  if (res) {
-    res.write(serviceHelper.ensureString(portStatus));
-    if (res.flush) res.flush();
-  }
 
+/**
+ * Deny a set of host ports on the firewall (ufw) and the router (UPnP) — leaf host
+ * mutations on the shared firewall ruleset / IGD session, so the deferred teardown
+ * worker calls this from inside the node-wide hostMutationLock; pass the bare port list
+ * so the worker can deny ports off the durable teardown descriptor without a live
+ * deployComp. Also used by a redeploy's port-delta reconcile to close only the removed
+ * ports. Progress goes through onStatus — the API handler owns the response stream.
+ * @param {number[]} ports - host ports to deny
+ * @param {string} appName - app name (the UPnP mapping description key)
+ * @param {object} [options]
+ * @param {string} [options.entityName] - label for progress messages (defaults to appName)
+ * @param {Function|null} [options.onStatus] - progress callback
+ */
+async function denyPorts(ports, appName, options = {}) {
+  const { entityName = appName, onStatus = null } = options;
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
+  };
+
+  status(`Denying ${entityName} ports...`);
   const firewallActive = await fluxNetworkHelper.isFirewallActive();
   const isUPNP = upnpService.isUPNP();
   // eslint-disable-next-line no-restricted-syntax
@@ -346,17 +278,19 @@ async function denyPorts(ports, appName, entityName, res) {
       await upnpService.removeMapUpnpPort(port, `Flux_App_${appName}`);
     }
   }
-
-  const portStatus2 = { status: `Ports of ${entityName} denied` };
-  log.info(portStatus2);
-  if (res) {
-    res.write(serviceHelper.ensureString(portStatus2));
-    if (res.flush) res.flush();
-  }
+  status(`Ports of ${entityName} denied`);
 }
 
-async function cleanupDeploymentPorts(deployComp, appName, res, entityName) {
-  await denyPorts(deployComp.hostPorts, appName, entityName, res);
+/**
+ * Close a component's full host-port set — the normal teardown path.
+ * @param {object} deployComp - DeploymentComponent (carries appName + hostPorts)
+ * @param {object} [options]
+ * @param {string} [options.entityName] - label for progress messages (defaults to the app name)
+ * @param {Function|null} [options.onStatus] - progress callback
+ */
+async function cleanupDeploymentPorts(deployComp, options = {}) {
+  const { entityName = deployComp.appName, onStatus = null } = options;
+  await denyPorts(deployComp.hostPorts, deployComp.appName, { entityName, onStatus });
 }
 
 /**
@@ -419,11 +353,17 @@ async function reclaimUnusedImages(images, status) {
  * @param {object} [options]
  * @param {boolean} [options.removeVolumes=false] - tear down volumes, syncthing, crontab
  * @param {boolean} [options.forceKill=false] - docker kill + force-remove instead of stop + remove
+ * @param {boolean} [options.skipPorts=false] - leave ufw/UPnP rules in place (a redeploy reconciles the port delta itself)
  * @param {Function|null} [options.onStatus] - progress callback
  */
 async function uninstallComponent(component, options = {}) {
   const removeVolumes = options.removeVolumes || false;
   const forceKill = options.forceKill || false;
+  // skipPorts: a redeploy keeps the app's ufw/UPnP rules and moves only the port delta
+  // itself, so the teardown half must not deny this component's ports (an unchanged port
+  // set would otherwise flap every rule, ~1s/port of UPnP router pacing). Normal removal
+  // leaves it false and denies all ports as before.
+  const skipPorts = options.skipPorts || false;
   const onStatus = options.onStatus || null;
 
   const { appName } = component;
@@ -452,7 +392,7 @@ async function uninstallComponent(component, options = {}) {
   status(`Flux App ${label} stopped`);
 
   if (removeVolumes) {
-    await stopSyncthingAndCleanup(component.identifier, appId, null);
+    await stopSyncthingAndCleanup(component.identifier, appId);
   }
 
   status(`Removing Flux App ${label} container...`);
@@ -478,13 +418,15 @@ async function uninstallComponent(component, options = {}) {
     log.warn(`WARNING: Container ${appId} may not have been fully removed`);
   }
 
-  await cleanupDeploymentPorts(component, appName, null, label);
+  if (!skipPorts) {
+    await cleanupDeploymentPorts(component, { entityName: label, onStatus });
+  }
 
   if (removeVolumes) {
-    await unmountVolume(appId, label, null);
-    await cleanupAppData(appId, label, null);
-    const volumepath = await cleanupCrontab(appId, null);
-    await cleanupVolumePath(volumepath, label, null);
+    await unmountVolume(appId, { entityName: label, onStatus });
+    await cleanupAppData(appId, { entityName: label, onStatus });
+    const volumepath = await cleanupCrontab(appId, { onStatus });
+    await cleanupVolumePath(volumepath, { entityName: label, onStatus });
     // Reclaim now-unneeded app-swap pool capacity (idempotent; no-op without the
     // new-mechanism host config). The container is already gone, so its swap pages
     // are freed and an emptied chunk can be swapped off + removed.
@@ -766,15 +708,15 @@ async function runTeardown(doc, { onStatus = null } = {}) {
           await dockerService.appDockerRemove(c.appId).catch((e) => log.warn(`remove ${c.appId}: ${e.message}`));
         }
         // eslint-disable-next-line no-await-in-loop
-        await denyPorts(c.ports, name, c.label, null);
+        await denyPorts(c.ports, name, { entityName: c.label });
         // eslint-disable-next-line no-await-in-loop
-        await unmountVolume(c.appId, c.label, null);
+        await unmountVolume(c.appId, { entityName: c.label });
         // eslint-disable-next-line no-await-in-loop
-        await cleanupAppData(c.appId, c.label, null);
+        await cleanupAppData(c.appId, { entityName: c.label });
         // eslint-disable-next-line no-await-in-loop
-        const volumepath = await cleanupCrontab(c.appId, null);
+        const volumepath = await cleanupCrontab(c.appId);
         // eslint-disable-next-line no-await-in-loop
-        await cleanupVolumePath(volumepath, c.label, null);
+        await cleanupVolumePath(volumepath, { entityName: c.label });
       } catch (err) {
         log.error(`Host teardown of ${c.identifier} failed (continuing): ${err.message}`);
       }
@@ -1052,6 +994,7 @@ module.exports = {
   uninstallApplication,
   uninstallComponent,
   cleanupDeploymentPorts,
+  denyPorts,
   removeAppLocallyApi,
   setOnComponentRemoved,
   expireGlobalApplications,
