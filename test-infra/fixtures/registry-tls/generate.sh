@@ -2,21 +2,23 @@
 #
 # Regenerate the test registry's TLS material.
 #
-# The server cert is bound to a stable DNS name (fluxregistry), NOT an IP, so the
+# The server cert is bound to a stable DNS name (fluxregistry.test), NOT an IP, so the
 # registry is reachable under any subnet base: the harness gives the registry
-# container this network alias, node dockerd pulls `fluxregistry:5000/...` (Docker
-# embedded DNS resolves the alias and TLS verifies against DNS:fluxregistry), and
+# container this network alias, node dockerd pulls `fluxregistry.test:5000/...` (Docker
+# embedded DNS resolves the alias and TLS verifies against DNS:fluxregistry.test), and
 # the host pushes to the registry's IP but verifies the cert against servername
-# fluxregistry (see runner/framework/registry-helper.js).
+# fluxregistry.test (see runner/framework/registry-helper.js). The alias is a dotted
+# .test FQDN so it satisfies the v9 spec image regex — a bare single-label host:port is
+# rejected (it cannot resolve across the real decentralised fleet).
 #
 # Outputs (committed): ca.pem, server-cert.pem, server-key.pem.
 # ca-key.pem is intermediate only and not needed at runtime.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-ALIAS=fluxregistry
+ALIAS=fluxregistry.test
 
-# Self-signed CA (nodes trust ca.pem; dockerd loads it under certs.d/fluxregistry:5000/)
+# Self-signed CA (nodes trust ca.pem; dockerd loads it under certs.d/fluxregistry.test:5000/)
 openssl genrsa -out ca-key.pem 4096
 openssl req -x509 -new -nodes -key ca-key.pem -sha256 -days 3650 \
   -out ca.pem -subj "/CN=flux-e2e-test-ca"
