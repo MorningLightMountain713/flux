@@ -3,6 +3,7 @@ const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const appHashSyncService = require('./appHashSyncService');
+const contentManifestSyncService = require('./contentManifestSyncService');
 const peerNotification = require('./peerNotification');
 const registryManager = require('../appDatabase/registryManager');
 const globalState = require('../utils/globalState');
@@ -36,8 +37,11 @@ const HASH_SYNC_RETRY_MS = config.fluxapps.hashSyncRetryMs ?? 300000;
 const FALLBACK_RECHECK_BLOCKS = config.fluxapps.hashSyncFallbackRecheckBlocks ?? 100;
 
 // The counted ephemeral sync types — each gates boot readiness. Temp messages are
-// requested with the initial batch but are best-effort and never counted toward it.
-const SYNC_TYPES = Object.freeze(['apprunning', 'appinstalling', 'apperrors', 'appcontentmanifest']);
+// requested with the initial batch but are best-effort and never counted toward it. The
+// content manifest is NOT here: it is permanent data reconciled on its own plane (a
+// two-step in-band exchange via contentManifestSyncService) and gated by
+// #manifestSyncComplete, parallel to the permanent-message hash sync.
+const SYNC_TYPES = Object.freeze(['apprunning', 'appinstalling', 'apperrors']);
 
 class AppSyncOrchestrator {
   #state = STATES.INITIALIZING;
@@ -72,8 +76,9 @@ class AppSyncOrchestrator {
   // #syncCompletions; only what it never delivered is re-asked elsewhere.
   #peerProgress = new Map();
   #syncCompletions = {
-    apprunning: 0, appinstalling: 0, apperrors: 0, appcontentmanifest: 0,
+    apprunning: 0, appinstalling: 0, apperrors: 0,
   };
+  #manifestSyncComplete = false;
   #stateSyncComplete = false;
   #syncRoundAbandoned = false;
   #syncPeerLostHandler = null;
@@ -198,8 +203,7 @@ class AppSyncOrchestrator {
     });
     if (this.#syncCompletions.apprunning >= MIN_SYNC_COMPLETIONS
       && this.#syncCompletions.appinstalling >= MIN_SYNC_COMPLETIONS
-      && this.#syncCompletions.apperrors >= MIN_SYNC_COMPLETIONS
-      && this.#syncCompletions.appcontentmanifest >= MIN_SYNC_COMPLETIONS) {
+      && this.#syncCompletions.apperrors >= MIN_SYNC_COMPLETIONS) {
       this.#stateSyncComplete = true;
       this.#clearSyncRequested();
       this.#peerProgress.clear();
@@ -208,7 +212,6 @@ class AppSyncOrchestrator {
         apprunning: this.#syncCompletions.apprunning,
         appinstalling: this.#syncCompletions.appinstalling,
         apperrors: this.#syncCompletions.apperrors,
-        appcontentmanifest: this.#syncCompletions.appcontentmanifest,
       });
       this.#checkReadiness();
     }
@@ -267,7 +270,7 @@ class AppSyncOrchestrator {
     if (this.#askedPeers.size === 0) return;
 
     const pending = {
-      apprunning: 0, appinstalling: 0, apperrors: 0, appcontentmanifest: 0,
+      apprunning: 0, appinstalling: 0, apperrors: 0,
     };
     let anyLivePending = false;
     for (const progress of this.#peerProgress.values()) {
@@ -320,6 +323,7 @@ class AppSyncOrchestrator {
     if (this.#state === STATES.RESYNCING) {
       if (this.#syncInProgress) return;
       await this.#runHashSync();
+      await this.#runManifestSync();
       this.#checkReadiness();
     }
   }
@@ -398,7 +402,6 @@ class AppSyncOrchestrator {
       apprunning: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, encode: peerCodec.encodeRequestAppRunning },
       appinstalling: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING, encode: peerCodec.encodeRequestAppInstalling },
       apperrors: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING_ERRORS, encode: peerCodec.encodeRequestAppInstallingErrors },
-      appcontentmanifest: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_CONTENT_MANIFESTS, encode: peerCodec.encodeRequestAppContentManifests },
     };
     for (const type of types) {
       const { msgType, encode } = codecs[type];
@@ -429,8 +432,9 @@ class AppSyncOrchestrator {
     this.#peerProgress.clear();
     this.#clearSyncRequested();
     this.#syncCompletions = {
-      apprunning: 0, appinstalling: 0, apperrors: 0, appcontentmanifest: 0,
+      apprunning: 0, appinstalling: 0, apperrors: 0,
     };
+    this.#manifestSyncComplete = false;
     this.#stateSyncComplete = false;
     this.#syncRoundAbandoned = false;
     this.#hashSyncAttempts = 0;
@@ -503,6 +507,7 @@ class AppSyncOrchestrator {
     await this.#checkVersionUpgrade();
     log.info('AppSyncOrchestrator - Starting initial hash sync');
     await this.#runHashSync();
+    await this.#runManifestSync();
     this.#checkReadiness();
   }
 
@@ -583,6 +588,26 @@ class AppSyncOrchestrator {
     }
   }
 
+  // Reconcile the permanent content-manifest register off the ephemeral plane (two-step
+  // in-band exchange). Gates readiness like the hash sync, so the spawner waits on the
+  // manifest view converging before it starts a slot app — but best-effort and bounded,
+  // so slow/absent peers fall back to the block timer rather than stalling boot. Run
+  // after the hash sync so the global specs the manifests verify against are present.
+  async #runManifestSync() {
+    if (this.#manifestSyncComplete) return;
+    if (!this.#canSendMessages) return;
+    try {
+      const peers = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
+      const result = await contentManifestSyncService.reconcile(peers);
+      this.#manifestSyncComplete = true;
+      log.info(`AppSyncOrchestrator - Manifest reconcile complete (peers=${result.peers}, indexes=${result.indexesReceived ?? 0}, fetched=${result.fetched ?? 0})`);
+      fluxEventBus.publish('manifestSync:complete', result);
+    } catch (error) {
+      log.error(`AppSyncOrchestrator - Manifest reconcile failed: ${error.message}`);
+      // Leave incomplete; the block timer releases readiness, gossip + per-app catch-up backfill.
+    }
+  }
+
   #ensureBlockThreshold() {
     if (this.#blockThreshold === 0) {
       const enterprise = this.#isEnterprise();
@@ -610,6 +635,9 @@ class AppSyncOrchestrator {
     const blockTimerExpired = this.#isBlockTimerExpired();
     if (!this.#hashSyncComplete && !blockTimerExpired) return;
     if (!this.#dbRebuilt && !blockTimerExpired) return;
+    // The permanent manifest register must converge before the spawner starts a slot app
+    // (parallel to the hash-sync gate); the block timer is the same backstop.
+    if (!this.#manifestSyncComplete && !blockTimerExpired) return;
 
     // Block timer fired but hash sync / DB rebuild never completed — rebuild from whatever data we have
     if (blockTimerExpired && !this.#dbRebuilt) {

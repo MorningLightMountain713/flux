@@ -22,6 +22,7 @@ const nodeConfirmationService = require('./nodeConfirmationService');
 const { extractIp, extractPort, parseSocketAddress, socketAddressesMatch } = require('./utils/socketAddressUtils');
 const registryManager = require('./appDatabase/registryManager');
 const contentSlotService = require('./appLifecycle/contentSlotService');
+const contentManifestSyncService = require('./appMessaging/contentManifestSyncService');
 const fluxEventBus = require('./utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const { INTENT } = require('./utils/messageIntent');
@@ -391,13 +392,31 @@ function announceToPeers(message, excludeKey) {
   peerManager.broadcastHash(messageHash, excludeKey);
 }
 
+// A peer's index of (appName, version) for every confirmed manifest — step 1 of the
+// two-step reconcile. Accepted only from a peer we asked this round (the reconcile
+// service owns the round, replacing the ephemeral isSyncRequested gate).
+async function handleContentManifestIndexResponse(message, peerKey) {
+  try {
+    if (!contentManifestSyncService.isPeerInActiveRound(peerKey)) return;
+    if (!message.data || message.data.type !== 'fluxappcontentmanifestindex') return;
+    const { index } = message.data;
+    if (!Array.isArray(index) || index.length > 100000) return;
+    contentManifestSyncService.depositIndex(peerKey, index);
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+// The requested manifest bodies — step 2 of the two-step reconcile. Same active-round
+// gate; bodies get the full owner-sig + spec gate in storeBatchContentManifests (no
+// rebroadcast — this is a targeted backfill, not gossip).
 async function handleContentManifestSyncResponse(message, peerKey) {
   try {
-    if (!peerManager.isSyncRequested(peerKey)) return;
+    if (!contentManifestSyncService.isPeerInActiveRound(peerKey)) return;
     if (!message.data || message.data.type !== 'fluxappcontentmanifestsync') return;
-    const { messages, done } = message.data;
+    const { messages } = message.data;
     if (!Array.isArray(messages) || messages.length > 2500) return;
-    log.info(`handleContentManifestSyncResponse - Received ${messages.length} manifests from ${peerKey} (done: ${!!done})`);
+    log.info(`handleContentManifestSyncResponse - Received ${messages.length} manifests from ${peerKey}`);
     // batchVerifyBroadcasts verifies the relaying node's envelope; storeBatchContentManifests
     // then applies the manifest owner-sig + spec gate before storing (or quarantining) each.
     const verified = await batchVerifyBroadcasts(messages, 'handleContentManifestSyncResponse');
@@ -405,10 +424,6 @@ async function handleContentManifestSyncResponse(message, peerKey) {
       const { stored } = await contentSlotService.storeBatchContentManifests(verified);
       log.info(`handleContentManifestSyncResponse - Stored ${stored} of ${verified.length} verified manifests`);
       fluxEventBus.publish('sync:chunkVerified', { syncType: 'appcontentmanifest', peer: peerKey, verified: verified.length, stored });
-    }
-    if (done) {
-      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appcontentmanifest', peerKey);
-      log.info('handleContentManifestSyncResponse - Sync complete');
     }
   } catch (error) {
     log.error(error);
@@ -761,6 +776,10 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
           setImmediate(() => handleNodeSigtermMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxappcontentmanifest') {
           setImmediate(() => contentSlotService.handleIncomingManifest(msgObj));
+        } else if (msgObj.data.type === 'fluxappcontentmanifestindexrequest') {
+          setImmediate(() => fluxCommunicationMessagesSender.respondWithManifestIndex(peerSocket));
+        } else if (msgObj.data.type === 'fluxappcontentmanifestrequest') {
+          setImmediate(() => fluxCommunicationMessagesSender.respondWithContentManifests(msgObj, peerSocket));
         } else {
           log.warn(`Unrecognised message type of ${msgObj.data.type}`);
         }
@@ -823,8 +842,11 @@ async function processSyncChunk(msgObj, peerSocket) {
     case 'fluxappinstallingerrorssync':
       await handleAppInstallingErrorsSyncResponse(msgObj, peerSocket);
       break;
+    case 'fluxappcontentmanifestindex':
+      await handleContentManifestIndexResponse(msgObj, peerSocket.key);
+      break;
     case 'fluxappcontentmanifestsync':
-      await handleContentManifestSyncResponse(msgObj, peerKey);
+      await handleContentManifestSyncResponse(msgObj, peerSocket.key);
       break;
     default:
       log.warn(`Unknown sync response type: ${type}`);
@@ -854,7 +876,12 @@ async function verifySyncEnvelope(msgObj) {
 async function dispatchSyncResponse(msgObj, peerSocket) {
   try {
     const peerKey = peerSocket.key;
-    if (!peerManager.isSyncResponseWanted(peerSocket)) return;
+    // The two manifest-reconcile response types ride their own request/response and are
+    // gated by the reconcile service's active round (checked in their handlers), not the
+    // ephemeral isSyncRequested flag the boot-sync types use.
+    const type = msgObj.data?.type;
+    const isManifestReconcile = type === 'fluxappcontentmanifestindex' || type === 'fluxappcontentmanifestsync';
+    if (!isManifestReconcile && !peerManager.isSyncResponseWanted(peerSocket)) return;
 
     // THE QUEUE IS THE ORDER, so nothing that can reorder may sit in front of
     // it. Chunks carry meaning by position: the sender sorts by timestamp and
@@ -1043,16 +1070,6 @@ peerManager.hashHandlers = {
     setImmediate(async () => {
       if (!await verifySyncRequest(peer, decoded)) return;
       fluxCommunicationMessagesSender.respondWithAppInstallingErrorsMessages(peer, decoded.sinceTimestamp);
-    });
-  },
-  handleAppContentManifestsRequest: (peer, decoded) => {
-    const now = Date.now();
-    const last = peer.lastAppContentManifestsSyncResponse || 0;
-    if (now - last < (config.fluxapps.syncResponseThrottleMs ?? 300000)) return;
-    peer.lastAppContentManifestsSyncResponse = now;
-    setImmediate(async () => {
-      if (!await verifySyncRequest(peer, decoded)) return;
-      fluxCommunicationMessagesSender.respondWithContentManifests(peer);
     });
   },
 };
