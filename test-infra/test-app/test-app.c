@@ -55,33 +55,21 @@
  *                 stdout-only writer cannot produce that and so cannot test for
  *                 it.
  *
- *   WRITE_PROBE   comma-separated directories. At start, before anything else,
- *                 the app creates a file in each and removes it again, as the
- *                 user the container runs as, and logs one line per directory:
- *                 `write probe ok: <dir> (uid <n>)` or
- *                 `write probe failed: <dir> (uid <n>): <reason>`. If any
- *                 directory refuses, it exits WRITE_PROBE_EXIT_CODE (73,
- *                 EX_CANTCREAT) once every directory has been tried, so the
- *                 container's exit code alone says the write failed; otherwise
- *                 it carries on with whatever the other variables ask for. Pair
- *                 it with an image user (registry-helper.pushTestApp's `user`)
- *                 to probe a mount the way a non-root application meets it.
- *
  * On SIGTERM/SIGINT (i.e. `docker stop`) it exits with EXIT_CODE, so a test can
  * deterministically produce a clean exit 0 or any non-zero code on demand.
+ *
+ * On SIGHUP/SIGUSR1/SIGUSR2 it logs the signal name to stdout and KEEPS RUNNING,
+ * so a content-slot onUpdate:signal reaction is observable via `docker logs`
+ * (and the container's StartedAt is unchanged — no restart).
+ *
  * Static + freestanding: it runs in an otherwise-empty rootfs (no libc loader,
  * no shell), exactly like the /bin/pause fixture.
  */
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
 #include <time.h>
-
-#define WRITE_PROBE_EXIT_CODE 73
 
 static int exit_code = 0;
 
@@ -91,45 +79,35 @@ static void on_signal(int sig)
     _exit(exit_code);
 }
 
-/* Returns the number of directories that refused a write. */
-static int write_probe(const char *list)
+/* async-signal-safe write of a fixed string (no libc string calls) */
+static void wlog(const char *s)
 {
-    char dirs[4096];
-    char path[4352];
-    int failed = 0;
-    const unsigned uid = (unsigned)getuid();
+    const char *p = s;
+    while (*p) p++;
+    (void)write(1, s, (size_t)(p - s));
+}
 
-    snprintf(dirs, sizeof(dirs), "%s", list);
-    for (char *dir = strtok(dirs, ","); dir; dir = strtok(NULL, ",")) {
-        if (*dir == '\0')
-            continue;
-        snprintf(path, sizeof(path), "%s/.write-probe-%ld", dir, (long)getpid());
-        int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
-        if (fd < 0) {
-            fprintf(stderr, "write probe failed: %s (uid %u): %s\n", dir, uid, strerror(errno));
-            failed++;
-            continue;
-        }
-        close(fd);
-        unlink(path);
-        printf("write probe ok: %s (uid %u)\n", dir, uid);
+static void on_reload(int sig)
+{
+    switch (sig) {
+        case SIGHUP:  wlog("RELOAD SIGHUP\n");  break;
+        case SIGUSR1: wlog("RELOAD SIGUSR1\n"); break;
+        case SIGUSR2: wlog("RELOAD SIGUSR2\n"); break;
+        default:      wlog("RELOAD\n");         break;
     }
-    fflush(stdout);
-    return failed;
 }
 
 int main(void)
 {
-    const char *probe = getenv("WRITE_PROBE");
-    if (probe && write_probe(probe) > 0)
-        return WRITE_PROBE_EXIT_CODE;
-
     const char *ec = getenv("EXIT_CODE");
     if (ec)
         exit_code = atoi(ec);
 
     signal(SIGTERM, on_signal);
     signal(SIGINT, on_signal);
+    signal(SIGHUP, on_reload);
+    signal(SIGUSR1, on_reload);
+    signal(SIGUSR2, on_reload);
 
     const char *after_ms = getenv("EXIT_AFTER_MS");
     if (after_ms) {
