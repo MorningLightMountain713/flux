@@ -27,6 +27,7 @@ const daemonHealthMonitor = require('./appMonitoring/daemonHealthMonitor');
 const containerEventBridge = require('./appMonitoring/containerEventBridge');
 const appReconciler = require('./appMonitoring/appReconciler');
 const appOperations = require('./appLifecycle/appOperations');
+const appShutdownCoordinator = require('./appLifecycle/appShutdownCoordinator');
 const imageManager = require('./appSecurity/imageManager');
 const appSpawner = require('./appLifecycle/appSpawner');
 const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
@@ -383,6 +384,9 @@ async function startFluxFunctions() {
     // a removed component's in-memory controller verdict dies with it - a
     // reinstalled g:/r: app must await a fresh election, not inherit a stale one
     appUninstaller.setOnComponentRemoved((id) => appReconciler.clearControllerDesired(id));
+    // route the reconciler's graceful stop-but-keep through flux-shutdownd on Arcane;
+    // returns false off Arcane (or when the daemon is unavailable) so it stops locally
+    appReconciler.setRequestGracefulStop((id, reason) => appShutdownCoordinator.requestGracefulStop(id, reason));
     log.info('App Spawner initialized');
 
     fluxNetworkHelper.adjustFirewall();

@@ -14,6 +14,7 @@ describe('appUninstaller tests', () => {
   let dockerServiceStub;
   let dbHelperStub;
   let appsRepositoryStub;
+  let fluxShutdowndClientStub;
 
   beforeEach(() => {
     configStub = {
@@ -71,11 +72,20 @@ describe('appUninstaller tests', () => {
 
     dockerServiceStub = {
       appDockerStop: sinon.stub().resolves(),
+      appDockerKill: sinon.stub().resolves(),
       appDockerRemove: sinon.stub().resolves(),
       appDockerImageRemove: sinon.stub().resolves(),
       dockerListContainers: sinon.stub().resolves([]),
       getAppIdentifier: sinon.stub().returns('testapp'),
       getBaseAppName: sinon.stub().callsFake((id) => id),
+    };
+
+    fluxShutdowndClientStub = {
+      SHUTDOWN_REASON: {
+        TTL_EXPIRED: 'ttl-expired', USER_CANCEL: 'user-cancel', REDEPLOY: 'redeploy', EVICTION: 'eviction', MANUAL: 'manual',
+      },
+      beginAppStop: sinon.stub().resolves({ outcome: 'not_arcane' }),
+      deleteAppPlanBestEffort: sinon.stub().resolves(),
     };
 
     appsRepositoryStub = {
@@ -141,6 +151,7 @@ describe('appUninstaller tests', () => {
       '../appManagement/appInspector': {
         stopAppMonitoring: sinon.stub().resolves(),
       },
+      '../utils/fluxShutdowndClient': fluxShutdowndClientStub,
     });
   });
 
@@ -265,7 +276,7 @@ describe('appUninstaller tests', () => {
       dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 1000000 });
     });
 
-    it('does NOT remove a renewed app whose authoritative GLOBAL spec is unexpired (F6-G stale-local)', async () => {
+    it('does NOT remove a renewed app whose authoritative GLOBAL spec is unexpired (stale local row)', async () => {
       // The local install row carries a stale shorter expire (says expired); the
       // authoritative global spec is renewed (says alive). Must trust global.
       appsRepositoryStub.listInstalledApps.resolves([spec('renewed', 100, true)]);
@@ -278,7 +289,7 @@ describe('appUninstaller tests', () => {
       expect(wasSelected('renewed')).to.equal(false);
     });
 
-    it('does NOT remove a forever app (height===0) - checked before !height (F6-H)', async () => {
+    it('does NOT remove a forever app (height===0) - checked before !height', async () => {
       appsRepositoryStub.listInstalledApps.resolves([spec('forever', 0, false)]);
       appsRepositoryStub.listGlobalAppInfo.resolves([]); // no global row -> local fallback (height 0)
       await appUninstaller.expireGlobalApplications();
@@ -298,6 +309,55 @@ describe('appUninstaller tests', () => {
       appsRepositoryStub.listGlobalAppInfo.resolves([]); // absent from global -> evaluate off local
       await appUninstaller.expireGlobalApplications();
       expect(wasSelected('manual')).to.equal(true);
+    });
+  });
+
+  describe('runTeardown stop routing through flux-shutdownd', () => {
+    const doc = () => ({
+      key: 'myapp',
+      name: 'myapp',
+      networkName: 'myapp',
+      forceKill: false,
+      owner: '1own',
+      reason: 'user-cancel',
+      shutdownBudgetSeconds: 30,
+      components: [{
+        identifier: 'web_myapp', appId: 'fluxweb_myapp', label: 'web', ports: [],
+      }],
+    });
+
+    it('passes the persisted reason + force to beginAppStop', async () => {
+      fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'rejected_pipeline_active' });
+      await appUninstaller.runTeardown(doc());
+      expect(fluxShutdowndClientStub.beginAppStop.calledOnce).to.equal(true);
+      const [owner, name, reason, opts] = fluxShutdowndClientStub.beginAppStop.firstCall.args;
+      expect(owner).to.equal('1own');
+      expect(name).to.equal('myapp');
+      expect(reason).to.equal('user-cancel');
+      expect(opts.force).to.equal(false);
+    });
+
+    it('defers (no local stop, no remove) when a node-wide shutdown owns the stop', async () => {
+      fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'rejected_pipeline_active' });
+      await appUninstaller.runTeardown(doc());
+      expect(dockerServiceStub.appDockerStop.called).to.equal(false);
+      expect(dockerServiceStub.appDockerKill.called).to.equal(false);
+      expect(dockerServiceStub.appDockerRemove.called).to.equal(false);
+    });
+
+    it('stops locally (appDockerStop, never kill) when the daemon is absent (non-Arcane)', async () => {
+      fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'not_arcane' });
+      // the host teardown after the stop loop touches unmocked deps; the stop loop runs first.
+      await appUninstaller.runTeardown(doc()).catch(() => {});
+      expect(dockerServiceStub.appDockerStop.calledWith('fluxweb_myapp')).to.equal(true);
+      expect(dockerServiceStub.appDockerKill.called).to.equal(false);
+    });
+
+    it('skips the local stop when the daemon already drained it (Arcane)', async () => {
+      fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
+      await appUninstaller.runTeardown(doc()).catch(() => {});
+      expect(dockerServiceStub.appDockerStop.called).to.equal(false);
+      expect(dockerServiceStub.appDockerKill.called).to.equal(false);
     });
   });
 

@@ -1452,4 +1452,49 @@ describe('appReconciler tests', () => {
       resolvers[1]();
     });
   });
+
+  describe('graceful stop-but-keep routing to the shutdown coordinator', () => {
+    beforeEach(() => {
+      // desired=false (condemned) + actual running => the reconciler's stop branch
+      stubs.appsRuntimeState.isCondemned.resolves(true);
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+    });
+
+    it('routes a non-force condemned stop through the coordinator and takes no docker action when it owns it', async () => {
+      const requestGracefulStop = sinon.stub().resolves(true);
+      appReconciler.setRequestGracefulStop(requestGracefulStop);
+
+      await appReconciler.reconcile('www_App');
+
+      expect(requestGracefulStop.calledOnceWith('www_App', 'condemned')).to.equal(true);
+      expect(stubs.dockerService.appDockerStop.called).to.equal(false);
+      expect(stubs.dockerService.appDockerKill.called).to.equal(false);
+    });
+
+    it('falls back to a local appDockerStop when the coordinator declines (non-Arcane)', async () => {
+      appReconciler.setRequestGracefulStop(sinon.stub().resolves(false));
+
+      await appReconciler.reconcile('www_App');
+
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.equal(true);
+      expect(stubs.dockerService.appDockerKill.called).to.equal(false);
+    });
+
+    it('does a local appDockerStop when no coordinator is wired', async () => {
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.equal(true);
+    });
+
+    it('still hard-kills a force-condemned app, never routing to the coordinator', async () => {
+      stubs.appsRuntimeState.getState.resolves({ condemnedForce: true });
+      const requestGracefulStop = sinon.stub().resolves(true);
+      appReconciler.setRequestGracefulStop(requestGracefulStop);
+
+      await appReconciler.reconcile('www_App');
+
+      expect(stubs.dockerService.appDockerKill.calledOnceWith('www_App')).to.equal(true);
+      expect(requestGracefulStop.called).to.equal(false);
+      expect(stubs.dockerService.appDockerStop.called).to.equal(false);
+    });
+  });
 });
