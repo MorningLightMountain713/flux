@@ -97,6 +97,60 @@ export async function deployContentApp(nodeUrl, opts) {
 }
 
 /**
+ * Push a standalone content-slot update (POST /apps/contentupdate): a new manifest
+ * version with new slot bytes, sealed as one HPKE content envelope (AAD ref
+ * manifest:v<version>) with the owner-signed manifest + the FluxDrive dual-sigs.
+ *
+ * @param {string} nodeUrl
+ * @param {object} opts - { name, owner?, version, slots: [{ name, bytes }], ownerKey?, timestamp?, rollout? }
+ * @returns {Promise<object>} the /apps/contentupdate response
+ */
+export async function pushContentUpdate(nodeUrl, opts) {
+  const ownerKey = opts.ownerKey || appOwnerKey();
+  const owner = opts.owner || ownerKey.zelid;
+  const name = opts.name;
+  const { version } = opts;
+  const timestamp = opts.timestamp || Date.now();
+
+  const slotMap = {};
+  const blobs = {};
+  for (const s of opts.slots || []) {
+    const h = tk.blobHash(s.bytes);
+    blobs[h] = s.bytes;
+    slotMap[s.name] = { hash: h };
+  }
+
+  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
+  const manifest = await tk.buildOwnerSignedManifest({
+    appName: name, version, slots: slotMap, ownerKey, timestamp, rollout: opts.rollout,
+  });
+  const locatorFor = (h) => benchCrypto.locatorFor({ appName: name, fluxID: owner, contentHash: h });
+  const ownerSigs = await tk.buildOwnerSigs({
+    hashes: Object.keys(blobs), appName: name, ownerKey, timestamp, locatorFor,
+  });
+  const mPutSig = await tk.manifestPutSig({ appName: name, version, timestamp, ownerKey });
+  const rSig = await tk.reconcileSig({ appName: name, source: 'slot', version, ownerKey });
+
+  const envelope = await tk.buildContentEnvelope({
+    blobs, manifest, manifestPutSig: mPutSig, reconcileSig: rSig,
+    appName: name, transportPubB64, ref: `manifest:v${version}`, timestamp,
+  });
+
+  const auth = await authenticate(nodeUrl, ownerKey);
+  const form = new FormData();
+  form.append('appName', name);
+  form.append('version', String(version));
+  form.append('timestamp', String(timestamp));
+  form.append('ownerSigs', JSON.stringify(ownerSigs));
+  form.append('content', new Blob([JSON.stringify(envelope)], { type: 'application/json' }), 'content.json');
+
+  const res = await fetch(`${nodeUrl}/apps/contentupdate`, {
+    method: 'POST', headers: { zelidauth: auth.zelidauth }, body: form,
+  });
+  return res.json();
+}
+
+/**
  * Assert every node's content-manifest register holds the given version for an app.
  * @param {Array<object>} dbClients - per-node dbClient instances
  * @param {string} appName
