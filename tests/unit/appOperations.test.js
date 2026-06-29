@@ -279,7 +279,7 @@ describe('appOperations tests', () => {
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
       sinon.stub(appsRepository, 'getInstalledApp').resolves({ version: 8, owner: 'owner1' });
-      sinon.stub(deploymentProvider, 'buildDeployment').resolves({ marker: 'fresh' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves({ marker: 'fresh', componentEntries: () => [] });
       sinon.stub(hwRequirements, 'checkNodeResources').resolves();
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
