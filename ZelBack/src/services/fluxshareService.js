@@ -1,17 +1,15 @@
 const config = require('config');
 const crypto = require('crypto');
 const path = require('path');
-const df = require('node-df');
 const fs = require('fs');
 const { formidable } = require('formidable');
 const archiver = require('archiver');
-// eslint-disable-next-line import/no-extraneous-dependencies
-const util = require('util');
 const serviceHelper = require('./serviceHelper');
 const messageHelper = require('./messageHelper');
 const dbHelper = require('./dbHelper');
 const verificationHelper = require('./verificationHelper');
 const generalService = require('./generalService');
+const deviceHelper = require('./deviceHelper');
 const log = require('../lib/log');
 const IOUtils = require('./IOUtils');
 const { sanitizePath } = require('./utils/pathSecurity');
@@ -739,35 +737,26 @@ async function fluxShareFileExists(req, res) {
  * @returns {number} The quantity of space available (GB).
  */
 async function getSpaceAvailableForFluxShare() {
-  const dfAsync = util.promisify(df);
-  // we want whole numbers in GB
-  const options = {
-    prefixMultiplier: 'GB',
-    isDisplayPrefixMultiplier: false,
-    precision: 0,
-  };
-
-  const dfres = await dfAsync(options);
-  const okVolumes = [];
-  dfres.forEach((volume) => {
-    if (volume.filesystem.includes('/dev/') && !volume.filesystem.includes('loop') && !volume.mount.includes('boot')) {
-      okVolumes.push(volume);
-    } else if (volume.filesystem.includes('loop') && volume.mount === '/') {
-      okVolumes.push(volume);
-    }
-  });
+  // The node's real block devices (the /dev/* disks, plus a loop-mounted root on
+  // legacy), excluding the loop-backed app volumes and the boot partition. Sum their
+  // total capacity to estimate node space — the same set the old node-df scan counted.
+  const filesystems = await deviceHelper.listMountedFilesystems();
+  const okVolumes = filesystems.filter((volume) => (
+    (volume.source.includes('/dev/') && !volume.source.includes('loop') && !volume.target.includes('boot'))
+    || (volume.source.includes('loop') && volume.target === '/')
+  ));
 
   // now we know that most likely there is a space available. IF user does not have his own stuff on the node or space may be sharded accross hdds.
+  const bytesPerGb = 1024 ** 3;
   let totalSpace = 0;
   okVolumes.forEach((volume) => {
-    totalSpace += serviceHelper.ensureNumber(volume.size);
+    totalSpace += volume.sizeBytes / bytesPerGb;
   });
   // space that is further reserved for flux os and that will be later substracted from available space. Max 30.
   const tier = await generalService.getNewNodeTier();
   const lockedSpaceOnNode = config.fluxSpecifics.hdd[tier];
 
   const extraSpaceOnNode = totalSpace - lockedSpaceOnNode > 0 ? totalSpace - lockedSpaceOnNode : 0; // shall always be above 0. Put precaution to place anyway
-  // const extraSpaceOnNode = availableSpace - lockedSpaceOnNode > 0 ? availableSpace - lockedSpaceOnNode : 0;
   const spaceAvailableForFluxShare = 2 + extraSpaceOnNode;
   return spaceAvailableForFluxShare;
 }

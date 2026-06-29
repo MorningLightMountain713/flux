@@ -1,4 +1,3 @@
-const df = require('node-df');
 const fs = require('fs').promises;
 const fs2 = require('fs');
 const util = require('util');
@@ -8,6 +7,7 @@ const path = require('path');
 const { formidable } = require('formidable');
 const serviceHelper = require('./serviceHelper');
 const messageHelper = require('./messageHelper');
+const deviceHelper = require('./deviceHelper');
 const verificationHelper = require('./verificationHelper');
 const exec = util.promisify(require('child_process').exec);
 const { URL } = require('url');
@@ -60,7 +60,7 @@ async function requestWithValidatedRedirects(url, method = 'GET', axiosOptions =
     }
 
     // Handle redirect
-    const location = response.headers.location;
+    const { location } = response.headers;
     if (!location) {
       throw new Error('Redirect response missing Location header');
     }
@@ -221,15 +221,30 @@ async function getRemoteFileSize(fileurl, multiplier, decimal, number = false) {
  * @param {string} fields - Optional comma-separated list of fields to include in the response. Possible fields: 'mount', 'size', 'used', 'available', 'capacity', 'filesystem'.
  * @returns {Array|boolean} - Array of objects containing volume information for the specified component, or false if no matching mount is found.
  */
+/**
+ * Bytes-per-unit divisor for a size multiplier string (B/KB/MB/GB/TB and the binary
+ * KiB/MiB/GiB/TiB forms). Decimal by default — anything unrecognized (including 'B')
+ * resolves to raw bytes, the unit most callers ask for.
+ * @param {string} multiplier
+ * @returns {number}
+ */
+function bytesPerUnit(multiplier) {
+  switch (String(multiplier).toUpperCase()) {
+    case 'KB': return 1e3;
+    case 'MB': return 1e6;
+    case 'GB': return 1e9;
+    case 'TB': return 1e12;
+    case 'KIB': return 1024;
+    case 'MIB': return 1024 ** 2;
+    case 'GIB': return 1024 ** 3;
+    case 'TIB': return 1024 ** 4;
+    default: return 1;
+  }
+}
+
 async function getVolumeInfo(appname, component, multiplier, decimal, fields) {
   try {
-    const options = {
-      prefixMultiplier: multiplier,
-      isDisplayPrefixMultiplier: false,
-      precision: +decimal,
-    };
-    const dfAsync = util.promisify(df);
-    const dfData = await dfAsync(options);
+    const filesystems = await deviceHelper.listMountedFilesystems();
     let regex;
     if (component === 'null') {
       regex = new RegExp(`flux${appname}$`);
@@ -237,35 +252,29 @@ async function getVolumeInfo(appname, component, multiplier, decimal, fields) {
       regex = new RegExp(`flux${component}_${appname}$`);
     }
     const allowedFields = fields ? fields.split(',') : null;
-    const adjustValue = (value) => (multiplier.toLowerCase() === 'b' ? value * 1024 : value);
-    const dfSorted = dfData
-      .filter((entry) => {
-        const testResult = regex.test(entry.mount);
-        return testResult;
-      })
+    const divisor = bytesPerUnit(multiplier);
+    const precision = Number(decimal);
+    const toUnit = (bytes) => {
+      const value = bytes / divisor;
+      return Number.isFinite(precision) ? Number(value.toFixed(precision)) : value;
+    };
+    const matched = filesystems
+      .filter((entry) => regex.test(entry.target))
       .map((entry) => {
-        const filteredEntry = allowedFields
-          ? Object.fromEntries(Object.entries(entry).filter(([key]) => allowedFields.includes(key)))
-          : entry;
-
-        if (allowedFields && allowedFields.some((field) => ['size', 'available', 'used'].includes(field))) {
-          ['size', 'available', 'used'].forEach((property) => {
-            if (filteredEntry[property] !== undefined) {
-              filteredEntry[property] = adjustValue(filteredEntry[property]);
-            }
-          });
-        }
-        return filteredEntry;
+        const full = {
+          filesystem: entry.source,
+          size: toUnit(entry.sizeBytes),
+          used: toUnit(entry.usedBytes),
+          available: toUnit(entry.availableBytes),
+          capacity: entry.usePercent / 100,
+          mount: entry.target,
+        };
+        return allowedFields
+          ? Object.fromEntries(Object.entries(full).filter(([key]) => allowedFields.includes(key)))
+          : full;
       })
-      .filter((entry) => {
-        if (allowedFields) {
-          return Object.keys(entry).length > 0;
-        // eslint-disable-next-line no-else-return
-        } else {
-          return true;
-        }
-      });
-    return dfSorted.length > 0 ? dfSorted : false;
+      .filter((entry) => Object.keys(entry).length > 0);
+    return matched.length > 0 ? matched : false;
   } catch (error) {
     log.error(error);
     return false;
