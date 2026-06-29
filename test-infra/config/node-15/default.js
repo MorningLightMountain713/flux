@@ -46,7 +46,8 @@ module.exports = {
             "appsTemporaryMessages": "zelappstemporarymessages",
             "appsLocations": "zelappslocation",
             "appsInstallingLocations": "appsinstallinglocations",
-            "appsInstallingErrorsLocations": "appsInstallingErrorsLocations"
+            "appsInstallingErrorsLocations": "appsInstallingErrorsLocations",
+            "appContentManifests": "appcontentmanifests"
         }
     },
     "chainparams": {
