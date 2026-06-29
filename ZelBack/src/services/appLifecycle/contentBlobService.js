@@ -58,7 +58,8 @@ async function encryptAndUploadBlob(blob, deps) {
 
   if (`sha256:${sha256Hex(bytes)}` !== contentHash) throw new Error(`contentBlob: hash mismatch for ${contentHash}`);
   if (bytes.length > MAX_BLOB_BYTES) throw new Error(`contentBlob: blob exceeds ${MAX_BLOB_BYTES} bytes`);
-  if (Math.abs(now() / 1000 - Number(timestamp)) > FRESHNESS_WINDOW_SECONDS) throw new Error('contentBlob: owner signature is stale');
+  // timestamp is the submission timestamp (milliseconds, like the app-message timestamp), so compare in ms.
+  if (Math.abs(now() - Number(timestamp)) > FRESHNESS_WINDOW_SECONDS * 1000) throw new Error('contentBlob: owner signature is stale');
 
   const locator = await deriveLocator(benchmark, { appName, fluxID, contentHash });
   const key = Buffer.from(benchmarkField(await benchmark.contentKey({ appName, fluxID, contentHash }), 'key'), 'base64');
