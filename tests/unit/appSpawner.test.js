@@ -720,4 +720,70 @@ describe('appSpawner tests', () => {
       expect(filtered[0].name).to.equal('otherApp');
     });
   });
+
+  describe('isSoleRequiredInstaller', () => {
+    beforeEach(() => buildModule());
+
+    const placementWith = (targetIps = [], targetOutpoints = [], targetOperators = []) => ({
+      targetIps, targetOutpoints, targetOperators,
+    });
+
+    it('is true when pinned to exactly as many nodes as required instances', () => {
+      expect(appSpawner.isSoleRequiredInstaller(placementWith(['1.2.3.4:16127']), 1)).to.equal(true);
+      expect(appSpawner.isSoleRequiredInstaller(placementWith(['a', 'b']), 2)).to.equal(true);
+    });
+
+    it('is true when pinned to fewer nodes than required instances', () => {
+      expect(appSpawner.isSoleRequiredInstaller(placementWith(['1.2.3.4:16127']), 3)).to.equal(true);
+    });
+
+    it('counts pins across IP, outpoint and operator targets', () => {
+      // 1 IP + 1 outpoint + 1 operator = 3 pins
+      expect(appSpawner.isSoleRequiredInstaller(placementWith(['ip'], ['out:0'], ['op']), 3)).to.equal(true);
+      expect(appSpawner.isSoleRequiredInstaller(placementWith(['ip'], ['out:0'], ['op']), 2)).to.equal(false);
+    });
+
+    it('is false when pinned to more nodes than required instances (real contention)', () => {
+      expect(appSpawner.isSoleRequiredInstaller(placementWith(['a', 'b', 'c']), 2)).to.equal(false);
+    });
+
+    it('is false for an unpinned app (no targets)', () => {
+      expect(appSpawner.isSoleRequiredInstaller(placementWith(), 1)).to.equal(false);
+    });
+
+    it('is false when the placement is missing', () => {
+      expect(appSpawner.isSoleRequiredInstaller(undefined, 1)).to.equal(false);
+      expect(appSpawner.isSoleRequiredInstaller(null, 1)).to.equal(false);
+    });
+  });
+
+  describe('sole-required-installer wait skip', () => {
+    it('skips both propagation waits for a pinned app with pins <= required instances', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      const candidate = makeCandidate({
+        required: 1,
+        placement: { targetIps: ['192.168.1.1'], hasTargets: () => true, matchesTarget: () => true },
+      });
+      buildModule({ candidates: [candidate], installStub });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      // reached the install past the broadcast, but as a sole installer neither the
+      // collision wait nor the post-install over-instance wait ran.
+      sinon.assert.called(installStub);
+      sinon.assert.notCalled(delayStub);
+    });
+
+    it('takes the collision wait for a non-pinned app (open contention)', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      const candidate = makeCandidate({ required: 3 }); // default placement: no targets
+
+      buildModule({ candidates: [candidate], installStub });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      sinon.assert.called(installStub);
+      sinon.assert.calledWith(delayStub, 5000); // installCollisionWaitMs
+    });
+  });
 });
