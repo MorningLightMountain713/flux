@@ -50,25 +50,37 @@ function deploymentOf(...comps) {
 }
 
 describe('shutdownPlan', () => {
-  describe('componentShutdownLabels', () => {
-    it('builds the full label set from a configured component', () => {
-      const labels = shutdownPlan.componentShutdownLabels(webComponent(), '1owner');
-      expect(labels).to.deep.equal({
+  describe('componentIdentityLabels', () => {
+    it('stamps app + component + owner (always, never gated)', () => {
+      expect(shutdownPlan.componentIdentityLabels(webComponent(), '1owner')).to.deep.equal({
         'runonflux.app': 'myapp',
         'runonflux.component': 'web',
-        'runonflux.shutdown.drain-s': '180',
-        'runonflux.shutdown.prestop-s': '30',
-        'runonflux.shutdown.graceful-s': '60',
         'runonflux.owner': '1owner',
       });
     });
 
-    it('uses defaults and omits owner when absent', () => {
-      const labels = shutdownPlan.componentShutdownLabels(bareComponent(), null);
-      expect(labels['runonflux.shutdown.drain-s']).to.equal('0');
-      expect(labels['runonflux.shutdown.prestop-s']).to.equal('0');
-      expect(labels['runonflux.shutdown.graceful-s']).to.equal('10');
+    it('omits owner when absent (never stamps an empty owner)', () => {
+      const labels = shutdownPlan.componentIdentityLabels(bareComponent(), null);
+      expect(labels).to.deep.equal({ 'runonflux.app': 'myapp', 'runonflux.component': 'worker' });
       expect(labels).to.not.have.property('runonflux.owner');
+    });
+  });
+
+  describe('componentBudgetLabels', () => {
+    it('builds the drain/preStop/graceful budget from a configured component', () => {
+      expect(shutdownPlan.componentBudgetLabels(webComponent())).to.deep.equal({
+        'runonflux.shutdown.drain-s': '180',
+        'runonflux.shutdown.prestop-s': '30',
+        'runonflux.shutdown.graceful-s': '60',
+      });
+    });
+
+    it('falls back to defaults for a plain component', () => {
+      expect(shutdownPlan.componentBudgetLabels(bareComponent())).to.deep.equal({
+        'runonflux.shutdown.drain-s': '0',
+        'runonflux.shutdown.prestop-s': '0',
+        'runonflux.shutdown.graceful-s': '10',
+      });
     });
   });
 

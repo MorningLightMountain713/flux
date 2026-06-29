@@ -221,6 +221,10 @@ async function installComponent(component, options = {}) {
   const crossAppLogCollector = options.crossAppLogCollector || null;
   const abortSignal = options.abortSignal || null;
   const { owner } = options;
+  // App-wide: does any component use a graceful-shutdown feature? Gates the
+  // per-container budget labels (identity labels are always stamped). Travels on
+  // the same channel as owner — computed once per app by the orchestrator.
+  const requiresEncryption = options.requiresEncryption || false;
 
   // owner is load-bearing: flux-shutdownd keys each app's shutdown plan on it,
   // so a blank runonflux.owner label silently breaks drain/preStop at node
@@ -292,6 +296,7 @@ async function installComponent(component, options = {}) {
     syslogTarget,
     crossAppLogCollector,
     owner,
+    requiresEncryption,
     measuredImageSizeBytes,
   });
 
