@@ -17,6 +17,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const transportHelper = require('../utils/transportHelper');
 const fluxDriveClient = require('../utils/fluxDriveClient');
 const globalState = require('../utils/globalState');
+const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpec } = require('../utils/specLibs');
 
 const { sha256Hex } = contentBlobService;
@@ -236,11 +237,13 @@ async function storeManifest(manifest, opts = {}) {
   // the latest-wins/promote write. A store WITHOUT a broadcast is a catch-up body, so its
   // envelope is cleared (else a kept envelope would sign the OLD data).
   const now = opts.now || Date.now();
-  return appsRepository.upsertContentManifest(row, {
+  const result = await appsRepository.upsertContentManifest(row, {
     confirmed,
     expireAt: confirmed ? undefined : new Date(now + QUARANTINE_TTL_MS),
     clearEnvelope: !opts.broadcast,
   });
+  fluxEventBus.publish('content:manifestStored', { appName, version, confirmed });
+  return result;
 }
 
 /**
@@ -297,7 +300,10 @@ async function receiveManifest(msgObj, deps = {}) {
   // the row we hold is still quarantined (then this receipt — now that the spec may
   // be local — can promote it). Versions are immutable + monotonic, never resetting.
   const prior = await getLatestManifest(appName);
-  if (prior && gossipManifest.version < prior.version) return;
+  if (prior && gossipManifest.version < prior.version) {
+    fluxEventBus.publish('content:manifestDropped', { appName, reason: 'stale_version' });
+    return;
+  }
   if (prior && gossipManifest.version === prior.version && prior.confirmed !== false) return;
 
   // Manifest-before-spec: we can't owner-verify without the spec, so QUARANTINE
@@ -307,6 +313,7 @@ async function receiveManifest(msgObj, deps = {}) {
   const info = await getApp(appName);
   if (!info) {
     if (prior && gossipManifest.version <= prior.version) return; // already hold this version (quarantined)
+    // Quarantine (confirmed:false) is observable via content:manifestStored, not a drop.
     await storeManifest(gossipManifest, { confirmed: false, broadcast: msgObj });
     return;
   }
@@ -320,11 +327,16 @@ async function receiveManifest(msgObj, deps = {}) {
     // Corrupt or forged gossip — log and drop. Never throws: this runs fire-and-forget
     // off the gossip dispatcher (the submission path throws to the submitter instead).
     log.warn(`contentSlot: dropping invalid manifest for ${appName} - ${error.message ?? error}`);
+    fluxEventBus.publish('content:manifestDropped', { appName, reason: 'forged_signature' });
     return;
   }
 
   const stored = await storeManifest(gossipManifest, { confirmed: true, broadcast: msgObj });
-  if (!stored) return; // lost the race to a same/higher version (or it is already confirmed)
+  if (!stored) {
+    fluxEventBus.publish('content:manifestDropped', { appName, reason: 'lost_store_race' });
+    return; // lost the race to a same/higher version (or it is already confirmed)
+  }
+  fluxEventBus.publish('content:manifestReceived', { appName, version: gossipManifest.version });
 
   await rebroadcast(msgObj.data);
 
@@ -457,7 +469,9 @@ async function promoteQuarantinedManifest(appName, deps = {}) {
   // Preserve the node-signed broadcast captured at quarantine (rebuilt from the stored
   // envelope + verbatim data) so the promoted row stays boot-sync-servable.
   const broadcast = stored.envelope ? { ...stored.envelope, data: stored.data } : undefined;
-  return store(heldManifest, { confirmed: true, broadcast });
+  const promoted = await store(heldManifest, { confirmed: true, broadcast });
+  if (promoted) fluxEventBus.publish('content:manifestPromoted', { appName });
+  return promoted;
 }
 
 /** The IPs of nodes currently running an app, for peers-first content resolution. */
@@ -654,9 +668,11 @@ async function applyManifest(deployment, manifest, ctx, deps = {}) {
     reactionsByComp.get(comp).push(mount.onUpdate);
   }
   for (const [comp, reactions] of reactionsByComp) {
+    let reaction;
     if (reactions.some((r) => r && r.action === 'restart')) {
       // eslint-disable-next-line no-await-in-loop
       await reactSafely(() => restart(comp.identifier));
+      reaction = 'restart';
     } else {
       const signals = [...new Set(reactions.filter((r) => r && r.action === 'signal').map((r) => r.signal))];
       for (const sig of signals) {
@@ -664,7 +680,9 @@ async function applyManifest(deployment, manifest, ctx, deps = {}) {
         await reactSafely(() => signal(comp.identifier, sig));
       }
       // null reactions self-watch (atomic delivery is torn-safe) — no action.
+      reaction = signals.length ? 'signal' : 'none';
     }
+    fluxEventBus.publish('content:slotApplied', { appName: ctx.appName, version: manifest.version, reaction });
   }
 }
 
@@ -782,6 +800,7 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
       slotMs = await computeDelay(appName, spec && spec.instances, Number(rollout.staggerSeconds) || 0, deps);
     }
     const waitMs = Math.max(0, (activateAtMs + slotMs) - now()); // 0 if our slot is already past (catch-up)
+    fluxEventBus.publish('content:rolloutScheduled', { appName, version: manifest.version, delayMs: waitMs });
     if (waitMs === 0) runApplyDetached();
     else setTimer(runApplyDetached, waitMs);
   };
@@ -862,6 +881,7 @@ async function reconcileBootContent(appName, deps = {}) {
   if (!restarting) return;
   const peers = await getPeers(appName);
   await provision(deployment, { appName, peers }, deps);
+  fluxEventBus.publish('content:bootReconcile', { appName, version: manifest && manifest.version });
 }
 
 /**
@@ -988,6 +1008,7 @@ async function backstopManifest(gossipManifest, ctx, deps = {}) {
     await put(appName, {
       version, timestamp, arcaneSig, ownerSig: manifestPutSig, manifest: gossipManifest,
     });
+    fluxEventBus.publish('content:manifestBackstopped', { appName, version });
     return true;
   } catch (error) {
     log.warn(`contentSlot: manifest backstop PUT failed for ${appName} (gossip + peers remain primary) - ${error.message ?? error}`);
@@ -1044,6 +1065,7 @@ async function reconcileSlots(plaintextManifest, ctx, deps = {}) {
     await reconcile(appName, {
       source: 'slot', version, arcaneSig, ownerSig: reconcileSig, liveLocators,
     });
+    fluxEventBus.publish('content:reconcilePushed', { appName, source: 'slot', version });
     return true;
   } catch (error) {
     log.warn(`contentSlot: slot reconcile push failed for ${appName} (superseded blobs reclaimed on the next update or at app death) - ${error.message ?? error}`);
@@ -1118,6 +1140,7 @@ async function submitContentUpdate(body, deps = {}) {
   // relayed, so we store that same envelope (one signature) for boot-sync re-serving.
   const signedBroadcast = await broadcast({ type: MANIFEST_GOSSIP_TYPE, appName, manifest: gossipManifest });
   await storeManifest(gossipManifest, { broadcast: signedBroadcast });
+  fluxEventBus.publish('content:contentUpdateApplied', { appName, version: ver });
 
   // Populate the FluxDrive backstop so a cold-start node with no running peer can
   // still provision (best-effort; gossip + boot-sync are primary). The owner PUT-sig

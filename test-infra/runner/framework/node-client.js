@@ -319,6 +319,25 @@ export function nodeClient(nodeNum) {
         // pass over an app CHANGING - excluded becoming a candidate, or the
         // reverse. That happens rarely, which is what makes it an event.
         'spawner:candidacy',
+        'content:blobUploaded',
+        'content:blobResolved',
+        'content:blobProvisioned',
+        'content:blobProvisionFailed',
+        'content:blobServed',
+        'content:manifestStored',
+        'content:manifestReceived',
+        'content:manifestDropped',
+        'content:manifestPromoted',
+        'content:manifestBackstopped',
+        'content:reconcilePushed',
+        'content:slotApplied',
+        'content:rolloutScheduled',
+        'content:bootReconcile',
+        'content:contentUpdateApplied',
+        'content:manifestSyncStarted',
+        'content:manifestSyncComplete',
+        'content:manifestReconciled',
+        'content:manifestReaped',
       ]) {
         eventSource.addEventListener(name, (e) => {
           const entry = {

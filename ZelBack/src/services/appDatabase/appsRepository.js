@@ -2,6 +2,7 @@ const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const fluxEventBus = require('../utils/fluxEventBus');
 const {
   globalAppsInformation,
   localAppsInformation,
@@ -337,7 +338,9 @@ async function reapOrphanedContentManifests() {
   const result = await dbHelper.removeDocumentsFromCollection(
     globalDb(), appContentManifests, { appName: { $in: orphans }, confirmed: true },
   );
-  return { reaped: result?.deletedCount ?? orphans.length, orphans };
+  const reaped = result?.deletedCount ?? orphans.length;
+  fluxEventBus.publish('content:manifestReaped', { count: reaped });
+  return { reaped, orphans };
 }
 
 // ── Installed Apps (localAppsInformation) ──────────────────────────
