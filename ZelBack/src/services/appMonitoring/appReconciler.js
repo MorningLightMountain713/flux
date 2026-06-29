@@ -129,6 +129,15 @@ function setOnContainerStarted(callback) {
   onContainerStarted = callback;
 }
 
+// serviceManager wires this to appShutdownCoordinator.requestGracefulStop. When set and
+// it returns true, the daemon owns a graceful stop-but-keep of the app and this
+// reconciler takes no docker action (the 'stopping' LB gate holds subsequent passes).
+let requestGracefulStop = null;
+
+function setRequestGracefulStop(callback) {
+  requestGracefulStop = callback;
+}
+
 function notifyContainerStarted(identifier) {
   if (!onContainerStarted) return;
   try {
@@ -1189,6 +1198,9 @@ async function reconcile(rawIdentifier) {
       log.info(`appReconciler - ${identifier} desired stopped, ${forceKill ? 'killing' : 'stopping'}`);
       if (forceKill) {
         await dockerService.appDockerKill(identifier);
+      } else if (requestGracefulStop && await requestGracefulStop(identifier, reason)) {
+        // flux-shutdownd owns a graceful drain of this app (Arcane). No docker action
+        // here — the 'stopping' LB gate holds subsequent passes until the drain ends.
       } else {
         await dockerService.appDockerStop(identifier);
       }
@@ -1974,6 +1986,7 @@ module.exports = {
   committedIdentifiers,
   requestStopAndClearData,
   setOnContainerStarted,
+  setRequestGracefulStop,
   waitForBootDrainSettled: reconcilerQueue.waitForBootDrainSettled,
   start,
   stop,
