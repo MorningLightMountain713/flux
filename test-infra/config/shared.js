@@ -49,6 +49,16 @@ module.exports = {
     ipApiBaseUrl: 'http://198.18.0.6:3000',
     statsApiBaseUrl: 'http://198.18.0.6:3000',
   },
+  // v9 content-delivery blob/manifest backstop, served by the FluxDrive stub at
+  // .8. The prod default.js (blobApiUrl: '') is not on the node config search
+  // path, so this default is what default-base runs resolve; non-default bases
+  // get the base-derived override from test-env infraOverride.
+  fluxDrive: { blobApiUrl: 'http://198.18.0.8:16140' },
+  // The network arcane-attestation pubkey the node verifies encrypted-app
+  // attestations against. Overrides the production constant in
+  // utils/arcaneAttestation.js with the benchmark stub's deterministic test key
+  // (benchCrypto attestation key), so the gate stays real and exercised.
+  arcane: { attestationPubkey: 'jSTlGDeXEhjvyuPgyKa8F37BwxiP4w2k6gbR2M3iKI0=' },
   fluxapps: {
     minOutgoing: 4,
     minIncoming: 2,
@@ -60,6 +70,12 @@ module.exports = {
     blocksLasting: 22000,
     newMinBlocksAllowance: 100,
     daemonPONFork: 2020000,
+    // Version-activation floors. The harness chain tip is INITIAL_HEIGHT
+    // (2,100,000), so every version here resolves active; v9 is pulled below the
+    // tip (prod is 2.6M+) so v9 specs are accepted under the harness.
+    appSpecsEnforcementHeights: {
+      1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 2000000,
+    },
     hddFileSystemMinimum: 2,
     defaultSwap: 0,
     appSyncPeerThreshold: 2,

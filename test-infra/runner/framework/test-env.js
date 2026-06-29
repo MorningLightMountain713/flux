@@ -78,6 +78,7 @@ const SYNCTHING_IP = subnet.syncthing;
 const REGISTRY_IP = subnet.registry;
 const EXTERNAL_STUB_IP = subnet.externalStub;
 const FDM_IP = subnet.fdm;
+const FLUXDRIVE_IP = subnet.fluxDrive;
 const INITIAL_HEIGHT = 2100000;
 
 // Per-run-all label. run-all.sh exports E2E_RUN_LABEL (unique per invocation) and
@@ -414,7 +415,7 @@ function releaseBootLock() {
   }
 }
 
-export async function createTestEnv({ hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [], configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true, tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {}, rpcFailures = [], bootContext = 'running' } = {}) {
+export async function createTestEnv({ hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [], configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true, tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {}, rpcFailures = [], bootContext = 'running', arcane = false } = {}) {
   await acquireBootLock();
   // The queue wait above must not count against the suite's hook budget. Mocha
   // re-arms a running hook's watchdog from "now" when timeout() is set, so
@@ -583,6 +584,20 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
   started.push(fdmStub);
   containers.fdmStub = fdmStub;
 
+  const fluxDriveStub = await new StaticIpContainer('flux-e2e-fluxdrive-stub')
+    .withStaticIp(networkName, FLUXDRIVE_IP)
+    .withEnvironment({ FLUXDRIVE_PORT: '16140', CONTROL_PORT: '16141' })
+    .withWaitStrategy(new HttpPollWaitStrategy(`http://${FLUXDRIVE_IP}:16141/health`))
+    .withHealthCheck({
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:16141/health', r => { r.on('data', () => {}); r.statusCode === 200 ? process.exit(0) : process.exit(1) })"],
+      interval: 3000,
+      timeout: 2000,
+      retries: 10,
+    })
+    .start();
+  started.push(fluxDriveStub);
+  containers.fluxDriveStub = fluxDriveStub;
+
   if (!dataCenter) {
     for (let i = 1; i <= nodes; i++) {
       await fetch(`http://${EXTERNAL_STUB_IP}:3001/geolocation/${subnet.nodeIp(i)}`, {
@@ -669,6 +684,10 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
       NODE_EXTRA_CA_CERTS: '/usr/local/share/ca-certificates/test-registry.crt',
     };
     if (!isLegacy) nodeEnv.FLUXOS_PATH = '/flux';
+    // v9 content/encrypted apps need the arcane verdict, which resolveNodeCapability
+    // gates on FLUX_ARCANE_NODE + a 'arcane' getnodetype (the daemon stub answers
+    // arcane). Opt-in per suite so the existing legacy-verdict suites are unchanged.
+    if (arcane && !isLegacy) nodeEnv.FLUX_ARCANE_NODE = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files (shared.js / node-NN) carry the default 198.18 addresses; NODE_CONFIG
@@ -682,6 +701,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
       syncthing: { ip: SYNCTHING_IP },
       github: { rawBaseUrl: `http://${EXTERNAL_STUB_IP}:3000`, apiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
       geolocation: { ipApiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000`, statsApiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
+      fluxDrive: { blobApiUrl: `http://${FLUXDRIVE_IP}:16140` },
     };
     const nodeConfig = mergeConfigs(infraOverride, mergeConfigs(configOverrides, nodeConfigOverrides[i]));
     nodeEnv.NODE_CONFIG = JSON.stringify(nodeConfig);

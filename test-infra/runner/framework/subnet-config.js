@@ -23,7 +23,7 @@
 // resolves the alias); the host pushes to the registry IP but verifies TLS against
 // the alias name.
 //
-// Within a /24: .1 gateway, .2-.7 infra services, nodes start at .10 (so node N -> .N+9).
+// Within a /24: .1 gateway, .2-.8 infra services, nodes start at .10 (so node N -> .N+9).
 
 export const REGISTRY_ALIAS = 'fluxregistry';
 export const REGISTRY_PORT = 5000;
@@ -47,7 +47,8 @@ export function getSubnetConfig(base = resolveBase()) {
     registry: `${base}.5`,
     externalStub: `${base}.6`,
     fdm: `${base}.7`,
-    // nodes occupy .10+ (gateway .1, services .2-.7); node number is 1-based
+    fluxDrive: `${base}.8`,
+    // nodes occupy .10+ (gateway .1, services .2-.8); node number is 1-based
     nodeIp: (num) => `${base}.${num + 9}`,
   };
 }
