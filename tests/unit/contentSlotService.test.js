@@ -136,6 +136,20 @@ describe('contentSlotService', () => {
         /not declared in the spec/,
       );
     });
+
+    it('decrypts a sealed (isEncrypted) spec to its DecryptedCanonicalSpec before checking slots', async () => {
+      const { service } = load();
+      // The registry hands back the sealed EncryptedSpec for an encrypted app — its
+      // declared slots are visible only after decrypt -> DecryptedCanonicalSpec.
+      // specSlotNames on the sealed spec would find none and reject without the decrypt.
+      const sealed = {
+        name: 'app',
+        isEncrypted: true,
+        createProvider: async () => fakeProvider(),
+        decrypt: async () => specWithSlots(['app-config']),
+      };
+      await service.verifyManifest(manifest(), { owner: '1id', spec: sealed }, { verify: () => true });
+    });
   });
 
   describe('seal/openManifestSlots', () => {
