@@ -27,6 +27,7 @@ const daemonHealthMonitor = require('./appMonitoring/daemonHealthMonitor');
 const containerEventBridge = require('./appMonitoring/containerEventBridge');
 const appReconciler = require('./appMonitoring/appReconciler');
 const appOperations = require('./appLifecycle/appOperations');
+const appShutdownCoordinator = require('./appLifecycle/appShutdownCoordinator');
 const imageManager = require('./appSecurity/imageManager');
 const appSpawner = require('./appLifecycle/appSpawner');
 const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
@@ -644,6 +645,9 @@ async function startFluxFunctions() {
     // the new one - asked for durably here rather than driven from the network
     // layer, which sits underneath the reconciler and cannot require it
     fluxNetworkMonitor.setOnAddressChanged((apps, reason) => appReconciler.requestRestartOf(apps, reason));
+    // route the reconciler's graceful stop-but-keep through flux-shutdownd on Arcane;
+    // returns false off Arcane (or when the daemon is unavailable) so it stops locally
+    appReconciler.setRequestGracefulStop((id, reason) => appShutdownCoordinator.requestGracefulStop(id, reason));
     log.info('App Spawner initialized');
 
     fluxNetworkHelper.adjustFirewall();
