@@ -30,6 +30,7 @@ const appOperations = require('./appLifecycle/appOperations');
 const appShutdownCoordinator = require('./appLifecycle/appShutdownCoordinator');
 const imageManager = require('./appSecurity/imageManager');
 const appSpawner = require('./appLifecycle/appSpawner');
+const registryManager = require('./appDatabase/registryManager');
 const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const containerMountRecovery = require('./appLifecycle/containerMountRecovery');
@@ -365,6 +366,11 @@ async function startFluxFunctions() {
     // route the reconciler's graceful stop-but-keep through flux-shutdownd on Arcane;
     // returns false off Arcane (or when the daemon is unavailable) so it stops locally
     appReconciler.setRequestGracefulStop((id, reason) => appShutdownCoordinator.requestGracefulStop(id, reason));
+    // wake the spawn loop the instant a spec this node must install is committed,
+    // rather than waiting for the next poll. notifySpecStored self-gates to the
+    // contention-free enterprise-pinned-to-this-node case; every other spec is
+    // ignored and rides the normal cadence.
+    registryManager.setOnSpecStored((specDoc) => appSpawner.notifySpecStored(specDoc));
     log.info('App Spawner initialized');
 
     fluxNetworkHelper.adjustFirewall();
