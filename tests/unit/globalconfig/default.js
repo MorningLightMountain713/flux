@@ -340,9 +340,9 @@ module.exports = {
     complianceRetryMaxMs: 3600000,
     forceRemovalIntervalMs: 7200000,
     installCollisionWaitMs: 90000,
+    portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
     portTestBindDelayMs: 5000,
     portTestPropagationDelayMs: 10000,
-    portTestPeerTimeoutMs: 30000,
     portTestMaxAttempts: 5,
     siblingPortsTimeoutMs: 5000,
     // How long a signed sibling ask stays good for. The exchange itself is
@@ -365,6 +365,8 @@ module.exports = {
     // How often this node checks that its calls to other nodes reach them
     // (outboundPathService).
     outboundPathCheckIntervalMs: 10 * 60 * 1000,
+    portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct /16, excluding our own
+    portTestMaxRounds: 3, // max retry rounds when a round is inconclusive (no peer answered)
     spawnReconfirmDelayMs: 7500000,
     globalCmdDelayMs: 500,
     discoveryAutostart: true,
