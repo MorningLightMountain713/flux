@@ -1,17 +1,24 @@
 const crypto = require('node:crypto');
+const config = require('config');
 
 /**
  * Network arcane-attestation public key (base64, raw 32-byte Ed25519).
  *
  * Every genuine Arcane node derives the same attestation keypair from the
  * network-wide salt, so there is exactly one public key for the whole network.
- * It is hardcoded here so any node — with or without a local secure backend — can verify
- * an attestation locally, without an RPC.
+ * Any node — with or without a local secure backend — can verify an attestation
+ * locally with it, without an RPC.
+ *
+ * Resolved from config (`arcane.attestationPubkey`) with the network constant as
+ * the default, so production always uses the constant while a controlled
+ * environment can point verification at a different attestation keypair.
  *
  * Rotation: bump the attestation domain version (FLUX_ARCANE_ATTEST_v1 -> v2)
  * and ship the new public key in a release; retain old keys to verify history.
  */
-const ARCANE_ATTESTATION_PUBKEY = 'fYkJ9M6NBKnQxnr8HD3FrYakKr8JM8BRo/wF4MA9/Ss=';
+const DEFAULT_ARCANE_ATTESTATION_PUBKEY = 'fYkJ9M6NBKnQxnr8HD3FrYakKr8JM8BRo/wF4MA9/Ss=';
+const ARCANE_ATTESTATION_PUBKEY = (config.arcane && config.arcane.attestationPubkey)
+  ?? DEFAULT_ARCANE_ATTESTATION_PUBKEY;
 
 // DER SubjectPublicKeyInfo prefix for an Ed25519 public key. Prepended to the
 // raw 32-byte key so node:crypto can import it as a KeyObject.
