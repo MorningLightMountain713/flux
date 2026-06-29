@@ -611,7 +611,9 @@ describe('appOperations tests', () => {
       proxyquire = require('proxyquire');
     });
 
-    function loadWith({ arcane = true, installed = [], plans = [], deployment = {} } = {}) {
+    function loadWith({
+      arcane = true, installed = [], plans = [], deployment = {}, requires = true,
+    } = {}) {
       const client = {
         SOCKET_PATH: '/run/flux-shutdownd/daemon.sock',
         listAppPlans: sinon.stub().resolves(plans),
@@ -627,7 +629,10 @@ describe('appOperations tests', () => {
         '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
         '../appDatabase/appsRepository': { listInstalledApps: sinon.stub().resolves(installed) },
         '../appRuntime/deploymentProvider': { buildDeployment: sinon.stub().resolves(deployment) },
-        './shutdownPlan': { buildShutdownPlan: sinon.stub().returns({ app_name: 'plan' }) },
+        './shutdownPlan': {
+          buildShutdownPlan: sinon.stub().returns({ app_name: 'plan' }),
+          appRequiresDaemonShutdown: sinon.stub().returns(requires),
+        },
         '../utils/fluxShutdowndClient': client,
       });
       return { mod, client };
@@ -660,6 +665,31 @@ describe('appOperations tests', () => {
       const { mod, client } = loadWith({ arcane: false });
       await mod.shutdownPlanResync();
       expect(client.listAppPlans.called).to.be.false;
+    });
+
+    it('orphan-deletes the plan of an installed app that no longer needs daemon shutdown', async () => {
+      // The app dropped its graceful-shutdown features (spec hash drifted), so the
+      // predicate is now false: it must be excluded from `live` and its stale plan
+      // removed, never re-pushed.
+      const { mod, client } = loadWith({
+        installed: [{ name: 'app1', owner: '1own', hash: 'hashNEW' }],
+        plans: [{ app_name: 'app1', owner_flux_id: '1own', spec_hash: 'hashOLD' }],
+        requires: false,
+      });
+      await mod.shutdownPlanResync();
+      expect(client.upsertAppPlanBestEffort.called).to.be.false;
+      expect(client.deleteAppPlanBestEffort.calledOnceWith('app1', '1own')).to.be.true;
+    });
+
+    it('pushes no plan for a non-requiring installed app with no stored plan', async () => {
+      const { mod, client } = loadWith({
+        installed: [{ name: 'plain', owner: '1own', hash: 'h' }],
+        plans: [],
+        requires: false,
+      });
+      await mod.shutdownPlanResync();
+      expect(client.upsertAppPlanBestEffort.called).to.be.false;
+      expect(client.deleteAppPlanBestEffort.called).to.be.false;
     });
   });
 
