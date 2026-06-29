@@ -240,6 +240,7 @@ async function redeployComponent(appName, componentName, options = {}) {
       skipPorts: true,
       specVersion: instantiated.version,
       owner: instantiated.owner,
+      requiresEncryption: shutdownPlan.appRequiresDaemonShutdown(freshDeployment),
     });
 
     status(`Component ${deployComp.identifier} ${label} complete`);
@@ -340,6 +341,7 @@ async function redeployApplication(appName, options = {}) {
     // Re-verify shared-network links before recreating containers.
     await appNetworkLinker.checkAppNetworkRequirements(instantiated);
 
+    const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
     for (const [, deployComp] of freshDeployment.componentEntries()) {
       status(`Installing ${deployComp.identifier}...`);
       // eslint-disable-next-line no-await-in-loop
@@ -348,6 +350,7 @@ async function redeployApplication(appName, options = {}) {
         skipPorts: true,
         specVersion: instantiated.version,
         owner: instantiated.owner,
+        requiresEncryption,
       });
       // Re-attach the recreated container to every linked app's network.
       // eslint-disable-next-line no-await-in-loop
@@ -1523,6 +1526,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
 
   const toInstall = [...keepVolume, ...recreateVolume, ...added];
   if (freshDeployment && toInstall.length > 0) {
+    const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
     for (const name of toInstall) {
       const deployComp = freshDeployment.getComponent(name);
       if (!deployComp) continue;
@@ -1534,6 +1538,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
         skipPorts: true,
         specVersion: registrySpec.version,
         owner: registrySpec.owner,
+        requiresEncryption,
       });
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
