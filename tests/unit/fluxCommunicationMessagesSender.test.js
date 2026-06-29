@@ -1889,4 +1889,35 @@ describe('fluxCommunicationMessagesSender tests', () => {
       sinon.assert.notCalled(websocketOut.send);
     });
   });
+
+  describe('manifest reconcile responders', () => {
+    // The internal sendSignedMessage call is not interceptable via the export (CJS), and
+    // its wire mechanics have their own tests; here we assert the load-bearing two-step
+    // logic — what each responder asks the registry for. A peer with a no-op send lets
+    // the real sendSignedMessage run harmlessly (CLOSED websocket → it just no-ops).
+    const peer = () => ({ key: 'p:1', readyState: 3, send: sinon.stub() });
+
+    afterEach(() => sinon.restore());
+
+    it('respondWithManifestIndex reads the confirmed (appName, version) vector', async () => {
+      const listStub = sinon.stub(appsRepository, 'listConfirmedContentManifestVersions')
+        .resolves([{ appName: 'a', version: 2 }]);
+      await fluxCommunicationMessagesSender.respondWithManifestIndex(peer());
+      sinon.assert.calledOnce(listStub);
+    });
+
+    it('respondWithContentManifests queries only the requested apps (the two-step fetch)', async () => {
+      const listStub = sinon.stub(appsRepository, 'listConfirmedContentManifestBroadcasts')
+        .resolves([{ version: 1, data: { manifest: { appName: 'b' } } }]);
+      const msgObj = { data: { type: 'fluxappcontentmanifestrequest', appNames: ['b'] } };
+      await fluxCommunicationMessagesSender.respondWithContentManifests(msgObj, peer());
+      sinon.assert.calledOnceWithExactly(listStub, ['b']);
+    });
+
+    it('respondWithContentManifests does not query the registry for an empty ask', async () => {
+      const listStub = sinon.stub(appsRepository, 'listConfirmedContentManifestBroadcasts').resolves([]);
+      await fluxCommunicationMessagesSender.respondWithContentManifests({ data: { appNames: [] } }, peer());
+      sinon.assert.notCalled(listStub);
+    });
+  });
 });

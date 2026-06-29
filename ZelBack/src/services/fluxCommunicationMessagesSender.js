@@ -388,18 +388,37 @@ async function respondWithAppInstallingErrorsMessages(peer, sinceTimestamp = 0) 
 }
 
 /**
- * Serve a boot-sync request for content-slot manifests. Unlike the time-windowed
- * broadcast collections, the manifest set is one-row-per-app and tiny, so the full
- * confirmed set is resent (sinceTimestamp windowing is unnecessary). Only rows that
- * carry a node `envelope` are servable — the verbatim signed broadcast is re-served as
- * { ...envelope, data } so the requester verifies it with batchVerifyBroadcasts on top
- * of the manifest's intrinsic owner signature, exactly like apprunning/appinstalling.
+ * Step 1 of the two-step manifest reconcile: serve this node's (appName, version) index
+ * of every confirmed manifest — cheap (no bodies), so a requester can fan out to several
+ * peers, union the indexes, and pull only the bodies it's missing/stale on.
  */
-async function respondWithContentManifests(peer) {
+async function respondWithManifestIndex(peer) {
   try {
     // eslint-disable-next-line global-require
     const appsRepository = require('./appDatabase/appsRepository');
-    const broadcasts = await appsRepository.listConfirmedContentManifestBroadcasts();
+    const index = await appsRepository.listConfirmedContentManifestVersions();
+    await sendSignedMessage({ type: 'fluxappcontentmanifestindex', index, done: true }, peer, { awaitDrain: true });
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+/**
+ * Step 2 of the two-step manifest reconcile: serve the re-servable signed broadcasts for
+ * the specific apps a peer asked for (`msgObj.data.appNames`). Only rows carrying a node
+ * `envelope` are servable — re-served as { ...envelope, data } so the requester verifies
+ * with batchVerifyBroadcasts on top of the manifest's intrinsic owner signature.
+ */
+async function respondWithContentManifests(msgObj, peer) {
+  try {
+    const appNames = msgObj && msgObj.data && msgObj.data.appNames;
+    if (!Array.isArray(appNames) || appNames.length === 0 || appNames.length > 5000) {
+      await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: [], done: true }, peer, { awaitDrain: true });
+      return;
+    }
+    // eslint-disable-next-line global-require
+    const appsRepository = require('./appDatabase/appsRepository');
+    const broadcasts = await appsRepository.listConfirmedContentManifestBroadcasts(appNames);
 
     const batchSize = 2000;
     if (broadcasts.length === 0) {
@@ -426,6 +445,7 @@ module.exports = {
   respondWithAppRunningMessages,
   respondWithAppInstallingMessages,
   respondWithAppInstallingErrorsMessages,
+  respondWithManifestIndex,
   respondWithContentManifests,
   serialiseAndSignFluxBroadcast,
   getFluxMessageSignature,
