@@ -356,15 +356,18 @@ async function redeployApplication(appName, options = {}) {
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
     }
 
-    // Refresh the shutdown plan: a redeploy may carry an updated spec (new
-    // hash, components, or timeouts). Guarded — the handoff must never break
-    // a redeploy. Per-container labels were already restamped at docker-create.
-    try {
-      await fluxShutdowndClient.upsertAppPlanBestEffort(
-        shutdownPlan.buildShutdownPlan(instantiated, freshDeployment),
-      );
-    } catch (error) {
-      log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
+    // Refresh the shutdown plan for graceful apps only (a redeploy re-derives the
+    // same spec, so the predicate is stable across it). Guarded — the handoff must
+    // never break a redeploy. Per-container labels were already restamped at
+    // docker-create.
+    if (shutdownPlan.appRequiresDaemonShutdown(freshDeployment)) {
+      try {
+        await fluxShutdowndClient.upsertAppPlanBestEffort(
+          shutdownPlan.buildShutdownPlan(instantiated, freshDeployment),
+        );
+      } catch (error) {
+        log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
+      }
     }
 
     status(`Application ${appName} ${label} complete`);
@@ -1561,15 +1564,20 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   await appUninstaller.reclaimUnusedImages(removedImages, (msg) => log.info(msg));
 
   // The applied spec changed, so the app-wide shutdown plan (hash, components,
-  // timeouts) may differ. Push the full refreshed plan. Guarded — must never
-  // break the update.
+  // timeouts) may differ. Push the refreshed plan for graceful apps; if the update
+  // DROPPED all graceful-shutdown features, delete any plan a prior version left so
+  // the daemon's store matches. Guarded — must never break the update.
   if (freshDeployment) {
-    try {
-      await fluxShutdowndClient.upsertAppPlanBestEffort(
-        shutdownPlan.buildShutdownPlan(registrySpec, freshDeployment),
-      );
-    } catch (error) {
-      log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
+    if (shutdownPlan.appRequiresDaemonShutdown(freshDeployment)) {
+      try {
+        await fluxShutdowndClient.upsertAppPlanBestEffort(
+          shutdownPlan.buildShutdownPlan(registrySpec, freshDeployment),
+        );
+      } catch (error) {
+        log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
+      }
+    } else {
+      await fluxShutdowndClient.deleteAppPlanBestEffort(freshDeployment.appName, registrySpec.owner);
     }
   }
 }
@@ -1637,13 +1645,26 @@ async function shutdownPlanResync() {
 
     for (const installed of installedApps) {
       const key = planKey(installed.owner, installed.name);
-      live.add(key);
       const summary = stored.get(key);
-      if (summary && summary.spec_hash === installed.hash) continue;
+      // A stored plan whose hash still matches: the app is graceful (it has a plan)
+      // and its spec is unchanged — keep it live, nothing to push.
+      if (summary && summary.spec_hash === installed.hash) {
+        live.add(key);
+        continue;
+      }
       try {
         // eslint-disable-next-line no-await-in-loop
         const deployment = await deploymentProvider.buildDeployment(installed);
-        if (!deployment) continue;
+        if (!deployment) {
+          live.add(key); // couldn't evaluate; keep any existing plan rather than orphan it
+          continue;
+        }
+        if (!shutdownPlan.appRequiresDaemonShutdown(deployment)) {
+          // Not (or no longer) graceful: leave OUT of `live` so the orphan pass
+          // deletes any stale plan a prior graceful version left behind.
+          continue;
+        }
+        live.add(key);
         // eslint-disable-next-line no-await-in-loop
         await fluxShutdowndClient.upsertAppPlanBestEffort(
           shutdownPlan.buildShutdownPlan(installed, deployment),
@@ -1651,6 +1672,7 @@ async function shutdownPlanResync() {
         pushed += 1;
       } catch (error) {
         log.warn(`shutdown plan resync upsert failed for ${installed.name}: ${error.message}`);
+        live.add(key); // couldn't evaluate; keep any existing plan rather than orphan it
       }
     }
 
