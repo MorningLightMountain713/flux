@@ -50,7 +50,12 @@ export async function installOnNodes(env, app, indices, { timeout = 120000 } = {
   return indices;
 }
 
-export async function bootAndPeer(env) {
+// minOutbound/minInbound default to the large-fleet (reconciler) targets. A small
+// arcane content fleet (~5 nodes) only ever reaches ~2 outbound / 2 inbound — once a
+// peer connects inbound, FluxOS dedups and never initiates the outbound back — so those
+// suites lower minOutbound to match their reduced fluxapps.minOutgoing config (the wait
+// tracks the submission gate, which is outboundCount >= minOutgoing).
+export async function bootAndPeer(env, { minOutbound = 4, minInbound = 2 } = {}) {
   for (const client of env.clients) await waitForDaemonReady(client);
   await Promise.all(env.clients.map(
     (c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000),
@@ -60,8 +65,8 @@ export async function bootAndPeer(env) {
     await waitForBlockProcessed(client, (d) => d.height > 2100000, 50000);
   }
   await env.startDiscovery();
-  await env.clients[0].waitForEvent('peers:added', (d) => d.outbound >= 4, 120000);
-  await env.clients[0].waitForEvent('peers:added', (d) => d.inbound >= 2, 120000);
+  await env.clients[0].waitForEvent('peers:added', (d) => d.outbound >= minOutbound, 120000);
+  await env.clients[0].waitForEvent('peers:added', (d) => d.inbound >= minInbound, 120000);
   await startTicker();
 }
 

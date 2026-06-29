@@ -18,8 +18,10 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // hash-verified) on install. Asserts on the SSE event bus (the deterministic
 // signal) plus the FluxDrive stub state, never log scraping.
 //
-// nodes:5 so the submission's minOutgoing>=4 peer gate is satisfiable; arcane:true
-// so the node accepts encrypted/content apps and runs the benchmark crypto.
+// nodes:5 with fluxapps.minOutgoing lowered to 2: a 5-node full mesh only reaches ~2
+// outbound/node (peers connect inbound first and FluxOS dedups), so the submission's
+// outboundCount>=minOutgoing gate is met at 2, not 4. arcane:true so the node accepts
+// encrypted/content apps and runs the benchmark crypto.
 
 describe('content blobs (contentRef): register, upload, provision', function () {
   let env;
@@ -32,8 +34,9 @@ describe('content blobs (contentRef): register, upload, provision', function () 
     this.timeout(420000);
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
+      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env);
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 1 });
     await pushImage(appName, 'v1');
     await resetFluxDrive();
   });
