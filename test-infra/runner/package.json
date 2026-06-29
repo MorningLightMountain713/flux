@@ -12,6 +12,7 @@
     "@noble/hashes": "^1.7.2",
     "@noble/secp256k1": "^2.2.3",
     "@runonflux/flux-spec": "file:../../flux-spec/packages/spec",
+    "@runonflux/flux-spec-policy": "file:../../flux-spec/packages/spec-policy",
     "axios": "^1.7.9",
     "chai": "^6.2.2",
     "eventsource": "^4.1.0",
