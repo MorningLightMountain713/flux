@@ -3,6 +3,7 @@ const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
+const fluxEventBus = require('../utils/fluxEventBus');
 
 // The content manifest is a permanent, latest-wins register reconciled OFF the
 // ephemeral boot-sync plane. A returning node converges its register to the network's
@@ -134,7 +135,9 @@ async function reconcile(peers, deps = {}) {
       });
     }
 
-    return { peers: peers.length, indexesReceived, fetched: neededCount - remaining.length };
+    const fetched = neededCount - remaining.length;
+    fluxEventBus.publish('content:manifestReconciled', { requested: neededCount, fetched });
+    return { peers: peers.length, indexesReceived, fetched };
   } finally {
     activeRound = null;
     reconcileRunning = false;

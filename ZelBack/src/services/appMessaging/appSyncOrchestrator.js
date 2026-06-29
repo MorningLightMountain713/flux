@@ -596,12 +596,13 @@ class AppSyncOrchestrator {
   async #runManifestSync() {
     if (this.#manifestSyncComplete) return;
     if (!this.#canSendMessages) return;
+    fluxEventBus.publish('content:manifestSyncStarted', {});
     try {
       const peers = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
       const result = await contentManifestSyncService.reconcile(peers);
       this.#manifestSyncComplete = true;
       log.info(`AppSyncOrchestrator - Manifest reconcile complete (peers=${result.peers}, indexes=${result.indexesReceived ?? 0}, fetched=${result.fetched ?? 0})`);
-      fluxEventBus.publish('manifestSync:complete', result);
+      fluxEventBus.publish('content:manifestSyncComplete', result);
     } catch (error) {
       log.error(`AppSyncOrchestrator - Manifest reconcile failed: ${error.message}`);
       // Leave incomplete; the block timer releases readiness, gossip + per-app catch-up backfill.

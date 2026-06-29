@@ -3,6 +3,7 @@ const axios = require('axios');
 const benchmarkService = require('../benchmarkService');
 const fluxDriveClient = require('../utils/fluxDriveClient');
 const { aeadEncrypt, aeadDecrypt } = require('../utils/aeadCrypto');
+const fluxEventBus = require('../utils/fluxEventBus');
 
 const MAX_BLOB_BYTES = 2 * 1024 * 1024;
 // Upper bound on the single HPKE-sealed content envelope a submission carries (it
@@ -69,6 +70,7 @@ async function encryptAndUploadBlob(blob, deps) {
   await uploader.uploadBlob(framed, {
     locator, appName, timestamp, arcaneSig, ownerSig, source,
   });
+  fluxEventBus.publish('content:blobUploaded', { appName, hash: contentHash, locator, source });
   return { locator };
 }
 
@@ -203,12 +205,18 @@ async function resolveBlob(req, deps) {
   for (const peer of peers.slice(0, maxPeerAttempts)) {
     const framed = await peerFetch(peer, appName, locator).catch(() => null);
     const plain = await verify(framed);
-    if (plain) return plain;
+    if (plain) {
+      fluxEventBus.publish('content:blobResolved', { appName, hash: contentHash, source: 'peer' });
+      return plain;
+    }
   }
 
   const framed = await fluxDrive.fetchBlobByLocator(locator).catch(() => null);
   const plain = await verify(framed);
-  if (plain) return plain;
+  if (plain) {
+    fluxEventBus.publish('content:blobResolved', { appName, hash: contentHash, source: 'fluxdrive' });
+    return plain;
+  }
 
   throw new Error(`contentBlob: no source for ${contentHash}`);
 }
@@ -232,11 +240,18 @@ async function provisionContentBlobs(deployment, ctx, deps) {
 
   for (const [, comp] of deployment.componentEntries()) {
     for (const { source, hash } of comp.contentBlobMounts()) {
-      const plaintext = await resolve(
-        { appName, fluxID, contentHash: hash, peers },
-        { benchmark, fluxDrive, peerFetch },
-      );
+      let plaintext;
+      try {
+        plaintext = await resolve(
+          { appName, fluxID, contentHash: hash, peers },
+          { benchmark, fluxDrive, peerFetch },
+        );
+      } catch (error) {
+        fluxEventBus.publish('content:blobProvisionFailed', { appName, hash });
+        throw error;
+      }
       await writeFile(source, plaintext);
+      fluxEventBus.publish('content:blobProvisioned', { appName, hash });
     }
   }
 }
@@ -265,7 +280,9 @@ async function serveBlob(req, deps) {
       if (derived !== locator) continue;
       const plaintext = await readFile(source);
       const key = Buffer.from(benchmarkField(await benchmark.contentKey({ appName, fluxID, contentHash: hash }), 'key'), 'base64');
-      return aeadEncrypt(key, plaintext, Buffer.from(hash));
+      const framed = aeadEncrypt(key, plaintext, Buffer.from(hash));
+      fluxEventBus.publish('content:blobServed', { appName, locator });
+      return framed;
     }
   }
   return null;
