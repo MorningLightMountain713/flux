@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const benchCrypto = require('./benchCrypto');
 
 const app = express();
 app.use(express.json());
@@ -329,11 +330,34 @@ const benchHandlers = {
     message: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=',
   }),
 
+  // v9 node-capability verdict — must be 'arcane' (and FLUX_ARCANE_NODE set on the
+  // node) or resolveNodeCapability polls forever / latches legacy. Read as
+  // response.data.nodetype, so this returns an object, not a JSON string.
+  getnodetype: () => ({ nodetype: 'arcane' }),
+
+  // v9 content/transport crypto. The node parses these (string or object); they
+  // mirror decryptrsamessage's { status:'ok', <field> } string convention.
+  bloblocator: (params) => JSON.stringify({ status: 'ok', locator: benchCrypto.locatorFor(JSON.parse(params[0])) }),
+  contentkey: (params) => JSON.stringify({ status: 'ok', key: benchCrypto.contentKeyFor(JSON.parse(params[0])) }),
+  signblobupload: (params) => JSON.stringify({ status: 'ok', signature: benchCrypto.signArcaneUpload(JSON.parse(params[0]).message) }),
+  attest: (params) => JSON.stringify({ status: 'ok', signature: benchCrypto.signAttestation(JSON.parse(params[0]).message) }),
+  appencrypt: (params) => JSON.stringify({ status: 'ok', ...benchCrypto.appEncrypt(JSON.parse(params[0])) }),
+  appdecrypt: (params) => JSON.stringify({ status: 'ok', ...benchCrypto.appDecrypt(JSON.parse(params[0])) }),
+  transportpublickey: async (params) => {
+    const q = new URLSearchParams(params[0]);
+    const res = await benchCrypto.transportPublicKey({ appName: q.get('appName'), fluxID: q.get('fluxID') });
+    return JSON.stringify({ status: 'ok', ...res });
+  },
+  transportdecap: async (params) => {
+    const res = await benchCrypto.transportDecap(JSON.parse(params[0]));
+    return JSON.stringify({ status: 'ok', ...res });
+  },
+
   help: () => 'Flux benchmark stub',
   stop: () => 'Flux benchmark stopping (stub)',
 };
 
-function handleRpc(handlers, req, res) {
+async function handleRpc(handlers, req, res) {
   const { method, params, id } = req.body;
   const sourceIp = req.ip;
   const cleanIp = sourceIp.replace('::ffff:', '');
@@ -358,7 +382,9 @@ function handleRpc(handlers, req, res) {
   }
 
   try {
-    const result = typeof handler === 'function' ? handler.call(handlers, params || [], sourceIp) : handler;
+    // await so async handlers (HPKE transport) resolve before the reply; a
+    // sync handler's plain value awaits to itself.
+    const result = await (typeof handler === 'function' ? handler.call(handlers, params || [], sourceIp) : handler);
     return res.json({ result, error: null, id });
   } catch (e) {
     console.error(`RPC error for ${method} from ${sourceIp}:`, e.message);
