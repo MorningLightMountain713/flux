@@ -47,9 +47,18 @@ From the repository root:
 # Runner dependencies (mocha, testcontainers, ...)
 (cd test-infra/runner && npm ci)
 
-# The node image + the five stubs (compose project name fixes the image tags)
+# The node image + the two compose-service stubs (the project name fixes the
+# image tags to flux-e2e-<service>)
 docker compose -f test-infra/docker-compose.yml -p flux-e2e build \
-  fluxos-01 daemon-stub syncthing-stub fdm-stub peer-stub external-http-stub
+  fluxos-01 daemon-stub syncthing-stub
+
+# The testcontainers-only stubs are NOT compose services — the runner pulls them
+# by the flux-e2e-<name> tag (see StaticIpContainer in test-env.js), so build each
+# standalone with a matching tag. Rebuild one only when its test-infra/<name>/ changes.
+docker build -t flux-e2e-fdm-stub test-infra/fdm-stub
+docker build -t flux-e2e-peer-stub test-infra/peer-stub
+docker build -t flux-e2e-external-http-stub test-infra/external-http-stub
+docker build -t flux-e2e-fluxdrive-stub test-infra/fluxdrive-stub
 
 # Supporting images
 docker pull mongo:8

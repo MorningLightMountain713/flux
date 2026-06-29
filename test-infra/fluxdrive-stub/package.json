@@ -1,14 +1,13 @@
 {
-  "name": "flux-daemon-stub",
+  "name": "flux-fluxdrive-stub",
   "version": "1.0.0",
   "private": true,
-  "description": "Stub for fluxd and fluxbenchd JSON-RPC for E2E testing",
+  "description": "Stub for the FluxDrive blob/manifest API for E2E testing",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@hpke/core": "~1.9.0",
     "express": "^4.21.2"
   }
 }
