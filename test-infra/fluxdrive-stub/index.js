@@ -23,8 +23,12 @@ const reconciles = [];
 const floors = new Map();
 
 // Behavior knobs the control plane drives. slow = per-request delay ms; fail5xx
-// makes the data plane return 500 (the "FluxDrive 5xx aborts submission" path).
-const mode = { strict: false, slow: 0, fail5xx: false };
+// makes the data plane return 500 (the "FluxDrive 5xx aborts submission" path);
+// failManifestPut fails ONLY the backstop manifest PUT (gossip stays primary,
+// the synchronous slot-blob upload still succeeds).
+const mode = {
+  strict: false, slow: 0, fail5xx: false, failManifestPut: false,
+};
 
 function reset() {
   blobs.clear();
@@ -34,6 +38,7 @@ function reset() {
   mode.strict = false;
   mode.slow = 0;
   mode.fail5xx = false;
+  mode.failManifestPut = false;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -123,6 +128,12 @@ app.post('/api/v1/blob/reconcile', express.json(), (req, res) => {
 // is confirmed via the control /promote, and strict GET serves confirmed-only.
 app.put('/api/v1/manifest/:appName', express.json(), (req, res) => {
   const appName = req.params.appName;
+  // Fail ONLY the backstop manifest PUT — before the version check, so it's
+  // independent of strict mode and leaves the slot-blob upload path intact.
+  if (mode.failManifestPut) {
+    res.status(503).json({ error: 'manifest put failed (injected)' });
+    return;
+  }
   const { version, timestamp, arcaneSig, ownerSig, manifest } = req.body || {};
   const stored = manifests.get(appName);
   if (mode.strict && stored && version <= stored.version) {
@@ -230,10 +241,13 @@ control.post('/manifest/:appName/promote', (req, res) => {
 });
 
 control.post('/mode', (req, res) => {
-  const { strict, slow, fail5xx } = req.body || {};
+  const {
+    strict, slow, fail5xx, failManifestPut,
+  } = req.body || {};
   if (strict !== undefined) mode.strict = !!strict;
   if (slow !== undefined) mode.slow = Number(slow) || 0;
   if (fail5xx !== undefined) mode.fail5xx = !!fail5xx;
+  if (failManifestPut !== undefined) mode.failManifestPut = !!failManifestPut;
   res.json({ ok: true, mode });
 });
 

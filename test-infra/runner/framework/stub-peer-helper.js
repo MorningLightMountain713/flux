@@ -21,6 +21,18 @@ export function stubPeerClient(ip) {
       return res.json();
     },
 
+    // Push an unsolicited node-signed gossip broadcast (the stub signs the envelope with
+    // its own node key) to every connected node. `data` is the inner gossip payload, e.g.
+    // { type: 'fluxappcontentmanifest', appName, manifest } with a forged owner signature.
+    async broadcast(data) {
+      const res = await fetch(`${controlUrl}/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data }),
+      });
+      return res.json();
+    },
+
     async clear() {
       const res = await fetch(`${controlUrl}/clear`, { method: 'POST' });
       return res.json();

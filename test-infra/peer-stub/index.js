@@ -1,5 +1,5 @@
 const http = require('http');
-const { WebSocketServer } = require('ws');
+const { WebSocketServer, WebSocket } = require('ws');
 const { signAsync } = require('@noble/secp256k1');
 const { sha256 } = require('@noble/hashes/sha2');
 
@@ -20,6 +20,9 @@ if (!PRIVATE_KEY || !PUBLIC_KEY) {
 }
 
 const messages = new Map();
+// Live inbound sockets (real nodes dial out to this stub), so the control plane can
+// push an unsolicited gossip broadcast down them.
+const clients = new Set();
 
 let connectionsReceived = 0;
 let requestsReceived = 0;
@@ -107,7 +110,9 @@ wss.on('headers', (headers) => {
 
 wss.on('connection', (ws) => {
   connectionsReceived++;
+  clients.add(ws);
   ws.on('message', (data) => handleMessage(ws, data));
+  ws.on('close', () => clients.delete(ws));
   ws.on('error', () => {});
 });
 
@@ -178,6 +183,25 @@ const controlServer = http.createServer(async (req, res) => {
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', hash: msg.hash }));
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/broadcast') {
+      // Push an unsolicited node-signed gossip broadcast to every connected node. Lets a
+      // suite inject a message an honest peer would never relay — e.g. a content manifest
+      // with a forged owner signature — to exercise a receiver's drop path.
+      const body = await readBody(req);
+      const { data } = JSON.parse(body);
+      const signed = await serialiseAndSignBroadcast(data);
+      let sent = 0;
+      for (const ws of clients) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(signed);
+          sent += 1;
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', sent }));
       return;
     }
 
