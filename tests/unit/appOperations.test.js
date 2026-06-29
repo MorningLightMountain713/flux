@@ -267,6 +267,29 @@ describe('appOperations tests', () => {
       expect(enqueue.calledOnceWith('myapp')).to.be.true;
       expect(operationRegistry.isHeld('myapp')).to.be.false;
     });
+
+    // A same-spec redeploy reinstalls the identical component, so its port set never
+    // changes. Both the teardown and the reinstall must leave the app's ufw/UPnP rules
+    // in place (skipPorts) — no firewall flap, no UPnP re-map churn.
+    it('leaves ufw/UPnP untouched: teardown and reinstall both run with skipPorts', async () => {
+      // eslint-disable-next-line global-require
+      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:v1' };
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ getComponent: () => deployComp });
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      sinon.stub(appsRepository, 'getInstalledApp').resolves({ version: 8, owner: 'owner1' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves({ marker: 'fresh' });
+      sinon.stub(hwRequirements, 'checkNodeResources').resolves();
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+      sinon.stub(appReconciler, 'enqueue');
+
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+
+      expect(uninstallComponent.calledOnceWith(deployComp, sinon.match({ skipPorts: true })), 'teardown must skip ports').to.be.true;
+      expect(installComponent.calledOnceWith(deployComp, sinon.match({ skipPorts: true })), 'reinstall must skip ports').to.be.true;
+    });
   });
 
   describe('redeployComponent (rebuild) tests', () => {
@@ -637,6 +660,75 @@ describe('appOperations tests', () => {
       const { mod, client } = loadWith({ arcane: false });
       await mod.shutdownPlanResync();
       expect(client.listAppPlans.called).to.be.false;
+    });
+  });
+
+  describe('reconcileComponents port-delta tests', () => {
+    // A spec-change reconcile must move only the ufw/UPnP rules that changed: close the
+    // dropped ports (old−new), open the added ports (new−old), leave the kept ports'
+    // mappings in place. The per-component teardown/reinstall run with skipPorts.
+    const makeComp = (hostPorts, storage) => ({
+      hostPorts,
+      storage,
+      identifier: `web_myapp`,
+      image: 'nginx:latest',
+      equals: () => false, // changed component
+    });
+    const makeDeployment = (components) => ({
+      components,
+      componentEntries: () => Object.entries(components),
+      getComponent: (n) => components[n] || null,
+    });
+
+    let uninstallComponentStub;
+    let denyPortsStub;
+    let openHostPortsStub;
+    let teardownOwedForStub;
+
+    function setup({ teardownOwed = false } = {}) {
+      // eslint-disable-next-line global-require
+      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+      // eslint-disable-next-line global-require
+      const pendingTeardownStore = require('../../ZelBack/src/services/appLifecycle/pendingTeardownStore');
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      sinon.stub(appsRepository, 'upsertInstalledApp').resolves();
+      // freshDeployment = null short-circuits the install loop, telemetry and shutdown-plan
+      // blocks, leaving the port close + gated open as the only port effects under test.
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(null);
+      sinon.stub(hwRequirements, 'checkNodeResources').resolves();
+      sinon.stub(appUninstaller, 'reclaimUnusedImages').resolves();
+      uninstallComponentStub = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      denyPortsStub = sinon.stub(appUninstaller, 'denyPorts').resolves();
+      openHostPortsStub = sinon.stub(componentProvisioner, 'openHostPorts').resolves();
+      teardownOwedForStub = sinon.stub(pendingTeardownStore, 'teardownOwedFor').resolves(teardownOwed);
+    }
+
+    const registrySpec = { serialize: () => ({}), version: 8, owner: 'owner1' };
+
+    it('closes only the dropped ports, opens only the added ones, and skips ports in the loops', async () => {
+      setup();
+      // old: 80,443 ; new: 443,8080 -> drop 80, add 8080, keep 443.
+      const oldDeployment = makeDeployment({ web: makeComp([80, 443], 5) });
+      const newDeployment = makeDeployment({ web: makeComp([443, 8080], 10) });
+
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+      expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ skipPorts: true })), 'teardown skips ports').to.be.true;
+      expect(denyPortsStub.calledOnceWith([80], 'myapp'), 'closes only the dropped port').to.be.true;
+      expect(openHostPortsStub.calledOnceWith([8080], 'myapp'), 'opens only the added port').to.be.true;
+    });
+
+    it('skips the port-open (but still closes) when a cancel teardown is owed', async () => {
+      setup({ teardownOwed: true });
+      const oldDeployment = makeDeployment({ web: makeComp([80, 443], 5) });
+      const newDeployment = makeDeployment({ web: makeComp([443, 8080], 10) });
+
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+      expect(teardownOwedForStub.calledWith('myapp')).to.be.true;
+      expect(openHostPortsStub.called, 'a raced cancel must skip the port-open (no orphaned rules)').to.be.false;
+      expect(denyPortsStub.calledOnceWith([80], 'myapp'), 'closing removed ports is always safe and still runs').to.be.true;
     });
   });
 

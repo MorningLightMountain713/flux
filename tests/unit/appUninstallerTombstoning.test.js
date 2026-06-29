@@ -1,6 +1,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 
 // Tombstoning teardown: the removal prelude records a durable owed-teardown doc +
 // condemns + deletes the local row, and the deferred worker (runTeardown) stops,
@@ -24,6 +25,10 @@ describe('appUninstaller tombstoning teardown', () => {
   };
 
   beforeEach(() => {
+    // The deferred worker's host teardown (umount, rm -rf) goes through
+    // serviceHelper.runCommand; stub it so the tests neither spawn real sudo
+    // subprocesses nor stall the timing-sensitive lease-release assertion.
+    sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: '', stderr: '' });
     const fakeCrontab = { jobs: () => [], remove: () => {}, save: () => {} };
     stubs = {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
@@ -94,7 +99,6 @@ describe('appUninstaller tombstoning teardown', () => {
           appsglobal: { database: 'globalapps', collections: { appsInformation: 'zelappsinformation', appsMessages: 'zelappsmessages' } },
         },
       },
-      'node-cmd': { run: (cmd, cb) => cb(null, 'ok') },
       crontab: { load: (cb) => cb(null, fakeCrontab) },
       '../../lib/log': stubs.log,
       '../dockerService': stubs.dockerService,
