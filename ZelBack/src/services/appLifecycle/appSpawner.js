@@ -4,6 +4,7 @@ const serviceHelper = require('../serviceHelper');
 const generalService = require('../generalService');
 const benchmarkService = require('../benchmarkService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
+const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const nodeDosState = require('../nodeDosState');
 const geolocationService = require('../geolocationService');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
@@ -44,6 +45,12 @@ let lastKnownLocalSocketAddr = null;
 // parked in that delay; calling it ends the delay early. Null at every other time,
 // so a wake outside the idle window is a harmless no-op.
 let idleWakeResolve = null;
+
+// One-bit latch for a wake that arrives while the loop is mid-cycle (idleWakeResolve
+// null): wakeIdleLoop sets it instead of dropping the signal, and spawnLoop checks +
+// clears it before the next idle delay so the wake is honored on the next park rather
+// than lost. Single-threaded event loop, so no race.
+let wakePending = false;
 
 /**
  * Number of nodes a spec pins via the placement model (IP / outpoint / operator
@@ -158,6 +165,10 @@ function initialize() {
 
 async function spawnLoop() {
   spawnLoopRunning = true;
+  // Start each loop incarnation with a clean latch so a wake latched while paused never
+  // skips the first cycle's delay after a SPAWNER_READY restart - the latch stays strictly
+  // intra-run.
+  wakePending = false;
   try {
     // Crypto providers are otherwise registered lazily by the first
     // specCutover call; the first spawn cycle can beat that and fail an
@@ -165,6 +176,15 @@ async function spawnLoop() {
     await ensureProvidersRegistered();
     while (!globalState.spawnerPaused) {
       const delayMs = await trySpawningGlobalApplication();
+      // A wake that fired while we were mid-cycle (idleWakeResolve null) latched wakePending
+      // instead of being dropped; honor it now by skipping this idle delay so a sibling
+      // pinned-enterprise spec stored during the cycle is picked up immediately. Checked +
+      // cleared in exactly this one place.
+      if (wakePending) {
+        wakePending = false;
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       // Race the inter-cycle delay against a one-shot wake so a spec this node must
       // install, landing mid-delay, is picked up now instead of on the next poll tick.
       // serviceHelper.delay still runs every idle iteration; the wake stays pending
@@ -746,13 +766,15 @@ async function trySpawningGlobalApplication() {
       broadcastedAt,
     };
 
-    // eslint-disable-next-line global-require
-    const fluxCommMessagesSender = require('../fluxCommunicationMessagesSender');
     if (soleRequiredInstaller) {
       // Contention-free pinned install: no propagation wait below depends on peers having seen the
-      // installing message, so store it locally (the over-instance check reads this) and tell peers.
+      // installing message, so store it locally (the over-instance check reads this) and fire-and-forget
+      // the ~500ms broadcast relay so the install starts sooner. Safe against reordering: the peer-side
+      // installing store applies only a strictly-newer broadcastedAt, so a late/duplicate can never
+      // clobber a newer state - the appremoved model.
       await registryManager.storeAppInstallingMessage(newAppInstallingMessage);
-      await fluxCommMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
+      fluxCommunicationMessagesSender.broadcastMessageToAll(newAppInstallingMessage)
+        .catch((e) => log.error(`installing broadcast for ${appToRun} failed: ${e.message}`));
     } else if (pinnedContended && !collisionWindowElapsed) {
       // Genuine multi-node contention on a pinned app (more pins than required): the collision
       // election needs peers' installing-broadcasts to propagate. Store + broadcast our intent, then
@@ -765,7 +787,7 @@ async function trySpawningGlobalApplication() {
       // window), so it is NOT re-stored on the way back, and must not be re-broadcast (which would
       // reset broadcastedAt and skew the election ordering).
       await registryManager.storeAppInstallingMessage(newAppInstallingMessage);
-      await fluxCommMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
+      await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
       appsToBeCheckedLater.push({
         appName: appToRun,
         hash: appHash,
@@ -779,7 +801,7 @@ async function trySpawningGlobalApplication() {
       // Non-pinned app (open contention - any node may install): keep the legacy inline election.
       // Store + broadcast, then wait inline for peers' broadcasts to propagate.
       await registryManager.storeAppInstallingMessage(newAppInstallingMessage);
-      await fluxCommMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
+      await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
       await serviceHelper.delay(collisionWaitMs); // give it 1.5m so messages are propagated on the network
     }
     // A pinned-contended app back from the deferred queue (collisionWindowElapsed) already stored +
@@ -891,6 +913,10 @@ function wakeIdleLoop() {
     const resolve = idleWakeResolve;
     idleWakeResolve = null;
     resolve();
+  } else {
+    // Loop is mid-cycle (no pending delay to interrupt): latch the wake so spawnLoop skips
+    // its NEXT idle delay instead of dropping the signal.
+    wakePending = true;
   }
 }
 
