@@ -697,31 +697,32 @@ async function promoteApplicationToPrimary(appname, appId) {
   try {
     log.info(`Starting app ${appname} with permissions fix workflow (new primary)`);
 
-    // Step 1: Move syncthing folder to receiveonly
-    log.info(`Step 1: Moving syncthing folder to receiveonly for ${appname}`);
+    // Quiesce inbound replication while the fix runs: receiveonly stops syncthing
+    // overwriting the data we are about to re-own.
+    log.info(`Moving syncthing folder to receiveonly for ${appname}`);
     const toReceiveOnly = await changeSyncthingFolderType(appId, 'receiveonly');
     if (!toReceiveOnly) {
       log.warn(`Failed to change syncthing folder to receiveonly for ${appname}, continuing anyway...`);
     }
 
-    // Step 2: Apply permissions fix on persistent container data
-    log.info(`Step 2: Applying permissions fix for ${appname}`);
+    // Re-own the persistent container data before the app starts writing to it.
+    log.info(`Applying permissions fix for ${appname}`);
     const permissionsApplied = await applyPermissionsFix(appname, appId);
     if (!permissionsApplied) {
       log.error(`Failed to apply permissions fix for ${appname}, aborting container start`);
       return;
     }
 
-    // Step 3: Move syncthing folder back to sendreceive
-    log.info(`Step 3: Moving syncthing folder to sendreceive for ${appname}`);
+    // Restore two-way sync now the data is fixed; a primary must be sendreceive.
+    log.info(`Moving syncthing folder to sendreceive for ${appname}`);
     const toSendReceive = await changeSyncthingFolderType(appId, 'sendreceive');
     if (!toSendReceive) {
       log.error(`Failed to change syncthing folder to sendreceive for ${appname}, aborting container start - cannot become primary without sendreceive mode`);
       return;
     }
 
-    // Step 4: hand the run-state decision to the reconciler (the single
-    // container actuator); permissions are already fixed at this point
+    // Hand the run-state decision to the reconciler (the single container actuator);
+    // permissions are already fixed at this point.
     appReconciler.setControllerDesired(appname, 'running', 'masterSlave primary (synced)');
 
     log.info(`Successfully completed permissions fix workflow for ${appname}`);
