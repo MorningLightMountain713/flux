@@ -8,8 +8,10 @@
     "test": "mocha --timeout 120000 --slow 10000 tests/**/*.js"
   },
   "dependencies": {
+    "@hpke/core": "~1.9.0",
     "@noble/hashes": "^1.7.2",
     "@noble/secp256k1": "^2.2.3",
+    "@runonflux/flux-spec": "file:../../flux-spec/packages/spec",
     "axios": "^1.7.9",
     "chai": "^6.2.2",
     "eventsource": "^4.1.0",
