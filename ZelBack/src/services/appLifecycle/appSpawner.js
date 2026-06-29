@@ -66,6 +66,70 @@ function isSoleRequiredInstaller(placement, minInstances) {
   return pinCount > 0 && pinCount <= minInstances;
 }
 
+/**
+ * A node-pinned app whose pin set is LARGER than its required instance count has genuine multi-node
+ * install contention: more nodes are eligible installers than instances are needed, so a collision-
+ * avoidance election must pick the winner(s). Unlike a non-pinned app (open contention), the
+ * eligible set is a known, bounded list - which lets such an app run its collision window OFF the
+ * serial spawn loop (deferred) instead of via an inline wait that head-of-line-blocks every app
+ * queued behind it.
+ * @param {object} placement - the spec's Placement (carries the pin targets)
+ * @param {number} minInstances - required instance count for the app
+ * @returns {boolean}
+ */
+function isPinnedContended(placement, minInstances) {
+  const pinCount = placementPinCount(placement);
+  return pinCount > 0 && pinCount > minInstances;
+}
+
+/**
+ * Over-instance self-evict check: if more than the required instances are running and this node is
+ * the surplus one (newest by runningSince), remove the local instance. Used both inline (a
+ * non-pinned app, after its propagation wait) and detached after a wait (a contended app).
+ */
+async function overInstanceSelfEvictCheck(appToRun, appHash, minInstances, localSocketAddr) {
+  const runningAppList = await registryManager.appLocation(appToRun);
+  if (runningAppList.length > minInstances) {
+    runningAppList.sort((a, b) => {
+      if (!a.runningSince && b.runningSince) {
+        return -1;
+      }
+      if (a.runningSince && !b.runningSince) {
+        return 1;
+      }
+      if (a.runningSince < b.runningSince) {
+        return -1;
+      }
+      if (a.runningSince > b.runningSince) {
+        return 1;
+      }
+      return 0;
+    });
+    const index = runningAppList.findIndex((x) => socketAddressesMatch(x.ip, localSocketAddr));
+    log.info(`trySpawningGlobalApplication - Application ${appToRun} is already spawned on ${runningAppList.length} instances, my instance is number ${index + 1}`);
+    if (index + 1 > minInstances) {
+      log.info(`trySpawningGlobalApplication - Application ${appToRun} is going to be removed as already passed the instances required.`);
+      log.warn(`REMOVAL REASON: Exceeded required instances - ${appToRun} already has sufficient instances, removing local installation (appSpawner)`);
+      globalState.trySpawningGlobalAppCache.delete(appHash);
+      appUninstaller.uninstallApplication(appToRun, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
+    }
+  }
+}
+
+/**
+ * Detached wrapper for the over-instance self-evict of a contended (non-sole-installer) app. Run
+ * fire-and-forget after the install so the post-install propagation wait never blocks the serial
+ * spawn loop (an inline 60s sleep head-of-line-blocks every queued app). Errors are logged.
+ */
+async function scheduleOverInstanceSelfEvict(appToRun, appHash, minInstances, localSocketAddr) {
+  try {
+    await serviceHelper.delay(1 * 60 * 1000); // give peers' running-broadcasts time to propagate
+    await overInstanceSelfEvictCheck(appToRun, appHash, minInstances, localSocketAddr);
+  } catch (error) {
+    log.error(error);
+  }
+}
+
 function initialize() {
   appSyncEvents.on(SYNC_EVENTS.SPAWNER_READY, () => {
     log.info('AppSyncOrchestrator signals ready, starting spawn loop');
@@ -204,6 +268,10 @@ async function trySpawningGlobalApplication() {
     let minInstances = null;
     let appFromAppsToBeCheckedLater = false;
     let appFromAppsSyncthingToBeCheckedLater = false;
+    // True when a contended app is pulled back off appsToBeCheckedLater after its collision window
+    // elapsed off-loop: it already broadcast its installing message on the first pass, so it skips
+    // the broadcast + collision wait and goes straight to the over-instance election + install.
+    let collisionWindowElapsed = false;
     const { appsToBeCheckedLater, appsSyncthingToBeCheckedLater } = globalState;
 
     const collateral = await generalService.obtainNodeCollateralInformation();
@@ -224,6 +292,7 @@ async function trySpawningGlobalApplication() {
       appToRun = appsToBeCheckedLater[appIndex].appName;
       appHash = appsToBeCheckedLater[appIndex].hash;
       minInstances = appsToBeCheckedLater[appIndex].required;
+      collisionWindowElapsed = appsToBeCheckedLater[appIndex].collisionDeferred === true;
       appsToBeCheckedLater.splice(appIndex, 1);
       appFromAppsToBeCheckedLater = true;
       appsCountAvailableToInstallOnMyNode = Math.max(0, appsCountAvailableToInstallOnMyNode - 1);
@@ -639,9 +708,12 @@ async function trySpawningGlobalApplication() {
     }
 
     // an application was selected and checked that it can run on this node. try to install and run it locally
-    // A pinned app with no install contention skips the two propagation waits below
-    // (collision election + post-install over-instance check) - see isSoleRequiredInstaller.
+    // A pinned app with no install contention (pins <= required) skips the propagation waits below
+    // (see isSoleRequiredInstaller). A pinned app with MORE pins than required has genuine multi-node
+    // contention (isPinnedContended) and runs the collision election OFF the loop. A non-pinned app
+    // keeps the legacy inline election.
     const soleRequiredInstaller = isSoleRequiredInstaller(specPlacement, minInstances);
+    const pinnedContended = isPinnedContended(specPlacement, minInstances);
     // lets broadcast to the network the app is going to be installed on this node, so we don't get lot's of intances installed when it's not needed
     let broadcastedAt = Date.now();
     const newAppInstallingMessage = {
@@ -652,17 +724,45 @@ async function trySpawningGlobalApplication() {
       broadcastedAt,
     };
 
-    // store it in local database first
-    await registryManager.storeAppInstallingMessage(newAppInstallingMessage);
-    // broadcast messages about running apps to all peers
     // eslint-disable-next-line global-require
     const fluxCommMessagesSender = require('../fluxCommunicationMessagesSender');
-    await fluxCommMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
-
-    if (!soleRequiredInstaller) {
-      // collision election needs peers' installing-broadcasts to propagate first
+    if (soleRequiredInstaller) {
+      // Contention-free pinned install: no propagation wait below depends on peers having seen the
+      // installing message, so store it locally (the over-instance check reads this) and tell peers.
+      await registryManager.storeAppInstallingMessage(newAppInstallingMessage);
+      await fluxCommMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
+    } else if (pinnedContended && !collisionWindowElapsed) {
+      // Genuine multi-node contention on a pinned app (more pins than required): the collision
+      // election needs peers' installing-broadcasts to propagate. Store + broadcast our intent, then
+      // DEFER the propagation window onto appsToBeCheckedLater instead of sleeping on it inline - an
+      // inline delay here freezes the single-threaded spawn loop for the whole window and
+      // head-of-line-blocks every contention-free app queued behind it (e.g. a sole-installer app
+      // pinned only to this node, which has nothing to wait for). It comes back off the queue once
+      // the window has elapsed and proceeds straight to the over-instance election + install below.
+      // The installing message persists in the local registry for installingTtlS (900s, >> the 90s
+      // window), so it is NOT re-stored on the way back, and must not be re-broadcast (which would
+      // reset broadcastedAt and skew the election ordering).
+      await registryManager.storeAppInstallingMessage(newAppInstallingMessage);
+      await fluxCommMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
+      appsToBeCheckedLater.push({
+        appName: appToRun,
+        hash: appHash,
+        required: minInstances,
+        timeToCheck: Date.now() + collisionWaitMs,
+        collisionDeferred: true,
+      });
+      log.info(`trySpawningGlobalApplication - ${appToRun} has multi-node install contention; deferring its ${collisionWaitMs}ms collision window off the spawn loop so contention-free apps queued behind it are not blocked`);
+      return shortDelayTime;
+    } else if (!collisionWindowElapsed) {
+      // Non-pinned app (open contention - any node may install): keep the legacy inline election.
+      // Store + broadcast, then wait inline for peers' broadcasts to propagate.
+      await registryManager.storeAppInstallingMessage(newAppInstallingMessage);
+      await fluxCommMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
       await serviceHelper.delay(collisionWaitMs); // give it 1.5m so messages are propagated on the network
     }
+    // A pinned-contended app back from the deferred queue (collisionWindowElapsed) already stored +
+    // broadcast its installing message on the first pass, so it falls straight through to the
+    // over-instance election check below.
 
     // double check if app is installed in more of the instances requested
     runningAppList = await registryManager.appLocation(appToRun);
@@ -732,36 +832,19 @@ async function trySpawningGlobalApplication() {
       return shortDelayTime;
     }
 
-    if (!soleRequiredInstaller) {
-      // over-instance self-evict needs peers' running-broadcasts to propagate first
-      await serviceHelper.delay(1 * 60 * 1000); // await 1 minute to give time for messages to be propagated on the network
-    }
-    // double check if app is installed in more of the instances requested
-    runningAppList = await registryManager.appLocation(appToRun);
-    if (runningAppList.length > minInstances) {
-      runningAppList.sort((a, b) => {
-        if (!a.runningSince && b.runningSince) {
-          return -1;
-        }
-        if (a.runningSince && !b.runningSince) {
-          return 1;
-        }
-        if (a.runningSince < b.runningSince) {
-          return -1;
-        }
-        if (a.runningSince > b.runningSince) {
-          return 1;
-        }
-        return 0;
-      });
-      const index = runningAppList.findIndex((x) => socketAddressesMatch(x.ip, localSocketAddr));
-      log.info(`trySpawningGlobalApplication - Application ${appToRun} is already spawned on ${runningAppList.length} instances, my instance is number ${index + 1}`);
-      if (index + 1 > minInstances) {
-        log.info(`trySpawningGlobalApplication - Application ${appToRun} is going to be removed as already passed the instances required.`);
-        log.warn(`REMOVAL REASON: Exceeded required instances - ${instantiated.name} already has sufficient instances, removing local installation (appSpawner)`);
-        globalState.trySpawningGlobalAppCache.delete(appHash);
-        appUninstaller.uninstallApplication(instantiated.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
+    if (pinnedContended) {
+      // Multi-node contention: the post-install over-instance self-evict needs peers' running-
+      // broadcasts to propagate, but that wait must NOT block the serial spawn loop (an inline 60s
+      // sleep head-of-line-blocks every queued app). Run it detached - the app is already installed,
+      // so this only trims a surplus local instance if the election overshot.
+      scheduleOverInstanceSelfEvict(appToRun, appHash, minInstances, localSocketAddr);
+    } else {
+      // Non-pinned apps keep the legacy inline propagation wait before the check; sole-installers can
+      // never over-install (pin set <= required) so they need neither the wait nor a real check.
+      if (!soleRequiredInstaller) {
+        await serviceHelper.delay(1 * 60 * 1000); // give running-broadcasts time to propagate
       }
+      await overInstanceSelfEvictCheck(appToRun, appHash, minInstances, localSocketAddr);
     }
 
     log.info('trySpawningGlobalApplication - Reinitiating possible app installation');
@@ -781,4 +864,5 @@ module.exports = {
   initialize,
   trySpawningGlobalApplication,
   isSoleRequiredInstaller,
+  isPinnedContended,
 };
