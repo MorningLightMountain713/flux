@@ -49,4 +49,12 @@ describe('arcaneAttestation verify primitive', () => {
 
     expect(verifyAttestationSignature(message, ARCANE_ATTESTATION_PUBKEY, signature)).to.equal(true);
   });
+
+  it('resolves to the production network constant when no config override is set', () => {
+    // The pubkey is config-driven (arcane.attestationPubkey) so a controlled
+    // environment can point the gate at a different attestation key; with no
+    // override configured it must fall back to the network constant, leaving
+    // production behavior unchanged.
+    expect(ARCANE_ATTESTATION_PUBKEY).to.equal('fYkJ9M6NBKnQxnr8HD3FrYakKr8JM8BRo/wF4MA9/Ss=');
+  });
 });
