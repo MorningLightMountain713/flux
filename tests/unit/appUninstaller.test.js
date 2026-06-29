@@ -128,6 +128,7 @@ describe('appUninstaller tests', () => {
         closeConnection: sinon.stub().resolves(),
         isFirewallActive: sinon.stub().resolves(false),
         allowPort: sinon.stub().resolves(true),
+        getLocalSocketAddress: sinon.stub().resolves('7.7.7.7:16127'),
       },
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),
@@ -358,6 +359,69 @@ describe('appUninstaller tests', () => {
       await appUninstaller.runTeardown(doc()).catch(() => {});
       expect(dockerServiceStub.appDockerStop.called).to.equal(false);
       expect(dockerServiceStub.appDockerKill.called).to.equal(false);
+    });
+  });
+
+  describe('clearSpawnThrottleForPinnedReinstall (throttle clear on operator removal)', () => {
+    const pinnedSpec = (matches = true, hasTargets = true) => ({
+      hash: 'pinhash',
+      placement: { hasTargets: () => hasTargets, matchesTarget: () => matches },
+    });
+
+    it('clears the throttle for a foreground non-force removal of an app pinned to this node', async () => {
+      appsRepositoryStub.getGlobalAppInfo.resolves(pinnedSpec());
+      globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
+
+      await appUninstaller.clearSpawnThrottleForPinnedReinstall('pinApp', { forceKill: false, background: false });
+
+      expect(globalStateStub.trySpawningGlobalAppCache.has('pinhash')).to.equal(false);
+    });
+
+    it('does NOT clear (and does not even look up) for a force removal', async () => {
+      appsRepositoryStub.getGlobalAppInfo.resolves(pinnedSpec());
+      globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
+
+      await appUninstaller.clearSpawnThrottleForPinnedReinstall('pinApp', { forceKill: true, background: false });
+
+      expect(globalStateStub.trySpawningGlobalAppCache.has('pinhash')).to.equal(true);
+      expect(appsRepositoryStub.getGlobalAppInfo.called).to.equal(false);
+    });
+
+    it('does NOT clear (and does not even look up) for a background removal (expiry/cancel)', async () => {
+      appsRepositoryStub.getGlobalAppInfo.resolves(pinnedSpec());
+      globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
+
+      await appUninstaller.clearSpawnThrottleForPinnedReinstall('pinApp', { forceKill: false, background: true });
+
+      expect(globalStateStub.trySpawningGlobalAppCache.has('pinhash')).to.equal(true);
+      expect(appsRepositoryStub.getGlobalAppInfo.called).to.equal(false);
+    });
+
+    it('does NOT clear when the app is not pinned to this node', async () => {
+      appsRepositoryStub.getGlobalAppInfo.resolves(pinnedSpec(false)); // matchesTarget -> false
+      globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
+
+      await appUninstaller.clearSpawnThrottleForPinnedReinstall('pinApp', { forceKill: false, background: false });
+
+      expect(globalStateStub.trySpawningGlobalAppCache.has('pinhash')).to.equal(true);
+    });
+
+    it('does NOT clear for an unpinned app (no placement targets)', async () => {
+      appsRepositoryStub.getGlobalAppInfo.resolves(pinnedSpec(true, false)); // hasTargets -> false
+      globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
+
+      await appUninstaller.clearSpawnThrottleForPinnedReinstall('pinApp', { forceKill: false, background: false });
+
+      expect(globalStateStub.trySpawningGlobalAppCache.has('pinhash')).to.equal(true);
+    });
+
+    it('is a no-op when the app is no longer globally registered', async () => {
+      appsRepositoryStub.getGlobalAppInfo.resolves(null);
+      globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
+
+      await appUninstaller.clearSpawnThrottleForPinnedReinstall('gone', { forceKill: false, background: false });
+
+      expect(globalStateStub.trySpawningGlobalAppCache.has('pinhash')).to.equal(true);
     });
   });
 

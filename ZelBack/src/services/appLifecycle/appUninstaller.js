@@ -18,6 +18,7 @@ const config = require('config');
 const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
+const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appVolumeService = require('./appVolumeService');
@@ -404,6 +405,41 @@ async function uninstallComponent(component, options = {}) {
 }
 
 /**
+ * Clear an app's spawn-throttle cache entry on an operator removal so the spawner can
+ * reinstall it promptly.
+ *
+ * A node-pinned app removed via the operator path (/apps/appremove, foreground non-force) stays
+ * globally registered and still targets this node, so the spawner is obliged to reinstall it -
+ * but trySpawningGlobalAppCache (set when it first spawned here, ~12h) is never cleared on the
+ * spawner's success path and suppresses reselection, a silent outage for a single-instance pinned
+ * app after a routine local removal. Clearing it lets the next scan reinstall.
+ *
+ * Gated to forceKill=false AND background=false, which is exactly that operator path. Force paths
+ * (over-instance self-evict, redeploy, rollback) must NOT reinstall; and expiry/cancel - graceful
+ * (force=false) on v9 but BACKGROUND - drain the app for good and must not reinstall either. The
+ * `background` flag distinguishes them precisely without leaning on the spawner's expiry filter:
+ * the operator REST removal is foreground/awaited, the expiry+cancel sweep is background. Placement
+ * + hash are read through the registry domain object; the pin is matched by IP (the conservative
+ * subset, as the wake gate does) - an outpoint/operator-only pin simply keeps the throttle.
+ * @param {string} appName
+ * @param {{forceKill: boolean, background: boolean}} opts - the removal's force/background flags
+ * @returns {Promise<void>}
+ */
+async function clearSpawnThrottleForPinnedReinstall(appName, { forceKill, background }) {
+  if (forceKill || background) return;
+  const globalSpec = await appsRepository.getGlobalAppInfo(appName);
+  const placement = globalSpec && globalSpec.placement;
+  if (!placement || !placement.hasTargets()) return;
+  const localSocketAddress = await fluxNetworkHelper.getLocalSocketAddress();
+  if (!localSocketAddress || !placement.matchesTarget({ ip: localSocketAddress, ipMatcher: socketAddressesMatch })) return;
+  const { trySpawningGlobalAppCache } = globalState;
+  if (globalSpec.hash && trySpawningGlobalAppCache && trySpawningGlobalAppCache.has(globalSpec.hash)) {
+    trySpawningGlobalAppCache.delete(globalSpec.hash);
+    log.info(`Cleared spawn-throttle cache for node-pinned app ${appName} (hash ${globalSpec.hash}) so the spawner can reinstall it`);
+  }
+}
+
+/**
  * Remove a whole application from the local node (a single component is removed via
  * uninstallComponent — this never takes a component identifier).
  * @param {string} appName - the app name.
@@ -562,6 +598,12 @@ async function uninstallApplication(appName, options = {}) {
     // a deferral (not a 7-day-poisoning failure), and its own rollback converges
     // idempotently with this teardown. No-op when no install is in flight.
     globalState.abortInstall(appName);
+
+    // On an operator (foreground non-force) removal of an app still pinned to this node, clear
+    // its spawn-throttle so the spawner reinstalls promptly instead of waiting out the ~12h
+    // throttle (see clearSpawnThrottleForPinnedReinstall for the gating rationale).
+    await clearSpawnThrottleForPinnedReinstall(appName, { forceKill, background });
+
     fluxEventBus.publish('app:removed', { name: appName });
     // Tell the network it's gone NOW — fire-and-forget, never blocking the prelude on a
     // broadcast — and drop it from the local running-apps cache.
@@ -992,6 +1034,7 @@ module.exports = {
   expireGlobalApplications,
   runTeardown,
   recoverOwedTeardowns,
+  clearSpawnThrottleForPinnedReinstall,
   // exposed for tests
   reclaimUnusedImages,
 };
