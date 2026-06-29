@@ -407,6 +407,10 @@ async function installApplication(instantiated, options = {}) {
         ? null
         : await appNetworkLinker.findLinkedAppLogCollector(instantiated);
 
+      // App-wide feature check computed once: gates the per-container budget labels
+      // stamped at docker-create, on the same channel as owner.
+      const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(deployment);
+
       for (const [, component] of deployment.componentEntries()) {
         // eslint-disable-next-line no-await-in-loop
         await componentProvisioner.installComponent(component, {
@@ -418,6 +422,7 @@ async function installApplication(instantiated, options = {}) {
           syslogTarget,
           crossAppLogCollector,
           owner: instantiated.owner,
+          requiresEncryption,
           // Abort the in-flight image pull if a concurrent cancel/removal of this app
           // fires (globalState.abortInstall). null for a test install (no controller).
           abortSignal: globalState.installingApps.get(appName)?.signal || null,

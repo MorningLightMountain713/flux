@@ -816,12 +816,18 @@ async function appDockerCreate(deployComp, options = {}) {
       'flux.burst.cores': String(effectiveCpu),
     }
     : null;
-  // Stamp the graceful-shutdown labels on every flux container at this single
-  // create chokepoint, so flux-shutdownd can find it and read its budget
-  // without consulting FluxOS at shutdown time. owner is provenance threaded
-  // in from the orchestrator (it isn't on DeploymentComponent).
-  const shutdownLabels = shutdownPlan.componentShutdownLabels(deployComp, options.owner || null);
-  const containerLabels = { ...shutdownLabels, ...(labels || {}), ...(burstLabels || {}) };
+  // Identity labels go on every flux container at this single create chokepoint so
+  // flux-shutdownd can enumerate and stop any app. Budget labels (drain/preStop/
+  // graceful timing) are added only for apps that use a graceful feature; a plain
+  // app drains on the daemon's defaults. owner is provenance threaded in from the
+  // orchestrator (it isn't on DeploymentComponent).
+  const identityLabels = shutdownPlan.componentIdentityLabels(deployComp, options.owner || null);
+  const budgetLabels = options.requiresEncryption
+    ? shutdownPlan.componentBudgetLabels(deployComp)
+    : null;
+  const containerLabels = {
+    ...identityLabels, ...(budgetLabels || {}), ...(labels || {}), ...(burstLabels || {}),
+  };
   if (burstEligible) {
     log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${effectiveCpu})`);
   }
