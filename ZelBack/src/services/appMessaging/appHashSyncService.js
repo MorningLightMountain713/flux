@@ -362,7 +362,7 @@ async function processMessages(messages, onProgress) {
           resolveHistoricalOwner: (name, currentOwner) => {
             let found = null;
             for (const m of (prevMessagesMap.get(name) || [])) {
-              const owner = (m.appSpecifications || m.zelAppSpecifications)?.owner;
+              const owner = m.appSpecifications?.owner;
               if (owner && owner !== currentOwner && (!found || m.height > found.height)) {
                 found = { owner, height: m.height };
               }

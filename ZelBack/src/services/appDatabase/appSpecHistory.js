@@ -32,7 +32,7 @@ async function getPreviousState(spec, verificationTimestamp) {
 
   if (!latest) return null;
 
-  const appSpecs = latest.appSpecifications || latest.zelAppSpecifications;
+  const appSpecs = latest.appSpecifications;
   if (!appSpecs) {
     throw new Error(`Previous specifications for ${spec.name} update message does not exist`);
   }
