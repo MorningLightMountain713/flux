@@ -265,6 +265,26 @@ export function dbClient(nodeNum) {
       return globalDb.collection('appcontentmanifests').findOne({ appName }, { projection: { _id: 0 } });
     },
 
+    // Seed an appcontentmanifests row directly, mirroring contentSlotService.storeManifest's
+    // stored shape, to stage a stale/divergent/quarantined manifest without the live path.
+    // For an encrypted app the manifest slots must already be SEALED (seed confirmed:true to
+    // skip re-verify on serve); an optional envelope enables boot-sync re-serve.
+    async seedContentManifest({
+      appName, version, manifest, confirmed = true, envelope,
+    }) {
+      const globalDb = await db('appsGlobal');
+      const row = {
+        appName,
+        version,
+        confirmed,
+        receivedAt: new Date(),
+        data: { type: 'fluxappcontentmanifest', appName, manifest },
+      };
+      if (envelope) row.envelope = envelope;
+      if (!confirmed) row.expireAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      await globalDb.collection('appcontentmanifests').insertOne(row);
+    },
+
     // Remove a global app spec so the dead-app manifest reaper has an orphaned
     // confirmed manifest to drop (appremove/expiry don't clear the global row in a test).
     async deleteGlobalAppSpec(name) {
