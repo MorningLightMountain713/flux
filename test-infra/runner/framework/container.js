@@ -112,14 +112,15 @@ export async function restartFluxos(container, { apiPort = 16127, readyTimeoutMs
 
 // ── Content bind-mount inspectors ──────────────────────────────────────
 // Read/stat a path INSIDE an app container (the node is the DinD host, so this is
-// `docker exec <appContainer> ...`). The inspected component needs coreutils
-// (cat/stat) — e.g. nginx/busybox, not the freestanding signal fixture.
+// `docker exec <appContainer> ...`). Inspected components run the static-busybox
+// fixture (registry-helper.pushBusybox) — the harness's other fixtures (/bin/pause,
+// /bin/test-app) are freestanding with no coreutils — so commands go via /bin/busybox.
 
 export { appContainerName };
 
 export async function readFileInContainer(container, appName, componentName, path) {
   const name = appContainerName(appName, componentName);
-  const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} cat ${path}`);
+  const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} /bin/busybox cat ${path}`);
   return { content: stdout, exitCode };
 }
 
@@ -127,7 +128,7 @@ export async function readFileInContainer(container, appName, componentName, pat
 // to root:root 0444; data/appdata/component dirs stay 777.
 export async function statFileInContainer(container, appName, componentName, path) {
   const name = appContainerName(appName, componentName);
-  const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} stat -c '%u %g %a' ${path}`);
+  const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} /bin/busybox stat -c '%u %g %a' ${path}`);
   const [uid, gid, mode] = stdout.trim().split(/\s+/);
   return { uid, gid, mode, exitCode };
 }
@@ -137,7 +138,7 @@ export async function statFileInContainer(container, appName, componentName, pat
 // bind keeps the same inode). Returns null when absent.
 export async function inodeInContainer(container, appName, componentName, path) {
   const name = appContainerName(appName, componentName);
-  const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} stat -c '%i' ${path} 2>/dev/null || echo ""`);
+  const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} /bin/busybox stat -c '%i' ${path} 2>/dev/null || echo ""`);
   const v = stdout.trim();
   return exitCode === 0 && v !== '' ? Number(v) : null;
 }
