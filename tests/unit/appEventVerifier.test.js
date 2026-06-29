@@ -423,7 +423,7 @@ describe('appEventVerifier', () => {
 
   describe('requestAttestation', () => {
     it('signs the domain-separated content hash via the local secure backend and returns the signature', async () => {
-      benchmarkServiceStub.attest.resolves({ status: 'success', data: { signature: 'attest-signature-b64', status: 'ok' } });
+      benchmarkServiceStub.attest.resolves({ status: 'success', data: JSON.stringify({ status: 'ok', signature: 'attest-signature-b64' }) });
 
       const signature = await appEventVerifier.requestAttestation('deadbeef');
 
@@ -439,7 +439,7 @@ describe('appEventVerifier', () => {
     });
 
     it('throws when the attestation response omits a signature', async () => {
-      benchmarkServiceStub.attest.resolves({ status: 'success', data: { status: 'ok' } });
+      benchmarkServiceStub.attest.resolves({ status: 'success', data: JSON.stringify({ status: 'ok' }) });
 
       await expect(appEventVerifier.requestAttestation('deadbeef'))
         .to.be.rejectedWith(/Failed to obtain arcane attestation/);
