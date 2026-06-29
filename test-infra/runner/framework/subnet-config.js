@@ -19,13 +19,15 @@
 //
 // The image registry is the one service NOT addressed by IP: it has a stable network
 // ALIAS (REGISTRY_ALIAS) with a DNS-SAN cert, so it's reachable under any /24 without
-// regenerating the cert. Nodes pull `fluxregistry:5000/...` (Docker embedded DNS
+// regenerating the cert. Nodes pull `fluxregistry.test:5000/...` (Docker embedded DNS
 // resolves the alias); the host pushes to the registry IP but verifies TLS against
-// the alias name.
+// the alias name. The alias is dotted (a .test FQDN) because the v9 spec image regex
+// only accepts a dotted host / IP / localhost as a registry — a bare single-label
+// host:port is unresolvable across the real decentralised fleet, so it is rejected.
 //
 // Within a /24: .1 gateway, .2-.8 infra services, nodes start at .10 (so node N -> .N+9).
 
-export const REGISTRY_ALIAS = 'fluxregistry';
+export const REGISTRY_ALIAS = 'fluxregistry.test';
 export const REGISTRY_PORT = 5000;
 
 export function resolveBase() {

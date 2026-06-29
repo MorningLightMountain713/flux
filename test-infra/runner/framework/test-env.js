@@ -609,8 +609,8 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
   }
 
   const registryTlsDir = join(fixturesDir, 'registry-tls');
-  // The registry is reached by a stable network alias (fluxregistry), not its IP:
-  // node dockerd pulls fluxregistry:5000/... and TLS verifies DNS:fluxregistry, so
+  // The registry is reached by a stable network alias (fluxregistry.test), not its IP:
+  // node dockerd pulls fluxregistry.test:5000/... and TLS verifies DNS:fluxregistry.test, so
   // the registry works under any subnet base without regenerating the cert.
   const registry = await new StaticIpContainer('registry:2')
     .withStaticIp(networkName, REGISTRY_IP, [REGISTRY_ALIAS])
