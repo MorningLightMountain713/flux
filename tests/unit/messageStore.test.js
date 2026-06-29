@@ -11,7 +11,7 @@ describe('messageStore tests', () => {
   let configStub;
 
   function makeMockAppEvent(message) {
-    const specs = message.appSpecifications || message.zelAppSpecifications || {};
+    const specs = message.appSpecifications || {};
     return {
       hash: message.hash,
       timestamp: message.timestamp,

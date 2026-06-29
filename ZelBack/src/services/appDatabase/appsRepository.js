@@ -408,7 +408,7 @@ async function getAppMessage(hash) {
     globalDb(), globalAppsMessages, { hash }, { projection: { _id: 0 } },
   );
   if (!doc) return null;
-  const specBlob = doc.appSpecifications || doc.zelAppSpecifications;
+  const specBlob = doc.appSpecifications;
   if (!specBlob) return { message: doc, spec: null };
   const docForHydrate = { ...specBlob, hash: doc.hash, height: doc.height };
   const spec = await hydrate(docForHydrate);
@@ -441,13 +441,9 @@ async function storePermanentMessage(doc) {
 
 async function listAppMessagesByName(name) {
   const projection = { projection: { _id: 0 } };
-  const results1 = await dbHelper.findInDatabase(
+  return dbHelper.findInDatabase(
     globalDb(), globalAppsMessages, { 'appSpecifications.name': name }, projection,
   );
-  const results2 = await dbHelper.findInDatabase(
-    globalDb(), globalAppsMessages, { 'zelAppSpecifications.name': name }, projection,
-  );
-  return [...results1, ...results2];
 }
 
 /**
@@ -467,20 +463,15 @@ async function getPreviousOwner(appName, currentOwner) {
 
 async function getPreviousPermanentMessage(name, beforeTimestamp) {
   const projection = { projection: { _id: 0 } };
-  const queries = [
-    { 'appSpecifications.name': name },
-    { 'zelAppSpecifications.name': name },
-  ];
+  const docs = await dbHelper.findInDatabase(
+    globalDb(), globalAppsMessages, { 'appSpecifications.name': name }, projection,
+  );
   let latest = null;
-  for (const query of queries) {
-    // eslint-disable-next-line no-await-in-loop
-    const docs = await dbHelper.findInDatabase(globalDb(), globalAppsMessages, query, projection);
-    for (const doc of docs) {
-      if (doc.timestamp > beforeTimestamp) continue;
-      if (!latest || doc.height > latest.height
-        || (doc.height === latest.height && doc.timestamp > latest.timestamp)) {
-        latest = doc;
-      }
+  for (const doc of docs) {
+    if (doc.timestamp > beforeTimestamp) continue;
+    if (!latest || doc.height > latest.height
+      || (doc.height === latest.height && doc.timestamp > latest.timestamp)) {
+      latest = doc;
     }
   }
   return latest;

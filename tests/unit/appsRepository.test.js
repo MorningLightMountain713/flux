@@ -294,21 +294,6 @@ describe('appsRepository', () => {
       expect(docForHydrate.hash).to.equal('abc');
       expect(docForHydrate.height).to.equal(500);
     });
-
-    it('tolerates legacy zelAppSpecifications field name', async () => {
-      const V = { deserialize: sinon.stub().returns({ name: 'y' }) };
-      versionRegistry.set(7, V);
-
-      dbHelperStub.findOneInDatabase.resolves({
-        hash: 'legacy',
-        height: 1,
-        zelAppSpecifications: { name: 'y', version: 7 },
-      });
-
-      const result = await appsRepository.getAppMessage('legacy');
-      expect(result.spec).to.not.be.null;
-      expect(result.spec.spec.name).to.equal('y');
-    });
   });
 
   describe('findUnderProvisionedApps', () => {
