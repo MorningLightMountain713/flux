@@ -1,8 +1,6 @@
 const fs = require('node:fs/promises');
 const { formidable } = require('formidable');
 const axios = require('axios');
-const config = require('config');
-const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
@@ -23,7 +21,6 @@ const { getSpec } = require('../utils/specLibs');
 
 const { sha256Hex } = contentBlobService;
 
-const manifestsCollection = config.database.appsglobal.collections.appContentManifests;
 const MANIFEST_GOSSIP_TYPE = 'fluxappcontentmanifest';
 
 // A manifest received before its app's spec is locally available can't be
@@ -152,7 +149,7 @@ async function openManifestSlots(manifest, ctx, deps = {}) {
  * referenced (a stray blob is an anti-abuse reject).
  *
  * @param {object} input - { manifest, spec, owner, encrypted, blobs, ownerSigs }
- * @param {object} deps - { db, getLatest?, uploader, benchmark?, now?, verify?, provider? }
+ * @param {object} deps - { getLatest?, uploader, benchmark?, now?, verify?, provider? }
  * @returns {Promise<object>} the gossip-form manifest
  */
 async function processManifestSubmission(input, deps) {
@@ -160,12 +157,12 @@ async function processManifestSubmission(input, deps) {
     manifest, spec, owner, encrypted, blobs, ownerSigs,
   } = input;
   const {
-    db, getLatest = getLatestManifest, uploader, benchmark, now, verify, provider,
+    getLatest = getLatestManifest, uploader, benchmark, now, verify, provider,
   } = deps;
 
   await verifyManifest(manifest, { owner, spec }, { verify });
 
-  const prior = await getLatest(db, manifest.appName);
+  const prior = await getLatest(manifest.appName);
   if (prior && manifest.version <= prior.version) {
     throw new Error(`contentSlot: manifest version ${manifest.version} is not newer than stored ${prior.version}`);
   }
@@ -219,67 +216,42 @@ async function processManifestSubmission(input, deps) {
  * is always at `row.data.manifest`. `appName`/`version` are denormalized index/floor
  * scalars, not a copy of the body.
  *
- * @param {object} db - appsglobal database handle
  * @param {object} manifest - gossip-form manifest
  * @param {object} [opts] - { confirmed?, now?, broadcast? }
  * @returns {Promise<boolean>}
  */
-async function storeManifest(db, manifest, opts = {}) {
+async function storeManifest(manifest, opts = {}) {
   const confirmed = opts.confirmed !== false; // default true (verified store); explicit false = quarantine
   const { appName, version } = manifest;
   const data = opts.broadcast ? opts.broadcast.data : { type: MANIFEST_GOSSIP_TYPE, appName, manifest };
-  const base = {
-    appName, version, confirmed, receivedAt: new Date(), data,
-  };
+  const row = { appName, version, data };
   if (opts.broadcast) {
     const b = opts.broadcast;
-    base.envelope = {
+    row.envelope = {
       version: b.version, timestamp: b.timestamp, pubKey: b.pubKey, signature: b.signature,
     };
   }
-  // A store WITHOUT a broadcast is a catch-up body — it must carry no envelope. Clear any
-  // stale one left by a row it promotes/advances over, else the kept envelope would sign
-  // the OLD data and the row would be served-then-rejected over boot-sync.
-  const clearEnvelope = !opts.broadcast;
-  let filter;
-  let update;
-  if (confirmed) {
-    // A verified store advances a strictly-older row OR promotes a same-version
-    // quarantined row in place (flipping confirmed:false -> true, clearing the TTL).
-    filter = { appName, $or: [{ version: { $lt: version } }, { version, confirmed: false }] };
-    update = { $set: base, $unset: clearEnvelope ? { expireAt: '', envelope: '' } : { expireAt: '' } };
-  } else {
-    // Quarantine: hold only if strictly newer than what we have; reaped by the TTL
-    // index if its spec never arrives.
-    const now = opts.now || Date.now();
-    filter = { appName, version: { $lt: version } };
-    update = { $set: { ...base, expireAt: new Date(now + QUARANTINE_TTL_MS) } };
-    if (clearEnvelope) update.$unset = { envelope: '' };
-  }
-  try {
-    await db.collection(manifestsCollection).updateOne(filter, update, { upsert: true });
-    return true;
-  } catch (error) {
-    if (error && error.code === 11000) return false; // a same/higher version is already stored
-    throw error;
-  }
+  // Quarantine TTL is the content domain's policy (aligned with the FluxDrive reclaim
+  // window), so it's computed here and the row+expiry handed to the registry, which owns
+  // the latest-wins/promote write. A store WITHOUT a broadcast is a catch-up body, so its
+  // envelope is cleared (else a kept envelope would sign the OLD data).
+  const now = opts.now || Date.now();
+  return appsRepository.upsertContentManifest(row, {
+    confirmed,
+    expireAt: confirmed ? undefined : new Date(now + QUARANTINE_TTL_MS),
+    clearEnvelope: !opts.broadcast,
+  });
 }
 
 /**
  * The stored gossip-form manifest for an app, or null. Carries the top-level
  * `version` (the monotonic floor) alongside the manifest body.
  *
- * @param {object} db - appsglobal database handle
  * @param {string} appName
  * @returns {Promise<{version: number, manifest: object}|null>}
  */
-async function getLatestManifest(db, appName) {
-  return db.collection(manifestsCollection).findOne({ appName });
-}
-
-/** The appsglobal database handle (one place, so callers don't repeat the dance). */
-function appsGlobalDb() {
-  return dbHelper.databaseConnection().db(config.database.appsglobal.database);
+async function getLatestManifest(appName) {
+  return appsRepository.getContentManifest(appName);
 }
 
 /**
@@ -305,11 +277,10 @@ function appsGlobalDb() {
  * distinct so a real fault is never hidden as a benign drop.
  *
  * @param {object} msgObj - received gossip message: { data: { type, appName, manifest } }
- * @param {object} deps - { db?, getApp?, isInstalledHere?, rebroadcast?, schedule?, verify?, provider? }
+ * @param {object} deps - { getApp?, isInstalledHere?, rebroadcast?, schedule?, verify?, provider? }
  */
 async function receiveManifest(msgObj, deps = {}) {
   const {
-    db = appsGlobalDb(),
     getApp = appsRepository.getGlobalAppInfo,
     isInstalledHere = appsRepository.getInstalledApp,
     rebroadcast = fluxCommunicationMessagesSender.broadcastMessageToAll,
@@ -325,7 +296,7 @@ async function receiveManifest(msgObj, deps = {}) {
   // Dedup: a strictly-older version is stale; a same-version is a duplicate UNLESS
   // the row we hold is still quarantined (then this receipt — now that the spec may
   // be local — can promote it). Versions are immutable + monotonic, never resetting.
-  const prior = await getLatestManifest(db, appName);
+  const prior = await getLatestManifest(appName);
   if (prior && gossipManifest.version < prior.version) return;
   if (prior && gossipManifest.version === prior.version && prior.confirmed !== false) return;
 
@@ -336,7 +307,7 @@ async function receiveManifest(msgObj, deps = {}) {
   const info = await getApp(appName);
   if (!info) {
     if (prior && gossipManifest.version <= prior.version) return; // already hold this version (quarantined)
-    await storeManifest(db, gossipManifest, { confirmed: false, broadcast: msgObj });
+    await storeManifest(gossipManifest, { confirmed: false, broadcast: msgObj });
     return;
   }
   const { owner, isEncrypted: encrypted, spec } = info;
@@ -352,7 +323,7 @@ async function receiveManifest(msgObj, deps = {}) {
     return;
   }
 
-  const stored = await storeManifest(db, gossipManifest, { confirmed: true, broadcast: msgObj });
+  const stored = await storeManifest(gossipManifest, { confirmed: true, broadcast: msgObj });
   if (!stored) return; // lost the race to a same/higher version (or it is already confirmed)
 
   await rebroadcast(msgObj.data);
@@ -391,12 +362,11 @@ async function handleIncomingManifest(msgObj, deps = {}) {
  * Returns { stored } — the count newly stored or quarantined.
  *
  * @param {Array<object>} broadcasts - signed node broadcasts { version, timestamp, pubKey, signature, data: { manifest } }
- * @param {object} deps - { db?, getApp?, getLatest?, store?, verify?, provider? }
+ * @param {object} deps - { getApp?, getLatest?, store?, verify?, provider? }
  * @returns {Promise<{stored: number}>}
  */
 async function storeBatchContentManifests(broadcasts, deps = {}) {
   const {
-    db = appsGlobalDb(),
     getApp = appsRepository.getGlobalAppInfo,
     getLatest = getLatestManifest,
     store = storeManifest,
@@ -411,7 +381,7 @@ async function storeBatchContentManifests(broadcasts, deps = {}) {
     const { appName } = manifest;
 
     // eslint-disable-next-line no-await-in-loop
-    const prior = await getLatest(db, appName);
+    const prior = await getLatest(appName);
     if (prior && manifest.version < prior.version) continue; // stale
     if (prior && manifest.version === prior.version && prior.confirmed !== false) continue; // already confirmed
 
@@ -422,7 +392,7 @@ async function storeBatchContentManifests(broadcasts, deps = {}) {
       // already hold this version quarantined.
       if (prior && manifest.version <= prior.version) continue;
       // eslint-disable-next-line no-await-in-loop
-      const okQ = await store(db, manifest, { confirmed: false, broadcast });
+      const okQ = await store(manifest, { confirmed: false, broadcast });
       if (okQ) stored += 1;
       continue;
     }
@@ -437,7 +407,7 @@ async function storeBatchContentManifests(broadcasts, deps = {}) {
       continue;
     }
     // eslint-disable-next-line no-await-in-loop
-    const okC = await store(db, manifest, { confirmed: true, broadcast });
+    const okC = await store(manifest, { confirmed: true, broadcast });
     if (okC) stored += 1;
   }
   return { stored };
@@ -445,8 +415,8 @@ async function storeBatchContentManifests(broadcasts, deps = {}) {
 
 /** Delete a quarantined (confirmed:false) manifest row — used when it fails
  *  verification, so a real manifest at the same version isn't blocked by the floor. */
-async function dropQuarantinedManifest(db, appName) {
-  await db.collection(manifestsCollection).deleteOne({ appName, confirmed: false });
+async function dropQuarantinedManifest(appName) {
+  return appsRepository.deleteQuarantinedContentManifest(appName);
 }
 
 /**
@@ -465,14 +435,13 @@ async function dropQuarantinedManifest(db, appName) {
  */
 async function promoteQuarantinedManifest(appName, deps = {}) {
   const {
-    db = appsGlobalDb(),
     getApp = appsRepository.getGlobalAppInfo,
     getLatest = getLatestManifest,
     store = storeManifest,
     drop = dropQuarantinedManifest,
     verify, provider,
   } = deps;
-  const stored = await getLatest(db, appName);
+  const stored = await getLatest(appName);
   if (!stored || !stored.data || stored.confirmed !== false) return false; // nothing quarantined
   const info = await getApp(appName);
   if (!info) return false; // spec still not available — stays quarantined (or TTL-reaped)
@@ -482,13 +451,13 @@ async function promoteQuarantinedManifest(appName, deps = {}) {
     const plaintext = await openManifestSlots(heldManifest, { owner, encrypted }, { provider });
     await verifyManifest(plaintext, { owner, spec }, { verify });
   } catch (error) {
-    await drop(db, appName);
+    await drop(appName);
     return false;
   }
   // Preserve the node-signed broadcast captured at quarantine (rebuilt from the stored
   // envelope + verbatim data) so the promoted row stays boot-sync-servable.
   const broadcast = stored.envelope ? { ...stored.envelope, data: stored.data } : undefined;
-  return store(db, heldManifest, { confirmed: true, broadcast });
+  return store(heldManifest, { confirmed: true, broadcast });
 }
 
 /** The IPs of nodes currently running an app, for peers-first content resolution. */
@@ -572,7 +541,7 @@ async function getContentManifestApi(req, res) {
       res.json(messageHelper.createErrorMessage('appname is required'));
       return;
     }
-    const stored = await getLatestManifest(appsGlobalDb(), appname);
+    const stored = await getLatestManifest(appname);
     // Serve only a CONFIRMED manifest — never a quarantined (unverified) one, so a
     // catching-up peer can't adopt a manifest this node hasn't verified yet.
     if (!stored || !stored.data || stored.confirmed === false) {
@@ -847,7 +816,6 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
  */
 async function reconcileBootContent(appName, deps = {}) {
   const {
-    db = appsGlobalDb(),
     getDeployment = deploymentProvider.getInstalledDeployment,
     getApp = appsRepository.getGlobalAppInfo,
     getLatest = getLatestManifest,
@@ -865,7 +833,7 @@ async function reconcileBootContent(appName, deps = {}) {
   // The don't-apply-early decision is on the CLEARTEXT rollout and needs no verification,
   // so read it from the stored manifest regardless of `confirmed` — otherwise a still-
   // quarantined future-dated row would slip through to provision and be applied early.
-  const stored = await getLatest(db, appName);
+  const stored = await getLatest(appName);
   const manifest = stored && stored.data ? stored.data.manifest : null;
   const rollout = manifest && manifest.rollout;
   const deferred = rollout
@@ -917,7 +885,6 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
   if (!declaresSlots) return;
 
   const {
-    db = appsGlobalDb(),
     getApp = appsRepository.getGlobalAppInfo,
     getLatest = getLatestManifest,
     getPeers = listAppPeers,
@@ -940,7 +907,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
   // running peer (the gossip may not have reached a fresh node yet). No peer with a
   // valid manifest ⇒ throw, so the install holds rather than serving empty slots.
   let plaintext;
-  const stored = await getLatest(db, appName);
+  const stored = await getLatest(appName);
   const storedManifest = stored && stored.data ? stored.data.manifest : null;
   if (storedManifest && stored.confirmed !== false) {
     // Already verified (confirmed) — use directly.
@@ -953,7 +920,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
       plaintext = await openManifestSlots(storedManifest, { owner, encrypted }, { provider });
       await verifyManifest(plaintext, { owner, spec }, { verify });
       const broadcast = stored.envelope ? { ...stored.envelope, data: stored.data } : undefined;
-      await store(db, storedManifest, { confirmed: true, broadcast });
+      await store(storedManifest, { confirmed: true, broadcast });
     } catch (error) {
       plaintext = null;
     }
@@ -961,7 +928,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
   if (!plaintext) {
     const fetched = await fetchPeers(appName, peers, { owner, encrypted, spec }, { verify, provider });
     if (fetched) {
-      await store(db, fetched.gossip);
+      await store(fetched.gossip);
       plaintext = fetched.plaintext;
     } else {
       // No running peer served it (the first-install / no-peer cold start). Fall back to
@@ -976,7 +943,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
         if (fromDrive && fromDrive.manifest) {
           const opened = await openManifestSlots(fromDrive.manifest, { owner, encrypted }, { provider });
           await verifyManifest(opened, { owner, spec }, { verify });
-          await store(db, fromDrive.manifest);
+          await store(fromDrive.manifest);
           plaintext = opened;
         }
       } catch (error) {
@@ -1100,7 +1067,6 @@ async function reconcileSlots(plaintextManifest, ctx, deps = {}) {
  */
 async function submitContentUpdate(body, deps = {}) {
   const {
-    db = appsGlobalDb(),
     getApp = appsRepository.getGlobalAppInfo,
     isInstalledHere = appsRepository.getInstalledApp,
     openEnvelope = transportHelper.openContentEnvelope,
@@ -1145,13 +1111,13 @@ async function submitContentUpdate(body, deps = {}) {
 
   const gossipManifest = await processSubmission(
     { manifest, spec, owner, encrypted, blobs, ownerSigs },
-    { db, uploader, benchmark, now, verify, provider },
+    { uploader, benchmark, now, verify, provider },
   );
 
   // Broadcast first: broadcastMessageToAll returns the exact signed node broadcast it
   // relayed, so we store that same envelope (one signature) for boot-sync re-serving.
   const signedBroadcast = await broadcast({ type: MANIFEST_GOSSIP_TYPE, appName, manifest: gossipManifest });
-  await storeManifest(db, gossipManifest, { broadcast: signedBroadcast });
+  await storeManifest(gossipManifest, { broadcast: signedBroadcast });
 
   // Populate the FluxDrive backstop so a cold-start node with no running peer can
   // still provision (best-effort; gossip + boot-sync are primary). The owner PUT-sig
@@ -1241,7 +1207,6 @@ module.exports = {
   storeManifest,
   storeBatchContentManifests,
   getLatestManifest,
-  appsGlobalDb,
   receiveManifest,
   handleIncomingManifest,
   promoteQuarantinedManifest,
