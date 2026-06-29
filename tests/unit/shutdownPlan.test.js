@@ -22,6 +22,33 @@ function bareComponent() {
   };
 }
 
+// Single-feature components: each exercises exactly one graceful-shutdown trigger.
+function shutdownOnlyComponent() {
+  return {
+    appName: 'myapp', name: 'api', loadBalancing: null, preStop: null, ports: {}, shutdown: { gracefulTimeout: 30 },
+  };
+}
+
+function preStopOnlyComponent() {
+  return {
+    appName: 'myapp', name: 'db', loadBalancing: null, shutdown: null, ports: {}, preStop: { type: 'exec', cmd: ['sh', '-c', 'flush'], timeout: 20 },
+  };
+}
+
+function drainOnlyComponent() {
+  return {
+    appName: 'myapp', name: 'lb', preStop: null, shutdown: null, ports: {}, loadBalancing: { http: { drain: { timeout: 45, waitForConnections: false } } },
+  };
+}
+
+function deploymentOf(...comps) {
+  return {
+    appName: 'myapp',
+    startupOrder: comps.map((c) => c.name),
+    componentEntries: () => comps.map((c) => [c.name, c]),
+  };
+}
+
 describe('shutdownPlan', () => {
   describe('componentShutdownLabels', () => {
     it('builds the full label set from a configured component', () => {
@@ -78,6 +105,43 @@ describe('shutdownPlan', () => {
       expect(workerPlan.shutdown).to.equal(null);
       expect(workerPlan.pre_stop).to.equal(null);
       expect(workerPlan.ports).to.deep.equal([]);
+    });
+  });
+
+  describe('appRequiresDaemonShutdown', () => {
+    it('is true when a component sets shutdown', () => {
+      expect(shutdownPlan.appRequiresDaemonShutdown(deploymentOf(shutdownOnlyComponent()))).to.equal(true);
+    });
+
+    it('is true when a component sets preStop', () => {
+      expect(shutdownPlan.appRequiresDaemonShutdown(deploymentOf(preStopOnlyComponent()))).to.equal(true);
+    });
+
+    it('is true when a component has a port drain', () => {
+      expect(shutdownPlan.appRequiresDaemonShutdown(deploymentOf(drainOnlyComponent()))).to.equal(true);
+    });
+
+    it('is false for a plain app (no shutdown/preStop/drain)', () => {
+      expect(shutdownPlan.appRequiresDaemonShutdown(deploymentOf(bareComponent()))).to.equal(false);
+    });
+
+    it('is true when any one of several components is graceful', () => {
+      const dep = deploymentOf(bareComponent(), bareComponent(), shutdownOnlyComponent());
+      expect(shutdownPlan.appRequiresDaemonShutdown(dep)).to.equal(true);
+    });
+  });
+
+  describe('appShutdownBudgetSeconds', () => {
+    it('equals buildShutdownPlan.shutdown_budget_app_wide_s (guards drift)', () => {
+      const dep = deploymentOf(bareComponent(), webComponent());
+      const instantiated = { owner: '1owner', hash: 'msg-hash-1' };
+      expect(shutdownPlan.appShutdownBudgetSeconds(dep))
+        .to.equal(shutdownPlan.buildShutdownPlan(instantiated, dep).shutdown_budget_app_wide_s);
+    });
+
+    it('sums drain + preStop + graceful per component (10s default)', () => {
+      // bare: 0+0+10, web: 180+30+60 → 280
+      expect(shutdownPlan.appShutdownBudgetSeconds(deploymentOf(bareComponent(), webComponent()))).to.equal(280);
     });
   });
 });
