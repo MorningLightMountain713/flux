@@ -253,6 +253,18 @@ export function dbClient(nodeNum) {
       await globalDb.collection('zelappsinformation').insertOne(spec);
     },
 
+    // v9 content-slot manifest register (one row per app, version-monotonic). The
+    // row shape is contentSlotService.storeManifest's: { appName, version, data, confirmed }.
+    async contentManifestCount() {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('appcontentmanifests').countDocuments({});
+    },
+
+    async getContentManifest(appName) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('appcontentmanifests').findOne({ appName }, { projection: { _id: 0 } });
+    },
+
     async seedPermanentMessage(msg) {
       const globalDb = await db('appsGlobal');
       await globalDb.collection('zelappsmessages').insertOne(msg);
