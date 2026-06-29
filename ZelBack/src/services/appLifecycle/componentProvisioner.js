@@ -167,15 +167,53 @@ async function verifyComponentImage(component) {
 }
 
 /**
+ * Open an app's host ports on the firewall (ufw) and the router (UPnP). The same leaf
+ * the install path uses, also called by a redeploy's port-delta reconcile to open only
+ * the added ports. Host/router state outlives a container, so it is independent of the
+ * container lifecycle. Throws on the first port that fails to open or map.
+ * @param {number[]} ports - host ports to open
+ * @param {string} appName - app name (the UPnP mapping description key)
+ * @param {Function|null} [status] - optional per-port progress callback
+ */
+async function openHostPorts(ports, appName, status = null) {
+  const firewallActive = await fluxNetworkHelper.isFirewallActive();
+  const isUPNP = upnpService.isUPNP();
+  // eslint-disable-next-line no-restricted-syntax
+  for (const port of (ports || [])) {
+    if (firewallActive) {
+      // eslint-disable-next-line no-await-in-loop
+      const portResponse = await fluxNetworkHelper.allowPort(port);
+      if (portResponse.status !== true) {
+        throw new Error(`Error: Port ${port} FAILed to open.`);
+      }
+    }
+    if (isUPNP) {
+      // eslint-disable-next-line no-await-in-loop
+      const mapped = await upnpService.mapUpnpPort(port, `Flux_App_${appName}`);
+      if (mapped !== true) {
+        throw new Error(`Error: Port ${port} FAILed to map.`);
+      }
+    }
+    if (status) status(`Port ${port} OK`);
+  }
+}
+
+/**
  * Install a single app component (pull image, create volume, create + start container).
  * @param {object} component - DeploymentComponent to install
- * @param {object} options - { owner, onStatus, test, createVolumes, burstEligible, restartPolicy, extraEnv, syslogTarget, crossAppLogCollector }
+ * @param {object} options - { owner, onStatus, test, createVolumes, skipPorts, burstEligible, restartPolicy, extraEnv, syslogTarget, crossAppLogCollector }
  * @returns {Promise<void>}
  */
 async function installComponent(component, options = {}) {
   const onStatus = options.onStatus || null;
   const test = options.test || false;
   const createVolumes = options.createVolumes || false;
+  // skipPorts: a redeploy keeps the running app's ufw/UPnP rules in place and reconciles
+  // only the port delta itself, so the reinstall must NOT open this component's ports
+  // (an unchanged port set would otherwise flap every rule). A fresh install leaves it
+  // false and opens all ports. Only the ufw/UPnP open is skipped — the container still
+  // gets its docker port bindings.
+  const skipPorts = options.skipPorts || false;
   const burstEligible = options.burstEligible || false;
   const restartPolicy = options.restartPolicy || null;
   const extraEnv = options.extraEnv || [];
@@ -200,28 +238,9 @@ async function installComponent(component, options = {}) {
     if (onStatus) onStatus(msg);
   };
 
-  status(`Allowing ${id} ports...`);
-  if (!test) {
-    const firewallActive = await fluxNetworkHelper.isFirewallActive();
-    const isUPNP = upnpService.isUPNP();
-    // eslint-disable-next-line no-restricted-syntax
-    for (const port of component.hostPorts) {
-      if (firewallActive) {
-        // eslint-disable-next-line no-await-in-loop
-        const portResponse = await fluxNetworkHelper.allowPort(port);
-        if (portResponse.status !== true) {
-          throw new Error(`Error: Port ${port} FAILed to open.`);
-        }
-      }
-      if (isUPNP) {
-        // eslint-disable-next-line no-await-in-loop
-        const mapped = await upnpService.mapUpnpPort(port, `Flux_App_${appName}`);
-        if (mapped !== true) {
-          throw new Error(`Error: Port ${port} FAILed to map.`);
-        }
-      }
-      status(`Port ${port} OK`);
-    }
+  if (!test && !skipPorts) {
+    status(`Allowing ${id} ports...`);
+    await openHostPorts(component.hostPorts, appName, status);
   }
 
   const pullConfig = await verifyComponentImage(component);
@@ -308,5 +327,6 @@ async function installComponent(component, options = {}) {
 
 module.exports = {
   installComponent,
+  openHostPorts,
   verifyComponentImage,
 };
