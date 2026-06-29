@@ -265,6 +265,13 @@ export function dbClient(nodeNum) {
       return globalDb.collection('appcontentmanifests').findOne({ appName }, { projection: { _id: 0 } });
     },
 
+    // Remove a global app spec so the dead-app manifest reaper has an orphaned
+    // confirmed manifest to drop (appremove/expiry don't clear the global row in a test).
+    async deleteGlobalAppSpec(name) {
+      const globalDb = await db('appsGlobal');
+      await globalDb.collection('zelappsinformation').deleteOne({ name });
+    },
+
     async seedPermanentMessage(msg) {
       const globalDb = await db('appsGlobal');
       await globalDb.collection('zelappsmessages').insertOne(msg);
