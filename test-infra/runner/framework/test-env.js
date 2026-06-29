@@ -18,6 +18,7 @@ import { getSubnetConfig, REGISTRY_ALIAS, REGISTRY_REPO_HOST } from './subnet-co
 import { closeDb } from './db-client.js';
 import { stubPeerClient } from './stub-peer-helper.js';
 import { pushImage } from './registry-helper.js';
+import { defaultGroupGrantDoc } from './policy-helper.js';
 import { MongoClient } from 'mongodb';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey, nodeKey } from './keys.js';
@@ -302,12 +303,21 @@ function getBootId(nodeNum) {
   return `test-boot-id-node-${String(nodeNum).padStart(2, '0')}`;
 }
 
-async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCenter = true } = {}) {
+async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCenter = true, arcane = false } = {}) {
   const client = new MongoClient(`mongodb://${mongoIp}:27017`);
   try {
     await client.connect();
+    // v9 content/encrypted features are gated behind policy entitlements, and a fresh
+    // harness chain grants none. Seed a default-group grant so every owner is entitled —
+    // the precondition the submission gate checks (see policy-helper). Arcane only: the
+    // legacy-verdict suites never submit v9 specs, so they don't need it.
+    const policyGrant = arcane ? defaultGroupGrantDoc() : null;
     for (let i = 1; i <= nodeCount; i++) {
       const num = String(i).padStart(2, '0');
+      if (policyGrant) {
+        await client.db(`node${num}_chainparams`).collection('policygroupmessages')
+          .insertOne(structuredClone(policyGrant));
+      }
       const explorerDb = client.db(`node${num}_zelcashdata`);
       await explorerDb.collection('scannedheight').updateOne(
         {},
@@ -480,7 +490,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
   started.push(mongo);
   containers.mongo = mongo;
 
-  await seedMongo(MONGO_IP, nodes, bootContext, { dataCenter });
+  await seedMongo(MONGO_IP, nodes, bootContext, { dataCenter, arcane });
 
   const daemonStub = await new StaticIpContainer('flux-e2e-daemon-stub')
     .withStaticIp(networkName, DAEMON_IP)
