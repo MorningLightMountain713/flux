@@ -16,7 +16,7 @@ const {
 
 // One-row-per-app content-slot manifest register (latest-wins). Not in appConstants
 // because only the content-manifest plane touches it.
-const appContentManifests = config.database.appsglobal.collections.appContentManifests;
+const { appContentManifests } = config.database.appsglobal.collections;
 
 let storageProviderInstance;
 
@@ -63,8 +63,6 @@ function localDb() {
 const { expireHeightExpr } = require('./appsMaintenance');
 
 async function findUnderProvisionedApps(currentHeight, nowSeconds) {
-  const ponFork = config.fluxapps.daemonPONFork;
-  const blocksLasting = config.fluxapps.blocksLasting;
   const minBlocksAllowance = config.fluxapps.newMinBlocksAllowance;
   const minTimeAllowance = minBlocksAllowance * 30;
 
@@ -210,13 +208,13 @@ async function listGlobalAppNodes() {
   return docs.map((doc) => ({ name: doc.name, nodes: doc.nodes || [] }));
 }
 
-async function upsertGlobalAppInfo(specDoc) {
+async function upsertGlobalAppInfo(specDoc, { upsert = true } = {}) {
   if (!specDoc || !specDoc.name) {
     throw new Error('appsRepository.upsertGlobalAppInfo: specDoc.name required');
   }
   return dbHelper.replaceOneInDatabase(
     globalDb(), globalAppsInformation,
-    { name: specDoc.name }, specDoc, { upsert: true },
+    { name: specDoc.name }, specDoc, { upsert },
   );
 }
 
