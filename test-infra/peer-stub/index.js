@@ -1,6 +1,6 @@
 const http = require('http');
 const net = require('net');
-const { WebSocketServer } = require('ws');
+const { WebSocketServer, WebSocket } = require('ws');
 const { signAsync } = require('@noble/secp256k1');
 const { sha256 } = require('@noble/hashes/sha2');
 
@@ -40,6 +40,9 @@ const SYNC_REQUEST_RESPONSES = Object.freeze({
 });
 
 const messages = new Map();
+// Live inbound sockets (real nodes dial out to this stub), so the control plane can
+// push an unsolicited gossip broadcast down them.
+const clients = new Set();
 
 let connectionsReceived = 0;
 let requestsReceived = 0;
@@ -279,7 +282,9 @@ wss.on('connection', (ws) => {
   connectionsReceived++;
   connectedNodes.add(ws);
   ws.on('close', () => connectedNodes.delete(ws));
+  clients.add(ws);
   ws.on('message', (data) => handleMessage(ws, data));
+  ws.on('close', () => clients.delete(ws));
   ws.on('error', () => {});
 });
 

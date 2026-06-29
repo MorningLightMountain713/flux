@@ -4,7 +4,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { deployContentApp, pushContentUpdate } from '../framework/content-helper.js';
 import {
-  getFluxDriveState, seedFluxDriveManifest, setFluxDriveMode, resetFluxDrive,
+  getFluxDriveState, setFluxDriveMode, resetFluxDrive,
 } from '../framework/fluxdrive-control.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
@@ -214,14 +214,12 @@ describe('content delivery: failure modes', function () {
     const installedIdx = await confirmAndFindArcaneInstaller(reg.data, name);
     const client = env.clients[installedIdx];
 
-    // Make ONLY the manifest backstop PUT fail. A global fail5xx can't be used here:
-    // the content update's slot-blob upload is synchronous and mandatory (it would abort
-    // the whole update before content:contentUpdateApplied). Instead, seed FluxDrive's
-    // stored manifest ahead of the update version and enable strict mode, so the v2
-    // backstop PUT hits the monotonic version floor (the data plane rejects it). The
-    // node's backstopManifest() catches that and carries on (gossip + peers are primary).
-    await seedFluxDriveManifest(name, 1000, { appName: name, version: 1000 }, { confirmed: true });
-    await setFluxDriveMode({ strict: true });
+    // Make ONLY the manifest backstop PUT fail (503). A global fail5xx can't be used here:
+    // the content update's slot-blob upload is synchronous and mandatory (it would abort the
+    // whole update before content:contentUpdateApplied). failManifestPut fails just the
+    // backstop PUT; the node's backstopManifest() catches it and carries on (gossip + peers
+    // are primary).
+    await setFluxDriveMode({ failManifestPut: true });
 
     try {
       const afterId = client.getLastEventId();
@@ -245,17 +243,18 @@ describe('content delivery: failure modes', function () {
       );
       expect(backstopped, 'a swallowed backstop PUT emits no content:manifestBackstopped').to.be.undefined;
 
-      // FluxDrive's stored manifest is untouched (the PUT was floor-rejected, never landed).
+      // FluxDrive's stored manifest is untouched (the v2 PUT 503'd, never landed; the v1
+      // backstop written at register remains).
       const state = await getFluxDriveState();
-      expect(state.manifests[name], 'seeded FluxDrive manifest still present').to.exist;
-      expect(state.manifests[name].version, 'FluxDrive manifest version unchanged by the rejected PUT').to.equal(1000);
+      expect(state.manifests[name], 'FluxDrive manifest from register still present').to.exist;
+      expect(state.manifests[name].version, 'FluxDrive manifest version unchanged by the failed PUT').to.equal(1);
 
       // The primary path still advanced this node's own register to v2.
       const row = await dbClient(client.num).getContentManifest(name);
       expect(row, 'local manifest row present').to.exist;
       expect(row.version, 'gossip/store advanced the local manifest to v2').to.equal(2);
     } finally {
-      await setFluxDriveMode({ strict: false });
+      await setFluxDriveMode({ failManifestPut: false });
     }
   });
 });
