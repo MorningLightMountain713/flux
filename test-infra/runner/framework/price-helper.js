@@ -12,11 +12,13 @@
 //
 // The authority address must match the node's messageAuthorityAddress config
 // (set to authorityAddress() via configOverrides). See flux-chain-crypto.js.
-import { PriceMessage, RateMessage, OracleKeyMessage } from '@runonflux/flux-spec-policy';
+import {
+  PriceMessage, RateMessage, OracleKeyMessage, SOFT_FORK_EFFECTIVE_DEPTH,
+} from '@runonflux/flux-spec-policy';
 import {
   buildSignedSoftForkTx, compressedPubkey, AUTHORITY_PRIVKEY, ORACLE_PRIVKEY,
 } from './flux-chain-crypto.js';
-import { injectBlock, seedTransaction } from './daemon-control.js';
+import { injectBlock, seedTransaction, advanceBlocks } from './daemon-control.js';
 
 // Modest, non-zero defaults: a small app floors at minPrice (well under the 2 FLUX
 // the stub's registration tx pays), so pricing is in force without underpaying.
@@ -56,12 +58,19 @@ export async function bootstrapPricing(opts = {}) {
   const priceFields = opts.priceFields || DEFAULT_PRICE_FIELDS;
   const fluxUsdPriceE4 = opts.fluxUsdPriceE4 || DEFAULT_FLUX_USD_E4;
   const timestamp = opts.timestamp || 1700000000;
+  // A soft-fork message only takes effect SOFT_FORK_EFFECTIVE_DEPTH blocks after it
+  // is mined (reorg safety). So the oracle key must be effective before the rate
+  // message can resolve it, and all three must be effective before the first
+  // registration fee is computed — hence the empty-block gaps.
+  const gap = SOFT_FORK_EFFECTIVE_DEPTH + 1;
 
   await injectSoftForkMessage(
     AUTHORITY_PRIVKEY,
     OracleKeyMessage.encode({ pubkey: compressedPubkey(ORACLE_PRIVKEY) }),
     'oraclekey',
   );
+  await advanceBlocks(gap); // oracle key becomes effective
+
   await injectSoftForkMessage(
     ORACLE_PRIVKEY,
     RateMessage.encode({ timestamp, fluxUsdPriceE4 }),
@@ -72,4 +81,5 @@ export async function bootstrapPricing(opts = {}) {
     PriceMessage.encode(priceFields),
     'price',
   );
+  await advanceBlocks(gap); // rate + price become effective
 }
