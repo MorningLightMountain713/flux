@@ -218,12 +218,12 @@ module.exports = {
       8: 1932380, // v8, brings enterprise apps using arcaneOS features to run these apps. // Around June 23th
       9: 2791000, // v9, Bedrock spec redesign: class hierarchy, contentHash signing, named ports, placement, time-based TTL
     },
-    address: 't1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6',
-    addressMultisig: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX',
-    addressMultisigB: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX',
-    addressDevelopment: 't1Mzja9iJcEYeW5B4m4s1tJG8M42odFZ16A',
+    appPaymentAddresses: [
+      { address: 't1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6', activeFromHeight: 0 },
+      { address: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX', activeFromHeight: 1300000, legacyMessageAuthority: true },
+      { address: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX', activeFromHeight: 1670000, legacyMessageAuthority: true },
+    ],
     messageAuthorityAddress: 't1eW962yoqbfCYKzFYaZJVYzeopSmhaKL4f',
-    multisigAddressChange: 1670000,
     epochstart: 694000,
     publicepochstart: 705000,
     portMinLegacy: 31000, // ports 30000 - 30999 are reserved for local applications
