@@ -16,8 +16,8 @@ function mockInstantiatedSpec({
     version,
     hash,
     isEncrypted,
-    // Encrypted apps expose only metadata here (no componentNames) and must be
-    // resolved via resolveSpec(serialize()); cleartext apps expose spec directly.
+    // Encrypted apps expose only metadata here (no componentNames); the seam
+    // yields their decrypted view. Cleartext apps expose their spec directly.
     spec: isEncrypted
       ? { componentNames() { throw new Error('encrypted wrapper has no componentNames'); } }
       : cleartext,
@@ -31,7 +31,7 @@ describe('peerNotification tests', () => {
   let logStub;
   let enqueueAllStub;
   let getAppLocationStub;
-  let resolveSpecStub;
+  let resolveInstantiatedStub;
   let listInstalledAppsStub;
   let broadcastAllStub;
   let listRunningAppsStub;
@@ -46,7 +46,9 @@ describe('peerNotification tests', () => {
 
     enqueueAllStub = sinon.stub().resolves();
     getAppLocationStub = sinon.stub().resolves(null);
-    resolveSpecStub = sinon.stub().resolves(null);
+    // cleartext instances resolve to their own spec; encrypted default to null
+    // (unresolvable) unless a test supplies a decrypted view
+    resolveInstantiatedStub = sinon.stub().callsFake(async (inst) => (inst.isEncrypted ? null : inst.spec));
     listInstalledAppsStub = sinon.stub().resolves([
       mockInstantiatedSpec({ name: 'app1', version: 4, hash: 'abc123', componentNames: ['c1'] }),
     ]);
@@ -88,7 +90,7 @@ describe('peerNotification tests', () => {
         getAppLocation: getAppLocationStub,
       },
       '../utils/specCutover': {
-        resolveSpec: resolveSpecStub,
+        resolveInstantiatedSpec: resolveInstantiatedStub,
       },
       '../appQuery/appQueryService': {
         listRunningApps: listRunningAppsStub,
@@ -123,13 +125,13 @@ describe('peerNotification tests', () => {
       expect(enqueueAllStub.calledOnceWith('hourly')).to.be.true;
     });
 
-    it('resolves an encrypted installed app via resolveSpec and broadcasts it by name+hash', async () => {
+    it('resolves an encrypted installed app to its decrypted view and broadcasts it by name+hash', async () => {
       const encInst = mockInstantiatedSpec({
         name: 'encapp', version: 8, hash: 'enchash', componentNames: ['c1'], isEncrypted: true,
       });
       listInstalledAppsStub.resolves([encInst]);
-      // decrypted cleartext view supplied by resolveSpec
-      resolveSpecStub.resolves({
+      // decrypted cleartext view for the held encrypted instance
+      resolveInstantiatedStub.resolves({
         componentNames: () => ['c1'],
         hasSyncthing: () => false,
         hasActiveStandbySyncthing: () => false,
@@ -137,9 +139,8 @@ describe('peerNotification tests', () => {
 
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
-      // resolveSpec called with the encrypted app's wire form
-      expect(resolveSpecStub.calledOnce).to.be.true;
-      expect(resolveSpecStub.firstCall.args[0]).to.deep.equal({ name: 'encapp', version: 8, hash: 'enchash' });
+      // the encrypted instance is passed straight to the seam for decryption
+      expect(resolveInstantiatedStub.calledOnceWith(encInst)).to.be.true;
       // resolved app is broadcast by name+hash (presence, not the encrypted wrapper)
       expect(broadcastAllStub.calledOnce).to.be.true;
       const broadcast = broadcastAllStub.firstCall.args[0];

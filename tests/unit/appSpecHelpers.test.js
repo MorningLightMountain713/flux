@@ -89,6 +89,8 @@ describe('appSpecHelpers tests', () => {
       appSpecHelpers = proxyquire('../../ZelBack/src/services/utils/appSpecHelpers', {
         './specCutover': {
           resolveSpec: sinon.stub().callsFake(async (doc) => mockClassSpec(doc)),
+          // seam decrypts the held instance; cleartext resolves to its own spec
+          resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.spec),
         },
       });
     });
