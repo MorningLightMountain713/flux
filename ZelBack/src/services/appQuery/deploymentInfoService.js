@@ -15,13 +15,7 @@ async function deploymentInformation(req, res) {
     // respond with information needed for application deployment regarding specification limitation and prices
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
     const daemonHeight = syncStatus.data.height;
-    let deployAddr = config.fluxapps.address;
-    if (daemonHeight >= config.fluxapps.appSpecsEnforcementHeights[6]) {
-      deployAddr = config.fluxapps.addressMultisig;
-    }
-    if (daemonHeight >= config.fluxapps.multisigAddressChange) {
-      deployAddr = config.fluxapps.addressMultisigB;
-    }
+    const deployAddr = chainUtilities.currentAppPaymentAddress(daemonHeight);
     // search in chainparams db for chainmessages of p version
     const appPrices = await chainUtilities.getChainParamsPriceUpdates();
     const { fluxapps: { portMin, portMax } } = config;
