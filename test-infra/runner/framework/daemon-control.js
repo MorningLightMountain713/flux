@@ -323,6 +323,11 @@ export async function seedAddressTxids(txids) {
   return post('/seed-address-txids', { txids });
 }
 
+// Advance one block carrying an explicit transaction (e.g. a soft-fork message tx).
+export async function injectBlock(tx) {
+  return post('/advance-block', { block: { tx: [tx] } });
+}
+
 export async function seedTransaction(txid, tx) {
   return post('/seed-transaction', { txid, tx });
 }
