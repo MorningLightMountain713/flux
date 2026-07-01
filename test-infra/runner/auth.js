@@ -24,8 +24,9 @@ function btcMagicHash(message) {
 
 async function signBtcMessage(message, privkeyHex, compressed = true) {
   const hash = btcMagicHash(message);
+  // hash is already the message digest — prehash:false so curves signs it directly.
   // 'recovered' format returns [recovery byte, ...64-byte compact signature].
-  const sig = secp256k1.sign(hash, Buffer.from(privkeyHex, 'hex'), { lowS: true, format: 'recovered' });
+  const sig = secp256k1.sign(hash, Buffer.from(privkeyHex, 'hex'), { lowS: true, format: 'recovered', prehash: false });
 
   const flag = 27 + sig[0] + (compressed ? 4 : 0);
 

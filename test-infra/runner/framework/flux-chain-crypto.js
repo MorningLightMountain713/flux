@@ -53,7 +53,7 @@ export function t1Address(privHex) {
 // isn't a consensus node, so it validates the DER + sighash byte, not the full
 // consensus sighash — but the signature genuinely comes from the signer's key.
 function p2pkhScriptSigHex(privHex, digest) {
-  const compact = secp256k1.sign(digest, privBytes(privHex), { lowS: true });
+  const compact = secp256k1.sign(digest, privBytes(privHex), { lowS: true, prehash: false });
   const der = secp256k1.Signature.fromBytes(compact, 'compact').toBytes('der');
   const sigWithType = concatBytes(der, Uint8Array.from([SIGHASH_ALL]));
   const pub = compressedPubkey(privHex);
