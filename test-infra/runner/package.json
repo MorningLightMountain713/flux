@@ -9,8 +9,9 @@
   },
   "dependencies": {
     "@hpke/core": "~1.9.0",
-    "@noble/hashes": "^1.7.2",
-    "@noble/secp256k1": "^2.2.3",
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
+    "@scure/base": "^2.2.0",
     "@runonflux/flux-spec": "file:../../flux-spec/packages/spec",
     "@runonflux/flux-spec-policy": "file:../../flux-spec/packages/spec-policy",
     "axios": "^1.7.9",

@@ -1,6 +1,7 @@
-import { signAsync, getPublicKey, Signature } from '@noble/secp256k1';
+import crypto from 'node:crypto';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { ripemd160 } from '@noble/hashes/ripemd160.js';
+import { ripemd160 } from '@noble/hashes/legacy.js';
 
 function hash256(data) {
   return sha256(sha256(data));
@@ -23,19 +24,20 @@ function btcMagicHash(message) {
 
 async function signBtcMessage(message, privkeyHex, compressed = true) {
   const hash = btcMagicHash(message);
-  const sig = await signAsync(hash, privkeyHex, { lowS: true });
+  // 'recovered' format returns [recovery byte, ...64-byte compact signature].
+  const sig = secp256k1.sign(hash, Buffer.from(privkeyHex, 'hex'), { lowS: true, format: 'recovered' });
 
-  const flag = 27 + sig.recovery + (compressed ? 4 : 0);
+  const flag = 27 + sig[0] + (compressed ? 4 : 0);
 
   const out = Buffer.alloc(65);
   out[0] = flag;
-  Buffer.from(sig.toCompactRawBytes()).copy(out, 1);
+  Buffer.from(sig.subarray(1)).copy(out, 1);
 
   return out.toString('base64');
 }
 
 function privkeyToZelid(privkeyHex) {
-  const pubBytes = getPublicKey(privkeyHex, true);
+  const pubBytes = secp256k1.getPublicKey(Buffer.from(privkeyHex, 'hex'), true);
   const h = ripemd160(sha256(pubBytes));
   const versioned = Buffer.concat([Buffer.from([0x00]), Buffer.from(h)]);
   const checksum = sha256(sha256(versioned)).slice(0, 4);
@@ -91,10 +93,10 @@ function verifyBtcMessage(message, signatureB64, pubkeyHex) {
     if (raw.length !== 65) return false;
     const flag = raw[0] - 27;
     const compressed = flag >= 4;
-    const recovery = flag % 4;
-    const sig = Signature.fromCompact(raw.subarray(1)).addRecoveryBit(recovery);
-    const recovered = sig.recoverPublicKey(btcMagicHash(message)).toHex(compressed);
-    return recovered === pubkeyHex.toLowerCase();
+    // curves' 'recovered' format: [recovery byte, ...64-byte compact signature].
+    const sig = Buffer.concat([Buffer.from([flag % 4]), raw.subarray(1)]);
+    const pubkey = secp256k1.recoverPublicKey(sig, btcMagicHash(message), { prehash: false });
+    return secp256k1.Point.fromBytes(pubkey).toHex(compressed) === pubkeyHex.toLowerCase();
   } catch {
     return false;
   }
