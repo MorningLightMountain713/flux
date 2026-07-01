@@ -10,7 +10,7 @@ const globalState = require('../utils/globalState');
 const appsRepository = require('../appDatabase/appsRepository');
 const appQueryService = require('../appQuery/appQueryService');
 const appReconciler = require('../appMonitoring/appReconciler');
-const { resolveSpec } = require('../utils/specCutover');
+const { resolveInstantiatedSpec } = require('../utils/specCutover');
 
 const fluxEventBus = require('../utils/fluxEventBus');
 
@@ -78,7 +78,7 @@ async function checkAndNotifyPeersOfRunningApps() {
     // eslint-disable-next-line no-restricted-syntax
     for (const inst of installedSpecs) {
       // eslint-disable-next-line no-await-in-loop
-      const view = inst.isEncrypted ? await resolveSpec(inst.serialize()) : inst.spec;
+      const view = await resolveInstantiatedSpec(inst);
       if (view) {
         resolvedViews.set(inst.name, view);
       } else {

@@ -12,7 +12,7 @@ const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
 const { buildPricingEngine, resolveMarketplacePricingCtx } = require('../pricing/buildPricingEngine');
 const priceOracleState = require('../pricing/priceOracleState');
 const { getSpecBackend, getSpecPolicy } = require('../utils/specLibs');
-const { resolveSpec } = require('../utils/specCutover');
+const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
 const appsRepository = require('../appDatabase/appsRepository');
 const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
 const { getPreviousSpec } = require('../appDatabase/appSpecHistory');
@@ -257,8 +257,8 @@ async function computeRegistrationFee(spec, height) {
     const breakdown = await engine.price(spec, {
       height,
       duration: spec.ttl || 0,
-      // Real encryption bit drives the encryptedSpec fee. resolveSpec exposes it:
-      // a cleartext spec reports false, a decrypted-from-encrypted spec reports true.
+      // Real encryption bit drives the encryptedSpec fee: a cleartext spec reports
+      // false, a DecryptedCanonicalSpec (decrypted-from-encrypted) reports true.
       isEncrypted: spec.isEncrypted,
       ...resolveMarketplacePricingCtx(spec, height),
     });
@@ -449,9 +449,9 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
     // (enterprise) spec must be decrypted first. Identity/lookups still use the
     // encrypted wire form (no decrypt needed).
     const { spec } = instantiated;
-    const pricingSpec = instantiated.isEncrypted
-      ? await resolveSpec(instantiated.serialize())
-      : spec;
+    // Cleartext apps resolve to their own spec; encrypted apps to a
+    // DecryptedCanonicalSpec the pricer reads through.
+    const pricingSpec = await resolveInstantiatedSpec(instantiated);
     if (!pricingSpec) {
       log.error(`checkAndRequestApp - could not resolve spec for ${instantiated.name} to compute fee`);
       return true;
