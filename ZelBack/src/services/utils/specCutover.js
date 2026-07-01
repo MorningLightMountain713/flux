@@ -40,8 +40,37 @@ async function resolveSpec(plainSpec) {
   }
 }
 
+/**
+ * Resolve the cleartext view of an InstantiatedSpec we already hold.
+ *
+ * Unlike resolveSpec (which takes a plain doc and deserializes it), this
+ * decrypts the held spec instance directly. Serializing an InstantiatedSpec
+ * would append the event-level contentHash, which EncryptedSpecV9.deserialize
+ * rejects — and re-parsing a spec we already have is wasteful either way.
+ *
+ * Cleartext apps return the CanonicalSpec instance; encrypted apps return the
+ * DecryptedCanonicalSpec wrapper (never a raw serializable plaintext spec — the
+ * decrypted spec stays inside the boundary type). Read the priced/deployed
+ * fields through it; the deployment path takes decrypted.spec at its call site.
+ *
+ * @param {object} instantiated - InstantiatedSpec instance
+ * @returns {Promise<object|null>} CanonicalSpec | DecryptedCanonicalSpec | null on decrypt failure
+ */
+async function resolveInstantiatedSpec(instantiated) {
+  if (!instantiated.isEncrypted) return instantiated.spec;
+  await ensureProvidersRegistered();
+  try {
+    const provider = await instantiated.spec.createProvider();
+    return await instantiated.spec.decrypt(provider);
+  } catch (error) {
+    log.warn(`resolveInstantiatedSpec: could not decrypt ${instantiated.name}: ${error.message}`);
+    return null;
+  }
+}
+
 module.exports = {
   deserializeSpec,
   resolveSpec,
+  resolveInstantiatedSpec,
   ensureProvidersRegistered,
 };
