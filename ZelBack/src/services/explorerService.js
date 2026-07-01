@@ -311,10 +311,9 @@ const FLUX_T1_PUBKEY_HASH = '1cb8';
 
 // Authority for the v9 foundation-signed soft-fork messages (PriceMessage,
 // PriceModifierMessage, OracleKeyMessage, MarketplacePricingMessage,
-// PolicyGroupMessage). Deliberately separate from the payment-collection
-// multisig (addressMultisig/B), which remains the legacy `p_` authority and the
-// app-payment receiver. None of these v9 message types exist on chain yet, so
-// keying them off a dedicated address breaks no history.
+// PolicyGroupMessage). messageAuthorityAddress is deliberately separate from the
+// legacy payment multisigs (appPaymentAddresses[].legacyMessageAuthority), which
+// authorise the pre-v9 ASCII price messages and receive app payments.
 // SIGHASH byte semantics: only a signature whose base type is SIGHASH_ALL commits
 // to every output — including the OP_RETURN carrying the message. NONE/SINGLE leave
 // the OP_RETURN unbound (an attacker could graft a different message onto a partially
@@ -347,6 +346,15 @@ function inputSignsAllOutputs(vin) {
   }
 }
 
+// The oracle's t1 address in force at a height, derived from the pubkey published
+// by the most recent OracleKeyMessage (0x05). Null if no oracle key is in force.
+function resolveOracleAddress(height) {
+  const history = priceOracleState.getOracleKeyHistory();
+  const oracleKey = history && history.resolveAt(height);
+  if (!oracleKey || !oracleKey.pubkey) return null;
+  return pubKeyToAddr(Buffer.from(oracleKey.pubkey).toString('hex'), FLUX_T1_PUBKEY_HASH);
+}
+
 function isMessageAuthority(tx) {
   const authAddr = config.fluxapps.messageAuthorityAddress;
   if (!authAddr) return false;
@@ -354,19 +362,35 @@ function isMessageAuthority(tx) {
 }
 
 // A RateMessage (0x03) is authorised only if its transaction is signed by the
-// oracle key currently published on-chain via OracleKeyMessage (0x05): resolve the
-// effective oracle pubkey at this height, derive its t1 address, and require a
-// matching transaction input. No oracle key in force -> no RateMessage accepted.
+// oracle key currently published on-chain via OracleKeyMessage (0x05), with a
+// SIGHASH_ALL signature. No oracle key in force -> no RateMessage accepted.
 function isOracleSigner(tx, height) {
-  const history = priceOracleState.getOracleKeyHistory();
-  if (!history) return false;
-  const oracleKey = history.resolveAt(height);
-  if (!oracleKey || !oracleKey.pubkey) return false;
-  const oracleAddr = pubKeyToAddr(Buffer.from(oracleKey.pubkey).toString('hex'), FLUX_T1_PUBKEY_HASH);
+  const oracleAddr = resolveOracleAddress(height);
+  if (!oracleAddr) return false;
   return tx.vin.some((vin) => vin.address === oracleAddr && inputSignsAllOutputs(vin));
 }
 
-async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
+// Whether an address is a pre-v9 soft-fork authority (the legacy payment multisigs).
+// Gates the legacy ASCII price messages — kept narrow so the v9 authority and the
+// oracle can never publish a legacy price message.
+function isLegacyMessageAuthority(address) {
+  return chainUtilities.legacyMessageAuthorities().includes(address);
+}
+
+// Coarse entry filter: is this address a recognised source of ANY soft-fork message?
+// The union of the legacy authorities, the v9 message authority, and the current
+// oracle. This only decides whether a tx is worth parsing as a soft-fork — the
+// per-type authority checks (isLegacyMessageAuthority / isMessageAuthority /
+// isOracleSigner) still enforce which signer may publish which message type. Strict
+// allowlist: any other sender is dropped at the gate, so it is no spam surface.
+function isRecognizedMessageSigner(address, height) {
+  if (!address) return false;
+  if (isLegacyMessageAuthority(address)) return true;
+  if (address === config.fluxapps.messageAuthorityAddress) return true;
+  return address === resolveOracleAddress(height);
+}
+
+async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx) {
   const { dispatch } = await getSpecPolicy();
   let dispatched;
   try {
@@ -381,7 +405,7 @@ async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
 
   switch (kind) {
     case 'legacy-price': {
-      if (!isSenderFoundation) return;
+      if (!senderIsLegacyAuthority) return;
       const ascii = decodeLegacyAscii(bytes);
       const splittedMess = ascii.split('_');
       const version = splittedMess[0];
@@ -468,26 +492,23 @@ async function processInsight(blockDataVerbose, database) {
     if (tx.version < 5 && tx.version > 0) {
       let message = '';
       let isFluxAppMessageValue = 0;
-      let isSenderFoundation = false;
-      let isReceiverFounation = false;
+      let senderIsRecognizedSigner = false;
+      let senderIsLegacyAuthority = false;
+      let receiverIsRecognizedSigner = false;
 
-      tx.vin.forEach((sender) => {
-        if (sender.address === config.fluxapps.addressMultisig || sender.address === config.fluxapps.addressMultisigB) { // coinbase vin.addr is undefined
-          isSenderFoundation = true;
-        }
+      tx.vin.forEach((sender) => { // coinbase vin.addr is undefined
+        if (isRecognizedMessageSigner(sender.address, blockDataVerbose.height)) senderIsRecognizedSigner = true;
+        if (isLegacyMessageAuthority(sender.address)) senderIsLegacyAuthority = true;
       });
 
       tx.vout.forEach((receiver) => {
         if (receiver.scriptPubKey.addresses) { // count for messages
-          if (receiver.scriptPubKey.addresses[0] === config.fluxapps.address
-            || (receiver.scriptPubKey.addresses[0] === config.fluxapps.addressMultisig && blockDataVerbose.height >= config.fluxapps.appSpecsEnforcementHeights[6])
-            || (receiver.scriptPubKey.addresses[0] === config.fluxapps.addressMultisigB && blockDataVerbose.height >= config.fluxapps.multisigAddressChange)
-            || (receiver.scriptPubKey.addresses[0] === config.fluxapps.addressDevelopment && config.development)) { // DEVELOPMENT MODE
+          if (chainUtilities.isAppPaymentReceiver(receiver.scriptPubKey.addresses[0], blockDataVerbose.height)) {
             // it is an app message. Get Satoshi amount
             isFluxAppMessageValue += receiver.valueSat;
           }
-          if (receiver.scriptPubKey.addresses[0] === config.fluxapps.addressMultisig || receiver.scriptPubKey.addresses[0] === config.fluxapps.addressMultisigB) {
-            isReceiverFounation = true;
+          if (isRecognizedMessageSigner(receiver.scriptPubKey.addresses[0], blockDataVerbose.height)) {
+            receiverIsRecognizedSigner = true;
           }
         }
         if (receiver.scriptPubKey.asm) {
@@ -534,15 +555,17 @@ async function processInsight(blockDataVerbose, database) {
           }
         }
       }
-      // check for softForks
-      const isSoftFork = isSenderFoundation && isReceiverFounation && message;
+      // check for softForks — coarse filter: a recognized signer self-send carrying
+      // an OP_RETURN. The per-type authority checks inside processSoftFork enforce
+      // which signer may publish which message type.
+      const isSoftFork = senderIsRecognizedSigner && receiverIsRecognizedSigner && message;
       if (isSoftFork) {
         try {
           const asmField = tx.vout.find((v) => v.scriptPubKey && v.scriptPubKey.asm);
           const rawBytes = asmField ? decodeMessageBytes(asmField.scriptPubKey.asm) : null;
           if (rawBytes) {
             // eslint-disable-next-line no-await-in-loop
-            await processSoftFork(tx.txid, blockDataVerbose.height, rawBytes, isSenderFoundation, tx);
+            await processSoftFork(tx.txid, blockDataVerbose.height, rawBytes, senderIsLegacyAuthority, tx);
           }
         } catch (error) {
           log.error('Error processing soft fork message:', error);
@@ -634,27 +657,25 @@ async function processStandard(blockDataVerbose, database) {
     if (tx.version < 5 && tx.version > 0) {
       let message = '';
       let isFluxAppMessageValue = 0;
-      let isSenderFoundation = false;
-      let isReceiverFounation = false;
+      let senderIsRecognizedSigner = false;
+      let senderIsLegacyAuthority = false;
+      let receiverIsRecognizedSigner = false;
 
       const addresses = [];
       tx.senders.forEach((sender) => {
         addresses.push(sender.address);
-        if (sender.address === config.fluxapps.addressMultisig || sender.address === config.fluxapps.addressMultisigB) {
-          isSenderFoundation = true;
-        }
+        if (isRecognizedMessageSigner(sender.address, blockDataVerbose.height)) senderIsRecognizedSigner = true;
+        if (isLegacyMessageAuthority(sender.address)) senderIsLegacyAuthority = true;
       });
       tx.vout.forEach((receiver) => {
         if (receiver.scriptPubKey.addresses) { // count for messages
           addresses.push(receiver.scriptPubKey.addresses[0]);
-          if (receiver.scriptPubKey.addresses[0] === config.fluxapps.address
-            || (receiver.scriptPubKey.addresses[0] === config.fluxapps.addressMultisig && blockDataVerbose.height >= config.fluxapps.appSpecsEnforcementHeights[6])
-            || (receiver.scriptPubKey.addresses[0] === config.fluxapps.addressMultisigB && blockDataVerbose.height >= config.fluxapps.multisigAddressChange)) {
+          if (chainUtilities.isAppPaymentReceiver(receiver.scriptPubKey.addresses[0], blockDataVerbose.height)) {
             // it is an app message. Get Satoshi amount
             isFluxAppMessageValue += receiver.valueSat;
           }
-          if (receiver.scriptPubKey.addresses[0] === config.fluxapps.addressMultisig || receiver.scriptPubKey.addresses[0] === config.fluxapps.addressMultisigB) {
-            isReceiverFounation = true;
+          if (isRecognizedMessageSigner(receiver.scriptPubKey.addresses[0], blockDataVerbose.height)) {
+            receiverIsRecognizedSigner = true;
           }
         }
         if (receiver.scriptPubKey.asm) {
@@ -711,14 +732,16 @@ async function processStandard(blockDataVerbose, database) {
           }
         }
       }
-      // check for softForks
-      const isSoftFork = isSenderFoundation && isReceiverFounation && message;
+      // check for softForks — coarse filter: a recognized signer self-send carrying
+      // an OP_RETURN. The per-type authority checks inside processSoftFork enforce
+      // which signer may publish which message type.
+      const isSoftFork = senderIsRecognizedSigner && receiverIsRecognizedSigner && message;
       if (isSoftFork) {
         try {
           const asmField = tx.vout.find((v) => v.scriptPubKey && v.scriptPubKey.asm);
           const rawBytes = asmField ? decodeMessageBytes(asmField.scriptPubKey.asm) : null;
           if (rawBytes) {
-            await processSoftFork(tx.txid, blockDataVerbose.height, rawBytes, isSenderFoundation, tx);
+            await processSoftFork(tx.txid, blockDataVerbose.height, rawBytes, senderIsLegacyAuthority, tx);
           }
         } catch (error) {
           log.error('Error processing soft fork message:', error);
@@ -1026,9 +1049,18 @@ function getPriceSpecForHeight(priceSpecs, height) {
 }
 
 async function bootstrapSoftForks(currentDaemonHeight) {
-  const multisigAddresses = [config.fluxapps.addressMultisig, config.fluxapps.addressMultisigB];
+  // Phase 1 — the STATIC recognized signers: the legacy payment multisigs and the
+  // v9 message authority. Finds legacy price + PriceMessage/PriceModifier/OracleKey/
+  // Marketplace/PolicyGroup. TODO: RateMessages are signed by the dynamic oracle
+  // address (rotated via OracleKeyMessage), so a cold rebuild also needs a phase-2
+  // scan of the discovered oracle addresses — see
+  // fluxModels fluxos/BOOTSTRAP_ORACLE_RATE_HISTORY_REBUILD.md.
+  const signerAddresses = [
+    ...chainUtilities.legacyMessageAuthorities(),
+    config.fluxapps.messageAuthorityAddress,
+  ].filter(Boolean);
   const deltaResult = await daemonServiceUtils.executeCall('getaddressdeltas', [{
-    addresses: multisigAddresses,
+    addresses: signerAddresses,
     start: config.fluxapps.epochstart,
     end: currentDaemonHeight,
   }]);
@@ -1050,10 +1082,10 @@ async function bootstrapSoftForks(currentDaemonHeight) {
   }
 
   if (selfSendTxids.length === 0) return;
-  log.info(`Bootstrap: Found ${selfSendTxids.length} foundation self-send transactions, checking for soft forks`);
+  log.info(`Bootstrap: Found ${selfSendTxids.length} recognized-signer self-send transactions, checking for soft forks`);
 
   const BATCH_SIZE = 500;
-  const multisigSet = new Set(multisigAddresses);
+  const signerSet = new Set(signerAddresses);
   let totalForks = 0;
   for (let i = 0; i < selfSendTxids.length; i += BATCH_SIZE) {
     const batch = selfSendTxids.slice(i, i + BATCH_SIZE);
@@ -1065,17 +1097,19 @@ async function bootstrapSoftForks(currentDaemonHeight) {
     for (const response of batchResult.data) {
       if (response.error || !response.result) continue;
       const tx = response.result;
-      let senderFoundation = false;
-      let receiverFoundation = false;
+      let senderRecognized = false;
+      let senderIsLegacyAuthority = false;
+      let receiverRecognized = false;
       let message = '';
 
       for (const vin of (tx.vin || [])) {
-        if (vin.address && multisigSet.has(vin.address)) { senderFoundation = true; break; }
+        if (vin.address && signerSet.has(vin.address)) senderRecognized = true;
+        if (vin.address && isLegacyMessageAuthority(vin.address)) senderIsLegacyAuthority = true;
       }
       for (const vout of tx.vout) {
         if (vout.scriptPubKey.addresses) {
           for (const addr of vout.scriptPubKey.addresses) {
-            if (multisigSet.has(addr)) receiverFoundation = true;
+            if (signerSet.has(addr)) receiverRecognized = true;
           }
         }
         if (vout.scriptPubKey.asm) {
@@ -1084,12 +1118,12 @@ async function bootstrapSoftForks(currentDaemonHeight) {
         }
       }
 
-      if (senderFoundation && receiverFoundation && message) {
+      if (senderRecognized && receiverRecognized && message) {
         const asmField = tx.vout.find((v) => v.scriptPubKey && v.scriptPubKey.asm);
         const rawBytes = asmField ? decodeMessageBytes(asmField.scriptPubKey.asm) : null;
         if (rawBytes) {
           // eslint-disable-next-line no-await-in-loop
-          await processSoftFork(tx.txid, tx.height, rawBytes, senderFoundation, tx);
+          await processSoftFork(tx.txid, tx.height, rawBytes, senderIsLegacyAuthority, tx);
           totalForks += 1;
         }
       }
@@ -1109,10 +1143,7 @@ function processBootstrapTx(tx, priceSpecs, seenHashes, hashBatch) {
   for (const vout of tx.vout) {
     if (vout.scriptPubKey.addresses) {
       const addr = vout.scriptPubKey.addresses[0];
-      if (addr === config.fluxapps.address
-        || (addr === config.fluxapps.addressMultisig && height >= config.fluxapps.appSpecsEnforcementHeights[6])
-        || (addr === config.fluxapps.addressMultisigB && height >= config.fluxapps.multisigAddressChange)
-        || (addr === config.fluxapps.addressDevelopment && config.development)) {
+      if (chainUtilities.isAppPaymentReceiver(addr, height)) {
         appValue += vout.valueSat;
       }
     }
@@ -1136,14 +1167,8 @@ function processBootstrapTx(tx, priceSpecs, seenHashes, hashBatch) {
 }
 
 async function bootstrapAppHashes(currentDaemonHeight) {
-  const appAddresses = [
-    config.fluxapps.address,
-    config.fluxapps.addressMultisig,
-    config.fluxapps.addressMultisigB,
-  ];
-  if (config.development) {
-    appAddresses.push(config.fluxapps.addressDevelopment);
-  }
+  // Every payment-collection address (the dev receiver is only in the array on dev builds).
+  const appAddresses = config.fluxapps.appPaymentAddresses.map((entry) => entry.address);
 
   log.info(`Bootstrap: Fetching txids for ${appAddresses.length} app addresses from height ${config.fluxapps.epochstart} to ${currentDaemonHeight}`);
 

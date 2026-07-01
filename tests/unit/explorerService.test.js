@@ -2104,7 +2104,7 @@ describe('explorerService tests', () => {
         vout: [{
           valueSat: 500000000,
           scriptPubKey: {
-            addresses: [config.fluxapps.address],
+            addresses: [config.fluxapps.appPaymentAddresses[0].address],
             asm: 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031',
           },
         }],
@@ -2131,7 +2131,7 @@ describe('explorerService tests', () => {
 
     it('should skip tx below minPrice', () => {
       const hashBatch = [];
-      explorerService.processBootstrapTx(makeTx({ vout: [{ valueSat: 100, scriptPubKey: { addresses: [config.fluxapps.address], asm: 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031' } }] }), [{ height: -1, minPrice: 1 }], new Set(), hashBatch);
+      explorerService.processBootstrapTx(makeTx({ vout: [{ valueSat: 100, scriptPubKey: { addresses: [config.fluxapps.appPaymentAddresses[0].address], asm: 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031' } }] }), [{ height: -1, minPrice: 1 }], new Set(), hashBatch);
       expect(hashBatch).to.have.length(0);
     });
 
@@ -2147,11 +2147,11 @@ describe('explorerService tests', () => {
     it('should not collect soft forks (handled by bootstrapSoftForks pre-pass)', () => {
       const hashBatch = [];
       const tx = makeTx({
-        vin: [{ address: config.fluxapps.addressMultisig }],
+        vin: [{ address: config.fluxapps.appPaymentAddresses[1].address }],
         vout: [{
           valueSat: 0,
           scriptPubKey: {
-            addresses: [config.fluxapps.addressMultisig],
+            addresses: [config.fluxapps.appPaymentAddresses[1].address],
             asm: 'OP_RETURN 705f302e30315f302e30315f302e3030345f302e30315f302e345f302e385f302e34',
           },
         }],
@@ -2167,7 +2167,7 @@ describe('explorerService tests', () => {
         vout: [{
           valueSat: 500000000,
           scriptPubKey: {
-            addresses: [config.fluxapps.addressMultisig],
+            addresses: [config.fluxapps.appPaymentAddresses[1].address],
             asm: 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031',
           },
         }],
@@ -2218,8 +2218,8 @@ describe('explorerService tests', () => {
       executeBatchCallStub.resolves({
         status: 'success',
         data: [
-          { id: 0, result: makeRpcTx('tx1', 700000, config.fluxapps.address, 500000000, hashHex1), error: null },
-          { id: 1, result: makeRpcTx('tx2', 700001, config.fluxapps.address, 500000000, hashHex2), error: null },
+          { id: 0, result: makeRpcTx('tx1', 700000, config.fluxapps.appPaymentAddresses[0].address, 500000000, hashHex1), error: null },
+          { id: 1, result: makeRpcTx('tx2', 700001, config.fluxapps.appPaymentAddresses[0].address, 500000000, hashHex2), error: null },
         ],
       });
 
@@ -2251,7 +2251,7 @@ describe('explorerService tests', () => {
       executeBatchCallStub.resolves({
         status: 'success',
         data: [
-          { id: 0, result: makeRpcTx('tx1', 700000, config.fluxapps.address, 500000000), error: null },
+          { id: 0, result: makeRpcTx('tx1', 700000, config.fluxapps.appPaymentAddresses[0].address, 500000000), error: null },
           { id: 1, result: null, error: { code: -5, message: 'Not found' } },
         ],
       });
@@ -2266,8 +2266,8 @@ describe('explorerService tests', () => {
       executeBatchCallStub.resolves({
         status: 'success',
         data: [
-          { id: 0, result: makeRpcTx('tx1', 700000, config.fluxapps.address, 500000000), error: null },
-          { id: 1, result: makeRpcTx('tx2', 700001, config.fluxapps.address, 500000000), error: null },
+          { id: 0, result: makeRpcTx('tx1', 700000, config.fluxapps.appPaymentAddresses[0].address, 500000000), error: null },
+          { id: 1, result: makeRpcTx('tx2', 700001, config.fluxapps.appPaymentAddresses[0].address, 500000000), error: null },
         ],
       });
 
@@ -2290,7 +2290,7 @@ describe('explorerService tests', () => {
             result: {
               txid: `tx${i + j}`, version: 1, height: 700000 + i + j,
               vin: [{ address: 't1Sender' }],
-              vout: [{ valueSat: 500000000, scriptPubKey: { addresses: [config.fluxapps.address], asm: `OP_RETURN ${hexHash}` } }],
+              vout: [{ valueSat: 500000000, scriptPubKey: { addresses: [config.fluxapps.appPaymentAddresses[0].address], asm: `OP_RETURN ${hexHash}` } }],
             },
             error: null,
           });
@@ -2307,8 +2307,8 @@ describe('explorerService tests', () => {
 
   describe('bootstrapSoftForks tests', () => {
     const config = require('config');
-    const multisigA = config.fluxapps.addressMultisig;
-    const multisigB = config.fluxapps.addressMultisigB;
+    const multisigA = config.fluxapps.appPaymentAddresses[1].address;
+    const multisigB = config.fluxapps.appPaymentAddresses[2].address;
     let executeCallStub;
     let executeBatchCallStub;
     let updateOneStub;

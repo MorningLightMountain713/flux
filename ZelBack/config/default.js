@@ -242,19 +242,27 @@ module.exports = {
       8: isDevelopment ? 1921500 : 1932380, // v8, brings enterprise apps using arcaneOS features to run these apps. // Around June 23th
       9: isDevelopment ? 2630000 : 2791000, // v9, Bedrock spec redesign: class hierarchy, contentHash signing, named ports, placement, time-based TTL
     },
-    address: 't1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6',
-    addressMultisig: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX',
-    addressMultisigB: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX',
-    addressDevelopment: 't1Mzja9iJcEYeW5B4m4s1tJG8M42odFZ16A',
+    // App-payment collection addresses, in activation-height order. A payment
+    // counts toward an app's fee when its receiver is one of these and the block
+    // is at or past that entry's activeFromHeight; new deployments pay to the
+    // latest active one. Entries flagged legacyMessageAuthority are also the
+    // pre-v9 soft-fork message signer (the v6+ multisigs); the t1 base address
+    // never was. The development-only receiver is present only on dev builds, so
+    // it can never be a valid mainnet receiver.
+    appPaymentAddresses: [
+      { address: 't1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6', activeFromHeight: 0 },
+      { address: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX', activeFromHeight: 1300000, legacyMessageAuthority: true }, // v6
+      { address: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX', activeFromHeight: 1670000, legacyMessageAuthority: true },
+      ...(isDevelopment ? [{ address: 't1Mzja9iJcEYeW5B4m4s1tJG8M42odFZ16A', activeFromHeight: 0 }] : []),
+    ],
     // Authority for the v9 foundation soft-fork messages (PriceMessage,
     // PriceModifierMessage, OracleKeyMessage, MarketplacePricingMessage,
     // PolicyGroupMessage). Deliberately separate from the payment-collection
-    // multisig above. Empty = fail-closed (those messages are rejected).
+    // addresses above. Empty = fail-closed (those messages are rejected).
     // TEST VALUE (a key we control on the dev oracle server) — MUST be changed
     // to the production foundation authority address before mainnet.
     // See fluxModels PRICING_ORACLE / ROLLOUT docs.
     messageAuthorityAddress: 't1eW962yoqbfCYKzFYaZJVYzeopSmhaKL4f',
-    multisigAddressChange: 1670000,
     epochstart: 694000,
     publicepochstart: 705000,
     portMinLegacy: 31000, // ports 30000 - 30999 are reserved for local applications
