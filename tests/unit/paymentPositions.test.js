@@ -18,7 +18,7 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 const delta = (txid, height, blockindex, satoshis = 500000000) => ({
-  txid, height, blockindex, satoshis, index: 0, address: config.fluxapps.address,
+  txid, height, blockindex, satoshis, index: 0, address: config.fluxapps.appPaymentAddresses[0].address,
 });
 
 describe('app payment positions', () => {
@@ -33,23 +33,8 @@ describe('app payment positions', () => {
   });
 
   describe('appPaymentAddresses', () => {
-    let developmentBefore;
-
-    beforeEach(() => {
-      developmentBefore = config.development;
-    });
-
-    afterEach(() => {
-      config.development = developmentBefore;
-    });
-
-    it('asks for every payment address, and the development address only on a development node', () => {
-      config.development = false;
-      expect(appPaymentAddresses()).to.deep.equal([
-        config.fluxapps.address, config.fluxapps.addressMultisig, config.fluxapps.addressMultisigB,
-      ]);
-      config.development = true;
-      expect(appPaymentAddresses()).to.include(config.fluxapps.addressDevelopment);
+    it('asks for every payment-collection address', () => {
+      expect(appPaymentAddresses()).to.deep.equal(config.fluxapps.appPaymentAddresses.map((entry) => entry.address));
     });
   });
 

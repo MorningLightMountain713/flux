@@ -3,14 +3,12 @@ const config = require('config');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 
 /**
- * The addresses an app message's payment is made to. The development address
- * receives payments only on a development node.
+ * The addresses an app message's payment is made to: every payment-collection
+ * address (the development receiver is in the array only on a development node).
  * @returns {string[]}
  */
 function appPaymentAddresses() {
-  const addresses = [config.fluxapps.address, config.fluxapps.addressMultisig, config.fluxapps.addressMultisigB];
-  if (config.development) addresses.push(config.fluxapps.addressDevelopment);
-  return addresses;
+  return config.fluxapps.appPaymentAddresses.map((entry) => entry.address);
 }
 
 /**

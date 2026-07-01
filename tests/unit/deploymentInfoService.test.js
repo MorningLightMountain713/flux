@@ -33,7 +33,7 @@ describe('deploymentInfoService tests', () => {
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
-      expect(response.data.address).to.equal(config.fluxapps.address);
+      expect(response.data.address).to.equal(config.fluxapps.appPaymentAddresses[0].address);
       expect(response.data.portMin).to.exist;
       expect(response.data.portMax).to.exist;
       expect(response.data.price).to.be.an('array');
@@ -62,7 +62,7 @@ describe('deploymentInfoService tests', () => {
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
-      expect(response.data.address).to.equal(config.fluxapps.addressMultisig);
+      expect(response.data.address).to.equal(config.fluxapps.appPaymentAddresses[1].address);
     });
 
     it('should use multisig B address after change height', async () => {
@@ -71,7 +71,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      const changeHeight = config.fluxapps.multisigAddressChange;
+      const changeHeight = config.fluxapps.appPaymentAddresses[2].activeFromHeight;
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         status: 'success',
@@ -88,7 +88,7 @@ describe('deploymentInfoService tests', () => {
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
-      expect(response.data.address).to.equal(config.fluxapps.addressMultisigB);
+      expect(response.data.address).to.equal(config.fluxapps.appPaymentAddresses[2].address);
     });
 
     it('should include all deployment configuration', async () => {
