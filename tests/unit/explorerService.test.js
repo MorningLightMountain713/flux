@@ -2461,14 +2461,33 @@ describe('explorerService tests', () => {
     const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
     afterEach(() => sinon.restore());
 
+    // A real mainnet oracle RateMessage scriptSig: a P2PKH spend (72-byte signature
+    // push tagged SIGHASH_ALL, then the 33-byte pubkey). The authority checks require
+    // the input signature to commit to all outputs, so a valid scriptSig is needed.
+    const ALL_SCRIPTSIG = '483045022100d8a57c5364a2eb062a6fdac519d665074a1a075dff2215eb15e17c4dfb170eef02203b96971b6a07f880a2d946de2155e3a296d3ebf02d1754cba1f4a648fc2e4591012103a9329557d633a7b261290f7c3b17506d460c3fcfd0cb8fd9339b27d4f583eca7';
+    // Same signature re-tagged SIGHASH_NONE (hashtype byte 01 -> 02): binds inputs,
+    // not outputs, so it must be rejected.
+    const NONE_SCRIPTSIG = `${ALL_SCRIPTSIG.slice(0, 144)}02${ALL_SCRIPTSIG.slice(146)}`;
+    const allSig = () => ({ scriptSig: { hex: ALL_SCRIPTSIG } });
+
     describe('isMessageAuthority', () => {
-      it('accepts a tx with an input from the configured authority address', () => {
+      it('accepts a tx whose authority input signs all outputs (SIGHASH_ALL)', () => {
         const addr = config.fluxapps.messageAuthorityAddress;
-        const tx = { vin: [{ address: 'tSomeoneElse' }, { address: addr }] };
+        const tx = { vin: [{ address: 'tSomeoneElse', ...allSig() }, { address: addr, ...allSig() }] };
         expect(explorerService.isMessageAuthority(tx)).to.equal(true);
       });
       it('rejects a tx with no input from the authority address', () => {
-        const tx = { vin: [{ address: 'tSomeoneElse' }] };
+        const tx = { vin: [{ address: 'tSomeoneElse', ...allSig() }] };
+        expect(explorerService.isMessageAuthority(tx)).to.equal(false);
+      });
+      it('rejects when the authority input does not sign all outputs (SIGHASH_NONE)', () => {
+        const addr = config.fluxapps.messageAuthorityAddress;
+        const tx = { vin: [{ address: addr, scriptSig: { hex: NONE_SCRIPTSIG } }] };
+        expect(explorerService.isMessageAuthority(tx)).to.equal(false);
+      });
+      it('rejects when the authority input carries no signature', () => {
+        const addr = config.fluxapps.messageAuthorityAddress;
+        const tx = { vin: [{ address: addr }] };
         expect(explorerService.isMessageAuthority(tx)).to.equal(false);
       });
     });
@@ -2477,26 +2496,31 @@ describe('explorerService tests', () => {
       // pubKeyToAddr(pubkeyHex, '1cb8') === oracleAddr (Flux t1 P2PKH derivation)
       const pubkeyHex = '02c7f5b5e6e7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4';
       const oracleAddr = 't1NfrwmYygJYwm4krB9KkhnBNLRffuCqvw8';
+      const oracleKeyInForce = () => sinon.stub(priceOracleState, 'getOracleKeyHistory').returns({
+        resolveAt: () => ({ pubkey: Buffer.from(pubkeyHex, 'hex') }),
+      });
 
-      it('accepts a RateMessage tx signed by the on-chain oracle key', () => {
-        sinon.stub(priceOracleState, 'getOracleKeyHistory').returns({
-          resolveAt: () => ({ pubkey: Buffer.from(pubkeyHex, 'hex') }),
-        });
-        const tx = { vin: [{ address: oracleAddr }] };
+      it('accepts a RateMessage tx signed by the on-chain oracle key with SIGHASH_ALL', () => {
+        oracleKeyInForce();
+        const tx = { vin: [{ address: oracleAddr, ...allSig() }] };
         expect(explorerService.isOracleSigner(tx, 100)).to.equal(true);
       });
 
       it('rejects when no oracle key is in force at the height', () => {
         sinon.stub(priceOracleState, 'getOracleKeyHistory').returns({ resolveAt: () => null });
-        const tx = { vin: [{ address: oracleAddr }] };
+        const tx = { vin: [{ address: oracleAddr, ...allSig() }] };
         expect(explorerService.isOracleSigner(tx, 100)).to.equal(false);
       });
 
       it('rejects a tx not signed by the oracle key', () => {
-        sinon.stub(priceOracleState, 'getOracleKeyHistory').returns({
-          resolveAt: () => ({ pubkey: Buffer.from(pubkeyHex, 'hex') }),
-        });
-        const tx = { vin: [{ address: 't1SomeoneElse' }] };
+        oracleKeyInForce();
+        const tx = { vin: [{ address: 't1SomeoneElse', ...allSig() }] };
+        expect(explorerService.isOracleSigner(tx, 100)).to.equal(false);
+      });
+
+      it('rejects an oracle input that does not sign all outputs (SIGHASH_NONE)', () => {
+        oracleKeyInForce();
+        const tx = { vin: [{ address: oracleAddr, scriptSig: { hex: NONE_SCRIPTSIG } }] };
         expect(explorerService.isOracleSigner(tx, 100)).to.equal(false);
       });
     });
