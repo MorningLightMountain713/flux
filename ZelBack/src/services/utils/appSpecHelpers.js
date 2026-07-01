@@ -3,7 +3,7 @@ const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
-const { resolveSpec } = require('./specCutover');
+const { resolveSpec, resolveInstantiatedSpec } = require('./specCutover');
 const { getSpecPolicy } = require('./specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { buildPricingEngine, resolveMarketplacePricingCtx } = require('../pricing/buildPricingEngine');
@@ -102,8 +102,8 @@ async function getAppFluxOnChainPrice(appSpecification) {
   const breakdown = await engine.price(spec, {
     height: daemonHeight,
     duration: spec.ttl || 0,
-    // Real encryption bit drives the encryptedSpec fee. resolveSpec exposes it:
-    // a cleartext spec reports false, a decrypted-from-encrypted spec reports true.
+    // Real encryption bit drives the encryptedSpec fee: a cleartext spec reports
+    // false, a DecryptedCanonicalSpec (decrypted-from-encrypted) reports true.
     isEncrypted: spec.isEncrypted,
     ...resolveMarketplacePricingCtx(spec, daemonHeight),
   });
@@ -124,9 +124,7 @@ async function getAppFluxOnChainPrice(appSpecification) {
  * @returns {Promise<number>} price in FLUX (decimal)
  */
 async function getAppFluxOnChainUpdatePrice(spec, existing, daemonHeight) {
-  const prevSpec = existing.isEncrypted
-    ? await resolveSpec(existing.serialize())
-    : existing.spec;
+  const prevSpec = await resolveInstantiatedSpec(existing);
   const prevHeight = existing.height;
 
   const oldEngine = await buildPricingEngine(prevHeight);
@@ -208,9 +206,7 @@ async function checkFreeAppUpdate(spec, daemonHeight) {
   const instantiated = await appsRepository.getGlobalAppInfo(spec.name);
   if (!instantiated) return false;
 
-  const prevSpec = instantiated.isEncrypted
-    ? await resolveSpec(instantiated.serialize())
-    : instantiated.spec;
+  const prevSpec = await resolveInstantiatedSpec(instantiated);
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   const newRemainingSeconds = spec.version >= 9

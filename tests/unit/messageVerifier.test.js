@@ -93,6 +93,8 @@ function makeBaseStubs(overrides = {}) {
     },
     '../utils/specCutover': {
       resolveSpec: sinon.stub().resolvesArg(0),
+      // cleartext seam behaviour: a non-encrypted instance resolves to its own spec
+      resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.spec),
     },
     '../appDatabase/appsRepository': {
       getPermanentMessage: sinon.stub().resolves(null),
@@ -544,8 +546,8 @@ describe('messageVerifier tests', () => {
         serialize: sinon.stub().returns(serializedEvent),
         toInstantiatedSpec: sinon.stub().returns({}),
       };
-      // Encrypted installed spec: spec is the encrypted wrapper (no components);
-      // serialize() yields the wire form fed to resolveSpec.
+      // Encrypted installed spec: spec is the encrypted wrapper (no components).
+      // resolveInstantiatedSpec decrypts the held instance — never serialized.
       const wireForm = { name: 'encapp', version: 8, enterprise: 'base64blob' };
       const mockInstantiated = {
         name: 'encapp',
@@ -558,8 +560,8 @@ describe('messageVerifier tests', () => {
       const decryptedSpec = { name: 'encapp', version: 8, expire: 88000 };
 
       const { stubs } = makeBaseStubs();
-      const resolveSpecStub = sinon.stub().resolves(decryptedSpec);
-      stubs['../utils/specCutover'].resolveSpec = resolveSpecStub;
+      const resolveInstantiatedStub = sinon.stub().resolves(decryptedSpec);
+      stubs['../utils/specCutover'].resolveInstantiatedSpec = resolveInstantiatedStub;
       stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
         type: 'fluxappregister', version: 1, appSpecifications: wireForm,
         hash: 'encReg', timestamp: Date.now(), signature: 'sig',
@@ -577,8 +579,8 @@ describe('messageVerifier tests', () => {
       const result = await mv.checkAndRequestApp('encReg', 'txid', 2000000, 200000000, null, 2);
 
       expect(result).to.be.true;
-      // resolveSpec called with the encrypted wire form (decrypt before pricing)
-      expect(resolveSpecStub.calledOnceWith(wireForm)).to.be.true;
+      // the held encrypted instance is decrypted to its cleartext pricing view
+      expect(resolveInstantiatedStub.calledOnceWith(mockInstantiated)).to.be.true;
       // pricing ran against the decrypted spec, never the encrypted wrapper
       expect(appPriceStub.calledOnce).to.be.true;
       expect(appPriceStub.firstCall.args[0]).to.equal(decryptedSpec);

@@ -1,18 +1,19 @@
 const appsRepository = require('../appDatabase/appsRepository');
 const { appsFolder } = require('../utils/appConstants');
 const { getSpecBackend } = require('../utils/specLibs');
-const { resolveSpec } = require('../utils/specCutover');
+const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const log = require('../../lib/log');
 
 async function toDeployment(instantiated) {
-  const spec = instantiated.isEncrypted
-    ? await resolveSpec(instantiated.serialize())
-    : instantiated.spec;
+  const resolved = await resolveInstantiatedSpec(instantiated);
+  if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
 
-  if (!spec) throw new Error(`Could not resolve spec for ${instantiated.name}`);
+  // Encrypted apps resolve to a DecryptedCanonicalSpec; DeploymentSpec projects
+  // from the real spec instance it wraps (its guard rejects a still-sealed spec).
+  const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
 
   const { DeploymentSpec } = await getSpecBackend();
-  return DeploymentSpec.fromSpec(spec, appsFolder);
+  return DeploymentSpec.fromSpec(runtimeSpec, appsFolder);
 }
 
 async function listInstalledDeployments() {
