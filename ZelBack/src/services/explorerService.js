@@ -1,5 +1,6 @@
 const config = require('config');
 const EventEmitter = require('node:events');
+const secp256k1 = require('secp256k1');
 
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
@@ -314,10 +315,42 @@ const FLUX_T1_PUBKEY_HASH = '1cb8';
 // multisig (addressMultisig/B), which remains the legacy `p_` authority and the
 // app-payment receiver. None of these v9 message types exist on chain yet, so
 // keying them off a dedicated address breaks no history.
+// SIGHASH byte semantics: only a signature whose base type is SIGHASH_ALL commits
+// to every output — including the OP_RETURN carrying the message. NONE/SINGLE leave
+// the OP_RETURN unbound (an attacker could graft a different message onto a partially
+// signed input); ANYONECANPAY (0x80) only frees the OTHER inputs, so it still binds
+// all outputs and is accepted.
+const SIGHASH_ALL = 0x01;
+const SIGHASH_ANYONECANPAY = 0x80;
+
+// Whether a P2PKH input's signature commits to all of the transaction's outputs.
+// The scriptSig's first element is a direct push of the DER signature plus a trailing
+// sighash byte; the DER body is validated with secp256k1 (rejecting anything that
+// isn't a real ECDSA signature), so the sighash byte we read is meaningful. Relying on
+// the address alone would trust the chain's tx-signature validation without pinning the
+// sighash type. Fail-closed: any parse failure returns false.
+function inputSignsAllOutputs(vin) {
+  const hex = vin && vin.scriptSig && vin.scriptSig.hex;
+  if (typeof hex !== 'string') return false;
+  try {
+    const script = Buffer.from(hex, 'hex');
+    const pushLen = script[0];
+    // A signature is always a single-byte-opcode direct push (opcode 0x01–0x4b);
+    // OP_PUSHDATA* or a bare opcode is not a standard signed input.
+    if (pushLen < 1 || pushLen >= 0x4c || script.length < 1 + pushLen) return false;
+    const signature = script.subarray(1, 1 + pushLen);
+    const hashType = signature[signature.length - 1];
+    secp256k1.signatureImport(signature.subarray(0, -1)); // throws on non-DER
+    return (hashType & ~SIGHASH_ANYONECANPAY) === SIGHASH_ALL;
+  } catch (error) {
+    return false;
+  }
+}
+
 function isMessageAuthority(tx) {
   const authAddr = config.fluxapps.messageAuthorityAddress;
   if (!authAddr) return false;
-  return tx.vin.some((vin) => vin.address === authAddr);
+  return tx.vin.some((vin) => vin.address === authAddr && inputSignsAllOutputs(vin));
 }
 
 // A RateMessage (0x03) is authorised only if its transaction is signed by the
@@ -330,7 +363,7 @@ function isOracleSigner(tx, height) {
   const oracleKey = history.resolveAt(height);
   if (!oracleKey || !oracleKey.pubkey) return false;
   const oracleAddr = pubKeyToAddr(Buffer.from(oracleKey.pubkey).toString('hex'), FLUX_T1_PUBKEY_HASH);
-  return tx.vin.some((vin) => vin.address === oracleAddr);
+  return tx.vin.some((vin) => vin.address === oracleAddr && inputSignsAllOutputs(vin));
 }
 
 async function processSoftFork(txid, height, bytes, isSenderFoundation, tx) {
