@@ -61,12 +61,6 @@ export async function injectBlock(tx) {
   return post('/advance-block', { block: { tx: [tx] } });
 }
 
-// Seed a raw transaction so getrawtransaction/getSender resolves it (used to give
-// an injected tx's input a resolvable sender address on the processStandard path).
-export async function seedTransaction(txid, tx) {
-  return post('/seed-transaction', { txid, tx });
-}
-
 // -- Per-node status --
 
 export async function setNodeStatus(ip, status) {
