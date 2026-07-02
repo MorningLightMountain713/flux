@@ -25,11 +25,17 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 //      gossip) converges its register to the network's higher version via the two-step
 //      in-band reconcile (content:manifestReconciled), not a fresh gossip that never re-fires.
 //
-// nodes:10 so a partition leaves both sides comfortably above the harness peer thresholds
-// (appSyncPeerThreshold 2 / appSyncDegradedThreshold 1) — the connected side keeps
-// gossiping while the isolated side degrades, then reconciles on reconnect. arcane:true so
-// the nodes accept content apps and run the benchmark crypto. Assert on the SSE bus plus
-// the real appcontentmanifests rows (read directly from the shared mongod), never logs.
+// nodes:10 so a partition leaves the connected side comfortably above the peer thresholds
+// while the isolated side drops to zero peers and degrades. Two suite config overrides:
+// appSyncPeerThreshold 3 — each isolated node has exactly two fellow-isolated ring peers,
+// and a recovery edge fired on those alone would run the manifest resync against peers
+// that cannot know the newer version; confirmation windows — the harness defaults (10s
+// stale / 20s expired) sit inside a held partition and would remove apps mid-test, while
+// the prod windows are hours. arcane:true so the nodes accept content apps and run the
+// benchmark crypto. Assert on the SSE bus plus the real appcontentmanifests rows (read
+// directly from the shared mongod). One exception: the partition hold gates on the
+// isolated nodes' own docker log stream, because SSE cannot cross a partition (the
+// published-port route dies with the container's network endpoint).
 
 // Count buffered events of `name` after `afterId` matching `predicate` on one node.
 function countEvents(node, name, afterId, predicate = () => true) {
@@ -55,7 +61,14 @@ describe('content propagation across a multi-node fleet', function () {
   before(async function () {
     this.timeout(540000);
     env = await createTestEnv({
-      hookCtx: this, nodes: 10, tickerAutostart: false, arcane: true,
+      hookCtx: this,
+      nodes: 10,
+      tickerAutostart: false,
+      arcane: true,
+      configOverrides: {
+        confirmation: { daemonStaleMs: 300000, daemonExpiredMs: 600000 },
+        fluxapps: { appSyncPeerThreshold: 3 },
+      },
     });
     await bootAndPeer(env, { pricing: true });
     await resetFluxDrive();
@@ -223,10 +236,13 @@ describe('content propagation across a multi-node fleet', function () {
     );
 
     // Partition: isolate the last three nodes from the docker network entirely. The
-    // connected seven keep >=2 peers (above the degraded threshold) and keep gossiping;
-    // the three isolated nodes drop to 0 peers and degrade.
+    // connected seven keep gossiping; the isolated three drop to 0 peers and degrade.
+    // Event cursors are captured pre-partition: disconnect wipes the client buffer and
+    // reconnect replays server history, so afterId 0 would match stale events.
     const isolated = [7, 8, 9];
     const connected = [0, 1, 2, 3, 4, 5, 6];
+    const reconciledAfterIds = isolated.map((i) => env.clients[i].getLastEventId());
+    const degradedBefore = isolated.map((i) => env.nodeLogCount(i, 'Degraded, pausing spawner'));
     for (const i of isolated) {
       await env.disconnectNode(i);
     }
@@ -247,23 +263,17 @@ describe('content propagation across a multi-node fleet', function () {
       expect(row && row.version, `isolated node ${i} still at v2`).to.equal(2);
     }
 
-    // Hold the partition until the fleet has DETECTED it: socket death is
-    // pong-timeout driven (wsPingIntervalMs 2s x 3 missed pongs ~ 6s here), and
-    // healing before detection means the isolated nodes never leave READY and
-    // never resync. The connected side's peers:removed for each isolated address
-    // is the live observable (the isolated side runs the same ping cadence, and
-    // the post-heal reconcile waits fail loudly if its own detection lagged). Any
-    // connected node removing the address counts — the mesh is dense but not
-    // necessarily complete.
-    const isolatedAddrs = isolated.map((i) => `198.18.0.${10 + i}`);
-    await Promise.all(isolatedAddrs.map((addr) => Promise.any(
-      connected.map((c) => env.clients[c].waitForEvent(
-        'peers:removed',
-        (d) => d.ip === addr,
-        60000,
-        { afterId: 0 },
-      )),
-    )));
+    // Hold the partition until every isolated node has itself DEGRADED (peer count
+    // hit zero, via pong timeout on all eight of its sockets). Healing any earlier
+    // leaves surviving sockets holding the count above the degraded threshold, and
+    // a node that never degrades never re-arms the resync. The gate reads each
+    // node's own transition off the docker log stream — the one channel that
+    // crosses a partition — against a pre-partition count so only THIS partition's
+    // transition satisfies it.
+    await waitFor(
+      () => isolated.every((i, k) => env.nodeLogCount(i, 'Degraded, pausing spawner') > degradedBefore[k]),
+      { timeout: 60000, interval: 1000, label: 'all isolated nodes DEGRADED' },
+    );
 
     // Heal the partition. The reconnected nodes re-peer, cross the peer threshold, and
     // the orchestrator runs DEGRADED -> RESYNCING -> the two-step manifest reconcile.
@@ -275,11 +285,11 @@ describe('content propagation across a multi-node fleet', function () {
     // Convergence is via RECONCILE: each isolated node fetches the missing higher version
     // in-band (content:manifestReconciled with fetched>=1). A fresh gossip would not re-fire
     // for a value broadcast while the node was away, so reconcile is the only path here.
-    await Promise.all(isolated.map((i) => env.clients[i].waitForEvent(
+    await Promise.all(isolated.map((i, k) => env.clients[i].waitForEvent(
       'content:manifestReconciled',
       (d) => d.fetched >= 1,
       240000,
-      { afterId: 0 },
+      { afterId: reconciledAfterIds[k] },
     )));
 
     // Real state: the isolated side's appcontentmanifests register caught up to v3.
