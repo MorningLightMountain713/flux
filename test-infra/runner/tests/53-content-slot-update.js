@@ -113,7 +113,7 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
       configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
     await resetFluxDrive();
 
     // pause stays up for the restart/none apps (we only inspect docker StartedAt);

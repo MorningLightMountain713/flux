@@ -36,7 +36,7 @@ describe('content blobs (contentRef): register, upload, provision', function () 
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
       configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
     await pushImage(appName, 'v1');
     await resetFluxDrive();
   });
