@@ -19,6 +19,7 @@ const config = require('config');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
+const { withHostMutationLock } = require('../utils/hostMutationLock');
 const log = require('../../lib/log');
 
 /**
@@ -140,8 +141,14 @@ async function connectComponentToLinkedApps(componentContainerName, instantiated
   // eslint-disable-next-line no-restricted-syntax
   for (const linkedApp of linkedApps) {
     const networkName = `fluxDockerNetwork_${linkedApp}`;
+    // The linked app's network is a CROSS-APP host resource: its removal runs in
+    // the linked app's teardown worker under the node-wide hostMutationLock. Take
+    // the same lock per attach so this connect either lands before that network is
+    // torn down or fails cleanly (rolling back this install) - never racing a
+    // half-removed network. Per-call (leaf) granularity, matching the install
+    // port-open loop; the connect is a single bounded docker call.
     // eslint-disable-next-line no-await-in-loop
-    await dockerService.appDockerNetworkConnect(componentContainerName, networkName);
+    await withHostMutationLock(() => dockerService.appDockerNetworkConnect(componentContainerName, networkName));
     log.info(`Connected ${componentContainerName} to linked app network ${networkName}`);
   }
 }
@@ -182,8 +189,10 @@ async function reconnectLinkedApps(appName) {
       const containerNames = await dockerService.getAppContainerNames(app.name);
       // eslint-disable-next-line no-restricted-syntax
       for (const containerName of containerNames) {
+        // Same-lock attach as connectComponentToLinkedApps: never race a
+        // concurrent teardown removing this network.
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerNetworkConnect(containerName, networkName);
+        await withHostMutationLock(() => dockerService.appDockerNetworkConnect(containerName, networkName));
         log.info(`Reconnected linked app ${containerName} to ${networkName}`);
       }
     } catch (error) {
@@ -222,8 +231,10 @@ async function reconcileAllAppNetworkLinks() {
         const networkName = `fluxDockerNetwork_${linkedApp}`;
         // eslint-disable-next-line no-restricted-syntax
         for (const containerName of containerNames) {
+          // Same-lock attach as connectComponentToLinkedApps: never race a
+          // concurrent teardown removing this network.
           // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerNetworkConnect(containerName, networkName).catch((error) => {
+          await withHostMutationLock(() => dockerService.appDockerNetworkConnect(containerName, networkName)).catch((error) => {
             log.error(`reconcileAllAppNetworkLinks: failed to connect ${containerName} to ${networkName}: ${error.message}`);
           });
         }
