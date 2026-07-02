@@ -15,6 +15,7 @@
  * is `network.mesh`, a separate field.
  */
 
+const config = require('config');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
@@ -57,8 +58,27 @@ function getLinkedApps(instantiated) {
 }
 
 /**
+ * Whether every container belonging to an installed app is currently running.
+ * Docker-listing based (the local DB blanks enterprise compose, so iterating the
+ * spec would miss components), so it works for enterprise apps too. False when
+ * the app has no containers.
+ *
+ * @param {string} appName
+ * @returns {Promise<boolean>}
+ */
+async function isAppRunning(appName) {
+  const containers = await dockerService.getAppContainerObjects(appName);
+  if (!containers || !containers.length) {
+    return false;
+  }
+  return containers.every((container) => container && container.State === 'running');
+}
+
+/**
  * Verifies every app this app is linked to is installed locally and owned by
- * the same owner. Throws otherwise, aborting the install/redeploy.
+ * the same owner; when the node-managed collector lifecycle is enabled, also
+ * that each linked app is actually running. Throws otherwise, aborting or
+ * deferring the install/redeploy.
  *
  * @param {object} instantiated - InstantiatedSpec instance of the parent app
  * @returns {Promise<boolean>} true when all network links are satisfied
@@ -83,6 +103,19 @@ async function checkAppNetworkRequirements(instantiated) {
     }
     if (installed.owner !== instantiated.owner) {
       throw new Error(`App '${linkedApp}' that '${instantiated.name}' must be networked with is owned by a different owner. Installation aborted.`);
+    }
+    // When the node-managed collector lifecycle is on, require the dependency to
+    // be actually running - not merely installed - so this app's docker-network
+    // attach and log routing land on a live container. Tagged transient so
+    // callers defer and retry rather than hard-failing.
+    if (config.fluxapps.manageCollectorLifecycle) {
+      // eslint-disable-next-line no-await-in-loop
+      const running = await isAppRunning(linkedApp);
+      if (!running) {
+        const error = new Error(`App '${linkedApp}' that '${instantiated.name}' must be networked with is installed but not running yet. Installation deferred.`);
+        error.code = 'NETWORK_DEPENDENCY_NOT_READY';
+        throw error;
+      }
     }
   }
   log.info(`App network links satisfied for ${instantiated.name}: ${linkedApps.join(', ')}`);
@@ -246,6 +279,7 @@ async function findLinkedAppLogCollector(instantiated) {
 
 module.exports = {
   getLinkedApps,
+  isAppRunning,
   checkAppNetworkRequirements,
   connectComponentToLinkedApps,
   reconnectLinkedApps,
