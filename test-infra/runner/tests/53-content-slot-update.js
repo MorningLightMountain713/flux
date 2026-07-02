@@ -134,6 +134,16 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
     node.null = await findInstalledIndex(nameNull);
     node.restart = await findInstalledIndex(nameRestart);
     node.signal = await findInstalledIndex(nameSignal);
+
+    // "installed" is the DB row, not a running container. A content update applied
+    // in the install->start window is a legitimate no-reaction (content lands on
+    // disk and the FIRST start reads it), so the reaction tests must only push
+    // once their container is actually running.
+    await Promise.all(Object.entries({ [nameNull]: node.null, [nameRestart]: node.restart, [nameSignal]: node.signal })
+      .map(([name, idx]) => waitFor(
+        async () => (await containerStartedAt(env.clients[idx], name)) !== '',
+        { timeout: 120000, interval: 2000, label: `${name} container running` },
+      )));
   });
 
   after(async function () {
