@@ -259,6 +259,12 @@ describe('appSpawner tests', () => {
         InstallStatus,
         installApplication: opts.installStub ?? sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null }),
       },
+      './appNetworkLinker': {
+        // Default: every candidate's network links are satisfied (matches the real
+        // module's behaviour for apps with no shareWith). Tests that exercise the
+        // readiness selection filter override this stub.
+        checkAppNetworkRequirements: opts.checkAppNetworkRequirements ?? sinon.stub().resolves(true),
+      },
       './appUninstaller': {
         uninstallApplication: sinon.stub().resolves(),
         expireGlobalApplications: sinon.stub().resolves(),
@@ -348,6 +354,51 @@ describe('appSpawner tests', () => {
     it('should pass apps that satisfy placement.matches', async () => {
       const candidate = makeCandidate({ placement: { matches: () => true } });
       buildModule({ candidates: [candidate] });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
+    });
+  });
+
+  describe('shareWith readiness selection filter', () => {
+    function notReadyError() {
+      return Object.assign(new Error("App 'collector' is not installed on this node"), { code: 'NETWORK_DEPENDENCY_NOT_READY' });
+    }
+
+    it('drops a candidate whose shareWith dependency is not ready', async () => {
+      buildModule({
+        candidates: [makeCandidate()],
+        checkAppNetworkRequirements: sinon.stub().rejects(notReadyError()),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('No app currently to be processed'))).to.be.true;
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.false;
+    });
+
+    it('does not error-cache a dropped candidate — it is reconsidered once the dependency appears', async () => {
+      buildModule({
+        candidates: [makeCandidate()],
+        checkAppNetworkRequirements: sinon.stub().rejects(notReadyError()),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.false;
+      expect(globalStateStub.trySpawningGlobalAppCache.has('abc123')).to.be.false;
+      expect(globalStateStub.appsToBeCheckedLater).to.have.lengthOf(0);
+    });
+
+    it('keeps a candidate whose shareWith dependencies are ready', async () => {
+      buildModule({
+        candidates: [makeCandidate()],
+        checkAppNetworkRequirements: sinon.stub().resolves(true),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
+    });
+
+    it('keeps a candidate on a non-NOT_READY error — a real misconfig is handled at install', async () => {
+      buildModule({
+        candidates: [makeCandidate()],
+        checkAppNetworkRequirements: sinon.stub().rejects(new Error('owned by a different owner')),
+      });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
     });

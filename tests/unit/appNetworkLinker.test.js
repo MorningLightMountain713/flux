@@ -95,16 +95,18 @@ describe('appNetworkLinker tests', () => {
       sinon.assert.notCalled(appsRepositoryStub.getInstalledApp);
     });
 
-    it('throws when a linked app is not installed locally', async () => {
+    it('throws NETWORK_DEPENDENCY_NOT_READY when a linked app is not installed locally', async () => {
       appsRepositoryStub.getInstalledApp.resolves(null);
-      await expect(appNetworkLinker.checkAppNetworkRequirements(instSpec({ name: 'appB', shareWith: ['appA'] })))
+      const error = await expect(appNetworkLinker.checkAppNetworkRequirements(instSpec({ name: 'appB', shareWith: ['appA'] })))
         .to.be.rejectedWith(/is not installed on this node/);
+      expect(error.code).to.equal('NETWORK_DEPENDENCY_NOT_READY');
     });
 
-    it('throws when a linked app is owned by a different owner', async () => {
+    it('throws a code-less hard failure when a linked app is owned by a different owner', async () => {
       appsRepositoryStub.getInstalledApp.resolves(instSpec({ name: 'appA', owner: 'owner2' }));
-      await expect(appNetworkLinker.checkAppNetworkRequirements(instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'] })))
+      const error = await expect(appNetworkLinker.checkAppNetworkRequirements(instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'] })))
         .to.be.rejectedWith(/owned by a different owner/);
+      expect(error.code).to.equal(undefined);
     });
 
     it('resolves true when every linked app is installed with the same owner', async () => {

@@ -292,6 +292,58 @@ describe('appOperations tests', () => {
     });
   });
 
+  describe('redeployApplication pre-teardown dependency check', () => {
+    // eslint-disable-next-line global-require
+    const appNetworkLinker = require('../../ZelBack/src/services/appLifecycle/appNetworkLinker');
+
+    beforeEach(() => {
+      operationRegistry.clear();
+    });
+
+    // Same contract as the image pre-flight: a redeploy that cannot complete must be
+    // rejected BEFORE the old version is torn down, never after.
+    it('aborts without tearing down the old version when a shareWith dependency is missing', async () => {
+      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:v1' };
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ componentEntries: () => [['frontend', deployComp]] });
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      sinon.stub(appsRepository, 'getInstalledApp').resolves({ name: 'myapp', owner: 'owner1' });
+      sinon.stub(appNetworkLinker, 'checkAppNetworkRequirements').rejects(
+        Object.assign(new Error("App 'collector' that 'myapp' must be networked with is not installed on this node. Installation aborted."), { code: 'NETWORK_DEPENDENCY_NOT_READY' }),
+      );
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      const uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const enqueue = sinon.stub(appReconciler, 'enqueue');
+
+      await appOperations.redeployApplication('myapp', { onStatus: () => {} });
+
+      expect(uninstallComponent.called, 'must NOT tear down the old version when a dependency is missing').to.be.false;
+      expect(uninstallApplication.called, 'and must NOT destroy the app').to.be.false;
+      expect(enqueue.calledOnceWith('myapp')).to.be.true;
+      expect(operationRegistry.isHeld('myapp')).to.be.false;
+    });
+
+    it('proceeds to teardown when every shareWith dependency is satisfied', async () => {
+      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:v1' };
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ componentEntries: () => [['frontend', deployComp]] });
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      // First read feeds the pre-teardown check; the post-teardown read returns null so
+      // the run settles through the catch without exercising the full reinstall path.
+      const getInstalledApp = sinon.stub(appsRepository, 'getInstalledApp');
+      getInstalledApp.onFirstCall().resolves({ name: 'myapp', owner: 'owner1' });
+      getInstalledApp.onSecondCall().resolves(null);
+      sinon.stub(appNetworkLinker, 'checkAppNetworkRequirements').resolves(true);
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(appReconciler, 'enqueue');
+
+      await appOperations.redeployApplication('myapp', { onStatus: () => {} });
+
+      expect(uninstallComponent.called, 'a satisfied dependency check must not block the redeploy').to.be.true;
+      expect(operationRegistry.isHeld('myapp')).to.be.false;
+    });
+  });
+
   describe('redeployComponent (rebuild) tests', () => {
     beforeEach(() => {
       operationRegistry.clear();
