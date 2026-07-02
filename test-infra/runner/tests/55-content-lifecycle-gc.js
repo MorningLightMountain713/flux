@@ -50,7 +50,7 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
     });
-    await bootAndPeer(env);
+    await bootAndPeer(env, { pricing: true });
     await pushImage(appName, 'v1');
     await resetFluxDrive();
     dbc = dbClient(env.clients[0].num);
