@@ -95,6 +95,7 @@ describe('appsRepository', () => {
         daemonPONFork: 2020000,
         blocksLasting: 22000,
         newMinBlocksAllowance: 100,
+        contentManifestReapGraceMs: 7200000,
       },
     };
 
@@ -462,18 +463,30 @@ describe('appsRepository', () => {
       expect(query).to.deep.equal({ confirmed: true, envelope: { $exists: true }, appName: { $in: ['a'] } });
     });
 
-    it('reapOrphanedContentManifests deletes confirmed manifests whose app left the global set', async () => {
+    it('reapOrphanedContentManifests deletes confirmed manifests whose app left the global set, aged past the grace', async () => {
       const distinctStub = sinon.stub().resolves(['live', 'dead']);
       mockDb.db.returns({ collection: sinon.stub().returns({ distinct: distinctStub }) });
       dbHelperStub.findInDatabase.resolves([{ name: 'live' }]); // listExistingGlobalAppNames -> only 'live' survives
       dbHelperStub.removeDocumentsFromCollection.resolves({ deletedCount: 1 });
 
+      const before = Date.now();
       const { reaped, orphans } = await appsRepository.reapOrphanedContentManifests();
       expect(orphans).to.deep.equal(['dead']);
       expect(reaped).to.equal(1);
+
+      // Both the candidate scan and the delete carry the receivedAt cutoff (now - grace):
+      // a manifest stored inside the register window is never a reap candidate, and a
+      // name re-registered fresh between scan and delete survives the delete.
+      const graceMs = 7200000; // the configStub's contentManifestReapGraceMs
+      const [, scanQuery] = distinctStub.firstCall.args;
+      expect(scanQuery.confirmed).to.equal(true);
+      expect(scanQuery.receivedAt.$lte).to.be.instanceOf(Date);
+      expect(scanQuery.receivedAt.$lte.getTime()).to.be.closeTo(before - graceMs, 5000);
       const [, collection, query] = dbHelperStub.removeDocumentsFromCollection.firstCall.args;
       expect(collection).to.equal('zelappcontentmanifests');
-      expect(query).to.deep.equal({ appName: { $in: ['dead'] }, confirmed: true });
+      expect(query.appName).to.deep.equal({ $in: ['dead'] });
+      expect(query.confirmed).to.equal(true);
+      expect(query.receivedAt.$lte.getTime()).to.be.closeTo(before - graceMs, 5000);
     });
 
     it('reapOrphanedContentManifests is a no-op when every manifest app is still live', async () => {
@@ -483,6 +496,17 @@ describe('appsRepository', () => {
       const { reaped } = await appsRepository.reapOrphanedContentManifests();
       expect(reaped).to.equal(0);
       sinon.assert.notCalled(dbHelperStub.removeDocumentsFromCollection);
+    });
+
+    it('reapOrphanedContentManifests reports zero when the age-gated delete matched nothing (re-registered mid-sweep)', async () => {
+      const distinctStub = sinon.stub().resolves(['dead']);
+      mockDb.db.returns({ collection: sinon.stub().returns({ distinct: distinctStub }) });
+      dbHelperStub.findInDatabase.resolves([]); // no live apps -> 'dead' is an orphan
+      dbHelperStub.removeDocumentsFromCollection.resolves({ deletedCount: 0 }); // its row is fresh again
+
+      const { reaped, orphans } = await appsRepository.reapOrphanedContentManifests();
+      expect(orphans).to.deep.equal(['dead']);
+      expect(reaped).to.equal(0);
     });
   });
 });
