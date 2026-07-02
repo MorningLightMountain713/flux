@@ -171,7 +171,7 @@ async function getRandomSocketAddress(socketAddress) {
  * Returns a sample of up to `count` random socket addresses from the network state,
  * honouring the diversity/exclusion options of NetworkStateManager.getRandomSocketAddressSample.
  * @param {number} count
- * @param {{excludeSocketAddress?: string, distinctPrefixes?: boolean}} [options]
+ * @param {{excludeSocketAddress?: string, distinctPrefixes?: boolean, prefixLength?: number}} [options]
  * @returns {Promise<string[]>}
  */
 async function getRandomSocketAddressSample(count, options) {

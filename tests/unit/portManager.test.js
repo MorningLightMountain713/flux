@@ -498,6 +498,8 @@ describe('portManager port-reachability probe', () => {
       });
       expect(await portManager.arePortsReachableViaPeers(data, 'me:16127')).to.equal(true);
       sinon.assert.calledOnce(getRandomSocketAddressSample);
+      // peer independence is defined by the configurable prefix, not a hardcoded /16
+      expect(getRandomSocketAddressSample.firstCall.args[1].prefixLength).to.equal(16);
     });
 
     it('returns false when >=2 distinct peers agree it is unreachable', async () => {

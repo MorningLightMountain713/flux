@@ -768,5 +768,21 @@ describe('networkStateManager tests', () => {
       const res = await nsm.getRandomSocketAddressSample(3);
       expect(res).to.have.lengthOf(3);
     });
+
+    it('treats same-/16 but distinct-IP peers as independent at prefixLength 32', async () => {
+      // an all-one-subnet fleet (the integration harness) still needs peers sampled
+      const sameSlash16State = structuredClone(defaultNetworkState);
+      sameSlash16State[1].ip = '47.199.52.62:16147';
+      fetcher.resolves(sameSlash16State);
+      const localNsm = new NetworkStateManager(fetcher, options);
+      await localNsm.start();
+
+      const res = await localNsm.getRandomSocketAddressSample(3, {
+        excludeSocketAddress: '47.199.51.61:16137',
+        distinctPrefixes: true,
+        prefixLength: 32,
+      });
+      expect(res.sort()).to.deep.equal(['44.192.51.11:16147', '47.199.52.62:16147']);
+    });
   });
 });
