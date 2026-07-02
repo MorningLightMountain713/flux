@@ -139,15 +139,13 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
     expect(complete.data.indexesReceived).to.be.at.least(1);
     expect(complete.data.fetched).to.be.at.least(1);
 
-    // The fetched body lands QUARANTINED (it races the spec) and promotes the moment
-    // the app-message confirm materializes the spec — content:manifestPromoted is that
-    // exact transition. On a cold joiner the spec needs explorer catch-up and, if the
-    // at-scan peer request loses the race with discovery, a hash-check retry tick
-    // (hashSyncIntervalMs, 30s here) — the deadline spans a couple of ticks as a
-    // failure bound. afterId omitted: the promote may already be in the buffer.
+    // The register converges to confirmed:true by either ordering — the design is
+    // order-independent: spec-first stores the fetched body confirmed directly,
+    // manifest-first quarantines then promotes on spec-confirm. Both paths publish
+    // manifestStored{confirmed:true}. afterId omitted: it may already be buffered.
     await deferredClient.waitForEvent(
-      'content:manifestPromoted',
-      (d) => d.appName === appName,
+      'content:manifestStored',
+      (d) => d.appName === appName && d.confirmed === true,
       150000,
     );
     const row = await dbClient(DEFERRED + 1).getContentManifest(appName);
