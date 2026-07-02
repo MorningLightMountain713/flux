@@ -321,6 +321,7 @@ export function nodeClient(nodeNum) {
         'spawner:candidacy',
         'content:blobUploaded',
         'content:blobResolved',
+        'content:blobPeerMiss',
         'content:blobProvisioned',
         'content:blobProvisionFailed',
         'content:blobServed',
