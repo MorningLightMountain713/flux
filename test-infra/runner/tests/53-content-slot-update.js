@@ -6,8 +6,8 @@ import { deployContentApp, pushContentUpdate } from '../framework/content-helper
 import { getFluxDriveState, getFluxDriveManifest, resetFluxDrive } from '../framework/fluxdrive-control.js';
 import { pushImage, pushTestApp } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
-import { waitForAppInstalled, waitFor } from '../framework/wait.js';
-import { getAppContainerStatus, execInContainer } from '../framework/container.js';
+import { waitFor } from '../framework/wait.js';
+import { getAppContainerStatus, execInContainer, isAppContainerRunning } from '../framework/container.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -77,11 +77,34 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
     return res.data; // appHash
   }
 
-  async function findInstalledIndex(name) {
-    return Promise.any(env.clients.map(async (c, i) => {
-      await waitForAppInstalled(c, name, 240000);
-      return i;
-    }));
+  // instances:1 races several nodes into the install-collision election; the first
+  // node to report "installed" can be a loser whose container is then torn down.
+  // The assertable node is the one whose container is still running once the fleet
+  // converges to exactly one — held across consecutive polls so a mid-election
+  // transient can't latch.
+  async function findRunningIndex(name) {
+    let winner = null;
+    let last = null;
+    let stable = 0;
+    await waitFor(
+      async () => {
+        const states = await Promise.all(env.clients.map((c) => isAppContainerRunning(c.container, name)));
+        const running = states.flatMap((r, i) => (r ? [i] : []));
+        if (running.length === 1 && running[0] === last) {
+          stable += 1;
+        } else {
+          stable = 0;
+        }
+        last = running.length === 1 ? running[0] : null;
+        if (stable >= 2) {
+          winner = last;
+          return true;
+        }
+        return false;
+      },
+      { timeout: 240000, interval: 3000, label: `${name} converged to one running instance` },
+    );
+    return winner;
   }
 
   before(async function () {
@@ -131,19 +154,9 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
     await queueAppTx(signalHash);
     await advanceBlocks(3);
 
-    node.null = await findInstalledIndex(nameNull);
-    node.restart = await findInstalledIndex(nameRestart);
-    node.signal = await findInstalledIndex(nameSignal);
-
-    // "installed" is the DB row, not a running container. A content update applied
-    // in the install->start window is a legitimate no-reaction (content lands on
-    // disk and the FIRST start reads it), so the reaction tests must only push
-    // once their container is actually running.
-    await Promise.all(Object.entries({ [nameNull]: node.null, [nameRestart]: node.restart, [nameSignal]: node.signal })
-      .map(([name, idx]) => waitFor(
-        async () => (await containerStartedAt(env.clients[idx], name)) !== '',
-        { timeout: 120000, interval: 2000, label: `${name} container running` },
-      )));
+    node.null = await findRunningIndex(nameNull);
+    node.restart = await findRunningIndex(nameRestart);
+    node.signal = await findRunningIndex(nameSignal);
   });
 
   after(async function () {
