@@ -658,11 +658,22 @@ async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
   return staged;
 }
 
+// Per-app latch: the highest manifest version this process has applied. A version
+// is applied at most once per node — the submitter's own POST apply and a peer's
+// rebroadcast echo of that same manifest otherwise BOTH apply it (broadcast is
+// deliberately before the local store, so the echo can win the dedup race), firing
+// the component reaction twice; a late scheduled-rollout timer for a superseded
+// version is skipped by the same guard. In-memory is enough: boot recovery
+// re-provisions content idempotently before the container starts. The app-removal
+// reaper (manifest-plane rework) must clear this alongside the manifest row.
+const lastAppliedVersion = new Map();
+
 /**
  * Apply a manifest's content to this node's installed, RUNNING app: stage + write
  * every declared slot (stageAndApplySlots), then fire ONE reaction per affected
  * component — restart subsumes signal subsumes null. A reaction failure never rolls
  * back the write (the new content is on disk and read on the next start regardless).
+ * Applies each version at most once per node (see lastAppliedVersion).
  *
  * @param {object} deployment - DeploymentSpec for the installed app
  * @param {object} manifest - plaintext manifest (slot -> { hash })
@@ -674,7 +685,25 @@ async function applyManifest(deployment, manifest, ctx, deps = {}) {
     signal = dockerService.appDockerSignal, restart = dockerService.appDockerRestart,
   } = deps;
 
-  const staged = await stageAndApplySlots(deployment, manifest, ctx, deps);
+  // Claim the version up front so a concurrent duplicate skips; roll back on a
+  // failed apply so the version stays retryable.
+  const prevApplied = lastAppliedVersion.get(ctx.appName);
+  if (prevApplied != null && manifest.version <= prevApplied) {
+    fluxEventBus.publish('content:slotApplySkipped', { appName: ctx.appName, version: manifest.version, reason: 'already_applied' });
+    return;
+  }
+  lastAppliedVersion.set(ctx.appName, manifest.version);
+
+  let staged;
+  try {
+    staged = await stageAndApplySlots(deployment, manifest, ctx, deps);
+  } catch (error) {
+    if (lastAppliedVersion.get(ctx.appName) === manifest.version) {
+      if (prevApplied != null) lastAppliedVersion.set(ctx.appName, prevApplied);
+      else lastAppliedVersion.delete(ctx.appName);
+    }
+    throw error;
+  }
 
   // 3. One reaction per affected component — restart subsumes signal subsumes null.
   const reactionsByComp = new Map();
