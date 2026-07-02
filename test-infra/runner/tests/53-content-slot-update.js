@@ -267,6 +267,14 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
       { timeout: 30000, interval: 1500, label: 'RELOAD SIGHUP in container logs' },
     );
 
+    // Exactly ONE delivery: the submitter's own apply and the gossip echo of the
+    // same manifest must not both fire the reaction. Settle briefly so a straggling
+    // duplicate would have landed before we count.
+    await new Promise((resolve) => { setTimeout(resolve, 5000); });
+    const logs = await containerLogs(client, nameSignal);
+    const deliveries = logs.split('RELOAD SIGHUP').length - 1;
+    expect(deliveries, 'SIGHUP delivered exactly once').to.equal(1);
+
     // A signal is not a restart: the same container kept running, StartedAt unchanged.
     const after = await containerStartedAt(client, nameSignal);
     expect(after).to.equal(before);
