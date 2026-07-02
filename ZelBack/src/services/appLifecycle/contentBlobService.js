@@ -210,6 +210,9 @@ async function resolveBlob(req, deps) {
       fluxEventBus.publish('content:blobResolved', { appName, hash: contentHash, source: 'peer' });
       return plain;
     }
+    // A discarded attempt may still have been served on the peer's side (e.g. the
+    // response timed out in transit) — publish it so serve counts stay accountable.
+    fluxEventBus.publish('content:blobPeerMiss', { appName, hash: contentHash, peer });
   }
 
   const framed = await fluxDrive.fetchBlobByLocator(locator).catch(() => null);
