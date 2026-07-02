@@ -604,6 +604,7 @@ module.exports = {
     portTestMaxRounds: 3, // max retry rounds when a round is inconclusive (no peer answered)
     spawnReconfirmDelayMs: 7500000,
     unencryptedSpawnDelayMs: 120000,
+    manageCollectorLifecycle: false, // node-managed lifecycle for shareWith dependency apps (collectors). Off: the flux console owns this lifecycle and a dependency is "ready" once installed; on: FluxOS also requires the dependency to be running before a consumer installs against it.
     globalCmdDelayMs: 500,
     // How many times a global command retries a node that answers 503 while it
     // is still reconciling its apps after boot. The refusal carries a 15s
