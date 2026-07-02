@@ -141,11 +141,13 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
 
     // The register converges to confirmed:true by either ordering — the design is
     // order-independent: spec-first stores the fetched body confirmed directly,
-    // manifest-first quarantines then promotes on spec-confirm. Both paths publish
-    // manifestStored{confirmed:true}. afterId omitted: it may already be buffered.
+    // manifest-first quarantines then promotes on spec-confirm. Every accepted
+    // store flows through the one storeManifest helper, whose single publish site
+    // emits manifestStored{appName, version, confirmed} — so confirmed:true at v1
+    // is observable in both orderings. afterId omitted: it may already be buffered.
     await deferredClient.waitForEvent(
       'content:manifestStored',
-      (d) => d.appName === appName && d.confirmed === true,
+      (d) => d.appName === appName && d.version === 1 && d.confirmed === true,
       150000,
     );
     const row = await dbClient(DEFERRED + 1).getContentManifest(appName);
