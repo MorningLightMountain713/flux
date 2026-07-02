@@ -937,7 +937,9 @@ async function reconcileBootContent(appName, deps = {}) {
  * manifest is reachable, so the install defers and retries rather than starting with
  * empty or stale slots (an app is not installable without its content). A no-op for an
  * app that declares no slots. Mirrors provisionContentBlobs; the difference is a slot's
- * hash comes from the manifest, not the signed spec.
+ * hash comes from the manifest, not the signed spec. Publishes
+ * content:slotsProvisioned once every slot is staged (hash-verified) and written —
+ * the slot-path counterpart of the blob path's content:blobProvisioned.
  *
  * @param {object} deployment - DeploymentSpec for the app being installed
  * @param {object} ctx - { appName, peers? }
@@ -1020,6 +1022,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
   }
 
   await stageApply(deployment, plaintext, { appName, owner, peers }, resolveDeps);
+  fluxEventBus.publish('content:slotsProvisioned', { appName, version: plaintext.version });
 }
 
 /**
