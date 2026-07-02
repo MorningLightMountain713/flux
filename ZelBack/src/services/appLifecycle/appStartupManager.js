@@ -133,6 +133,17 @@ async function reconcileAppsOnBoot() {
       }
     }
 
+    // Reap follower apps (shared collectors) that no installed workload requires
+    // any more — e.g. the workload was removed while the node was down. Runs on
+    // every boot with installed apps (an orphan's containers are usually auto-
+    // restarted, so the stopped-container early-return below must not skip it).
+    // Detached and best-effort; boot recovery must not block on removals. Gated
+    // off in production: the flux console owns the collector lifecycle.
+    if (config.fluxapps.manageCollectorLifecycle) {
+      appUninstaller.removeUnrequiredDependencies()
+        .catch((error) => log.error(`appStartupManager - boot dependency cleanup failed: ${error.message}`));
+    }
+
     if (stoppedContainers.length === 0) {
       log.info('appStartupManager - No stopped containers found');
       return results;
@@ -203,7 +214,7 @@ async function reconcileAppsOnBoot() {
       + `Apps failed: ${results.appsFailed.length}`,
     );
 
-    // Re-apply app-to-app network links (networkWith token in the description).
+    // Re-apply app-to-app network links (the network.shareWith spec field).
     // Idempotent and best-effort — defensive in case docker did not restore a
     // secondary network membership across the reboot.
     await appNetworkLinker.reconcileAllAppNetworkLinks();

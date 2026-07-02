@@ -21,6 +21,7 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appNetworkLinker = require('./appNetworkLinker');
 const appVolumeService = require('./appVolumeService');
 const appSwapPoolService = require('./appSwapPoolService');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
@@ -439,6 +440,89 @@ async function clearSpawnThrottleForPinnedReinstall(appName, { forceKill, backgr
   }
 }
 
+// Reentrancy latch for the orphaned-follower sweep: a sweep removal triggers the
+// sweep again (deferred), which must not stack a second concurrent pass.
+let dependencyCleanupInProgress = false;
+
+/**
+ * Reverse dependency cascade: before a pure-follower app (a shared collector) is
+ * removed, gracefully uninstall every installed workload that transitively
+ * requires it via `shareWith`, so a consumer is never left attached to a
+ * torn-down dependency. No-op for apps that are not pure followers. Each
+ * workload removal is foreground (its teardown is awaited), so a consumer
+ * finishes its graceful drain while the dependency it may still be flushing to
+ * is up.
+ *
+ * @param {string} appName - bare app name being removed
+ * @returns {Promise<void>}
+ */
+async function removeRequiringWorkloadsFirst(appName) {
+  if (!appName) {
+    return;
+  }
+  const spec = await appsRepository.getInstalledApp(appName);
+  if (!spec || !appNetworkLinker.isPureFollower(spec)) {
+    return;
+  }
+  const workloads = await appNetworkLinker.findInstalledWorkloadsRequiring(appName);
+  // eslint-disable-next-line no-restricted-syntax
+  for (const workload of workloads) {
+    log.info(`Reverse dependency cascade: uninstalling workload ${workload.name} before its dependency ${appName}`);
+    // forceKill=false honours the graceful drain; broadcastRemoval tells the network.
+    // eslint-disable-next-line no-await-in-loop, no-use-before-define
+    await uninstallApplication(workload.name, { forceKill: false, broadcastRemoval: true });
+  }
+}
+
+/**
+ * Removes locally-installed reapable follower apps (shared collectors) that no
+ * installed workload still requires via `shareWith`. Triggered after a workload
+ * is removed and at boot. Loops until the set is stable so a chain unwinds
+ * fully: removing the consumer that linked to a collector then orphans the
+ * collector. Each removal is a normal graceful uninstall, so the collector's
+ * own drain window is honoured; by the time this runs the workload that
+ * depended on it has already finished draining and been removed.
+ *
+ * @returns {Promise<void>}
+ */
+async function removeUnrequiredDependencies() {
+  if (dependencyCleanupInProgress) {
+    return;
+  }
+  dependencyCleanupInProgress = true;
+  try {
+    const attempted = new Set();
+    // Bounded: each pass either removes one app or stops. The cap is a backstop.
+    for (let pass = 0; pass < 50; pass += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
+      // Remove a consumer before the app it consumes so the network/log wiring
+      // tears down in dependency order.
+      orphans.sort((a, b) => {
+        if (appNetworkLinker.getLinkedApps(a).some((n) => n.toLowerCase() === b.name.toLowerCase())) return -1;
+        if (appNetworkLinker.getLinkedApps(b).some((n) => n.toLowerCase() === a.name.toLowerCase())) return 1;
+        return 0;
+      });
+      const target = orphans.find((app) => !attempted.has(app.name.toLowerCase()));
+      if (!target) {
+        return;
+      }
+      attempted.add(target.name.toLowerCase());
+      log.info(`Dependency cleanup: removing ${target.name} - no installed app requires it any more`);
+      // forceKill=false honours the graceful drain; broadcastRemoval tells the
+      // network this node dropped it. A DEFERRED/FAILED removal is retried on
+      // the next trigger (the name stays in attempted for this run only).
+      // eslint-disable-next-line no-await-in-loop, no-use-before-define
+      await uninstallApplication(target.name, { forceKill: false, broadcastRemoval: true });
+    }
+    log.warn('Dependency cleanup: reached pass limit, will retry on next trigger');
+  } catch (error) {
+    log.error(`Dependency cleanup failed: ${error.message}`);
+  } finally {
+    dependencyCleanupInProgress = false;
+  }
+}
+
 /**
  * Remove a whole application from the local node (a single component is removed via
  * uninstallComponent — this never takes a component identifier).
@@ -535,6 +619,18 @@ async function uninstallApplication(appName, options = {}) {
     if (!spec) {
       status('Flux App not found');
       return { status: UninstallStatus.SKIPPED, reason: 'Flux App not found' };
+    }
+
+    // Reverse dependency cascade: before tearing down a pure-follower app (a
+    // shared collector), gracefully uninstall every installed workload that
+    // still requires it - a consumer must never outlive its dependency. Fires
+    // on graceful removals only, cancel/expiry included; a plain force-kill is
+    // an emergency teardown and does not cascade. Runs before this app's
+    // teardown record exists, so each nested workload removal is an ordinary
+    // standalone removal. Gated off in production: the flux console owns the
+    // collector lifecycle.
+    if (config.fluxapps.manageCollectorLifecycle && !forceKill && appNetworkLinker.isPureFollower(spec)) {
+      await removeRequiringWorkloadsFirst(appName);
     }
 
     // Capture each component's teardown descriptors off the normalized deployment. The
@@ -641,6 +737,18 @@ async function uninstallApplication(appName, options = {}) {
     } else {
       await runTeardown(teardownDoc, { onStatus });
       status(`Removal step done. Result: Flux App ${appName} was successfully removed`);
+    }
+
+    // Removing a workload may orphan a follower (a shared collector) that linked
+    // to it; removing a follower reverse-cascaded its workloads above, which can
+    // orphan sibling collectors. Sweep orphans once this removal settles -
+    // deferred direct call, not an event subscription (the event bus is
+    // publish-only test observability). Gated off in production.
+    if (config.fluxapps.manageCollectorLifecycle
+      && (!appNetworkLinker.isPureFollower(spec) || !forceKill)) {
+      setImmediate(() => {
+        removeUnrequiredDependencies().catch((error) => log.error(`Dependency cleanup trigger failed: ${error.message}`));
+      });
     }
     return { status: UninstallStatus.REMOVED, reason: null };
   } catch (error) {
@@ -1035,6 +1143,8 @@ module.exports = {
   runTeardown,
   recoverOwedTeardowns,
   clearSpawnThrottleForPinnedReinstall,
+  removeRequiringWorkloadsFirst,
+  removeUnrequiredDependencies,
   // exposed for tests
   reclaimUnusedImages,
 };
