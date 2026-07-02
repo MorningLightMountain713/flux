@@ -9,7 +9,9 @@ const ok = (obj) => ({ status: 'success', data: { status: 'ok', ...obj } });
 const KEY = crypto.randomBytes(32);
 const NOW_MS = 1_700_000_000_000;
 const now = () => NOW_MS;
-const freshTs = String(NOW_MS / 1000);
+// owner-sig timestamps are MILLISECONDS (like the app-message timestamp) — the
+// blob freshness window compares in ms
+const freshTs = String(NOW_MS);
 
 // flux-spec is ESM-only; FluxOS reaches it through the async getSpec() loader.
 // Stub it (the FluxOS test convention) with simple deterministic fakes — the real
@@ -804,6 +806,38 @@ describe('contentSlotService', () => {
       const dep = deployment([{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'restart' } }]);
       await service.applyManifest(dep, { slots: { cfg: { hash: HCFG } } }, ctx, deps);
       sinon.assert.calledWith(deps.writeFile, '/dat/app/cfg', Buffer.from(`bytes:${HCFG}`));
+    });
+
+    it('applies a version at most once (submitter apply vs its gossip echo)', async () => {
+      const { service } = load();
+      const deps = applyDeps();
+      const dep = deployment([{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'signal', signal: 'SIGHUP' } }]);
+      const m = { appName: 'app', version: 2, slots: { cfg: { hash: HCFG } } };
+      await service.applyManifest(dep, m, ctx, deps);
+      await service.applyManifest(dep, m, ctx, deps);
+      sinon.assert.calledOnce(deps.signal);
+    });
+
+    it('skips a superseded version after a newer one has applied (late rollout timer)', async () => {
+      const { service } = load();
+      const deps = applyDeps();
+      const dep = deployment([{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'signal', signal: 'SIGHUP' } }]);
+      await service.applyManifest(dep, { appName: 'app', version: 3, slots: { cfg: { hash: HCFG } } }, ctx, deps);
+      await service.applyManifest(dep, { appName: 'app', version: 2, slots: { cfg: { hash: HCFG } } }, ctx, deps);
+      sinon.assert.calledOnce(deps.signal);
+    });
+
+    it('a failed apply leaves the version retryable', async () => {
+      const { service } = load();
+      const resolve = sinon.stub();
+      resolve.onFirstCall().rejects(new Error('peer gone'));
+      resolve.resolves(Buffer.from('bytes'));
+      const deps = applyDeps({ resolve });
+      const dep = deployment([{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'signal', signal: 'SIGHUP' } }]);
+      const m = { appName: 'app', version: 2, slots: { cfg: { hash: HCFG } } };
+      await expectReject(service.applyManifest(dep, m, ctx, deps), /peer gone/);
+      await service.applyManifest(dep, m, ctx, deps);
+      sinon.assert.calledOnce(deps.signal);
     });
   });
 
