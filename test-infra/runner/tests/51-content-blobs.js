@@ -6,8 +6,6 @@ import { deployContentApp, fetchTransportPubKey } from '../framework/content-hel
 import { getFluxDriveState, resetFluxDrive } from '../framework/fluxdrive-control.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
-import { bootstrapPricing } from '../framework/price-helper.js';
-import { authorityAddress } from '../framework/flux-chain-crypto.js';
 import { waitForAppInstalled } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -36,11 +34,9 @@ describe('content blobs (contentRef): register, upload, provision', function () 
     this.timeout(420000);
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
-      configOverrides: { fluxapps: { minOutgoing: 2, messageAuthorityAddress: authorityAddress() } },
+      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { minOutbound: 2, minInbound: 1 });
-    // On-chain v9 pricing must be in force before any registration fee is computed.
-    await bootstrapPricing();
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
     await pushImage(appName, 'v1');
     await resetFluxDrive();
   });

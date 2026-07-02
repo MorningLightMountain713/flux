@@ -118,6 +118,11 @@ module.exports = {
     // the whole harness fleet shares one /24, so the mainnet /16-diversity rule
     // would always sample zero peers; distinct-IP is the honest harness equivalent
     portTestPrefixLength: 32,
+    // address of the fixed harness authority key (AUTHORITY_PRIVKEY in
+    // runner/framework/flux-chain-crypto.js) so bootstrapPricing's soft-fork
+    // messages pass the recognized-signer gate; override per-suite to test
+    // authority rotation / rejection paths
+    messageAuthorityAddress: 't1ggL4azeDbBHwt4TJ6mAHZ88x3eBsn2vgh',
     spawnReconfirmDelayMs: 30000,
     // harness nodes look Arcane (FLUXOS_PATH set), so unencrypted spawns defer by this
     unencryptedSpawnDelayMs: 500,
