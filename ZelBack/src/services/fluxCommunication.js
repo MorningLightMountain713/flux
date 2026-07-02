@@ -51,6 +51,19 @@ const DISCOVERY = {
 };
 
 /**
+ * Fire the store's promotion signal: a just-stored temp message matched an
+ * unresolved on-chain hash, so confirm it (spec materialization) off the hot path.
+ * @param {object|null} promotion Promotion descriptor from storeAppTemporaryMessage.
+ */
+function schedulePromotion(promotion) {
+  if (!promotion) return;
+  setImmediate(() => {
+    messageVerifier.checkAndRequestApp(promotion.hash, promotion.txid, promotion.height, promotion.value, promotion.blockTime ?? null, 2)
+      .catch((err) => log.error(`Immediate promotion failed for ${promotion.hash}: ${err.message}`));
+  });
+}
+
+/**
  * To handle temporary app messages.
  * @param {object} message Message.
  * @param {string} fromIP Sender's IP address.
@@ -62,13 +75,13 @@ async function handleAppMessages(message, fromIP, port) {
     // if not in database, rebroadcast to all connections
     // do furtherVerification of message
     const storeResult = await messageStore.storeAppTemporaryMessage(message.data);
-    if (storeResult.promotion) {
-      setImmediate(() => {
-        const p = storeResult.promotion;
-        messageVerifier.checkAndRequestApp(p.hash, p.txid, p.height, p.value, p.blockTime ?? null, 2)
-          .catch((err) => log.error(`Immediate promotion failed for ${p.hash}: ${err.message}`));
-      });
+    // The store RETURNS an Error for a rejected message (false for a known dedup —
+    // too common to log); it must be surfaced or rejections are invisible.
+    if (storeResult instanceof Error) {
+      log.warn(`handleAppMessages - message ${message.data.hash} from ${fromIP}:${port} rejected: ${storeResult.message}`);
+      return;
     }
+    schedulePromotion(storeResult.promotion);
     if (storeResult.rebroadcast) {
       fluxEventBus.publish('network:appmessage', { hash: message.data.hash, type: message.data.type, name: message.data.appSpecifications?.name });
       const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
@@ -141,15 +154,24 @@ async function handleTempSyncResponse(message, peerKey) {
     if (!Array.isArray(messages) || messages.length > 2500) return;
     log.info(`handleTempSyncResponse - Received ${messages.length} temp messages from ${peerKey} (done: ${!!done})`);
     let stored = 0;
+    let rejected = 0;
     for (const msg of messages) {
       try {
         const result = await messageStore.storeAppTemporaryMessage(msg, { furtherVerification: true });
-        if (result && typeof result === 'object' && 'rebroadcast' in result) stored += 1;
+        if (result instanceof Error) {
+          rejected += 1;
+          log.warn(`handleTempSyncResponse - message ${msg && msg.hash} from ${peerKey} rejected: ${result.message}`);
+        } else if (result && typeof result === 'object' && 'rebroadcast' in result) {
+          stored += 1;
+          // The promotion signal fires only on the FIRST store of a message; every
+          // later copy dedups to false. Dropping it here orphans a scanned hash.
+          schedulePromotion(result.promotion);
+        }
       } catch (err) {
         log.error(`Temp sync message failed: ${err.message}`);
       }
     }
-    log.info(`handleTempSyncResponse - Processed ${stored} of ${messages.length} messages`);
+    log.info(`handleTempSyncResponse - Processed ${stored} of ${messages.length} messages (${rejected} rejected)`);
   } catch (error) {
     log.error(error);
   }

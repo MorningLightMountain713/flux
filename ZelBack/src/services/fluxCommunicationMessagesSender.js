@@ -9,6 +9,8 @@ const { peerManager } = require('./utils/peerState');
 const cacheManager = require('./utils/cacheManager').default;
 const { serialiseAndSignFluxBroadcast, getFluxMessageSignature } = require('./utils/fluxBroadcastHelper');
 const fluxEventBus = require('./utils/fluxEventBus');
+const appEventVerifier = require('./appMessaging/appEventVerifier');
+const appsRepository = require('./appDatabase/appsRepository');
 
 const myMessageCache = cacheManager.tempMessageCache;
 
@@ -41,8 +43,6 @@ async function sendSignedMessage(message, peer, options = {}) {
 async function respondWithAppMessage(msgObj, peer) {
   try {
     // check if we have it database of permanent appMessages
-    // eslint-disable-next-line global-require
-    const appsRepository = require('./appDatabase/appsRepository');
     const appsMessages = [];
     if (!msgObj.data) {
       throw new Error('Invalid Flux App Request message');
@@ -91,17 +91,17 @@ async function respondWithAppMessage(msgObj, peer) {
       // eslint-disable-next-line no-await-in-loop
       const appMessage = await appsRepository.getPermanentMessage(hash) || await appsRepository.getTempMessage(hash);
       if (appMessage) {
-        temporaryAppMessage = { // specification of temp message
-          type: appMessage.type,
-          version: appMessage.version,
-          appSpecifications: appMessage.appSpecifications,
-          hash: appMessage.hash,
-          timestamp: appMessage.timestamp,
-          signature: appMessage.signature,
-          arcaneAttestation: appMessage.arcaneAttestation,
-        };
-        sendSignedMessage(temporaryAppMessage, peer);
-        found += 1;
+        // The event class owns the wire shape: it round-trips every field the
+        // requester's deserialize needs and ignores the row's storage/chain extras.
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const appEvent = await appEventVerifier.deserializeTempMessage(appMessage);
+          temporaryAppMessage = appEvent.serialize();
+          sendSignedMessage(temporaryAppMessage, peer);
+          found += 1;
+        } catch (error) {
+          log.warn(`respondWithAppMessage - stored message ${hash} failed to deserialize, not served: ${error.message}`);
+        }
       }
       myMessageCache.set(hash, temporaryAppMessage);
       // eslint-disable-next-line no-await-in-loop
@@ -295,15 +295,10 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
     let batch = [];
     let total = 0;
     for await (const msg of cursor) {
-      batch.push({
-        type: msg.type,
-        version: msg.version,
-        appSpecifications: msg.appSpecifications,
-        hash: msg.hash,
-        timestamp: msg.timestamp,
-        signature: msg.signature,
-        arcaneAttestation: msg.arcaneAttestation,
-      });
+      // The row is served whole: messageStore writes it from the typed event's
+      // serialize() and the projection strips the storage-only fields, so the
+      // row IS the wire shape — no field list to drift from the event class.
+      batch.push(msg);
       if (batch.length >= batchSize) {
         log.info(`respondWithTempMessages - Sending chunk of ${batch.length} to ${peer.key}`);
         await sendSignedMessage({ type: 'fluxapptempsync', version: 1, messages: batch, done: false }, peer, { awaitDrain: true });
@@ -394,8 +389,6 @@ async function respondWithAppInstallingErrorsMessages(peer, sinceTimestamp = 0) 
  */
 async function respondWithManifestIndex(peer) {
   try {
-    // eslint-disable-next-line global-require
-    const appsRepository = require('./appDatabase/appsRepository');
     const index = await appsRepository.listConfirmedContentManifestVersions();
     await sendSignedMessage({ type: 'fluxappcontentmanifestindex', index, done: true }, peer, { awaitDrain: true });
   } catch (error) {
@@ -416,8 +409,6 @@ async function respondWithContentManifests(msgObj, peer) {
       await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: [], done: true }, peer, { awaitDrain: true });
       return;
     }
-    // eslint-disable-next-line global-require
-    const appsRepository = require('./appDatabase/appsRepository');
     const broadcasts = await appsRepository.listConfirmedContentManifestBroadcasts(appNames);
 
     const batchSize = 2000;

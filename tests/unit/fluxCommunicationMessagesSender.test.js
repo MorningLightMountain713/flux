@@ -14,6 +14,7 @@ const generalService = require('../../ZelBack/src/services/generalService');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
 const { PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
+const { getSpec } = require('../../ZelBack/src/services/utils/specLibs');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -371,7 +372,19 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
       await fluxCommunicationMessagesSender.respondWithAppMessage(callMessage, websocket);
 
-      sinon.assert.calledOnceWithExactly(myMessageCacheSetStub, callMessage.data.hash, message);
+      // The served/cached value is the typed event's serialized form — every field
+      // of the stored message must survive the round-trip.
+      sinon.assert.calledOnce(myMessageCacheSetStub);
+      const [cachedHash, served] = myMessageCacheSetStub.firstCall.args;
+      expect(cachedHash).to.equal(callMessage.data.hash);
+      expect(served).to.deep.include({
+        type: message.type,
+        version: message.version,
+        hash: message.hash,
+        timestamp: message.timestamp,
+        signature: message.signature,
+      });
+      expect(served.appSpecifications).to.deep.equal(message.appSpecifications);
       sinon.assert.calledOnceWithExactly(getPermanentMessageStub, callMessage.data.hash);
     });
 
@@ -395,9 +408,82 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
       await fluxCommunicationMessagesSender.respondWithAppMessage(callMessage, websocket);
 
-      sinon.assert.calledOnceWithExactly(myMessageCacheSetStub, callMessage.data.hash, message);
+      // The served/cached value is the typed event's serialized form — every field
+      // of the stored message must survive the round-trip.
+      sinon.assert.calledOnce(myMessageCacheSetStub);
+      const [cachedHash, served] = myMessageCacheSetStub.firstCall.args;
+      expect(cachedHash).to.equal(callMessage.data.hash);
+      expect(served).to.deep.include({
+        type: message.type,
+        version: message.version,
+        hash: message.hash,
+        timestamp: message.timestamp,
+        signature: message.signature,
+      });
+      expect(served.appSpecifications).to.deep.equal(message.appSpecifications);
       sinon.assert.calledOnceWithExactly(getPermanentMessageStub, callMessage.data.hash);
       sinon.assert.calledOnceWithExactly(getTempMessageStub, callMessage.data.hash);
+    });
+
+    it('serves a v9 registration with its event-v2 fields intact (contentHash, extend)', async () => {
+      // A real spec through the real library: the fixture is schema-validated on
+      // every run, so it tracks the canonical v9 shape instead of drifting.
+      const { FluxAppSpecV9 } = await getSpec();
+      const spec = FluxAppSpecV9.fromSubmission({
+        version: 9,
+        name: 'v9serveapp',
+        description: 'v9 serve fixture',
+        owner: '13ienDRfUwFEgfZxm5dk4drTQsmj5hDGwL',
+        instances: 3,
+        ttl: 86400,
+        contacts: { email: ['admin@example.com'] },
+        components: {
+          web: {
+            name: 'web',
+            description: 'component',
+            image: 'nginx:1.25',
+            cpu: 0.5,
+            memory: 300,
+            rootFsGb: 2,
+            persistentStorage: { sizeGb: 10, mounts: {} },
+            ports: { http: { containerPort: 80, hostPort: 31000 } },
+          },
+        },
+      });
+      const v9Message = {
+        type: 'fluxappregister',
+        version: 2,
+        appSpecifications: spec.serialize(),
+        hash: 'v9hash',
+        timestamp: Date.now(),
+        signature: 'sig',
+        contentHash: spec.contentHash(),
+        extend: true,
+      };
+      const callMessage = {
+        timestamp: Date.now(),
+        pubKey: '1234asd',
+        signature: 'blabla',
+        version: 1,
+        data: {
+          type: 'fluxapprequest',
+          hash: 'v9hash',
+          version: 1,
+        },
+      };
+      sinon.stub(appsRepository, 'getPermanentMessage').returns(v9Message);
+      sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
+      const myMessageCacheSetStub = sinon.stub(FluxTTLCache.prototype, 'set').returns(undefined);
+      const websocket = generateWebsocket();
+
+      await fluxCommunicationMessagesSender.respondWithAppMessage(callMessage, websocket);
+
+      sinon.assert.calledOnce(myMessageCacheSetStub);
+      const [, served] = myMessageCacheSetStub.firstCall.args;
+      expect(served.contentHash).to.equal(v9Message.contentHash);
+      expect(served.extend).to.equal(true);
+      expect(served.appSpecifications).to.deep.equal(v9Message.appSpecifications);
+      sinon.assert.calledOnce(websocket.send);
     });
 
     it('should do nothing if the message does not exist', async () => {
