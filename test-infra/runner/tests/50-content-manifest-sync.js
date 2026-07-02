@@ -139,15 +139,17 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
     expect(complete.data.indexesReceived).to.be.at.least(1);
     expect(complete.data.fetched).to.be.at.least(1);
 
-    // The cold node's appcontentmanifests register converges to the network version.
-    // The fetched body lands QUARANTINED (the spec races it) and promotes on the
-    // app-message-confirm path, which on a cold joiner needs the explorer catch-up
-    // plus a hashSyncIntervalMs (30s) retry tick to materialize the spec — allow a
-    // couple of ticks.
-    await waitFor(async () => {
-      const row = await dbClient(DEFERRED + 1).getContentManifest(appName).catch(() => null);
-      return !!(row && row.version === 1 && row.confirmed === true);
-    }, { timeout: 150000, interval: 3000, label: 'cold node manifest converged to v1' });
+    // The fetched body lands QUARANTINED (it races the spec) and promotes the moment
+    // the app-message confirm materializes the spec — content:manifestPromoted is that
+    // exact transition. On a cold joiner the spec needs explorer catch-up and, if the
+    // at-scan peer request loses the race with discovery, a hash-check retry tick
+    // (hashSyncIntervalMs, 30s here) — the deadline spans a couple of ticks as a
+    // failure bound. afterId omitted: the promote may already be in the buffer.
+    await deferredClient.waitForEvent(
+      'content:manifestPromoted',
+      (d) => d.appName === appName,
+      150000,
+    );
     const row = await dbClient(DEFERRED + 1).getContentManifest(appName);
     expect(row.appName).to.equal(appName);
     expect(row.version).to.equal(1);
