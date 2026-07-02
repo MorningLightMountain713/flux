@@ -303,6 +303,7 @@ module.exports = {
     portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct prefix, excluding our own
     portTestMaxRounds: 3, // max retry rounds when a round is inconclusive (no peer answered)
     portTestPrefixLength: 16, // bits of IP prefix (whole octets) defining an "independent" peer for the reachability probe
+    contentManifestReapGraceMs: 7200000, // manifests younger than this are never reaped - covers the register window where the manifest exists before the app tx confirms on-chain
     spawnReconfirmDelayMs: 7500000,
     unencryptedSpawnDelayMs: 120000,
     manageCollectorLifecycle: false, // node-managed lifecycle for shareWith dependency apps (collectors). Off: the flux console owns this lifecycle and a dependency is "ready" once installed; on: FluxOS also requires the dependency to be running before a consumer installs against it.

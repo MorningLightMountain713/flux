@@ -48,9 +48,13 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
 
   before(async function () {
     this.timeout(420000);
+    // contentManifestReapGraceMs: the prod default (2h) would keep test 4's
+    // just-stored manifest un-reapable for the whole suite; 30s still covers this
+    // suite's own register window (manifest stored before the app tx confirms)
+    // while letting the reap land inside test 4's wait as ticker blocks sweep.
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
-      configOverrides: { fluxapps: { minOutgoing: 2 } },
+      configOverrides: { fluxapps: { minOutgoing: 2, contentManifestReapGraceMs: 30000 } },
     });
     await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
     await pushImage(appName, 'v1');
