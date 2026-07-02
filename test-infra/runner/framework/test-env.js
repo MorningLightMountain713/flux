@@ -1867,9 +1867,9 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
     // arrives through a file like every other one.
     nodeEnv.FLUX_TEST_CONFIG = JSON.stringify(nodeConfig);
 
-    // Wait on an HTTP poll of the node's own /flux/version, not Docker's health
-    // state machine: under a contended 10-node fleet boot, Wait.forHealthCheck()
-    // tears the fleet down on a transient "unhealthy" even when FluxOS is up. See
+    // Wait on an HTTP poll of the node's own API, not Docker's health state
+    // machine: under a contended 10-node fleet boot, Wait.forHealthCheck() tears
+    // the fleet down on a transient "unhealthy" even when FluxOS is up. See
     // http-wait-strategy.js for the full rationale.
     const imageTag = nodeImageTags[i] ?? IMAGE_TAG;
     const builder = new StaticIpContainer(nodeImageRef(imageTag))
@@ -2148,7 +2148,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
     // machine: on restart Docker transiently reports "unhealthy" during monitor
     // teardown (moby/daemon/container/health.go CloseMonitorChannel), which a
     // health-coupled wait strategy would mistake for a dead container. This is
-    // the same HttpPollWaitStrategy the initial fleet build uses.
+    // the same serve-auth readiness the initial fleet build uses.
     async restartNode(index, { timeout = 15000 } = {}) {
       if (clients[index]) clients[index].disconnectEventStream();
       const { container, logCollector } = fluxNodes[index];
