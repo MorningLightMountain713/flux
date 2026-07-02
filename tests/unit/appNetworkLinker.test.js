@@ -190,6 +190,29 @@ describe('appNetworkLinker tests', () => {
     });
   });
 
+  describe('attach serialization under the host mutation lock', () => {
+    // eslint-disable-next-line global-require
+    const { withHostMutationLock } = require('../../ZelBack/src/services/utils/hostMutationLock');
+
+    it('queues a cross-app attach behind a held teardown lock instead of racing it', async () => {
+      let releaseTeardown;
+      const teardownGate = new Promise((resolve) => { releaseTeardown = resolve; });
+      // The proxyquired module shares the real lock singleton with this holder,
+      // standing in for a linked app's teardown worker mid-removal.
+      const teardownHold = withHostMutationLock(() => teardownGate);
+      await new Promise((resolve) => { setImmediate(resolve); });
+
+      const attach = appNetworkLinker.connectComponentToLinkedApps('fluxweb_appB', instSpec({ name: 'appB', shareWith: ['appA'] }));
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(dockerServiceStub.appDockerNetworkConnect.called, 'attach must wait for the held lock, never race the teardown').to.equal(false);
+
+      releaseTeardown();
+      await attach;
+      await teardownHold;
+      sinon.assert.calledWith(dockerServiceStub.appDockerNetworkConnect, 'fluxweb_appB', 'fluxDockerNetwork_appA');
+    });
+  });
+
   describe('reconnectLinkedApps', () => {
     it('reconnects only the apps that are networked with the given app', async () => {
       appsRepositoryStub.listInstalledApps.resolves([

@@ -4,7 +4,9 @@ const { AsyncLock } = require('./asyncLock');
 // subsystems perform on single physical host resources:
 //   - the ufw ruleset (fluxNetworkHelper allowPort / deleteAllowPortRule -> `sudo ufw ...`);
 //   - the UPnP IGD client session (upnpService mapUpnpPort / removeMapUpnpPort);
-//   - the content-addressed docker image store (appDockerImageRemove / image prune).
+//   - the content-addressed docker image store (appDockerImageRemove / image prune);
+//   - a linked app's docker network (appNetworkLinker cross-app attach vs the teardown
+//     worker removing that network).
 // Each is one physical resource shared by every app on the node, so two concurrent operations
 // corrupt it: an install opening a port while a teardown denies one mangles the ufw ruleset;
 // a watchtower prune racing a teardown image-remove corrupts the image store; concurrent UPnP
