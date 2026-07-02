@@ -322,8 +322,20 @@ async function installApplication(instantiated, options = {}) {
     }
 
     // Verify every app this app shares a network with is installed locally and
-    // same-owner before any container is created — aborts early otherwise.
-    await appNetworkLinker.checkAppNetworkRequirements(instantiated);
+    // same-owner before any container is created — aborts early otherwise. A
+    // dependency that is merely not installed yet is a transient ordering
+    // condition (apps register in any order), so it defers rather than fails —
+    // a failure would bury this app in the spawner's 7-day error cache and keep
+    // it locked out long after the dependency arrives.
+    try {
+      await appNetworkLinker.checkAppNetworkRequirements(instantiated);
+    } catch (error) {
+      if (error.code === 'NETWORK_DEPENDENCY_NOT_READY') {
+        if (onStatus) onStatus(messageHelper.createErrorMessage(error.message));
+        return { status: InstallStatus.DEFERRED, reason: error.message };
+      }
+      throw error;
+    }
 
     {
       let dockerNetworkAddrValue = Math.floor(Math.random() * 256);
