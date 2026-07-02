@@ -454,8 +454,14 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
 
   // Health check timeout must be < interval — Docker's health state machine
   // produces spurious "unhealthy" on container restart when timeout >= interval.
+  // nofile: modern docker defaults give a 1024 soft limit; the shared mongod
+  // spends an fd per pooled connection across every node PLUS one per WiredTiger
+  // data file, and a 10-node fleet sits right at that cliff — the last node to
+  // boot finds mongod unable to accept ("Too many open files") while the earlier
+  // nodes coast on established pools. MongoDB's own floor is 64000.
   const mongo = await new StaticIpContainer('mongo:8')
     .withCommand(['--wiredTigerCacheSizeGB', '1', '--setParameter', 'maxNumActiveUserIndexBuilds=64', '--setParameter', 'enableTestCommands=1'])
+    .withUlimits({ nofile: { soft: 64000, hard: 64000 } })
     .withStaticIp(networkName, MONGO_IP)
     .withWaitStrategy(new TcpPollWaitStrategy(MONGO_IP, 27017))
     .withHealthCheck({
