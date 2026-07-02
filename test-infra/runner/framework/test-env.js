@@ -415,6 +415,20 @@ export async function createTestEnv({ hookCtx = null, nodes = 1, deferredNodes =
   }
 }
 
+// A node is ready when it can SERVE AUTH, not merely HTTP: the first thing every
+// suite does against a fresh or restarted node is authenticate (startDiscovery),
+// and /id/loginphrase needs the mongo connection, which comes up after express
+// starts answering /flux/version. During that window the route returns 200 with
+// an error body, so readiness must validate the body, not just res.ok.
+function nodeReadyWaitStrategy(nodeIp) {
+  const validate = async (res) => {
+    if (!res.ok) return false;
+    const body = await res.json().catch(() => null);
+    return !!(body && body.status === 'success');
+  };
+  return new HttpPollWaitStrategy(`http://${nodeIp}:16127/id/loginphrase`, { validate });
+}
+
 function mergeConfigs(base, override) {
   if (!override) return base;
   if (!base) return override;
@@ -673,9 +687,9 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     const nodeConfig = mergeConfigs(infraOverride, mergeConfigs(configOverrides, nodeConfigOverrides[i]));
     nodeEnv.NODE_CONFIG = JSON.stringify(nodeConfig);
 
-    // Wait on an HTTP poll of the node's own /flux/version, not Docker's health
-    // state machine: under a contended 10-node fleet boot, Wait.forHealthCheck()
-    // tears the fleet down on a transient "unhealthy" even when FluxOS is up. See
+    // Wait on an HTTP poll of the node's own API, not Docker's health state
+    // machine: under a contended 10-node fleet boot, Wait.forHealthCheck() tears
+    // the fleet down on a transient "unhealthy" even when FluxOS is up. See
     // http-wait-strategy.js for the full rationale.
     const builder = new StaticIpContainer('flux-e2e-fluxos-01')
       .withPrivilegedMode()
@@ -684,7 +698,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
       .withBindMounts(bindMounts)
       .withLogConsumer(logCollector)
       .withEnvironment(nodeEnv)
-      .withWaitStrategy(new HttpPollWaitStrategy(`http://${nodeIp}:16127/flux/version`).withStartupTimeout(120000));
+      .withWaitStrategy(nodeReadyWaitStrategy(nodeIp).withStartupTimeout(120000));
 
     nodeConfigs.push({ index: i, builder, ip: nodeIp, num: i + 1, logCollector, bootIdDir });
   }
@@ -800,17 +814,16 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
       return client;
     },
 
-    // Wait on an HTTP poll of /flux/version rather than Docker's health state
+    // Wait on an HTTP poll of the node's API rather than Docker's health state
     // machine: on restart Docker transiently reports "unhealthy" during monitor
     // teardown (moby/daemon/container/health.go CloseMonitorChannel), which a
     // health-coupled wait strategy would mistake for a dead container. This is
-    // the same HttpPollWaitStrategy the initial fleet build uses.
+    // the same serve-auth readiness the initial fleet build uses.
     async restartNode(index, { timeout = 15000 } = {}) {
       if (clients[index]) clients[index].disconnectEventStream();
       const container = fluxNodes[index].container;
       const saved = container.waitStrategy;
-      const nodeUrl = `http://${fluxNodes[index].ip}:16127/flux/version`;
-      container.waitStrategy = new HttpPollWaitStrategy(nodeUrl);
+      container.waitStrategy = nodeReadyWaitStrategy(fluxNodes[index].ip);
       try {
         await container.restart({ timeout });
       } finally {
