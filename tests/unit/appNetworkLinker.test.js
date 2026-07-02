@@ -37,6 +37,21 @@ describe('appNetworkLinker tests', () => {
     };
   }
 
+  // Loads the module against the shared stubs. The real config (flag off) is used
+  // unless fluxappsOverrides supplies e.g. { manageCollectorLifecycle: true }.
+  function loadLinker(fluxappsOverrides) {
+    const stubs = {
+      '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appRuntime/deploymentProvider': deploymentProviderStub,
+      '../dockerService': dockerServiceStub,
+      '../../lib/log': logStub,
+    };
+    if (fluxappsOverrides) {
+      stubs.config = { fluxapps: fluxappsOverrides };
+    }
+    return proxyquire('../../ZelBack/src/services/appLifecycle/appNetworkLinker', stubs);
+  }
+
   beforeEach(() => {
     appsRepositoryStub = {
       getInstalledApp: sinon.stub(),
@@ -48,15 +63,11 @@ describe('appNetworkLinker tests', () => {
     dockerServiceStub = {
       appDockerNetworkConnect: sinon.stub().resolves(),
       getAppContainerNames: sinon.stub().resolves([]),
+      getAppContainerObjects: sinon.stub().resolves([]),
     };
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
 
-    appNetworkLinker = proxyquire('../../ZelBack/src/services/appLifecycle/appNetworkLinker', {
-      '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appRuntime/deploymentProvider': deploymentProviderStub,
-      '../dockerService': dockerServiceStub,
-      '../../lib/log': logStub,
-    });
+    appNetworkLinker = loadLinker();
   });
 
   afterEach(() => {
@@ -113,6 +124,50 @@ describe('appNetworkLinker tests', () => {
       appsRepositoryStub.getInstalledApp.resolves(instSpec({ name: 'appA', owner: 'owner1' }));
       const result = await appNetworkLinker.checkAppNetworkRequirements(instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'] }));
       expect(result).to.equal(true);
+    });
+
+    it('flag off (default): an installed but not-running linked app still satisfies the check', async () => {
+      appsRepositoryStub.getInstalledApp.resolves(instSpec({ name: 'appA', owner: 'owner1' }));
+      dockerServiceStub.getAppContainerObjects.resolves([{ State: 'exited' }]);
+      const result = await appNetworkLinker.checkAppNetworkRequirements(instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'] }));
+      expect(result).to.equal(true);
+      sinon.assert.notCalled(dockerServiceStub.getAppContainerObjects);
+    });
+  });
+
+  describe('checkAppNetworkRequirements with manageCollectorLifecycle on', () => {
+    it('throws NETWORK_DEPENDENCY_NOT_READY when a linked app is installed but not running', async () => {
+      const linker = loadLinker({ manageCollectorLifecycle: true });
+      appsRepositoryStub.getInstalledApp.resolves(instSpec({ name: 'appA', owner: 'owner1' }));
+      dockerServiceStub.getAppContainerObjects.resolves([{ State: 'running' }, { State: 'exited' }]);
+      const error = await expect(linker.checkAppNetworkRequirements(instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'] })))
+        .to.be.rejectedWith(/installed but not running yet/);
+      expect(error.code).to.equal('NETWORK_DEPENDENCY_NOT_READY');
+    });
+
+    it('resolves true when every linked app is installed and running', async () => {
+      const linker = loadLinker({ manageCollectorLifecycle: true });
+      appsRepositoryStub.getInstalledApp.resolves(instSpec({ name: 'appA', owner: 'owner1' }));
+      dockerServiceStub.getAppContainerObjects.resolves([{ State: 'running' }, { State: 'running' }]);
+      const result = await linker.checkAppNetworkRequirements(instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'] }));
+      expect(result).to.equal(true);
+    });
+  });
+
+  describe('isAppRunning', () => {
+    it('is true when every container of the app is running', async () => {
+      dockerServiceStub.getAppContainerObjects.resolves([{ State: 'running' }, { State: 'running' }]);
+      expect(await appNetworkLinker.isAppRunning('appA')).to.equal(true);
+    });
+
+    it('is false when any container of the app is not running', async () => {
+      dockerServiceStub.getAppContainerObjects.resolves([{ State: 'running' }, { State: 'exited' }]);
+      expect(await appNetworkLinker.isAppRunning('appA')).to.equal(false);
+    });
+
+    it('is false when the app has no containers', async () => {
+      dockerServiceStub.getAppContainerObjects.resolves([]);
+      expect(await appNetworkLinker.isAppRunning('appA')).to.equal(false);
     });
   });
 
