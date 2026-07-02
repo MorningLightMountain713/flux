@@ -69,6 +69,9 @@ function makeBaseStubs(overrides = {}) {
     '../daemonService/daemonServiceMiscRpcs': {
       isDaemonSynced: sinon.stub().returns({ data: { height: 2000000, synced: true } }),
     },
+    '../daemonService/daemonServiceBlockchainRpcs': {
+      getBlock: sinon.stub().resolves({ status: 'success', data: { time: 1750000000 } }),
+    },
     '../utils/appUtilities': {
       appPricePerMonth: sinon.stub().resolves(1),
     },
@@ -521,6 +524,81 @@ describe('messageVerifier tests', () => {
       const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 0, null, 2);
       expect(result).to.be.true;
       expect(insertStub.called).to.be.false;
+    });
+
+    // registeredAt anchors v9 time-based expiry: a wrong value (0, or a stray
+    // retry counter) stores an app every liveness query reads as long-dead.
+    function makeV9Fixture(stubs) {
+      const mockConfirmedEvent = {
+        isRegistration: true,
+        isUpdate: false,
+        spec: { name: 'v9app', version: 9 },
+        serialize: sinon.stub().returns({}),
+        toInstantiatedSpec: sinon.stub().returns({}),
+      };
+      const mockInstantiated = {
+        name: 'v9app',
+        spec: { name: 'v9app', version: 9 },
+        isExpired: sinon.stub().returns(false),
+        serialize: sinon.stub().returns({}),
+      };
+      const confirmedDeserialize = sinon.stub().returns(mockConfirmedEvent);
+      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
+        type: 'fluxappregister',
+        version: 2,
+        appSpecifications: { name: 'v9app', version: 9, owner: 'owner1' },
+        hash: 'v9reg',
+        timestamp: Date.now(),
+        signature: 'sig',
+      });
+      stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
+        AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
+        ConfirmedAppEvent: { deserialize: confirmedDeserialize },
+        InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
+        deserializeSpec: sinon.stub().returnsArg(0),
+      });
+      return { confirmedDeserialize };
+    }
+
+    it('uses the confirming block time as the v9 registeredAt', async () => {
+      const { stubs } = makeBaseStubs();
+      const { confirmedDeserialize } = makeV9Fixture(stubs);
+      const getBlockStub = stubs['../daemonService/daemonServiceBlockchainRpcs'].getBlock;
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 200000000, 1751234567, 2);
+
+      expect(result).to.be.true;
+      expect(confirmedDeserialize.firstCall.args[0].registeredAt).to.equal(1751234567);
+      // block time was supplied — no daemon round-trip
+      expect(getBlockStub.called).to.be.false;
+    });
+
+    it('recovers the block time from the daemon when the hash row predates it', async () => {
+      const { stubs } = makeBaseStubs();
+      const { confirmedDeserialize } = makeV9Fixture(stubs);
+      const getBlockStub = stubs['../daemonService/daemonServiceBlockchainRpcs'].getBlock;
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 200000000, null, 2);
+
+      expect(result).to.be.true;
+      expect(getBlockStub.calledOnce).to.be.true;
+      expect(confirmedDeserialize.firstCall.args[0].registeredAt).to.equal(1750000000);
+    });
+
+    it('leaves the hash unresolved rather than storing a v9 app without a block time', async () => {
+      const storePermanentStub = sinon.stub().resolves();
+      const { stubs } = makeBaseStubs();
+      makeV9Fixture(stubs);
+      stubs['../appDatabase/appsRepository'].storePermanentMessage = storePermanentStub;
+      stubs['../daemonService/daemonServiceBlockchainRpcs'].getBlock = sinon.stub().resolves({ status: 'error', data: { message: 'no block' } });
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 200000000, null, 2);
+
+      expect(result).to.be.false;
+      expect(storePermanentStub.called).to.be.false;
     });
 
     it('should return false and log error when an exception occurs', async () => {

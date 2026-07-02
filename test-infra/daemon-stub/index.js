@@ -649,6 +649,7 @@ control.post('/advance-block', (req, res) => {
     // did not - so the one class of block whose isSynced skip matters most, an
     // app registration, was the one class the stub had made unskippable.
     block.confirmations = currentHeight - block.height + 1;
+    block.time = block.time || Math.floor(Date.now() / 1000);
     block.tx = [...(block.tx || []), ...txs];
     pendingBlocks.push(block);
   } else if (txs.length > 0) {
