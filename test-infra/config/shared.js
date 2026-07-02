@@ -246,6 +246,9 @@ module.exports = {
     // outlast it, or every UDP refusal reads as a peer that never answered.
     portTestPeerTimeoutMs: 8000,
     portTestMaxAttempts: 2,
+    // the whole harness fleet shares one /24, so the mainnet /16-diversity rule
+    // would always sample zero peers; distinct-IP is the honest harness equivalent
+    portTestPrefixLength: 32,
     spawnReconfirmDelayMs: 30000,
     globalCmdDelayMs: 100,
     discoveryAutostart: false,
