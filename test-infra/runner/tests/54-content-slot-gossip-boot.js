@@ -142,8 +142,8 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     const node = env.clients[installedIndex];
 
     // No node runs the app yet (no peers), so the install-hold resolves both the
-    // manifest and the slot bytes from the FluxDrive deep backstop. A blobProvisioned
-    // event means the hash-verified slot bytes landed; blobResolved names the source.
+    // manifest and the slot bytes from the FluxDrive deep backstop. A slotsProvisioned
+    // event means every hash-verified slot landed on disk; blobResolved names the source.
     const resolved = await node.waitForEvent(
       'content:blobResolved',
       (d) => d.appName === appName,
@@ -152,7 +152,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     );
     expect(resolved.data.source).to.equal('fluxdrive');
     await node.waitForEvent(
-      'content:blobProvisioned',
+      'content:slotsProvisioned',
       (d) => d.appName === appName,
       60000,
       { afterId: beforeIds[installedIndex] },
