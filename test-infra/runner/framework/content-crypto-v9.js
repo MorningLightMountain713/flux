@@ -176,14 +176,16 @@ export async function buildContentEnvelope({
 // seals the slots for an encrypted app). The owner signs the canonical form flux-spec
 // derives, the same bytes every verifier recomputes.
 export async function buildOwnerSignedManifest({
-  appName, version, slots, ownerKey, timestamp = Date.now(), rollout,
+  // rollout is mandatory on a manifest (contentManifest.js requires a strategy);
+  // immediate is the simplest valid value, overridden by the rollout-strategy tests
+  appName, version, slots, ownerKey, timestamp = Date.now(), rollout = { strategy: 'immediate' },
 }) {
   const manifest = {
     appName,
     version,
     slots,
     timestamp,
-    ...(rollout ? { rollout } : {}),
+    rollout,
   };
   const canonical = await canonicalContentManifest(manifest);
   manifest.ownerSignature = await signBtcMessage(canonical, ownerKey.privkey);
