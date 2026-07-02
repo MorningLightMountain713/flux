@@ -65,7 +65,7 @@ async function handleAppMessages(message, fromIP, port) {
     if (storeResult.promotion) {
       setImmediate(() => {
         const p = storeResult.promotion;
-        messageVerifier.checkAndRequestApp(p.hash, p.txid, p.height, p.value, 2)
+        messageVerifier.checkAndRequestApp(p.hash, p.txid, p.height, p.value, p.blockTime ?? null, 2)
           .catch((err) => log.error(`Immediate promotion failed for ${p.hash}: ${err.message}`));
       });
     }

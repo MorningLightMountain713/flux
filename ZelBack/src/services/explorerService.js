@@ -524,6 +524,7 @@ async function processInsight(blockDataVerbose, database) {
         if (isFluxAppMessageValue >= (priceSpecifications.minPrice * 1e8) && message.length === 64 && blockDataVerbose.height >= config.fluxapps.epochstart) { // min of X flux had to be paid for us bothering checking
           const appTxRecord = {
             txid: tx.txid, height: blockDataVerbose.height, hash: message, value: isFluxAppMessageValue, message: false, // message is boolean saying if we already have it stored as permanent message
+            blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
             syncAttempts: 0, nextRetryHeight: blockDataVerbose.height, retryFromHeight: blockDataVerbose.height,
           };
           // Unique hash - If we already have a hash of this app in our database, do not insert it!
@@ -618,7 +619,7 @@ async function insertAndRequestAppHashes(apps, database) {
       // eslint-disable-next-line no-restricted-syntax
       for (const app of apps) {
         // eslint-disable-next-line no-await-in-loop
-        const messageReceived = await messageVerifier.checkAndRequestApp(app.hash, app.txid, app.height, app.value, 2);
+        const messageReceived = await messageVerifier.checkAndRequestApp(app.hash, app.txid, app.height, app.value, app.blockTime ?? null, 2);
         if (messageReceived) {
           appsToRemove.push(app);
         } else {
@@ -702,6 +703,7 @@ async function processStandard(blockDataVerbose, database) {
         if (isFluxAppMessageValue >= (priceSpecifications.minPrice * 1e8) && message.length === 64 && blockDataVerbose.height >= config.fluxapps.epochstart) { // min of 1 flux had to be paid for us bothering checking
           const appTxRecord = {
             txid: tx.txid, height: blockDataVerbose.height, hash: message, value: isFluxAppMessageValue, message: false, // message is boolean saying if we already have it stored as permanent message
+            blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
             syncAttempts: 0, nextRetryHeight: blockDataVerbose.height, retryFromHeight: blockDataVerbose.height,
           };
           // Unique hash - If we already have a hash of this app in our database, do not insert it!
@@ -1159,6 +1161,7 @@ function processBootstrapTx(tx, priceSpecs, seenHashes, hashBatch) {
       seenHashes.add(message);
       hashBatch.push({
         txid: tx.txid, height, hash: message, value: appValue,
+        blockTime: tx.blocktime ?? null, // verbose getrawtransaction field — v9 registeredAt
         message: false, syncAttempts: 0, nextRetryHeight: height, retryFromHeight: height,
       });
     }
