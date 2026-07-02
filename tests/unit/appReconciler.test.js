@@ -40,6 +40,8 @@ describe('appReconciler tests', () => {
       };
     });
     return {
+      appName: spec.name,
+      linkedApps: spec.linkedApps || [],
       getComponent: (n) => comps.find((c) => c.name === n) || null,
       componentForIdentifier: (id) => comps.find((c) => c.identifier === id) || null,
       componentEntries: () => comps.map((c) => [c.name, c]),
@@ -100,6 +102,7 @@ describe('appReconciler tests', () => {
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
       },
       containerHealthMonitor: { recreateMissingContainers: sinon.stub().resolves() },
+      appNetworkLinker: { ensureContainerNetworkMembership: sinon.stub().resolves({ connected: [], disconnected: [], failed: [] }) },
       appUninstaller: { UninstallStatus, uninstallApplication: sinon.stub().resolves({ status: UninstallStatus.REMOVED, reason: null }) },
       appTamperingDetectionService: { recordEvent: sinon.stub().resolves(), isNetworkMissingError: () => false },
       dockerOperations: { appDeleteDataInMountPoint: sinon.stub().resolves() },
@@ -127,6 +130,7 @@ describe('appReconciler tests', () => {
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
       '../appQuery/appQueryService': stubs.appQueryService,
       './containerHealthMonitor': stubs.containerHealthMonitor,
+      '../appLifecycle/appNetworkLinker': stubs.appNetworkLinker,
       '../appLifecycle/appUninstaller': stubs.appUninstaller,
       '../appTamperingDetectionService': stubs.appTamperingDetectionService,
       '../appManagement/dockerOperations': stubs.dockerOperations,
@@ -150,6 +154,58 @@ describe('appReconciler tests', () => {
     const promise = new Promise((res) => { resolve = res; });
     return { promise, resolve };
   };
+
+  describe('network-membership convergence', () => {
+    it('steady state: converges a running container onto its own + linked networks', async () => {
+      localSpec = {
+        name: 'App', version: 4, compose: [{ name: 'www', containerData: '/data' }], linkedApps: ['collector'],
+      };
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: { Running: true, Status: 'running' },
+        NetworkSettings: { Networks: { fluxDockerNetwork_App: {} } },
+      });
+
+      await appReconciler.reconcile('www_App');
+
+      sinon.assert.calledOnceWithExactly(
+        stubs.appNetworkLinker.ensureContainerNetworkMembership,
+        'www_App',
+        ['fluxDockerNetwork_App', 'fluxDockerNetwork_collector'],
+        ['fluxDockerNetwork_App'],
+      );
+    });
+
+    it('wires memberships BEFORE starting a created/stopped container', async () => {
+      localSpec = {
+        name: 'App', version: 4, compose: [{ name: 'www', containerData: '/data' }], linkedApps: ['collector'],
+      };
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: { Running: false, Status: 'created' },
+        NetworkSettings: { Networks: { fluxDockerNetwork_App: {} } },
+      });
+
+      await appReconciler.reconcile('www_App');
+
+      sinon.assert.calledOnce(stubs.appNetworkLinker.ensureContainerNetworkMembership);
+      sinon.assert.calledOnce(stubs.dockerService.appDockerStart);
+      sinon.assert.callOrder(stubs.appNetworkLinker.ensureContainerNetworkMembership, stubs.dockerService.appDockerStart);
+    });
+
+    it('a failed membership change never blocks the start - it paces a retry instead', async () => {
+      localSpec = {
+        name: 'App', version: 4, compose: [{ name: 'www', containerData: '/data' }], linkedApps: ['collector'],
+      };
+      stubs.appNetworkLinker.ensureContainerNetworkMembership.resolves({ connected: [], disconnected: [], failed: ['fluxDockerNetwork_collector'] });
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: { Running: false, Status: 'created' },
+        NetworkSettings: { Networks: { fluxDockerNetwork_App: {} } },
+      });
+
+      await appReconciler.reconcile('www_App');
+
+      sinon.assert.calledOnce(stubs.dockerService.appDockerStart);
+    });
+  });
 
   describe('shutdown pipeline holds (LB drain state)', () => {
     it('takes no action on a stopped component while its app is stopping', async () => {

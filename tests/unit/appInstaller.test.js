@@ -557,7 +557,11 @@ describe('appInstaller tests', () => {
         // appNetworkLinker.reconnectLinkedApps runs on the success path (the call kept during
         // the rebase); without this stub the install throws before reaching the broadcast.
         './appNetworkLinker': {
-          reconnectLinkedApps: sinon.stub().resolves(), checkAppNetworkRequirements, connectComponentToLinkedApps: sinon.stub().resolves(), findLinkedAppLogCollector: sinon.stub().returns(null),
+          reconnectLinkedApps: sinon.stub().resolves(),
+          checkAppNetworkRequirements,
+          connectComponentToLinkedApps: sinon.stub().resolves(),
+          findLinkedAppLogCollector: sinon.stub().returns(null),
+          resolveLogCollector: sinon.stub().resolves({ syslogTarget: null, crossAppLogCollector: null }),
         },
         '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves(), broadcastMessageToAll },
         '../appMessaging/messageStore': { storeAppInstallingErrorMessage, storeAppRunningMessage: sinon.stub().resolves() },
