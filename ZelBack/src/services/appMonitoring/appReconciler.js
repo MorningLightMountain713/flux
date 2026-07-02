@@ -13,6 +13,7 @@ const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appQueryService = require('../appQuery/appQueryService');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
 const appVolumeService = require('../appLifecycle/appVolumeService');
 const appSwapPoolService = require('../appLifecycle/appSwapPoolService');
 const containerHealthMonitor = require('./containerHealthMonitor');
@@ -286,6 +287,9 @@ async function dockerActual(identifier) {
       // docker HEALTHCHECK status from a v9 livenessProbe: healthy | unhealthy |
       // starting, or null when the component declares no probe.
       health: info.State?.Health?.Status ?? null,
+      // docker-network memberships, for the network-membership convergence.
+      // null (the error paths below) means unknown - never converge on it.
+      networks: Object.keys(info.NetworkSettings?.Networks ?? {}),
     };
   } catch (err) {
     let containers;
@@ -293,19 +297,47 @@ async function dockerActual(identifier) {
       containers = await dockerService.dockerListContainers(true);
     } catch (probeErr) {
       return {
-        reachable: false, exists: false, running: false, exitCode: null, health: null,
+        reachable: false, exists: false, running: false, exitCode: null, health: null, networks: null,
       };
     }
     const dockerName = dockerService.getAppDockerNameIdentifier(identifier);
     const listed = containers.some((c) => Array.isArray(c.Names) && c.Names.includes(dockerName));
     if (listed) {
       return {
-        reachable: true, exists: true, running: false, exitCode: null, health: null, indeterminate: true,
+        reachable: true, exists: true, running: false, exitCode: null, health: null, indeterminate: true, networks: null,
       };
     }
     return {
-      reachable: true, exists: false, running: false, exitCode: null, health: null,
+      reachable: true, exists: false, running: false, exitCode: null, health: null, networks: null,
     };
+  }
+}
+
+/**
+ * Converges the container's docker-network memberships on the deployment's
+ * declared links: its own app network plus one per network.shareWith target.
+ * Runs wherever the reconcile holds a live container - before a start, so a
+ * recreated container is wired before it first runs, and on the steady-state
+ * pass, so drift (a missed attach, an update that dropped a link, an external
+ * disconnect) heals within one reconcile. Best-effort: a failure never blocks
+ * the run decision - an app is not held down over a degraded link - it paces
+ * a retry instead. No-op when the memberships are unknown (inspect failed).
+ */
+async function reconcileNetworkMembership(identifier, spec, actual) {
+  if (!Array.isArray(actual.networks)) return;
+  const { appName } = spec.deployment;
+  const desired = [
+    `fluxDockerNetwork_${appName}`,
+    ...spec.deployment.linkedApps.map((name) => `fluxDockerNetwork_${name}`),
+  ];
+  const result = await appNetworkLinker.ensureContainerNetworkMembership(identifier, desired, actual.networks);
+  if (result.connected.length || result.disconnected.length || result.failed.length) {
+    fluxEventBus.publish('reconciler:actuated', {
+      identifier, action: 'networkMembership', connected: result.connected, disconnected: result.disconnected, failed: result.failed,
+    });
+  }
+  if (result.failed.length) {
+    scheduleRetry(identifier, MANAGED_RETRY_MS);
   }
 }
 
@@ -635,6 +667,10 @@ async function reconcile(rawIdentifier) {
   }
 
   if (actual.running) {
+    // Steady state is where membership drift surfaces (a recreated linked app,
+    // an update that dropped a link, an external disconnect) - converge before
+    // the run-state decisions below.
+    await reconcileNetworkMembership(identifier, spec, actual);
     // A durable restart request (operator restart / mount or network repair) bounces
     // a running container when the desired generation exceeds the one we last
     // actuated, then records it. Level-based + idempotent (re-running won't re-bounce);
@@ -709,6 +745,12 @@ async function reconcile(rawIdentifier) {
   // Syncthing cleanup of a replicated data folder) before starting — otherwise the
   // start fails on a missing mount source and the app backoff-loops forever.
   await appVolumeService.ensureMountSourcesExist(spec.comp);
+
+  // Wire the container's network memberships before it runs: every creation
+  // path hands the container to this start in docker 'created' state, so this
+  // is the attach-before-first-start guarantee for shareWith links (and heals
+  // a stopped container's drift before a restart).
+  await reconcileNetworkMembership(identifier, spec, actual);
 
   // The controller verdict was sampled at reconcile entry, but the syncthing
   // decider's stop wrapper runs OUTSIDE this single-flight and may have flipped

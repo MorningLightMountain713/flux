@@ -1,5 +1,6 @@
 const log = require('../../lib/log');
 const componentProvisioner = require('../appLifecycle/componentProvisioner');
+const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
 const appVolumeService = require('../appLifecycle/appVolumeService');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -18,6 +19,9 @@ async function recreateMissingContainers(componentIdentifier) {
   // Recompute the app-wide feature gate so a recreated container keeps its budget
   // labels (identity labels are always stamped) — never silently downgraded.
   const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(deployment);
+  // Same for syslog routing - a container recreated without it silently falls
+  // back to json-file logging.
+  const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(instantiated, deployment);
   const isComponent = componentIdentifier.includes('_');
   const componentName = isComponent ? componentIdentifier.split('_')[0] : null;
   const components = componentName
@@ -46,7 +50,9 @@ async function recreateMissingContainers(componentIdentifier) {
       // rearchitect (pruner coordination / sources outside the synced tree).
       await appVolumeService.ensureMountSourcesExist(deployComp);
     }
-    await componentProvisioner.installComponent(deployComp, { createVolumes: !volumeMounted, owner: instantiated.owner, requiresEncryption });
+    await componentProvisioner.installComponent(deployComp, {
+      createVolumes: !volumeMounted, owner: instantiated.owner, requiresEncryption, syslogTarget, crossAppLogCollector,
+    });
   }
 
   log.info(`Successfully recreated missing containers for ${componentIdentifier}`);
