@@ -24,9 +24,9 @@ const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const log = require('../../lib/log');
 
 /**
- * Returns the linked app names declared by an app via `network.shareWith`,
- * excluding any self reference and duplicates. Empty for legacy (v1-v8) and
- * encrypted specs (no readable shareWith on this node).
+ * Returns the linked app names declared by an app via `network.shareWith`.
+ * Empty for legacy (v1-v8) and encrypted specs (no readable shareWith on
+ * this node).
  *
  * @param {object} instantiated - InstantiatedSpec instance
  * @returns {string[]} linked app names
@@ -36,27 +36,7 @@ function getLinkedApps(instantiated) {
     return [];
   }
   const { spec } = instantiated;
-  const shareWith = spec && spec.network && Array.isArray(spec.network.shareWith)
-    ? spec.network.shareWith
-    : [];
-  if (!shareWith.length) {
-    return [];
-  }
-  const selfName = String(instantiated.name || '').toLowerCase();
-  const names = [];
-  const seen = new Set();
-  for (const raw of shareWith) {
-    if (typeof raw !== 'string') {
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    const key = raw.toLowerCase();
-    if (key && key !== selfName && !seen.has(key)) {
-      seen.add(key);
-      names.push(raw);
-    }
-  }
-  return names;
+  return spec ? spec.linkedAppNames() : [];
 }
 
 /**
@@ -331,6 +311,68 @@ async function connectComponentToLinkedApps(componentContainerName, instantiated
 }
 
 /**
+ * Converges a container's docker-network memberships on the given desired set:
+ * connects missing networks and disconnects stale flux app networks (a
+ * membership that carries the runonflux.app-network ownership label but is no
+ * longer desired, e.g. an update dropped a shareWith link). Unlabelled
+ * networks (docker defaults, user-created) are never touched, and nothing
+ * outside the desired/actual diff is. Best-effort per network: each change is
+ * a leaf docker call under the node-wide host mutation lock (a linked
+ * network's removal runs in its app's teardown under the same lock), failures
+ * are collected for the caller to pace a retry.
+ *
+ * @param {string} componentIdentifier - container (bare identifier or docker name)
+ * @param {string[]} desiredNetworks - full desired membership (own + linked)
+ * @param {string[]} actualNetworks - current memberships from docker inspect
+ * @returns {Promise<{connected: string[], disconnected: string[], failed: string[]}>}
+ */
+async function ensureContainerNetworkMembership(componentIdentifier, desiredNetworks, actualNetworks) {
+  const desired = new Set(desiredNetworks);
+  const actual = new Set(actualNetworks);
+  const connected = [];
+  const disconnected = [];
+  const failed = [];
+  // eslint-disable-next-line no-restricted-syntax
+  for (const networkName of desired) {
+    if (actual.has(networkName)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await withHostMutationLock(() => dockerService.appDockerNetworkConnect(componentIdentifier, networkName));
+      connected.push(networkName);
+      log.info(`Connected ${componentIdentifier} to ${networkName}`);
+    } catch (error) {
+      failed.push(networkName);
+      log.error(`ensureContainerNetworkMembership: failed to connect ${componentIdentifier} to ${networkName}: ${error.message}`);
+    }
+  }
+  // eslint-disable-next-line no-restricted-syntax
+  for (const networkName of actual) {
+    if (desired.has(networkName)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await dockerService.isFluxAppNetwork(networkName))) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await withHostMutationLock(() => dockerService.appDockerNetworkDisconnect(componentIdentifier, networkName));
+      disconnected.push(networkName);
+      log.info(`Disconnected ${componentIdentifier} from stale ${networkName}`);
+    } catch (error) {
+      failed.push(networkName);
+      log.error(`ensureContainerNetworkMembership: failed to disconnect ${componentIdentifier} from ${networkName}: ${error.message}`);
+    }
+  }
+  return { connected, disconnected, failed };
+}
+
+/**
  * After an app's private network is (re)created, reconnects every locally
  * installed app that is networked with it back onto that network. Best-effort —
  * never throws, so a redeploy is not aborted by a reconnect hiccup.
@@ -465,6 +507,28 @@ async function findLinkedAppLogCollector(instantiated) {
   return null;
 }
 
+/**
+ * Resolves where a SEND component's syslog stream should land: the app's own
+ * LOG=COLLECT component when it has one, otherwise the first linked
+ * (shareWith) app exposing one. Resolved by the orchestrating caller and
+ * passed down to installComponent, so the docker primitive never depends on
+ * this module. Every path that creates a container must thread the result —
+ * a container created without it silently falls back to json-file logging.
+ *
+ * @param {object} instantiated - InstantiatedSpec instance
+ * @param {object} deployment - DeploymentSpec (decrypted view)
+ * @returns {Promise<{syslogTarget: string|null, crossAppLogCollector: {linkedAppName: string, collectorComponentName: string}|null}>}
+ */
+async function resolveLogCollector(instantiated, deployment) {
+  const syslogCollector = deployment.componentEntries()
+    .find(([, c]) => c.toDockerEnv().some((e) => typeof e === 'string' && e.startsWith('LOG=COLLECT')));
+  const syslogTarget = syslogCollector ? syslogCollector[0] : null;
+  const crossAppLogCollector = syslogTarget
+    ? null
+    : await findLinkedAppLogCollector(instantiated);
+  return { syslogTarget, crossAppLogCollector };
+}
+
 module.exports = {
   getLinkedApps,
   isAppRunning,
@@ -476,7 +540,9 @@ module.exports = {
   getRequiredDependencyNamesForNode,
   findUnrequiredInstalledDependencies,
   connectComponentToLinkedApps,
+  ensureContainerNetworkMembership,
   reconnectLinkedApps,
   reconcileAllAppNetworkLinks,
   findLinkedAppLogCollector,
+  resolveLogCollector,
 };
