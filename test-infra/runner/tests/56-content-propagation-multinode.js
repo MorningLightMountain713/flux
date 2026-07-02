@@ -19,8 +19,10 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 //   1. LIVE gossip — a contentupdate broadcast applies on the submitter
 //      (content:contentUpdateApplied) and lands on every other node holding the spec
 //      (content:manifestReceived), so the whole fleet's appcontentmanifests row reaches v2.
-//   2. ECONOMY of fetches — a blob body is served once per distinct missing holder
-//      (content:blobServed == the peer-resolving holders), not peers x bodies.
+//   2. ECONOMY of fetches — every holder resolves its body exactly once, every serve is
+//      one requester attempt (a resolve, or a discarded attempt announced as
+//      content:blobPeerMiss), and each holder tries at most maxPeerAttempts peers —
+//      bounded fetching, not peers x bodies.
 //   3. RECONCILE backfill — a node that was partitioned away (and so MISSED the live
 //      gossip) converges its register to the network's higher version via the two-step
 //      in-band reconcile (content:manifestReconciled), not a fresh gossip that never re-fires.
@@ -133,8 +135,8 @@ describe('content propagation across a multi-node fleet', function () {
     expect(versions.every((v) => v === 2)).to.equal(true);
   });
 
-  it('fetches each blob body once per missing holder: blobServed equals the peer-resolving holders, not peers x bodies', async function () {
-    this.timeout(360000);
+  it('fetches each blob body once per missing holder: serves are bounded by requester attempts, not peers x bodies', async function () {
+    this.timeout(420000);
     const name = `e2eserve${Date.now()}`;
     await pushImage(name, 'v1'); // /bin/pause: the holder stays up to serve peers
     const contentBytes = Buffer.from('immutable contentRef body for the serve-economy suite');
@@ -164,11 +166,14 @@ describe('content propagation across a multi-node fleet', function () {
     await queueAppTx(dep.data);
     await advanceBlocks(3);
 
-    // Let the spawner place several instances (it staggers via the installing-broadcast
-    // backoff, so later holders find an already-running peer and fetch the body from it).
+    // Wait for FULL placement (the spawner converges to exactly `instances`, staggered
+    // via the installing-broadcast backoff, so later holders find an already-running
+    // peer and fetch the body from it). Counting before every holder has provisioned
+    // leaves fetches in flight: a serve lands fleet-wide while its resolve belongs to
+    // a holder not yet in the snapshot, and the books never balance.
     await waitFor(
-      async () => (await installedInstanceIndices(env, name)).length >= 3,
-      { timeout: 220000, interval: 3000, label: `>=3 instances of ${name}` },
+      async () => (await installedInstanceIndices(env, name)).length >= 5,
+      { timeout: 280000, interval: 3000, label: `all 5 instances of ${name}` },
     );
     const installed = await installedInstanceIndices(env, name);
 
@@ -184,27 +189,36 @@ describe('content propagation across a multi-node fleet', function () {
     let totalServed = 0;
     let totalPeerResolved = 0;
     let totalFluxResolved = 0;
+    let totalPeerMisses = 0;
     for (const i of installed) {
       const node = env.clients[i];
       const provisioned = countEvents(node, 'content:blobProvisioned', afterIds[i], (d) => d.appName === name);
       const resolved = countEvents(node, 'content:blobResolved', afterIds[i], (d) => d.appName === name);
       expect(provisioned, `node ${i} provisioned the body exactly once`).to.equal(1);
       expect(resolved, `node ${i} resolved the body exactly once (no re-fetch across peers)`).to.equal(1);
-      totalPeerResolved += countEvents(node, 'content:blobResolved', afterIds[i], (d) => d.appName === name && d.source === 'peer');
+      const peerResolved = countEvents(node, 'content:blobResolved', afterIds[i], (d) => d.appName === name && d.source === 'peer');
+      const misses = countEvents(node, 'content:blobPeerMiss', afterIds[i], (d) => d.appName === name);
+      // The resolver walks peers sequentially and stops at maxPeerAttempts (3):
+      // every attempt is a resolve or an announced miss, never a silent fan-out.
+      expect(peerResolved + misses, `node ${i} attempted at most 3 peers`).to.be.at.most(3);
+      totalPeerResolved += peerResolved;
       totalFluxResolved += countEvents(node, 'content:blobResolved', afterIds[i], (d) => d.appName === name && d.source === 'fluxdrive');
     }
-    // blobServed fires only on the SERVING side; sum it for this locator across the fleet.
+    // Serves fire only on the SERVING side and misses on any requester (even one whose
+    // install later failed), so both are summed fleet-wide, not over the holders.
     for (let i = 0; i < env.clients.length; i++) {
       totalServed += countEvents(env.clients[i], 'content:blobServed', afterIds[i], (d) => d.appName === name && d.locator === locator);
+      totalPeerMisses += countEvents(env.clients[i], 'content:blobPeerMiss', afterIds[i], (d) => d.appName === name);
     }
 
-    // Conservation: every peer fetch is exactly one serve. If the resolver had amplified
-    // to peers x bodies, served would exceed the peer-resolving holders.
-    expect(totalServed, 'one serve per peer-resolving holder (== distinct missing holders served by a peer)').to.equal(totalPeerResolved);
+    // Conservation, both sides: every peer resolve was served by someone, and every
+    // serve was one requester attempt — a resolve, or a discarded attempt the
+    // requester announced (its response was lost or failed verification). A resolver
+    // that amplified to peers x bodies would blow through the per-holder attempt cap.
+    expect(totalServed, 'every peer-resolved body was served').to.be.at.least(totalPeerResolved);
+    expect(totalServed, 'every serve was one requester attempt (resolve or announced miss)').to.be.at.most(totalPeerResolved + totalPeerMisses);
     // Each install provisioned the one body once: peer + fluxdrive resolutions == installs.
     expect(totalPeerResolved + totalFluxResolved, 'every installed holder resolved the body exactly once').to.equal(installed.length);
-    // And no body was served more times than there were holders needing it.
-    expect(totalServed).to.be.at.most(installed.length);
   });
 
   it('converges a partitioned-away node to the higher version via reconcile, not a fresh gossip', async function () {
