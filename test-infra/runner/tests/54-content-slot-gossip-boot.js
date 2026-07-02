@@ -68,7 +68,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
   it('gossips the v1 manifest at submission; non-origin nodes quarantine it before the spec arrives', async function () {
     this.timeout(120000);
     const origin = env.clients[0];
-    const beforeIds = env.clients.map((c) => c.getLastEventId());
+    const beforeIds = env.clients.map((c) => (c ? c.getLastEventId() : 0)); // stub slot is null
 
     const res = await deployContentApp(origin.url, {
       name: appName,
@@ -118,12 +118,13 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
   it('confirms on-chain; the first cold installer provisions slot content from the FluxDrive backstop', async function () {
     this.timeout(240000);
     expect(appHash, 'submission produced an app hash').to.be.a('string');
-    const beforeIds = env.clients.map((c) => c.getLastEventId());
+    const beforeIds = env.clients.map((c) => (c ? c.getLastEventId() : 0)); // stub slot is null
 
     await queueAppTx(appHash);
     await advanceBlocks(3);
 
     installedIndex = await Promise.any(env.clients.map(async (c, i) => {
+      if (!c) throw new Error('stub slot'); // never installs; rejected out of the race
       await waitForAppInstalled(c, appName, 200000);
       return i;
     }));
@@ -168,7 +169,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
       { timeout: 120000, interval: 3000, label: `node ${i} promotes v1 on spec-confirm` },
     )));
 
-    const beforeIds = env.clients.map((c) => c.getLastEventId());
+    const beforeIds = env.clients.map((c) => (c ? c.getLastEventId() : 0)); // stub slot is null
     const up = await pushContentUpdate(env.clients[0].url, {
       name: appName, version: 2, slots: [{ name: slotName, bytes: v2Bytes }],
     });
