@@ -522,6 +522,7 @@ control.post('/advance-block', (req, res) => {
     block.height = block.height || currentHeight;
     block.hash = block.hash || `000000000000stub${currentHeight}`;
     block.confirmations = 1;
+    block.time = block.time || Math.floor(Date.now() / 1000);
     block.tx = [...(block.tx || []), ...txs];
     pendingBlocks.push(block);
   } else if (txs.length > 0) {

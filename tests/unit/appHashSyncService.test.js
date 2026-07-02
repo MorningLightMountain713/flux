@@ -138,7 +138,7 @@ describe('appHashSyncService tests', () => {
     };
 
     appEventVerifierStub = {
-      deserializeMessage: sinon.stub().resolves({}),
+      deserializeMessage: sinon.stub().callsFake(async (msg) => ({ serialize: () => ({ ...msg }) })),
       authorize: sinon.stub().resolves(),
       authorizeWithReplayFallback: sinon.stub().resolves(),
     };
@@ -776,7 +776,7 @@ describe('appHashSyncService tests', () => {
       };
 
       localAppEventVerifierStub = {
-        deserializeMessage: sinon.stub().resolves({}),
+        deserializeMessage: sinon.stub().callsFake(async (msg) => ({ serialize: () => ({ ...msg }) })),
         authorize: sinon.stub().resolves(),
         authorizeWithReplayFallback: sinon.stub().resolves(),
       };

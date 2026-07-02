@@ -320,19 +320,11 @@ async function processMessages(messages, onProgress) {
           await validateGossipSpec(validationBlob, { height });
         }
 
-        const permMsg = {
-          type: appMessage.type,
-          version: serviceHelper.ensureNumber(appMessage.version),
-          appSpecifications: appSpecFormatted,
-          hash: appMessage.hash,
-          timestamp: serviceHelper.ensureNumber(appMessage.timestamp),
-          signature: appMessage.signature,
-          txid: serviceHelper.ensureString(appMessage.txid),
-          height,
-          valueSat,
-        };
-
         const appEvent = await appEventVerifier.deserializeMessage(appMessage);
+        // The typed event (ConfirmedAppEvent v2 / AppEventLegacy v1) round-trips
+        // its own permanent-message shape; a hand-built object here drops the
+        // v2-only fields (contentHash, registeredAt, extend, arcaneAttestation).
+        const permMsg = appEvent.serialize();
 
         let previousState = null;
         if (!isRegistration) {

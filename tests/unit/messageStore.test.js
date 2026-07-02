@@ -237,7 +237,9 @@ describe('messageStore tests', () => {
       appsRepositoryStub.getTempMessage.resolves(null);
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneInDatabase.resolves({ height: 500, txid: 'txid123', value: 10000 });
+      dbHelperStub.findOneInDatabase.resolves({
+        height: 500, txid: 'txid123', value: 10000, blockTime: 1750000000,
+      });
       dbHelperStub.insertOneToDatabase.resolves();
 
       const result = await messageStore.storeAppTemporaryMessage(message, { furtherVerification: false });
@@ -248,6 +250,7 @@ describe('messageStore tests', () => {
         txid: 'txid123',
         height: 500,
         value: 10000,
+        blockTime: 1750000000,
       });
     });
 
