@@ -7,6 +7,7 @@ const generalService = require('../generalService');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
 const { buildPricingEngine, resolveMarketplacePricingCtx } = require('../pricing/buildPricingEngine');
@@ -216,11 +217,32 @@ function getDefaultExpire(height) {
     : config.fluxapps.blocksLasting;
 }
 
+/**
+ * Timestamp of the block at a given height. Fallback for v9 confirmations
+ * driven by an appshashes row that predates the stored blockTime field.
+ * @param {number} height - Block height
+ * @returns {Promise<number|null>} Block time in seconds, or null if unavailable
+ */
+async function lookupBlockTime(height) {
+  const req = { params: { hashheight: String(height), verbosity: 1 } };
+  const blockInfo = await daemonServiceBlockchainRpcs.getBlock(req);
+  if (blockInfo.status === 'success' && Number.isFinite(blockInfo.data.time)) {
+    return blockInfo.data.time;
+  }
+  return null;
+}
+
 async function constructConfirmedEvent(tempMessage, txid, height, valueSat, blockTime) {
   const { AppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
   const specs = tempMessage.appSpecifications;
 
   if (tempMessage.version === 2) {
+    // registeredAt anchors v9's time-based expiry (registeredAt + ttl); a
+    // coerced 0/NaN stores an app every liveness query reads as long-dead.
+    const registeredAt = serviceHelper.ensureNumber(blockTime);
+    if (!Number.isFinite(registeredAt) || registeredAt <= 0) {
+      throw new Error(`constructConfirmedEvent - no confirming block time for ${tempMessage.hash} at height ${height}`);
+    }
     return ConfirmedAppEvent.deserialize({
       type: tempMessage.type,
       version: tempMessage.version,
@@ -233,7 +255,7 @@ async function constructConfirmedEvent(tempMessage, txid, height, valueSat, bloc
       txid: serviceHelper.ensureString(txid),
       height: serviceHelper.ensureNumber(height),
       valueSat: serviceHelper.ensureNumber(valueSat),
-      registeredAt: serviceHelper.ensureNumber(blockTime),
+      registeredAt,
       arcaneAttestation: tempMessage.arcaneAttestation || null,
     });
   }
@@ -412,7 +434,18 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
 
     // Construct the confirmed event from temp message + chain data.
     // This deserializes the spec into its class instance (v1-v9).
-    const confirmedEvent = await constructConfirmedEvent(tempMessage, txid, height, valueSat, blockTime);
+    // v2 events need the confirming block's timestamp (v9 registeredAt); an
+    // appshashes row written before blockTime was stored lacks it — recover it
+    // from the daemon, or leave the hash unresolved for a later retry.
+    let confirmedBlockTime = blockTime;
+    if (confirmedBlockTime == null && tempMessage.version === 2) {
+      confirmedBlockTime = await lookupBlockTime(height);
+      if (confirmedBlockTime === null) {
+        log.error(`checkAndRequestApp - could not resolve block time for ${hash} at height ${height}`);
+        return false;
+      }
+    }
+    const confirmedEvent = await constructConfirmedEvent(tempMessage, txid, height, valueSat, confirmedBlockTime);
 
     // Re-verify signature for updates against current permanent state.
     // Prevents race: two updates verified against same state at temp time,
@@ -439,7 +472,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
 
     // Expiry check
     const daemonHeight = getDaemonHeight();
-    if (instantiated.isExpired(blockTime, daemonHeight)) {
+    if (instantiated.isExpired(confirmedBlockTime, daemonHeight)) {
       await handleExpiredApp(instantiated.name);
       return true;
     }
@@ -488,7 +521,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
       }
       const requiredSats = await computeUpdateFee(
         pricingSpec, prevSpec, height, prevMessage.height,
-        prevMessage.registeredAt || 0, blockTime,
+        prevMessage.registeredAt || 0, confirmedBlockTime,
       );
       if (BigInt(valueSat) >= requiredSats) {
         await updateAppSpecifications(instantiated.serialize());
@@ -525,7 +558,7 @@ async function checkAndRequestMultipleApps(apps, incoming = false, i = 1) {
     // eslint-disable-next-line no-restricted-syntax
     for (const app of apps) {
       // eslint-disable-next-line no-await-in-loop
-      const messageReceived = await checkAndRequestApp(app.hash, app.txid, app.height, app.value, null, 2);
+      const messageReceived = await checkAndRequestApp(app.hash, app.txid, app.height, app.value, app.blockTime ?? null, 2);
       if (messageReceived) {
         appsToRemove.push(app);
       }
@@ -603,6 +636,7 @@ async function continuousFluxAppHashesCheck(force = false) {
         value: 1,
         message: 1,
         messageNotFound: 1,
+        blockTime: 1,
       },
     };
     const results = await dbHelper.findInDatabase(database, appsHashesCollection, query, projection);
@@ -638,6 +672,7 @@ async function continuousFluxAppHashesCheck(force = false) {
             txid: result.txid,
             height: result.height,
             value: result.value,
+            blockTime: result.blockTime ?? null,
           };
           appsMessagesMissing.push(appMessageInformation);
           if (appsMessagesMissing.length === 500) {
