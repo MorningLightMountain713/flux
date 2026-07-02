@@ -52,7 +52,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     env = await createTestEnv({
       hookCtx: this, nodes: 6, stubPeers: [5], tickerAutostart: false, arcane: true,
     });
-    await bootAndPeer(env);
+    await bootAndPeer(env, { pricing: true });
     await pushImage(appName, 'v1');
     await resetFluxDrive();
     dbClients = env.clients.map((_, i) => dbClient(i + 1));

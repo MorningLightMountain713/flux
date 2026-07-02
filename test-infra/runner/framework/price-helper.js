@@ -10,8 +10,9 @@
 //   2. RateMessage (oracle-signed) — the FLUX/USD rate.
 //   3. PriceMessage (authority-signed) — the commodity rates + minPrice floor.
 //
-// The authority address must match the node's messageAuthorityAddress config
-// (set to authorityAddress() via configOverrides). See flux-chain-crypto.js.
+// The authority address must match the node's messageAuthorityAddress config —
+// the harness default in test-infra/config/shared.js is authorityAddress() from
+// flux-chain-crypto.js; suites testing authority rotation override it per-suite.
 import {
   PriceMessage, RateMessage, OracleKeyMessage, SOFT_FORK_EFFECTIVE_DEPTH,
 } from '@runonflux/flux-spec-policy';

@@ -56,7 +56,7 @@ describe('content delivery: failure modes', function () {
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true, legacyNodes: [LEGACY],
     });
-    await bootAndPeer(env);
+    await bootAndPeer(env, { pricing: true });
     await resetFluxDrive();
   });
 

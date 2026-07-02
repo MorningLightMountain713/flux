@@ -57,7 +57,7 @@ describe('content propagation across a multi-node fleet', function () {
     env = await createTestEnv({
       hookCtx: this, nodes: 10, tickerAutostart: false, arcane: true,
     });
-    await bootAndPeer(env);
+    await bootAndPeer(env, { pricing: true });
     await resetFluxDrive();
     dbClients = env.clients.map((_, i) => dbClient(i + 1));
   });

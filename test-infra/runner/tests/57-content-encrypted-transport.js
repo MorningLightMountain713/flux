@@ -47,7 +47,7 @@ describe('content encrypted transport (HPKE capstone): open, seal-at-rest, multi
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
     });
-    await bootAndPeer(env);
+    await bootAndPeer(env, { pricing: true });
     // transportApp: pause (no in-container inspection). sealApp + capApp(web): busybox
     // (cat/stat/inode). capApp(dep): pause (the dependsOn target, stays up).
     await pushImage(transportApp, 'v1');

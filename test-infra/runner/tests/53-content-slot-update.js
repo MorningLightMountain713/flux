@@ -88,7 +88,7 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
     });
-    await bootAndPeer(env);
+    await bootAndPeer(env, { pricing: true });
     await resetFluxDrive();
 
     // pause stays up for the restart/none apps (we only inspect docker StartedAt);
