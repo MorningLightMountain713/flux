@@ -54,7 +54,9 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
       hookCtx: this, nodes: 6, stubPeers: [5], tickerAutostart: false, arcane: true,
       configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
+    // minInbound matches the submission gate's fluxapps.minIncoming (2): the stub
+    // peer absorbs outbound dials without dialing back, so inbound converges late
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
     await pushImage(appName, 'v1');
     await resetFluxDrive();
     dbClients = env.clients.map((_, i) => dbClient(i + 1));
