@@ -239,13 +239,10 @@ module.exports = {
     complianceRetryMaxMs: 20000,
     forceRemovalIntervalMs: 120000,
     installCollisionWaitMs: 5000,
-    portTestBindDelayMs: 100,
-    portTestPropagationDelayMs: 100,
     // A peer answers only once its UDP probe of a silent port has reached its deadline
     // (UDP_PROBE_DEADLINE_MS, 3 s, fluxNetworkHelper.js), so the wait for that peer has to
     // outlast it, or every UDP refusal reads as a peer that never answered.
     portTestPeerTimeoutMs: 8000,
-    portTestMaxAttempts: 2,
     // the whole harness fleet shares one /24, so the mainnet /16-diversity rule
     // would always sample zero peers; distinct-IP is the honest harness equivalent
     portTestPrefixLength: 32,
