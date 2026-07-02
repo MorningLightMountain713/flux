@@ -22,8 +22,9 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // atomic:true managed-dir swap under /io.runonflux/ (inode replaced, torn-safe).
 //
 // Inspected components run the static-busybox fixture so the host (the DinD node)
-// can `docker exec /bin/busybox cat|stat` into them. nodes:5 so the submission's
-// minOutgoing>=4 peer gate is satisfiable; arcane:true so the node accepts the
+// can `docker exec /bin/busybox cat|stat` into them. nodes:5 with fluxapps.minOutgoing
+// lowered to 2 (a 5-node full mesh only reaches ~2 outbound/node — peers connect
+// inbound first and FluxOS dedups); arcane:true so the node accepts the
 // encrypted/content app and runs the benchmark-channel crypto. Asserts on the SSE
 // bus + the FluxDrive stub state + container inspectors, never log scraping.
 
@@ -62,8 +63,9 @@ describe('content slots + bind mounting: manifest, injection, perms, atomic deli
     this.timeout(720000);
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
+      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
     await Promise.all([
       pushBusybox(baseApp, 'v1'),
       pushBusybox(inplaceApp, 'v1'),

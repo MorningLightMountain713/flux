@@ -26,7 +26,8 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 //   4. the best-effort FluxDrive manifest-backstop PUT failing is swallowed — the
 //      content update still succeeds (gossip is primary).
 //
-// nodes:5 so the submission's minOutgoing>=4 peer gate is satisfiable; arcane:true
+// nodes:5 with fluxapps.minOutgoing lowered to 2 (a 5-node full mesh only reaches
+// ~2 outbound/node — peers connect inbound first and FluxOS dedups); arcane:true
 // so the arcane nodes accept content apps and run the benchmark crypto;
 // legacyNodes:[4] makes node 4 NON-arcane (no FLUX_ARCANE_NODE) — the refuser.
 
@@ -55,8 +56,9 @@ describe('content delivery: failure modes', function () {
     this.timeout(480000);
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true, legacyNodes: [LEGACY],
+      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
     await resetFluxDrive();
   });
 
