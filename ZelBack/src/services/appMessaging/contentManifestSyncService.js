@@ -18,6 +18,11 @@ const fluxEventBus = require('../utils/fluxEventBus');
 // Bodies land via the shared fluxappcontentmanifestsync receive path
 // (storeBatchContentManifests: full owner-sig + spec gate, latest-wins). The change-only
 // gossip stays the live-update path; this backfills a node that was away.
+//
+// The LOCAL gap view counts every held row, quarantined included: on a truly cold node
+// the fetched body races the app-spec sync and lands confirmed:false, but transport is
+// done — it promotes when the spec confirms, and re-fetching from another peer would
+// hit the same local spec gate. Only the index SERVED to peers is confirmed-only.
 
 const INDEX_TIMEOUT_MS = config.fluxapps.manifestIndexTimeoutMs ?? 15000;
 const FETCH_SETTLE_MS = config.fluxapps.manifestFetchSettleMs ?? 8000;
@@ -84,7 +89,7 @@ async function reconcile(peers, deps = {}) {
   if (!Array.isArray(peers) || peers.length === 0) return { peers: 0, indexesReceived: 0, fetched: 0 };
 
   const {
-    getLocalVersions = appsRepository.listConfirmedContentManifestVersions,
+    getLocalVersions = appsRepository.listContentManifestVersions,
     sign = serialiseAndSignFluxBroadcast,
     delay = serviceHelper.delay,
     now = Date.now,
