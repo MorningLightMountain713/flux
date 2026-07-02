@@ -308,13 +308,15 @@ class NetworkStateManager extends EventEmitter {
   /**
    * Returns up to `count` random socket addresses from the network state.
    *   options.excludeSocketAddress - never return this address, nor any address that
-   *     shares its /16 (its first two octets).
-   *   options.distinctPrefixes - returned addresses each have a distinct /16, so a
+   *     shares its prefix.
+   *   options.distinctPrefixes - returned addresses each have a distinct prefix, so a
    *     caller needing independent observers (e.g. the port-reachability probe) does
    *     not get same-subnet, shared-fate peers.
+   *   options.prefixLength - bits of IP prefix (whole octets, default 16) defining
+   *     "same network" for both exclusion and distinctness.
    * Fewer than `count` may be returned if the filtered pool is smaller.
    * @param {number} count
-   * @param {{excludeSocketAddress?: string, distinctPrefixes?: boolean}} options
+   * @param {{excludeSocketAddress?: string, distinctPrefixes?: boolean, prefixLength?: number}} options
    * @returns {Promise<string[]>}
    */
   async getRandomSocketAddressSample(count, options = {}) {
@@ -323,8 +325,8 @@ class NetworkStateManager extends EventEmitter {
     const indexSize = this.#socketAddressIndex.size;
     if (!indexSize || count <= 0) return [];
 
-    const { excludeSocketAddress = null, distinctPrefixes = false } = options;
-    const excludePrefix = excludeSocketAddress ? slash16Prefix(excludeSocketAddress) : null;
+    const { excludeSocketAddress = null, distinctPrefixes = false, prefixLength = 16 } = options;
+    const excludePrefix = excludeSocketAddress ? ipPrefix(excludeSocketAddress, prefixLength) : null;
 
     // Walk the index from a random offset, collecting addresses that pass the filters
     // until we have `count`. Single pass, O(indexSize) worst case.
@@ -339,7 +341,7 @@ class NetworkStateManager extends EventEmitter {
         // eslint-disable-next-line no-continue
         continue;
       }
-      const prefix = slash16Prefix(socketAddress);
+      const prefix = ipPrefix(socketAddress, prefixLength);
       if (excludePrefix && prefix === excludePrefix) {
         // eslint-disable-next-line no-continue
         continue;
@@ -625,18 +627,21 @@ if (require.main === module) {
 }
 
 /**
- * The /16 (first two octets) of a socketAddress ('ip:port' or 'ip'). Used to keep
- * randomly-sampled peers in distinct networks - same-/16 nodes share routing fate,
- * so their port-reachability verdicts are not independent.
+ * The network prefix of a socketAddress ('ip:port' or 'ip') at the given bit
+ * length, in whole octets (16 -> first two octets, 24 -> three, 32 -> full IP).
+ * Used to keep randomly-sampled peers in distinct networks - same-prefix nodes
+ * share routing fate, so their port-reachability verdicts are not independent.
  * @param {string} socketAddress
+ * @param {number} prefixLength - bits (16/24/32)
  * @returns {string}
  */
-function slash16Prefix(socketAddress) {
+function ipPrefix(socketAddress, prefixLength) {
   const ip = socketAddress.includes(':') ? socketAddress.slice(0, socketAddress.indexOf(':')) : socketAddress;
-  const firstDot = ip.indexOf('.');
-  if (firstDot === -1) return ip;
-  const secondDot = ip.indexOf('.', firstDot + 1);
-  return secondDot === -1 ? ip : ip.slice(0, secondDot);
+  const octets = Math.max(1, Math.min(4, Math.floor(prefixLength / 8)));
+  const parts = ip.split('.');
+  if (parts.length !== 4) return ip;
+  const prefix = parts.slice(0, octets).join('.');
+  return prefix;
 }
 
 module.exports = { NetworkStateManager };
