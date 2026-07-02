@@ -23,7 +23,8 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // applier (slotApplied). Asserts on the SSE event bus + the FluxDrive stub state +
 // the appcontentmanifests DB row + docker container state, never log scraping.
 //
-// nodes:5 so the submission's minOutgoing>=4 peer gate is satisfiable; arcane:true
+// nodes:5 with fluxapps.minOutgoing lowered to 2 (a 5-node full mesh only reaches
+// ~2 outbound/node — peers connect inbound first and FluxOS dedups); arcane:true
 // so the node accepts content apps, runs the benchmark crypto, and opens the sealed
 // content-update envelope.
 
@@ -87,8 +88,9 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
     this.timeout(600000);
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
+      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
     await resetFluxDrive();
 
     // pause stays up for the restart/none apps (we only inspect docker StartedAt);
