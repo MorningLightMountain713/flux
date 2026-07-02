@@ -485,6 +485,7 @@ describe('appInstaller tests', () => {
         teardownOwed = false,
         installComponentError = null,
         components = [],
+        checkAppNetworkRequirements = sinon.stub().resolves(),
       } = opts;
 
       const onInstallComplete = sinon.stub().resolves();
@@ -555,7 +556,9 @@ describe('appInstaller tests', () => {
         },
         // appNetworkLinker.reconnectLinkedApps runs on the success path (the call kept during
         // the rebase); without this stub the install throws before reaching the broadcast.
-        './appNetworkLinker': { reconnectLinkedApps: sinon.stub().resolves(), checkAppNetworkRequirements: sinon.stub().resolves(), connectComponentToLinkedApps: sinon.stub().resolves(), findLinkedAppLogCollector: sinon.stub().returns(null) },
+        './appNetworkLinker': {
+          reconnectLinkedApps: sinon.stub().resolves(), checkAppNetworkRequirements, connectComponentToLinkedApps: sinon.stub().resolves(), findLinkedAppLogCollector: sinon.stub().returns(null),
+        },
         '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves(), broadcastMessageToAll },
         '../appMessaging/messageStore': { storeAppInstallingErrorMessage, storeAppRunningMessage: sinon.stub().resolves() },
         '../appSecurity/imageManager': { isImageBlocked: sinon.stub().resolves(false), verifyRepository: sinon.stub().resolves({ verified: true, supportedArchitectures: ['amd64'] }) },
@@ -688,6 +691,36 @@ describe('appInstaller tests', () => {
         expect(result.status, 'a real failure fails').to.equal(appInstaller.InstallStatus.FAILED);
         expect(uninstallApplication.calledWith('newapp'), 'a real failure rolls back').to.be.true;
         expect(broadcastMessageToAll.called, 'a real failure broadcasts the install error').to.be.true;
+      });
+
+      it('defers (not fails) when a shareWith dependency is not installed yet — no mutation, no rollback', async () => {
+        const notReady = Object.assign(new Error("App 'collector' that 'newapp' must be networked with is not installed on this node. Installation aborted."), { code: 'NETWORK_DEPENDENCY_NOT_READY' });
+        const {
+          installer, installComponent, uninstallApplication, broadcastMessageToAll,
+        } = loadFresh({
+          checkAppNetworkRequirements: sinon.stub().rejects(notReady),
+          components: [['web', mockComponent]],
+        });
+
+        const result = await installer.installApplication(mockInstantiated, {});
+
+        expect(result.status, 'a missing dependency defers, never fails').to.equal(appInstaller.InstallStatus.DEFERRED);
+        expect(result.reason).to.include('is not installed on this node');
+        expect(installComponent.called, 'never provisioned anything').to.be.false;
+        expect(uninstallApplication.called, 'nothing to roll back').to.be.false;
+        expect(broadcastMessageToAll.called, 'no install-error broadcast for a transient ordering condition').to.be.false;
+      });
+
+      it('a code-less network-requirement error (owner mismatch) still fails hard', async () => {
+        const { installer, installComponent } = loadFresh({
+          checkAppNetworkRequirements: sinon.stub().rejects(new Error("App 'collector' that 'newapp' must be networked with is owned by a different owner. Installation aborted.")),
+          components: [['web', mockComponent]],
+        });
+
+        const result = await installer.installApplication(mockInstantiated, {});
+
+        expect(result.status, 'a misconfiguration is a real failure').to.equal(appInstaller.InstallStatus.FAILED);
+        expect(installComponent.called, 'never provisioned anything').to.be.false;
       });
 
       it('converge-rollback: a cancel landing during convergence defers instead of poisoning', async () => {
