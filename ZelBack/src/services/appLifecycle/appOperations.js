@@ -304,6 +304,17 @@ async function redeployApplication(appName, options = {}) {
       await componentProvisioner.verifyComponentImage(deployComp);
     }
 
+    // Pre-flight: verify every shareWith dependency is still installed BEFORE tearing
+    // anything down. The post-teardown re-verify below can only fail after the running
+    // containers are already destroyed; failing here keeps the old version running
+    // untouched (degraded at worst — reconnectLinkedApps re-attaches it when the
+    // dependency returns).
+    const preTeardownSpec = await appsRepository.getInstalledApp(appName);
+    if (!preTeardownSpec) {
+      throw new Error(`Application ${appName} not found in database`);
+    }
+    await appNetworkLinker.checkAppNetworkRequirements(preTeardownSpec);
+
     // Same-spec redeploy: every component's port set is unchanged, so leave the app's
     // ufw/UPnP rules in place across the teardown+reinstall (no firewall flap, no UPnP
     // re-map churn). skipPorts on both the teardown and the reinstall below.

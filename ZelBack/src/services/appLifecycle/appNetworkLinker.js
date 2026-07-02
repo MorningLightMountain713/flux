@@ -74,7 +74,12 @@ async function checkAppNetworkRequirements(instantiated) {
     // eslint-disable-next-line no-await-in-loop
     const installed = await appsRepository.getInstalledApp(linkedApp);
     if (!installed) {
-      throw new Error(`App '${linkedApp}' that '${instantiated.name}' must be networked with is not installed on this node. Installation aborted.`);
+      // Transient ordering condition, not a misconfiguration: the dependency may
+      // simply not be installed yet. Tagged so callers can defer and retry
+      // instead of treating it as a hard install failure.
+      const error = new Error(`App '${linkedApp}' that '${instantiated.name}' must be networked with is not installed on this node. Installation aborted.`);
+      error.code = 'NETWORK_DEPENDENCY_NOT_READY';
+      throw error;
     }
     if (installed.owner !== instantiated.owner) {
       throw new Error(`App '${linkedApp}' that '${instantiated.name}' must be networked with is owned by a different owner. Installation aborted.`);

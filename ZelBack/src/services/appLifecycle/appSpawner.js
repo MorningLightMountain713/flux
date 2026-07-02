@@ -73,6 +73,7 @@ const NODE_WIDE_OPERATIONS = ['install', 'remove', 'softRedeploy', 'hardRedeploy
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const { FluxCacheManager } = require('../utils/cacheManager');
 const appInstaller = require('./appInstaller');
+const appNetworkLinker = require('./appNetworkLinker');
 const appUninstaller = require('./appUninstaller');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -456,6 +457,26 @@ async function trySpawningGlobalApplication() {
       });
       survivors.afterNodePin = globalAppNamesLocation.length;
       stages.push(['afterNodePin', nameSet()]);
+
+      // Readiness-ordered selection: drop candidates whose shareWith dependencies
+      // are not ready, so a linked group installs root-first (a dependency before
+      // its consumers) instead of a consumer being selected first and deferring
+      // its install. A not-ready app is simply skipped this cycle and reconsidered
+      // once its deps come up — no deferral-queue entry and no error cache, so it
+      // installs the moment its dependency appears (even one registered later).
+      if (globalAppNamesLocation.length > 0) {
+        const readiness = await Promise.all(globalAppNamesLocation.map(async (c) => {
+          try {
+            await appNetworkLinker.checkAppNetworkRequirements(c.instantiated);
+            return true;
+          } catch (error) {
+            // Dependency not ready yet -> skip this cycle. Any other error (e.g.
+            // owner mismatch) is a real misconfig handled at install.
+            return error.code !== 'NETWORK_DEPENDENCY_NOT_READY';
+          }
+        }));
+        globalAppNamesLocation = globalAppNamesLocation.filter((_, index) => readiness[index]);
+      }
 
       appsCountAvailableToInstallOnMyNode = globalAppNamesLocation.length + appsSyncthingToBeCheckedLater.length + appsToBeCheckedLater.length;
       ({ shortDelayTime, delayTime } = enterpriseNetwork.getSpawnDelays(isEnterpriseNode, appsCountAvailableToInstallOnMyNode));
