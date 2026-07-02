@@ -110,6 +110,9 @@ module.exports = {
     portTestPropagationDelayMs: 100,
     portTestPeerTimeoutMs: 3000,
     portTestMaxAttempts: 2,
+    // the whole harness fleet shares one /24, so the mainnet /16-diversity rule
+    // would always sample zero peers; distinct-IP is the honest harness equivalent
+    portTestPrefixLength: 32,
     spawnReconfirmDelayMs: 30000,
     // harness nodes look Arcane (FLUXOS_PATH set), so unencrypted spawns defer by this
     unencryptedSpawnDelayMs: 500,

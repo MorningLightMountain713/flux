@@ -305,8 +305,8 @@ async function askPeerPortReachability(peerSocketAddress, payload, axiosConfig) 
  * Verify the given ports are publicly reachable by asking remote nodes to connect
  * back. Reachability is external, so the peer round-trip is the only real signal -
  * there is nothing local to wait for (firewall/UPnP are already applied by the
- * caller). Each round queries portTestPeerQueryCount nodes from DISTINCT /16s (and
- * never our own /16) concurrently:
+ * caller). Each round queries portTestPeerQueryCount nodes from DISTINCT network
+ * prefixes (portTestPrefixLength bits, default /16 - and never our own) concurrently:
  *   - the first peer that reaches us proves reachability -> true;
  *   - >=2 distinct-subnet peers agreeing it is unreachable -> false;
  *   - an inconclusive round (peers did not answer) retries with fresh diverse peers,
@@ -329,6 +329,7 @@ async function arePortsReachableViaPeers(data, localSocketAddress) {
     const peers = await networkStateService.getRandomSocketAddressSample(peerQueryCount, {
       excludeSocketAddress: localSocketAddress,
       distinctPrefixes: true,
+      prefixLength: config.fluxapps.portTestPrefixLength,
     });
     if (!peers || peers.length === 0) {
       // no eligible peers this round (tiny / just-booted network state) - retry
