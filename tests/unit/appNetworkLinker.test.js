@@ -13,14 +13,17 @@ describe('appNetworkLinker tests', () => {
   let dockerServiceStub;
   let logStub;
 
-  // Build a minimal InstantiatedSpec-shaped object. shareWith lives on
-  // the underlying spec's network object; encrypted/legacy specs expose
-  // no readable shareWith. activation is the v9 follower toggle; placement
-  // mimics the InstantiatedSpec delegating getter.
+  // Build a minimal InstantiatedSpec-shaped object whose spec mimics the
+  // domain-class surface (linkedAppNames per FluxAppSpecBase/V9; validation
+  // owns dedupe/self-reference invariants, so the list is returned as-is).
+  // activation is the v9 follower toggle; placement mimics the
+  // InstantiatedSpec delegating getter.
   function instSpec({
     name, owner = 'owner1', shareWith, encrypted = false, activation, placement,
   } = {}) {
-    const spec = {};
+    const spec = {
+      linkedAppNames: () => (Array.isArray(shareWith) ? [...shareWith] : []),
+    };
     if (shareWith !== undefined) spec.network = { shareWith };
     if (activation !== undefined) spec.activation = activation;
     return {
@@ -73,6 +76,8 @@ describe('appNetworkLinker tests', () => {
     };
     dockerServiceStub = {
       appDockerNetworkConnect: sinon.stub().resolves(),
+      appDockerNetworkDisconnect: sinon.stub().resolves(),
+      isFluxAppNetwork: sinon.stub().resolves(false),
       getAppContainerNames: sinon.stub().resolves([]),
       getAppContainerObjects: sinon.stub().resolves([]),
     };
@@ -89,11 +94,6 @@ describe('appNetworkLinker tests', () => {
     it('returns the shareWith entries declared on the spec', () => {
       const inst = instSpec({ name: 'appB', shareWith: ['appA', 'appC'] });
       expect(appNetworkLinker.getLinkedApps(inst)).to.eql(['appA', 'appC']);
-    });
-
-    it('excludes a self-reference and deduplicates', () => {
-      const inst = instSpec({ name: 'appB', shareWith: ['appA', 'appB', 'appA'] });
-      expect(appNetworkLinker.getLinkedApps(inst)).to.eql(['appA']);
     });
 
     it('returns an empty list when shareWith is absent', () => {
@@ -307,6 +307,33 @@ describe('appNetworkLinker tests', () => {
     });
   });
 
+  describe('resolveLogCollector', () => {
+    it('prefers the app\'s own LOG=COLLECT component (no cross-app lookup)', async () => {
+      const own = deployment([
+        ['web', ['FOO=BAR']],
+        ['logsink', ['LOG=COLLECT']],
+      ]);
+      const result = await appNetworkLinker.resolveLogCollector(instSpec({ name: 'appB', shareWith: ['appA'] }), own);
+      expect(result).to.eql({ syslogTarget: 'logsink', crossAppLogCollector: null });
+      sinon.assert.notCalled(deploymentProviderStub.getInstalledDeployment);
+    });
+
+    it('falls back to a linked app\'s collector when the app has none', async () => {
+      deploymentProviderStub.getInstalledDeployment.withArgs('appA').resolves(deployment([
+        ['collector', ['LOG=COLLECT']],
+      ]));
+      const own = deployment([['web', ['FOO=BAR']]]);
+      const result = await appNetworkLinker.resolveLogCollector(instSpec({ name: 'appB', shareWith: ['appA'] }), own);
+      expect(result).to.eql({ syslogTarget: null, crossAppLogCollector: { linkedAppName: 'appA', collectorComponentName: 'collector' } });
+    });
+
+    it('resolves to nothing for an app with no collector anywhere', async () => {
+      const own = deployment([['web', ['FOO=BAR']]]);
+      const result = await appNetworkLinker.resolveLogCollector(instSpec({ name: 'appB' }), own);
+      expect(result).to.eql({ syslogTarget: null, crossAppLogCollector: null });
+    });
+  });
+
   describe('attach serialization under the host mutation lock', () => {
     // eslint-disable-next-line global-require
     const { withHostMutationLock } = require('../../ZelBack/src/services/utils/hostMutationLock');
@@ -327,6 +354,64 @@ describe('appNetworkLinker tests', () => {
       await attach;
       await teardownHold;
       sinon.assert.calledWith(dockerServiceStub.appDockerNetworkConnect, 'fluxweb_appB', 'fluxDockerNetwork_appA');
+    });
+  });
+
+  describe('ensureContainerNetworkMembership', () => {
+    it('connects every desired network the container is missing', async () => {
+      const result = await appNetworkLinker.ensureContainerNetworkMembership(
+        'fluxweb_myapp',
+        ['fluxDockerNetwork_myapp', 'fluxDockerNetwork_collector'],
+        ['fluxDockerNetwork_myapp'],
+      );
+      sinon.assert.calledOnceWithExactly(dockerServiceStub.appDockerNetworkConnect, 'fluxweb_myapp', 'fluxDockerNetwork_collector');
+      sinon.assert.notCalled(dockerServiceStub.appDockerNetworkDisconnect);
+      expect(result.connected).to.eql(['fluxDockerNetwork_collector']);
+    });
+
+    it('disconnects a stale flux app network (ownership label) that is no longer desired', async () => {
+      dockerServiceStub.isFluxAppNetwork.withArgs('fluxDockerNetwork_dropped').resolves(true);
+      const result = await appNetworkLinker.ensureContainerNetworkMembership(
+        'fluxweb_myapp',
+        ['fluxDockerNetwork_myapp'],
+        ['fluxDockerNetwork_myapp', 'fluxDockerNetwork_dropped'],
+      );
+      sinon.assert.calledOnceWithExactly(dockerServiceStub.appDockerNetworkDisconnect, 'fluxweb_myapp', 'fluxDockerNetwork_dropped');
+      sinon.assert.notCalled(dockerServiceStub.appDockerNetworkConnect);
+      expect(result.disconnected).to.eql(['fluxDockerNetwork_dropped']);
+    });
+
+    it('never touches a network without the ownership label (docker defaults, user networks)', async () => {
+      await appNetworkLinker.ensureContainerNetworkMembership(
+        'fluxweb_myapp',
+        ['fluxDockerNetwork_myapp'],
+        ['fluxDockerNetwork_myapp', 'bridge', 'host'],
+      );
+      sinon.assert.notCalled(dockerServiceStub.appDockerNetworkConnect);
+      sinon.assert.notCalled(dockerServiceStub.appDockerNetworkDisconnect);
+    });
+
+    it('makes no docker calls when memberships already match', async () => {
+      const result = await appNetworkLinker.ensureContainerNetworkMembership(
+        'fluxweb_myapp',
+        ['fluxDockerNetwork_myapp', 'fluxDockerNetwork_collector'],
+        ['fluxDockerNetwork_myapp', 'fluxDockerNetwork_collector'],
+      );
+      sinon.assert.notCalled(dockerServiceStub.appDockerNetworkConnect);
+      sinon.assert.notCalled(dockerServiceStub.appDockerNetworkDisconnect);
+      expect(result).to.eql({ connected: [], disconnected: [], failed: [] });
+    });
+
+    it('collects a failed change and continues with the rest (best-effort)', async () => {
+      dockerServiceStub.appDockerNetworkConnect
+        .withArgs('fluxweb_myapp', 'fluxDockerNetwork_gone').rejects(new Error('network not found'));
+      const result = await appNetworkLinker.ensureContainerNetworkMembership(
+        'fluxweb_myapp',
+        ['fluxDockerNetwork_gone', 'fluxDockerNetwork_collector'],
+        [],
+      );
+      expect(result.failed).to.eql(['fluxDockerNetwork_gone']);
+      expect(result.connected).to.eql(['fluxDockerNetwork_collector']);
     });
   });
 
