@@ -64,17 +64,19 @@ export async function installOnNodes(env, app, indices, { timeout = 120000 } = {
 // timestamp }) for suites exercising specific policy values; suites needing full
 // control of the message sequence leave it off and drive price-helper directly.
 export async function bootAndPeer(env, { minOutbound = 4, minInbound = 2, pricing = false } = {}) {
-  for (const client of env.clients) await waitForDaemonReady(client);
-  await Promise.all(env.clients.map(
+  // stub-peer slots hold no FluxOS client (their env.clients entry is null)
+  const fluxClients = env.clients.filter(Boolean);
+  for (const client of fluxClients) await waitForDaemonReady(client);
+  await Promise.all(fluxClients.map(
     (c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000),
   ));
   await advanceBlock();
-  for (const client of env.clients) {
+  for (const client of fluxClients) {
     await waitForBlockProcessed(client, (d) => d.height > 2100000, 50000);
   }
   await env.startDiscovery();
-  await env.clients[0].waitForEvent('peers:added', (d) => d.outbound >= minOutbound, 120000);
-  await env.clients[0].waitForEvent('peers:added', (d) => d.inbound >= minInbound, 120000);
+  await fluxClients[0].waitForEvent('peers:added', (d) => d.outbound >= minOutbound, 120000);
+  await fluxClients[0].waitForEvent('peers:added', (d) => d.inbound >= minInbound, 120000);
   await startTicker();
   if (pricing) {
     await bootstrapPricing(pricing === true ? {} : pricing);
