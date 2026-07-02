@@ -13,6 +13,7 @@ import {
 import { dbClient } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { bootstrapPricing } from '../framework/price-helper.js';
 
 // Content-manifest sync: the permanent latest-wins register reconciled OFF the
 // ephemeral boot-sync plane (the two-step in-band exchange in
@@ -74,6 +75,9 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
       hookCtx: this, nodes: NODES, deferredNodes: 1, tickerAutostart: false, arcane: true,
     });
     await bootAndPeerInitial(env, INITIAL_IDX);
+    // this suite boots its fleet through the local index-taking helper, so it
+    // drives price-helper directly instead of bootAndPeer's pricing option
+    await bootstrapPricing();
     await pushImage(appName, 'v1');
     await resetFluxDrive();
 

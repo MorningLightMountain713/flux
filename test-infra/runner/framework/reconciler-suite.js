@@ -21,6 +21,7 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from './subnet-config.js';
 import { dialerCount, expectedPeerTotal } from './peer-topology.js';
 import { setSynced, setSyncState, setNoPeerData } from './syncthing-control.js';
 import { execInContainer } from './container.js';
+import { bootstrapPricing } from './price-helper.js';
 
 // A folder the suite pins "synced" (setSynced reports a non-zero global index)
 // must also HOLD data on disk, like any really-synced folder. Seeded apps write
@@ -281,7 +282,13 @@ export async function electionIndexOf(env, appName, holderIndex, { timeout = 900
   return position;
 }
 
-export async function bootAndPeer(env, { minOutbound, minInbound } = {}) {
+// pricing: true bootstraps default v9 on-chain pricing once the fleet is ticking
+// (any suite confirming a v9 app through the real chain path needs it — a fresh
+// harness chain quotes no price and registrations are fail-closed rejected). Pass
+// an object to forward bootstrapPricing overrides ({ priceFields, fluxUsdPriceE4,
+// timestamp }) for suites exercising specific policy values; suites needing full
+// control of the message sequence leave it off and drive price-helper directly.
+export async function bootAndPeer(env, { minOutbound, minInbound, pricing = false } = {}) {
   // A stub peer holds an index with no client behind it. It is something for the
   // fleet to talk to, never a node this boots, confirms or reads a height from -
   // so the waits run over the real nodes while the peering ceiling below still
@@ -340,6 +347,9 @@ export async function bootAndPeer(env, { minOutbound, minInbound } = {}) {
   );
 
   await startTicker();
+  if (pricing) {
+    await bootstrapPricing(pricing === true ? {} : pricing);
+  }
 }
 
 // The location table never gates boot: the fetch starts at DB-ready and a
