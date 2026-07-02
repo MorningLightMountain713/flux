@@ -454,6 +454,15 @@ describe('appsRepository', () => {
       expect(options.projection).to.deep.equal({ _id: 0, appName: 1, version: 1 });
     });
 
+    it('listContentManifestVersions returns every held row, quarantined included', async () => {
+      dbHelperStub.findInDatabase.resolves([{ appName: 'a', version: 2 }, { appName: 'q', version: 1 }]);
+      const out = await appsRepository.listContentManifestVersions();
+      expect(out).to.deep.equal([{ appName: 'a', version: 2 }, { appName: 'q', version: 1 }]);
+      const [, , query, options] = dbHelperStub.findInDatabase.firstCall.args;
+      expect(query).to.deep.equal({});
+      expect(options.projection).to.deep.equal({ _id: 0, appName: 1, version: 1 });
+    });
+
     it('listConfirmedContentManifestBroadcasts rebuilds {...envelope, data}, optionally scoped to appNames', async () => {
       const env = { version: 1, timestamp: 7, pubKey: 'pk', signature: 'sig' };
       dbHelperStub.findInDatabase.resolves([{ envelope: env, data: { m: 1 } }]);
