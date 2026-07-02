@@ -58,7 +58,7 @@ describe('content delivery: failure modes', function () {
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true, legacyNodes: [LEGACY],
       configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
     await resetFluxDrive();
   });
 

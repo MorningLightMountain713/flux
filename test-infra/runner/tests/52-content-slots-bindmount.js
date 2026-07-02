@@ -65,7 +65,7 @@ describe('content slots + bind mounting: manifest, injection, perms, atomic deli
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
       configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
     await Promise.all([
       pushBusybox(baseApp, 'v1'),
       pushBusybox(inplaceApp, 'v1'),
