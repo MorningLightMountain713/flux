@@ -15,16 +15,26 @@ describe('appNetworkLinker tests', () => {
 
   // Build a minimal InstantiatedSpec-shaped object. shareWith lives on
   // the underlying spec's network object; encrypted/legacy specs expose
-  // no readable shareWith.
+  // no readable shareWith. activation is the v9 follower toggle; placement
+  // mimics the InstantiatedSpec delegating getter.
   function instSpec({
-    name, owner = 'owner1', shareWith, encrypted = false,
+    name, owner = 'owner1', shareWith, encrypted = false, activation, placement,
   } = {}) {
+    const spec = {};
+    if (shareWith !== undefined) spec.network = { shareWith };
+    if (activation !== undefined) spec.activation = activation;
     return {
       name,
       owner,
       isEncrypted: encrypted,
-      spec: shareWith === undefined ? {} : { network: { shareWith } },
+      spec,
+      placement,
     };
+  }
+
+  // A follower app: no independent run decision, reaped when orphaned.
+  function follower(opts) {
+    return instSpec({ ...opts, activation: { standalone: false, stopWhenUnneeded: true } });
   }
 
   // Build a DeploymentSpec-shaped object whose componentEntries expose the
@@ -56,6 +66,7 @@ describe('appNetworkLinker tests', () => {
     appsRepositoryStub = {
       getInstalledApp: sinon.stub(),
       listInstalledApps: sinon.stub(),
+      listGlobalAppInfo: sinon.stub(),
     };
     deploymentProviderStub = {
       getInstalledDeployment: sinon.stub(),
@@ -187,6 +198,112 @@ describe('appNetworkLinker tests', () => {
       dockerServiceStub.appDockerNetworkConnect.rejects(new Error('docker boom'));
       await expect(appNetworkLinker.connectComponentToLinkedApps('c', instSpec({ name: 'appB', shareWith: ['appA'] })))
         .to.be.rejectedWith('docker boom');
+    });
+  });
+
+  describe('follower predicates (activation)', () => {
+    it('isPureFollower is true only for activation.standalone === false', () => {
+      expect(appNetworkLinker.isPureFollower(follower({ name: 'c' }))).to.equal(true);
+      expect(appNetworkLinker.isPureFollower(instSpec({ name: 'c', activation: { standalone: false, stopWhenUnneeded: false } }))).to.equal(true);
+      expect(appNetworkLinker.isPureFollower(instSpec({ name: 'c', activation: { standalone: true, stopWhenUnneeded: true } }))).to.equal(false);
+      expect(appNetworkLinker.isPureFollower(instSpec({ name: 'c' }))).to.equal(false);
+      expect(appNetworkLinker.isPureFollower(null)).to.equal(false);
+    });
+
+    it('isPureFollower is false for an encrypted spec (activation unreadable here)', () => {
+      const enc = instSpec({ name: 'c', encrypted: true, activation: { standalone: false, stopWhenUnneeded: true } });
+      expect(appNetworkLinker.isPureFollower(enc)).to.equal(false);
+    });
+
+    it('isReapableFollower requires BOTH standalone false and stopWhenUnneeded', () => {
+      expect(appNetworkLinker.isReapableFollower(follower({ name: 'c' }))).to.equal(true);
+      expect(appNetworkLinker.isReapableFollower(instSpec({ name: 'c', activation: { standalone: false, stopWhenUnneeded: false } }))).to.equal(false);
+      // a standalone app is never reaped - it justifies its own presence
+      expect(appNetworkLinker.isReapableFollower(instSpec({ name: 'c', activation: { standalone: true, stopWhenUnneeded: true } }))).to.equal(false);
+    });
+  });
+
+  describe('computeRequiredDependencyNames', () => {
+    it('marks a follower required when a workload links to it', () => {
+      const apps = [instSpec({ name: 'game', shareWith: ['collector'] }), follower({ name: 'collector' })];
+      expect([...appNetworkLinker.computeRequiredDependencyNames(apps)]).to.eql(['collector']);
+    });
+
+    it('follows the closure transitively through follower-to-follower links', () => {
+      const apps = [
+        instSpec({ name: 'game', shareWith: ['datadog'] }),
+        follower({ name: 'datadog', shareWith: ['alloy'] }),
+        follower({ name: 'alloy' }),
+      ];
+      const required = appNetworkLinker.computeRequiredDependencyNames(apps);
+      expect(required.has('datadog')).to.equal(true);
+      expect(required.has('alloy')).to.equal(true);
+    });
+
+    it('a follower cannot keep itself (or a sibling) alive - closure starts from standalone apps only', () => {
+      const apps = [follower({ name: 'datadog', shareWith: ['alloy'] }), follower({ name: 'alloy' })];
+      expect(appNetworkLinker.computeRequiredDependencyNames(apps).size).to.equal(0);
+    });
+
+    it('ignores cross-owner links', () => {
+      const apps = [instSpec({ name: 'game', owner: 'owner1', shareWith: ['collector'] }), follower({ name: 'collector', owner: 'owner2' })];
+      expect(appNetworkLinker.computeRequiredDependencyNames(apps).size).to.equal(0);
+    });
+  });
+
+  describe('findInstalledWorkloadsRequiring', () => {
+    it('returns workloads that transitively require the follower, never sibling followers', async () => {
+      appsRepositoryStub.listInstalledApps.resolves([
+        instSpec({ name: 'game', shareWith: ['datadog'] }),
+        follower({ name: 'datadog', shareWith: ['alloy'] }),
+        follower({ name: 'alloy' }),
+        instSpec({ name: 'unrelated' }),
+      ]);
+      const requiring = await appNetworkLinker.findInstalledWorkloadsRequiring('alloy');
+      expect(requiring.map((a) => a.name)).to.eql(['game']);
+    });
+  });
+
+  describe('getRequiredDependencyNamesForNode', () => {
+    function placementStub(matches) {
+      return { hasTargets: () => true, matchesTarget: sinon.stub().returns(matches) };
+    }
+
+    it('computes the closure over global apps whose placement targets this node', async () => {
+      appsRepositoryStub.listGlobalAppInfo.resolves([
+        instSpec({ name: 'game', shareWith: ['collector'], placement: placementStub(true) }),
+        follower({ name: 'collector', placement: placementStub(true) }),
+        instSpec({ name: 'elsewhere', shareWith: ['othercol'], placement: placementStub(false) }),
+        follower({ name: 'othercol', placement: placementStub(false) }),
+      ]);
+      const required = await appNetworkLinker.getRequiredDependencyNamesForNode({ ip: '7.7.7.7:16127' });
+      expect(required.has('collector')).to.equal(true);
+      expect(required.has('othercol')).to.equal(false);
+    });
+
+    it('returns an empty set when no node identity is known', async () => {
+      const required = await appNetworkLinker.getRequiredDependencyNamesForNode({});
+      expect(required.size).to.equal(0);
+      sinon.assert.notCalled(appsRepositoryStub.listGlobalAppInfo);
+    });
+  });
+
+  describe('findUnrequiredInstalledDependencies', () => {
+    it('returns only reapable followers that no workload requires', async () => {
+      appsRepositoryStub.listInstalledApps.resolves([
+        instSpec({ name: 'game', shareWith: ['datadog'] }),
+        follower({ name: 'datadog' }),
+        follower({ name: 'orphaned' }),
+        instSpec({ name: 'persistent', activation: { standalone: false, stopWhenUnneeded: false } }),
+      ]);
+      const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
+      expect(orphans.map((a) => a.name)).to.eql(['orphaned']);
+    });
+
+    it('orphans the follower once its last workload is gone', async () => {
+      appsRepositoryStub.listInstalledApps.resolves([follower({ name: 'datadog' })]);
+      const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
+      expect(orphans.map((a) => a.name)).to.eql(['datadog']);
     });
   });
 
