@@ -30,10 +30,16 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 //   5. FluxDrive backstop — the first (cold, peerless) installer provisions its slot
 //      content from the FluxDrive deep backstop, not a peer.
 //
-// nodes:6 (five real nodes + one peer stub at index 5, used to inject the forged-sig
-// gossip) with fluxapps.minOutgoing lowered to 2 (a small full mesh only reaches
-// ~2 outbound/node — peers connect inbound first and FluxOS dedups); arcane:true so the nodes
-// accept content apps and run the benchmark crypto.
+// nodes:6 — five real nodes + one peer stub at index 5, used to inject the forged-sig
+// gossip. Peering is a deterministic ring: each node dials the NEXT minOutgoing (2)
+// nodes in the IP-sorted node list, asks the PREVIOUS 2 to dial it, and FluxOS keeps
+// one edge per pair — adjacency is exactly ring-distance <= 2. The stub dials nobody,
+// so node 2 (the stub's ring antipode) is the one real adjacent to ALL four other
+// reals, and the stub's only edges are the dial-ins from nodes 3 and 4. Quarantined
+// manifests are deliberately not rebroadcast (anti-amplification), so at-submission
+// gossip is ONE hop from the origin: the suite submits through node 2 and asserts
+// stub-injected gossip on nodes 3/4. arcane:true so the nodes accept content apps
+// and run the benchmark crypto.
 
 describe('content slots: manifest gossip propagation + boot recovery', function () {
   let env;
@@ -60,7 +66,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
     await pushImage(appName, 'v1');
     await resetFluxDrive();
-    dbClients = env.clients.map((_, i) => dbClient(i + 1));
+    dbClients = env.clients.map((c, i) => (c ? dbClient(i + 1) : null)); // stub slot has no node
   });
 
   after(async function () {
@@ -70,7 +76,9 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
 
   it('gossips the v1 manifest at submission; non-origin nodes quarantine it before the spec arrives', async function () {
     this.timeout(120000);
-    const origin = env.clients[0];
+    // Node 2 is the only real adjacent to all four others (see header): submitting
+    // there makes the one-hop at-submission gossip reach every non-origin real.
+    const origin = env.clients[2];
     const beforeIds = env.clients.map((c) => (c ? c.getLastEventId() : 0)); // stub slot is null
 
     const res = await deployContentApp(origin.url, {
@@ -89,19 +97,19 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
       'content:manifestStored',
       (d) => d.appName === appName && d.version === 1 && d.confirmed === true,
       30000,
-      { afterId: beforeIds[0] },
+      { afterId: beforeIds[2] },
     );
     expect(stored.data.confirmed).to.equal(true);
     await origin.waitForEvent(
       'content:manifestBackstopped',
       (d) => d.appName === appName && d.version === 1,
       30000,
-      { afterId: beforeIds[0] },
+      { afterId: beforeIds[2] },
     );
 
     // The other four nodes receive the gossip but do not yet hold the (unconfirmed)
     // spec, so they QUARANTINE (confirmed:false) — never a drop. This IS scenario 2.
-    await Promise.all([1, 2, 3, 4].map((i) => env.clients[i].waitForEvent(
+    await Promise.all([0, 1, 3, 4].map((i) => env.clients[i].waitForEvent(
       'content:manifestStored',
       (d) => d.appName === appName && d.confirmed === false,
       45000,
@@ -109,7 +117,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     )));
 
     // The quarantine is durable in the register: a confirmed:false row at version 1.
-    for (const i of [1, 2, 3, 4]) {
+    for (const i of [0, 1, 3, 4]) {
       // eslint-disable-next-line no-await-in-loop
       const row = await dbClients[i].getContentManifest(appName);
       expect(row, `node ${i} holds a quarantined manifest`).to.exist;
@@ -164,7 +172,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     // After confirmation each non-origin node promotes its quarantined v1 row once the
     // spec lands (the promote-on-confirm hook); a confirmed:true row is the durable
     // proof the spec is now local, so receiveManifest will store (not re-quarantine) v2.
-    await Promise.all([1, 2, 3, 4].map((i) => waitFor(
+    await Promise.all([0, 1, 3, 4].map((i) => waitFor(
       async () => {
         const row = await dbClients[i].getContentManifest(appName);
         return !!(row && row.version === 1 && row.confirmed === true);
@@ -173,7 +181,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     )));
 
     const beforeIds = env.clients.map((c) => (c ? c.getLastEventId() : 0)); // stub slot is null
-    const up = await pushContentUpdate(env.clients[0].url, {
+    const up = await pushContentUpdate(env.clients[2].url, {
       name: appName, version: 2, slots: [{ name: slotName, bytes: v2Bytes }],
     });
     expect(up.status).to.equal('success');
@@ -181,7 +189,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     // Every non-origin node receives + verifies + stores v2 (the change-only gossip
     // live-update path). The origin is the submitter, so it emits contentUpdateApplied,
     // not manifestReceived (gossip never loops back to itself).
-    await Promise.all([1, 2, 3, 4].map((i) => env.clients[i].waitForEvent(
+    await Promise.all([0, 1, 3, 4].map((i) => env.clients[i].waitForEvent(
       'content:manifestReceived',
       (d) => d.appName === appName && d.version === 2,
       60000,
@@ -191,7 +199,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     // Latest-wins: the monotonic register advances 1 -> 2 on EVERY node (origin included).
     await waitFor(
       async () => {
-        const { synced } = await assertManifestSynced(dbClients, appName, 2);
+        const { synced } = await assertManifestSynced(dbClients.filter(Boolean), appName, 2);
         return synced;
       },
       { timeout: 60000, interval: 3000, label: 'every node converges to manifest v2' },
@@ -206,8 +214,10 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     // owner-sig check then fails and the spec-holding node drops it. Models a Byzantine
     // peer relaying an owner-unverified manifest, which honest nodes never do.
     const stub = env.stubPeerClients.get(5);
-    const target = env.clients[1];
-    const beforeId = target.getLastEventId();
+    // The stub's only fleet edges are the dial-ins from nodes 3 and 4 (see header),
+    // so its broadcast reaches exactly those two spec-holding nodes.
+    const targets = [3, 4];
+    const beforeIds = targets.map((i) => env.clients[i].getLastEventId());
 
     const res = await injectForgedManifestGossip(stub, {
       appName,
@@ -216,25 +226,27 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     });
     expect(res.sent, 'stub pushed the gossip to at least one connected node').to.be.greaterThan(0);
 
-    const dropped = await target.waitForEvent(
+    await Promise.all(targets.map((i, k) => env.clients[i].waitForEvent(
       'content:manifestDropped',
       (d) => d.appName === appName && d.reason === 'forged_signature',
       45000,
-      { afterId: beforeId },
-    );
-    expect(dropped.data.reason).to.equal('forged_signature');
+      { afterId: beforeIds[k] },
+    )));
 
     // Dropped, not stored: the forged manifest never advanced the register.
-    const row = await dbClients[1].getContentManifest(appName);
-    expect(row, 'node 1 still holds its manifest row').to.exist;
-    expect(row.version, 'the dropped forged manifest never advanced the register').to.be.below(99);
+    for (const i of targets) {
+      // eslint-disable-next-line no-await-in-loop
+      const row = await dbClients[i].getContentManifest(appName);
+      expect(row, `node ${i} still holds its manifest row`).to.exist;
+      expect(row.version, 'the dropped forged manifest never advanced the register').to.be.below(99);
+    }
   });
 
   it('recovers on boot: a node down while v3 is published catches it up and stages it before start', async function () {
     this.timeout(300000);
     expect(installedIndex, 'an installer was selected').to.be.a('number');
-    // Publish v3 from a node that is NOT the one we take down (and never the origin if
-    // the origin is the installer), so the update genuinely lands on the live fleet.
+    // Publish v3 from a node that is NOT the one we take down, so the update genuinely
+    // lands on the live fleet (spec-holding receivers rebroadcast, so any live origin works).
     const pushIndex = installedIndex === 0 ? 1 : 0;
 
     // 1) Take the installer off the network: it is now "down" for the v3 publish window
