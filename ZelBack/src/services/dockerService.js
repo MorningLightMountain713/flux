@@ -1440,6 +1440,10 @@ async function createFluxAppDockerNetwork(appname, number) {
   // check if fluxDockerNetwork of an appexists
   const fluxNetworkOptions = {
     Name: `fluxDockerNetwork_${appname}`,
+    // Ownership stamp, same scheme as container identity labels: management
+    // decisions (e.g. the reconciler disconnecting a stale membership) key on
+    // this label, never on name matching.
+    Labels: { 'runonflux.app-network': appname },
     IPAM: {
       Config: [{
         Subnet: `172.23.${number}.0/24`,
@@ -1547,13 +1551,16 @@ async function forceRemoveFluxAppDockerNetwork(appname) {
  * overloaded by docker for unrelated failure modes (e.g. forbidden swarm-scoped
  * operations) and was silently masking them.
  *
- * @param {string} containerIdOrName - container id or name
+ * @param {string} componentIdentifier - bare component identifier or docker name
  * @param {string} networkName - target docker network name
  * @returns {Promise<void>}
  */
-async function appDockerNetworkConnect(containerIdOrName, networkName) {
+async function appDockerNetworkConnect(componentIdentifier, networkName) {
+  // Docker callers normalise through getAppIdentifier: accept the bare
+  // component identifier (web_myapp) as well as the docker name (fluxweb_myapp).
+  const appId = getAppIdentifier(componentIdentifier);
   try {
-    const containerInfo = await docker.getContainer(containerIdOrName).inspect();
+    const containerInfo = await docker.getContainer(appId).inspect();
     const attached = containerInfo && containerInfo.NetworkSettings && containerInfo.NetworkSettings.Networks;
     if (attached && Object.prototype.hasOwnProperty.call(attached, networkName)) {
       return;
@@ -1565,10 +1572,72 @@ async function appDockerNetworkConnect(containerIdOrName, networkName) {
 
   const network = docker.getNetwork(networkName);
   try {
-    await network.connect({ Container: containerIdOrName });
+    await network.connect({ Container: appId });
   } catch (error) {
     if (/already exists in network|already connected/i.test(error.message || '')) {
       return;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Disconnects a container from a docker network. Idempotent — a container
+ * not attached to the network (or already gone) resolves without error.
+ *
+ * Same strategy as appDockerNetworkConnect: inspect and return early when
+ * there is nothing to do, then disconnect and let real errors throw. 404 is
+ * structured (dockerode statusCode: the container or network is gone —
+ * nothing to disconnect); the one string match left covers the disconnect
+ * race window only ("is not connected" arrives as a 500, indistinguishable
+ * by status from a real server error).
+ *
+ * @param {string} componentIdentifier - bare component identifier or docker name
+ * @param {string} networkName - docker network name
+ * @returns {Promise<void>}
+ */
+async function appDockerNetworkDisconnect(componentIdentifier, networkName) {
+  const appId = getAppIdentifier(componentIdentifier);
+  try {
+    const containerInfo = await docker.getContainer(appId).inspect();
+    const attached = containerInfo && containerInfo.NetworkSettings && containerInfo.NetworkSettings.Networks;
+    if (!attached || !Object.prototype.hasOwnProperty.call(attached, networkName)) {
+      return;
+    }
+  } catch (error) {
+    if (error.statusCode === 404) {
+      return;
+    }
+    // Transient inspect failure: fall through and let the disconnect attempt
+    // surface the real error.
+  }
+
+  const network = docker.getNetwork(networkName);
+  try {
+    await network.disconnect({ Container: appId });
+  } catch (error) {
+    if (error.statusCode === 404 || /is not connected/i.test(error.message || '')) {
+      return;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Whether a docker network is a flux app network — carries the
+ * runonflux.app-network ownership label stamped at creation. False for a
+ * network that is gone (404): nothing there is ours to manage.
+ *
+ * @param {string} networkName - docker network name
+ * @returns {Promise<boolean>}
+ */
+async function isFluxAppNetwork(networkName) {
+  try {
+    const info = await docker.getNetwork(networkName).inspect();
+    return !!(info && info.Labels && Object.prototype.hasOwnProperty.call(info.Labels, 'runonflux.app-network'));
+  } catch (error) {
+    if (error.statusCode === 404) {
+      return false;
     }
     throw error;
   }
@@ -1847,6 +1916,8 @@ module.exports = {
   removeFluxAppDockerNetwork,
   forceRemoveFluxAppDockerNetwork,
   appDockerNetworkConnect,
+  appDockerNetworkDisconnect,
+  isFluxAppNetwork,
   getAppContainerNames,
   getAppContainerObjects,
   getAppNameByContainerIp,

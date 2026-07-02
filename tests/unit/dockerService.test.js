@@ -905,6 +905,17 @@ describe('dockerService tests', () => {
       expect(inspectResult.Name).to.equal(fluxNetworkOptions.Name);
       expect(inspectResult.Id).to.be.a('string');
       expect(inspectResult.IPAM.Config).to.eql(fluxNetworkOptions.IPAM.Config);
+      // the ownership stamp management decisions key on (never name matching)
+      expect(inspectResult.Labels).to.eql({ 'runonflux.app-network': 'MyAppName' });
+    });
+
+    it('isFluxAppNetwork is true for a labelled app network, false for docker defaults and missing networks', async () => {
+      await dockerService.createFluxAppDockerNetwork('MyAppName', 52);
+      network = docker.getNetwork(fluxNetworkOptions.Name);
+
+      expect(await dockerService.isFluxAppNetwork(fluxNetworkOptions.Name)).to.equal(true);
+      expect(await dockerService.isFluxAppNetwork('bridge')).to.equal(false);
+      expect(await dockerService.isFluxAppNetwork('no_such_network_xyz')).to.equal(false);
     });
 
     it('should return a message if the flux app network does exist', async () => {
@@ -993,6 +1004,102 @@ describe('dockerService tests', () => {
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
 
       await expect(dockerService.appDockerNetworkConnect('fluxweb_myapp', 'fluxDockerNetwork_dep')).to.be.rejectedWith('swarm-scoped');
+    });
+
+    it('normalises a bare component identifier to the docker name', async () => {
+      const inspectStub = sinon.stub().resolves({ NetworkSettings: { Networks: { bridge: {} } } });
+      const getContainerStub = sinon.stub(Dockerode.prototype, 'getContainer').returns({ inspect: inspectStub });
+      const connectStub = sinon.stub().resolves();
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
+
+      await dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep');
+
+      sinon.assert.calledOnceWithExactly(getContainerStub, 'fluxweb_myapp');
+      sinon.assert.calledOnceWithExactly(connectStub, { Container: 'fluxweb_myapp' });
+    });
+  });
+
+  describe('appDockerNetworkDisconnect tests', () => {
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    function stubInspect(networksOrError) {
+      const inspectStub = networksOrError instanceof Error
+        ? sinon.stub().rejects(networksOrError)
+        : sinon.stub().resolves({ NetworkSettings: { Networks: networksOrError } });
+      sinon.stub(Dockerode.prototype, 'getContainer').returns({ inspect: inspectStub });
+      return inspectStub;
+    }
+
+    it('disconnects an attached container, normalising a bare identifier', async () => {
+      stubInspect({ fluxDockerNetwork_dep: {} });
+      const disconnectStub = sinon.stub().resolves();
+      const getNetworkStub = sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: disconnectStub });
+
+      await dockerService.appDockerNetworkDisconnect('web_myapp', 'fluxDockerNetwork_dep');
+
+      sinon.assert.calledOnceWithExactly(getNetworkStub, 'fluxDockerNetwork_dep');
+      sinon.assert.calledOnceWithExactly(disconnectStub, { Container: 'fluxweb_myapp' });
+    });
+
+    it('skips the disconnect call when the container is not attached', async () => {
+      stubInspect({ bridge: {} });
+      const disconnectStub = sinon.stub().resolves();
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: disconnectStub });
+
+      await dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep');
+
+      sinon.assert.notCalled(disconnectStub);
+    });
+
+    it('resolves without a disconnect call when the container is gone (404)', async () => {
+      const gone = new Error('no such container');
+      gone.statusCode = 404;
+      stubInspect(gone);
+      const disconnectStub = sinon.stub().resolves();
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: disconnectStub });
+
+      await dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep');
+
+      sinon.assert.notCalled(disconnectStub);
+    });
+
+    it('still attempts the disconnect when inspect fails transiently', async () => {
+      stubInspect(new Error('inspect transient'));
+      const disconnectStub = sinon.stub().resolves();
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: disconnectStub });
+
+      await dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep');
+
+      sinon.assert.calledOnceWithExactly(disconnectStub, { Container: 'fluxweb_myapp' });
+    });
+
+    it('swallows the race-window not-connected error from disconnect', async () => {
+      stubInspect({ fluxDockerNetwork_dep: {} });
+      const error = new Error('container fluxweb_myapp is not connected to network fluxDockerNetwork_dep');
+      error.statusCode = 500;
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: sinon.stub().rejects(error) });
+
+      await expect(dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep')).to.not.be.rejected;
+    });
+
+    it('swallows a 404 from disconnect (network vanished in the race window)', async () => {
+      stubInspect({ fluxDockerNetwork_dep: {} });
+      const error = new Error('network fluxDockerNetwork_dep not found');
+      error.statusCode = 404;
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: sinon.stub().rejects(error) });
+
+      await expect(dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep')).to.not.be.rejected;
+    });
+
+    it('rethrows a genuine disconnect failure', async () => {
+      stubInspect({ fluxDockerNetwork_dep: {} });
+      const error = new Error('driver failure');
+      error.statusCode = 500;
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: sinon.stub().rejects(error) });
+
+      await expect(dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep')).to.be.rejectedWith('driver failure');
     });
   });
 

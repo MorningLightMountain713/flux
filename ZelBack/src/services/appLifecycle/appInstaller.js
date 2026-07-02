@@ -408,16 +408,7 @@ async function installApplication(instantiated, options = {}) {
       const restartAlwaysOwners = config.fluxapps.restartAlwaysOwners || [];
       const restartPolicy = (owner && restartAlwaysOwners.includes(owner)) ? 'always' : null;
 
-      const syslogCollector = deployment.componentEntries()
-        .find(([, c]) => c.toDockerEnv().some((e) => e.startsWith('LOG=COLLECT')));
-      const syslogTarget = syslogCollector ? syslogCollector[0] : null;
-
-      // No in-app collector: discover one in a linked (shareWith) app so a
-      // SEND component can ship cross-app. Resolved here (orchestrator) and
-      // passed down, so the docker primitive never depends on the linker.
-      const crossAppLogCollector = syslogTarget
-        ? null
-        : await appNetworkLinker.findLinkedAppLogCollector(instantiated);
+      const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(instantiated, deployment);
 
       // App-wide feature check computed once: gates the per-container budget labels
       // stamped at docker-create, on the same channel as owner.
