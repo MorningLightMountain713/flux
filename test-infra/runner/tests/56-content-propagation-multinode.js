@@ -247,6 +247,24 @@ describe('content propagation across a multi-node fleet', function () {
       expect(row && row.version, `isolated node ${i} still at v2`).to.equal(2);
     }
 
+    // Hold the partition until the fleet has DETECTED it: socket death is
+    // pong-timeout driven (wsPingIntervalMs 2s x 3 missed pongs ~ 6s here), and
+    // healing before detection means the isolated nodes never leave READY and
+    // never resync. The connected side's peers:removed for each isolated address
+    // is the live observable (the isolated side runs the same ping cadence, and
+    // the post-heal reconcile waits fail loudly if its own detection lagged). Any
+    // connected node removing the address counts — the mesh is dense but not
+    // necessarily complete.
+    const isolatedAddrs = isolated.map((i) => `198.18.0.${10 + i}`);
+    await Promise.all(isolatedAddrs.map((addr) => Promise.any(
+      connected.map((c) => env.clients[c].waitForEvent(
+        'peers:removed',
+        (d) => d.ip === addr,
+        60000,
+        { afterId: 0 },
+      )),
+    )));
+
     // Heal the partition. The reconnected nodes re-peer, cross the peer threshold, and
     // the orchestrator runs DEGRADED -> RESYNCING -> the two-step manifest reconcile.
     for (const i of isolated) {
