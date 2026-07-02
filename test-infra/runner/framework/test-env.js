@@ -1018,20 +1018,6 @@ export async function createTestEnv({
   }
 }
 
-// A node is ready when it can SERVE AUTH, not merely HTTP: the first thing every
-// suite does against a fresh or restarted node is authenticate (startDiscovery),
-// and /id/loginphrase needs the mongo connection, which comes up after express
-// starts answering /flux/version. During that window the route returns 200 with
-// an error body, so readiness must validate the body, not just res.ok.
-function nodeReadyWaitStrategy(nodeIp) {
-  const validate = async (res) => {
-    if (!res.ok) return false;
-    const body = await res.json().catch(() => null);
-    return !!(body && body.status === 'success');
-  };
-  return new HttpPollWaitStrategy(`http://${nodeIp}:16127/id/loginphrase`, { validate });
-}
-
 function mergeConfigs(base, override) {
   if (!override) return base;
   if (!base) return override;
