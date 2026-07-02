@@ -234,6 +234,10 @@ async function redeployComponent(appName, componentName, options = {}) {
     const freshDeployment = await deploymentProvider.buildDeployment(instantiated);
     await hwRequirements.checkNodeResources(freshDeployment);
 
+    // Recreated containers must keep their syslog routing - a container created
+    // without it silently falls back to json-file logging.
+    const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(instantiated, freshDeployment);
+
     status(`Installing ${deployComp.identifier}...`);
     await componentProvisioner.installComponent(deployComp, {
       createVolumes,
@@ -241,6 +245,8 @@ async function redeployComponent(appName, componentName, options = {}) {
       specVersion: instantiated.version,
       owner: instantiated.owner,
       requiresEncryption: shutdownPlan.appRequiresDaemonShutdown(freshDeployment),
+      syslogTarget,
+      crossAppLogCollector,
     });
 
     status(`Component ${deployComp.identifier} ${label} complete`);
@@ -353,6 +359,9 @@ async function redeployApplication(appName, options = {}) {
     await appNetworkLinker.checkAppNetworkRequirements(instantiated);
 
     const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
+    // Recreated containers must keep their syslog routing - a container created
+    // without it silently falls back to json-file logging.
+    const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(instantiated, freshDeployment);
     for (const [, deployComp] of freshDeployment.componentEntries()) {
       status(`Installing ${deployComp.identifier}...`);
       // eslint-disable-next-line no-await-in-loop
@@ -362,6 +371,8 @@ async function redeployApplication(appName, options = {}) {
         specVersion: instantiated.version,
         owner: instantiated.owner,
         requiresEncryption,
+        syslogTarget,
+        crossAppLogCollector,
       });
       // Re-attach the recreated container to every linked app's network.
       // eslint-disable-next-line no-await-in-loop
@@ -1539,6 +1550,9 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   const toInstall = [...keepVolume, ...recreateVolume, ...added];
   if (freshDeployment && toInstall.length > 0) {
     const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
+    // Recreated containers must keep their syslog routing - a container created
+    // without it silently falls back to json-file logging.
+    const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(registrySpec, freshDeployment);
     for (const name of toInstall) {
       const deployComp = freshDeployment.getComponent(name);
       if (!deployComp) continue;
@@ -1551,6 +1565,8 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
         specVersion: registrySpec.version,
         owner: registrySpec.owner,
         requiresEncryption,
+        syslogTarget,
+        crossAppLogCollector,
       });
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);

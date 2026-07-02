@@ -268,6 +268,34 @@ describe('appOperations tests', () => {
       expect(operationRegistry.isHeld('myapp')).to.be.false;
     });
 
+    // A recreated container must keep its syslog routing: the resolved collector
+    // options ride every reinstall, or a SEND component silently falls back to
+    // json-file logging.
+    it('threads the resolved log-collector options to the reinstalled component', async () => {
+      // eslint-disable-next-line global-require
+      const appNetworkLinker = require('../../ZelBack/src/services/appLifecycle/appNetworkLinker');
+      // eslint-disable-next-line global-require
+      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:v1' };
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ getComponent: () => deployComp });
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      sinon.stub(appsRepository, 'getInstalledApp').resolves({ version: 9, owner: 'owner1' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves({ marker: 'fresh', componentEntries: () => [] });
+      sinon.stub(hwRequirements, 'checkNodeResources').resolves();
+      sinon.stub(appNetworkLinker, 'resolveLogCollector').resolves({ syslogTarget: null, crossAppLogCollector: { linkedAppName: 'colapp', collectorComponentName: 'logsink' } });
+      sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+      sinon.stub(appReconciler, 'enqueue');
+
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+
+      expect(installComponent.calledOnceWith(deployComp, sinon.match({
+        crossAppLogCollector: { linkedAppName: 'colapp', collectorComponentName: 'logsink' },
+        syslogTarget: null,
+      })), 'reinstall must carry the resolved collector routing').to.be.true;
+    });
+
     // A same-spec redeploy reinstalls the identical component, so its port set never
     // changes. Both the teardown and the reinstall must leave the app's ufw/UPnP rules
     // in place (skipPorts) — no firewall flap, no UPnP re-map churn.
