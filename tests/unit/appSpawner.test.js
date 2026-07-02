@@ -260,10 +260,13 @@ describe('appSpawner tests', () => {
         installApplication: opts.installStub ?? sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null }),
       },
       './appNetworkLinker': {
-        // Default: every candidate's network links are satisfied (matches the real
-        // module's behaviour for apps with no shareWith). Tests that exercise the
-        // readiness selection filter override this stub.
+        // Default: every candidate's network links are satisfied and no candidate
+        // is a pure follower (matches the real module's behaviour for apps with no
+        // shareWith/activation). Tests that exercise the readiness filter or the
+        // follower suppression override these stubs.
         checkAppNetworkRequirements: opts.checkAppNetworkRequirements ?? sinon.stub().resolves(true),
+        isPureFollower: opts.isPureFollower ?? sinon.stub().returns(false),
+        getRequiredDependencyNamesForNode: opts.getRequiredDependencyNamesForNode ?? sinon.stub().resolves(new Set()),
       },
       './appUninstaller': {
         uninstallApplication: sinon.stub().resolves(),
@@ -356,6 +359,72 @@ describe('appSpawner tests', () => {
       buildModule({ candidates: [candidate] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
+    });
+  });
+
+  describe('pure-follower spawn suppression (manageCollectorLifecycle)', () => {
+    it('flag on: drops a follower candidate that nothing assigned to this node requires', async () => {
+      buildModule({
+        candidates: [makeCandidate()],
+        configOverrides: { manageCollectorLifecycle: true },
+        isPureFollower: sinon.stub().returns(true),
+        getRequiredDependencyNamesForNode: sinon.stub().resolves(new Set()),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('No app currently to be processed'))).to.be.true;
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.false;
+    });
+
+    it('flag on: keeps a follower candidate that an assigned app requires', async () => {
+      buildModule({
+        candidates: [makeCandidate()],
+        configOverrides: { manageCollectorLifecycle: true },
+        isPureFollower: sinon.stub().returns(true),
+        getRequiredDependencyNamesForNode: sinon.stub().resolves(new Set(['testApp'])),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
+    });
+
+    it('flag off (default): a follower is never suppressed - the console owns the lifecycle', async () => {
+      buildModule({
+        candidates: [makeCandidate()],
+        isPureFollower: sinon.stub().returns(true),
+        getRequiredDependencyNamesForNode: sinon.stub().resolves(new Set()),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
+    });
+
+    it('flag on: a registry-read failure falls back to not suppressing', async () => {
+      buildModule({
+        candidates: [makeCandidate()],
+        configOverrides: { manageCollectorLifecycle: true },
+        isPureFollower: sinon.stub().returns(true),
+        getRequiredDependencyNamesForNode: sinon.stub().rejects(new Error('registry read failed')),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
+    });
+
+    it('flag on: the deferred-queue intake path is covered by the install gate (skip + throttle clear)', async () => {
+      const queued = makeCandidate({ name: 'placeholder', hash: 'ph1' });
+      buildModule({
+        // a placeholder keeps the candidate pool non-empty so the deferred-queue branch is reached
+        candidates: [queued],
+        configOverrides: { manageCollectorLifecycle: true },
+        isPureFollower: sinon.stub().returns(true),
+        getRequiredDependencyNamesForNode: sinon.stub().resolves(new Set()),
+        globalAppInfoStub: sinon.stub().resolves(mockInstantiated({ name: 'testApp', hash: 'abc123' })),
+        globalStateOverrides: {
+          appsToBeCheckedLater: [{
+            appName: 'testApp', hash: 'abc123', required: 3, timeToCheck: Date.now() - 1000,
+          }],
+        },
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('is a pure follower and nothing on this node requires it'))).to.be.true;
+      expect(globalStateStub.trySpawningGlobalAppCache.has('abc123')).to.be.false;
     });
   });
 

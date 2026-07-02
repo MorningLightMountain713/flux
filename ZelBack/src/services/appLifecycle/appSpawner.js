@@ -384,6 +384,24 @@ async function trySpawningGlobalApplication() {
         return true;
       });
 
+      // Suppress pure-follower apps (activation.standalone false — shared
+      // collectors) that no app assigned to this node requires: they only
+      // install while a workload here shareWith-links to them, and must not be
+      // respawned after a teardown. Best-effort: on a registry-read failure,
+      // fall back to not suppressing rather than aborting. Gated off in
+      // production: the flux console owns the collector lifecycle.
+      if (config.fluxapps.manageCollectorLifecycle) {
+        try {
+          const requiredDependencyNames = await appNetworkLinker.getRequiredDependencyNamesForNode({
+            ip: localSocketAddr, outpoint: nodeOutpoint, operator: nodeOperator,
+          });
+          globalAppNamesLocation = globalAppNamesLocation.filter((c) => !appNetworkLinker.isPureFollower(c.instantiated)
+            || requiredDependencyNames.has(c.instantiated.name));
+        } catch (error) {
+          log.error(`trySpawningGlobalApplication - could not compute required dependencies, not suppressing collectors this cycle: ${error.message}`);
+        }
+      }
+
       // Readiness-ordered selection: drop candidates whose shareWith dependencies
       // are not ready, so a linked group installs root-first (a dependency before
       // its consumers) instead of a consumer being selected first and deferring
@@ -482,6 +500,27 @@ async function trySpawningGlobalApplication() {
     if (await appsRepository.existsInstalledApp(instantiated.name)) {
       log.info(`trySpawningGlobalApplication - Application ${instantiated.name} is already installed`);
       return shortDelayTime;
+    }
+
+    // A pure-follower app (shared collector) installs only while an app assigned
+    // to this node shareWith-links to it. Re-check here so the deferred selection
+    // path is covered too, and clear the spawn throttle set above so it is
+    // reconsidered promptly once a workload that needs it arrives. Best-effort: a
+    // registry-read failure falls back to allowing the spawn.
+    if (config.fluxapps.manageCollectorLifecycle && appNetworkLinker.isPureFollower(instantiated)) {
+      let requiredDeps = null;
+      try {
+        requiredDeps = await appNetworkLinker.getRequiredDependencyNamesForNode({
+          ip: localSocketAddr, outpoint: nodeOutpoint, operator: nodeOperator,
+        });
+      } catch (error) {
+        log.error(`trySpawningGlobalApplication - could not check dependency requirement for ${instantiated.name}: ${error.message}`);
+      }
+      if (requiredDeps && !requiredDeps.has(instantiated.name)) {
+        log.info(`trySpawningGlobalApplication - ${instantiated.name} is a pure follower and nothing on this node requires it; skipping spawn`);
+        globalState.trySpawningGlobalAppCache.delete(appHash);
+        return shortDelayTime;
+      }
     }
 
     let { spec } = instantiated;

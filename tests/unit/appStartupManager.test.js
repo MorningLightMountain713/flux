@@ -40,6 +40,7 @@ describe('appStartupManager tests', () => {
 
     appUninstallerStub = {
       uninstallApplication: sinon.stub().resolves(),
+      removeUnrequiredDependencies: sinon.stub().resolves(),
     };
 
     const mockDb = { db: sinon.stub().returns('mockDatabase') };
@@ -169,6 +170,51 @@ describe('appStartupManager tests', () => {
       const result = await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127');
 
       expect(result).to.equal(false);
+    });
+  });
+
+  describe('reconcileAppsOnBoot - boot orphan sweep (manageCollectorLifecycle)', () => {
+    beforeEach(() => {
+      // One installed app whose containers all auto-restarted (nothing stopped):
+      // the sweep must still run on such a boot - an orphaned collector's
+      // containers are typically running after a reboot.
+      dbHelperStub.findInDatabase.resolves([{ name: 'AppX' }]);
+      dockerServiceStub.dockerListContainers.resolves([]);
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
+    });
+
+    it('flag off (default): boot does not run the orphan sweep', async () => {
+      await appStartupManager.reconcileAppsOnBoot();
+      expect(appUninstallerStub.removeUnrequiredDependencies.called).to.equal(false);
+    });
+
+    it('flag on: boot reaps orphaned followers after recovery', async () => {
+      // Rebuild the module against a config whose lifecycle toggle is on.
+      // eslint-disable-next-line global-require
+      const realConfig = require('config');
+      const flaggedStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
+        config: { ...realConfig, fluxapps: { ...realConfig.fluxapps, manageCollectorLifecycle: true } },
+        '../../lib/log': logStub,
+        '../dbHelper': dbHelperStub,
+        '../dockerService': dockerServiceStub,
+        '../serviceHelper': { delay: sinon.stub().resolves() },
+        '../fluxNetworkHelper': fluxNetworkHelperStub,
+        '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
+        '../appMonitoring/appReconciler': appReconcilerStub,
+        './appUninstaller': appUninstallerStub,
+        '../utils/globalState': globalStateStub,
+        '../appQuery/appQueryService': appQueryServiceStub,
+        '../utils/appConstants': { localAppsInformation: 'localAppsInformation', SIGTERM_EXPIRY_MS: 420000, RUNNING_EXPIRY_MS: 7500000 },
+        '../utils/appUtilities': appUtilities,
+        '../nodeConfirmationService': {
+          isConfirmed: sinon.stub().returns(true),
+          waitForConfirmed: sinon.stub().resolves(),
+          waitForConfirmationStatus: sinon.stub().resolves(),
+        },
+      });
+
+      await flaggedStartupManager.reconcileAppsOnBoot();
+      expect(appUninstallerStub.removeUnrequiredDependencies.called).to.equal(true);
     });
   });
 
@@ -419,25 +465,11 @@ describe('appStartupManager tests', () => {
       expect(logStub.info.calledWithMatch(/node confirmed, reconciling/)).to.be.true;
     });
 
-    it('should remove all apps on sync timeout', async () => {
-      const bootContext = {
-        machineRebooted: true, downtimeMs: 60000, cleanShutdown: false,
-      };
-      // waitForDbReady never resolves — simulate timeout
-      globalStateStub.waitForDbReady = sinon.stub().returns(new Promise(() => {}));
-      appQueryServiceStub.installedApps.resolves({
-        status: 'success',
-        data: [{ name: 'app1' }],
-      });
-
-      // manageAppsOnBoot will race waitForDbReady vs 5min timeout.
-      // We can't wait 5 minutes in a test, so we'll test the timeout path
-      // by temporarily overriding SYNC_TIMEOUT_MS. Since it's a const in the
-      // module, we test the behavior indirectly: verify that when dbReady
-      // resolves, apps are started (tested above). The timeout path is
-      // structurally identical to the locations-expired path (calls removeAllApps).
-      // Full integration testing of the 5-minute timeout is done on a live node.
-    });
+    // The 5-minute sync timeout path cannot run in a unit test (SYNC_TIMEOUT_MS is a
+    // module const); it is structurally identical to the locations-expired path
+    // (calls removeAllApps) and is integration-tested on a live node. Pending, not a
+    // hollow green test.
+    it('should remove all apps on sync timeout');
 
     it('should not remove apps on clean shutdown with short downtime', async () => {
       const bootContext = {
