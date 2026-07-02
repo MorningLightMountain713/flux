@@ -114,10 +114,7 @@ module.exports = {
     imageComplianceIntervalMs: 60000,
     forceRemovalIntervalMs: 120000,
     installCollisionWaitMs: 5000,
-    portTestBindDelayMs: 100,
-    portTestPropagationDelayMs: 100,
     portTestPeerTimeoutMs: 3000,
-    portTestMaxAttempts: 2,
     // the whole harness fleet shares one /24, so the mainnet /16-diversity rule
     // would always sample zero peers; distinct-IP is the honest harness equivalent
     portTestPrefixLength: 32,
