@@ -121,6 +121,7 @@ export function nodeClient(nodeNum) {
         'reconciler:swept',
         'content:blobUploaded',
         'content:blobResolved',
+        'content:blobPeerMiss',
         'content:blobProvisioned',
         'content:blobProvisionFailed',
         'content:blobServed',
