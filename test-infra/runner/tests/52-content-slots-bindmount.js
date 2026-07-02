@@ -63,7 +63,7 @@ describe('content slots + bind mounting: manifest, injection, perms, atomic deli
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
     });
-    await bootAndPeer(env);
+    await bootAndPeer(env, { pricing: true });
     await Promise.all([
       pushBusybox(baseApp, 'v1'),
       pushBusybox(inplaceApp, 'v1'),

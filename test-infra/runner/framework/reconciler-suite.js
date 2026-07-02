@@ -16,6 +16,7 @@ import {
 } from './wait.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from './subnet-config.js';
 import { setSynced } from './syncthing-control.js';
+import { bootstrapPricing } from './price-helper.js';
 
 // Seed a pre-built app's global spec into the given nodes' DBs (so a local install
 // can resolve it).
@@ -55,7 +56,14 @@ export async function installOnNodes(env, app, indices, { timeout = 120000 } = {
 // peer connects inbound, FluxOS dedups and never initiates the outbound back — so those
 // suites lower minOutbound to match their reduced fluxapps.minOutgoing config (the wait
 // tracks the submission gate, which is outboundCount >= minOutgoing).
-export async function bootAndPeer(env, { minOutbound = 4, minInbound = 2 } = {}) {
+//
+// pricing: true bootstraps default v9 on-chain pricing once the fleet is ticking
+// (any suite confirming a v9 app through the real chain path needs it — a fresh
+// harness chain quotes no price and registrations are fail-closed rejected). Pass
+// an object to forward bootstrapPricing overrides ({ priceFields, fluxUsdPriceE4,
+// timestamp }) for suites exercising specific policy values; suites needing full
+// control of the message sequence leave it off and drive price-helper directly.
+export async function bootAndPeer(env, { minOutbound = 4, minInbound = 2, pricing = false } = {}) {
   for (const client of env.clients) await waitForDaemonReady(client);
   await Promise.all(env.clients.map(
     (c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000),
@@ -68,6 +76,9 @@ export async function bootAndPeer(env, { minOutbound = 4, minInbound = 2 } = {})
   await env.clients[0].waitForEvent('peers:added', (d) => d.outbound >= minOutbound, 120000);
   await env.clients[0].waitForEvent('peers:added', (d) => d.inbound >= minInbound, 120000);
   await startTicker();
+  if (pricing) {
+    await bootstrapPricing(pricing === true ? {} : pricing);
+  }
 }
 
 // Seed a pre-built app (buildSeedableApp / buildSeedableSyncthingApp) into every
