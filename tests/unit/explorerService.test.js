@@ -2100,6 +2100,7 @@ describe('explorerService tests', () => {
         txid: 'abc123',
         version: 1,
         height: 700000,
+        blocktime: 1750000000,
         vin: [{ address: 't1SenderAddr' }],
         vout: [{
           valueSat: 500000000,
@@ -2121,6 +2122,8 @@ describe('explorerService tests', () => {
       expect(hashBatch[0].txid).to.equal('abc123');
       expect(hashBatch[0].hash).to.have.length(64);
       expect(hashBatch[0].message).to.equal(false);
+      // the confirming block's timestamp rides the row — it becomes v9 registeredAt
+      expect(hashBatch[0].blockTime).to.equal(1750000000);
     });
 
     it('should skip tx with version >= 5', () => {

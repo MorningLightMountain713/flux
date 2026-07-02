@@ -92,6 +92,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
       height: 1,
       txid: 1,
       value: 1,
+      blockTime: 1,
     },
   };
   let database = db.db(config.database.daemon.database);
@@ -187,7 +188,9 @@ async function storeAppTemporaryMessage(message, options = {}) {
   });
   if (isAppRequested) {
     const promotion = (result && result.txid && result.height)
-      ? { hash: appEvent.hash, txid: result.txid, height: result.height, value: result.value }
+      ? {
+        hash: appEvent.hash, txid: result.txid, height: result.height, value: result.value, blockTime: result.blockTime ?? null,
+      }
       : null;
     return { rebroadcast: false, promotion };
   }
