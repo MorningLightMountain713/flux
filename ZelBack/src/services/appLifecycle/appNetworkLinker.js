@@ -20,6 +20,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
+const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const log = require('../../lib/log');
 
 /**
@@ -121,6 +122,182 @@ async function checkAppNetworkRequirements(instantiated) {
   }
   log.info(`App network links satisfied for ${instantiated.name}: ${linkedApps.join(', ')}`);
   return true;
+}
+
+/**
+ * Whether an app is a pure follower — `activation.standalone === false`: it has
+ * no independent run decision and exists on a node only while a same-owner app
+ * there `shareWith`-links to it (the v9 successor to the v8 dependencyOnly
+ * marker, e.g. a shared stats collector). Absent/null activation (v1-v8 specs,
+ * the v9 default) and encrypted specs (activation unreadable on this node) are
+ * standalone.
+ *
+ * @param {object} instantiated - InstantiatedSpec instance
+ * @returns {boolean}
+ */
+function isPureFollower(instantiated) {
+  if (!instantiated || instantiated.isEncrypted) {
+    return false;
+  }
+  const activation = instantiated.spec && instantiated.spec.activation;
+  return !!activation && activation.standalone === false;
+}
+
+/**
+ * Whether an orphaned follower should be reaped: a pure follower that also
+ * declares `activation.stopWhenUnneeded`. A follower with stopWhenUnneeded
+ * false persists even when orphaned (an explicit spec opt-in); a standalone
+ * app is never reaped — it justifies its own presence.
+ *
+ * @param {object} instantiated - InstantiatedSpec instance
+ * @returns {boolean}
+ */
+function isReapableFollower(instantiated) {
+  return isPureFollower(instantiated) && instantiated.spec.activation.stopWhenUnneeded === true;
+}
+
+/**
+ * Given a set of apps, returns the set of follower-app names that are
+ * *required*: the transitive `shareWith` closure starting from the apps that
+ * can stand alone (activation.standalone !== false). Links are only followed
+ * between apps of the same owner. Original-cased names are returned; matching
+ * is case-insensitive.
+ *
+ * Starting the closure from standalone apps only (not every app in the set) is
+ * what lets a pure follower fall out of the required set once nothing links to
+ * it — otherwise a collector, being present itself, would keep itself alive.
+ *
+ * @param {Array<object>} apps - InstantiatedSpec instances to reason over
+ * @returns {Set<string>} required follower app names
+ */
+function computeRequiredDependencyNames(apps) {
+  const required = new Set();
+  if (!Array.isArray(apps) || !apps.length) {
+    return required;
+  }
+  const byName = new Map();
+  apps.forEach((app) => {
+    if (app && app.name) byName.set(app.name.toLowerCase(), app);
+  });
+
+  const roots = apps.filter((app) => app && app.name && !isPureFollower(app));
+  const queue = [...roots];
+  const visited = new Set(roots.map((app) => app.name.toLowerCase()));
+
+  while (queue.length) {
+    const current = queue.shift();
+    // eslint-disable-next-line no-restricted-syntax
+    for (const linkedName of getLinkedApps(current)) {
+      const dep = byName.get(linkedName.toLowerCase());
+      if (dep && dep.owner === current.owner) {
+        required.add(dep.name);
+        const key = dep.name.toLowerCase();
+        if (!visited.has(key)) {
+          visited.add(key);
+          queue.push(dep);
+        }
+      }
+    }
+  }
+  return required;
+}
+
+/**
+ * Whether a workload transitively `shareWith`-depends on `depNameLower`,
+ * following same-owner links only. Breadth-first over the link graph.
+ *
+ * @param {object} workload - root InstantiatedSpec
+ * @param {string} depNameLower - lowercased follower name to look for
+ * @param {Map<string, object>} byName - lowercased-name -> InstantiatedSpec
+ * @returns {boolean}
+ */
+function appTransitivelyRequires(workload, depNameLower, byName) {
+  const visited = new Set([workload.name.toLowerCase()]);
+  const queue = [workload];
+  while (queue.length) {
+    const current = queue.shift();
+    // eslint-disable-next-line no-restricted-syntax
+    for (const linkedName of getLinkedApps(current)) {
+      const key = linkedName.toLowerCase();
+      const dep = byName.get(key);
+      // Only same-owner links to present apps are real dependencies (mirrors
+      // computeRequiredDependencyNames); a cross-owner/dangling link is ignored.
+      if (!dep || dep.owner !== workload.owner) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      if (key === depNameLower) {
+        return true;
+      }
+      if (!visited.has(key)) {
+        visited.add(key);
+        queue.push(dep);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Locally-installed workloads (apps that are NOT pure followers) that
+ * transitively `shareWith`-require the given follower, same-owner only. The
+ * inverse of `computeRequiredDependencyNames`: used to uninstall the consumers
+ * before the dependency they rely on is torn down.
+ *
+ * @param {string} depName - follower app name
+ * @returns {Promise<Array<object>>} requiring workload InstantiatedSpecs
+ */
+async function findInstalledWorkloadsRequiring(depName) {
+  const installed = await appsRepository.listInstalledApps();
+  if (!installed || !installed.length) {
+    return [];
+  }
+  const byName = new Map();
+  installed.forEach((app) => {
+    if (app && app.name) byName.set(app.name.toLowerCase(), app);
+  });
+  const target = depName.toLowerCase();
+  return installed.filter((app) => app && app.name && !isPureFollower(app)
+    && appTransitivelyRequires(app, target, byName));
+}
+
+/**
+ * The follower-app names that should be present on this node, computed from
+ * every global app whose placement targets this node. Used by the spawner to
+ * suppress a pure follower that nothing here requires.
+ *
+ * @param {object} nodeIdentity - { ip, outpoint, operator } of this node
+ * @returns {Promise<Set<string>>}
+ */
+async function getRequiredDependencyNamesForNode(nodeIdentity) {
+  const { ip, outpoint, operator } = nodeIdentity || {};
+  if (!ip && !outpoint && !operator) {
+    return new Set();
+  }
+  const globalApps = await appsRepository.listGlobalAppInfo();
+  const assigned = (globalApps || []).filter((app) => app && app.placement
+    && app.placement.hasTargets()
+    && app.placement.matchesTarget({
+      ip, outpoint, operator, ipMatcher: socketAddressesMatch,
+    }));
+  return computeRequiredDependencyNames(assigned);
+}
+
+/**
+ * Locally-installed reapable followers (activation stopWhenUnneeded) that no
+ * installed workload requires any more (transitive `shareWith`). These should
+ * be removed. Based on what is actually installed here now, so removing the
+ * last workload orphans the collectors it linked to.
+ *
+ * @returns {Promise<Array<object>>} orphaned follower InstantiatedSpecs
+ */
+async function findUnrequiredInstalledDependencies() {
+  const installed = await appsRepository.listInstalledApps();
+  if (!installed || !installed.length) {
+    return [];
+  }
+  const required = computeRequiredDependencyNames(installed);
+  return installed.filter((app) => isReapableFollower(app) && !required.has(app.name));
 }
 
 /**
@@ -291,7 +468,13 @@ async function findLinkedAppLogCollector(instantiated) {
 module.exports = {
   getLinkedApps,
   isAppRunning,
+  isPureFollower,
+  isReapableFollower,
   checkAppNetworkRequirements,
+  computeRequiredDependencyNames,
+  findInstalledWorkloadsRequiring,
+  getRequiredDependencyNamesForNode,
+  findUnrequiredInstalledDependencies,
   connectComponentToLinkedApps,
   reconnectLinkedApps,
   reconcileAllAppNetworkLinks,
