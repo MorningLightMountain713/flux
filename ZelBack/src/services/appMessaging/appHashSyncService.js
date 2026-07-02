@@ -69,7 +69,7 @@ async function getMissingHashes(options = {}) {
   }
   const projection = {
     projection: {
-      _id: 0, txid: 1, hash: 1, height: 1, value: 1, message: 1, messageNotFound: 1, syncAttempts: 1, retryFromHeight: 1,
+      _id: 0, txid: 1, hash: 1, height: 1, value: 1, message: 1, messageNotFound: 1, syncAttempts: 1, retryFromHeight: 1, blockTime: 1,
     },
   };
   const results = await dbHelper.findInDatabase(database, appsHashesCollection, query, projection);
@@ -386,19 +386,11 @@ async function processMessages(messages, records, onProgress) {
           await validateGossipSpec(validationBlob, { height });
         }
 
-        const permMsg = {
-          type: appMessage.type,
-          version: serviceHelper.ensureNumber(appMessage.version),
-          appSpecifications: appSpecFormatted,
-          hash: appMessage.hash,
-          timestamp: serviceHelper.ensureNumber(appMessage.timestamp),
-          signature: appMessage.signature,
-          txid: serviceHelper.ensureString(appMessage.txid),
-          height,
-          valueSat,
-        };
-
         const appEvent = await appEventVerifier.deserializeMessage(appMessage);
+        // The typed event (ConfirmedAppEvent v2 / AppEventLegacy v1) round-trips
+        // its own permanent-message shape; a hand-built object here drops the
+        // v2-only fields (contentHash, registeredAt, extend, arcaneAttestation).
+        const permMsg = appEvent.serialize();
 
         let previousState = null;
         if (!isRegistration) {
@@ -687,7 +679,7 @@ async function syncMissingHashes(options = {}) {
       // eslint-disable-next-line no-restricted-syntax
       for (const record of chunk.filter((r) => heldHashes.has(r.hash))) {
         // eslint-disable-next-line no-await-in-loop
-        if (await messageVerifier.checkAndRequestApp(record.hash, record.txid, record.height, record.value, 2)) poolResolved += 1;
+        if (await messageVerifier.checkAndRequestApp(record.hash, record.txid, record.height, record.value, record.blockTime ?? null, 2)) poolResolved += 1;
       }
     }
     if (localResolved > 0 || poolResolved > 0) {

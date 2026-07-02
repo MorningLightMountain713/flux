@@ -562,6 +562,7 @@ async function processInsight(blockDataVerbose, database) {
         if (isFluxAppMessageValue >= (priceSpecifications.minPrice * 1e8) && message.length === 64 && blockDataVerbose.height >= config.fluxapps.epochstart) { // min of X flux had to be paid for us bothering checking
           const appTxRecord = {
             txid: tx.txid, height: blockDataVerbose.height, txIndex, hash: message, value: isFluxAppMessageValue, message: false, // message is boolean saying if we already have it stored as permanent message
+            blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
             syncAttempts: 0, nextRetryHeight: blockDataVerbose.height,
           };
           // A hash is paid once: a payment this node already holds stands.
@@ -658,7 +659,7 @@ async function requestAppHashes(apps) {
     // eslint-disable-next-line no-restricted-syntax
     for (const app of apps) {
       // eslint-disable-next-line no-await-in-loop
-      const messageReceived = await messageVerifier.checkAndRequestApp(app.hash, app.txid, app.height, app.value, 2);
+      const messageReceived = await messageVerifier.checkAndRequestApp(app.hash, app.txid, app.height, app.value, app.blockTime ?? null, 2);
       if (messageReceived) {
         appsToRemove.push(app);
       } else {
@@ -752,6 +753,7 @@ async function processStandard(blockDataVerbose, database) {
         if (isFluxAppMessageValue >= (priceSpecifications.minPrice * 1e8) && message.length === 64 && blockDataVerbose.height >= config.fluxapps.epochstart) { // min of 1 flux had to be paid for us bothering checking
           const appTxRecord = {
             txid: tx.txid, height: blockDataVerbose.height, txIndex, hash: message, value: isFluxAppMessageValue, message: false, // message is boolean saying if we already have it stored as permanent message
+            blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
             syncAttempts: 0, nextRetryHeight: blockDataVerbose.height,
           };
           // A hash is paid once: a payment this node already holds stands.
@@ -1351,6 +1353,7 @@ function processBootstrapTx(tx, priceSpecs, seenHashes, hashBatch, txIndex) {
       seenHashes.add(message);
       hashBatch.push({
         txid: tx.txid, height, txIndex, hash: message, value: appValue,
+        blockTime: tx.blocktime ?? null, // verbose getrawtransaction field — v9 registeredAt
         message: false, syncAttempts: 0, nextRetryHeight: height,
       });
     }
