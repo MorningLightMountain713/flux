@@ -324,20 +324,28 @@ async function listConfirmedContentManifestBroadcasts(appNames) {
  * app is removed/expires. Converges the manifest register to the live-app set, the
  * node-plane analogue of the FluxDrive blob GC. Quarantined (confirmed:false) rows are
  * left to the TTL index, so this never races a manifest that arrived just before its
- * spec. Returns the reaped count.
+ * spec. Rows younger than the reap grace are never touched: a manifest submitted with
+ * a registration is stored confirmed BEFORE the app tx confirms on-chain, so absence
+ * from the global set is not yet evidence of a dead app — the grace spans that
+ * register window (and a lapsed never-confirmed registration reaps once it ages out).
+ * The age re-check on the delete keeps a name re-registered mid-sweep safe. Returns
+ * the reaped count.
  * @returns {Promise<{reaped: number, orphans: string[]}>}
  */
 async function reapOrphanedContentManifests() {
-  const names = await globalDb().collection(appContentManifests).distinct('appName', { confirmed: true });
+  const cutoff = new Date(Date.now() - config.fluxapps.contentManifestReapGraceMs);
+  const names = await globalDb().collection(appContentManifests)
+    .distinct('appName', { confirmed: true, receivedAt: { $lte: cutoff } });
   if (!names.length) return { reaped: 0, orphans: [] };
   const live = new Set(await listExistingGlobalAppNames(names));
   const orphans = names.filter((name) => !live.has(name));
   if (!orphans.length) return { reaped: 0, orphans: [] };
   const result = await dbHelper.removeDocumentsFromCollection(
-    globalDb(), appContentManifests, { appName: { $in: orphans }, confirmed: true },
+    globalDb(), appContentManifests,
+    { appName: { $in: orphans }, confirmed: true, receivedAt: { $lte: cutoff } },
   );
-  const reaped = result?.deletedCount ?? orphans.length;
-  fluxEventBus.publish('content:manifestReaped', { count: reaped });
+  const reaped = result?.deletedCount ?? 0;
+  if (reaped) fluxEventBus.publish('content:manifestReaped', { count: reaped });
   return { reaped, orphans };
 }
 
