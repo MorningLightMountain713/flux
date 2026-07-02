@@ -28,7 +28,8 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // Assertions are SSE events + real state (FluxDrive-backed install, appcontentmanifests
 // rows, in-container cat/stat/inode), never log scraping.
 //
-// nodes:5 satisfies the submission minOutgoing>=4 peer gate; arcane:true is required
+// nodes:5 with fluxapps.minOutgoing lowered to 2 (a 5-node full mesh only reaches
+// ~2 outbound/node — peers connect inbound first and FluxOS dedups); arcane:true is required
 // for content/encrypted apps and the benchmark crypto.
 
 describe('content encrypted transport (HPKE capstone): open, seal-at-rest, multi-component', function () {
@@ -46,8 +47,9 @@ describe('content encrypted transport (HPKE capstone): open, seal-at-rest, multi
     this.timeout(480000);
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
+      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
     // transportApp: pause (no in-container inspection). sealApp + capApp(web): busybox
     // (cat/stat/inode). capApp(dep): pause (the dependsOn target, stays up).
     await pushImage(transportApp, 'v1');

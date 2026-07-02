@@ -31,7 +31,8 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 //      content from the FluxDrive deep backstop, not a peer.
 //
 // nodes:6 (five real nodes + one peer stub at index 5, used to inject the forged-sig
-// gossip) satisfies the submission minOutgoing>=4 peer gate; arcane:true so the nodes
+// gossip) with fluxapps.minOutgoing lowered to 2 (a small full mesh only reaches
+// ~2 outbound/node — peers connect inbound first and FluxOS dedups); arcane:true so the nodes
 // accept content apps and run the benchmark crypto.
 
 describe('content slots: manifest gossip propagation + boot recovery', function () {
@@ -51,8 +52,9 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     this.timeout(420000);
     env = await createTestEnv({
       hookCtx: this, nodes: 6, stubPeers: [5], tickerAutostart: false, arcane: true,
+      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
     await pushImage(appName, 'v1');
     await resetFluxDrive();
     dbClients = env.clients.map((_, i) => dbClient(i + 1));
