@@ -290,12 +290,25 @@ async function deleteQuarantinedContentManifest(appName) {
   );
 }
 
-/** The (appName, version) vector of every confirmed manifest — the version index the
- *  two-step reconcile compares against (local vector + the index served to peers). */
+/** The (appName, version) vector of every confirmed manifest — the version index
+ *  SERVED to peers (only verified rows are authoritative to others). */
 async function listConfirmedContentManifestVersions() {
   const docs = await dbHelper.findInDatabase(
     globalDb(), appContentManifests,
     { confirmed: true },
+    { projection: { _id: 0, appName: 1, version: 1 } },
+  );
+  return docs.map((doc) => ({ appName: doc.appName, version: doc.version }));
+}
+
+/** The (appName, version) vector of every HELD manifest, quarantined included — the
+ *  reconcile's local gap view. A body held pending spec-confirm is already fetched
+ *  (transport done, promotion is the spec-gated lifecycle), so it is not a gap:
+ *  re-fetching it from another peer would hit the same local spec gate. */
+async function listContentManifestVersions() {
+  const docs = await dbHelper.findInDatabase(
+    globalDb(), appContentManifests,
+    {},
     { projection: { _id: 0, appName: 1, version: 1 } },
   );
   return docs.map((doc) => ({ appName: doc.appName, version: doc.version }));
@@ -694,6 +707,7 @@ module.exports = {
   upsertContentManifest,
   deleteQuarantinedContentManifest,
   listConfirmedContentManifestVersions,
+  listContentManifestVersions,
   listConfirmedContentManifestBroadcasts,
   reapOrphanedContentManifests,
   listGlobalAppNodes,
