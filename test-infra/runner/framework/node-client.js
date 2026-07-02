@@ -405,6 +405,8 @@ export function nodeClient(nodeNum) {
         'content:manifestBackstopped',
         'content:reconcilePushed',
         'content:slotApplied',
+        'content:slotApplySkipped',
+        'content:slotsProvisioned',
         'content:rolloutScheduled',
         'content:bootReconcile',
         'content:contentUpdateApplied',
