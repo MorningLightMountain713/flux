@@ -29,7 +29,8 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // (which proves onUpdate reactions on the RUNNING node); this suite is install-free —
 // every assertion is a control-plane fact, so it operates entirely on the submitter.
 //
-// nodes:5 so the submission's minOutgoing>=4 peer gate is satisfiable; arcane:true so
+// nodes:5 with fluxapps.minOutgoing lowered to 2 (a 5-node full mesh only reaches
+// ~2 outbound/node — peers connect inbound first and FluxOS dedups); arcane:true so
 // the node accepts content apps, runs the benchmark crypto, and opens sealed content.
 
 describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-wins', function () {
@@ -49,8 +50,9 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     this.timeout(420000);
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
+      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
     await pushImage(appName, 'v1');
     await resetFluxDrive();
     dbc = dbClient(env.clients[0].num);
