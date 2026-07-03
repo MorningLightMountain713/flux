@@ -26,6 +26,7 @@ const { FluxCacheManager } = require('../utils/cacheManager');
 const appInstaller = require('./appInstaller');
 const appNetworkLinker = require('./appNetworkLinker');
 const appUninstaller = require('./appUninstaller');
+const pendingTeardownStore = require('./pendingTeardownStore');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 const fluxEventBus = require('../utils/fluxEventBus');
 
@@ -225,6 +226,15 @@ async function trySpawningGlobalApplication() {
   }
   let { shortDelayTime, delayTime } = enterpriseNetwork.getSpawnDelays(isEnterpriseNode, 0);
   let appHash = null;
+  // The spawn throttle and the node's own fluxappinstalling record are two "I'm
+  // taking this app" marks. They must be unwound on any exit that neither
+  // deliberately backed off (throttleIntended - a real retry-later delay) nor
+  // actually installed (installSucceeded). The finally enforces that by
+  // construction, so no bail path can strand the throttle (a 12h node-local
+  // lockout) or leave a stale installing record that self-locks the next cycle.
+  let throttleIntended = false;
+  let installSucceeded = false;
+  let installingRecordKey = null; // { name, ip } once the installing record is stored
   try {
     const synced = await generalService.checkSynced();
     if (synced !== true) {
@@ -410,6 +420,13 @@ async function trySpawningGlobalApplication() {
       // installs the moment its dependency appears (even one registered later).
       if (globalAppNamesLocation.length > 0) {
         const readiness = await Promise.all(globalAppNamesLocation.map(async (c) => {
+          // Never re-select an app that is mid-teardown: its containers/ports are
+          // still draining, so re-selecting races the removal - the port probe hits
+          // the draining docker-proxy (EADDRINUSE) and used to strand the 12h
+          // throttle. Reconsidered once the teardown clears.
+          if (await pendingTeardownStore.teardownOwedFor(c.instantiated.name)) {
+            return false;
+          }
           try {
             await appNetworkLinker.checkAppNetworkRequirements(c.instantiated);
             return true;
@@ -466,7 +483,6 @@ async function trySpawningGlobalApplication() {
       }
     }
 
-    globalState.trySpawningGlobalAppCache.set(appHash, '');
     log.info(`trySpawningGlobalApplication - App ${appToRun} hash: ${appHash}`);
 
     // TODO: re-enable once error classification (transient vs permanent) is implemented.
@@ -518,7 +534,6 @@ async function trySpawningGlobalApplication() {
       }
       if (requiredDeps && !requiredDeps.has(instantiated.name)) {
         log.info(`trySpawningGlobalApplication - ${instantiated.name} is a pure follower and nothing on this node requires it; skipping spawn`);
-        globalState.trySpawningGlobalAppCache.delete(appHash);
         return shortDelayTime;
       }
     }
@@ -534,7 +549,6 @@ async function trySpawningGlobalApplication() {
         // would suppress a healthy app for the cache TTL. Clear the
         // selection-time entry so the next cycle retries.
         log.warn(`trySpawningGlobalApplication - decrypt of ${appToRun} failed, will retry next cycle: ${error.message}`);
-        globalState.trySpawningGlobalAppCache.delete(appHash);
         return shortDelayTime;
       }
     }
@@ -570,7 +584,6 @@ async function trySpawningGlobalApplication() {
       // Blocklist unreachable (transient) - don't admit something we couldn't check.
       // Defer to next cycle without the longer back-off so a brief outage can't lock it out.
       log.warn(`trySpawningGlobalApplication - image blocklist unreachable for ${instantiated.name}, deferring spawn to next cycle`);
-      globalState.trySpawningGlobalAppCache.delete(appHash);
       return shortDelayTime;
     }
 
@@ -598,7 +611,12 @@ async function trySpawningGlobalApplication() {
     // double check if app is installed on the number of instances requested
     runningAppList = await registryManager.appLocation(appToRun);
     installingAppList = await registryManager.appInstallingLocation(appToRun);
-    if (runningAppList.length + installingAppList.length > minInstances) {
+    // A pinned-contended app returning from its off-loop collision window must fall
+    // through to the broadcastedAt election below (the only code that ranks the
+    // contenders and installs the winner). This blunt over-instance return would
+    // otherwise pre-empt it - installing counts every contender's record - and the
+    // app would place nowhere for 12h. Fresh passes still bail early here.
+    if (!collisionWindowElapsed && runningAppList.length + installingAppList.length > minInstances) {
       log.info(`trySpawningGlobalApplication - Application ${appToRun} is already spawned or being installed on ${runningAppList.length + installingAppList.length} instances.`);
       return shortDelayTime;
     }
@@ -638,7 +656,6 @@ async function trySpawningGlobalApplication() {
               required: minInstances,
             };
             globalState.appsSyncthingToBeCheckedLater.push(appToCheck);
-            globalState.trySpawningGlobalAppCache.delete(appHash);
             return shortDelayTime;
           }
         }
@@ -657,7 +674,6 @@ async function trySpawningGlobalApplication() {
               required: minInstances,
             };
             globalState.appsSyncthingToBeCheckedLater.push(appToCheck);
-            globalState.trySpawningGlobalAppCache.delete(appHash);
             return shortDelayTime;
           }
         }
@@ -679,7 +695,6 @@ async function trySpawningGlobalApplication() {
       };
       log.info(`trySpawningGlobalApplication - App ${appToRun} has targets that don't match this node, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
       globalState.appsToBeCheckedLater.push(appToCheck);
-      globalState.trySpawningGlobalAppCache.delete(appHash);
       fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'targeted_nodes', delayMs });
       return shortDelayTime;
     }
@@ -702,7 +717,6 @@ async function trySpawningGlobalApplication() {
         };
         log.info(`trySpawningGlobalApplication - App ${appToRun} not encrypted, will check in around ${Math.round(unencryptedSpawnDelayMs / 1000)}s if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
-        globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'unencrypted_on_arcane', delayMs: unencryptedSpawnDelayMs });
         delay = true;
       } else if (!specPlacement.staticIp && geolocationService.isStaticIP()) {
@@ -716,7 +730,6 @@ async function trySpawningGlobalApplication() {
         };
         log.info(`trySpawningGlobalApplication - App ${appToRun} does not require static IP but node has static IP, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
-        globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'static_ip', delayMs });
         delay = true;
       } else if (!specPlacement.dataCenter && geolocationService.isDataCenter()) {
@@ -730,7 +743,6 @@ async function trySpawningGlobalApplication() {
         };
         log.info(`trySpawningGlobalApplication - App ${appToRun} does not require datacenter but node is datacenter, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
-        globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'datacenter', delayMs });
         delay = true;
       } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
@@ -744,7 +756,6 @@ async function trySpawningGlobalApplication() {
         };
         log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from cumulus, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
-        globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_large', delayMs });
         delay = true;
       } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memory < 29000 && appHWrequirements.storage < 370) {
@@ -758,7 +769,6 @@ async function trySpawningGlobalApplication() {
         };
         log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from nimbus, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
-        globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_medium', delayMs });
         delay = true;
       } else if (!specPlacement.hasTargets() && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
@@ -772,7 +782,6 @@ async function trySpawningGlobalApplication() {
         };
         log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from cumulus, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
-        globalState.trySpawningGlobalAppCache.delete(appHash);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_small', delayMs });
         delay = true;
       }
@@ -797,6 +806,7 @@ async function trySpawningGlobalApplication() {
         // This lets temporary Docker Hub issues (network, rate limit) be retried faster
         log.warn(`trySpawningGlobalApplication - Docker Hub verification failed for ${appToRun}: ${error.message}`);
         globalState.trySpawningGlobalAppCache.set(appHash, '', { ttl: FluxCacheManager.oneHour });
+        throttleIntended = true; // a deliberate 1h Docker-Hub back-off; keep it through the finally
         throw error;
       });
     }
@@ -804,7 +814,9 @@ async function trySpawningGlobalApplication() {
     // triple check if app is installed on the number of instances requested
     runningAppList = await registryManager.appLocation(appToRun);
     installingAppList = await registryManager.appInstallingLocation(appToRun);
-    if (runningAppList.length + installingAppList.length > minInstances) {
+    // Same as the double check: the collision-window return pass must reach the
+    // election below, not bail on the raw over-instance count.
+    if (!collisionWindowElapsed && runningAppList.length + installingAppList.length > minInstances) {
       log.info(`trySpawningGlobalApplication - Application ${appToRun} is already spawned or being installed on ${runningAppList.length + installingAppList.length} instances.`);
       return shortDelayTime;
     }
@@ -833,6 +845,7 @@ async function trySpawningGlobalApplication() {
       // installing store applies only a strictly-newer broadcastedAt, so a late/duplicate can never
       // clobber a newer state - the appremoved model.
       await registryManager.storeAppInstallingMessage(newAppInstallingMessage);
+      installingRecordKey = { name: instantiated.name, ip: localSocketAddr };
       fluxCommunicationMessagesSender.broadcastMessageToAll(newAppInstallingMessage)
         .catch((e) => log.error(`installing broadcast for ${appToRun} failed: ${e.message}`));
     } else if (pinnedContended && !collisionWindowElapsed) {
@@ -847,6 +860,7 @@ async function trySpawningGlobalApplication() {
       // window), so it is NOT re-stored on the way back, and must not be re-broadcast (which would
       // reset broadcastedAt and skew the election ordering).
       await registryManager.storeAppInstallingMessage(newAppInstallingMessage);
+      installingRecordKey = { name: instantiated.name, ip: localSocketAddr };
       await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
       appsToBeCheckedLater.push({
         appName: appToRun,
@@ -861,6 +875,7 @@ async function trySpawningGlobalApplication() {
       // Non-pinned app (open contention - any node may install): keep the legacy inline election.
       // Store + broadcast, then wait inline for peers' broadcasts to propagate.
       await registryManager.storeAppInstallingMessage(newAppInstallingMessage);
+      installingRecordKey = { name: instantiated.name, ip: localSocketAddr };
       await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
       await serviceHelper.delay(collisionWaitMs); // give it 1.5m so messages are propagated on the network
     }
@@ -925,7 +940,6 @@ async function trySpawningGlobalApplication() {
       // Transient (blocklist unreachable, node busy) - retry next cycle without the
       // longer back-off, so a brief outage doesn't lock the app out for days.
       log.info(`trySpawningGlobalApplication - install deferred for ${appToRun}: ${installResult.reason}; retrying next cycle`);
-      globalState.trySpawningGlobalAppCache.delete(appHash);
       return shortDelayTime;
     }
     if (installResult.status !== appInstaller.InstallStatus.INSTALLED && installResult.status !== appInstaller.InstallStatus.SKIPPED) {
@@ -935,6 +949,9 @@ async function trySpawningGlobalApplication() {
       fluxEventBus.publish('spawner:installFailed', { appName: appToRun, hash: appHash });
       return shortDelayTime;
     }
+    // The app installed (or was already installed): the installing record now reflects
+    // reality, so the finally must not retract it.
+    installSucceeded = true;
 
     if (pinnedContended) {
       // Multi-node contention: the post-install over-instance self-evict needs peers' running-
@@ -959,8 +976,20 @@ async function trySpawningGlobalApplication() {
     if (appHash && !globalState.spawnErrorsLongerAppCache.has(appHash) && !globalState.trySpawningGlobalAppCache.has(appHash)) {
       log.info(`trySpawningGlobalApplication - Adding app hash ${appHash} to trySpawningGlobalAppCache due to pre-install error`);
       globalState.trySpawningGlobalAppCache.set(appHash, '', { ttl: FluxCacheManager.oneHour * 6 });
+      throttleIntended = true; // a deliberate pre-install-error back-off; keep it
     }
     return shortDelayTime || 5 * 60 * 1000;
+  } finally {
+    // Unwind the "I'm taking this app" marks unless a deliberate back-off was set
+    // or the install succeeded. Clearing an unset throttle / retracting an unstored
+    // record are no-ops, so this is safe on every early exit.
+    if (appHash && !throttleIntended) {
+      globalState.trySpawningGlobalAppCache.delete(appHash);
+    }
+    if (installingRecordKey && !installSucceeded) {
+      await registryManager.removeAppInstallingMessage(installingRecordKey.name, installingRecordKey.ip)
+        .catch((e) => log.error(`trySpawningGlobalApplication - removeAppInstallingMessage for ${installingRecordKey.name} failed: ${e.message}`));
+    }
   }
 }
 
