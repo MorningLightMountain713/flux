@@ -93,6 +93,7 @@ describe('appNetworkLinker tests', () => {
       appDockerNetworkConnect: sinon.stub().resolves(),
       appDockerNetworkDisconnect: sinon.stub().resolves(),
       isFluxAppNetwork: sinon.stub().resolves(false),
+      fluxDockerNetworkExists: sinon.stub().resolves(true),
       getAppContainerNames: sinon.stub().resolves([]),
       getAppContainerObjects: sinon.stub().resolves([]),
     };
@@ -189,10 +190,22 @@ describe('appNetworkLinker tests', () => {
       sinon.assert.calledWith(dockerServiceStub.appDockerNetworkConnect, 'fluxweb_appB', 'fluxDockerNetwork_appC');
     });
 
-    it('propagates a connection failure so the install is rolled back', async () => {
+    it('propagates a raw connection failure (network present) so the install is rolled back', async () => {
       dockerServiceStub.appDockerNetworkConnect.rejects(new Error('docker boom'));
+      dockerServiceStub.fluxDockerNetworkExists.resolves(true);
       await expect(appNetworkLinker.connectComponentToLinkedApps('c', instSpec({ name: 'appB', shareWith: ['appA'] })))
         .to.be.rejectedWith('docker boom');
+    });
+
+    it('tags an attach failure as NETWORK_DEPENDENCY_NOT_READY when the linked network vanished mid-install', async () => {
+      dockerServiceStub.appDockerNetworkConnect.rejects(new Error('network not found'));
+      dockerServiceStub.fluxDockerNetworkExists.resolves(false); // the dependency was torn down
+      try {
+        await appNetworkLinker.connectComponentToLinkedApps('c', instSpec({ name: 'appB', shareWith: ['appA'] }));
+        expect.fail('should have thrown');
+      } catch (error) {
+        expect(error.code).to.equal('NETWORK_DEPENDENCY_NOT_READY');
+      }
     });
   });
 

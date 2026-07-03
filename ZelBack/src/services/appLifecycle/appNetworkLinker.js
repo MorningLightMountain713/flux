@@ -336,15 +336,31 @@ async function connectComponentToLinkedApps(componentContainerName, instantiated
   // eslint-disable-next-line no-restricted-syntax
   for (const linkedApp of linkedApps) {
     const networkName = `fluxDockerNetwork_${linkedApp}`;
-    // The linked app's network is a CROSS-APP host resource: its removal runs in
-    // the linked app's teardown worker under the node-wide hostMutationLock. Take
-    // the same lock per attach so this connect either lands before that network is
-    // torn down or fails cleanly (rolling back this install) - never racing a
-    // half-removed network. Per-call (leaf) granularity, matching the install
-    // port-open loop; the connect is a single bounded docker call.
-    // eslint-disable-next-line no-await-in-loop
-    await withHostMutationLock(() => dockerService.appDockerNetworkConnect(componentContainerName, networkName));
-    log.info(`Connected ${componentContainerName} to linked app network ${networkName}`);
+    try {
+      // The linked app's network is a CROSS-APP host resource: its removal runs in
+      // the linked app's teardown worker under the node-wide hostMutationLock. Take
+      // the same lock per attach so this connect either lands before that network is
+      // torn down or fails cleanly (rolling back this install) - never racing a
+      // half-removed network. Per-call (leaf) granularity, matching the install
+      // port-open loop; the connect is a single bounded docker call.
+      // eslint-disable-next-line no-await-in-loop
+      await withHostMutationLock(() => dockerService.appDockerNetworkConnect(componentContainerName, networkName));
+      log.info(`Connected ${componentContainerName} to linked app network ${networkName}`);
+    } catch (error) {
+      // A dependency can vanish between the pre-install readiness check and this
+      // attach (reaped, or its own expiry/cancel completed mid-install). If the
+      // network is simply gone, that is a transient ordering condition - tag it so
+      // the installer DEFERS and retries rather than hard-failing the consumer into
+      // the 7-day error cache. A connect that failed for any other reason (the
+      // network is present) is a real failure and propagates unchanged.
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await dockerService.fluxDockerNetworkExists(networkName))) {
+        const notReady = new Error(`Linked app network ${networkName} for '${instantiated.name}' disappeared during install; deferring`);
+        notReady.code = 'NETWORK_DEPENDENCY_NOT_READY';
+        throw notReady;
+      }
+      throw error;
+    }
   }
 }
 
