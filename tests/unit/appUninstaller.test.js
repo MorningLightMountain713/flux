@@ -255,6 +255,29 @@ describe('appUninstaller tests', () => {
         operationRegistry.clear();
       }
     });
+
+    it('skipGuard never bypasses an ACTIVE remove lease (no double teardown)', async () => {
+      operationRegistry.acquire('anyapp', 'remove', 'other-teardown');
+      try {
+        const result = await appUninstaller.uninstallApplication('anyapp', { forceKill: true, skipGuard: true });
+        expect(result.status).to.equal(appUninstaller.UninstallStatus.DEFERRED);
+      } finally {
+        operationRegistry.clear();
+      }
+    });
+
+    it('skipGuard still barges past a NON-remove lease (install cleanup / force past a redeploy)', async () => {
+      operationRegistry.acquire('anyapp', 'install', 'the-install');
+      appsRepositoryStub.getInstalledApp.resolves(null);
+      appsRepositoryStub.getGlobalAppInfo.resolves(null);
+      try {
+        const result = await appUninstaller.uninstallApplication('anyapp', { forceKill: true, skipGuard: true });
+        // it proceeds past the install lease (does not defer); the app is simply not found here
+        expect(result.status).to.not.equal(appUninstaller.UninstallStatus.DEFERRED);
+      } finally {
+        operationRegistry.clear();
+      }
+    });
   });
 
   describe('reclaimUnusedImages (reference-gated image GC)', () => {
@@ -401,6 +424,20 @@ describe('appUninstaller tests', () => {
       expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.calledWith('myapp')).to.equal(true);
       expect(dockerServiceStub.removeFluxAppDockerNetwork.called).to.equal(false);
     });
+
+    it('refuses a second concurrent teardown of the same app (single-flight)', async () => {
+      // Hold the first teardown open at the shutdownd stop so the second overlaps it.
+      let releaseStop;
+      fluxShutdowndClientStub.beginAppStop.onFirstCall().returns(new Promise((resolve) => { releaseStop = resolve; }));
+      fluxShutdowndClientStub.beginAppStop.onSecondCall().resolves({ outcome: 'not_arcane' });
+
+      const first = appUninstaller.runTeardown(doc()).catch(() => {});
+      await appUninstaller.runTeardown(doc()); // same key -> single-flight bail, returns at once
+
+      expect(fluxShutdowndClientStub.beginAppStop.callCount, 'the second teardown must not start a second stop').to.equal(1);
+      releaseStop({ outcome: 'not_arcane' });
+      await first;
+    });
   });
 
   describe('clearSpawnThrottleForPinnedReinstall (throttle clear on operator removal)', () => {
@@ -497,6 +534,23 @@ describe('appUninstaller tests', () => {
       expect(keys.indexOf('workload')).to.be.lessThan(keys.indexOf('collector'));
     });
 
+    it('defers the follower teardown when a requiring workload is mid-operation (DEFERRED)', async () => {
+      configStub.fluxapps.manageCollectorLifecycle = true;
+      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      appNetworkLinkerStub.isPureFollower.callsFake((s) => s.name === 'collector');
+      appNetworkLinkerStub.findInstalledWorkloadsRequiring.resolves([spec('workload')]);
+      // the requiring workload holds a redeploy lease, so its removal DEFERS
+      operationRegistry.acquire('workload', 'softRedeploy', 'the-redeploy');
+      try {
+        const result = await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true });
+        expect(result.status, 'the follower teardown must defer while its consumer is mid-operation').to.equal(appUninstaller.UninstallStatus.DEFERRED);
+        const keys = pendingTeardownStoreStub.writeTeardown.getCalls().map((c) => c.args[0].key);
+        expect(keys.indexOf('collector'), 'the follower must NOT have started tearing down').to.equal(-1);
+      } finally {
+        operationRegistry.clear();
+      }
+    });
+
     it('a force-kill of a follower does NOT cascade', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
@@ -556,17 +610,19 @@ describe('appUninstaller tests', () => {
       expect(removals[1]).to.include('alloy');
     });
 
-    it('the sweep is reentrancy-latched: a second concurrent trigger is a no-op', async () => {
+    it('re-runs the sweep when a trigger arrives mid-pass (dirty flag), never dropping it', async () => {
       let releaseFind;
       appNetworkLinkerStub.findUnrequiredInstalledDependencies.returns(new Promise((resolve) => { releaseFind = resolve; }));
 
       const first = appUninstaller.removeUnrequiredDependencies();
       const second = appUninstaller.removeUnrequiredDependencies();
-      await second; // returns immediately - latched
+      await second; // the concurrent trigger returns immediately, marking the running sweep dirty
       expect(appNetworkLinkerStub.findUnrequiredInstalledDependencies.callCount).to.equal(1);
 
-      releaseFind([]);
+      releaseFind([]); // first pass finds nothing to remove...
       await first;
+      // ...but the dirty flag forces one more pass instead of dropping the concurrent trigger.
+      expect(appNetworkLinkerStub.findUnrequiredInstalledDependencies.callCount).to.equal(2);
     });
   });
 
