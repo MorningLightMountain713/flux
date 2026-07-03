@@ -255,7 +255,7 @@ async function getLocalComponentSpec(identifier) {
     return { missingComponent: true };
   }
   return {
-    deployment, comp, invalidSpec: false, invalidReason: null,
+    deployment, comp, owner: inst.owner, invalidSpec: false, invalidReason: null,
   };
 }
 
@@ -335,9 +335,13 @@ async function dockerActual(identifier) {
 async function reconcileNetworkMembership(identifier, spec, actual) {
   if (!Array.isArray(actual.networks)) return;
   const { appName } = spec.deployment;
+  // Desired = own network + only the links that resolve to a currently-installed
+  // same-owner app. A link that is gone or has changed hands drops out here, so
+  // convergence disconnects it (never maintains a dangling or cross-tenant bridge)
+  // instead of trusting the static spec forever.
   const desired = [
     `fluxDockerNetwork_${appName}`,
-    ...spec.deployment.linkedApps.map((name) => `fluxDockerNetwork_${name}`),
+    ...(await appNetworkLinker.resolveActiveLinkedNetworks(spec.owner, spec.deployment.linkedApps)),
   ];
   const result = await appNetworkLinker.ensureContainerNetworkMembership(identifier, desired, actual.networks);
   if (result.connected.length || result.disconnected.length || result.failed.length) {

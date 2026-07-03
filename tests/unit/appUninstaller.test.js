@@ -85,6 +85,8 @@ describe('appUninstaller tests', () => {
       appDockerRemove: sinon.stub().resolves(),
       appDockerImageRemove: sinon.stub().resolves(),
       dockerListContainers: sinon.stub().resolves([]),
+      forceRemoveFluxAppDockerNetwork: sinon.stub().resolves(),
+      removeFluxAppDockerNetwork: sinon.stub().resolves(),
       getAppIdentifier: sinon.stub().returns('testapp'),
       getBaseAppName: sinon.stub().callsFake((id) => id),
     };
@@ -391,6 +393,13 @@ describe('appUninstaller tests', () => {
       await appUninstaller.runTeardown(doc()).catch(() => {});
       expect(dockerServiceStub.appDockerStop.called).to.equal(false);
       expect(dockerServiceStub.appDockerKill.called).to.equal(false);
+    });
+
+    it('force-disconnects endpoints and removes the network even on a graceful teardown (no leak)', async () => {
+      fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
+      await appUninstaller.runTeardown(doc()).catch(() => {});
+      expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.calledWith('myapp')).to.equal(true);
+      expect(dockerServiceStub.removeFluxAppDockerNetwork.called).to.equal(false);
     });
   });
 
