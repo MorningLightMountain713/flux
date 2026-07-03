@@ -486,6 +486,7 @@ describe('appInstaller tests', () => {
         installComponentError = null,
         components = [],
         checkAppNetworkRequirements = sinon.stub().resolves(),
+        connectComponentToLinkedApps = sinon.stub().resolves(),
       } = opts;
 
       const onInstallComplete = sinon.stub().resolves();
@@ -559,7 +560,7 @@ describe('appInstaller tests', () => {
         './appNetworkLinker': {
           reconnectLinkedApps: sinon.stub().resolves(),
           checkAppNetworkRequirements,
-          connectComponentToLinkedApps: sinon.stub().resolves(),
+          connectComponentToLinkedApps,
           findLinkedAppLogCollector: sinon.stub().returns(null),
           resolveLogCollector: sinon.stub().resolves({ syslogTarget: null, crossAppLogCollector: null }),
         },
@@ -725,6 +726,27 @@ describe('appInstaller tests', () => {
 
         expect(result.status, 'a misconfiguration is a real failure').to.equal(appInstaller.InstallStatus.FAILED);
         expect(installComponent.called, 'never provisioned anything').to.be.false;
+      });
+
+      it('defers (not fails) when a linked dependency vanishes MID-install — cleans up, no error broadcast', async () => {
+        // Passes the pre-check, then the attach at connect-time finds the dependency's
+        // network gone (reaped, or the dep's own cancel/expiry completed mid-install).
+        const notReady = Object.assign(new Error("Linked app network fluxDockerNetwork_collector for 'newapp' disappeared during install; deferring"), { code: 'NETWORK_DEPENDENCY_NOT_READY' });
+        const {
+          installer, uninstallApplication, broadcastMessageToAll, storeAppInstallingErrorMessage,
+        } = loadFresh({
+          installAborted: false,
+          teardownOwed: false,
+          connectComponentToLinkedApps: sinon.stub().rejects(notReady),
+          components: [['web', mockComponent]],
+        });
+
+        const result = await installer.installApplication(mockInstantiated, {});
+
+        expect(result.status, 'a mid-install dep-vanish defers, never fails').to.equal(appInstaller.InstallStatus.DEFERRED);
+        expect(uninstallApplication.calledWith('newapp'), 'the partial install is cleaned up').to.be.true;
+        expect(broadcastMessageToAll.called, 'no network-wide install error for a transient').to.be.false;
+        expect(storeAppInstallingErrorMessage.called, 'no install-error stored either').to.be.false;
       });
 
       it('converge-rollback: a cancel landing during convergence defers instead of poisoning', async () => {

@@ -497,11 +497,13 @@ async function installApplication(instantiated, options = {}) {
       // peers count it as a real install failure for that hash. Suppress the store +
       // broadcast on the same cancel signals the outer catch defers on — installAborted
       // latches the instant the cancel fires (so it is observable here), with the
-      // owed-teardown doc as a fail-closed fallback. A genuine failure (no cancel) still
+      // owed-teardown doc as a fail-closed fallback. A linked dependency vanishing
+      // mid-install (NETWORK_DEPENDENCY_NOT_READY) is likewise transient, not a real
+      // failure, so it is suppressed too. A genuine failure (no cancel) still
       // broadcasts. Always rethrow so the outer catch runs its classification.
       const cancelInFlight = globalState.installAborted(appName)
         || await pendingTeardownStore.teardownOwedFor(appName);
-      if (!test && !cancelInFlight) {
+      if (!test && !cancelInFlight && error.code !== 'NETWORK_DEPENDENCY_NOT_READY') {
         const errorResponse = messageHelper.createErrorMessage(
           error.message || error,
           error.name,
@@ -569,6 +571,16 @@ async function installApplication(instantiated, options = {}) {
       if (onStatus) onStatus(messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appName} removal`));
       await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
       log.info(`Cleanup completed for ${appName} after installation failure`);
+
+      // A linked dependency's network vanished mid-install (attach-time
+      // NETWORK_DEPENDENCY_NOT_READY). The partial install is cleaned up above; this
+      // is the same transient class the pre-install readiness check DEFERS on, just
+      // detected later - so DEFER, don't FAIL. Returning FAILED would 7-day-poison
+      // the hash in the spawner even though the dependency reinstalls minutes later.
+      if (error.code === 'NETWORK_DEPENDENCY_NOT_READY') {
+        log.warn(`Install of ${appName} deferred: a linked dependency's network vanished mid-install`);
+        return { status: InstallStatus.DEFERRED, reason: error.message };
+      }
     }
 
     return { status: InstallStatus.FAILED, reason: error.message || serviceHelper.ensureString(error) };
