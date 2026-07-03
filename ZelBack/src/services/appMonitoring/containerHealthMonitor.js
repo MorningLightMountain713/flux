@@ -30,7 +30,7 @@ async function recreateMissingContainers(componentIdentifier) {
   const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(deployment);
   // Same for syslog routing - a container recreated without it silently falls
   // back to json-file logging.
-  const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(instantiated, deployment);
+  const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(deployment);
   const isComponent = componentIdentifier.includes('_');
   const componentName = isComponent ? componentIdentifier.split('_')[0] : null;
   const components = componentName

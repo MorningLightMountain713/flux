@@ -408,7 +408,7 @@ async function installApplication(instantiated, options = {}) {
       const restartAlwaysOwners = config.fluxapps.restartAlwaysOwners || [];
       const restartPolicy = (owner && restartAlwaysOwners.includes(owner)) ? 'always' : null;
 
-      const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(instantiated, deployment);
+      const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(deployment);
 
       // App-wide feature check computed once: gates the per-container budget labels
       // stamped at docker-create, on the same channel as owner.
