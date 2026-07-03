@@ -441,8 +441,19 @@ async function clearSpawnThrottleForPinnedReinstall(appName, { forceKill, backgr
 }
 
 // Reentrancy latch for the orphaned-follower sweep: a sweep removal triggers the
-// sweep again (deferred), which must not stack a second concurrent pass.
+// sweep again (deferred), which must not stack a second concurrent pass. A trigger
+// arriving while a sweep runs sets the dirty flag so the running sweep re-runs once
+// more before releasing - otherwise a trigger that fires during the terminal pass's
+// DB read (before a concurrent removal's row delete) is lost, leaving a real orphan.
 let dependencyCleanupInProgress = false;
+let dependencyCleanupDirty = false;
+
+// Keys with a destructive teardown currently executing. The single-flight guard for
+// runTeardown: every teardown path (foreground, detached, boot recovery, the install
+// catch's recovery) funnels through it, so this is where two concurrent teardowns of
+// the same app - which would double-destroy and race the crash-recovery record - are
+// refused. In-memory only: a crash clears it and boot recovery re-drives.
+const teardownsInProgress = new Set();
 
 /**
  * Reverse dependency cascade: before a pure-follower app (a shared collector) is
@@ -454,24 +465,39 @@ let dependencyCleanupInProgress = false;
  * is up.
  *
  * @param {string} appName - bare app name being removed
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} true when the dependency's teardown may proceed; false
+ *   when a requiring workload DEFERRED (it is mid-operation and will resume as a live
+ *   consumer), so the dependency's teardown must be deferred rather than leave that
+ *   consumer half-torn. A FAILED workload does not block: its teardown is already
+ *   committed (record owed, retried by boot recovery), so the dependency may go.
  */
 async function removeRequiringWorkloadsFirst(appName) {
   if (!appName) {
-    return;
+    return true;
   }
   const spec = await appsRepository.getInstalledApp(appName);
   if (!spec || !appNetworkLinker.isPureFollower(spec)) {
-    return;
+    return true;
   }
   const workloads = await appNetworkLinker.findInstalledWorkloadsRequiring(appName);
+  let allRemoved = true;
   // eslint-disable-next-line no-restricted-syntax
   for (const workload of workloads) {
     log.info(`Reverse dependency cascade: uninstalling workload ${workload.name} before its dependency ${appName}`);
     // forceKill=false honours the graceful drain; broadcastRemoval tells the network.
     // eslint-disable-next-line no-await-in-loop, no-use-before-define
-    await uninstallApplication(workload.name, { forceKill: false, broadcastRemoval: true });
+    const result = await uninstallApplication(workload.name, { forceKill: false, broadcastRemoval: true });
+    // A workload mid-operation (redeploy/backup/install) DEFERS - it will resume as a
+    // live consumer, so its dependency must not be torn down under it (that leaves the
+    // workload's post-teardown re-verify throwing with its own containers already gone).
+    // A FAILED workload has already committed its teardown (record owed) and won't
+    // resume, so it does not block the dependency.
+    if (result && result.status === UninstallStatus.DEFERRED) {
+      log.warn(`Reverse dependency cascade: workload ${workload.name} is mid-operation (deferred); deferring teardown of ${appName}`);
+      allRemoved = false;
+    }
   }
+  return allRemoved;
 }
 
 /**
@@ -487,35 +513,46 @@ async function removeRequiringWorkloadsFirst(appName) {
  */
 async function removeUnrequiredDependencies() {
   if (dependencyCleanupInProgress) {
+    // A trigger arrived mid-sweep: it may reflect state the running sweep already
+    // read past, so mark it dirty to re-run rather than drop this trigger.
+    dependencyCleanupDirty = true;
     return;
   }
   dependencyCleanupInProgress = true;
   try {
-    const attempted = new Set();
-    // Bounded: each pass either removes one app or stops. The cap is a backstop.
-    for (let pass = 0; pass < 50; pass += 1) {
-      // eslint-disable-next-line no-await-in-loop
-      const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
-      // Remove a consumer before the app it consumes so the network/log wiring
-      // tears down in dependency order.
-      orphans.sort((a, b) => {
-        if (a.linkedAppNames().some((n) => n.toLowerCase() === b.name.toLowerCase())) return -1;
-        if (b.linkedAppNames().some((n) => n.toLowerCase() === a.name.toLowerCase())) return 1;
-        return 0;
-      });
-      const target = orphans.find((app) => !attempted.has(app.name.toLowerCase()));
-      if (!target) {
-        return;
+    do {
+      dependencyCleanupDirty = false;
+      const attempted = new Set();
+      let hitLimit = true;
+      // Bounded: each pass either removes one app or stops. The cap is a backstop.
+      for (let pass = 0; pass < 50; pass += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
+        // Remove a consumer before the app it consumes so the network/log wiring
+        // tears down in dependency order.
+        orphans.sort((a, b) => {
+          if (a.linkedAppNames().some((n) => n.toLowerCase() === b.name.toLowerCase())) return -1;
+          if (b.linkedAppNames().some((n) => n.toLowerCase() === a.name.toLowerCase())) return 1;
+          return 0;
+        });
+        const target = orphans.find((app) => !attempted.has(app.name.toLowerCase()));
+        if (!target) {
+          hitLimit = false;
+          break;
+        }
+        attempted.add(target.name.toLowerCase());
+        log.info(`Dependency cleanup: removing ${target.name} - no installed app requires it any more`);
+        // forceKill=false honours the graceful drain; broadcastRemoval tells the
+        // network this node dropped it. A DEFERRED/FAILED removal is retried on
+        // the next trigger (the name stays in attempted for this run only).
+        // eslint-disable-next-line no-await-in-loop, no-use-before-define
+        await uninstallApplication(target.name, { forceKill: false, broadcastRemoval: true });
       }
-      attempted.add(target.name.toLowerCase());
-      log.info(`Dependency cleanup: removing ${target.name} - no installed app requires it any more`);
-      // forceKill=false honours the graceful drain; broadcastRemoval tells the
-      // network this node dropped it. A DEFERRED/FAILED removal is retried on
-      // the next trigger (the name stays in attempted for this run only).
-      // eslint-disable-next-line no-await-in-loop, no-use-before-define
-      await uninstallApplication(target.name, { forceKill: false, broadcastRemoval: true });
-    }
-    log.warn('Dependency cleanup: reached pass limit, will retry on next trigger');
+      if (hitLimit) {
+        log.warn('Dependency cleanup: reached pass limit, will retry on next trigger');
+      }
+      // Re-run if a trigger arrived while this sweep was executing.
+    } while (dependencyCleanupDirty);
   } catch (error) {
     log.error(`Dependency cleanup failed: ${error.message}`);
   } finally {
@@ -567,10 +604,14 @@ async function uninstallApplication(appName, options = {}) {
     const callerLine = stack.split('\n')[2]?.trim();
     log.warn(`APP REMOVAL TRIGGERED: ${appName} | forceKill=${forceKill} | skipGuard=${skipGuard} | broadcastRemoval=${broadcastRemoval} | caller: ${callerLine}`);
 
-    // Per-app: defer only if THIS app is already mid-operation (skipGuard is the
-    // documented emergency-removal bypass). Removals of different apps run
-    // concurrently - each removes only its own containers/volumes/network.
-    if (!skipGuard && operationRegistry.isHeld(appName)) {
+    // Per-app: defer if THIS app is already mid-operation. skipGuard is the emergency
+    // bypass that lets a removal barge past a NON-remove lease (an install cleaning up
+    // after itself, an operator force past a redeploy) - but it must NEVER let a second
+    // teardown start while a 'remove' lease is already active: two concurrent teardowns
+    // double-destroy and race each other's crash-recovery record. Removals of different
+    // apps run concurrently - each removes only its own containers/volumes/network.
+    const heldLease = operationRegistry.get(appName);
+    if (heldLease && (!skipGuard || heldLease.type === 'remove')) {
       status(`An operation is already in progress for ${appName}. Removal not possible.`);
       return { status: UninstallStatus.DEFERRED, reason: `An operation is already in progress for ${appName}` };
     }
@@ -630,7 +671,14 @@ async function uninstallApplication(appName, options = {}) {
     // standalone removal. Gated off in production: the flux console owns the
     // collector lifecycle.
     if (config.fluxapps.manageCollectorLifecycle && !forceKill && appNetworkLinker.isPureFollower(spec)) {
-      await removeRequiringWorkloadsFirst(appName);
+      const workloadsRemoved = await removeRequiringWorkloadsFirst(appName);
+      if (!workloadsRemoved) {
+        // A consumer that still requires this follower could not be removed yet
+        // (it is mid-operation). Defer this teardown - it runs before the prelude,
+        // so nothing is torn down - and retry on the next trigger.
+        status(`Removal of ${appName} deferred: a workload still requiring it could not be removed yet`);
+        return { status: UninstallStatus.DEFERRED, reason: `A workload requiring ${appName} could not be removed yet` };
+      }
     }
 
     // Capture each component's teardown descriptors off the normalized deployment. The
@@ -780,7 +828,23 @@ async function uninstallApplication(appName, options = {}) {
  * @param {object} [opts]
  * @param {Function|null} [opts.onStatus] - progress callback (the foreground REST path)
  */
-async function runTeardown(doc, { onStatus = null } = {}) {
+async function runTeardown(doc, opts = {}) {
+  const { key, name } = doc;
+  // Single-flight per app: refuse a second concurrent destructive teardown of the
+  // same app (it would double stop/remove/rm-rf and race the crash-recovery record).
+  if (teardownsInProgress.has(key)) {
+    log.warn(`runTeardown: a teardown of ${name} is already in progress; skipping the concurrent one`);
+    return;
+  }
+  teardownsInProgress.add(key);
+  try {
+    await executeTeardown(doc, opts);
+  } finally {
+    teardownsInProgress.delete(key);
+  }
+}
+
+async function executeTeardown(doc, { onStatus = null } = {}) {
   const {
     key, name, networkName, forceKill, owner, components, reason, shutdownBudgetSeconds,
   } = doc;
@@ -859,8 +923,7 @@ async function runTeardown(doc, { onStatus = null } = {}) {
     // Force-disconnect any remaining endpoints before removing the network. The app's
     // own containers are already gone by here; the only endpoints left are foreign
     // consumers that linked to this app, and a plain removal fails on them ("active
-    // endpoints") - which silently leaked the network on a graceful (non-force)
-    // teardown. A linked consumer stops desiring this departed network on its next
+    // endpoints"). A linked consumer stops desiring this departed network on its next
     // reconcile, so disconnecting it here is safe regardless of the teardown mode.
     await dockerService.forceRemoveFluxAppDockerNetwork(networkName).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
   });

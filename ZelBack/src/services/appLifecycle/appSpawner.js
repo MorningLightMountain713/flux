@@ -130,7 +130,10 @@ async function overInstanceSelfEvictCheck(appToRun, appHash, minInstances, local
       log.info(`trySpawningGlobalApplication - Application ${appToRun} is going to be removed as already passed the instances required.`);
       log.warn(`REMOVAL REASON: Exceeded required instances - ${appToRun} already has sufficient instances, removing local installation (appSpawner)`);
       globalState.trySpawningGlobalAppCache.delete(appHash);
-      appUninstaller.uninstallApplication(appToRun, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
+      // No skipGuard: trimming a surplus instance is never an emergency, so it must
+      // defer on any in-flight operation (esp. a graceful teardown already draining
+      // this app) rather than barge past it and force-kill mid-drain.
+      appUninstaller.uninstallApplication(appToRun, { forceKill: true, broadcastRemoval: true }).catch((error) => log.error(error));
     }
   }
 }
@@ -421,9 +424,9 @@ async function trySpawningGlobalApplication() {
       if (globalAppNamesLocation.length > 0) {
         const readiness = await Promise.all(globalAppNamesLocation.map(async (c) => {
           // Never re-select an app that is mid-teardown: its containers/ports are
-          // still draining, so re-selecting races the removal - the port probe hits
-          // the draining docker-proxy (EADDRINUSE) and used to strand the 12h
-          // throttle. Reconsidered once the teardown clears.
+          // still draining, so re-selecting would race the removal (the port probe
+          // hits the draining docker-proxy and reads the port as busy). Reconsidered
+          // once the teardown clears.
           if (await pendingTeardownStore.teardownOwedFor(c.instantiated.name)) {
             return false;
           }
