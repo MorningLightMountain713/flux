@@ -389,6 +389,17 @@ describe('appNetworkLinker tests', () => {
       sinon.assert.notCalled(dockerServiceStub.appDockerNetworkDisconnect);
     });
 
+    it('disconnects an UNLABELLED pre-upgrade fluxDockerNetwork_ no longer desired (membership-3 fallback)', async () => {
+      dockerServiceStub.isFluxAppNetwork.withArgs('fluxDockerNetwork_old').resolves(false); // pre-label, unlabelled
+      const result = await appNetworkLinker.ensureContainerNetworkMembership(
+        'fluxweb_myapp',
+        ['fluxDockerNetwork_myapp'],
+        ['fluxDockerNetwork_myapp', 'fluxDockerNetwork_old'],
+      );
+      sinon.assert.calledOnceWithExactly(dockerServiceStub.appDockerNetworkDisconnect, 'fluxweb_myapp', 'fluxDockerNetwork_old');
+      expect(result.disconnected).to.eql(['fluxDockerNetwork_old']);
+    });
+
     it('makes no docker calls when memberships already match', async () => {
       const result = await appNetworkLinker.ensureContainerNetworkMembership(
         'fluxweb_myapp',
@@ -430,6 +441,18 @@ describe('appNetworkLinker tests', () => {
       expect(dockerServiceStub.appDockerNetworkConnect.calledWith('fluxweb_appC')).to.equal(false);
     });
 
+    it('does not reconnect a consumer owned by a different owner (name changed hands)', async () => {
+      appsRepositoryStub.listInstalledApps.resolves([
+        instSpec({ name: 'appB', owner: 'attacker', shareWith: ['appA'] }),
+        instSpec({ name: 'appA', owner: 'owner1' }),
+      ]);
+      dockerServiceStub.getAppContainerNames.withArgs('appB').resolves(['fluxweb_appB']);
+
+      await appNetworkLinker.reconnectLinkedApps('appA');
+
+      sinon.assert.notCalled(dockerServiceStub.appDockerNetworkConnect);
+    });
+
     it('does not throw when the database read fails', async () => {
       appsRepositoryStub.listInstalledApps.rejects(new Error('db down'));
       await expect(appNetworkLinker.reconnectLinkedApps('appA')).to.not.be.rejected;
@@ -437,11 +460,12 @@ describe('appNetworkLinker tests', () => {
   });
 
   describe('reconcileAllAppNetworkLinks', () => {
-    it('connects every linked app to each of its linked app networks', async () => {
+    it('connects only to links that resolve to an installed same-owner app', async () => {
       appsRepositoryStub.listInstalledApps.resolves([
         instSpec({ name: 'appB', shareWith: ['appA'] }),
         instSpec({ name: 'appC', shareWith: [] }),
       ]);
+      appsRepositoryStub.getInstalledApp.withArgs('appA').resolves(instSpec({ name: 'appA', owner: 'owner1' }));
       dockerServiceStub.getAppContainerNames.withArgs('appB').resolves(['fluxweb_appB']);
 
       await appNetworkLinker.reconcileAllAppNetworkLinks();
@@ -449,9 +473,58 @@ describe('appNetworkLinker tests', () => {
       sinon.assert.calledWith(dockerServiceStub.appDockerNetworkConnect, 'fluxweb_appB', 'fluxDockerNetwork_appA');
     });
 
+    it('does not connect to a link that changed hands (different owner)', async () => {
+      appsRepositoryStub.listInstalledApps.resolves([instSpec({ name: 'appB', shareWith: ['appA'] })]);
+      appsRepositoryStub.getInstalledApp.withArgs('appA').resolves(instSpec({ name: 'appA', owner: 'attacker' }));
+      dockerServiceStub.getAppContainerNames.withArgs('appB').resolves(['fluxweb_appB']);
+
+      await appNetworkLinker.reconcileAllAppNetworkLinks();
+
+      sinon.assert.notCalled(dockerServiceStub.appDockerNetworkConnect);
+    });
+
     it('does not throw when the database read fails', async () => {
       appsRepositoryStub.listInstalledApps.rejects(new Error('db down'));
       await expect(appNetworkLinker.reconcileAllAppNetworkLinks()).to.not.be.rejected;
+    });
+  });
+
+  describe('resolveActiveLinkedNetworks', () => {
+    it('keeps a link resolving to an installed same-owner app', async () => {
+      appsRepositoryStub.getInstalledApp.withArgs('collector').resolves(instSpec({ name: 'collector', owner: 'owner1' }));
+      expect(await appNetworkLinker.resolveActiveLinkedNetworks('owner1', ['collector'])).to.eql(['fluxDockerNetwork_collector']);
+    });
+
+    it('uses the installed app\'s registered casing for the network name', async () => {
+      appsRepositoryStub.getInstalledApp.withArgs('collector').resolves(instSpec({ name: 'Collector', owner: 'owner1' }));
+      expect(await appNetworkLinker.resolveActiveLinkedNetworks('owner1', ['collector'])).to.eql(['fluxDockerNetwork_Collector']);
+    });
+
+    it('drops a link whose target is not installed (gone)', async () => {
+      appsRepositoryStub.getInstalledApp.withArgs('gone').resolves(null);
+      expect(await appNetworkLinker.resolveActiveLinkedNetworks('owner1', ['gone'])).to.eql([]);
+    });
+
+    it('drops a link whose target changed hands (different owner) - the cross-1 fix', async () => {
+      appsRepositoryStub.getInstalledApp.withArgs('collector').resolves(instSpec({ name: 'collector', owner: 'attacker' }));
+      expect(await appNetworkLinker.resolveActiveLinkedNetworks('owner1', ['collector'])).to.eql([]);
+    });
+  });
+
+  describe('isDisconnectEligibleFluxNetwork', () => {
+    it('is eligible when the ownership label is present', async () => {
+      dockerServiceStub.isFluxAppNetwork.withArgs('fluxDockerNetwork_x').resolves(true);
+      expect(await appNetworkLinker.isDisconnectEligibleFluxNetwork('fluxDockerNetwork_x')).to.equal(true);
+    });
+
+    it('is eligible for an unlabelled pre-upgrade fluxDockerNetwork_ network (transitional fallback)', async () => {
+      dockerServiceStub.isFluxAppNetwork.withArgs('fluxDockerNetwork_old').resolves(false);
+      expect(await appNetworkLinker.isDisconnectEligibleFluxNetwork('fluxDockerNetwork_old')).to.equal(true);
+    });
+
+    it('is not eligible for a non-flux network', async () => {
+      dockerServiceStub.isFluxAppNetwork.withArgs('bridge').resolves(false);
+      expect(await appNetworkLinker.isDisconnectEligibleFluxNetwork('bridge')).to.equal(false);
     });
   });
 

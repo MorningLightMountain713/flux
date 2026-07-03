@@ -861,11 +861,13 @@ async function runTeardown(doc, { onStatus = null } = {}) {
     // Reclaim the app's images (reference-gated) — an image-store mutation, so under the lock.
     await reclaimUnusedImages(list.map((c) => c.image), status);
     status('Cleaning up docker network...');
-    if (forceKill) {
-      await dockerService.forceRemoveFluxAppDockerNetwork(networkName).catch((e) => log.error(`force network removal ${networkName}: ${e.message}`));
-    } else {
-      await dockerService.removeFluxAppDockerNetwork(networkName).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
-    }
+    // Force-disconnect any remaining endpoints before removing the network. The app's
+    // own containers are already gone by here; the only endpoints left are foreign
+    // consumers that linked to this app, and a plain removal fails on them ("active
+    // endpoints") - which silently leaked the network on a graceful (non-force)
+    // teardown. A linked consumer stops desiring this departed network on its next
+    // reconcile, so disconnecting it here is safe regardless of the teardown mode.
+    await dockerService.forceRemoveFluxAppDockerNetwork(networkName).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
   });
 
   // Reclaim now-unneeded swap-pool capacity — self-serializing on its own chain and none

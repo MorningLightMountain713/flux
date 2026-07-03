@@ -58,7 +58,7 @@ describe('appReconciler tests', () => {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       appsRepository: {
         getInstalledApp: sinon.stub().callsFake(async () => (localSpec
-          ? { name: localSpec.name, isEncrypted: Boolean(localSpec.enterprise) }
+          ? { name: localSpec.name, owner: localSpec.owner ?? 'owner1', isEncrypted: Boolean(localSpec.enterprise) }
           : null)),
       },
       // mirrors the deployment view the reconciler reads: primary-mount g: =>
@@ -102,7 +102,12 @@ describe('appReconciler tests', () => {
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
       },
       containerHealthMonitor: { recreateMissingContainers: sinon.stub().resolves() },
-      appNetworkLinker: { ensureContainerNetworkMembership: sinon.stub().resolves({ connected: [], disconnected: [], failed: [] }) },
+      appNetworkLinker: {
+        ensureContainerNetworkMembership: sinon.stub().resolves({ connected: [], disconnected: [], failed: [] }),
+        // Default: every declared link resolves to an installed same-owner network.
+        // A membership test that drops a link overrides this for a specific name.
+        resolveActiveLinkedNetworks: sinon.stub().callsFake(async (owner, names) => (names || []).map((n) => `fluxDockerNetwork_${n}`)),
+      },
       appUninstaller: { UninstallStatus, uninstallApplication: sinon.stub().resolves({ status: UninstallStatus.REMOVED, reason: null }) },
       appTamperingDetectionService: { recordEvent: sinon.stub().resolves(), isNetworkMissingError: () => false },
       dockerOperations: { appDeleteDataInMountPoint: sinon.stub().resolves() },
@@ -158,7 +163,7 @@ describe('appReconciler tests', () => {
   describe('network-membership convergence', () => {
     it('steady state: converges a running container onto its own + linked networks', async () => {
       localSpec = {
-        name: 'App', version: 4, compose: [{ name: 'www', containerData: '/data' }], linkedApps: ['collector'],
+        name: 'App', version: 4, owner: 'owner1', compose: [{ name: 'www', containerData: '/data' }], linkedApps: ['collector'],
       };
       stubs.dockerService.dockerContainerInspect.resolves({
         State: { Running: true, Status: 'running' },
@@ -167,6 +172,8 @@ describe('appReconciler tests', () => {
 
       await appReconciler.reconcile('www_App');
 
+      // Desired-set validation runs with the CONSUMER's own owner threaded through.
+      sinon.assert.calledWith(stubs.appNetworkLinker.resolveActiveLinkedNetworks, 'owner1', ['collector']);
       sinon.assert.calledOnceWithExactly(
         stubs.appNetworkLinker.ensureContainerNetworkMembership,
         'www_App',

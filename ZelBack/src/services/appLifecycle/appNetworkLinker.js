@@ -349,15 +349,64 @@ async function connectComponentToLinkedApps(componentContainerName, instantiated
 }
 
 /**
+ * The docker networks a consumer should currently be attached to for its declared
+ * links: each linked name resolved to a currently-installed app owned by the SAME
+ * owner. A link whose target is gone (expired, never installed) or has changed
+ * hands (the name re-registered by a different owner after the original expired)
+ * is dropped — convergence then treats its network as stale and disconnects,
+ * rather than maintaining a dangling or cross-tenant bridge. This carries the
+ * same-owner invariant that install enforces once (checkAppNetworkRequirements)
+ * onto the post-install attach surfaces, where the trust decision is acted on
+ * every pass. Uses the installed app's REGISTERED casing for the network name —
+ * the name docker actually created — not the declared casing.
+ *
+ * @param {string} ownerId - the linking (consumer) app's owner
+ * @param {string[]} linkedNames - declared linked app names
+ * @returns {Promise<string[]>} fluxDockerNetwork_<name> for each valid link
+ */
+async function resolveActiveLinkedNetworks(ownerId, linkedNames) {
+  if (!Array.isArray(linkedNames) || !linkedNames.length) {
+    return [];
+  }
+  const networks = [];
+  // eslint-disable-next-line no-restricted-syntax
+  for (const name of linkedNames) {
+    // eslint-disable-next-line no-await-in-loop
+    const installed = await appsRepository.getInstalledApp(name);
+    if (installed && installed.owner === ownerId) {
+      networks.push(`fluxDockerNetwork_${installed.name}`);
+    }
+  }
+  return networks;
+}
+
+/**
+ * TRANSITIONAL — remove once no pre-label fluxDockerNetwork_* networks remain in
+ * the fleet. Whether a network is eligible for the reconciler to DISCONNECT a
+ * container from. The forward-looking signal is the runonflux.app-network
+ * ownership label; but docker cannot retro-stamp that label onto networks an
+ * older FluxOS created, and only FluxOS ever creates the fluxDockerNetwork_
+ * prefix, so we also accept that prefix for the reversible disconnect decision
+ * (the connect/ownership decision is owner-validated upstream, never by name). To
+ * retire: delete the prefix branch and revert callers to isFluxAppNetwork.
+ *
+ * @param {string} networkName
+ * @returns {Promise<boolean>}
+ */
+async function isDisconnectEligibleFluxNetwork(networkName) {
+  if (await dockerService.isFluxAppNetwork(networkName)) return true; // permanent signal
+  return networkName.startsWith('fluxDockerNetwork_'); // transitional fallback
+}
+
+/**
  * Converges a container's docker-network memberships on the given desired set:
  * connects missing networks and disconnects stale flux app networks (a
- * membership that carries the runonflux.app-network ownership label but is no
- * longer desired, e.g. an update dropped a shareWith link). Unlabelled
- * networks (docker defaults, user-created) are never touched, and nothing
- * outside the desired/actual diff is. Best-effort per network: each change is
- * a leaf docker call under the node-wide host mutation lock (a linked
- * network's removal runs in its app's teardown under the same lock), failures
- * are collected for the caller to pace a retry.
+ * membership no longer desired, e.g. an update dropped a shareWith link, or a
+ * link resolved as gone/changed-hands). Networks docker or a user created are
+ * never touched, and nothing outside the desired/actual diff is. Best-effort per
+ * network: each change is a leaf docker call under the node-wide host mutation
+ * lock (a linked network's removal runs in its app's teardown under the same
+ * lock), failures are collected for the caller to pace a retry.
  *
  * @param {string} componentIdentifier - container (bare identifier or docker name)
  * @param {string[]} desiredNetworks - full desired membership (own + linked)
@@ -394,7 +443,7 @@ async function ensureContainerNetworkMembership(componentIdentifier, desiredNetw
     }
     try {
       // eslint-disable-next-line no-await-in-loop
-      if (!(await dockerService.isFluxAppNetwork(networkName))) {
+      if (!(await isDisconnectEligibleFluxNetwork(networkName))) {
         // eslint-disable-next-line no-continue
         continue;
       }
@@ -412,8 +461,9 @@ async function ensureContainerNetworkMembership(componentIdentifier, desiredNetw
 
 /**
  * After an app's private network is (re)created, reconnects every locally
- * installed app that is networked with it back onto that network. Best-effort —
- * never throws, so a redeploy is not aborted by a reconnect hiccup.
+ * installed SAME-OWNER app that is networked with it back onto that network.
+ * Best-effort — never throws, so a redeploy is not aborted by a reconnect
+ * failure.
  *
  * @param {string} appName - the app whose network was (re)created
  * @returns {Promise<void>}
@@ -429,6 +479,11 @@ async function reconnectLinkedApps(appName) {
 
   const networkName = `fluxDockerNetwork_${appName}`;
   const lowerAppName = appName.toLowerCase();
+  // The owner of the just-(re)created app. Only same-owner consumers may attach:
+  // if this name changed hands (re-registered by a different owner after the
+  // original expired), a foreign consumer's declared link must NOT bridge it in.
+  const depApp = (installedApps || []).find((a) => a && a.name === appName);
+  const depOwner = depApp ? depApp.owner : null;
 
   // eslint-disable-next-line no-restricted-syntax
   for (const app of installedApps || []) {
@@ -438,6 +493,10 @@ async function reconnectLinkedApps(appName) {
     }
     const linkedApps = app.linkedAppNames();
     if (!linkedApps.some((linked) => linked.toLowerCase() === lowerAppName)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    if (!depOwner || app.owner !== depOwner) {
       // eslint-disable-next-line no-continue
       continue;
     }
@@ -475,8 +534,11 @@ async function reconcileAllAppNetworkLinks() {
 
   // eslint-disable-next-line no-restricted-syntax
   for (const app of installedApps || []) {
-    const linkedApps = app.linkedAppNames();
-    if (!linkedApps.length) {
+    // Only attach to links that resolve to a currently-installed same-owner app —
+    // a departed or changed-hands link is not (re)bridged at boot.
+    // eslint-disable-next-line no-await-in-loop
+    const desiredNetworks = await resolveActiveLinkedNetworks(app.owner, app.linkedAppNames());
+    if (!desiredNetworks.length) {
       // eslint-disable-next-line no-continue
       continue;
     }
@@ -484,8 +546,7 @@ async function reconcileAllAppNetworkLinks() {
       // eslint-disable-next-line no-await-in-loop
       const containerNames = await dockerService.getAppContainerNames(app.name);
       // eslint-disable-next-line no-restricted-syntax
-      for (const linkedApp of linkedApps) {
-        const networkName = `fluxDockerNetwork_${linkedApp}`;
+      for (const networkName of desiredNetworks) {
         // eslint-disable-next-line no-restricted-syntax
         for (const containerName of containerNames) {
           // Same-lock attach as connectComponentToLinkedApps: never race a
@@ -583,6 +644,8 @@ module.exports = {
   getRequiredDependencyNamesForNode,
   findUnrequiredInstalledDependencies,
   connectComponentToLinkedApps,
+  resolveActiveLinkedNetworks,
+  isDisconnectEligibleFluxNetwork,
   ensureContainerNetworkMembership,
   reconnectLinkedApps,
   reconcileAllAppNetworkLinks,
