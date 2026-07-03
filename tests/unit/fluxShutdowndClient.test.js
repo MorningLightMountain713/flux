@@ -170,4 +170,36 @@ describe('fluxShutdowndClient', () => {
       expect(await p).to.deep.equal({ outcome: 'unreachable' });
     });
   });
+
+  describe('forceAppStop', () => {
+    it('short-circuits to not_arcane without opening a socket', async () => {
+      const { client, netStub } = load({ isArcane: false });
+      const res = await client.forceAppStop('1own', 'app');
+      expect(res).to.deep.equal({ outcome: 'not_arcane' });
+      expect(netStub.createConnection.called).to.equal(false);
+    });
+
+    it('maps the daemon end_state to the outcome (forced)', async () => {
+      const { client, sockets } = load();
+      const p = client.forceAppStop('1own', 'app');
+      sockets[0].emit('connect');
+      sockets[0].emit('data', Buffer.from(okLine({ end_state: 'forced' })));
+      expect(await p).to.deep.equal({ outcome: 'forced' });
+    });
+
+    it('reports no_run when nothing was draining', async () => {
+      const { client, sockets } = load();
+      const p = client.forceAppStop('1own', 'app');
+      sockets[0].emit('connect');
+      sockets[0].emit('data', Buffer.from(okLine({ end_state: 'no_run' })));
+      expect(await p).to.deep.equal({ outcome: 'no_run' });
+    });
+
+    it('returns unreachable when the socket errors', async () => {
+      const { client, sockets } = load();
+      const p = client.forceAppStop('1own', 'app');
+      sockets[0].emit('error', new Error('ECONNREFUSED'));
+      expect(await p).to.deep.equal({ outcome: 'unreachable' });
+    });
+  });
 });
