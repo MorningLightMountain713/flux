@@ -236,7 +236,7 @@ async function redeployComponent(appName, componentName, options = {}) {
 
     // Recreated containers must keep their syslog routing - a container created
     // without it silently falls back to json-file logging.
-    const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(instantiated, freshDeployment);
+    const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(freshDeployment);
 
     status(`Installing ${deployComp.identifier}...`);
     await componentProvisioner.installComponent(deployComp, {
@@ -361,7 +361,7 @@ async function redeployApplication(appName, options = {}) {
     const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
     // Recreated containers must keep their syslog routing - a container created
     // without it silently falls back to json-file logging.
-    const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(instantiated, freshDeployment);
+    const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(freshDeployment);
     for (const [, deployComp] of freshDeployment.componentEntries()) {
       status(`Installing ${deployComp.identifier}...`);
       // eslint-disable-next-line no-await-in-loop
@@ -1552,7 +1552,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
     // Recreated containers must keep their syslog routing - a container created
     // without it silently falls back to json-file logging.
-    const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(registrySpec, freshDeployment);
+    const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(freshDeployment);
     for (const name of toInstall) {
       const deployComp = freshDeployment.getComponent(name);
       if (!deployComp) continue;

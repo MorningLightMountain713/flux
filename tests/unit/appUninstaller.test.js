@@ -111,7 +111,6 @@ describe('appUninstaller tests', () => {
       isPureFollower: sinon.stub().returns(false),
       findInstalledWorkloadsRequiring: sinon.stub().resolves([]),
       findUnrequiredInstalledDependencies: sinon.stub().resolves([]),
-      getLinkedApps: sinon.stub().returns([]),
     };
 
     pendingTeardownStoreStub = {
@@ -532,9 +531,8 @@ describe('appUninstaller tests', () => {
     });
 
     it('removeUnrequiredDependencies unwinds a chain until no orphans remain, consumer-first', async () => {
-      const datadog = { ...spec('datadog'), linked: ['alloy'] };
-      const alloy = spec('alloy');
-      appNetworkLinkerStub.getLinkedApps.callsFake((s) => s.linked || []);
+      const datadog = { ...spec('datadog'), linkedAppNames: () => ['alloy'] };
+      const alloy = { ...spec('alloy'), linkedAppNames: () => [] };
       // Deliberately unsorted: the consumer (datadog links to alloy) must be removed first.
       appNetworkLinkerStub.findUnrequiredInstalledDependencies.onCall(0).resolves([alloy, datadog]);
       appNetworkLinkerStub.findUnrequiredInstalledDependencies.onCall(1).resolves([alloy]);
