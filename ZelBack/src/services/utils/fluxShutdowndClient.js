@@ -209,6 +209,28 @@ async function beginAppStop(ownerFluxId, appName, reason, { force = false, deadl
   }
 }
 
+/**
+ * Escalate an in-flight per-app graceful drain to an immediate force-kill — an
+ * operator's explicit force-remove preempting the drain. Never throws; returns a
+ * discriminated `{ outcome }`:
+ *   forced | no_run   — the daemon's end-state (escalated, or nothing was draining);
+ *   unreachable       — daemon absent/down;
+ *   not_arcane        — no daemon here (short-circuit).
+ *
+ * @param {string} ownerFluxId
+ * @param {string} appName
+ * @returns {Promise<{outcome: string}>}
+ */
+async function forceAppStop(ownerFluxId, appName) {
+  if (!globalState.isArcane()) return { outcome: 'not_arcane' };
+  try {
+    const res = await callRpc('force_app_stop', { owner_flux_id: ownerFluxId, app_name: appName });
+    return { outcome: res.end_state };
+  } catch {
+    return { outcome: 'unreachable' };
+  }
+}
+
 module.exports = {
   callRpc,
   upsertAppPlan,
@@ -217,6 +239,7 @@ module.exports = {
   upsertAppPlanBestEffort,
   deleteAppPlanBestEffort,
   beginAppStop,
+  forceAppStop,
   SHUTDOWN_REASON,
   SOCKET_PATH,
 };
