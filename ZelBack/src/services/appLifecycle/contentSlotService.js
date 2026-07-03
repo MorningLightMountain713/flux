@@ -828,7 +828,8 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
     return;
   }
 
-  const activateAtMs = Number(rollout.activateAt) * 1000;
+  // activateAt is an epoch-ms instant (no conversion); staggerSeconds is a seconds duration → ms.
+  const activateAtMs = Number(rollout.activateAt);
   const staggerMs = (Number(rollout.staggerSeconds) || 0) * 1000;
   // Past the whole window (scheduled: past activateAt; staggered: past activateAt+stagger):
   // a node catching up after the moment applies the current content immediately.
@@ -901,7 +902,7 @@ async function reconcileBootContent(appName, deps = {}) {
   const rollout = manifest && manifest.rollout;
   const deferred = rollout
     && (rollout.strategy === 'scheduled' || rollout.strategy === 'staggered')
-    && Number(rollout.activateAt) * 1000 > now();
+    && Number(rollout.activateAt) > now(); // activateAt is epoch ms
 
   if (deferred) {
     // A future-dated rollout: never apply it early — the on-disk content (live before the

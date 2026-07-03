@@ -83,7 +83,7 @@ function manifest(overrides = {}) {
     version: 2,
     slots: { 'app-config': { hash: CFG_HASH } },
     rollout: { strategy: 'immediate' },
-    timestamp: NOW_MS / 1000,
+    timestamp: NOW_MS, // unix epoch ms
     ownerSignature: 'owner-sig',
     ...overrides,
   };
@@ -514,7 +514,7 @@ describe('contentSlotService', () => {
       return {
         appName: 'app',
         version: 2,
-        timestamp: NOW_MS / 1000,
+        timestamp: NOW_MS, // unix epoch ms (must match the sealed manifest's timestamp)
         content: { algorithm: 'x', encapsulatedKey: 'k', nonce: 'n', ciphertext: 'c' },
         ownerSigs: { [CFG_HASH]: { sig: 'osig', timestamp: freshTs } },
         ...overrides,
@@ -608,7 +608,7 @@ describe('contentSlotService', () => {
       const sign = sinon.stub().resolves('arcane-sig');
       const okPut = await service.backstopManifest(
         { appName: 'app', version: 2, slots: { sealed: {} } },
-        { appName: 'app', version: 2, timestamp: 1_700_000_000, manifestPutSig: 'owner-sig' },
+        { appName: 'app', version: 2, timestamp: 1_700_000_000_000, manifestPutSig: 'owner-sig' },
         { put, sign },
       );
       expect(okPut).to.equal(true);
@@ -903,7 +903,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const apply = sinon.spy();
       const sched = fakeScheduler(1000); // now = 1000ms
-      const m = manifest({ rollout: { strategy: 'scheduled', activateAt: 2 } }); // activateAt = 2000ms
+      const m = manifest({ rollout: { strategy: 'scheduled', activateAt: 2000 } }); // activateAt = 2000ms
       await service.scheduleContentApplication(m, { owner: '1id' }, schedDeps(sched, { apply }));
       expect(sched.timers.length).to.equal(1);
       expect(sched.timers[0].ms).to.equal(1000); // activateAt - now
@@ -916,7 +916,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const apply = sinon.spy();
       const sched = fakeScheduler(5000); // well past activateAt
-      const m = manifest({ rollout: { strategy: 'scheduled', activateAt: 2 } });
+      const m = manifest({ rollout: { strategy: 'scheduled', activateAt: 2000 } });
       await service.scheduleContentApplication(m, { owner: '1id' }, schedDeps(sched, { apply }));
       sinon.assert.calledOnce(apply);
       expect(sched.timers.length).to.equal(0);
@@ -927,7 +927,7 @@ describe('contentSlotService', () => {
       const apply = sinon.spy();
       const computeDelay = sinon.stub().resolves(5000); // this node's slot is 5s into the window
       const sched = fakeScheduler(1000);
-      const m = manifest({ rollout: { strategy: 'staggered', activateAt: 2, staggerSeconds: 30 } });
+      const m = manifest({ rollout: { strategy: 'staggered', activateAt: 2000, staggerSeconds: 30 } });
       await service.scheduleContentApplication(m, { owner: '1id', instances: 10 }, schedDeps(sched, { apply, computeDelay }));
       expect(sched.timers.length).to.equal(1); // first a timer to activateAt
       sinon.assert.notCalled(computeDelay); // slot is computed only when activateAt arrives (snapshot-at-activateAt)
@@ -942,7 +942,7 @@ describe('contentSlotService', () => {
       const apply = sinon.spy();
       const computeDelay = sinon.stub().resolves(5000);
       const sched = fakeScheduler(40000); // past activateAt + staggerSeconds
-      const m = manifest({ rollout: { strategy: 'staggered', activateAt: 2, staggerSeconds: 30 } });
+      const m = manifest({ rollout: { strategy: 'staggered', activateAt: 2000, staggerSeconds: 30 } });
       await service.scheduleContentApplication(m, { owner: '1id', instances: 10 }, schedDeps(sched, { apply, computeDelay }));
       sinon.assert.calledOnce(apply);
       sinon.assert.notCalled(computeDelay);
@@ -1015,7 +1015,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const provision = sinon.spy();
       const schedule = sinon.spy();
-      const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1000 } }); // 1000s, far future
+      const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1_000_000 } }); // far future (ms), well ahead of now=0
       await service.reconcileBootContent('app', {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: future } }),
@@ -1034,7 +1034,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const provision = sinon.spy();
       const schedule = sinon.spy();
-      const past = manifest({ rollout: { strategy: 'scheduled', activateAt: 1 } }); // 1s
+      const past = manifest({ rollout: { strategy: 'scheduled', activateAt: 1000 } }); // 1000ms, past (now=5000)
       await service.reconcileBootContent('app', {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: past } }),
@@ -1051,7 +1051,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const provision = sinon.spy();
       const schedule = sinon.spy();
-      const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1000 } }); // 1000s
+      const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1_000_000 } }); // far future (ms)
       await service.reconcileBootContent('app', {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: false, data: { manifest: future } }), // quarantined
@@ -1067,7 +1067,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const provision = sinon.spy();
       const schedule = sinon.spy();
-      const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1000 } });
+      const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1_000_000 } });
       await service.reconcileBootContent('app', {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: future } }),
