@@ -67,6 +67,8 @@ describe('appController tests', () => {
       version: opts.version,
       name: opts.name,
       components,
+      // DeploymentSpec.fromSpec reads the app's network links off the spec.
+      linkedAppNames: () => [],
     };
     return {
       name: opts.name,
