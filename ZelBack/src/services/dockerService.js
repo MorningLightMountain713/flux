@@ -1616,6 +1616,27 @@ async function isFluxAppNetwork(networkName) {
 }
 
 /**
+ * Whether a docker network exists (any network, by name). Distinguishes a gone
+ * network (404 → false) from a transient inspect failure (rethrows). Lets a
+ * caller tell "the linked app's network disappeared" (a transient ordering
+ * condition to defer on) from a real docker error.
+ *
+ * @param {string} networkName - docker network name
+ * @returns {Promise<boolean>}
+ */
+async function fluxDockerNetworkExists(networkName) {
+  try {
+    await docker.getNetwork(networkName).inspect();
+    return true;
+  } catch (error) {
+    if (error.statusCode === 404) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+/**
  * Escapes a string for safe use inside a RegExp source.
  */
 function escapeRegExp(str) {
@@ -1888,6 +1909,7 @@ module.exports = {
   appDockerNetworkConnect,
   appDockerNetworkDisconnect,
   isFluxAppNetwork,
+  fluxDockerNetworkExists,
   getAppContainerNames,
   getAppContainerObjects,
   getAppNameByContainerIp,
