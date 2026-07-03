@@ -281,6 +281,23 @@ async function storeAppInstallingMessage(message) {
 }
 
 /**
+ * Retract this node's own fluxappinstalling record for an app (delete by the same
+ * name+ip key storeAppInstallingMessage upserts on). Used when a spawn attempt
+ * that stored the record does not go on to install (deferred, failed, or an early
+ * bail): a lingering record would make the next spawn cycle read its own stale
+ * "installing" state and self-lock the app. Idempotent - a no-op when absent.
+ *
+ * @param {string} name - app name
+ * @param {string} ip - this node's socket address
+ * @returns {Promise<void>}
+ */
+async function removeAppInstallingMessage(name, ip) {
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.database.appsglobal.database);
+  await dbHelper.findOneAndDeleteInDatabase(database, globalAppsInstallingLocations, { name, ip }, {});
+}
+
+/**
  * To return the owner of a FluxOS application.
  * @param {string} appName Name of app.
  * @returns {string|null} Owner.
@@ -1364,6 +1381,7 @@ module.exports = {
   appInstallingLocation,
   appInstallingErrorsLocation,
   storeAppInstallingMessage,
+  removeAppInstallingMessage,
   getAppsLocations,
   getAppsLocation,
   getAppInstallingLocation,
