@@ -81,10 +81,17 @@ describe('appUninstaller tombstoning teardown', () => {
       appSwapPoolService: { reconcile: sinon.stub().resolves() },
       telemetrySinkCache: { deleteSink: sinon.stub(), hasAnyTelemetryApps: sinon.stub().returns(false) },
       telemetryConfigService: { remove: sinon.stub().resolves() },
-      fluxShutdowndClient: { deleteAppPlanBestEffort: sinon.stub().resolves() },
+      fluxShutdowndClient: {
+        beginAppStop: sinon.stub().resolves({ outcome: 'not_arcane' }),
+        forceAppStop: sinon.stub().resolves({ outcome: 'forced' }),
+        deleteAppPlanBestEffort: sinon.stub().resolves(),
+        SHUTDOWN_REASON: {
+          TTL_EXPIRED: 'ttl-expired', USER_CANCEL: 'user-cancel', REDEPLOY: 'redeploy', EVICTION: 'eviction', MANUAL: 'manual',
+        },
+      },
       appInspector: { stopAppMonitoring: sinon.stub() },
       operationRegistry: {
-        isHeld: sinon.stub().returns(false), acquire: sinon.stub().returns('tok'), release: sinon.stub(),
+        isHeld: sinon.stub().returns(false), get: sinon.stub().returns(null), acquire: sinon.stub().returns('tok'), release: sinon.stub(),
       },
       globalState: {
         runningAppsCache: new Map(), receiveOnlySyncthingAppsCache: new Map(), abortInstall: sinon.stub().returns(false),
@@ -94,6 +101,7 @@ describe('appUninstaller tombstoning teardown', () => {
 
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
       config: {
+        fluxapps: { manageCollectorLifecycle: false },
         database: {
           appslocal: { database: 'localapps', collections: { appsInformation: 'zelappsinformation', pendingAppTeardowns: 'zelappspendingteardowns' } },
           appsglobal: { database: 'globalapps', collections: { appsInformation: 'zelappsinformation', appsMessages: 'zelappsmessages' } },
@@ -151,9 +159,12 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.appsRuntimeState.remove.calledBefore(stubs.pendingTeardownStore.clearTeardown)).to.be.true;
     });
 
-    it('removes the whole-app docker network', async () => {
+    it('removes the whole-app docker network (force-disconnecting any endpoints first)', async () => {
       await appUninstaller.runTeardown(doc());
-      expect(stubs.dockerService.removeFluxAppDockerNetwork.calledOnceWith('app')).to.be.true;
+      // Even a graceful teardown force-removes: any endpoints left are foreign linked
+      // consumers, and a plain removal would leak the network on "active endpoints".
+      expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.calledOnceWith('app')).to.be.true;
+      expect(stubs.dockerService.removeFluxAppDockerNetwork.called).to.be.false;
     });
 
     it('does NOT clear the durable record if a condemned stamp failed to drop (boot recovery re-drives)', async () => {
