@@ -617,6 +617,11 @@ describe('fluxNetworkMonitor tests', () => {
 
     afterEach(() => {
       sinon.restore();
+      fluxNetworkHelper.setLocalSocketAddress(null);
+    });
+
+    afterEach(() => {
+      sinon.restore();
     });
 
     it('should not change dosMessage', async () => {
@@ -722,6 +727,7 @@ describe('fluxNetworkMonitor tests', () => {
         },
       ];
       const ip = '127.0.0.1:5050';
+      fluxNetworkHelper.setLocalSocketAddress(ip);
       const getBenchmarkResponseData = {
         status: 'success',
         data: { ipaddress: ip },
@@ -746,6 +752,7 @@ describe('fluxNetworkMonitor tests', () => {
 
     it('should trigger collision detection if the collateral is not matching', async () => {
       const ip = '127.0.0.1:5050';
+      fluxNetworkHelper.setLocalSocketAddress(ip);
       const getBenchmarkResponseData = {
         status: 'success',
         data: { ipaddress: ip },
@@ -771,6 +778,7 @@ describe('fluxNetworkMonitor tests', () => {
     it('should trigger collision detection when same collateral exists on different IP and other node is reachable', async () => {
       const myIp = '192.168.1.100:16127';
       const otherIp = '192.168.1.200:16127';
+      fluxNetworkHelper.setLocalSocketAddress(myIp);
       const sharedCollateral = 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)';
       const nodeListWithDifferentIp = [
         {
@@ -839,6 +847,7 @@ describe('fluxNetworkMonitor tests', () => {
     it('should take over collateral when same collateral exists on different IP and other node is unreachable after grace period', async () => {
       const myIp = '192.168.1.100:16127';
       const otherIp = '192.168.1.200:16127';
+      fluxNetworkHelper.setLocalSocketAddress(myIp);
       const sharedCollateral = 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)';
       const nodeListWithDifferentIp = [
         {
@@ -906,6 +915,7 @@ describe('fluxNetworkMonitor tests', () => {
     it('should handle case when other node comes back online during grace period', async () => {
       const myIp = '192.168.1.100:16127';
       const otherIp = '192.168.1.200:16127';
+      fluxNetworkHelper.setLocalSocketAddress(myIp);
       const sharedCollateral = 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)';
       const nodeListWithDifferentIp = [
         {
