@@ -455,6 +455,25 @@ let dependencyCleanupDirty = false;
 // refused. In-memory only: a crash clears it and boot recovery re-drives.
 const teardownsInProgress = new Set();
 
+// App name -> a callback that escalates its in-flight graceful drain to a force
+// stop. A teardown draining via flux-shutdownd registers one for the drain window;
+// an operator's explicit force-remove of the same app fires it to preempt the drain
+// instead of starting a second teardown.
+const teardownEscalations = new Map();
+
+/**
+ * Fire the escalation for an app whose graceful drain is in flight, preempting it
+ * with a force stop. No-op (returns false) when nothing is draining.
+ * @param {string} name
+ * @returns {boolean} whether an in-flight drain was escalated
+ */
+function escalateTeardown(name) {
+  const escalate = teardownEscalations.get(name);
+  if (!escalate) return false;
+  escalate();
+  return true;
+}
+
 /**
  * Reverse dependency cascade: before a pure-follower app (a shared collector) is
  * removed, gracefully uninstall every installed workload that transitively
@@ -577,6 +596,7 @@ async function uninstallApplication(appName, options = {}) {
     background = false,
     onStatus = null,
     reason = null,
+    operatorForce = false,
   } = options;
 
   const status = (msg) => {
@@ -611,9 +631,24 @@ async function uninstallApplication(appName, options = {}) {
     // double-destroy and race each other's crash-recovery record. Removals of different
     // apps run concurrently - each removes only its own containers/volumes/network.
     const heldLease = operationRegistry.get(appName);
-    if (heldLease && (!skipGuard || heldLease.type === 'remove')) {
-      status(`An operation is already in progress for ${appName}. Removal not possible.`);
-      return { status: UninstallStatus.DEFERRED, reason: `An operation is already in progress for ${appName}` };
+    if (heldLease) {
+      // An operator's explicit force-remove of an app already tearing down does not
+      // start a second teardown - it preempts the in-flight graceful drain, escalating
+      // it to a force stop. If nothing is draining (the teardown is past the drain, or
+      // already forceful), it simply defers.
+      if (heldLease.type === 'remove' && operatorForce) {
+        const escalated = escalateTeardown(appName);
+        status(escalated
+          ? `Operator force-remove: escalating the in-flight teardown of ${appName} to a force stop`
+          : `A teardown of ${appName} is already in progress`);
+        return escalated
+          ? { status: UninstallStatus.REMOVED, reason: `Escalated the in-flight teardown of ${appName} to force` }
+          : { status: UninstallStatus.DEFERRED, reason: `A teardown of ${appName} is already in progress` };
+      }
+      if (heldLease.type === 'remove' || !skipGuard) {
+        status(`An operation is already in progress for ${appName}. Removal not possible.`);
+        return { status: UninstallStatus.DEFERRED, reason: `An operation is already in progress for ${appName}` };
+      }
     }
 
     // Acquire the per-app operation lease — the sole record that this app is
@@ -859,15 +894,26 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   const stopReason = reason || fluxShutdowndClient.SHUTDOWN_REASON.TTL_EXPIRED;
   const budgetSeconds = forceKill ? 0 : (shutdownBudgetSeconds || 0);
   const stopDeadline = Math.floor(Date.now() / 1000) + budgetSeconds;
+  // While this graceful drain is in flight, let an operator's explicit force-remove
+  // preempt it: the escalation force-stops the app via the daemon, resolving the
+  // beginAppStop below with "forced" so the destructive cleanup proceeds at once. A
+  // forceful teardown has nothing to escalate.
+  if (!forceKill) {
+    teardownEscalations.set(name, () => {
+      fluxShutdowndClient.forceAppStop(owner, name).catch((e) => log.warn(`forceAppStop ${name}: ${e.message}`));
+    });
+  }
   const stop = await fluxShutdowndClient.beginAppStop(owner, name, stopReason, {
     force: Boolean(forceKill),
     deadline: stopDeadline,
   });
+  teardownEscalations.delete(name);
   if (stop.outcome === 'rejected_pipeline_active') {
     status(`${name} teardown deferred: a node-wide shutdown owns the stop; boot recovery will re-drive`);
     return;
   }
-  const daemonStopped = stop.outcome === 'complete' || stop.outcome === 'deadline' || stop.outcome === 'superseded';
+  const daemonStopped = stop.outcome === 'complete' || stop.outcome === 'deadline'
+    || stop.outcome === 'superseded' || stop.outcome === 'forced';
 
   // Stop OUTSIDE the lock (skipped when the daemon already did it): the container is
   // removed below, so stopping it first makes the remove a clean (non-SIGKILL) teardown
@@ -1084,6 +1130,9 @@ async function removeAppLocallyApi(req, res) {
     await uninstallApplication(appname, {
       forceKill: force,
       skipGuard: force,
+      // The operator explicitly asked to force: this is the one caller allowed to
+      // preempt an in-flight graceful drain (escalate it) rather than defer.
+      operatorForce: force,
       broadcastRemoval: true,
       onStatus: (msg) => {
         res.write(serviceHelper.ensureString(msg));
