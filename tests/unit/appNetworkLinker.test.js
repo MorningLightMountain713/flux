@@ -32,6 +32,8 @@ describe('appNetworkLinker tests', () => {
       isEncrypted: encrypted,
       spec,
       placement,
+      // InstantiatedSpec sealed-vantage accessor: none when encrypted, else the spec's.
+      linkedAppNames() { return encrypted ? [] : spec.linkedAppNames(); },
     };
   }
 
@@ -40,10 +42,20 @@ describe('appNetworkLinker tests', () => {
     return instSpec({ ...opts, activation: { standalone: false, stopWhenUnneeded: true } });
   }
 
+  // The resolved (decrypted) link map computeRequiredDependencyNames now takes as
+  // input; built here from the plaintext mocks the same way the async caller does.
+  function linksMap(apps) {
+    const m = new Map();
+    apps.forEach((a) => { if (a && a.name) m.set(a.name.toLowerCase(), a.linkedAppNames()); });
+    return m;
+  }
+
   // Build a DeploymentSpec-shaped object whose componentEntries expose the
-  // given component env arrays via toDockerEnv().
-  function deployment(components) {
+  // given component env arrays via toDockerEnv(). linkedApps is the DECRYPTED
+  // link view the log-collector resolution reads.
+  function deployment(components, linkedApps = []) {
     return {
+      linkedApps,
       componentEntries() {
         return components.map(([cname, env]) => [cname, { toDockerEnv: () => env }]);
       },
@@ -73,6 +85,9 @@ describe('appNetworkLinker tests', () => {
     };
     deploymentProviderStub = {
       getInstalledDeployment: sinon.stub(),
+      // The decrypt bridge: plaintext reads the sealed accessor, encrypted would
+      // decrypt (returns null here unless a test overrides for a specific app).
+      resolveLinkedAppNames: sinon.stub().callsFake(async (app) => (app.isEncrypted ? null : app.linkedAppNames())),
     };
     dockerServiceStub = {
       appDockerNetworkConnect: sinon.stub().resolves(),
@@ -88,26 +103,6 @@ describe('appNetworkLinker tests', () => {
 
   afterEach(() => {
     sinon.restore();
-  });
-
-  describe('getLinkedApps', () => {
-    it('returns the shareWith entries declared on the spec', () => {
-      const inst = instSpec({ name: 'appB', shareWith: ['appA', 'appC'] });
-      expect(appNetworkLinker.getLinkedApps(inst)).to.eql(['appA', 'appC']);
-    });
-
-    it('returns an empty list when shareWith is absent', () => {
-      expect(appNetworkLinker.getLinkedApps(instSpec({ name: 'appB' }))).to.eql([]);
-    });
-
-    it('returns an empty list for an encrypted spec', () => {
-      const inst = instSpec({ name: 'appB', shareWith: ['appA'], encrypted: true });
-      expect(appNetworkLinker.getLinkedApps(inst)).to.eql([]);
-    });
-
-    it('returns an empty list for a falsy spec', () => {
-      expect(appNetworkLinker.getLinkedApps(null)).to.eql([]);
-    });
   });
 
   describe('checkAppNetworkRequirements', () => {
@@ -226,7 +221,7 @@ describe('appNetworkLinker tests', () => {
   describe('computeRequiredDependencyNames', () => {
     it('marks a follower required when a workload links to it', () => {
       const apps = [instSpec({ name: 'game', shareWith: ['collector'] }), follower({ name: 'collector' })];
-      expect([...appNetworkLinker.computeRequiredDependencyNames(apps)]).to.eql(['collector']);
+      expect([...appNetworkLinker.computeRequiredDependencyNames(apps, linksMap(apps))]).to.eql(['collector']);
     });
 
     it('follows the closure transitively through follower-to-follower links', () => {
@@ -235,19 +230,19 @@ describe('appNetworkLinker tests', () => {
         follower({ name: 'datadog', shareWith: ['alloy'] }),
         follower({ name: 'alloy' }),
       ];
-      const required = appNetworkLinker.computeRequiredDependencyNames(apps);
+      const required = appNetworkLinker.computeRequiredDependencyNames(apps, linksMap(apps));
       expect(required.has('datadog')).to.equal(true);
       expect(required.has('alloy')).to.equal(true);
     });
 
     it('a follower cannot keep itself (or a sibling) alive - closure starts from standalone apps only', () => {
       const apps = [follower({ name: 'datadog', shareWith: ['alloy'] }), follower({ name: 'alloy' })];
-      expect(appNetworkLinker.computeRequiredDependencyNames(apps).size).to.equal(0);
+      expect(appNetworkLinker.computeRequiredDependencyNames(apps, linksMap(apps)).size).to.equal(0);
     });
 
     it('ignores cross-owner links', () => {
       const apps = [instSpec({ name: 'game', owner: 'owner1', shareWith: ['collector'] }), follower({ name: 'collector', owner: 'owner2' })];
-      expect(appNetworkLinker.computeRequiredDependencyNames(apps).size).to.equal(0);
+      expect(appNetworkLinker.computeRequiredDependencyNames(apps, linksMap(apps)).size).to.equal(0);
     });
   });
 
@@ -312,24 +307,27 @@ describe('appNetworkLinker tests', () => {
       const own = deployment([
         ['web', ['FOO=BAR']],
         ['logsink', ['LOG=COLLECT']],
-      ]);
-      const result = await appNetworkLinker.resolveLogCollector(instSpec({ name: 'appB', shareWith: ['appA'] }), own);
+      ], ['appA']);
+      const result = await appNetworkLinker.resolveLogCollector(own);
       expect(result).to.eql({ syslogTarget: 'logsink', crossAppLogCollector: null });
       sinon.assert.notCalled(deploymentProviderStub.getInstalledDeployment);
     });
 
-    it('falls back to a linked app\'s collector when the app has none', async () => {
+    it('falls back to a linked app\'s collector, read from the DECRYPTED deployment links', async () => {
+      // The links come from deployment.linkedApps (the decrypted view), so an
+      // encrypted consumer - whose sealed spec would report no links - still
+      // resolves its cross-app collector. That is the cross-4 fix.
       deploymentProviderStub.getInstalledDeployment.withArgs('appA').resolves(deployment([
         ['collector', ['LOG=COLLECT']],
       ]));
-      const own = deployment([['web', ['FOO=BAR']]]);
-      const result = await appNetworkLinker.resolveLogCollector(instSpec({ name: 'appB', shareWith: ['appA'] }), own);
+      const own = deployment([['web', ['FOO=BAR']]], ['appA']);
+      const result = await appNetworkLinker.resolveLogCollector(own);
       expect(result).to.eql({ syslogTarget: null, crossAppLogCollector: { linkedAppName: 'appA', collectorComponentName: 'collector' } });
     });
 
     it('resolves to nothing for an app with no collector anywhere', async () => {
-      const own = deployment([['web', ['FOO=BAR']]]);
-      const result = await appNetworkLinker.resolveLogCollector(instSpec({ name: 'appB' }), own);
+      const own = deployment([['web', ['FOO=BAR']]], []);
+      const result = await appNetworkLinker.resolveLogCollector(own);
       expect(result).to.eql({ syslogTarget: null, crossAppLogCollector: null });
     });
   });
@@ -459,7 +457,7 @@ describe('appNetworkLinker tests', () => {
 
   describe('findLinkedAppLogCollector', () => {
     it('returns null when there are no linked apps', async () => {
-      const result = await appNetworkLinker.findLinkedAppLogCollector(instSpec({ name: 'appB' }));
+      const result = await appNetworkLinker.findLinkedAppLogCollector([]);
       expect(result).to.equal(null);
       sinon.assert.notCalled(deploymentProviderStub.getInstalledDeployment);
     });
@@ -470,7 +468,7 @@ describe('appNetworkLinker tests', () => {
         ['logsink', ['LOG=COLLECT']],
       ]));
 
-      const result = await appNetworkLinker.findLinkedAppLogCollector(instSpec({ name: 'appB', shareWith: ['appA'] }));
+      const result = await appNetworkLinker.findLinkedAppLogCollector(['appA']);
       expect(result).to.eql({ linkedAppName: 'appA', collectorComponentName: 'logsink' });
     });
 
@@ -480,7 +478,7 @@ describe('appNetworkLinker tests', () => {
         ['collector', ['LOG=COLLECT']],
       ]));
 
-      const result = await appNetworkLinker.findLinkedAppLogCollector(instSpec({ name: 'appB', shareWith: ['appA', 'appC'] }));
+      const result = await appNetworkLinker.findLinkedAppLogCollector(['appA', 'appC']);
       expect(result).to.eql({ linkedAppName: 'appC', collectorComponentName: 'collector' });
     });
 
@@ -489,7 +487,7 @@ describe('appNetworkLinker tests', () => {
         ['web', ['FOO=BAR']],
       ]));
 
-      const result = await appNetworkLinker.findLinkedAppLogCollector(instSpec({ name: 'appB', shareWith: ['appA'] }));
+      const result = await appNetworkLinker.findLinkedAppLogCollector(['appA']);
       expect(result).to.equal(null);
     });
 
@@ -499,8 +497,35 @@ describe('appNetworkLinker tests', () => {
         ['collector', ['LOG=COLLECT']],
       ]));
 
-      const result = await appNetworkLinker.findLinkedAppLogCollector(instSpec({ name: 'appB', shareWith: ['appA', 'appC'] }));
+      const result = await appNetworkLinker.findLinkedAppLogCollector(['appA', 'appC']);
       expect(result).to.eql({ linkedAppName: 'appC', collectorComponentName: 'collector' });
+    });
+  });
+
+  describe('resolver-4: graph reads the decrypted link view', () => {
+    it('keeps a follower required by an ENCRYPTED consumer (sealed view would reap it)', async () => {
+      const encWorkload = instSpec({ name: 'game', shareWith: ['collector'], encrypted: true });
+      appsRepositoryStub.listInstalledApps.resolves([encWorkload, follower({ name: 'collector' })]);
+      // The bridge decrypts the encrypted consumer's real link to the collector;
+      // the sealed accessor (encWorkload.linkedAppNames()) reports none.
+      deploymentProviderStub.resolveLinkedAppNames.withArgs(encWorkload).resolves(['collector']);
+      const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
+      expect(orphans.map((a) => a.name)).to.eql([]);
+    });
+
+    it('does not reap when link visibility is incomplete (undecryptable app)', async () => {
+      const encWorkload = instSpec({ name: 'game', encrypted: true });
+      appsRepositoryStub.listInstalledApps.resolves([encWorkload, follower({ name: 'orphaned' })]);
+      deploymentProviderStub.resolveLinkedAppNames.withArgs(encWorkload).resolves(null);
+      const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
+      expect(orphans).to.eql([]);
+    });
+
+    it('refuses the required-set (falls back to not suppressing) when an assigned app is undecryptable', async () => {
+      const enc = instSpec({ name: 'game', encrypted: true, placement: { hasTargets: () => true, matchesTarget: () => true } });
+      appsRepositoryStub.listGlobalAppInfo.resolves([enc]);
+      deploymentProviderStub.resolveLinkedAppNames.withArgs(enc).resolves(null);
+      await expect(appNetworkLinker.getRequiredDependencyNamesForNode({ ip: '7.7.7.7:16127' })).to.be.rejected;
     });
   });
 });
