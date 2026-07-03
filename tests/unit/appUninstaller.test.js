@@ -96,6 +96,7 @@ describe('appUninstaller tests', () => {
         TTL_EXPIRED: 'ttl-expired', USER_CANCEL: 'user-cancel', REDEPLOY: 'redeploy', EVICTION: 'eviction', MANUAL: 'manual',
       },
       beginAppStop: sinon.stub().resolves({ outcome: 'not_arcane' }),
+      forceAppStop: sinon.stub().resolves({ outcome: 'forced' }),
       deleteAppPlanBestEffort: sinon.stub().resolves(),
     };
 
@@ -278,6 +279,16 @@ describe('appUninstaller tests', () => {
         operationRegistry.clear();
       }
     });
+
+    it('operatorForce defers when a remove lease is held but nothing is draining to escalate', async () => {
+      operationRegistry.acquire('anyapp', 'remove', 'the-teardown'); // no escalation registered
+      try {
+        const result = await appUninstaller.uninstallApplication('anyapp', { forceKill: true, skipGuard: true, operatorForce: true });
+        expect(result.status).to.equal(appUninstaller.UninstallStatus.DEFERRED);
+      } finally {
+        operationRegistry.clear();
+      }
+    });
   });
 
   describe('reclaimUnusedImages (reference-gated image GC)', () => {
@@ -437,6 +448,27 @@ describe('appUninstaller tests', () => {
       expect(fluxShutdowndClientStub.beginAppStop.callCount, 'the second teardown must not start a second stop').to.equal(1);
       releaseStop({ outcome: 'not_arcane' });
       await first;
+    });
+
+    it('an operator force-remove escalates the in-flight graceful drain via the daemon', async () => {
+      const settle = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
+      // A graceful teardown in flight, held at the drain, registers its escalation.
+      let releaseStop;
+      fluxShutdowndClientStub.beginAppStop.onFirstCall().returns(new Promise((resolve) => { releaseStop = resolve; }));
+      const draining = appUninstaller.runTeardown(doc()).catch(() => {});
+      await settle();
+
+      // The in-flight teardown holds its remove lease; an operator force-remove of the
+      // same app escalates it rather than starting a second teardown.
+      operationRegistry.acquire('myapp', 'remove', 'the-teardown');
+      const result = await appUninstaller.uninstallApplication('myapp', { forceKill: true, skipGuard: true, operatorForce: true });
+      operationRegistry.clear();
+
+      expect(fluxShutdowndClientStub.forceAppStop.calledWith('1own', 'myapp'), 'escalated the drain via the daemon').to.equal(true);
+      expect(result.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
+
+      releaseStop({ outcome: 'forced' });
+      await draining;
     });
   });
 
