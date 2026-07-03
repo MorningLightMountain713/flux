@@ -24,22 +24,6 @@ const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const log = require('../../lib/log');
 
 /**
- * Returns the linked app names declared by an app via `network.shareWith`.
- * Empty for legacy (v1-v8) and encrypted specs (no readable shareWith on
- * this node).
- *
- * @param {object} instantiated - InstantiatedSpec instance
- * @returns {string[]} linked app names
- */
-function getLinkedApps(instantiated) {
-  if (!instantiated || instantiated.isEncrypted) {
-    return [];
-  }
-  const { spec } = instantiated;
-  return spec ? spec.linkedAppNames() : [];
-}
-
-/**
  * Whether every container belonging to an installed app is currently running.
  * Docker-listing based (the local DB blanks enterprise compose, so iterating the
  * spec would miss components), so it works for enterprise apps too. False when
@@ -66,7 +50,7 @@ async function isAppRunning(appName) {
  * @returns {Promise<boolean>} true when all network links are satisfied
  */
 async function checkAppNetworkRequirements(instantiated) {
-  const linkedApps = getLinkedApps(instantiated);
+  const linkedApps = instantiated ? instantiated.linkedAppNames() : [];
   if (!linkedApps.length) {
     return true;
   }
@@ -137,20 +121,52 @@ function isReapableFollower(instantiated) {
 }
 
 /**
- * Given a set of apps, returns the set of follower-app names that are
- * *required*: the transitive `shareWith` closure starting from the apps that
- * can stand alone (activation.standalone !== false). Links are only followed
- * between apps of the same owner. Original-cased names are returned; matching
- * is case-insensitive.
+ * Resolves the DECRYPTED links of a set of apps into a lowercased-name -> names
+ * map, so the pure graph traversals below can reason over encrypted consumers'
+ * edges (which the sealed `linkedAppNames()` reports as none). Each app is read
+ * through the deployment provider's decrypt bridge; an app whose links can't be
+ * read on this node maps to `[]` and flips `complete` false — the signal for the
+ * reap/suppression callers to fail toward keeping rather than act blind.
+ *
+ * @param {Array<object>} apps - InstantiatedSpec instances
+ * @returns {Promise<{ linksByName: Map<string, string[]>, complete: boolean }>}
+ */
+async function buildLinksByName(apps) {
+  const linksByName = new Map();
+  let complete = true;
+  // eslint-disable-next-line no-restricted-syntax
+  for (const app of apps) {
+    if (!app || !app.name) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const links = await deploymentProvider.resolveLinkedAppNames(app);
+    linksByName.set(app.name.toLowerCase(), links === null ? [] : links);
+    if (links === null) complete = false;
+  }
+  return { linksByName, complete };
+}
+
+/**
+ * Given a set of apps and their resolved (decrypted) links, returns the set of
+ * follower-app names that are *required*: the transitive `shareWith` closure
+ * starting from the apps that can stand alone (activation.standalone !== false).
+ * Links are only followed between apps of the same owner. Original-cased names
+ * are returned; matching is case-insensitive.
  *
  * Starting the closure from standalone apps only (not every app in the set) is
  * what lets a pure follower fall out of the required set once nothing links to
  * it — otherwise a collector, being present itself, would keep itself alive.
  *
+ * Pure over its inputs: link reads come from `linksByName` (built by the async
+ * caller via the decrypt bridge), never fetched here.
+ *
  * @param {Array<object>} apps - InstantiatedSpec instances to reason over
+ * @param {Map<string, string[]>} linksByName - lowercased-name -> resolved links
  * @returns {Set<string>} required follower app names
  */
-function computeRequiredDependencyNames(apps) {
+function computeRequiredDependencyNames(apps, linksByName) {
   const required = new Set();
   if (!Array.isArray(apps) || !apps.length) {
     return required;
@@ -166,8 +182,9 @@ function computeRequiredDependencyNames(apps) {
 
   while (queue.length) {
     const current = queue.shift();
+    const links = linksByName.get(current.name.toLowerCase()) || [];
     // eslint-disable-next-line no-restricted-syntax
-    for (const linkedName of getLinkedApps(current)) {
+    for (const linkedName of links) {
       const dep = byName.get(linkedName.toLowerCase());
       if (dep && dep.owner === current.owner) {
         required.add(dep.name);
@@ -184,20 +201,22 @@ function computeRequiredDependencyNames(apps) {
 
 /**
  * Whether a workload transitively `shareWith`-depends on `depNameLower`,
- * following same-owner links only. Breadth-first over the link graph.
+ * following same-owner links only. Breadth-first over the resolved link graph.
  *
  * @param {object} workload - root InstantiatedSpec
  * @param {string} depNameLower - lowercased follower name to look for
  * @param {Map<string, object>} byName - lowercased-name -> InstantiatedSpec
+ * @param {Map<string, string[]>} linksByName - lowercased-name -> resolved links
  * @returns {boolean}
  */
-function appTransitivelyRequires(workload, depNameLower, byName) {
+function appTransitivelyRequires(workload, depNameLower, byName, linksByName) {
   const visited = new Set([workload.name.toLowerCase()]);
   const queue = [workload];
   while (queue.length) {
     const current = queue.shift();
+    const links = linksByName.get(current.name.toLowerCase()) || [];
     // eslint-disable-next-line no-restricted-syntax
-    for (const linkedName of getLinkedApps(current)) {
+    for (const linkedName of links) {
       const key = linkedName.toLowerCase();
       const dep = byName.get(key);
       // Only same-owner links to present apps are real dependencies (mirrors
@@ -236,9 +255,10 @@ async function findInstalledWorkloadsRequiring(depName) {
   installed.forEach((app) => {
     if (app && app.name) byName.set(app.name.toLowerCase(), app);
   });
+  const { linksByName } = await buildLinksByName(installed);
   const target = depName.toLowerCase();
   return installed.filter((app) => app && app.name && !isPureFollower(app)
-    && appTransitivelyRequires(app, target, byName));
+    && appTransitivelyRequires(app, target, byName, linksByName));
 }
 
 /**
@@ -248,6 +268,8 @@ async function findInstalledWorkloadsRequiring(depName) {
  *
  * @param {object} nodeIdentity - { ip, outpoint, operator } of this node
  * @returns {Promise<Set<string>>}
+ * @throws when an assigned app's links can't be read here — the caller falls
+ *   back to not suppressing rather than wrongly suppressing a needed follower.
  */
 async function getRequiredDependencyNamesForNode(nodeIdentity) {
   const { ip, outpoint, operator } = nodeIdentity || {};
@@ -260,7 +282,15 @@ async function getRequiredDependencyNamesForNode(nodeIdentity) {
     && app.placement.matchesTarget({
       ip, outpoint, operator, ipMatcher: socketAddressesMatch,
     }));
-  return computeRequiredDependencyNames(assigned);
+  const { linksByName, complete } = await buildLinksByName(assigned);
+  if (!complete) {
+    // An assigned encrypted consumer's links are unreadable here (its key isn't
+    // held until it installs), so the required set would be understated - which
+    // would wrongly suppress a follower it needs. Refuse; the spawner's callers
+    // already fall back to not suppressing this cycle.
+    throw new Error('required-dependency computation incomplete: an assigned app\'s links are unreadable on this node');
+  }
+  return computeRequiredDependencyNames(assigned, linksByName);
 }
 
 /**
@@ -276,7 +306,15 @@ async function findUnrequiredInstalledDependencies() {
   if (!installed || !installed.length) {
     return [];
   }
-  const required = computeRequiredDependencyNames(installed);
+  const { linksByName, complete } = await buildLinksByName(installed);
+  if (!complete) {
+    // Incomplete link visibility (an installed encrypted app whose key isn't
+    // loaded yet - a transient boot window): never reap a follower we can't prove
+    // is unrequired. Skip this pass; it self-heals once decryption is available.
+    log.warn('findUnrequiredInstalledDependencies: link visibility incomplete; skipping reap this pass');
+    return [];
+  }
+  const required = computeRequiredDependencyNames(installed, linksByName);
   return installed.filter((app) => isReapableFollower(app) && !required.has(app.name));
 }
 
@@ -290,7 +328,7 @@ async function findUnrequiredInstalledDependencies() {
  * @returns {Promise<void>}
  */
 async function connectComponentToLinkedApps(componentContainerName, instantiated) {
-  const linkedApps = getLinkedApps(instantiated);
+  const linkedApps = instantiated ? instantiated.linkedAppNames() : [];
   if (!linkedApps.length) {
     return;
   }
@@ -398,7 +436,7 @@ async function reconnectLinkedApps(appName) {
       // eslint-disable-next-line no-continue
       continue;
     }
-    const linkedApps = getLinkedApps(app);
+    const linkedApps = app.linkedAppNames();
     if (!linkedApps.some((linked) => linked.toLowerCase() === lowerAppName)) {
       // eslint-disable-next-line no-continue
       continue;
@@ -437,7 +475,7 @@ async function reconcileAllAppNetworkLinks() {
 
   // eslint-disable-next-line no-restricted-syntax
   for (const app of installedApps || []) {
-    const linkedApps = getLinkedApps(app);
+    const linkedApps = app.linkedAppNames();
     if (!linkedApps.length) {
       // eslint-disable-next-line no-continue
       continue;
@@ -473,17 +511,20 @@ async function reconcileAllAppNetworkLinks() {
  * Encrypted linked apps whose deployment cannot be built on this node are
  * skipped — the SEND container falls back to json-file logging.
  *
- * @param {object} instantiated - InstantiatedSpec instance of the app being installed
+ * Takes the resolved link names (from the DECRYPTED deployment view) rather than
+ * the parent spec, so an encrypted consumer's links are visible here too — the
+ * sealed vantage would report none and silently drop cross-app log routing.
+ *
+ * @param {string[]} linkedAppNames - decrypted linked app names of the parent app
  * @returns {Promise<{linkedAppName: string, collectorComponentName: string}|null>}
  */
-async function findLinkedAppLogCollector(instantiated) {
-  const linkedApps = getLinkedApps(instantiated);
-  if (!linkedApps.length) {
+async function findLinkedAppLogCollector(linkedAppNames) {
+  if (!linkedAppNames || !linkedAppNames.length) {
     return null;
   }
 
   // eslint-disable-next-line no-restricted-syntax
-  for (const linkedAppName of linkedApps) {
+  for (const linkedAppName of linkedAppNames) {
     let deployment;
     try {
       // eslint-disable-next-line no-await-in-loop
@@ -515,22 +556,24 @@ async function findLinkedAppLogCollector(instantiated) {
  * this module. Every path that creates a container must thread the result —
  * a container created without it silently falls back to json-file logging.
  *
- * @param {object} instantiated - InstantiatedSpec instance
+ * Reads links from the DECRYPTED deployment (the view already in hand), so an
+ * encrypted consumer resolves its cross-app collector too — the sealed spec view
+ * would report no links and silently fall back to json-file logging.
+ *
  * @param {object} deployment - DeploymentSpec (decrypted view)
  * @returns {Promise<{syslogTarget: string|null, crossAppLogCollector: {linkedAppName: string, collectorComponentName: string}|null}>}
  */
-async function resolveLogCollector(instantiated, deployment) {
+async function resolveLogCollector(deployment) {
   const syslogCollector = deployment.componentEntries()
     .find(([, c]) => c.toDockerEnv().some((e) => typeof e === 'string' && e.startsWith('LOG=COLLECT')));
   const syslogTarget = syslogCollector ? syslogCollector[0] : null;
   const crossAppLogCollector = syslogTarget
     ? null
-    : await findLinkedAppLogCollector(instantiated);
+    : await findLinkedAppLogCollector(deployment.linkedApps);
   return { syslogTarget, crossAppLogCollector };
 }
 
 module.exports = {
-  getLinkedApps,
   isAppRunning,
   isPureFollower,
   isReapableFollower,
