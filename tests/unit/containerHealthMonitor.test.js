@@ -18,6 +18,7 @@ describe('containerHealthMonitor tests', () => {
   let dockerServiceStub;
   let componentProvisionerStub;
   let appVolumeServiceStub;
+  let appNetworkLinkerStub;
   let appUninstallerStub;
   let appInspectorStub;
   let tamperingStub;
@@ -43,6 +44,7 @@ describe('containerHealthMonitor tests', () => {
     dockerServiceStub = { getDockerContainer: sinon.stub().resolves(null) };
     componentProvisionerStub = { installComponent: sinon.stub().resolves() };
     appVolumeServiceStub = { ensureMountSourcesExist: sinon.stub().resolves() };
+    appNetworkLinkerStub = { resolveLogCollector: sinon.stub().resolves({ syslogTarget: null, crossAppLogCollector: null }) };
     appUninstallerStub = { uninstallApplication: sinon.stub().resolves() };
     appInspectorStub = { startAppMonitoring: sinon.stub() };
     tamperingStub = {
@@ -60,6 +62,7 @@ describe('containerHealthMonitor tests', () => {
       '../appLifecycle/appUninstaller': appUninstallerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
+      '../appLifecycle/appNetworkLinker': appNetworkLinkerStub,
       '../appLifecycle/shutdownPlan': shutdownPlanStub,
       '../appManagement/appInspector': appInspectorStub,
       '../appTamperingDetectionService': tamperingStub,
