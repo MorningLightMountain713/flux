@@ -499,8 +499,8 @@ async function removeUnrequiredDependencies() {
       // Remove a consumer before the app it consumes so the network/log wiring
       // tears down in dependency order.
       orphans.sort((a, b) => {
-        if (appNetworkLinker.getLinkedApps(a).some((n) => n.toLowerCase() === b.name.toLowerCase())) return -1;
-        if (appNetworkLinker.getLinkedApps(b).some((n) => n.toLowerCase() === a.name.toLowerCase())) return 1;
+        if (a.linkedAppNames().some((n) => n.toLowerCase() === b.name.toLowerCase())) return -1;
+        if (b.linkedAppNames().some((n) => n.toLowerCase() === a.name.toLowerCase())) return 1;
         return 0;
       });
       const target = orphans.find((app) => !attempted.has(app.name.toLowerCase()));
