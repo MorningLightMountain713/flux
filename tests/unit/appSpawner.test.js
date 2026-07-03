@@ -16,6 +16,7 @@ describe('appSpawner tests', () => {
   let logStub;
   let configStub;
   let globalStateStub;
+  let registryManagerStub;
   let findUnderProvisionedStub;
   let delayStub;
   let daemonSyncStub;
@@ -138,6 +139,14 @@ describe('appSpawner tests', () => {
       data: { height: opts.daemonHeight || 2555563, synced: true },
     });
     ensureProvidersRegisteredStub = sinon.stub().resolves();
+    registryManagerStub = {
+      appLocation: sinon.stub().resolves([]),
+      appInstallingLocation: sinon.stub().resolves([]),
+      storeAppInstallingMessage: sinon.stub().resolves(),
+      removeAppInstallingMessage: sinon.stub().resolves(),
+      getRunningAppIpList: sinon.stub().resolves([]),
+      countAppInstallingErrors: sinon.stub().resolves(opts.errorCount ?? 0),
+    };
 
     appSpawner = proxyquire('../../ZelBack/src/services/appLifecycle/appSpawner', {
       config: configStub,
@@ -172,13 +181,7 @@ describe('appSpawner tests', () => {
         isDaemonSynced: daemonSyncStub,
       },
       '../../lib/log': logStub,
-      '../appDatabase/registryManager': {
-        appLocation: sinon.stub().resolves([]),
-        appInstallingLocation: sinon.stub().resolves([]),
-        storeAppInstallingMessage: sinon.stub().resolves(),
-        getRunningAppIpList: sinon.stub().resolves([]),
-        countAppInstallingErrors: sinon.stub().resolves(opts.errorCount ?? 0),
-      },
+      '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': {
         findUnderProvisionedApps: findUnderProvisionedStub,
         getGlobalAppInfo: opts.globalAppInfoStub ?? sinon.stub().resolves(null),
@@ -272,6 +275,9 @@ describe('appSpawner tests', () => {
         uninstallApplication: sinon.stub().resolves(),
         expireGlobalApplications: sinon.stub().resolves(),
       },
+      './pendingTeardownStore': {
+        teardownOwedFor: opts.teardownOwedFor ?? sinon.stub().resolves(false),
+      },
     });
   }
 
@@ -359,6 +365,13 @@ describe('appSpawner tests', () => {
       buildModule({ candidates: [candidate] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
+    });
+
+    it('should filter out an app that is mid-teardown (teardown-aware selection)', async () => {
+      buildModule({ candidates: [makeCandidate()], teardownOwedFor: sinon.stub().resolves(true) });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('No app currently to be processed'))).to.be.true;
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.false;
     });
   });
 
@@ -599,6 +612,29 @@ describe('appSpawner tests', () => {
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.false;
+    });
+
+    it('retracts its own installing record when the install DEFERS (so the next cycle is not self-locked)', async () => {
+      buildModule({
+        candidates: [makeCandidate()],
+        errorCount: 0,
+        installStub: sinon.stub().resolves({ status: InstallStatus.DEFERRED, reason: 'node busy' }),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      // the record was stored before install; a DEFERRED (not an install) must retract it
+      sinon.assert.called(registryManagerStub.storeAppInstallingMessage);
+      sinon.assert.called(registryManagerStub.removeAppInstallingMessage);
+    });
+
+    it('keeps its own installing record when the install SUCCEEDS', async () => {
+      buildModule({
+        candidates: [makeCandidate()],
+        errorCount: 0,
+        installStub: sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null }),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      sinon.assert.called(registryManagerStub.storeAppInstallingMessage);
+      sinon.assert.notCalled(registryManagerStub.removeAppInstallingMessage);
     });
 
     it('should not overwrite short-term cache with long-term cache when network errors throw into catch', async () => {
@@ -990,6 +1026,33 @@ describe('appSpawner tests', () => {
       // window already elapsed off-loop -> it installs this time, and is spliced out (not re-queued).
       expect(installStub.called, 'a collisionDeferred app back from the queue must install').to.equal(true);
       expect(globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conApp'), 'must not re-defer').to.not.exist;
+    });
+
+    it('second pass under real contention: reaches the election, not the count-gate, and installs as the index-0 winner', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      buildModule({
+        candidates: [makeCandidate({ name: 'placeholder', hash: 'ph1' })],
+        installStub,
+        globalAppInfoStub,
+        globalStateOverrides: {
+          appsToBeCheckedLater: [{
+            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true,
+          }],
+        },
+      });
+      // Real multi-node contention: installing (2) > required (1). The blunt count
+      // gate would return here on a fresh pass; on the collision-return pass it must
+      // instead fall through to the broadcastedAt election. Our record broadcast
+      // first, so the election ranks us index-0 and we install.
+      registryManagerStub.appInstallingLocation.resolves([
+        { ip: '192.168.1.1', broadcastedAt: 1000 },
+        { ip: '10.0.0.7', broadcastedAt: 2000 },
+      ]);
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(installStub.called, 'the collision-return pass must reach the election and install the index-0 winner').to.equal(true);
     });
   });
 
