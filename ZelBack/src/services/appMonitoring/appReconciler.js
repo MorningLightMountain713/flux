@@ -1,10 +1,10 @@
 const config = require('config');
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
-const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const volumeService = require('../utils/volumeService');
 const dockerOperations = require('../appManagement/dockerOperations');
+const serviceHelper = require('../serviceHelper');
 const globalState = require('../utils/globalState');
 const { appNameFromIdentifier } = require('../utils/componentIdentifier');
 const operationRegistry = require('../utils/operationRegistry');
@@ -86,9 +86,6 @@ const startingClaims = new Set();
 // down (the lease that set it is also in-memory and gone after a crash).
 const operationDesired = new Map();
 
-// brief settle between the stop and the rm -rf so the container has fully released
-// its appdata mount before the wipe (mirrors the sync layer's prior 500ms delay).
-const DATA_CLEAR_SETTLE_MS = 500;
 
 // Install converge-wait (Stage 5b): installApplication registers a per-component
 // waiter via awaitConvergence and blocks on it. runReconcile resolves 'settled'
@@ -1147,8 +1144,9 @@ async function reconcile(rawIdentifier) {
         appInspector.stopAppMonitoring(identifier, false);
         fluxEventBus.publish('reconciler:actuated', { identifier, action: 'stopped', reason: 'dataClear' });
       }
-      await serviceHelper.delay(DATA_CLEAR_SETTLE_MS);
-      await volumeService.clearAppVolumeData(identifier);
+      // appDeleteDataInMountPoint retries the wipe until it succeeds (the delete completing
+      // proves the stopped container released its appdata mount) — no fixed settle needed.
+      await dockerOperations.appDeleteDataInMountPoint(dockerService.getAppIdentifier(identifier));
     } catch (err) {
       // A failed stop/wipe is the only actuation path here that would otherwise drop
       // to the hourly sweep (~1h down). Leave dataDesired 'clear' - so the retried
