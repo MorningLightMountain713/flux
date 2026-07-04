@@ -66,6 +66,12 @@ rm -f /var/run/docker.pid
 (
   set +e
   while true; do
+    # Fault-injection lever: a test can hold dockerd DOWN (a real docker outage) by
+    # creating /tmp/dockerd-paused (and killing dockerd); the watchdog then refuses to
+    # respawn it until the file is removed. Unlike a plain bounce (restartDockerd), this
+    # keeps docker unreachable for an arbitrary window, so a suite can exercise teardown /
+    # reconcile convergence across a genuine outage without bricking the node.
+    while [ -f /tmp/dockerd-paused ]; do sleep 0.3; done
     rm -f /var/run/docker.pid
     dockerd --data-root /mnt/appdata/docker
     echo "dockerd exited (rc=$?), respawning in 1s" >&2
