@@ -438,6 +438,15 @@ describe('appsRepository', () => {
       expect(query).to.deep.equal({ appName: 'app' });
     });
 
+    it('setContentManifestApplied advances appliedVersion monotonically, never upserting', async () => {
+      await appsRepository.setContentManifestApplied('app', 5);
+      const [, collection, filter, update, opts] = dbHelperStub.updateOneInDatabase.firstCall.args;
+      expect(collection).to.equal('zelappcontentmanifests');
+      expect(filter).to.deep.equal({ appName: 'app', $or: [{ appliedVersion: { $exists: false } }, { appliedVersion: { $lt: 5 } }] });
+      expect(update).to.deep.equal({ $set: { appliedVersion: 5 } });
+      expect(opts).to.equal(undefined); // the row must already exist — you can't apply what you never stored
+    });
+
     it('deleteQuarantinedContentManifest removes only the confirmed:false row', async () => {
       await appsRepository.deleteQuarantinedContentManifest('app');
       const [, collection, query] = dbHelperStub.removeDocumentsFromCollection.firstCall.args;

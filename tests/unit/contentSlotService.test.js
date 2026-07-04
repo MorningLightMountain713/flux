@@ -33,8 +33,10 @@ function fakeRepo(overrides = {}) {
     getInstalledApp: sinon.stub().resolves(null),
     listLocationsByApp: sinon.stub().resolves([]),
     getContentManifest: sinon.stub().resolves(null),
+    setContentManifestApplied: sinon.stub().resolves(),
     upsertContentManifest: sinon.stub().resolves(true),
     deleteQuarantinedContentManifest: sinon.stub().resolves(),
+    listInstalledApps: sinon.stub().resolves([]),
     ...overrides,
   };
 }
@@ -980,6 +982,146 @@ describe('contentSlotService', () => {
     });
   });
 
+  describe('applyManifest records the delivered version', () => {
+    const HCFG = `sha256:${'1'.repeat(64)}`;
+    const dep = { componentEntries: () => [['web', { identifier: 'web_app', contentSlotMounts: () => [{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'signal', signal: 'SIGHUP' } }] }]] };
+    const m = { appName: 'app', version: 4, slots: { cfg: { hash: HCFG } } };
+
+    it('write-throughs appliedVersion after a successful apply', async () => {
+      const { service } = load();
+      const recordApplied = sinon.spy();
+      await service.applyManifest(dep, m, { appName: 'app', owner: '1id', peers: [] }, {
+        resolve: async () => Buffer.from('x'), writeFile: sinon.spy(), applyPerms: sinon.spy(), signal: sinon.spy(), recordApplied,
+      });
+      sinon.assert.calledOnceWithExactly(recordApplied, 'app', 4);
+    });
+
+    it('does not record when the apply is skipped (already-applied guard)', async () => {
+      const { service } = load();
+      const recordApplied = sinon.spy();
+      const deps = {
+        resolve: async () => Buffer.from('x'), writeFile: sinon.spy(), applyPerms: sinon.spy(), signal: sinon.spy(), recordApplied,
+      };
+      await service.applyManifest(dep, m, { appName: 'app', owner: '1id', peers: [] }, deps);
+      await service.applyManifest(dep, m, { appName: 'app', owner: '1id', peers: [] }, deps); // echo — skipped
+      sinon.assert.calledOnce(recordApplied); // only the real apply recorded
+    });
+  });
+
+  describe('contentComponentsRunning', () => {
+    const twoComp = {
+      componentEntries: () => [
+        ['web', { hasContentSlots: () => true, identifier: 'web_app' }],
+        ['db', { hasContentSlots: () => false, identifier: 'db_app' }],
+      ],
+    };
+
+    it('is true when every content component is running (ignores non-content ones)', async () => {
+      const { service } = load();
+      const inspect = sinon.stub().resolves({ State: { Running: true } });
+      expect(await service.contentComponentsRunning(twoComp, { inspect })).to.be.true;
+      sinon.assert.calledOnceWithExactly(inspect, 'web_app'); // db (no content) not inspected
+    });
+
+    it('is false when a content component is stopped', async () => {
+      const { service } = load();
+      expect(await service.contentComponentsRunning(twoComp, { inspect: async () => ({ State: { Running: false } }) })).to.be.false;
+    });
+
+    it('is false when a content component container is absent (inspect throws)', async () => {
+      const { service } = load();
+      expect(await service.contentComponentsRunning(twoComp, { inspect: async () => { throw new Error('no such container'); } })).to.be.false;
+    });
+  });
+
+  describe('applyStoredIfBehind (catch a running container up to its stored manifest)', () => {
+    const slotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => true, identifier: 'web_app' }]] };
+    function baseDeps(overrides = {}) {
+      return {
+        getStored: async () => ({ version: 2, appliedVersion: 1, confirmed: true, data: { manifest: manifest({ version: 2 }) } }),
+        getDeployment: async () => slotDeployment,
+        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: { owner: '1id', instances: 3 } }),
+        componentsRunning: async () => true,
+        schedule: sinon.spy(),
+        ...overrides,
+      };
+    }
+
+    it('applies when the register is ahead of the delivered version and the container is running', async () => {
+      const { service } = load();
+      const deps = baseDeps();
+      const applied = await service.applyStoredIfBehind('app', deps);
+      expect(applied).to.be.true;
+      sinon.assert.calledOnce(deps.schedule);
+    });
+
+    it('is a no-op when already delivered (appliedVersion >= version)', async () => {
+      const { service } = load();
+      const deps = baseDeps({ getStored: async () => ({ version: 2, appliedVersion: 2, confirmed: true, data: { manifest: manifest({ version: 2 }) } }) });
+      expect(await service.applyStoredIfBehind('app', deps)).to.be.false;
+      sinon.assert.notCalled(deps.schedule);
+    });
+
+    it('is a no-op when the container is not running (leaves it for the start path)', async () => {
+      const { service } = load();
+      const deps = baseDeps({ componentsRunning: async () => false });
+      expect(await service.applyStoredIfBehind('app', deps)).to.be.false;
+      sinon.assert.notCalled(deps.schedule);
+    });
+
+    it('is a no-op when the app is not installed here', async () => {
+      const { service } = load();
+      const deps = baseDeps({ getDeployment: async () => null });
+      expect(await service.applyStoredIfBehind('app', deps)).to.be.false;
+      sinon.assert.notCalled(deps.schedule);
+    });
+
+    it('is a no-op when nothing is stored (or the row is unconfirmed)', async () => {
+      const { service } = load();
+      const missing = baseDeps({ getStored: async () => null });
+      expect(await service.applyStoredIfBehind('app', missing)).to.be.false;
+      sinon.assert.notCalled(missing.schedule);
+
+      const quarantined = baseDeps({ getStored: async () => ({ version: 2, appliedVersion: 1, confirmed: false, data: { manifest: manifest({ version: 2 }) } }) });
+      expect(await service.applyStoredIfBehind('app', quarantined)).to.be.false;
+      sinon.assert.notCalled(quarantined.schedule);
+    });
+
+    it('treats a never-applied row (no appliedVersion) as behind', async () => {
+      const { service } = load();
+      const deps = baseDeps({ getStored: async () => ({ version: 1, confirmed: true, data: { manifest: manifest({ version: 1 }) } }) });
+      expect(await service.applyStoredIfBehind('app', deps)).to.be.true;
+      sinon.assert.calledOnce(deps.schedule);
+    });
+  });
+
+  describe('applyBehindContentApps (steady-state sweep)', () => {
+    it('catches up every installed app that is behind, counting successes', async () => {
+      const { service } = load();
+      const applyBehind = sinon.stub();
+      applyBehind.withArgs('a1').resolves(true);
+      applyBehind.withArgs('a2').resolves(false); // current — no-op
+      applyBehind.withArgs('a3').resolves(true);
+      const count = await service.applyBehindContentApps({
+        listInstalled: async () => [{ name: 'a1' }, { name: 'a2' }, { name: 'a3' }],
+        applyBehind,
+      });
+      expect(count).to.equal(2);
+    });
+
+    it('a single app catch-up throwing does not abort the sweep', async () => {
+      const { service } = load();
+      const applyBehind = sinon.stub();
+      applyBehind.withArgs('a1').rejects(new Error('docker busy'));
+      applyBehind.withArgs('a2').resolves(true);
+      const count = await service.applyBehindContentApps({
+        listInstalled: async () => [{ name: 'a1' }, { name: 'a2' }],
+        applyBehind,
+      });
+      expect(count).to.equal(1);
+    });
+  });
+
   describe('reconcileBootContent (boot before-start recovery)', () => {
     const slotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => true }]] };
     const noSlotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => false }]] };
@@ -1082,20 +1224,44 @@ describe('contentSlotService', () => {
       sinon.assert.notCalled(provision); // running mount not re-written
     });
 
-    it('does NOT re-provision a surviving container with a due rollout (re-arm-only on a process restart)', async () => {
+    it('catches up a surviving container that is BEHIND its stored manifest, in place (never re-provisions)', async () => {
       const { service } = load();
       const provision = sinon.spy();
       const schedule = sinon.spy();
       await service.reconcileBootContent('app', {
         getDeployment: async () => slotDeployment,
-        getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ rollout: { strategy: 'immediate' } }) } }),
+        getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ version: 3, rollout: { strategy: 'immediate' } }) } }),
+        // applyStoredIfBehind seam (reconcileBootContent forwards deps): register ahead of delivered
+        getStored: async () => ({ version: 3, appliedVersion: 2, confirmed: true, data: { manifest: manifest({ version: 3 }) } }),
+        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: { owner: '1id', instances: 3 } }),
+        componentsRunning: async () => true,
+        provision,
+        schedule,
+        now: () => 0,
+        restarting: false,
+        provider: fakeProvider(),
+      });
+      sinon.assert.notCalled(provision); // running mount is never re-provisioned
+      sinon.assert.calledOnce(schedule); // caught up in place (a during-downtime update won't re-gossip)
+    });
+
+    it('leaves a surviving container that is already current untouched', async () => {
+      const { service } = load();
+      const provision = sinon.spy();
+      const schedule = sinon.spy();
+      await service.reconcileBootContent('app', {
+        getDeployment: async () => slotDeployment,
+        getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ version: 3, rollout: { strategy: 'immediate' } }) } }),
+        getStored: async () => ({ version: 3, appliedVersion: 3, confirmed: true, data: { manifest: manifest({ version: 3 }) } }),
+        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: { owner: '1id', instances: 3 } }),
+        componentsRunning: async () => true,
         provision,
         schedule,
         now: () => 0,
         restarting: false,
       });
       sinon.assert.notCalled(provision);
-      sinon.assert.notCalled(schedule);
+      sinon.assert.notCalled(schedule); // appliedVersion == version -> nothing to catch up
     });
   });
 
