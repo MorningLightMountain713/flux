@@ -97,6 +97,52 @@ export async function deployContentApp(nodeUrl, opts) {
 }
 
 /**
+ * Register an encrypted v9 app that carries NO content (no contentRef, no
+ * contentSlots) — e.g. a graceful-shutdown or secrets-only app. The spec is always
+ * HPKE-sealed toward the node's transport key, so the app is genuinely encrypted;
+ * the content envelope is omitted entirely (the register handler treats content as
+ * optional). Reusable for any non-content encrypted v9 app — deployContentApp's
+ * sibling for the no-content case.
+ *
+ * @param {string} nodeUrl
+ * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, ownerKey?, timestamp? }
+ *   `components` is the full v9 components map (pass shutdown/preStop/etc. on a component here).
+ * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName }
+ */
+export async function registerEncryptedV9App(nodeUrl, opts) {
+  const ownerKey = opts.ownerKey || appOwnerKey();
+  const owner = opts.owner || ownerKey.zelid;
+  const name = opts.name;
+  const timestamp = opts.timestamp || Date.now();
+
+  const submissionSpec = tk.buildV9ContentSpec({
+    name,
+    owner,
+    image: opts.image,
+    instances: opts.instances,
+    ttl: opts.ttl,
+    components: opts.components,
+  });
+
+  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
+  const { specField, contentHash } = await tk.buildSignedRegistration({
+    submissionSpec, ownerKey, transportPubB64, timestamp,
+  });
+
+  const auth = await authenticate(nodeUrl, ownerKey);
+  const form = new FormData();
+  form.append('spec', JSON.stringify(specField));
+
+  const res = await fetch(`${nodeUrl}/apps/appregister`, {
+    method: 'POST',
+    headers: { zelidauth: auth.zelidauth },
+    body: form,
+  });
+  const data = await res.json();
+  return { ...data, contentHash, appName: name };
+}
+
+/**
  * Push a standalone content-slot update (POST /apps/contentupdate): a new manifest
  * version with new slot bytes, sealed as one HPKE content envelope (AAD ref
  * manifest:v<version>) with the owner-signed manifest + the FluxDrive dual-sigs.
