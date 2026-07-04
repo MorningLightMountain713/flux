@@ -49,7 +49,7 @@ describe('reconciler keeps a running syncthing app up across a FluxOS process re
     // drive the r: folder to fully synced so the reconciler starts the container
     await setSynced({ folder });
     const client = env.clients[idx];
-    await waitForReconcileActuated(client, identifier, 'started', 90000);
+    await waitForReconcileActuated(client, identifier, 'firstStart', 90000);
     await waitFor(() => isUp(client, appName), { timeout: 45000, interval: 2000, label: 'r: app running before FluxOS restart' });
   });
 

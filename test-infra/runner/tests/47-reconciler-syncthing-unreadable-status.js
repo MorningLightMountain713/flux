@@ -53,7 +53,7 @@ describe('reconciler never removes (or starts) on an unreadable sync status', fu
     const client = env.clients[app.index];
     // far past every compressed ladder window (nudge 6s, removal >=30s)
     await assertNoEvent(client, 'app:removed', (d) => d.name === appName, 60000);
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === app.identifier && d.action === 'started', 1000);
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === app.identifier && (d.action === 'firstStart' || d.action === 'restart'), 1000);
     const { nudges } = await getNudges(subnet.nodeIp(1));
     expect(nudges.filter((n) => n.action === 'pause')).to.have.lengthOf(0);
     expect(nudges.filter((n) => n.action === 'restart')).to.have.lengthOf(0);
@@ -65,7 +65,7 @@ describe('reconciler never removes (or starts) on an unreadable sync status', fu
     const client = env.clients[app.index];
     const afterId = client.getLastEventId();
     await setSynced({ ip: subnet.nodeIp(1), folder: app.folder });
-    await client.waitForEvent('reconciler:actuated', (d) => d.identifier === app.identifier && d.action === 'started', 90000, { afterId });
+    await client.waitForEvent('reconciler:actuated', (d) => d.identifier === app.identifier && d.action === 'firstStart', 90000, { afterId });
     expect(await isUp(client, appName)).to.equal(true);
   });
 });
