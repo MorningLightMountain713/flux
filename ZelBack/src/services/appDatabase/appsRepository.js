@@ -243,6 +243,27 @@ async function getContentManifest(appName) {
 }
 
 /**
+ * Record the manifest version this node has actually delivered to the app's RUNNING
+ * container, as a node-local annotation on the register row. Distinct from the row's
+ * `version` (the latest KNOWN manifest): the gap `version > appliedVersion` is what tells
+ * a returning/steady node its running content is behind, independent of the (mutable)
+ * on-disk bytes. Advanced monotonically; never upserts (you cannot have applied a manifest
+ * you never stored). Written on disjoint fields from upsertContentManifest, so the two
+ * writers never clobber each other on the same row.
+ *
+ * @param {string} appName
+ * @param {number} version
+ * @returns {Promise<void>}
+ */
+async function setContentManifestApplied(appName, version) {
+  await dbHelper.updateOneInDatabase(
+    globalDb(), appContentManifests,
+    { appName, $or: [{ appliedVersion: { $exists: false } }, { appliedVersion: { $lt: version } }] },
+    { $set: { appliedVersion: version } },
+  );
+}
+
+/**
  * Latest-wins upsert of a manifest row. A confirmed store advances a strictly-older
  * row OR promotes a same-version quarantined row in place (clearing its TTL); a
  * quarantine store holds only a strictly-newer version (TTL-reaped if its spec never
@@ -704,6 +725,7 @@ module.exports = {
   listExistingGlobalAppNames,
   listGlobalAppInfo,
   getContentManifest,
+  setContentManifestApplied,
   upsertContentManifest,
   deleteQuarantinedContentManifest,
   listConfirmedContentManifestVersions,
