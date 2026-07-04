@@ -35,6 +35,7 @@ const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const containerMountRecovery = require('./appLifecycle/containerMountRecovery');
 const appStartupManager = require('./appLifecycle/appStartupManager');
+const contentSlotService = require('./appLifecycle/contentSlotService');
 const hardwareValidationService = require('./appLifecycle/hardwareValidationService');
 const globalState = require('./utils/globalState');
 const nodeCapabilities = require('./utils/nodeCapabilities');
@@ -348,6 +349,9 @@ async function startFluxFunctions() {
       completeSyncRequest: (key) => peerManager.completeSyncRequest(key),
       isEnterprise: () => enterpriseNetwork.getCachedEnterpriseIdentity(),
       networkStateReady: () => networkStateService.waitStarted(),
+      // The steady-state manifest refresh's apply half: catch up any running container whose
+      // register advanced (a silently-missed update) to what it should be serving.
+      catchUpRunningContent: () => contentSlotService.applyBehindContentApps(),
       fluxVersion,
     });
     nodeConfirmationService.onMessageCapabilityChange((capable) => orchestrator.onMessageCapabilityChange(capable));
