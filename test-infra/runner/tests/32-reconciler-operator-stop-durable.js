@@ -4,7 +4,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { getAppContainerStatus } from '../framework/container.js';
-import { waitFor, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
+import { waitFor, assertNoEvent } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
@@ -59,13 +59,13 @@ describe('reconciler honours a durable operator stop', function () {
 
     // the die event from the stop triggers a reconcile; operatorStopped must win,
     // so it is never restarted.
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && d.action === 'started', 8000);
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && (d.action === 'firstStart' || d.action === 'restart'), 8000);
 
     // durable across a FluxOS restart: the boot reconcile re-enqueues every
     // component, but operatorStopped (mongo) keeps this one stopped.
     await env.restartNode(idx);
     client = env.clients[idx];
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && d.action === 'started', 10000);
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && (d.action === 'firstStart' || d.action === 'restart'), 10000);
     const afterRestart = await getAppContainerStatus(client.container, appName, { all: true });
     expect(afterRestart && afterRestart.status.startsWith('Up')).to.not.equal(true);
 

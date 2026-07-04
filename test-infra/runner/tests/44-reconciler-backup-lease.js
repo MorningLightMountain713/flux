@@ -64,7 +64,6 @@ describe('backup leases the whole app against the reconciler', function () {
     const client = env.clients[0];
     const auth = await authenticate(client.url, appOwnerKey());
 
-    const afterId = client.getLastEventId();
     // start the backup but do NOT await: the unresolved promise IS the lease window
     const backupDone = client.appendBackupTask(appName, [appName], auth.zelidauth);
 
@@ -72,7 +71,7 @@ describe('backup leases the whole app against the reconciler', function () {
     await restartDockerd(client.container);
 
     // while leased, the reconciler must not start/stop/recreate any component
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === app.identifier && (d.action === 'started' || d.action === 'stopped' || d.action === 'recreated'), 10000);
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === app.identifier && (d.action === 'firstStart' || d.action === 'restart' || d.action === 'stopped' || d.action === 'recreated'), 10000);
 
     const body = await backupDone;
     expect(body).to.not.match(/Unauthorized/i);

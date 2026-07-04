@@ -50,7 +50,7 @@ describe('reconnect sweep covers enterprise apps (encrypted at rest)', function 
 
     // the reconnect sweep enumerates the enterprise app (decrypting the spec)
     // and the reconciler brings the container back
-    await client.waitForEvent('reconciler:actuated', (d) => d.identifier === identifier && d.action === 'started', 120000, { afterId });
+    await client.waitForEvent('reconciler:actuated', (d) => d.identifier === identifier && d.action === 'restart', 120000, { afterId });
     await waitForUp(client, appName, 'enterprise app running again after sweep');
     expect(await isUp(client, appName)).to.equal(true);
   });

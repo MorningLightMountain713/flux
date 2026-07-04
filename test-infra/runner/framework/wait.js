@@ -159,7 +159,11 @@ export async function waitForPeersRemoved(node, predicate = () => true, timeout 
 // --- reconciler (appReconciler) ---
 
 // action (omit to match any):
-//   run-state:  'started' | 'stopped' | 'backoff' | 'recreated' | 'recreateFailed'
+//   came-up:    'firstStart' (this component never ran here before - a first start, whose
+//               failure rolls the install back) | 'restart' (ran here before - a restart,
+//               whose failure walks the crash-backoff ladder). A scenario knows which it
+//               expects; a "must not come up" negative asserts NEITHER fires.
+//   run-state:  'stopped' | 'backoff' | 'recreated' | 'recreateFailed'
 //   deferrals:  'startDeferred' | 'stopDeferred' | 'restartRequestedDeferred' | 'restartUnhealthyDeferred'
 //               (a transition deferred because a conflicting container operation held the lease)
 //   removal:    'removed' (an owed teardown converged - the app is fully gone) |

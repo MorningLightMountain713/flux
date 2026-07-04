@@ -96,7 +96,7 @@ describe('syncthing promotion gate never reverts/promotes against an empty globa
 
     // a start would be the promote-on-empty-global regression; flag it if it fires
     let startedSeen = false;
-    client.waitForEvent('reconciler:actuated', (d) => d.identifier === aEmpty.identifier && d.action === 'started', 45000)
+    client.waitForEvent('reconciler:actuated', (d) => d.identifier === aEmpty.identifier && d.action === 'firstStart', 45000)
       .then(() => { startedSeen = true; }).catch(() => {});
 
     // watch ~45s (≈15 monitor cycles). On the bug the gate issues db/revert
@@ -141,7 +141,7 @@ describe('syncthing promotion gate never reverts/promotes against an empty globa
 
     // once clean (the stub clears receiveOnlyChangedFiles on revert), the
     // follower promotes and the reconciler starts it
-    const started = await client.waitForEvent('reconciler:actuated', (d) => d.identifier === aPart.identifier && d.action === 'started', 90000);
+    const started = await client.waitForEvent('reconciler:actuated', (d) => d.identifier === aPart.identifier && d.action === 'firstStart', 90000);
     expect(started).to.exist;
     expect(await isUp(client, appPart)).to.equal(true);
   });

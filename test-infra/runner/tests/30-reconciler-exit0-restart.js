@@ -47,7 +47,7 @@ describe('reconciler restarts a cleanly-exited (exit 0) container by default', f
     // SIGTERM -> the test-app's handler exits 0 (clean exit), container left present
     await stopAppContainer(client.container, appName);
 
-    const evt = await waitForReconcileActuated(client, identifier, 'started', 90000, { afterId });
+    const evt = await waitForReconcileActuated(client, identifier, 'restart', 90000, { afterId });
     expect(evt.data.exitCode).to.equal(0); // genuinely restarted from a clean exit 0
 
     await waitFor(async () => {
