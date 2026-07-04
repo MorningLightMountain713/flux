@@ -10,32 +10,50 @@ describe('dockerOperations tests', () => {
   });
 
   describe('appDeleteDataInMountPoint', () => {
-    it('should execute rm -rf on app mount point', async () => {
-      const execStub = sinon.stub().yields(null, '', '');
-      const dockerOperations = proxyquire('../../ZelBack/src/services/appManagement/dockerOperations', {
-        child_process: { exec: execStub },
-        '../../lib/log': { info: sinon.stub(), error: sinon.stub() },
-        '../utils/appConstants': { appsFolder: '/tmp/flux/apps/' },
-      });
-
-      await dockerOperations.appDeleteDataInMountPoint('testapp');
-
-      expect(execStub.calledOnce).to.be.true;
-      expect(execStub.firstCall.args[0]).to.equal('sudo rm -rf /tmp/flux/apps/testapp/appdata/*');
+    const build = (serviceHelper, log) => proxyquire('../../ZelBack/src/services/appManagement/dockerOperations', {
+      '../serviceHelper': serviceHelper,
+      '../../lib/log': log,
+      '../utils/appConstants': { appsFolder: '/tmp/flux/apps/' },
     });
 
-    it('should log error when command fails', async () => {
-      const execStub = sinon.stub().yields(new Error('Permission denied'), '', '');
-      const logStub = { info: sinon.stub(), error: sinon.stub() };
-      const dockerOperations = proxyquire('../../ZelBack/src/services/appManagement/dockerOperations', {
-        child_process: { exec: execStub },
-        '../../lib/log': logStub,
-        '../utils/appConstants': { appsFolder: '/tmp/flux/apps/' },
-      });
+    it('deletes the appdata dir via runCommand (as root, no shell glob)', async () => {
+      const runCommand = sinon.stub().resolves({ error: null });
+      const dockerOperations = build(
+        { runCommand, delay: sinon.stub().resolves() },
+        { info: sinon.stub(), error: sinon.stub() },
+      );
 
       await dockerOperations.appDeleteDataInMountPoint('testapp');
 
-      expect(logStub.error.calledOnce).to.be.true;
+      expect(runCommand.calledOnce).to.be.true;
+      expect(runCommand.firstCall.args[0]).to.equal('rm');
+      expect(runCommand.firstCall.args[1].runAsRoot).to.equal(true);
+      expect(runCommand.firstCall.args[1].params).to.deep.equal(['-rf', '/tmp/flux/apps/testapp/appdata']);
+    });
+
+    it('retries until the delete succeeds (the stopped container released the mount)', async () => {
+      const runCommand = sinon.stub();
+      runCommand.onFirstCall().resolves({ error: new Error('device busy') });
+      runCommand.onSecondCall().resolves({ error: null });
+      const log = { info: sinon.stub(), error: sinon.stub() };
+      const dockerOperations = build({ runCommand, delay: sinon.stub().resolves() }, log);
+
+      await dockerOperations.appDeleteDataInMountPoint('testapp', { intervalMs: 1 });
+
+      expect(runCommand.calledTwice).to.be.true;
+      expect(log.info.calledOnce).to.be.true;
+      expect(log.error.called).to.be.false;
+    });
+
+    it('gives up and logs after the timeout (never loops forever)', async () => {
+      const runCommand = sinon.stub().resolves({ error: new Error('still busy') });
+      const log = { info: sinon.stub(), error: sinon.stub() };
+      const dockerOperations = build({ runCommand, delay: sinon.stub().resolves() }, log);
+
+      await dockerOperations.appDeleteDataInMountPoint('testapp', { timeoutMs: 0 });
+
+      expect(log.error.calledOnce).to.be.true;
+      expect(log.info.called).to.be.false;
     });
   });
 });
