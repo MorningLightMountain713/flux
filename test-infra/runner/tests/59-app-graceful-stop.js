@@ -9,7 +9,7 @@ import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { buildSeedableGracefulV8App, buildSeedableTestApp } from '../framework/seed-helper.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { getAppContainerStatus } from '../framework/container.js';
-import { waitForUp, waitForDown } from '../framework/wait.js';
+import { waitForUp, waitForDown, waitFor } from '../framework/wait.js';
 import {
   shutdowndControl, waitForShutdowndCall, assertNoShutdowndCall,
 } from '../framework/shutdownd-control.js';
@@ -151,9 +151,9 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
     try {
       const auth = await ownerAuth();
       await client.removeApp(name, { zelidauth: auth.zelidauth });
-      // the socket refused, so no begin_app_stop was answered — yet the app removes
-      await waitForDown(client, name, `${name} stopped locally on daemon-unreachable`);
-      expect(await isRemoved(name)).to.equal(true);
+      // the socket refused, so no begin_app_stop was answered — yet the local graceful
+      // fallback stops AND removes the app (it never lingers stopped-but-present)
+      await waitFor(() => isRemoved(name), { timeout: 60000, label: `${name} removed via local fallback` });
     } finally {
       await control.refuse(false);
     }
