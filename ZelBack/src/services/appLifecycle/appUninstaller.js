@@ -938,6 +938,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   // lock's own resources (ufw / UPnP / image store / network) run under it — the swap-pool
   // reconcile runs after release.
   status(`Removing ${name} container(s) and host state...`);
+  // A component whose container is still present after the remove blocks clearing the owed
+  // record: destroying its volume under a live container would corrupt it, so we skip the
+  // cleanup and leave the teardown for boot recovery (which re-checks the container is gone).
+  let containerSurvived = false;
   await withHostMutationLock(async () => {
     // eslint-disable-next-line no-restricted-syntax
     for (const c of list) {
@@ -948,6 +952,25 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
         } else {
           // eslint-disable-next-line no-await-in-loop
           await dockerService.appDockerRemove(c.appId).catch((e) => log.warn(`remove ${c.appId}: ${e.message}`));
+        }
+        // NEVER reclaim a component's host storage while its container still exists — a
+        // concurrent re-create (or a failed remove) would leave a live container with its
+        // volume unmounted and data deleted. Decide on the container's ACTUAL presence
+        // (getDockerContainer returns null when gone), not on the remove error; a presence
+        // check that itself fails is treated as "still there" (never delete on uncertainty).
+        let stillPresent;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          stillPresent = Boolean(await dockerService.getDockerContainer(c.appId));
+        } catch (probeErr) {
+          stillPresent = true;
+          log.warn(`Teardown of ${c.identifier}: could not confirm the container was removed (${probeErr.message}); keeping it owed`);
+        }
+        if (stillPresent) {
+          containerSurvived = true;
+          log.error(`Teardown of ${c.identifier}: container still present after remove — skipping destructive cleanup, keeping the teardown owed for retry`);
+          // eslint-disable-next-line no-continue
+          continue;
         }
         // eslint-disable-next-line no-await-in-loop
         await denyPorts(c.ports, name, { entityName: c.label });
@@ -996,10 +1019,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     if (!dropped) allDropped = false;
     if (onComponentRemoved) onComponentRemoved(c.identifier);
   }
-  if (allDropped) {
+  if (allDropped && !containerSurvived) {
     await pendingTeardownStore.clearTeardown(key);
   } else {
-    log.warn(`Teardown of ${name}: a condemned stamp did not drop; keeping the teardown record for boot recovery`);
+    log.warn(`Teardown of ${name}: ${containerSurvived ? 'a container survived removal' : 'a condemned stamp did not drop'}; keeping the teardown record for boot recovery`);
   }
 }
 
