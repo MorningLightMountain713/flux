@@ -43,7 +43,7 @@ describe('reconciler restarts a crashed container', function () {
     await crashAppContainer(client.container, appName); // docker kill -> exit 137
 
     // the reconciler restarts it and reports the exit it restarted from
-    const evt = await waitForReconcileActuated(client, identifier, 'started', 90000, { afterId });
+    const evt = await waitForReconcileActuated(client, identifier, 'restart', 90000, { afterId });
     expect(evt.data.exitCode).to.not.equal(0);
 
     await waitFor(async () => {

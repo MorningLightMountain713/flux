@@ -108,7 +108,7 @@ describe('reconciler recovers orphaned containers after a dockerd restart', func
     // recreate/uninstall it (the docker-unreachable defer guards against that).
     // Recovery comes from whichever fires first: the deferred retry once docker is
     // reachable again, or the reconnect orphan sweep. Both end in a restart.
-    await waitForReconcileActuated(client, identifier, 'started', 120000, { afterId });
+    await waitForReconcileActuated(client, identifier, 'restart', 120000, { afterId });
 
     // and docker confirms it is actually Up again
     await waitFor(async () => {

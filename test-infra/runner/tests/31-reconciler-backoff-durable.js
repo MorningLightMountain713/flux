@@ -49,7 +49,7 @@ describe('reconciler backoff escalates and survives a FluxOS restart', function 
     // crash #1 -> immediate restart (ladder step 0), restartHistory length 1
     let afterId = client.getLastEventId();
     await crashAppContainer(client.container, appName);
-    await waitForReconcileActuated(client, identifier, 'started', 60000, { afterId });
+    await waitForReconcileActuated(client, identifier, 'restart', 60000, { afterId });
     await waitForUp(client, appName, 'running after crash #1');
 
     // crash #2 -> first real backoff (~30s); read the waitMs, don't sleep it
@@ -60,7 +60,7 @@ describe('reconciler backoff escalates and survives a FluxOS restart', function 
     expect(backoff1.data.waitMs).to.be.at.most(30000);
 
     // its scheduled retry fires -> restart, restartHistory length 2
-    await waitForReconcileActuated(client, identifier, 'started', 60000, { afterId });
+    await waitForReconcileActuated(client, identifier, 'restart', 60000, { afterId });
     await waitForUp(client, appName, 'running after crash #2 backoff retry');
 
     // crash #3 -> next ladder step (~5m); only observe the escalation

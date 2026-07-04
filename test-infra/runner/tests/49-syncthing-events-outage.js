@@ -84,7 +84,7 @@ describe('syncthing events-stream outage degrades to the poll, never to wrong ac
     const client = env.clients[app.index];
     const afterId = client.getLastEventId();
     await setSynced({ ip: subnet.nodeIp(1), folder: app.folder });
-    await client.waitForEvent('reconciler:actuated', (d) => d.identifier === app.identifier && d.action === 'started', 90000, { afterId });
+    await client.waitForEvent('reconciler:actuated', (d) => d.identifier === app.identifier && d.action === 'firstStart', 90000, { afterId });
     expect(await isUp(client, appName)).to.equal(true);
   });
 });

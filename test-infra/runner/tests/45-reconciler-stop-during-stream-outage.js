@@ -6,7 +6,7 @@ import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import {
-  waitForUp, waitForDown, assertNoEvent, waitForOperatorIntent,
+  waitForUp, waitForDown, assertNoEvent, waitForOperatorIntent
 } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
@@ -62,7 +62,7 @@ describe('deliberate stop during an event-stream outage neither wedges nor flaps
     // the lost die event must cost nothing: no restart against the operator
     // lock (reconnect sweep + boot-style reconciles all see operatorStopped),
     // and no flapping start/stop loop
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && d.action === 'started', 20000, { afterId: intent.id });
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && (d.action === 'firstStart' || d.action === 'restart'), 20000, { afterId: intent.id });
     const status = await getAppContainerStatus(client.container, appName, { all: true });
     expect(status && status.status.startsWith('Up')).to.not.equal(true);
 
