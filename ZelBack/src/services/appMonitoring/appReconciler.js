@@ -1292,8 +1292,11 @@ async function reconcile(rawIdentifier) {
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
   }
-  // A real (re)start happened — record it so the backoff ladder paces repeated restarts.
-  await appsRuntimeState.recordRestart(identifier);
+  // Record only a genuine restart so the backoff ladder paces repeated crashes. A
+  // successful first start is not a restart: it must not seed the history, or the
+  // ladder's immediate first-retry rung (index 0) is unreachable and a container that
+  // crashes before its first stable run backs off 30s instead of retrying at once.
+  if (!firstStart) await appsRuntimeState.recordRestart(identifier);
   appInspector.startAppMonitoring(identifier, globalState.appsMonitored);
   if (firstStart) await appsRuntimeState.setSuccessfullyStarted(identifier);
   // A start satisfies any pending restart request (a "restart" of a stopped
