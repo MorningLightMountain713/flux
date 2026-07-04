@@ -60,13 +60,16 @@ async function handleContainerDie(event) {
   const containerName = event.Actor?.Attributes?.name;
   if (!containerName || !isFluxContainer(containerName)) return;
 
-  // A deliberate FluxOS stop (appDockerStop/Kill/Restart) holds a 'stopping' lease
-  // on the container for the duration of the operation; its die needs no reconcile -
-  // the operation already recorded the desired state before acting. Skip to avoid
-  // churn. Best-effort only: the lease is released by the operation itself when it
-  // settles (never by this event), so a die that arrives after the operation
-  // resolved simply falls through to a desired-state no-op.
-  if (operationRegistry.isHeld(containerName)) {
+  // A deliberate teardown of the container (a stop/kill/restart, or a teardown's
+  // remove) holds a stop-aligned component lease for the duration of the operation;
+  // its die needs no reconcile - the operation already recorded the desired state
+  // before acting. Skip to avoid churn. A die while an 'actuating' (create/start)
+  // lease is held is the opposite: a genuine crash-on-start that MUST be recorded and
+  // re-reconciled, so it falls through. Best-effort only: the lease is released by the
+  // operation itself when it settles (never by this event), so a die that arrives
+  // after the operation resolved simply falls through to a desired-state no-op.
+  const lease = operationRegistry.get(containerName);
+  if (lease && operationRegistry.isStopAligned(lease.type)) {
     return;
   }
 
