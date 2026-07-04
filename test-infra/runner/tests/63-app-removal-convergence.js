@@ -73,12 +73,14 @@ describe('app removal converges to fully gone via the reconciler', function () {
     this.timeout(300000);
     const name = `rmconv${Date.now()}`;
     await installLocalOnly(name);
+    // grab auth BEFORE the outage: the node's login-phrase endpoint needs docker
+    const auth = await ownerAuth();
     const afterId = client.getLastEventId();
 
     // hold a real docker outage across the removal: the teardown's remove + presence-check
     // fail, so it leaves a survivor and hands the owed teardown to the reconciler.
     await pauseDockerd(client.container);
-    await client.removeApp(name, { zelidauth: (await ownerAuth()).zelidauth }).catch(() => {});
+    await client.removeApp(name, { zelidauth: auth.zelidauth }).catch(() => {});
 
     // the reconciler owns the owed teardown now and keeps re-driving it while docker is down
     await removalEvent(name, 'removalDeferred', afterId, 90000);
@@ -94,12 +96,14 @@ describe('app removal converges to fully gone via the reconciler', function () {
     this.timeout(300000);
     const name = `rmboot${Date.now()}`;
     await installLocalOnly(name);
+    // grab auth BEFORE the outage: the node's login-phrase endpoint needs docker
+    const auth = await ownerAuth();
     const afterId = client.getLastEventId();
 
     // interrupt a teardown mid-flight: the outage leaves a survivor, so an owed record
     // persists past the removal call.
     await pauseDockerd(client.container);
-    await client.removeApp(name, { zelidauth: (await ownerAuth()).zelidauth }).catch(() => {});
+    await client.removeApp(name, { zelidauth: auth.zelidauth }).catch(() => {});
     await removalEvent(name, 'removalDeferred', afterId, 90000);
 
     // restart FluxOS (in-memory state wiped) while the teardown is still owed AND docker is
