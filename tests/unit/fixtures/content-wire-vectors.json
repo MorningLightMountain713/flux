@@ -1,0 +1,72 @@
+{
+  "$schema": "content-delivery-wire-contract/v1",
+  "description": "Shared wire-contract vectors for FluxDrive content delivery. Consumed by BOTH the FluxOS content client tests and the FluxDrive server tests. Regenerate with `node tests/contract/generate-vectors.mjs`; if the contract changes, update BOTH consumers. Keys are TEST-ONLY.",
+  "timestampUnit": "unix-epoch-milliseconds",
+  "freshnessWindowSeconds": 300,
+  "signedMessageFormulas": { "blob": "sha256hex(locator:appName:timestamp)", "manifestPut": "sha256hex(appName:version:timestamp)", "reconcile": "sha256hex(appName:source:version)" },
+  "endpoints": {
+    "blobUpload": { "method": "POST", "path": "/api/v1/blob", "headers": ["X-Flux-Locator", "X-Flux-AppName", "X-Flux-Timestamp", "X-Flux-Arcane-Sig", "X-Flux-Owner-Sig", "X-Flux-Source"], "freshness": true },
+    "manifestPut": { "method": "PUT", "path": "/api/v1/manifest/:appName", "bodyFields": ["version", "timestamp", "arcaneSig", "ownerSig", "manifest"], "freshness": true },
+    "reconcile": { "method": "POST", "path": "/api/v1/blob/reconcile", "bodyFields": ["appName", "source", "version", "arcaneSig", "ownerSig", "liveLocators"], "freshness": false }
+  },
+  "keys": {
+    "arcane": { "algo": "ed25519", "publicKeyB64": "oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=", "seedHex_TEST_ONLY": "2222222222222222222222222222222222222222222222222222222222222222" },
+    "ownerBtc": { "algo": "btc-p2pkh", "address": "1Q1pE5vPGEEMqRcVRMbtBK842Y6Pzo6nK9", "privateKeyHex_TEST_ONLY": "1111111111111111111111111111111111111111111111111111111111111111" },
+    "ownerEth": { "algo": "eth", "address": "0x5cbdd86a2fa8dc4bddd8a8f69dba48572eec07fb", "privateKeyHex_TEST_ONLY": "3333333333333333333333333333333333333333333333333333333333333333" }
+  },
+  "vectors": {
+    "blob": [
+      {
+        "name": "blob-upload-btc-owner",
+        "inputs": { "locator": "QmContentBlobLocatorOne0000000000000000000000", "appName": "e2e-content-app", "timestamp": 1751600000000 },
+        "signedMessage": "a0bd65723b64d003be483978d955bd170d271d94d7981442679d9864876352de",
+        "arcaneSigB64": "Z9WAfc1CbpZlIM0G/u/cAU938oypHWaPsyvema1TAWplME8jzj/nTV1iJpqGutaweW33uRuHFPEsOjnK+jAXDQ==",
+        "ownerSig": "HzCoBd0vrwBtg/z0YnzXnr2i5ooHaTArAFarL88YLRLOHK2ZHi/PWEeRNegW8gvJCKbM0+M+hky80MdyGDu9IXE=",
+        "ownerAddress": "1Q1pE5vPGEEMqRcVRMbtBK842Y6Pzo6nK9",
+        "ownerType": "btc"
+      },
+      {
+        "name": "blob-upload-eth-owner",
+        "inputs": { "locator": "QmContentBlobLocatorTwo0000000000000000000000", "appName": "eth-content-app", "timestamp": 1751600000000 },
+        "signedMessage": "de5a2dab1bd84e7cac80d92c3b1870c515cf82d73bb9aa641468ae53295b9445",
+        "arcaneSigB64": "dDn+PSW2x7/kXrv0ZBnCE+4853s2ufSmXY1t/Mwux9C22ANBXTg1X4EfTOCG4MirNQvto4MHKm9cKVuneCTlAQ==",
+        "ownerSig": "0xce8e81b5795552fcec007890b3a3e5dc539700ebb235e7bb8cbb52b3fce81337274d9688e26de7637a3e057d46d373c9fc58d6a0e9557902ecceefcf2e06b8c21c",
+        "ownerAddress": "0x5cbdd86a2fa8dc4bddd8a8f69dba48572eec07fb",
+        "ownerType": "eth"
+      }
+    ],
+    "manifestPut": [
+      {
+        "name": "manifest-put-btc-owner",
+        "inputs": { "appName": "e2e-content-app", "version": 5, "timestamp": 1751600000000 },
+        "signedMessage": "29de3db391b940d95b6d4ae2f944842514bcf535af4c719af049302f18559dca",
+        "arcaneSigB64": "a6H5SLfOZHh2MwljZKluJJoTR8MMpcxBHerpdhzWe0JlK9/yzcw9Wwuah0PtByDw4LMtVSNoChN8b+BdU44XDQ==",
+        "ownerSig": "HzXuNpt56jLa10IJa9B+oTaVl3lBro25Cb9xrxboFLkwQBYUVvIo2fYXrTOAwS1nk+IoJad7q7OK/oTbUpK5s/E=",
+        "ownerAddress": "1Q1pE5vPGEEMqRcVRMbtBK842Y6Pzo6nK9",
+        "ownerType": "btc"
+      }
+    ],
+    "reconcile": [
+      {
+        "name": "reconcile-slot-btc-owner",
+        "inputs": { "appName": "e2e-content-app", "source": "slot", "version": 7 },
+        "signedMessage": "fcf839df9730f5fa6b41d5f30393fed331bc984be71a7044e2f6ceba1c585078",
+        "arcaneSigB64": "lMXUkV0WE9mM8zBF9tGMKkVQ18jl+5mgRPH6l0dWQVbO7Y0zenr0Q6RtVCyi6raX92uUujT/XEF9+hM8oQh+BQ==",
+        "ownerSig": "HwPZ853rji1vAC0V2MirMxr3jbGMeyFZvk6/5ypvzcJBUL2TZEWZ4U74R+N/GTFgyesrhEmwoNDOD//8jPdfB3E=",
+        "ownerAddress": "1Q1pE5vPGEEMqRcVRMbtBK842Y6Pzo6nK9",
+        "ownerType": "btc"
+      }
+    ]
+  },
+  "freshness": {
+    "windowSeconds": 300,
+    "cases": [
+      { "name": "fresh-now", "timestamp": 1751600000000, "nowMs": 1751600000000, "expectFresh": true, "why": "same instant" },
+      { "name": "fresh-edge-late", "timestamp": 1751600000000, "nowMs": 1751600300000, "expectFresh": true, "why": "exactly +window" },
+      { "name": "fresh-edge-early", "timestamp": 1751600000000, "nowMs": 1751599700000, "expectFresh": true, "why": "exactly -window" },
+      { "name": "stale-just-over", "timestamp": 1751600000000, "nowMs": 1751600300001, "expectFresh": false, "why": "1ms past +window" },
+      { "name": "stale-future", "timestamp": 1751600000000, "nowMs": 1751599699999, "expectFresh": false, "why": "1ms before -window" },
+      { "name": "seconds-value-regression", "timestamp": 1751600000, "nowMs": 1751600000000, "expectFresh": false, "why": "a seconds value (10 digits) read against an ms window is ~54yr in the past → must reject" }
+    ]
+  }
+}
