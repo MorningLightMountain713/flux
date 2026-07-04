@@ -80,7 +80,7 @@ describe('reconciler stall ladder: nudge with evidence, remove only with proof, 
     this.timeout(90000);
     const client = env.clients[active.index];
     // well past every compressed ladder window: no start, no nudge, no removal
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === active.identifier && (d.action === 'started' || d.action === 'stopped'), 45000);
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === active.identifier && (d.action === 'firstStart' || d.action === 'restart' || d.action === 'stopped'), 45000);
     const { nudges } = await getNudges(subnet.nodeIp(1));
     expect(nudges.filter((n) => n.action === 'pause')).to.have.lengthOf(0);
     expect(await isUp(client, activeApp)).to.equal(false);
@@ -127,13 +127,13 @@ describe('reconciler stall ladder: nudge with evidence, remove only with proof, 
     // the source comes back and the data syncs through: the follower starts
     const afterId = client.getLastEventId();
     await setSynced({ ip: subnet.nodeIp(3), folder: offline.folder });
-    await client.waitForEvent('reconciler:actuated', (d) => d.identifier === offline.identifier && d.action === 'started', 90000, { afterId });
+    await client.waitForEvent('reconciler:actuated', (d) => d.identifier === offline.identifier && d.action === 'firstStart', 90000, { afterId });
   });
 
   it('waits forever (never starts, never removes) when no peer holds the data', async function () {
     this.timeout(90000);
     const client = env.clients[stuck.index];
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === stuck.identifier && d.action === 'started', 45000);
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === stuck.identifier && (d.action === 'firstStart' || d.action === 'restart'), 45000);
     await assertNoEvent(client, 'app:removed', (d) => d.name === stuckApp, 1000);
     expect(await isUp(client, stuckApp)).to.equal(false);
   });

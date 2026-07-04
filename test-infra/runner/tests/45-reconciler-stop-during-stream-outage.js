@@ -55,7 +55,7 @@ describe('deliberate stop during an event-stream outage neither wedges nor flaps
     // the lost die event must cost nothing: no restart against the operator
     // lock (reconnect sweep + boot-style reconciles all see operatorStopped),
     // and no flapping start/stop loop
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && d.action === 'started', 20000);
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && (d.action === 'firstStart' || d.action === 'restart'), 20000);
     const status = await getAppContainerStatus(client.container, appName, { all: true });
     expect(status && status.status.startsWith('Up')).to.not.equal(true);
 

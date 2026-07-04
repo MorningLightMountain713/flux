@@ -292,17 +292,6 @@ export function dbClient(nodeNum) {
       await globalDb.collection('zelappsinformation').deleteOne({ name });
     },
 
-    // Force a globally-registered v9 app to be EXPIRED (isAlive keys on registeredAt+ttl>now,
-    // so registeredAt:0 makes it expired now). The block loop's expireGlobalApplications sweep
-    // then drops the global spec row (stopping respawn) AND gracefully uninstalls it via the
-    // real ttl-expired path - the only in-test lever for genuine expiry (a v9 ttl has a 1-day
-    // floor, unreachable by advancing blocks). Patch EVERY node's DB, then advanceBlocks past a
-    // sweep boundary (post-fork: every 8 blocks).
-    async expireGlobalAppSpec(name) {
-      const globalDb = await db('appsGlobal');
-      await globalDb.collection('zelappsinformation').updateOne({ name }, { $set: { registeredAt: 0 } });
-    },
-
     async seedPermanentMessage(msg) {
       const globalDb = await db('appsGlobal');
       await globalDb.collection('zelappsmessages').insertOne(msg);
