@@ -176,6 +176,36 @@ export async function buildSeedableTestApp({
 }
 
 /**
+ * A seedable v8 GRACEFUL app: the configurable test-app image plus the legacy
+ * `gracefulShutdownSec:<n>` token in the component description, which AppComponentV8
+ * parses onto the v9 shutdown shape — so the app reads as graceful
+ * (appRequiresDaemonShutdown) and, on an arcane node with flux-shutdownd, is drained
+ * rather than force-stopped. exitCode 0 makes the container exit cleanly on SIGTERM
+ * so a test can tell a graceful stop from a SIGKILL. Push the image first with
+ * registry-helper.pushTestApp(name).
+ */
+export async function buildSeedableGracefulV8App({
+  name, gracefulSec = 3, exitCode = 0, port = 31111, ...rest
+}) {
+  const compose = [{
+    name,
+    description: `graceful test container. gracefulShutdownSec:${gracefulSec}`,
+    repotag: `${REGISTRY_REPO_HOST}/${name}:v1`,
+    ports: [port],
+    domains: [''],
+    environmentParameters: [`EXIT_CODE=${exitCode}`],
+    commands: [],
+    containerPorts: [80],
+    containerData: '/tmp',
+    cpu: 0.1,
+    ram: 100,
+    hdd: 1,
+    repoauth: '',
+  }];
+  return buildSeedableApp({ name, compose, ...rest });
+}
+
+/**
  * A seedable app with a MIXED-mount component: a plain primary mount plus a synced
  * (g:/r:/s:) mount in a LATER `|`-segment (e.g. `/data|g:/db`, like real roundcube).
  * Exercises the case where the sync flag is NOT the first segment — the shape that

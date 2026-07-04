@@ -85,6 +85,17 @@ until docker info > /dev/null 2>&1; do
 done
 echo "dockerd is ready (took ${ELAPSED}s)"
 
+# Optional mock flux-shutdownd for the graceful-stop suites: a second in-container
+# process that binds the daemon socket and drives the inner dockerd (each node is
+# DinD, so a sidecar could not reach these app containers). Started after dockerd
+# since begin_app_stop docker-stops the app's containers. Gated so only those suites
+# pay for it. The mock uses Node built-ins only, so it needs no extra install.
+if [ "$FLUX_SHUTDOWND_MOCK" = "true" ]; then
+  mkdir -p /run/flux-shutdownd
+  node /flux/test-infra/shutdownd-stub/index.js &
+  echo "started mock flux-shutdownd (control port ${SHUTDOWND_MOCK_CONTROL_PORT:-16199})"
+fi
+
 # Write boot_id for test harness control.
 # FLUX_BOOT_ID is set per-container by the test harness.
 # The harness seeds a heartbeat with matching or different value to
