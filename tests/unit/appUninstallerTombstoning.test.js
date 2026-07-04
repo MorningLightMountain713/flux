@@ -57,6 +57,7 @@ describe('appUninstaller tombstoning teardown', () => {
         clearTeardown: sinon.stub().resolves(),
         prepareCollection: sinon.stub().resolves(),
         getTeardown: sinon.stub().resolves(null),
+        bumpAttempts: sinon.stub().resolves(),
       },
       deploymentProvider: { getInstalledDeployment: sinon.stub().resolves(makeDeployment(['web'])) },
       appsRepository: {
@@ -99,6 +100,7 @@ describe('appUninstaller tombstoning teardown', () => {
         runningAppsCache: new Map(), receiveOnlySyncthingAppsCache: new Map(), abortInstall: sinon.stub().returns(false),
       },
       fluxEventBus: { publish: sinon.stub() },
+      reconcilerQueue: { enqueue: sinon.stub() },
     };
 
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
@@ -128,6 +130,7 @@ describe('appUninstaller tombstoning teardown', () => {
       '../telemetryConfigService': stubs.telemetryConfigService,
       '../utils/fluxShutdowndClient': stubs.fluxShutdowndClient,
       '../utils/operationRegistry': stubs.operationRegistry,
+      '../appMonitoring/reconcilerQueue': stubs.reconcilerQueue,
       '../utils/fluxEventBus': stubs.fluxEventBus,
       '../utils/appConstants': { localAppsInformation: 'zelappsinformation', globalAppsMessages: 'zelappsmessages', appsFolder: '/tmp/flux/ZelApps/' },
     });
@@ -230,6 +233,9 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.dockerService.appDockerForceRemove.called, 'escalation attempted').to.be.true;
       expect(stubs.appsRuntimeState.remove.called, 'must NOT drop runtime state — that would un-condemn a live container').to.be.false;
       expect(stubs.pendingTeardownStore.clearTeardown.called, 'kept owed for boot recovery').to.be.false;
+      // and it hands the still-owed teardown to the reconciler to converge (retry with
+      // backoff), rather than abandoning it until the next boot.
+      expect(stubs.reconcilerQueue.enqueue.calledWith('web_app'), 'enqueued the survivor for the reconciler to re-drive').to.be.true;
     });
   });
 
@@ -284,14 +290,16 @@ describe('appUninstaller tombstoning teardown', () => {
       key: 'app', name: 'app', networkName: 'app', forceKill: false, owner: 'o', components: [{ identifier: 'web_app', appId: 'web_app', label: 'app', ports: [], image: null }],
     };
 
-    it('re-condemns owed components then drives their teardown', async () => {
+    it('re-condemns owed components then hands them to the reconciler to converge (not a one-shot boot drive)', async () => {
       stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc]);
       stubs.appsRepository.existsInstalledApp.resolves(false);
       await appUninstaller.recoverOwedTeardowns();
       expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', true)).to.be.true;
-      // teardown is fire-and-forget; let the microtask run
+      // Boot recovery no longer drives the teardown directly (a partial would be abandoned
+      // until the NEXT boot); it enqueues the components so the reconciler converges them.
+      expect(stubs.reconcilerQueue.enqueue.calledWith('web_app'), 'enqueued for the reconciler to drive').to.be.true;
       await new Promise((r) => { setImmediate(r); });
-      expect(stubs.dockerService.appDockerStop.called).to.be.true;
+      expect(stubs.dockerService.appDockerStop.called, 'no direct boot-time teardown drive').to.be.false;
     });
 
     it('un-condemns + drops the record without teardown when the app is re-installed (row is back)', async () => {
@@ -312,6 +320,36 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.pendingTeardownStore.clearTeardown.called, 'record kept for next boot').to.be.false;
       await new Promise((r) => { setImmediate(r); });
       expect(stubs.dockerService.appDockerRemove.called).to.be.false;
+    });
+  });
+
+  describe('driveOwedTeardown (the reconciler converge-to-gone actuator)', () => {
+    const owedDoc = () => ({
+      key: 'app', name: 'app', networkName: 'app', forceKill: false, owner: 'o', attempts: 0, components: [{ identifier: 'web_app', appId: 'web_app', label: 'app', ports: [], image: null }],
+    });
+
+    it('returns none when nothing is owed (the component is genuinely uninstalled)', async () => {
+      stubs.pendingTeardownStore.getTeardown.resolves(null);
+      const verdict = await appUninstaller.driveOwedTeardown('app');
+      expect(verdict.status).to.equal('none');
+      expect(stubs.dockerService.appDockerRemove.called, 'no teardown driven').to.be.false;
+    });
+
+    it('drives the teardown and returns removed once the owed record clears', async () => {
+      // owed on entry; cleared after the (idempotent) teardown runs
+      stubs.pendingTeardownStore.getTeardown.onFirstCall().resolves(owedDoc()).onSecondCall().resolves(null);
+      const verdict = await appUninstaller.driveOwedTeardown('app');
+      expect(stubs.dockerService.appDockerRemove.called, 'teardown driven').to.be.true;
+      expect(verdict.status).to.equal('removed');
+    });
+
+    it('returns deferred and bumps the attempt count when the teardown did not converge', async () => {
+      // still owed after the pass (a survivor) -> deferred, pace the next attempt
+      stubs.pendingTeardownStore.getTeardown.resolves(owedDoc());
+      const verdict = await appUninstaller.driveOwedTeardown('app');
+      expect(verdict.status).to.equal('deferred');
+      expect(stubs.pendingTeardownStore.bumpAttempts.calledOnceWith('app'), 'attempt count bumped for backoff').to.be.true;
+      expect(verdict.attempts).to.equal(1);
     });
   });
 });

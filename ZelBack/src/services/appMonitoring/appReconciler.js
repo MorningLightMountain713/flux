@@ -197,6 +197,16 @@ const POST_START_VERIFY_MS = 30 * 1000;
 const networkDetachedNoted = new Set();
 const networkPrunedNoted = new Set();
 
+// Backoff for re-driving an owed teardown that did not converge in one pass (a survivor,
+// a host-cleanup blip). Indexed by the durable per-app attempt count so a persistently-
+// failing teardown paces itself instead of hot-looping, and the pacing survives a crash.
+// Mirrors the crash-restart ladder's shape.
+const REMOVAL_BACKOFF_MS = [MANAGED_RETRY_MS, 30 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 30 * 60 * 1000];
+function removalBackoffMs(attempts) {
+  const i = Math.min(Math.max(attempts, 0), REMOVAL_BACKOFF_MS.length - 1);
+  return REMOVAL_BACKOFF_MS[i];
+}
+
 // A component can hold silently with no action: awaitingController (no decider has
 // spoken) or awaitingDependency (a dependsOn target hasn't reached its condition). Both
 // are correct in the moment, but a hold that outlives many sweep cycles means something
@@ -850,6 +860,27 @@ async function reconcile(rawIdentifier) {
     return;
   }
   if (!spec) {
+    // The local install row is gone. Before concluding "not installed", check the OTHER
+    // durable desired state: GONE. Every permanent removal writes an owed-teardown record
+    // (+ condemn stamps) BEFORE deleting the row, so a row-deleted component that still
+    // has an owed record is not "uninstalled" - it is mid-removal, and its desired state
+    // is fully gone. Drive the (idempotent) teardown to completion here, retrying with
+    // backoff on a partial pass. This makes removal a converged desired state rather than
+    // a one-shot job re-driven only at the next boot.
+    const removal = await appUninstaller.driveOwedTeardown(appNameFromIdentifier(identifier));
+    if (removal.status === 'removed') {
+      silentHoldSince.delete(identifier);
+      log.info(`appReconciler - ${identifier} teardown converged; component is gone`);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'removed' });
+      return;
+    }
+    if (removal.status === 'deferred') {
+      const wait = removalBackoffMs(removal.attempts);
+      log.warn(`appReconciler - ${identifier} removal owed, not yet converged (attempt ${removal.attempts}); retrying in ${Math.round(wait / 1000)}s`);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'removalDeferred', attempts: removal.attempts });
+      scheduleRetry(identifier, wait);
+      return;
+    }
     silentHoldSince.delete(identifier);
     // drop the in-memory heal markers for a gone app (its durable runtime-state doc
     // is dropped by the uninstaller via appsRuntimeState.remove)
