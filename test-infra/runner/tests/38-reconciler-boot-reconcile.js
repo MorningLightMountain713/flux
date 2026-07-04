@@ -45,7 +45,7 @@ describe('reconciler restarts app containers on FluxOS boot', function () {
     const afterId = client.getLastEventId();
 
     // the boot reconcile enqueues the component and the reconciler starts it
-    await waitForReconcileActuated(client, identifier, 'started', 120000, { afterId });
+    await waitForReconcileActuated(client, identifier, 'restart', 120000, { afterId });
     await waitFor(async () => {
       const status = await getAppContainerStatus(client.container, appName);
       return status && status.status.startsWith('Up');

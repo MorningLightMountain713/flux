@@ -301,9 +301,9 @@ describe('content encrypted transport (HPKE capstone): open, seal-at-rest, multi
     );
 
     // dependsOn ordering: the reconciler holds web at awaitingDependency until dep is
-    // running, so dep's firstStart precedes web's (event ids are monotonic). Match
-    // either action name (the reconciler refactor renamed 'started' -> 'firstStart').
-    const startMatch = (id) => (d) => d.identifier === id && (d.action === 'firstStart' || d.action === 'started');
+    // running, so dep's firstStart precedes web's (event ids are monotonic). Both are
+    // fresh-install first starts, so match 'firstStart'.
+    const startMatch = (id) => (d) => d.identifier === id && d.action === 'firstStart';
     const depStart = await node.waitForEvent('reconciler:actuated', startMatch(`dep_${capApp}`), 120000, { afterId: afterInstall });
     const webStart = await node.waitForEvent('reconciler:actuated', startMatch(`web_${capApp}`), 120000, { afterId: afterInstall });
     expect(depStart.id, 'dep must start before web (dependsOn)').to.be.lessThan(webStart.id);

@@ -83,7 +83,7 @@ describe('reconciler enforces masterSlave g: election', function () {
     await electMaster(appName, a.ip);
 
     await waitForReconcilerDesiredChanged(a, identifier, 'running', 60000);
-    await waitForReconcileActuated(a, identifier, 'started', 60000);
+    await waitForReconcileActuated(a, identifier, 'firstStart', 60000);
     await waitForUp(a, appName, 'elected primary running');
 
     // a standby holder is told to stay stopped and never starts
@@ -98,7 +98,7 @@ describe('reconciler enforces masterSlave g: election', function () {
 
     await electMaster(appName, b.ip);
 
-    await waitForReconcileActuated(b, identifier, 'started', 60000);
+    await waitForReconcileActuated(b, identifier, 'firstStart', 60000);
     await waitForUp(b, appName, 'new primary running after failover');
 
     await waitForReconcileActuated(a, identifier, 'stopped', 60000);
@@ -115,7 +115,7 @@ describe('reconciler enforces masterSlave g: election', function () {
 
     // keep b elected; the election must NOT override the operator stop
     await electMaster(appName, b.ip);
-    await assertNoEvent(b, 'reconciler:actuated', (d) => d.identifier === identifier && d.action === 'started', 15000);
+    await assertNoEvent(b, 'reconciler:actuated', (d) => d.identifier === identifier && (d.action === 'firstStart' || d.action === 'restart'), 15000);
     expect(await isUp(b, appName)).to.equal(false);
   });
 });
