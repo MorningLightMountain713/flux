@@ -37,6 +37,8 @@ describe('appUninstaller tombstoning teardown', () => {
         appDockerKill: sinon.stub().resolves(),
         appDockerRemove: sinon.stub().resolves(),
         appDockerForceRemove: sinon.stub().resolves(),
+        // container gone after a successful remove: the teardown reclaims host storage
+        getDockerContainer: sinon.stub().resolves(null),
         appDockerImageRemove: sinon.stub().resolves(),
         removeFluxAppDockerNetwork: sinon.stub().resolves(),
         forceRemoveFluxAppDockerNetwork: sinon.stub().resolves(),
@@ -171,6 +173,18 @@ describe('appUninstaller tombstoning teardown', () => {
       stubs.appsRuntimeState.remove.resolves(false);
       await appUninstaller.runTeardown(doc());
       expect(stubs.pendingTeardownStore.clearTeardown.called).to.be.false;
+    });
+
+    it('never reclaims host storage (nor clears the record) while the container survives the remove', async () => {
+      // A concurrent re-create (or a failed remove) leaves the container present. Destroying
+      // its volume now would corrupt a live container, so the teardown must skip the
+      // destructive cleanup and stay owed for retry.
+      stubs.dockerService.getDockerContainer.resolves({ id: 'still-running' });
+      await appUninstaller.runTeardown(doc());
+      expect(stubs.dockerService.appDockerRemove.calledOnce, 'remove attempted').to.be.true;
+      const umountCalled = serviceHelper.runCommand.getCalls().some((c) => c.args[0] === 'umount');
+      expect(umountCalled, 'volume NOT unmounted under a live container').to.be.false;
+      expect(stubs.pendingTeardownStore.clearTeardown.called, 'record kept owed for retry').to.be.false;
     });
 
     it('force teardown kills + force-removes the container and force-removes the network', async () => {

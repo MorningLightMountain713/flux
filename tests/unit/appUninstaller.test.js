@@ -83,6 +83,8 @@ describe('appUninstaller tests', () => {
       appDockerStop: sinon.stub().resolves(),
       appDockerKill: sinon.stub().resolves(),
       appDockerRemove: sinon.stub().resolves(),
+      // container gone after a successful remove: the teardown reclaims host storage
+      getDockerContainer: sinon.stub().resolves(null),
       appDockerImageRemove: sinon.stub().resolves(),
       dockerListContainers: sinon.stub().resolves([]),
       forceRemoveFluxAppDockerNetwork: sinon.stub().resolves(),
