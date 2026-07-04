@@ -594,6 +594,85 @@ describe('AppSyncOrchestrator', () => {
     });
   });
 
+  describe('steady-state manifest refresh (F3 anti-entropy)', () => {
+    function completeEphemeral() {
+      for (let i = 0; i < 3; i += 1) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+      }
+    }
+
+    async function toReady(catchUpRunningContent) {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true, catchUpRunningContent });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+      return orchestrator;
+    }
+
+    it('reconciles a few sampled peers and catches up running content on the block cadence', async () => {
+      const catchUp = sinon.stub().resolves();
+      await toReady(catchUp);
+      reconcileStub.resetHistory();
+      catchUp.resetHistory();
+
+      // Before the cadence (100 blocks) — no refresh.
+      blockEmitter.emit('blocksProcessed', 2555050);
+      await clock.tickAsync(0);
+      sinon.assert.notCalled(reconcileStub);
+      sinon.assert.notCalled(catchUp);
+
+      // At the cadence — reconcile a sample, then catch up running content.
+      blockEmitter.emit('blocksProcessed', 2555200);
+      await clock.tickAsync(0);
+      sinon.assert.calledOnce(reconcileStub);
+      sinon.assert.calledOnce(catchUp);
+      expect(reconcileStub.firstCall.args[0]).to.have.lengthOf(3); // sampled peers
+    });
+
+    it('does not refresh while SYNCING (boot/recovery own convergence)', async () => {
+      getEligibleSyncPeersStub.returns([]); // no peers -> manifest never latches, stays SYNCING
+      const catchUp = sinon.stub().resolves();
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true, catchUpRunningContent: catchUp });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+      reconcileStub.resetHistory();
+
+      for (let i = 1; i < 120; i += 1) blockEmitter.emit('blocksProcessed', 2555000 + i);
+      await clock.tickAsync(0);
+      sinon.assert.notCalled(catchUp);
+    });
+
+    it('does not overlap refreshes (single-flight)', async () => {
+      const catchUp = sinon.stub().resolves();
+      await toReady(catchUp); // boot uses the resolved stub from beforeEach
+      reconcileStub.resetHistory();
+
+      // Make the refresh reconcile hang so a second cadence tick lands while it is in flight.
+      let resolveReconcile;
+      reconcileStub.callsFake(() => new Promise((r) => { resolveReconcile = r; }));
+
+      blockEmitter.emit('blocksProcessed', 2555200); // triggers the refresh (hangs)
+      await clock.tickAsync(0);
+      blockEmitter.emit('blocksProcessed', 2555400); // in-flight -> skipped
+      await clock.tickAsync(0);
+      sinon.assert.calledOnce(reconcileStub);
+
+      resolveReconcile({ peers: 3, indexesReceived: 3, fetched: 0 });
+      await clock.tickAsync(0);
+    });
+  });
+
   describe('sync peer failure and replacement', () => {
     let completeSyncRequestStub;
     let clearSyncRequestedStub;
