@@ -308,6 +308,49 @@ export async function setNodeApiPort(container, apiPort) {
   if (r.exitCode !== 0) throw new Error(`setNodeApiPort: could not set apiport ${apiPort}: ${r.output}`);
 }
 
+// ── "Fully gone" state inspectors ──────────────────────────────────────
+// The container being absent is NOT proof an app was fully torn down: the teardown
+// also removes the app's cross-app docker network and umount+rm's its loop-mounted
+// appdata. These inspect the real in-node state so a suite can prove FULL removal.
+
+// The per-app docker network FluxOS creates and (only after all components detach) removes.
+export function fluxAppNetworkName(appName) {
+  return `fluxDockerNetwork_${appName}`;
+}
+
+// The app's docker network if it still exists on this node, else null.
+export async function getAppNetwork(container, appName) {
+  const { stdout } = await execInContainer(container,
+    "docker network ls --format '{{.Name}}' 2>/dev/null || echo \"\"");
+  const names = stdout.trim().split('\n').map((s) => s.trim()).filter(Boolean);
+  return names.find((n) => n === fluxAppNetworkName(appName)) ?? null;
+}
+
+// The node's flux appdata root (harness FLUX_APPS_FOLDER). Per-component appdata lives at
+// <root>/flux<component>_<app>, loop-mounted then umount+rm -rf'd by the teardown.
+const APPDATA_ROOT = '/mnt/appdata/flux-apps';
+
+// Still-present appdata artifacts for an app: live loop mounts and/or leftover directories
+// under the appdata root carrying the app name. Both empty => the volume is fully torn
+// down (unmounted AND removed).
+export async function getAppVolumeArtifacts(container, appName) {
+  const { stdout: mounts } = await execInContainer(container,
+    `mount 2>/dev/null | grep -F '${APPDATA_ROOT}/' | grep -F '${appName}' || true`);
+  const { stdout: dirs } = await execInContainer(container,
+    `ls -1 ${APPDATA_ROOT} 2>/dev/null | grep -F '${appName}' || true`);
+  const lines = (s) => s.trim().split('\n').map((x) => x.trim()).filter(Boolean);
+  return { mounts: lines(mounts), dirs: lines(dirs) };
+}
+
+// True when NOTHING of the app remains on this node: no container, no docker network,
+// no appdata mount or directory. The single "fully torn down" predicate.
+export async function isAppFullyGone(container, appName) {
+  if (await getAppContainerStatus(container, appName, { all: true })) return false;
+  if (await getAppNetwork(container, appName)) return false;
+  const { mounts, dirs } = await getAppVolumeArtifacts(container, appName);
+  return mounts.length === 0 && dirs.length === 0;
+}
+
 // ── Content bind-mount inspectors ──────────────────────────────────────
 // Read/stat a path INSIDE an app container (the node is the DinD host, so this is
 // `docker exec <appContainer> ...`). Inspected components run the static-busybox

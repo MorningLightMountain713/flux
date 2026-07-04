@@ -9,8 +9,9 @@ import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App } from '../framework/content-helper.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
-import { waitForAppInstalled, waitForDown } from '../framework/wait.js';
-import { getAppContainerStatus } from '../framework/container.js';
+import { dbClient } from '../framework/db-client.js';
+import { waitForAppInstalled, waitForDown, waitForAppFullyGone } from '../framework/wait.js';
+import { isAppFullyGone } from '../framework/container.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { shutdowndControl, waitForShutdowndCall } from '../framework/shutdownd-control.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -56,9 +57,16 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypt
   before(async function () {
     this.timeout(600000);
     env = await createTestEnv({
-      hookCtx: this, nodes: NODES, tickerAutostart: false, arcane: true, shutdowndMock: true,
+      hookCtx: this,
+      nodes: NODES,
+      tickerAutostart: false,
+      arcane: true,
+      shutdowndMock: true,
+      // A 5-node mesh only reaches ~2 outbound; lower the app-submission peer gate
+      // (default minOutgoing 4) to match, as the content-registration suites do.
+      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
-    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
   });
 
   after(async function () {
@@ -86,7 +94,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypt
     return { idx: winner, client: env.clients[winner] };
   }
 
-  it('encrypted-v9 graceful app drains via the daemon on expiry, then removes', async function () {
+  it('encrypted-v9 graceful app drains via the daemon on expiry, fully removes, and does not respawn', async function () {
     this.timeout(300000);
     const name = `egsexpiry${Date.now()}`;
     const { idx, client } = await deployGracefulV9(name);
@@ -95,18 +103,34 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypt
     // decrypt → shutdown field → plan pushed at install time
     const state = await control.getState();
     expect(state.plans).to.include(`${owner}:${name}`);
-
     await control.reset();
-    const auth = await authenticate(client.url, ownerKey);
-    await client.removeApp(name, { zelidauth: auth.zelidauth });
 
+    // Real expiry, not a local /apps/appremove: mark the global spec expired on EVERY node
+    // (a v9 ttl can't be reached by advancing blocks), then cross a sweep boundary. The
+    // expireGlobalApplications sweep drops the global row fleet-wide - so the spawner has
+    // nothing to respawn - AND gracefully uninstalls via the ttl-expired path. A local
+    // removeApp instead leaves the global spec, and this instances:3 app just respawns.
+    for (let i = 0; i < NODES; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await dbClient(i + 1).expireGlobalAppSpec(name);
+    }
+    await advanceBlocks(9);
+
+    // the sweep drains through the daemon with the ttl-expired reason + the graceful budget
     const call = await waitForShutdowndCall(control, (c) => c.method === 'begin_app_stop' && c.app === name);
     expect(call.reason).to.equal('ttl-expired');
     expect(call.force).to.equal(false);
     const now = Math.floor(Date.now() / 1000);
     expect(call.deadline).to.be.within(now - 5, now + GRACEFUL_S + 5);
 
-    expect(await getAppContainerStatus(client.container, name, { all: true })).to.equal(null);
+    // FULLY torn down on the winner: container + docker network + appdata volume all gone
+    // (not just the container) - the removal converged.
+    await waitForAppFullyGone(client, name);
+
+    // and it STAYS gone: the global spec is expired fleet-wide, so the spawner never
+    // respawns it (the original bug: a local remove left the global spec and it respawned).
+    await advanceBlocks(9);
+    expect(await isAppFullyGone(client.container, name), 'no respawn once the global spec is expired').to.equal(true);
   });
 
   it('encrypted-v9 reconciler stop-but-keep routes to the daemon without removing', async function () {
