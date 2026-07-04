@@ -57,10 +57,12 @@ describe('steady-state manifest backstop converges a silently-stale node', funct
           appSyncPeerThreshold: 3,
           appSyncDegradedThreshold: 0, // never degrade — reproduce "stayed above the floor"
           manifestRefreshBlocks: 3, // fire the steady-state refresh within the suite
+          minOutgoing: 2, minIncoming: 1, // app-submission peer gate, lowered to the 5-node mesh
         },
       },
     });
-    await bootAndPeer(env, { pricing: true });
+    // minOutbound 2: a 5-node fleet can't reliably reach the default 4 outbound on node 0.
+    await bootAndPeer(env, { pricing: true, minOutbound: 2 });
     await resetFluxDrive();
     dbClients = env.clients.map((_, i) => dbClient(i + 1));
   });
