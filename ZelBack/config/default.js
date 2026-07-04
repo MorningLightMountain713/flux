@@ -383,6 +383,8 @@ module.exports = {
     hashSyncPeersPerRound: 3,
     hashSyncEphemeralPeers: 5,
     hashSyncFallbackRecheckBlocks: 100,
+    manifestRefreshBlocks: 100, // steady-state content-manifest anti-entropy cadence (~50 min)
+    manifestRefreshPeers: 3, // peers sampled per steady-state manifest refresh
     syncResponseThrottleMs: 300000,
     wsHandshakeTimeoutMs: 10000,
     imageUpdateCheckIntervalMs: 21600000,
