@@ -123,7 +123,7 @@ describe('syncthing promotion gate never reverts/promotes against an empty globa
     // A start would be a second writer alongside the peer that already holds the folder
     // sendreceive; flag it if it fires.
     let startedSeen = false;
-    client.waitForEvent('reconciler:actuated', (d) => d.identifier === aEmpty.identifier && d.action === 'started', 45000)
+    client.waitForEvent('reconciler:actuated', (d) => d.identifier === aEmpty.identifier && d.action === 'firstStart', 45000)
       .then(() => { startedSeen = true; }).catch(() => {});
 
     // THE data-safety property: db/revert against an empty global deletes the only copy.
@@ -206,7 +206,7 @@ describe('syncthing promotion gate never reverts/promotes against an empty globa
 
     // once clean (the stub clears receiveOnlyChangedFiles on revert), the
     // follower promotes and the reconciler starts it
-    const started = await client.waitForEvent('reconciler:actuated', (d) => d.identifier === aPart.identifier && d.action === 'started', 90000);
+    const started = await client.waitForEvent('reconciler:actuated', (d) => d.identifier === aPart.identifier && d.action === 'firstStart', 90000);
     expect(started).to.exist;
     expect(await isUp(client, appPart)).to.equal(true);
 

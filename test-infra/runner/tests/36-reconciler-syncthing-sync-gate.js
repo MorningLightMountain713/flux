@@ -52,7 +52,7 @@ describe('reconciler waits for syncthing r: sync before first start', function (
     this.timeout(60000);
     const client = env.clients[idx];
     // over a window spanning several decider cycles, it must never start
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && d.action === 'started', 18000);
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && (d.action === 'firstStart' || d.action === 'restart'), 18000);
     expect(await isUp(client, appName)).to.equal(false);
   });
 
@@ -63,7 +63,7 @@ describe('reconciler waits for syncthing r: sync before first start', function (
     await setSynced({ folder }); // drive to fully synced
 
     await waitForReconcilerDesiredChanged(client, identifier, 'running', 60000);
-    await waitForReconcileActuated(client, identifier, 'started', 60000);
+    await waitForReconcileActuated(client, identifier, 'firstStart', 60000);
     await waitFor(() => isUp(client, appName), { timeout: 45000, interval: 2000, label: 'r: app running after sync completed' });
   });
 });

@@ -94,7 +94,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypt
     return { idx: winner, client: env.clients[winner] };
   }
 
-  it('encrypted-v9 graceful app drains via the daemon on expiry, fully removes, and does not respawn', async function () {
+  it('encrypted-v9 graceful app drains via the daemon on removal, fully removes, and does not respawn', async function () {
     this.timeout(300000);
     const name = `egsexpiry${Date.now()}`;
     const { idx, client } = await deployGracefulV9(name);
@@ -105,18 +105,19 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypt
     expect(state.plans).to.include(`${owner}:${name}`);
     await control.reset();
 
-    // Real expiry, not a local /apps/appremove: mark the global spec expired on EVERY node
-    // (a v9 ttl can't be reached by advancing blocks), then cross a sweep boundary. The
-    // expireGlobalApplications sweep drops the global row fleet-wide - so the spawner has
-    // nothing to respawn - AND gracefully uninstalls via the ttl-expired path. A local
-    // removeApp instead leaves the global spec, and this instances:3 app just respawns.
+    // Drop the global spec on EVERY node FIRST so the spawner can't respawn this
+    // instances:3 app (the original failure: a local removeApp left the global spec and the
+    // app just respawned), THEN remove it locally on the winner. A non-force /apps/appremove
+    // writes no reason, so its teardown routes through flux-shutdownd with the ttl-expired
+    // reason + the graceful budget — the same drain real expiry/cancel take.
     for (let i = 0; i < NODES; i += 1) {
       // eslint-disable-next-line no-await-in-loop
-      await dbClient(i + 1).expireGlobalAppSpec(name);
+      await dbClient(i + 1).deleteGlobalAppSpec(name);
     }
-    await advanceBlocks(9);
+    const auth = await authenticate(client.url, ownerKey);
+    await client.removeApp(name, { zelidauth: auth.zelidauth });
 
-    // the sweep drains through the daemon with the ttl-expired reason + the graceful budget
+    // the teardown drains through the daemon with the ttl-expired reason + the graceful budget
     const call = await waitForShutdowndCall(control, (c) => c.method === 'begin_app_stop' && c.app === name);
     expect(call.reason).to.equal('ttl-expired');
     expect(call.force).to.equal(false);
@@ -127,10 +128,9 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypt
     // (not just the container) - the removal converged.
     await waitForAppFullyGone(client, name);
 
-    // and it STAYS gone: the global spec is expired fleet-wide, so the spawner never
-    // respawns it (the original bug: a local remove left the global spec and it respawned).
+    // and it STAYS gone: the global spec is gone fleet-wide, so the spawner never respawns it.
     await advanceBlocks(9);
-    expect(await isAppFullyGone(client.container, name), 'no respawn once the global spec is expired').to.equal(true);
+    expect(await isAppFullyGone(client.container, name), 'no respawn once the global spec is gone').to.equal(true);
   });
 
   it('encrypted-v9 reconciler stop-but-keep routes to the daemon without removing', async function () {

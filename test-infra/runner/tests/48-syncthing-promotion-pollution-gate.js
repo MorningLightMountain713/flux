@@ -63,7 +63,7 @@ describe('syncthing promotion gate reverts local pollution before flipping to se
     const revertAt = nudges.find((n) => n.action === 'revert' && n.device === app.folder).at;
 
     // once clean, the follower promotes and the reconciler starts it
-    const started = await client.waitForEvent('reconciler:actuated', (d) => d.identifier === app.identifier && d.action === 'started', 90000);
+    const started = await client.waitForEvent('reconciler:actuated', (d) => d.identifier === app.identifier && d.action === 'firstStart', 90000);
     expect(started).to.exist;
     expect(await isUp(client, appName)).to.equal(true);
     // ordering: the revert happened before the start was possible
