@@ -70,6 +70,24 @@ describe('containerEventBridge', () => {
       expect(operationRegistry.isHeld('fluxwww_app')).to.be.true;
     });
 
+    it('does NOT reconcile a die while a teardown holds the removing lease (also stop-aligned)', async () => {
+      operationRegistry.acquire('fluxwww_app', 'removing', 'test'); // held by an in-flight teardown
+      await containerEventBridge.handleContainerDie(dieEvent('fluxwww_app', 0));
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appsRuntimeState.recordExit.called).to.be.false;
+    });
+
+    // A die while an 'actuating' (create/start) lease is held is a genuine crash-on-start,
+    // NOT a deliberate stop — it must be recorded and re-reconciled, never swallowed. This
+    // is the guard that keeps the new start lease from eating crash dies (which would
+    // otherwise leave the component down until the hourly sweep).
+    it('DOES reconcile a die while an actuating (start) lease is held — a crash-on-start is real', async () => {
+      operationRegistry.acquire('fluxwww_app', 'actuating', 'test'); // held by an in-flight appDockerStart
+      await containerEventBridge.handleContainerDie(dieEvent('fluxwww_app', 137));
+      expect(stubs.appReconciler.enqueue.calledOnceWith('fluxwww_app')).to.be.true;
+      expect(stubs.appsRuntimeState.recordExit.calledOnceWith('fluxwww_app', 137)).to.be.true;
+    });
+
     it('ignores non-flux containers', async () => {
       await containerEventBridge.handleContainerDie(dieEvent('some_other_container'));
       expect(stubs.appReconciler.enqueue.called).to.be.false;

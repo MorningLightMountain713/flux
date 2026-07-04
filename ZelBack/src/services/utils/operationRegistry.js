@@ -9,12 +9,20 @@ const log = require('../../lib/log');
 // Three lease scopes, one uniform shape:
 //   app-scoped (key = app name)            : install | remove | softRedeploy |
 //                                            hardRedeploy | reconcile | backup | restore
-//   component-scoped (key = component id)  : stopping  (the reconciler's own
-//                                            stop/restart-in-flight marker, was stoppingContainers)
+//   component-scoped (key = component id)  : actuating (a create/start heading to
+//                                            running) | stopping (a stop/kill/restart
+//                                            heading to stopped, was stoppingContainers) |
+//                                            removing (the teardown's stop→remove→cleanup)
 //   node-global (reserved key)             : coordinate (the activeStandby election
 //                                            singleton's mid-cycle marker; key
 //                                            ACTIVE_STANDBY_COORDINATOR_KEY, was the
 //                                            globalState.activeStandbyCoordinationRunning expando)
+//
+// The three component-scoped types are mutually exclusive on one container (per-key
+// single holder): a start, a stop, and a teardown of the same component can never
+// overlap. They split by intent - 'actuating' heads TO running (a die inside it is a
+// real crash the die handler must honour), while 'stopping'/'removing' head AWAY from
+// running (an expected die the handler swallows). isStopAligned() draws that line.
 //
 // In-memory + TTL only, NEVER DB-durable: an in-flight lease is transient intent;
 // a crash between acquire and completion must not persist as "installing" (after a
@@ -34,10 +42,30 @@ const TTL_MS = {
   reconcile: 30 * 60 * 1000,
   backup: 60 * 60 * 1000,
   restore: 60 * 60 * 1000,
+  actuating: 5 * 60 * 1000,
   stopping: 5 * 60 * 1000,
+  removing: 30 * 60 * 1000,
   coordinate: 10 * 60 * 1000,
 };
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
+
+// The component-scoped lease types that head a container AWAY from running (a
+// deliberate stop/kill/restart, or a teardown's remove). A container die that lands
+// while one of these is held is expected - the operation already recorded the desired
+// state before acting - so the die handler swallows it. 'actuating' is deliberately
+// NOT here: a die during a create/start is a genuine crash that must be recorded and
+// re-reconciled, never swallowed.
+const STOP_ALIGNED_TYPES = new Set(['stopping', 'removing']);
+
+/**
+ * Whether a lease type is stop-aligned (its container is heading away from running,
+ * so a die inside it is expected and swallowable). See STOP_ALIGNED_TYPES.
+ * @param {string} type
+ * @returns {boolean}
+ */
+function isStopAligned(type) {
+  return STOP_ALIGNED_TYPES.has(type);
+}
 
 // Reserved node-global key: the activeStandby election loop is a node singleton,
 // not an app operation, so it leases a fixed sentinel key. The '__'-bracketed
@@ -200,5 +228,5 @@ function clear() {
 
 module.exports = {
   acquire, release, isHeld, get, list, anyHeld, anyHeldOfType, listByType, clear, TTL_MS,
-  ACTIVE_STANDBY_COORDINATOR_KEY,
+  isStopAligned, ACTIVE_STANDBY_COORDINATOR_KEY,
 };

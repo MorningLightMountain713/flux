@@ -513,6 +513,25 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
+    // A stop that hits an in-flight start ('actuating') must defer + retry, never strand
+    // the container running: a bare throw would be logged by the queue WITHOUT rescheduling.
+    it('defers (retries) when a desired-stopped stop hits an in-flight start', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      stubs.appsRuntimeState.isCondemned.resolves(true);
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      const held = new Error("fluxwww_App: an 'actuating' container transition is in flight; deferring 'stopping'");
+      held.code = 'ETRANSITIONHELD';
+      stubs.dockerService.appDockerStop.rejects(held);
+
+      await appReconciler.reconcile('www_App'); // must not throw (the queue would not reschedule a bare throw)
+
+      expect(stubs.dockerService.appDockerStop.callCount).to.equal(1);
+      clock.tick(6000);
+      await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
+      expect(stubs.dockerService.appDockerStop.callCount, 'a deferred stop must retry once the start clears').to.equal(2);
+      clock.restore();
+    });
+
     it('condemned wins over the operator lock and stays graceful (operatorStopForce must not leak to a condemn)', async () => {
       stubs.appsRuntimeState.isCondemned.resolves(true);
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
@@ -989,9 +1008,31 @@ describe('appReconciler tests', () => {
       await appReconciler.reconcile('www_App');
 
       expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
+      // a real start records exactly one restart attempt (paces the backoff ladder)
+      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
       clock.tick(60 * 1000);
       await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
       expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
+      clock.restore();
+    });
+
+    // A deferred start (a stop/kill/remove holds the container's lease — e.g. a teardown)
+    // is NOT a failure and NOT an attempt: it must schedule a retry but must NOT record a
+    // restart (recording would advance the backoff ladder for a collision that never ran).
+    it('defers (retries, records no restart) when the start hits an in-flight transition', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      const held = new Error("fluxwww_App: a 'removing' container transition is in flight; deferring 'actuating'");
+      held.code = 'ETRANSITIONHELD';
+      stubs.dockerService.appDockerStart.rejects(held);
+
+      await appReconciler.reconcile('www_App'); // must not throw
+
+      expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
+      expect(stubs.appsRuntimeState.recordRestart.called, 'a deferral is not an attempt — it must not touch the backoff ladder').to.be.false;
+      clock.tick(6000); // past the near-term retry
+      await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
+      expect(stubs.dockerService.appDockerStart.callCount, 'a deferred start must retry once the transition clears').to.equal(2);
+      expect(stubs.appsRuntimeState.recordRestart.called, 'still no restart recorded across deferrals').to.be.false;
       clock.restore();
     });
 
