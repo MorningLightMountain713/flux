@@ -418,6 +418,48 @@ describe('dockerService tests', () => {
     it('should throw error if app name is not correct or app does not exist', async () => {
       await expect(dockerService.appDockerStart('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
     });
+
+    // The 'actuating' lease makes a start mutually exclusive with a concurrent
+    // teardown's remove: held across the start (a die inside it is a real crash, NOT
+    // swallowed) and released own-lease-only when it settles.
+    it('holds the actuating lease during the start and releases it on completion', async () => {
+      operationRegistry.clear();
+      const leaseKey = dockerService.getAppIdentifier(appName);
+      let leasedDuringStart = false;
+      dockerStub.callsFake(async () => {
+        leasedDuringStart = operationRegistry.get(leaseKey)?.type === 'actuating';
+        return 'started';
+      });
+
+      await dockerService.appDockerStart(appName);
+
+      expect(leasedDuringStart, 'the actuating lease must be held while the start is in flight').to.be.true;
+      expect(operationRegistry.isHeld(leaseKey), 'the actuating lease must release when the start settles').to.be.false;
+    });
+
+    it('releases the actuating lease when the start throws', async () => {
+      operationRegistry.clear();
+      dockerStub.rejects(new Error('no such image'));
+
+      await expect(dockerService.appDockerStart(appName)).to.eventually.be.rejected;
+      expect(operationRegistry.isHeld(dockerService.getAppIdentifier(appName)), 'the lease must release even when the start throws').to.be.false;
+    });
+
+    // Fail-closed: a start must NEVER race a teardown that already holds the component
+    // key. It throws a structured ETRANSITIONHELD (keyed on err.code, no string-match)
+    // and touches neither docker nor the foreign lease.
+    it('defers (throws ETRANSITIONHELD) and does not start when a teardown holds the removing lease', async () => {
+      operationRegistry.clear();
+      const leaseKey = dockerService.getAppIdentifier(appName);
+      operationRegistry.acquire(leaseKey, 'removing', 'appUninstaller', 'test teardown');
+
+      const err = await dockerService.appDockerStart(appName).then(() => null, (e) => e);
+      expect(err, 'a start must reject while a removing lease is held').to.be.an('error');
+      expect(err.code).to.equal('ETRANSITIONHELD');
+      sinon.assert.notCalled(dockerStub);
+      expect(operationRegistry.get(leaseKey)?.type, 'the foreign lease must be untouched (own-lease-only)').to.equal('removing');
+      operationRegistry.clear();
+    });
   });
 
   describe('appDockerStop tests', () => {
@@ -511,6 +553,22 @@ describe('dockerService tests', () => {
 
       await expect(dockerService.appDockerStop(appName)).to.eventually.be.rejected;
       expect(operationRegistry.isHeld(dockerService.getAppIdentifier(appName)), 'the lease must release even when the stop throws').to.be.false;
+    });
+
+    // Fail-closed against a concurrent start: a stop must not race an 'actuating'
+    // create/start (its old unconditional release used to clobber that lease). It
+    // throws ETRANSITIONHELD and leaves docker + the foreign lease untouched.
+    it('defers (throws ETRANSITIONHELD) and does not stop when a start holds the actuating lease', async () => {
+      operationRegistry.clear();
+      const leaseKey = dockerService.getAppIdentifier(appName);
+      operationRegistry.acquire(leaseKey, 'actuating', 'appReconciler', 'test start');
+
+      const err = await dockerService.appDockerStop(appName).then(() => null, (e) => e);
+      expect(err, 'a stop must reject while an actuating lease is held').to.be.an('error');
+      expect(err.code).to.equal('ETRANSITIONHELD');
+      sinon.assert.notCalled(dockerStopStub);
+      expect(operationRegistry.get(leaseKey)?.type, 'the foreign actuating lease must be untouched').to.equal('actuating');
+      operationRegistry.clear();
     });
   });
 
@@ -665,6 +723,22 @@ describe('dockerService tests', () => {
 
     it('should throw error if app name is not correct or app does not exist', async () => {
       await expect(dockerService.appDockerRemove('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
+    });
+
+    // Lease-free: the teardown owns the component 'removing' lease across the whole
+    // stop->remove->cleanup, so appDockerRemove must NOT touch the registry — neither
+    // acquire (that would conflict with the teardown's own hold) nor release (its old
+    // unconditional release dropped it, re-opening the race).
+    it('does not touch the component lease (the teardown owns removing)', async () => {
+      operationRegistry.clear();
+      const leaseKey = dockerService.getAppIdentifier(appName);
+      const token = operationRegistry.acquire(leaseKey, 'removing', 'appUninstaller', 'test teardown');
+
+      await dockerService.appDockerRemove(appName);
+
+      sinon.assert.calledOnce(dockerStub);
+      expect(operationRegistry.get(leaseKey)?.type, 'the removing lease the teardown holds must survive the remove').to.equal('removing');
+      operationRegistry.release(leaseKey, token);
     });
   });
 

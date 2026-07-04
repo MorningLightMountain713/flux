@@ -1008,12 +1008,33 @@ async function appDockerUpdateCpu(idOrName, nanoCpus) {
  * @param {string} idOrName
  * @returns {string} message
  */
+// Acquire a component-transition lease (actuating | stopping | removing) or fail
+// closed. These three types are mutually exclusive on one container, so a conflicting
+// transition already in flight means this one must NOT race it — it throws a structured
+// ETRANSITIONHELD the caller defers on (the reconciler retries; a teardown's best-effort
+// catch skips the component and keeps it owed). Fail-closed acquisition + own-lease-only
+// release is what makes the lease a real lock rather than the decoupled advisory marker
+// it started as.
+function acquireTransitionLease(dockerName, type, reason) {
+  const token = operationRegistry.acquire(dockerName, type, 'dockerService', reason);
+  if (!token) {
+    const held = operationRegistry.get(dockerName);
+    const error = new Error(`${dockerName}: a '${held ? held.type : 'concurrent'}' container transition is in flight; deferring '${type}'`);
+    error.code = 'ETRANSITIONHELD';
+    throw error;
+  }
+  return token;
+}
+
 async function appDockerStart(idOrName) {
+  const dockerName = getDockerName(idOrName);
+  // Hold 'actuating' across the start so a concurrent teardown's remove defers instead
+  // of tearing the container down mid-create; released own-lease-only in finally.
+  const token = acquireTransitionLease(dockerName, 'actuating', `start ${dockerName}`);
   try {
     const dockerContainer = await getDockerContainer(idOrName);
     if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
-    operationRegistry.release(getDockerName(idOrName));
     await dockerContainer.start(); // may throw
 
     // Apply CFS burst after start — cgroup paths only exist once the container
@@ -1042,6 +1063,8 @@ async function appDockerStart(idOrName) {
   } catch (error) {
     log.error(error);
     throw error;
+  } finally {
+    operationRegistry.release(dockerName, token);
   }
 }
 
@@ -1065,17 +1088,18 @@ async function appDockerStop(idOrName, timeout) {
   const dockerName = getDockerName(idOrName);
   // The component-scoped 'stopping' lease is held for the duration of the stop
   // (legitimately hours under a graceful shutdown) so the die handler swallows the
-  // deliberate stop and the reconciler defers. Keyed on the docker name. Released
-  // when the operation settles - never by the die event: a lost event (stream
-  // outage) would otherwise leak it and permanently wedge the reconciler's
-  // actuation for this component.
-  operationRegistry.acquire(dockerName, 'stopping', 'dockerService', `stop ${dockerName}`);
+  // deliberate stop and the reconciler defers. Keyed on the docker name, released
+  // own-lease-only when the operation settles - never by the die event: a lost event
+  // (stream outage) would otherwise leak it and permanently wedge the reconciler's
+  // actuation for this component. Fail-closed: if a create/start ('actuating') is in
+  // flight, the stop defers rather than racing it.
+  const token = acquireTransitionLease(dockerName, 'stopping', `stop ${dockerName}`);
 
   try {
     const opts = timeout !== undefined ? { t: timeout } : {};
     await dockerContainer.stop(opts);
   } finally {
-    operationRegistry.release(dockerName);
+    operationRegistry.release(dockerName, token);
   }
   return `Flux App ${idOrName} successfully stopped.`;
 }
@@ -1091,21 +1115,26 @@ async function appDockerRestart(idOrName) {
   const dockerContainer = await getDockerContainer(idOrName);
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
+  const dockerName = getDockerName(idOrName);
   // Check if container is running
   const containerInfo = await dockerContainer.inspect();
   if (!containerInfo.State.Running) {
-    // If stopped, start it instead of restarting
-    operationRegistry.release(getDockerName(idOrName));
-    await dockerContainer.start();
+    // Stopped -> this is really a start, so hold 'actuating' (a die here is a real
+    // crash) rather than 'stopping'; a concurrent teardown's remove defers on it.
+    const startToken = acquireTransitionLease(dockerName, 'actuating', `restart(start) ${dockerName}`);
+    try {
+      await dockerContainer.start();
+    } finally {
+      operationRegistry.release(dockerName, startToken);
+    }
     return `Flux App ${idOrName} was stopped, successfully started.`;
   }
 
-  const dockerName = getDockerName(idOrName);
-  operationRegistry.acquire(dockerName, 'stopping', 'dockerService', `restart ${dockerName}`);
+  const token = acquireTransitionLease(dockerName, 'stopping', `restart ${dockerName}`);
   try {
     await dockerContainer.restart();
   } finally {
-    operationRegistry.release(dockerName);
+    operationRegistry.release(dockerName, token);
   }
   return `Flux App ${idOrName} successfully restarted.`;
 }
@@ -1121,13 +1150,14 @@ async function appDockerKill(idOrName) {
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
   const dockerName = getDockerName(idOrName);
-  // same lease lifetime as appDockerStop: operation-scoped, never event-scoped
-  operationRegistry.acquire(dockerName, 'stopping', 'dockerService', `kill ${dockerName}`);
+  // same lease lifetime as appDockerStop: operation-scoped, never event-scoped, and
+  // fail-closed against an in-flight 'actuating' start; released own-lease-only.
+  const token = acquireTransitionLease(dockerName, 'stopping', `kill ${dockerName}`);
 
   try {
     await dockerContainer.kill();
   } finally {
-    operationRegistry.release(dockerName);
+    operationRegistry.release(dockerName, token);
   }
   return `Flux App ${idOrName} successfully killed.`;
 }
@@ -1159,7 +1189,9 @@ async function appDockerSignal(idOrName, signal) {
 async function appDockerRemove(idOrName) {
   const dockerContainer = await getDockerContainer(idOrName);
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
-  operationRegistry.release(getDockerName(idOrName));
+  // Lease-free: the only caller is the teardown, which already holds this component's
+  // 'removing' lease across the whole stop->remove->cleanup. Touching the registry here
+  // would either conflict with that hold (acquire) or drop it (release).
   await dockerContainer.remove();
   return `Flux App ${idOrName} successfully removed.`;
 }
@@ -1174,7 +1206,7 @@ async function appDockerRemove(idOrName) {
 async function appDockerForceRemove(idOrName, removeVolumes = true) {
   const dockerContainer = await getDockerContainer(idOrName);
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
-  operationRegistry.release(getDockerName(idOrName));
+  // Lease-free: see appDockerRemove — the teardown owns the 'removing' lease.
   await dockerContainer.remove({ force: true, v: removeVolumes });
   return `Flux App ${idOrName} successfully force removed.`;
 }
