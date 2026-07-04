@@ -13,6 +13,7 @@ const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunica
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const geolocationService = require('../../ZelBack/src/services/geolocationService');
 const fluxNetworkMonitor = require('../../ZelBack/src/services/fluxNetworkMonitor');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const { requireMongo } = require('./dbTestHelper');
@@ -20,6 +21,14 @@ const { requireMongo } = require('./dbTestHelper');
 chai.use(chaiAsPromised);
 
 describe('fluxNetworkMonitor tests', () => {
+  // adjustExternalIP fires setNodeGeolocation() without awaiting it; left real it does
+  // a live ip-api lookup that writes nondeterministic geolocation to the shared test DB
+  // (polluting suites that read it) and self-reschedules a 10s retry that outlives the
+  // test. Neutralise it for every real-module describe in this file.
+  beforeEach(() => {
+    sinon.stub(geolocationService, 'setNodeGeolocation').resolves();
+  });
+
   describe('checkMyFluxAvailability tests', () => {
     let getRandomSocketAddress;
 
