@@ -24,6 +24,7 @@ describe('AppSyncOrchestrator', () => {
   let getFluxNodePublicKeyStub;
   let getFluxNodePrivateKeyStub;
   let signMessageStub;
+  let reconcileStub;
 
   function makePeer(key) {
     return { key, send: sinon.stub() };
@@ -85,6 +86,11 @@ describe('AppSyncOrchestrator', () => {
     getFluxNodePublicKeyStub = sinon.stub().resolves('04testpubkey1234567890');
     getFluxNodePrivateKeyStub = sinon.stub().resolves('L1testprivkey');
     signMessageStub = sinon.stub().returns('fakesig==');
+    // Mirror the real reconcile: a round that reached peers reports indexesReceived>=1
+    // (which is what latches #manifestSyncComplete); a peerless/vacuous round reports 0.
+    reconcileStub = sinon.stub().callsFake((peers = []) => Promise.resolve({
+      peers: peers.length, indexesReceived: peers.length, fetched: 0,
+    }));
 
     const appSyncEventsModule = require('../../ZelBack/src/services/utils/appSyncEvents');
     appSyncEvents = appSyncEventsModule.appSyncEvents;
@@ -96,7 +102,7 @@ describe('AppSyncOrchestrator', () => {
       '../../lib/log': logStub,
       '../dbHelper': dbHelperStub,
       './appHashSyncService': { syncMissingHashes: syncMissingHashesStub, getMissingHashes: getMissingHashesStub, resetHashSyncForUpgrade: resetHashSyncForUpgradeStub },
-      './contentManifestSyncService': { reconcile: sinon.stub().resolves({ peers: 0, indexesReceived: 0, fetched: 0 }), depositIndex: sinon.stub(), isPeerInActiveRound: sinon.stub().returns(false) },
+      './contentManifestSyncService': { reconcile: reconcileStub, depositIndex: sinon.stub(), isPeerInActiveRound: sinon.stub().returns(false) },
       './peerNotification': { checkAndNotifyPeersOfRunningApps: checkAndNotifyStub, stopBroadcastInterval: sinon.stub() },
       '../appDatabase/registryManager': {
         reindexGlobalAppsInformation: reindexStub,
@@ -440,6 +446,151 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.RESYNCING);
+    });
+  });
+
+  describe('manifest reconcile readiness gate', () => {
+    function completeEphemeral() {
+      for (let i = 0; i < 3; i += 1) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+      }
+    }
+
+    it('reaches READY once a peer index is received (manifest latched on evidence)', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+
+      expect(reconcileStub.called).to.be.true;
+      expect(orchestrator.state).to.equal(STATES.READY);
+    });
+
+    it('stays gated when the reconcile round reached no peer (0 indexes received)', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      // Peers present but none answered within the index window.
+      reconcileStub.resolves({ peers: 3, indexesReceived: 0, fetched: 0 });
+
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+
+      // Hash + DB + ephemeral all done, but the manifest never converged and the
+      // block timer has not fired — the spawner stays gated.
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+    });
+
+    it('does not latch the manifest on a single-flight-skipped round', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      reconcileStub.resolves({
+        peers: 0, indexesReceived: 0, fetched: 0, skipped: true,
+      });
+
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+    });
+
+    it('lets the block timer release readiness when the manifest never converges', async () => {
+      getEligibleSyncPeersStub.returns([]); // never any peer to reconcile against
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+
+      for (let i = 0; i < 130; i += 1) {
+        blockEmitter.emit('blocksProcessed', 2555000 + i);
+      }
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+    });
+
+    it('retries the manifest reconcile when peers arrive after a peerless boot round (F1)', async () => {
+      // Boot: explorer + capability ready, but discovery has not connected peers yet.
+      getEligibleSyncPeersStub.returns([]);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      // First round ran against nobody, so the manifest did not latch.
+      expect(reconcileStub.calledOnce).to.be.true;
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+
+      // Discovery connects peers -> the peer-threshold edge re-drives the sync.
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+
+      expect(reconcileStub.callCount).to.be.greaterThan(1);
+      expect(orchestrator.state).to.equal(STATES.READY);
+    });
+
+    it('reconciles the manifest after a peers-first recovery once capability returns (F2)', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+
+      // Boot to READY.
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+
+      // Partial-partition-style disruption: degrade (resets the sync latches) AND
+      // lose message capability.
+      peerEmitter.emit('peersBelowThreshold', 3);
+      orchestrator.onMessageCapabilityChange(false);
+      expect(orchestrator.state).to.equal(STATES.DEGRADED);
+      reconcileStub.resetHistory();
+
+      // Peers return BEFORE capability: the resync cannot send yet, so nothing
+      // reconciles — and, crucially, nothing latches.
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.RESYNCING);
+      expect(reconcileStub.called, 'manifest not reconciled while uncapable').to.be.false;
+
+      // Capability returns: the manifest sync is re-driven (the old code skipped it
+      // because hash sync had already completed).
+      orchestrator.onMessageCapabilityChange(true);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+
+      expect(reconcileStub.called, 'manifest reconciled after capability returned').to.be.true;
+      expect(orchestrator.state).to.equal(STATES.READY);
     });
   });
 
