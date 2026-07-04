@@ -108,7 +108,11 @@ describe('appReconciler tests', () => {
         // A membership test that drops a link overrides this for a specific name.
         resolveActiveLinkedNetworks: sinon.stub().callsFake(async (owner, names) => (names || []).map((n) => `fluxDockerNetwork_${n}`)),
       },
-      appUninstaller: { UninstallStatus, uninstallApplication: sinon.stub().resolves({ status: UninstallStatus.REMOVED, reason: null }) },
+      appUninstaller: {
+        UninstallStatus,
+        uninstallApplication: sinon.stub().resolves({ status: UninstallStatus.REMOVED, reason: null }),
+        driveOwedTeardown: sinon.stub().resolves({ status: 'none', attempts: 0 }),
+      },
       appTamperingDetectionService: { recordEvent: sinon.stub().resolves(), isNetworkMissingError: () => false },
       dockerOperations: { appDeleteDataInMountPoint: sinon.stub().resolves() },
       serviceHelper: { delay: sinon.stub().resolves() },
@@ -451,11 +455,48 @@ describe('appReconciler tests', () => {
   });
 
   describe('reconcile decisions', () => {
-    it('does nothing when the app is not installed locally', async () => {
+    it('does nothing when the app is not installed locally and nothing is owed', async () => {
       localSpec = null;
+      stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'none', attempts: 0 });
       await appReconciler.reconcile('www_App');
+      // it checks the OTHER desired state (gone) before concluding "not installed"
+      expect(stubs.appUninstaller.driveOwedTeardown.calledOnceWith('App')).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
+    });
+
+    // The new desired state: a row-deleted component that still has an owed teardown is
+    // NOT uninstalled - it is mid-removal (desired = gone). The reconciler drives the
+    // teardown to completion, and once it converges it does NOT retry.
+    it('drives an owed teardown to completion and does not retry once converged (desired = gone)', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      localSpec = null;
+      stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'removed', attempts: 0 });
+
+      await appReconciler.reconcile('www_App');
+      expect(stubs.appUninstaller.driveOwedTeardown.calledOnceWith('App')).to.be.true;
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+      clock.tick(60 * 60 * 1000); // an hour: a converged removal must not re-drive
+      await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
+      expect(stubs.appUninstaller.driveOwedTeardown.callCount, 'converged - no retry').to.equal(1);
+      clock.restore();
+    });
+
+    // A teardown that did not converge in one pass (a survivor, a host-cleanup blip) is
+    // re-driven with backoff - the reconciler owns the convergence, so it is never
+    // abandoned until the next boot.
+    it('retries an owed teardown with backoff when it has not converged (attempt count paces it)', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      localSpec = null;
+      stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'deferred', attempts: 1 });
+
+      await appReconciler.reconcile('www_App');
+      expect(stubs.appUninstaller.driveOwedTeardown.callCount).to.equal(1);
+      // attempt 1 -> the 30s rung of the removal ladder; tick past it and it re-drives
+      clock.tick(30 * 1000 + 100);
+      await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
+      expect(stubs.appUninstaller.driveOwedTeardown.callCount, 'the reconciler re-drives an owed teardown after the backoff').to.equal(2);
+      clock.restore();
     });
 
     it('fails loud on invalid containerData (sync flag on a non-primary mount): no start/stop, no throw', async () => {

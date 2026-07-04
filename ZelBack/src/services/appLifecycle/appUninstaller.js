@@ -31,6 +31,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const pendingTeardownStore = require('./pendingTeardownStore');
 const shutdownPlan = require('./shutdownPlan');
+const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
@@ -879,6 +880,35 @@ async function runTeardown(doc, opts = {}) {
   }
 }
 
+/**
+ * Drive an app's OWED teardown one step toward completion — the reconciler's
+ * converge-to-gone actuator. "Gone" is a durable desired state: an owed-teardown record
+ * (written by every permanent removal before it deletes the local row) says this app
+ * must be fully torn down. Rather than that record only being re-driven at the next boot,
+ * the reconciler calls this on every pass over a row-deleted component and drives the
+ * (idempotent, single-flight) teardown until the record clears. Returns a verdict:
+ *   'none'     - nothing owed; the caller treats the component as genuinely uninstalled.
+ *   'removed'  - the owed record cleared; the app is fully gone (converged).
+ *   'deferred' - a teardown is already in flight, or this pass left work owed; the caller
+ *                retries with backoff (attempts drives the pacing).
+ * @param {string} appName
+ * @returns {Promise<{ status: 'none'|'removed'|'deferred', attempts: number }>}
+ */
+async function driveOwedTeardown(appName) {
+  const doc = await pendingTeardownStore.getTeardown(appName);
+  if (!doc) return { status: 'none', attempts: 0 };
+  // A teardown of this app is already running (the removal prelude's initial drive, or a
+  // sibling reconcile pass). Let it finish; a quick retry observes its result.
+  if (teardownsInProgress.has(appName)) return { status: 'deferred', attempts: doc.attempts || 0 };
+  await runTeardown(doc);
+  // runTeardown clears the owed record ONLY when the app is fully gone; a surviving record
+  // means this pass left work owed (a survivor, a host-cleanup blip) - pace the retry.
+  const remaining = await pendingTeardownStore.getTeardown(appName);
+  if (!remaining) return { status: 'removed', attempts: 0 };
+  await pendingTeardownStore.bumpAttempts(appName);
+  return { status: 'deferred', attempts: (remaining.attempts || 0) + 1 };
+}
+
 // A component's destructive teardown (remove + host cleanup) holds the component
 // 'removing' lease so a concurrent reconcile start ('actuating') defers instead of
 // (re)creating the container mid-teardown. A start that beat us here holds the key, so
@@ -1085,7 +1115,15 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   if (allDropped && !containerSurvived) {
     await pendingTeardownStore.clearTeardown(key);
   } else {
-    log.warn(`Teardown of ${name}: ${containerSurvived ? 'a container survived removal' : 'a condemned stamp did not drop'}; keeping the teardown record for boot recovery`);
+    log.warn(`Teardown of ${name}: ${containerSurvived ? 'a container survived removal' : 'a condemned stamp did not drop'}; keeping the teardown record owed`);
+    // Hand the still-owed teardown back to the reconciler to CONVERGE (drive + retry with
+    // backoff) instead of abandoning it until the next boot. Each component's null-spec
+    // reconcile pass re-drives the owed record via driveOwedTeardown; single-flight and
+    // the idempotent teardown make the fan-out safe.
+    // eslint-disable-next-line no-restricted-syntax
+    for (const c of list) {
+      reconcilerQueue.enqueue(c.identifier);
+    }
   }
 }
 
@@ -1145,10 +1183,13 @@ async function recoverOwedTeardowns() {
     toDrain.push(doc);
   }
 
-  // Drive the destructive teardowns in the background — the synchronous re-condemn
-  // above already protects them from the reconciler.
+  // Hand the owed teardowns to the reconciler to CONVERGE — it drives each to completion
+  // and retries with backoff on a partial pass, instead of a one-shot boot drive that
+  // abandons a partial failure until the NEXT boot. The synchronous re-condemn above keeps
+  // the run-state path off these components until the boot gate opens and these enqueues
+  // (held in bootPending until then) drain into the reconciler's owed-teardown path.
   toDrain.forEach((doc) => {
-    runTeardown(doc).catch((e) => log.error(`Boot-recovered teardown of ${doc.name} failed: ${e.message}`));
+    (doc.components || []).forEach((c) => reconcilerQueue.enqueue(c.identifier));
   });
 }
 
@@ -1341,6 +1382,7 @@ module.exports = {
   setOnComponentRemoved,
   expireGlobalApplications,
   runTeardown,
+  driveOwedTeardown,
   recoverOwedTeardowns,
   clearSpawnThrottleForPinnedReinstall,
   removeRequiringWorkloadsFirst,
