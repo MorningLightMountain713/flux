@@ -254,6 +254,16 @@ export function nodeClient(nodeNum) {
       const res = await fetch(`${url}/apps/installapplocally/${appname}`, { headers: { zelidauth } });
       return res.text();
     },
+    // Remove an app on THIS node (GET /apps/appremove/:app/:force?). force=true sets
+    // the operator-force path (escalates an in-flight graceful drain). The endpoint
+    // streams status text then ends, so drain it as text; the returned promise
+    // resolves when the removal finishes — a suite holds a drain window by NOT
+    // awaiting yet (like appendBackupTask).
+    removeApp: async (appname, { force = false, zelidauth } = {}) => {
+      const path = force ? `/apps/appremove/${appname}/true` : `/apps/appremove/${appname}`;
+      const res = await fetch(`${url}${path}`, { headers: { zelidauth } });
+      return res.text();
+    },
     // Backup/restore drive the whole-app lease (B1). The endpoints stream chunked
     // progress and the returned promise resolves when the task FINISHES - so a
     // suite holds the lease window by simply not awaiting yet.
