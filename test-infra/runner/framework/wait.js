@@ -1,4 +1,4 @@
-import { getAppContainerStatus } from './container.js';
+import { getAppContainerStatus, isAppFullyGone } from './container.js';
 
 export async function waitFor(condition, { timeout = 60000, interval = 2000, label = '' } = {}) {
   const start = Date.now();
@@ -22,6 +22,13 @@ export async function waitForDown(client, appName, label, { timeout = 60000, int
     const status = await getAppContainerStatus(client.container, appName, { all: true });
     return !!(status && !status.status.startsWith('Up'));
   }, { timeout, interval, label });
+}
+
+// Proof of FULL teardown on a node: no container, no docker network, no appdata mount or
+// directory. Use instead of a bare container-gone check to assert an app is really gone
+// (a removal that converged), not merely stopped/removed-container-but-leaked-volume.
+export async function waitForAppFullyGone(client, appName, { timeout = 120000, interval = 2000 } = {}) {
+  await waitFor(() => isAppFullyGone(client.container, appName), { timeout, interval, label: `${appName} fully torn down` });
 }
 
 // Event-based wait helpers (use SSE event stream)
@@ -151,7 +158,12 @@ export async function waitForPeersRemoved(node, predicate = () => true, timeout 
 
 // --- reconciler (appReconciler) ---
 
-// action: 'started' | 'stopped' | 'backoff' | 'recreated' | 'recreateFailed' (omit to match any)
+// action (omit to match any):
+//   run-state:  'started' | 'stopped' | 'backoff' | 'recreated' | 'recreateFailed'
+//   deferrals:  'startDeferred' | 'stopDeferred' | 'restartRequestedDeferred' | 'restartUnhealthyDeferred'
+//               (a transition deferred because a conflicting container operation held the lease)
+//   removal:    'removed' (an owed teardown converged - the app is fully gone) |
+//               'removalDeferred' (an owed teardown re-driven but not yet converged)
 export async function waitForReconcileActuated(node, identifier, action, timeout = 60000, opts) {
   return node.waitForEvent(
     'reconciler:actuated',
