@@ -650,13 +650,27 @@ async function reconcile(rawIdentifier) {
       const rs = (reason === 'operatorStopped' || reason === 'condemned') ? await appsRuntimeState.getState(identifier) : null;
       const forceKill = !!(rs && (reason === 'condemned' ? rs.condemnedForce : rs.operatorStopForce));
       log.info(`appReconciler - ${identifier} desired stopped, ${forceKill ? 'killing' : 'stopping'}`);
-      if (forceKill) {
-        await dockerService.appDockerKill(identifier);
-      } else if (requestGracefulStop && await requestGracefulStop(identifier, reason)) {
-        // flux-shutdownd owns a graceful drain of this app (Arcane). No docker action
-        // here — the 'stopping' LB gate holds subsequent passes until the drain ends.
-      } else {
-        await dockerService.appDockerStop(identifier);
+      try {
+        if (forceKill) {
+          await dockerService.appDockerKill(identifier);
+        } else if (requestGracefulStop && await requestGracefulStop(identifier, reason)) {
+          // flux-shutdownd owns a graceful drain of this app (Arcane). No docker action
+          // here — the 'stopping' LB gate holds subsequent passes until the drain ends.
+        } else {
+          await dockerService.appDockerStop(identifier);
+        }
+      } catch (err) {
+        if (err.code === 'ETRANSITIONHELD') {
+          // A start ('actuating') is mid-flight on this container; don't race the stop.
+          // Reschedule so we re-evaluate once it clears — a bare throw would be logged by
+          // the queue WITHOUT a retry, stranding the container running when we wanted it
+          // stopped.
+          log.info(`appReconciler - ${identifier} stop deferred, a start is in flight`);
+          fluxEventBus.publish('reconciler:actuated', { identifier, action: 'stopDeferred', reason: err.message });
+          scheduleRetry(identifier, MANAGED_RETRY_MS);
+          return;
+        }
+        throw err;
       }
       // monitoring follows run-state — the reconciler owns both ends (it starts
       // monitoring on the start branch), so a stopped container is never left with
@@ -685,6 +699,13 @@ async function reconcile(rawIdentifier) {
       try {
         await dockerService.appDockerRestart(identifier);
       } catch (err) {
+        if (err.code === 'ETRANSITIONHELD') {
+          // a stop/kill/remove is mid-flight on this container; don't race it, retry once it clears.
+          log.info(`appReconciler - ${identifier} requested restart deferred, a container transition is in flight`);
+          fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartRequestedDeferred', reason: err.message });
+          scheduleRetry(identifier, MANAGED_RETRY_MS);
+          return;
+        }
         log.error(`appReconciler - failed to restart ${identifier} (requested): ${err.message}; retrying`);
         fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartRequestedFailed', reason: err.message });
         scheduleRetry(identifier, MANAGED_RETRY_MS);
@@ -708,18 +729,29 @@ async function reconcile(rawIdentifier) {
         scheduleRetry(identifier, wait);
         return;
       }
-      await appsRuntimeState.recordRestart(identifier);
       try {
         await dockerService.appDockerRestart(identifier);
       } catch (err) {
+        if (err.code === 'ETRANSITIONHELD') {
+          // a stop/kill/remove is mid-flight; don't race it, and don't record a restart
+          // attempt (a deferral is not one — recording it would advance the backoff
+          // ladder spuriously). Retry once the transition clears.
+          log.info(`appReconciler - ${identifier} unhealthy restart deferred, a container transition is in flight`);
+          fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthyDeferred', reason: err.message });
+          scheduleRetry(identifier, MANAGED_RETRY_MS);
+          return;
+        }
         // appDockerRestart owns the stop+start; a thrown restart leaves the container in
-        // whatever state docker left it. Pace the retry off the ladder (attempt recorded
-        // above) rather than hammering, mirroring the failed-start path below.
+        // whatever state docker left it. Record the attempt so a persistent failure walks
+        // the ladder, then pace the retry rather than hammering, mirroring the failed-start path.
+        await appsRuntimeState.recordRestart(identifier);
         log.error(`appReconciler - failed to restart unhealthy ${identifier}: ${err.message}; retrying`);
         fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthyFailed', reason: err.message });
         scheduleRetry(identifier, MANAGED_RETRY_MS);
         return;
       }
+      // a real restart happened — record it so the backoff ladder paces repeated restarts.
+      await appsRuntimeState.recordRestart(identifier);
       log.warn(`appReconciler - ${identifier} restarted (was unhealthy)`);
       fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthy' });
       return;
@@ -772,25 +804,36 @@ async function reconcile(rawIdentifier) {
     return;
   }
 
-  // firstStart vs restart keys on the durable hasSuccessfullyStarted marker (read
-  // before recordRestart bumps the history): a container that has run here before
-  // is a restart even after a crash; one that never has is a first start.
+  // firstStart vs restart keys on the durable hasSuccessfullyStarted marker: a
+  // container that has run here before is a restart even after a crash; one that never
+  // has is a first start.
   const priorRuntimeState = await appsRuntimeState.getState(identifier);
   const firstStart = !(priorRuntimeState && priorRuntimeState.hasSuccessfullyStarted);
-  await appsRuntimeState.recordRestart(identifier);
   try {
     await dockerService.appDockerStart(identifier);
   } catch (err) {
-    // No die event fires for a failed start (the container never ran), so a
-    // dropped throw here leaves the component down until the hourly sweep.
-    // Schedule our own retry; pacing is free - the attempt was recorded above,
-    // so a persistent failure walks the backoff ladder instead of hammering.
+    if (err.code === 'ETRANSITIONHELD') {
+      // A stop/kill/remove is mid-flight on this container (e.g. a teardown holds the
+      // 'removing' lease). Don't race it, and don't record a restart attempt — a
+      // deferral is not one, so it must not advance the backoff ladder. Retry once the
+      // transition clears; if it was a teardown, the retry bails at the condemned gate above.
+      log.info(`appReconciler - ${identifier} start deferred, a container transition is in flight`);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'startDeferred', reason: err.message });
+      scheduleRetry(identifier, MANAGED_RETRY_MS);
+      return;
+    }
+    // A genuine start failure. Record the attempt so a persistent failure walks the
+    // backoff ladder instead of hammering (no die event fires for a failed start — the
+    // container never ran — so a dropped throw would leave it down until the hourly sweep).
+    await appsRuntimeState.recordRestart(identifier);
     log.error(`appReconciler - failed to start ${identifier}: ${err.message}; retrying`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'startFailed', reason: err.message });
     await failConvergeIfExhausted(identifier);
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
   }
+  // A real (re)start happened — record it so the backoff ladder paces repeated restarts.
+  await appsRuntimeState.recordRestart(identifier);
   appInspector.startAppMonitoring(identifier, globalState.appsMonitored);
   if (firstStart) await appsRuntimeState.setSuccessfullyStarted(identifier);
   // A start satisfies any pending restart request (a "restart" of a stopped

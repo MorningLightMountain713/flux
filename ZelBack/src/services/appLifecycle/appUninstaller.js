@@ -879,6 +879,29 @@ async function runTeardown(doc, opts = {}) {
   }
 }
 
+// A component's destructive teardown (remove + host cleanup) holds the component
+// 'removing' lease so a concurrent reconcile start ('actuating') defers instead of
+// (re)creating the container mid-teardown. A start that beat us here holds the key, so
+// the acquire fails while it runs. We do NOT race it (removing a container mid-create)
+// nor drop it to boot recovery (an owed record only re-drives at restart, so the app
+// would run un-condemned until then); instead we WAIT bounded for the lease to clear -
+// the acquire succeeding is the concrete signal the start settled, never a fixed guess.
+// Returns the lease token, or null if nothing settled within the budget (pathological:
+// a leaked/stuck transition, force-released by its own TTL eventually).
+const REMOVING_LEASE_WAIT_MS = 5000;
+const REMOVING_LEASE_POLL_MS = 100;
+async function acquireRemovingLease(dockerName, identifier) {
+  const budgetNs = BigInt(REMOVING_LEASE_WAIT_MS) * 1000000n;
+  const startNs = process.hrtime.bigint();
+  for (;;) {
+    const token = operationRegistry.acquire(dockerName, 'removing', 'appUninstaller', `teardown ${identifier}`);
+    if (token) return token;
+    if (process.hrtime.bigint() - startNs >= budgetNs) return null;
+    // eslint-disable-next-line no-await-in-loop
+    await serviceHelper.delay(REMOVING_LEASE_POLL_MS);
+  }
+}
+
 async function executeTeardown(doc, { onStatus = null } = {}) {
   const {
     key, name, networkName, forceKill, owner, components, reason, shutdownBudgetSeconds,
@@ -942,9 +965,22 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   // record: destroying its volume under a live container would corrupt it, so we skip the
   // cleanup and leave the teardown for boot recovery (which re-checks the container is gone).
   let containerSurvived = false;
+  const survivedComponents = new Set();
   await withHostMutationLock(async () => {
     // eslint-disable-next-line no-restricted-syntax
     for (const c of list) {
+      // Hold the component's 'removing' lease across remove + host cleanup so a reconcile
+      // start can't (re)create the container mid-teardown; wait bounded for an in-flight
+      // start to settle rather than racing it.
+      // eslint-disable-next-line no-await-in-loop
+      const removingToken = await acquireRemovingLease(c.appId, c.identifier);
+      if (!removingToken) {
+        containerSurvived = true;
+        survivedComponents.add(c.identifier);
+        log.error(`Teardown of ${c.identifier}: a container transition did not settle within ${REMOVING_LEASE_WAIT_MS}ms — deferring, keeping it owed and condemned for boot recovery`);
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       try {
         if (forceKill) {
           // eslint-disable-next-line no-await-in-loop
@@ -954,10 +990,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
           await dockerService.appDockerRemove(c.appId).catch((e) => log.warn(`remove ${c.appId}: ${e.message}`));
         }
         // NEVER reclaim a component's host storage while its container still exists — a
-        // concurrent re-create (or a failed remove) would leave a live container with its
-        // volume unmounted and data deleted. Decide on the container's ACTUAL presence
-        // (getDockerContainer returns null when gone), not on the remove error; a presence
-        // check that itself fails is treated as "still there" (never delete on uncertainty).
+        // failed remove would otherwise strand a live container with its volume unmounted
+        // and data deleted. Decide on the container's ACTUAL presence (getDockerContainer
+        // returns null when gone), not on the remove error; a presence check that itself
+        // fails is treated as "still there" (never delete on uncertainty).
         let stillPresent;
         try {
           // eslint-disable-next-line no-await-in-loop
@@ -966,9 +1002,26 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
           stillPresent = true;
           log.warn(`Teardown of ${c.identifier}: could not confirm the container was removed (${probeErr.message}); keeping it owed`);
         }
+        // A non-force teardown found the container still present: a reconcile start
+        // completed after our pre-lock stop and before we took the 'removing' lease,
+        // leaving it running. We hold the lease now, so no further start can intervene —
+        // escalate to a force remove (its graceful window already elapsed in the stop
+        // phase) rather than 409-looping to boot recovery.
+        if (stillPresent && !forceKill) {
+          // eslint-disable-next-line no-await-in-loop
+          await dockerService.appDockerForceRemove(c.appId).catch((e) => log.warn(`force remove (escalated) ${c.appId}: ${e.message}`));
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            stillPresent = Boolean(await dockerService.getDockerContainer(c.appId));
+          } catch (probeErr) {
+            stillPresent = true;
+            log.warn(`Teardown of ${c.identifier}: could not confirm the escalated removal (${probeErr.message}); keeping it owed`);
+          }
+        }
         if (stillPresent) {
           containerSurvived = true;
-          log.error(`Teardown of ${c.identifier}: container still present after remove — skipping destructive cleanup, keeping the teardown owed for retry`);
+          survivedComponents.add(c.identifier);
+          log.error(`Teardown of ${c.identifier}: container still present after remove — skipping destructive cleanup, keeping the teardown owed and condemned for retry`);
           // eslint-disable-next-line no-continue
           continue;
         }
@@ -984,6 +1037,8 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
         await cleanupVolumePath(volumepath, { entityName: c.label });
       } catch (err) {
         log.error(`Host teardown of ${c.identifier} failed (continuing): ${err.message}`);
+      } finally {
+        operationRegistry.release(c.appId, removingToken);
       }
     }
     // Reclaim the app's images (reference-gated) — an image-store mutation, so under the lock.
@@ -1014,6 +1069,14 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   let allDropped = true;
   // eslint-disable-next-line no-restricted-syntax
   for (const c of list) {
+    if (survivedComponents.has(c.identifier)) {
+      // Its container still exists (or a transition never settled): keep the condemn
+      // stamp + runtime state so the reconciler keeps refusing it and we never un-condemn
+      // a live container. The owed record re-drives it at boot recovery.
+      allDropped = false;
+      // eslint-disable-next-line no-continue
+      continue;
+    }
     // eslint-disable-next-line no-await-in-loop
     const dropped = await appsRuntimeState.remove(c.identifier);
     if (!dropped) allDropped = false;
