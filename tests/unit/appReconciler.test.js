@@ -613,11 +613,14 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
-    it('starts a stopped plain component that should run (default always policy)', async () => {
+    it('starts a stopped plain component that should run (default always policy) without seeding the crash ladder', async () => {
+      // getState resolves null by default — a first start, which is not a restart, so it
+      // must not record: seeding the history would push the container's first crash-recovery
+      // off the immediate rung onto the 30s rung.
       await appReconciler.reconcile('www_App');
-      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
       expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
       expect(stubs.appInspector.startAppMonitoring.calledOnce).to.be.true;
+      expect(stubs.appsRuntimeState.recordRestart.called, 'a clean first start does not seed the crash-backoff ladder').to.be.false;
     });
 
     it('marks hasSuccessfullyStarted on a first start (the durable signal that gates firstStart vs the install-window rollback)', async () => {
@@ -632,6 +635,15 @@ describe('appReconciler tests', () => {
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
       expect(stubs.appsRuntimeState.setSuccessfullyStarted.called).to.be.false;
+    });
+
+    it('records a restart when starting a stopped component that has run here before (crash-ladder paces repeated crashes)', async () => {
+      // hasSuccessfullyStarted true → this start IS a restart (the container ran, crashed,
+      // and is being brought back), so it seeds the ladder that paces repeated crashes.
+      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasSuccessfullyStarted: true });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
     });
 
     it('awaitConvergence resolves settled once a converging component reconciles to running', async () => {
@@ -1049,8 +1061,6 @@ describe('appReconciler tests', () => {
       await appReconciler.reconcile('www_App');
 
       expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
-      // a real start records exactly one restart attempt (paces the backoff ladder)
-      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
       clock.tick(60 * 1000);
       await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
       expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
