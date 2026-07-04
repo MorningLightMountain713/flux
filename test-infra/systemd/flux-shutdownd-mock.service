@@ -1,0 +1,20 @@
+[Unit]
+# The graceful-stop suites only (FLUX_SHUTDOWND_MOCK, entrypoint.sh). It runs in
+# the node because the app containers it stops live in the node's inner dockerd.
+Description=Mock flux-shutdownd (harness node)
+After=dockerd.service
+Wants=dockerd.service
+# Listening before FluxOS starts, which may ask it to stop an app at boot.
+Before=fluxos.service pm2-fluxuser.service
+
+[Service]
+EnvironmentFile=/etc/fluxos-harness.env
+ExecStart=/usr/bin/node /flux/test-infra/shutdownd-stub/index.js
+Restart=always
+RestartSec=1
+# The node's output stream, where the harness reads the unit's lines (entrypoint.sh).
+StandardOutput=append:/var/lib/flux-harness/stream
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target

@@ -331,6 +331,10 @@ fi
 if [ -n "$FLUX_SYNCTHING_HOST" ]; then
   ln -sf /etc/systemd/system/syncthing-forward.service /etc/systemd/system/multi-user.target.wants/syncthing-forward.service
 fi
+# The mock flux-shutdownd the graceful-stop suites drive (shutdownd-stub).
+if [ "$FLUX_SHUTDOWND_MOCK" = "true" ]; then
+  ln -sf /etc/systemd/system/flux-shutdownd-mock.service /etc/systemd/system/multi-user.target.wants/flux-shutdownd-mock.service
+fi
 
 # Container hygiene: kernel modules cannot be loaded here, and a tmpfs
 # over /tmp would shadow the harness's /tmp/flux-boot-config bind mount.
