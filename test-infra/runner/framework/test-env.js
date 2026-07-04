@@ -425,7 +425,7 @@ function releaseBootLock() {
   }
 }
 
-export async function createTestEnv({ hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [], configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true, tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {}, rpcFailures = [], bootContext = 'running', arcane = false } = {}) {
+export async function createTestEnv({ hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [], configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true, tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {}, rpcFailures = [], bootContext = 'running', arcane = false, shutdowndMock = false } = {}) {
   await acquireBootLock();
   // The queue wait above must not count against the suite's hook budget. Mocha
   // re-arms a running hook's watchdog from "now" when timeout() is set, so
@@ -436,7 +436,7 @@ export async function createTestEnv({ hookCtx = null, nodes = 1, deferredNodes =
   activeEnvs.add(env);
 
   try {
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -479,7 +479,7 @@ function mergeConfigs(base, override) {
   return result;
 }
 
-async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane) {
+async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -718,6 +718,10 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     // gates on FLUX_ARCANE_NODE + a 'arcane' getnodetype (the daemon stub answers
     // arcane). Opt-in per suite so the existing legacy-verdict suites are unchanged.
     if (arcane && !isLegacy) nodeEnv.FLUX_ARCANE_NODE = 'true';
+    // Graceful-stop suites: run the mock flux-shutdownd in-container so the daemon
+    // socket answers and FluxOS's stop routing is exercised. Only meaningful on an
+    // arcane node (the routing short-circuits not_arcane otherwise).
+    if (shutdowndMock && !isLegacy) nodeEnv.FLUX_SHUTDOWND_MOCK = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files (shared.js / node-NN) carry the default 198.18 addresses; NODE_CONFIG
