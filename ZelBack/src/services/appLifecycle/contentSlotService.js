@@ -683,6 +683,7 @@ const lastAppliedVersion = new Map();
 async function applyManifest(deployment, manifest, ctx, deps = {}) {
   const {
     signal = dockerService.appDockerSignal, restart = dockerService.appDockerRestart,
+    recordApplied = appsRepository.setContentManifestApplied,
   } = deps;
 
   // Claim the version up front so a concurrent duplicate skips; roll back on a
@@ -727,6 +728,15 @@ async function applyManifest(deployment, manifest, ctx, deps = {}) {
       reaction = signals.length ? 'signal' : 'none';
     }
     fluxEventBus.publish('content:slotApplied', { appName: ctx.appName, version: manifest.version, reaction });
+  }
+
+  // Durably record what this node delivered to the running container, AFTER the write +
+  // reaction — so a crash mid-apply leaves the version un-advanced and the next check
+  // retries once, never a loop. Best-effort: the content is already live regardless.
+  try {
+    await recordApplied(ctx.appName, manifest.version);
+  } catch (error) {
+    log.warn(`contentSlot: failed to record applied version ${manifest.version} for ${ctx.appName} - ${error.message ?? error}`);
   }
 }
 
@@ -861,6 +871,99 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
   }
 }
 
+/** True only when every content-bearing component of the deployment has a running
+ *  container. A stopped or absent one means the app isn't up, so applying content would
+ *  fire a reaction that wrongly (re)starts it — leave that to the start path, which stages
+ *  the current content before the container comes up. */
+async function contentComponentsRunning(deployment, deps = {}) {
+  const { inspect = dockerService.dockerContainerInspect } = deps;
+  for (const [, comp] of deployment.componentEntries()) {
+    if (!comp.hasContentSlots()) continue;
+    let info;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      info = await inspect(comp.identifier);
+    } catch (error) {
+      return false; // container absent
+    }
+    if (!info || !info.State || !info.State.Running) return false;
+  }
+  return true;
+}
+
+/**
+ * Bring a RUNNING container's slot content up to its stored manifest when this node's
+ * register advanced past what it last delivered (appliedVersion) — an update learned via a
+ * NON-gossip path (boot-sync of a version published during downtime, degrade-recovery, or
+ * the steady-state refresh). Live gossip apply is fire-once, so such an update would sit in
+ * the store unapplied and the container would serve stale content until it restarts. The
+ * decision is register `version` vs `appliedVersion` (Flux-owned scalars), never the
+ * mutable on-disk bytes a container may have changed. No-op unless the app is installed
+ * here with content slots, its container is running, and it is behind. Honors the manifest
+ * rollout (scheduleContentApplication → applyManifest, which advances appliedVersion).
+ *
+ * @param {string} appName
+ * @param {object} deps
+ * @returns {Promise<boolean>} whether an apply was scheduled
+ */
+async function applyStoredIfBehind(appName, deps = {}) {
+  const {
+    getStored = appsRepository.getContentManifest,
+    getDeployment = deploymentProvider.getInstalledDeployment,
+    getApp = appsRepository.getGlobalAppInfo,
+    componentsRunning = contentComponentsRunning,
+    schedule = scheduleContentApplication,
+    provider,
+  } = deps;
+
+  const stored = await getStored(appName);
+  if (!stored || !stored.data || stored.confirmed === false) return false; // nothing verified to apply
+  if (stored.version <= (stored.appliedVersion ?? 0)) return false; // already delivered
+
+  const deployment = await getDeployment(appName);
+  if (!deployment || !deployment.componentEntries().some(([, comp]) => comp.hasContentSlots())) return false;
+  if (!(await componentsRunning(deployment, deps))) return false; // stopped — the start path provisions it
+
+  const info = await getApp(appName);
+  if (!info) return false;
+  const { owner, isEncrypted: encrypted, spec } = info;
+  const plaintext = await openManifestSlots(stored.data.manifest, { owner, encrypted }, { provider });
+  await schedule(plaintext, spec, deps);
+  return true;
+}
+
+/**
+ * Sweep this node's installed apps and catch up any running container that is behind its
+ * stored manifest (applyStoredIfBehind self-filters the non-content and already-current
+ * ones). The steady-state backstop's apply half: the orchestrator calls it after a manifest
+ * refresh so a node that silently missed an update (partial partition, post-recovery)
+ * converges its live content, not just its register. Best-effort per app.
+ *
+ * @param {object} deps
+ * @returns {Promise<number>} count of apps caught up
+ */
+async function applyBehindContentApps(deps = {}) {
+  const { listInstalled = appsRepository.listInstalledApps, applyBehind = applyStoredIfBehind } = deps;
+  let installed;
+  try {
+    installed = await listInstalled();
+  } catch (error) {
+    log.warn(`contentSlot: applyBehindContentApps could not list installed apps - ${error.message ?? error}`);
+    return 0;
+  }
+  let caughtUp = 0;
+  for (const app of installed || []) {
+    if (!app || !app.name) continue;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      if (await applyBehind(app.name, deps)) caughtUp += 1;
+    } catch (error) {
+      log.warn(`contentSlot: catch-up for ${app.name} failed - ${error.message ?? error}`);
+    }
+  }
+  return caughtUp;
+}
+
 /**
  * Boot-time content recovery for an already-installed slot app, run AFTER the node has
  * synced and BEFORE its container (re)starts (the boot gate opens only once the boot
@@ -919,11 +1022,15 @@ async function reconcileBootContent(appName, deps = {}) {
     return;
   }
 
-  // Due (or no rollout): stage the current content before the container starts — but only
-  // for a container that is actually (re)starting. A surviving, still-running container is
-  // not re-written here (the steady-state gossip apply handles a missed update with its
-  // proper reaction); for it we only needed to re-arm a future rollout above.
-  if (!restarting) return;
+  // Due (or no rollout): a container that is actually (re)starting gets the current content
+  // staged before it starts (below). A surviving, still-running container instead catches up
+  // in place if the register advanced past what we last delivered while the process was down
+  // — a during-downtime update won't re-arrive (gossip is fire-once). No-op when it is
+  // already current.
+  if (!restarting) {
+    await applyStoredIfBehind(appName, deps);
+    return;
+  }
   const peers = await getPeers(appName);
   await provision(deployment, { appName, peers }, deps);
   fluxEventBus.publish('content:bootReconcile', { appName, version: manifest && manifest.version });
@@ -1285,6 +1392,9 @@ module.exports = {
   applyManifest,
   scheduleContentApplication,
   computeStaggerDelayMs,
+  applyStoredIfBehind,
+  applyBehindContentApps,
+  contentComponentsRunning,
   reconcileBootContent,
   provisionContentSlots,
   listAppPeers,
