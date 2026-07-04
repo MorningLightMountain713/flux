@@ -35,6 +35,11 @@ const MIN_UPTIME_SECONDS = config.fluxapps.appSyncMinPeerUptime ?? 7500;
 const HASH_SYNC_MAX_RETRIES = config.fluxapps.hashSyncMaxRetries ?? 3;
 const HASH_SYNC_RETRY_MS = config.fluxapps.hashSyncRetryMs ?? 300000;
 const FALLBACK_RECHECK_BLOCKS = config.fluxapps.hashSyncFallbackRecheckBlocks ?? 100;
+// Steady-state manifest anti-entropy: how often a READY node re-checks its content register
+// against a few peers, and how many it samples. Bounds how long a node that silently missed
+// an update (a partial partition above the degrade floor) can serve stale content.
+const MANIFEST_REFRESH_BLOCKS = config.fluxapps.manifestRefreshBlocks ?? 100;
+const MANIFEST_REFRESH_PEERS = config.fluxapps.manifestRefreshPeers ?? 3;
 
 // The counted ephemeral sync types — each gates boot readiness. Temp messages are
 // requested with the initial batch but are best-effort and never counted toward it. The
@@ -91,6 +96,9 @@ class AppSyncOrchestrator {
   #bootContext = null;
   #canSendMessages = false;
   #peerCountIfAboveThreshold = () => 0;
+  #catchUpRunningContent = async () => {};
+  #nextManifestRefreshHeight = 0;
+  #manifestRefreshInProgress = false;
 
   constructor(options = {}) {
     this.#blockEmitter = options.blockEmitter;
@@ -102,6 +110,7 @@ class AppSyncOrchestrator {
     this.#completeSyncRequest = options.completeSyncRequest ?? (() => {});
     this.#isEnterprise = options.isEnterprise ?? (() => false);
     this.#peerCountIfAboveThreshold = options.peerCountIfAboveThreshold ?? (() => 0);
+    this.#catchUpRunningContent = options.catchUpRunningContent ?? (async () => {});
     this.#waitForNetworkState = options.networkStateReady ?? null;
     this.#fluxVersion = options.fluxVersion ?? null;
   }
@@ -462,6 +471,7 @@ class AppSyncOrchestrator {
       this.#superviseStateSync();
       this.#checkReadiness();
       this.#checkHashRetry(blockHeight);
+      this.#checkManifestRefresh(blockHeight);
     }
   }
 
@@ -675,7 +685,55 @@ class AppSyncOrchestrator {
     if (!this.#canSendMessages) return;
 
     this.#setState(STATES.READY);
+    // First steady-state refresh one period out — boot/recovery just reconciled, so there is
+    // nothing to re-check immediately.
+    this.#nextManifestRefreshHeight = this.#lastBlockHeight + MANIFEST_REFRESH_BLOCKS;
     log.info('AppSyncOrchestrator - All readiness conditions met');
+  }
+
+  // Steady-state anti-entropy for the permanent content-manifest register. Change-only
+  // gossip misses a node cut off by a partial partition (one that stays above the degrade
+  // floor, so it never resyncs), and the boot/recovery reconcile only fires on (re)join —
+  // so a READY node can silently serve stale content indefinitely. A low-frequency pull
+  // against a few random peers bounds that to one refresh period: reconcile the register
+  // (fetch any newer manifest), then catch up the running containers whose register advanced.
+  async #checkManifestRefresh(blockHeight) {
+    if (this.#state !== STATES.READY) return;
+    if (!this.#canSendMessages) return;
+    if (this.#manifestRefreshInProgress) return;
+    if (blockHeight < this.#nextManifestRefreshHeight) return;
+    this.#nextManifestRefreshHeight = blockHeight + MANIFEST_REFRESH_BLOCKS;
+
+    const eligible = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
+    if (eligible.length === 0) return;
+    const sample = this.#samplePeers(eligible, MANIFEST_REFRESH_PEERS);
+
+    this.#manifestRefreshInProgress = true;
+    try {
+      const result = await contentManifestSyncService.reconcile(sample);
+      if (result.fetched > 0) {
+        log.info(`AppSyncOrchestrator - Manifest refresh pulled ${result.fetched} update(s) from ${result.peers} peer(s)`);
+      }
+      await this.#catchUpRunningContent();
+    } catch (error) {
+      log.error(`AppSyncOrchestrator - Manifest refresh failed: ${error.message}`);
+    } finally {
+      this.#manifestRefreshInProgress = false;
+    }
+  }
+
+  // A small random subset: steady-state convergence needs only a few peers (any few will
+  // almost surely carry an update the rest of the network already has), and random spreads
+  // the tiny load rather than always hitting the same peers.
+  #samplePeers(peers, n) {
+    if (peers.length <= n) return peers;
+    const pool = [...peers];
+    const picked = [];
+    for (let i = 0; i < n; i += 1) {
+      const idx = Math.floor(Math.random() * pool.length);
+      picked.push(pool.splice(idx, 1)[0]);
+    }
+    return picked;
   }
 
   onMessageCapabilityChange(capable) {
