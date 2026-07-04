@@ -195,6 +195,42 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.dockerService.appDockerForceRemove.calledOnce).to.be.true;
       expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.calledOnce).to.be.true;
     });
+
+    // Defect 1: a teardown must not tear a container down while a reconcile start holds the
+    // component 'removing' key. It WAITS (bounded) for the start to settle — the acquire
+    // succeeding is the signal — then removes, rather than deferring to boot recovery.
+    it('waits for an in-flight start (removing key busy) to settle, then removes', async () => {
+      stubs.operationRegistry.acquire.onFirstCall().returns(null).onSecondCall().returns('tok');
+      await appUninstaller.runTeardown(doc());
+      expect(stubs.operationRegistry.acquire.callCount, 'polled the removing lease until the start cleared').to.be.at.least(2);
+      expect(stubs.dockerService.appDockerRemove.calledOnce, 'removed once the lease cleared').to.be.true;
+      expect(stubs.pendingTeardownStore.clearTeardown.calledOnce, 'teardown completed, not owed').to.be.true;
+    });
+
+    // A start that completed in the gap before we took the lease leaves the container
+    // running; holding 'removing' now, we escalate to a force remove (its graceful window
+    // already elapsed) rather than 409-looping to boot recovery — and the teardown completes.
+    it('force-escalates and completes when a start left the container running', async () => {
+      stubs.dockerService.getDockerContainer.onFirstCall().resolves({ id: 'running-from-gap' }).onSecondCall().resolves(null);
+      await appUninstaller.runTeardown(doc());
+      expect(stubs.dockerService.appDockerRemove.calledOnce, 'non-force remove attempted first').to.be.true;
+      expect(stubs.dockerService.appDockerForceRemove.calledOnce, 'escalated to a force remove').to.be.true;
+      expect(stubs.dockerService.appDockerRemove.calledBefore(stubs.dockerService.appDockerForceRemove)).to.be.true;
+      expect(stubs.appsRuntimeState.remove.called, 'runtime state dropped — component fully torn down').to.be.true;
+      expect(stubs.pendingTeardownStore.clearTeardown.calledOnce, 'record cleared, not owed').to.be.true;
+    });
+
+    // A component whose container cannot be removed (even the force escalation fails) must
+    // keep its condemned stamp: dropping it would un-condemn a live container and let the
+    // reconciler keep it running until boot recovery. So the teardown must NOT drop its
+    // runtime state, and must stay owed.
+    it('keeps a surviving component condemned (does not drop its runtime state) and owed', async () => {
+      stubs.dockerService.getDockerContainer.resolves({ id: 'stuck' }); // never gone, even after force
+      await appUninstaller.runTeardown(doc());
+      expect(stubs.dockerService.appDockerForceRemove.called, 'escalation attempted').to.be.true;
+      expect(stubs.appsRuntimeState.remove.called, 'must NOT drop runtime state — that would un-condemn a live container').to.be.false;
+      expect(stubs.pendingTeardownStore.clearTeardown.called, 'kept owed for boot recovery').to.be.false;
+    });
   });
 
   describe('uninstallApplication (the removal prelude)', () => {
