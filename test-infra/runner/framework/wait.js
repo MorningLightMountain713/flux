@@ -1,4 +1,4 @@
-import { getAppContainerStatus, restartFluxos } from './container.js';
+import { getAppContainerStatus, restartFluxos, isAppFullyGone } from './container.js';
 import { throwIfInfraDead, sleepUnlessInfraDead } from './infra-death.js';
 // The node's own enum, not a copy of its values: a rename on the product side has to
 // break this import rather than quietly stop matching.
@@ -79,6 +79,13 @@ export async function waitForDown(client, appName, label, { timeout = 60000, int
     if (status && !status.status.startsWith('Up')) return true;
     throw new Error(status ? `${status.name} is still "${status.status}"` : `no container matching ${appName}`);
   }, { timeout, interval, label });
+}
+
+// Proof of FULL teardown on a node: no container, no docker network, no appdata mount or
+// directory. Use instead of a bare container-gone check to assert an app is really gone
+// (a removal that converged), not merely stopped/removed-container-but-leaked-volume.
+export async function waitForAppFullyGone(client, appName, { timeout = 120000, interval = 2000 } = {}) {
+  await waitFor(() => isAppFullyGone(client.container, appName), { timeout, interval, label: `${appName} fully torn down` });
 }
 
 // Event-based wait helpers (use SSE event stream)
@@ -425,7 +432,12 @@ export async function electionDecisionCount(node, identifier, decision) {
 
 // --- reconciler (appReconciler) ---
 
-// action: 'started' | 'stopped' | 'backoff' | 'recreated' | 'recreateFailed' (omit to match any)
+// action (omit to match any):
+//   run-state:  'started' | 'stopped' | 'backoff' | 'recreated' | 'recreateFailed'
+//   deferrals:  'startDeferred' | 'stopDeferred' | 'restartRequestedDeferred' | 'restartUnhealthyDeferred'
+//               (a transition deferred because a conflicting container operation held the lease)
+//   removal:    'removed' (an owed teardown converged - the app is fully gone) |
+//               'removalDeferred' (an owed teardown re-driven but not yet converged)
 export async function waitForReconcileActuated(node, identifier, action, timeout = 60000, opts) {
   return node.waitForEvent(
     'reconciler:actuated',
