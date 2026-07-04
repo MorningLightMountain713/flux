@@ -33,6 +33,7 @@ const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonServ
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
+const geolocationService = require('../../ZelBack/src/services/geolocationService');
 const packageJson = require('../../package.json');
 
 // Mock adminConfig for consistent testing
@@ -1891,6 +1892,10 @@ describe('fluxService tests', () => {
       fluxCommunicationStub = sinon.stub(fluxCommunication, 'connectedPeersInfo');
       fluxNetworkHelperStub = sinon.stub(fluxNetworkHelper, 'getIncomingConnectionsInfo');
       syncthingServiceStub = sinon.stub(syncthingService, 'systemVersion');
+      // getNodeGeolocation reads a process-wide module cache and the local DB; pin it
+      // so the response is driven by this test rather than by geolocation state left by
+      // an earlier suite.
+      sinon.stub(geolocationService, 'getNodeGeolocation').resolves(null);
     });
 
     afterEach(() => {
