@@ -320,11 +320,12 @@ class AppSyncOrchestrator {
     this.#startAppRunningBroadcast();
     this.#requestSyncs();
 
-    if (this.#state === STATES.RESYNCING) {
-      if (this.#syncInProgress) return;
-      await this.#runHashSync();
-      await this.#runManifestSync();
-      this.#checkReadiness();
+    // Peers arriving is also a wake-up for the permanent-plane syncs: on boot the
+    // manifest round may have run before discovery connected anyone (nothing to
+    // compare against, so it never latched), and recovery needs a real peer set to
+    // resync against. #advanceSync runs only the steps still incomplete.
+    if (this.#state === STATES.SYNCING || this.#state === STATES.RESYNCING) {
+      await this.#advanceSync();
     }
   }
 
@@ -453,7 +454,7 @@ class AppSyncOrchestrator {
       if (this.#state === STATES.INITIALIZING) {
         this.#setState(STATES.SYNCING);
         this.#ensureBlockThreshold();
-        this.#runInitialSync();
+        this.#advanceSync();
       }
     }
     if (this.#state === STATES.SYNCING || this.#state === STATES.READY || this.#state === STATES.RESYNCING) {
@@ -497,16 +498,31 @@ class AppSyncOrchestrator {
     }
   }
 
-  async #runInitialSync() {
+  // The single driver for the permanent-plane syncs (hash then manifest). Every
+  // wake-up — explorer synced, message-capability gained, peers ready — funnels
+  // through here rather than each one hand-picking which step to run off a flag
+  // proxy, so no interleaving of the three signals can leave a step un-run. Each
+  // step self-guards on its own completion latch: one that already succeeded is
+  // skipped, one that never truly ran is retried by whichever signal arrives next.
+  // Deferred until the node can both verify against synced specs (explorer) and
+  // send requests (capability); the block timer stays the terminal readiness
+  // backstop.
+  async #advanceSync() {
     if (this.#syncInProgress) return;
-    if (!this.#canSendMessages) {
-      log.info('AppSyncOrchestrator - Sync deferred, waiting for message capability');
+    if (!this.#explorerSynced || !this.#canSendMessages) {
+      log.info(`AppSyncOrchestrator - Sync deferred (explorerSynced=${this.#explorerSynced}, canSendMessages=${this.#canSendMessages})`);
+      return;
+    }
+    // Both permanent-plane steps already converged — nothing to run, just re-evaluate.
+    if (this.#hashSyncComplete && this.#manifestSyncComplete) {
+      this.#checkReadiness();
       return;
     }
     log.info('AppSyncOrchestrator - Sync started');
-    await this.#checkVersionUpgrade();
-    log.info('AppSyncOrchestrator - Starting initial hash sync');
-    await this.#runHashSync();
+    if (!this.#hashSyncComplete) {
+      await this.#checkVersionUpgrade();
+      await this.#runHashSync();
+    }
     await this.#runManifestSync();
     this.#checkReadiness();
   }
@@ -600,9 +616,17 @@ class AppSyncOrchestrator {
     try {
       const peers = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
       const result = await contentManifestSyncService.reconcile(peers);
-      this.#manifestSyncComplete = true;
-      log.info(`AppSyncOrchestrator - Manifest reconcile complete (peers=${result.peers}, indexes=${result.indexesReceived ?? 0}, fetched=${result.fetched ?? 0})`);
-      fluxEventBus.publish('content:manifestSyncComplete', result);
+      // Latch complete only on evidence the register was actually compared against a
+      // peer (>=1 index received). A vacuous round — no eligible peers, a single-flight
+      // collision, or a silent index timeout — must stay incomplete so a later wake-up
+      // retries; otherwise the node ships READY believing it converged when it asked no one.
+      if (result.indexesReceived >= 1) {
+        this.#manifestSyncComplete = true;
+        log.info(`AppSyncOrchestrator - Manifest reconcile complete (peers=${result.peers}, indexes=${result.indexesReceived}, fetched=${result.fetched ?? 0})`);
+        fluxEventBus.publish('content:manifestSyncComplete', result);
+      } else {
+        log.info(`AppSyncOrchestrator - Manifest reconcile made no peer contact (peers=${result.peers}), will retry`);
+      }
     } catch (error) {
       log.error(`AppSyncOrchestrator - Manifest reconcile failed: ${error.message}`);
       // Leave incomplete; the block timer releases readiness, gossip + per-app catch-up backfill.
@@ -660,11 +684,11 @@ class AppSyncOrchestrator {
     if (prev === capable) return;
     if (capable) {
       log.info('AppSyncOrchestrator - Message capability gained');
-      if (this.#explorerSynced && !this.#hashSyncComplete) {
-        this.#runInitialSync();
-      } else {
-        this.#checkReadiness();
-      }
+      // Re-run whatever is still incomplete (hash and/or manifest), not just when
+      // hash is unfinished: on a peers-first recovery the RESYNCING pass completes
+      // the hash sync but leaves the manifest un-reconciled, and keying the retry on
+      // #hashSyncComplete alone would skip it forever.
+      this.#advanceSync();
     } else {
       log.info('AppSyncOrchestrator - Message capability lost');
       if (this.#state === STATES.READY) {
