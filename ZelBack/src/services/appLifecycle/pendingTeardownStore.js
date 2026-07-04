@@ -84,6 +84,22 @@ async function clearTeardown(key) {
 }
 
 /**
+ * Bump the durable attempt counter for an owed teardown that didn't converge in one
+ * pass. Keyed by the teardown key; drives the reconciler's removal backoff so a
+ * persistently-failing teardown paces itself instead of hot-looping, and the pacing
+ * survives a crash (it lives in the same durable record). Best-effort.
+ * @param {string} key
+ */
+async function bumpAttempts(key) {
+  try {
+    const database = collection();
+    await dbHelper.updateOneInDatabase(database, pendingAppTeardowns, { key }, { $inc: { attempts: 1 } }, {});
+  } catch (err) {
+    log.error(`pendingTeardownStore - failed to bump attempts for ${key}: ${err.message}`);
+  }
+}
+
+/**
  * Whether a teardown is owed for an app NAME — the install-side interlock: an
  * install must not adopt an app whose prior teardown has not finished (its volume
  * may still be mid-umount/rm-rf). Fails CLOSED: a read error returns true, deferring
@@ -121,6 +137,7 @@ module.exports = {
   getTeardown,
   readAllTeardowns,
   clearTeardown,
+  bumpAttempts,
   teardownOwedFor,
   prepareCollection,
 };
