@@ -83,6 +83,10 @@ const syncthingEventsConsumerMock = {
   drainErroredFolderIds: sinon.stub().returns([]),
 };
 
+const volumeServiceMock = {
+  ensureAppVolumeMounted: sinon.stub().resolves({ mounted: true, alreadyMounted: true }),
+};
+
 // Load module with mocked dependencies
 const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingMonitor', {
   '../dbHelper': dbHelperMock,
@@ -95,6 +99,7 @@ const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/sy
   './syncthingMonitorHelpers': syncthingMonitorHelpersMock,
   './syncthingHealthMonitor': syncthingHealthMonitorMock,
   './syncthingEventsConsumer': syncthingEventsConsumerMock,
+  '../utils/volumeService': volumeServiceMock,
 });
 
 describe('syncthingMonitor tests', () => {
