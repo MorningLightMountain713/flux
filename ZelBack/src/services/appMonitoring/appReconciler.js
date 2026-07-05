@@ -15,6 +15,7 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
 const appVolumeService = require('../appLifecycle/appVolumeService');
 const appSwapPoolService = require('../appLifecycle/appSwapPoolService');
+const volumeService = require('../utils/volumeService');
 const containerHealthMonitor = require('./containerHealthMonitor');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
