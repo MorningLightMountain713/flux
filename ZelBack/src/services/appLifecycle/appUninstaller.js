@@ -125,8 +125,8 @@ async function cleanupAppData(appId, options = {}) {
     if (onStatus) onStatus(msg);
   };
 
-  // the bare mountpoint is kept immutable while unmounted (set at volume
-  // creation); clear the flag or the removal below fails
+  // the bare mountpoint is kept immutable while unmounted (set in createAppVolume,
+  // re-established by the boot mount pass); clear the flag or the removal below fails
   await serviceHelper.runCommand('chattr', { runAsRoot: true, params: ['-i', appsFolder + appId], logError: false });
 
   status(`Cleaning up ${entityName} data...`);
