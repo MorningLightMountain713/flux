@@ -139,11 +139,14 @@ async function cleanupAppData(appId, options = {}) {
 }
 
 /**
- * Clean up crontab entry for application
+ * Remove the legacy @reboot mount crontab entry for an app, if any. FluxOS owns
+ * mounting now (createAppVolume no longer creates these, and the boot pass in
+ * crontabAndMountsCleanup removes surviving entries once the volume is mounted),
+ * so this only cleans up an entry an older version left behind on uninstall.
  * @param {string} appId - Application ID
  * @param {object} [options]
  * @param {Function|null} [options.onStatus] - progress callback
- * @returns {Promise<string|null>} Volume path if found, null otherwise
+ * @returns {Promise<void>}
  */
 async function cleanupCrontab(appId, options = {}) {
   const { onStatus = null } = options;
@@ -151,7 +154,6 @@ async function cleanupCrontab(appId, options = {}) {
     log.info(msg);
     if (onStatus) onStatus(msg);
   };
-  let volumepath = null;
 
   status('Adjusting crontab...');
   const crontab = await crontabLoad().catch((e) => {
@@ -161,22 +163,7 @@ async function cleanupCrontab(appId, options = {}) {
 
   if (crontab) {
     const jobs = crontab.jobs();
-    let jobToRemove;
-    jobs.forEach((job) => {
-      if (job.comment() === appId) {
-        jobToRemove = job;
-        // find the command that tells us where the actual fsvol is;
-        const command = job.command();
-        const cmdsplit = command.split(' ');
-        // eslint-disable-next-line prefer-destructuring
-        volumepath = cmdsplit[4]; // sudo mount -o loop /home/abcapp2TEMP /root/flux/ZelApps/abcapp2 is an example
-        if (!job || !job.isValid()) {
-          // remove the job as its invalid anyway
-          crontab.remove(job);
-        }
-      }
-    });
-
+    const jobToRemove = jobs.find((job) => job.comment() === appId);
     if (jobToRemove) {
       crontab.remove(jobToRemove);
       try {
@@ -190,8 +177,6 @@ async function cleanupCrontab(appId, options = {}) {
       status('Crontab not found.');
     }
   }
-
-  return volumepath;
 }
 
 /**
@@ -400,7 +385,8 @@ async function uninstallComponent(component, options = {}) {
   if (removeVolumes) {
     await unmountVolume(appId, { entityName: label, onStatus });
     await cleanupAppData(appId, { entityName: label, onStatus });
-    const volumepath = await cleanupCrontab(appId, { onStatus });
+    await cleanupCrontab(appId, { onStatus });
+    const volumepath = await volumeService.getVolumeFilePath(appId);
     await cleanupVolumePath(volumepath, { entityName: label, onStatus });
     // Reclaim now-unneeded app-swap pool capacity (idempotent; no-op without the
     // new-mechanism host config). The container is already gone, so its swap pages
@@ -1067,7 +1053,9 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
         // eslint-disable-next-line no-await-in-loop
         await cleanupAppData(c.appId, { entityName: c.label });
         // eslint-disable-next-line no-await-in-loop
-        const volumepath = await cleanupCrontab(c.appId);
+        await cleanupCrontab(c.appId);
+        // eslint-disable-next-line no-await-in-loop
+        const volumepath = await volumeService.getVolumeFilePath(c.appId);
         // eslint-disable-next-line no-await-in-loop
         await cleanupVolumePath(volumepath, { entityName: c.label });
       } catch (err) {
