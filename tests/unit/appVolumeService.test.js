@@ -130,6 +130,12 @@ describe('appVolumeService.createAppVolume (findmnt disk selection + in-lock rec
     expect(calls.some((c) => c.cmd === 'fallocate' && c.params.some((p) => String(p).includes('/dat/'))), 'allocated the volume file on /dat').to.be.true;
     expect(calls.some((c) => c.cmd === 'mke2fs'), 'made the filesystem').to.be.true;
     expect(calls.some((c) => c.cmd === 'mount' && c.params.includes('loop')), 'mounted it').to.be.true;
+    // the bare mountpoint is set immutable BEFORE the mount shadows it, so a write
+    // while the volume is unmounted fails EPERM instead of landing on the host fs
+    const chattrIdx = calls.findIndex((c) => c.cmd === 'chattr' && c.params[0] === '+i');
+    const mountIdx = calls.findIndex((c) => c.cmd === 'mount' && c.params.includes('loop'));
+    expect(chattrIdx, 'set the mountpoint immutable').to.be.greaterThan(-1);
+    expect(chattrIdx, 'immutable flag set before the mount shadows the bare dir').to.be.lessThan(mountIdx);
   });
 
   it('aborts inside the lock without allocating when the app is condemned', async () => {
