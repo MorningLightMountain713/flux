@@ -85,6 +85,17 @@ async function createAppVolume(deployComp, res, test = false) {
       await serviceHelper.runCommand('mkdir', { params: ['-p', appsFolder + appId], runAsRoot: true });
       emitStatus(res, { status: 'Directory made' });
 
+      // Lock the empty bare mountpoint immutable BEFORE mounting so writes through
+      // it while the volume is unmounted (the first-reboot-after-install window,
+      // before the boot mount pass remounts) fail with EPERM instead of silently
+      // landing on the host filesystem. The mounted volume shadows the flag;
+      // uninstall clears it. Defense-in-depth on top of the mount, so a failure
+      // (unexpected on ext4/XFS) must never fail the install.
+      const chattr = await serviceHelper.runCommand('chattr', { runAsRoot: true, params: ['+i', appsFolder + appId], logError: false });
+      if (chattr.error) {
+        log.error(`createAppVolume - could not set ${appsFolder + appId} immutable (unexpected on ext4/XFS): ${chattr.error.message}`);
+      }
+
       emitStatus(res, { status: 'Mounting volume...' });
       await serviceHelper.runCommand('mount', { params: ['-o', 'loop', volumeFile, appsFolder + appId], runAsRoot: true });
       emitStatus(res, { status: 'Volume mounted' });
@@ -153,6 +164,8 @@ async function createAppVolume(deployComp, res, test = false) {
       volumeFilePath = `${useThisVolume.target}/${appId}FLUXFSVOL`;
     }
     await serviceHelper.runCommand('rm', { params: ['-rf', volumeFilePath], runAsRoot: true });
+    // clear the immutable flag set on the bare mountpoint before mounting, or the removal below fails
+    await serviceHelper.runCommand('chattr', { params: ['-i', appsFolder + appId], runAsRoot: true, logError: false });
     await serviceHelper.runCommand('rm', { params: ['-rf', appsFolder + appId], runAsRoot: true });
     emitStatus(res, { status: 'Pre-removal cleaning completed. Forcing removal.' });
     throw error;
