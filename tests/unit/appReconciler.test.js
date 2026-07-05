@@ -67,6 +67,7 @@ describe('appReconciler tests', () => {
         buildDeployment: sinon.stub().callsFake(async () => fakeDeployment(localSpec)),
       },
       appVolumeService: { ensureMountSourcesExist: sinon.stub().resolves() },
+      volumeService: { ensureAppVolumeMounted: sinon.stub().resolves({ mounted: true, alreadyMounted: true }) },
       dockerService: {
         dockerContainerInspect: sinon.stub().resolves({ State: { Running: false, Status: 'exited', ExitCode: 1 } }),
         // reachability probe used by dockerActual on an inspect failure; resolves => docker up
@@ -136,6 +137,7 @@ describe('appReconciler tests', () => {
       '../appDatabase/appsRepository': stubs.appsRepository,
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       '../appLifecycle/appVolumeService': stubs.appVolumeService,
+      '../utils/volumeService': stubs.volumeService,
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
       '../appQuery/appQueryService': stubs.appQueryService,
       './containerHealthMonitor': stubs.containerHealthMonitor,
