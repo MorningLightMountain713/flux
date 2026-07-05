@@ -1,6 +1,7 @@
 const util = require('util');
 const systemcrontab = require('crontab');
 const log = require('../../lib/log');
+const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const volumeService = require('../utils/volumeService');
@@ -21,15 +22,34 @@ const crontabLoad = util.promisify(systemcrontab.load);
 async function getInstalledAppIds() {
   const installedAppIds = new Set();
 
-  try {
-    const deployments = await deploymentProvider.listInstalledDeployments();
-    for (const deployment of deployments) {
-      for (const [, deployComp] of deployment.componentEntries()) {
-        installedAppIds.add(dockerService.getAppIdentifier(deployComp.identifier));
+  // listInstalledApps throws on a read failure: "cannot enumerate" must surface as
+  // unknown to callers, never as "nothing installed" (which would reap live mounts).
+  const installed = await appsRepository.listInstalledApps();
+
+  // eslint-disable-next-line no-restricted-syntax
+  for (const instantiated of installed) {
+    let deployment;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      deployment = await deploymentProvider.buildDeployment(instantiated);
+    } catch (error) {
+      // An encrypted app's components live in a sealed blob and cannot be enumerated
+      // when decryption is unavailable; derive its component ids from the FLUXFSVOL
+      // images on disk so its mounts are not reaped as "not installed".
+      if (instantiated.isEncrypted) {
+        // eslint-disable-next-line no-await-in-loop
+        const diskAppIds = await volumeService.getComponentAppIdsFromVolumeFiles(instantiated.name);
+        diskAppIds.forEach((appId) => installedAppIds.add(appId));
+      } else {
+        log.warn(`getInstalledAppIds - could not build deployment for ${instantiated.name}: ${error.message}`);
       }
+      // eslint-disable-next-line no-continue
+      continue;
     }
-  } catch (error) {
-    log.error(`getInstalledAppIds - Error: ${error.message}`);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const [, deployComp] of deployment.componentEntries()) {
+      installedAppIds.add(dockerService.getAppIdentifier(deployComp.identifier));
+    }
   }
 
   return installedAppIds;
