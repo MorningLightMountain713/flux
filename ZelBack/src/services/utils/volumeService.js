@@ -1,14 +1,11 @@
 const fs = require('fs').promises;
 const path = require('node:path');
-const util = require('node:util');
-const df = require('node-df');
+const deviceHelper = require('../deviceHelper');
 const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const mountParser = require('./mountParser');
 const log = require('../../lib/log');
 const { appsFolder, appVolumesPath, legacyAppVolumesPath } = require('./appConstants');
-
-const dfAsync = util.promisify(df);
 
 /**
  * Whether a path currently has a filesystem mounted on it. Reads
@@ -49,16 +46,16 @@ async function getVolumeFilePath(appId) {
   const candidates = [];
 
   try {
-    const dfres = await dfAsync({});
-    dfres.forEach((volume) => {
-      const eligible = volume.filesystem.includes('/dev/') && !volume.filesystem.includes('loop')
-        && !volume.mount.includes('boot') && volume.mount !== '/';
+    const filesystems = await deviceHelper.listMountedFilesystems();
+    filesystems.forEach((volume) => {
+      const eligible = volume.source.includes('/dev/') && !volume.source.includes('loop')
+        && !volume.target.includes('boot') && volume.target !== '/';
       if (eligible) {
-        candidates.push(path.join(volume.mount, volumeFileName));
+        candidates.push(path.join(volume.target, volumeFileName));
       }
     });
   } catch (error) {
-    log.warn(`getVolumeFilePath - df failed (${error.message}), falling back to appvolumes locations only`);
+    log.warn(`getVolumeFilePath - findmnt failed (${error.message}), falling back to appvolumes locations only`);
   }
 
   candidates.push(path.join(appVolumesPath, volumeFileName));
@@ -89,16 +86,16 @@ async function getComponentAppIdsFromVolumeFiles(appName) {
   const searchDirs = new Set([appVolumesPath, legacyAppVolumesPath]);
 
   try {
-    const dfres = await dfAsync({});
-    dfres.forEach((volume) => {
-      const eligible = volume.filesystem.includes('/dev/') && !volume.filesystem.includes('loop')
-        && !volume.mount.includes('boot') && volume.mount !== '/';
+    const filesystems = await deviceHelper.listMountedFilesystems();
+    filesystems.forEach((volume) => {
+      const eligible = volume.source.includes('/dev/') && !volume.source.includes('loop')
+        && !volume.target.includes('boot') && volume.target !== '/';
       if (eligible) {
-        searchDirs.add(volume.mount);
+        searchDirs.add(volume.target);
       }
     });
   } catch (error) {
-    log.warn(`getComponentAppIdsFromVolumeFiles - df failed (${error.message}), searching appvolumes locations only`);
+    log.warn(`getComponentAppIdsFromVolumeFiles - findmnt failed (${error.message}), searching appvolumes locations only`);
   }
 
   const escapedName = appName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
