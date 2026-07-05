@@ -246,6 +246,12 @@ describe('syncthingMonitor tests', () => {
       });
       syncthingServiceMock.adjustConfigFolders.resolves(); // beforeEach reset() wipes behavior; restore it
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, reason: 'not mounted' });
+      // getAppIdentifier is an identity stub here, so the component identifier is
+      // already the docker-style folder id.
+      deploymentProviderMock.listInstalledDeployments.resolves([{
+        appName: 'testapp',
+        componentEntries: () => [['comp', { identifier: 'fluxcomp_testapp' }]],
+      }]);
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -277,11 +283,13 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.calledOnce(syncthingEventsConsumerMock.stop);
     });
 
-    it('should run an early evaluation (debounced) when folder events arrive', async () => {
+    it('should run an early evaluation for a folder in active transition', async () => {
       // events never decide anything - they only run the SAME monitoring pass
-      // earlier than the interval would
+      // earlier than the interval would, and only for folders the state machine
+      // is actively transitioning (in the receiveOnly cache, not yet restarted).
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      mockState.receiveOnlySyncthingAppsCache.set('fluxcomp_app1', { numberOfExecutions: 3 });
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -294,9 +302,40 @@ describe('syncthingMonitor tests', () => {
       handlers.onFolderActivity('fluxcomp_app1', 'FolderSummary');
       handlers.onFolderActivity('fluxcomp_app1', 'StateChanged'); // coalesces
 
-      await clock.tickAsync(2500); // past the debounce, well before the interval
+      // a continuous event stream must not drive back-to-back passes: nothing
+      // fires before the min gap from the last completed pass
+      await clock.tickAsync(2500);
+      expect(deploymentProviderMock.listInstalledDeployments.callCount).to.equal(runsAfterStart);
 
+      // past the min gap, before the interval
+      await clock.tickAsync(8500);
       expect(deploymentProviderMock.listInstalledDeployments.callCount).to.equal(runsAfterStart + 1);
+    });
+
+    it('should NOT accelerate on activity from steady-state folders', async () => {
+      // a healthy folder (synced, or a busy app writing into it) emits events
+      // continuously - those belong to the level pass, never the accelerator, or
+      // a busy g: app degenerates the cadence into back-to-back full passes.
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      // a completed transition (restarted) is steady state too
+      mockState.receiveOnlySyncthingAppsCache.set('fluxcomp_done', { restarted: true });
+
+      monitorControl = syncthingMonitor.syncthingApps(
+        mockState,
+        mockGetGlobalStateFn,
+      );
+      await clock.tickAsync(100); // initial run completes
+      const runsAfterStart = deploymentProviderMock.listInstalledDeployments.callCount;
+
+      const handlers = syncthingEventsConsumerMock.start.firstCall.args[0];
+      handlers.onFolderActivity('fluxcomp_untracked', 'FolderSummary');
+      handlers.onFolderActivity('fluxcomp_done', 'FolderSummary');
+      handlers.onFolderActivity('fluxcomp_done', 'StateChanged');
+
+      await clock.tickAsync(15000); // well past debounce and min gap
+
+      expect(deploymentProviderMock.listInstalledDeployments.callCount).to.equal(runsAfterStart);
     });
 
     it('should prevent overlapping executions', async () => {
