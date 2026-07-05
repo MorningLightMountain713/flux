@@ -81,6 +81,7 @@ const syncthingEventsConsumerMock = {
   stop: sinon.stub().resolves(),
   isRunning: sinon.stub().returns(false),
   getFolderErrors: sinon.stub(),
+  drainErroredFolderIds: sinon.stub().returns([]),
 };
 
 // Load module with mocked dependencies
