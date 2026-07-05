@@ -1,8 +1,6 @@
 const config = require('config');
 const fs = require('node:fs/promises');
-const util = require('util');
 const path = require('node:path');
-const systemcrontab = require('crontab');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const messageHelper = require('../messageHelper');
@@ -63,10 +61,6 @@ async function createAppVolume(deployComp, res, test = false) {
     } else {
       volumeFile = `${useThisVolume.target}/${appId}FLUXFSVOL`;
     }
-
-    // The @reboot remount command, hoisted out of the locked region below so the crontab
-    // step (which runs outside the lock) can use it.
-    const execMount = `while [ ! -f ${volumeFile} ]; do sleep 5; done && sudo mount -o loop ${volumeFile} ${appsFolder + appId}`;
 
     // Build the loop-mounted FLUXFSVOL under the node-wide host-mutation lock — the same
     // lock a same-app cancel's teardown holds for its umount + rm -rf of this volume.
@@ -141,30 +135,9 @@ async function createAppVolume(deployComp, res, test = false) {
       emitStatus(res, { status: '.stignore created' });
     }
 
-    emitStatus(res, { status: 'Creating crontab...' });
-    const crontab = await crontabLoad();
-    const jobs = crontab.jobs();
-    let exists = false;
-    jobs.forEach((job) => {
-      if (job.comment() === appId) {
-        exists = true;
-      }
-      if (!job || !job.isValid()) {
-        crontab.remove(job);
-      }
-    });
-    if (!exists) {
-      const job = crontab.create(execMount, '@reboot', appId);
-      if (job == null) {
-        throw new Error('Failed to create a cron job');
-      }
-      if (!job.isValid()) {
-        throw new Error('Failed to create a valid cron job');
-      }
-      crontab.save();
-    }
-    emitStatus(res, { status: 'Crontab adjusted.' });
-
+    // No @reboot crontab entry: FluxOS owns mounting (boot pass in
+    // crontabAndMountsCleanup + the reconciler). crontabAndMountsCleanup only
+    // idempotently removes legacy entries older versions left behind.
     return messageHelper.createSuccessMessage('Flux App volume creation completed.');
   } catch (error) {
     clearInterval(global.allocationInterval);
