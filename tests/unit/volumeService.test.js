@@ -14,7 +14,7 @@ describe('volumeService tests', () => {
   let serviceHelperStub;
   let mountParserStub;
   let fsStub;
-  let dfStub;
+  let deviceHelperStub;
   let logStub;
   let volumeService;
 
@@ -38,7 +38,7 @@ describe('volumeService tests', () => {
     // fallback, so tests can keep expressing mountedness via runCommand; the
     // isPathMounted describe covers the mountinfo path with real fixtures
     fsStub = { promises: { access: sinon.stub(), readdir: sinon.stub().resolves([]), readFile: sinon.stub().rejects(new Error('no mountinfo')) } };
-    dfStub = sinon.stub().callsArgWith(1, null, []); // node-df callback style: (options, cb)
+    deviceHelperStub = { listMountedFilesystems: sinon.stub().resolves([]) };
     logStub = {
       info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
     };
@@ -49,7 +49,7 @@ describe('volumeService tests', () => {
       './mountParser': mountParserStub,
       './appConstants': { appsFolder: APPS_FOLDER, appVolumesPath: APP_VOLUMES, legacyAppVolumesPath: LEGACY_APP_VOLUMES },
       '../../lib/log': logStub,
-      'node-df': dfStub,
+      '../deviceHelper': deviceHelperStub,
       fs: { promises: fsStub.promises },
     });
   });
@@ -120,9 +120,9 @@ describe('volumeService tests', () => {
 
   describe('getVolumeFilePath tests', () => {
     it('should find the image at the root of an eligible df volume', async () => {
-      dfStub.callsArgWith(1, null, [
-        { filesystem: '/dev/sda1', mount: '/dat' },
-        { filesystem: 'tmpfs', mount: '/run' },
+      deviceHelperStub.listMountedFilesystems.resolves([
+        { source: '/dev/sda1', target: '/dat' },
+        { source: 'tmpfs', target: '/run' },
       ]);
       fsStub.promises.access.rejects(new Error('ENOENT'));
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
@@ -132,7 +132,7 @@ describe('volumeService tests', () => {
     });
 
     it('should not look for images at the root filesystem itself', async () => {
-      dfStub.callsArgWith(1, null, [{ filesystem: '/dev/sda1', mount: '/' }]);
+      deviceHelperStub.listMountedFilesystems.resolves([{ source: '/dev/sda1', target: '/' }]);
       fsStub.promises.access.rejects(new Error('ENOENT'));
 
       await volumeService.getVolumeFilePath('fluxapp1');
@@ -164,7 +164,7 @@ describe('volumeService tests', () => {
     });
 
     it('should still check appvolumes locations when df fails', async () => {
-      dfStub.callsArgWith(1, new Error('df failed'), null);
+      deviceHelperStub.listMountedFilesystems.rejects(new Error('findmnt failed'));
       fsStub.promises.access.rejects(new Error('ENOENT'));
       fsStub.promises.access.withArgs(`${APP_VOLUMES}/fluxapp1FLUXFSVOL`).resolves();
 
@@ -176,7 +176,7 @@ describe('volumeService tests', () => {
   describe('ensureAppVolumeMounted tests', () => {
     beforeEach(() => {
       dockerServiceStub.getAppIdentifier.returns('fluxapp1');
-      dfStub.callsArgWith(1, null, [{ filesystem: '/dev/sda1', mount: '/dat' }]);
+      deviceHelperStub.listMountedFilesystems.resolves([{ source: '/dev/sda1', target: '/dat' }]);
     });
 
     it('should be a no-op when the app dir is already a mountpoint', async () => {
