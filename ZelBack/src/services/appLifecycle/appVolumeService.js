@@ -14,7 +14,6 @@ const log = require('../../lib/log');
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
 const appsFolder = `${appsFolderPath}/`;
-const crontabLoad = util.promisify(systemcrontab.load);
 
 function emitStatus(res, status) {
   log.info(status);
