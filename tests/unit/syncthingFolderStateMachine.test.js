@@ -448,9 +448,8 @@ describe('syncthingFolderStateMachine tests', () => {
         State: { Running: false },
       });
 
-      const result = await stateMachine.manageFolderSyncState(mockParams);
+      await stateMachine.manageFolderSyncState(mockParams);
 
-      expect(result.skipUpdate).to.be.true;
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
     });
 
@@ -1980,6 +1979,65 @@ describe('syncthingFolderStateMachine tests', () => {
       const peer = await stateMachine.findSyncedPeer('fluxappone');
 
       expect(peer).to.not.equal(null);
+    });
+  });
+
+  describe('manageFolderSyncState mount safety on a sendreceive folder', () => {
+    let mockParams;
+
+    beforeEach(() => {
+      mockParams = {
+        appId: 'test-app',
+        syncFolder: { type: 'sendreceive', path: '/apps/test-app' },
+        requiresSyncBeforeStart: false,
+        syncthingAppsFirstRun: false,
+        receiveOnlySyncthingAppsCache: new Map(),
+        appLocation: sinon.stub().resolves([]),
+        localSocketAddr: '10.0.0.1:16127',
+        syncthingFolder: { id: 'test-app', type: 'sendreceive' },
+        installedAppName: 'test-app',
+      };
+      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: true } });
+    });
+
+    it('mounts an unmounted volume and proceeds when the re-verify passes', async () => {
+      volumeServiceMock.isPathMounted.onFirstCall().resolves(false);
+      volumeServiceMock.isPathMounted.resolves(true);
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false });
+
+      const result = await stateMachine.manageFolderSyncState(mockParams);
+
+      sinon.assert.calledWith(volumeServiceMock.ensureAppVolumeMounted, 'test-app');
+      // dev's a0c652f0a deleted skipUpdate from the already-syncing path (nothing read
+      // it, and honouring it would suppress the config rewrite a changed device list
+      // needs), so "proceeded" is the folder staying sendreceive.
+      expect(result.syncthingFolder.type).to.equal('sendreceive');
+      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'test-app', 'stopped');
+    });
+
+    it('demotes to receiveonly and holds the container when the volume cannot be mounted', async () => {
+      volumeServiceMock.isPathMounted.resolves(false);
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+
+      const result = await stateMachine.manageFolderSyncState(mockParams);
+
+      expect(result.syncthingFolder.type).to.equal('receiveonly');
+      expect(result.cache.mountSafetyBlocked).to.be.true;
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'stopped');
+    });
+
+    it('still demotes after a successful mount when the index is phantom over an empty volume', async () => {
+      volumeServiceMock.isPathMounted.onFirstCall().resolves(false);
+      volumeServiceMock.isPathMounted.resolves(true);
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false });
+      fsMock.promises.readdir.resolves([dirent('.stignore')]);
+      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500000, inSyncBytes: 500000, state: 'idle' });
+
+      const result = await stateMachine.manageFolderSyncState(mockParams);
+
+      expect(result.syncthingFolder.type).to.equal('receiveonly');
+      expect(result.cache.blockedReason).to.equal('phantom_index_empty_disk');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'stopped');
     });
   });
 });
