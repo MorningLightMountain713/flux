@@ -88,6 +88,10 @@ const volumeServiceMock = {
   ensureAppVolumeMounted: sinon.stub().resolves({ mounted: true, alreadyMounted: true }),
 };
 
+const appReconcilerMock = {
+  setControllerDesired: sinon.stub(),
+};
+
 // Load module with mocked dependencies
 const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingMonitor', {
   '../dbHelper': dbHelperMock,
@@ -96,6 +100,7 @@ const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/sy
   '../fluxNetworkHelper': fluxNetworkHelperMock,
   '../syncthingService': syncthingServiceMock,
   '../appRuntime/deploymentProvider': deploymentProviderMock,
+  './appReconciler': appReconcilerMock,
   './syncthingFolderStateMachine': syncthingFolderStateMachineMock,
   './syncthingMonitorHelpers': syncthingMonitorHelpersMock,
   './syncthingHealthMonitor': syncthingHealthMonitorMock,
@@ -136,6 +141,13 @@ describe('syncthingMonitor tests', () => {
     syncthingEventsConsumerMock.start.reset();
     syncthingEventsConsumerMock.stop.reset();
     syncthingEventsConsumerMock.stop.resolves();
+    syncthingEventsConsumerMock.drainErroredFolderIds.reset();
+    syncthingEventsConsumerMock.drainErroredFolderIds.returns([]);
+    volumeServiceMock.ensureAppVolumeMounted.reset();
+    volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: true });
+    syncthingFolderStateMachineMock.verifyFolderMountSafety.reset();
+    syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: true, isMounted: true, fileCount: 1 });
+    appReconcilerMock.setControllerDesired.reset();
 
     // Default stub behaviors
     syncthingServiceMock.getConfigFolders.resolves({ data: [] });
@@ -261,8 +273,77 @@ describe('syncthingMonitor tests', () => {
 
       sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, 'patch', { type: 'receiveonly' }, 'fluxcomp_testapp');
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
+    });
 
-      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: true, isMounted: true, fileCount: 1 });
+    it('demotes a sendreceive folder over an unrepairable mount while skipping the cycle', async () => {
+      // repair fails (backing image gone) so the whole cycle is skipped, but a
+      // folder left sendreceive over the bad mount could still broadcast its disk
+      // state - it must be demoted and its container held before bailing.
+      deploymentProviderMock.listInstalledDeployments.resolves([{
+        appName: 'testapp',
+        componentEntries: () => [['comp', { identifier: 'testapp' }]],
+      }]);
+      syncthingEventsConsumerMock.drainErroredFolderIds.returns(['testapp']);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: 'testapp', type: 'sendreceive' }] });
+      syncthingServiceMock.adjustConfigFolders.resolves(); // beforeEach reset() wipes behavior; restore it
+
+      monitorControl = syncthingMonitor.syncthingApps(
+        mockState,
+        mockGetGlobalStateFn,
+      );
+      await clock.tickAsync(100);
+
+      sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, 'patch', { type: 'receiveonly' }, 'testapp');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'testapp', 'stopped');
+      // the cycle itself was skipped - per-app processing never ran
+      sinon.assert.notCalled(syncthingServiceMock.getDeviceId);
+    });
+
+    it('does not re-patch an unsafe folder that is already receiveonly', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([{
+        appName: 'testapp',
+        componentEntries: () => [['comp', { identifier: 'testapp' }]],
+      }]);
+      syncthingEventsConsumerMock.drainErroredFolderIds.returns(['testapp']);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'empty_unmounted_directory' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: 'testapp', type: 'receiveonly' }] });
+
+      monitorControl = syncthingMonitor.syncthingApps(
+        mockState,
+        mockGetGlobalStateFn,
+      );
+      await clock.tickAsync(100);
+
+      sinon.assert.notCalled(syncthingServiceMock.adjustConfigFolders);
+      sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
+    });
+
+    it('does not sweep mounts in steady state (no FolderErrors, not first run)', async () => {
+      // an unsafe mount exists (verifyFolderMountSafety would report it if asked),
+      // but nothing flagged it - the steady-state pass must not go looking:
+      // syncthing's .stfolder marker converts real storage loss into
+      // FolderErrors, which is the only trigger. The pass still proceeds.
+      deploymentProviderMock.listInstalledDeployments.resolves([{
+        appName: 'testapp',
+        componentEntries: () => [['comp', { identifier: 'testapp', hasSyncthing: () => false }]],
+      }]);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'empty_unmounted_directory' });
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+
+      monitorControl = syncthingMonitor.syncthingApps(
+        mockState,
+        mockGetGlobalStateFn,
+      );
+      await clock.tickAsync(100);
+
+      // a sweep would run checkAppFolderMounts over the installed deployment
+      sinon.assert.notCalled(syncthingFolderStateMachineMock.verifyFolderMountSafety);
+      // the pass itself proceeded - it was not skipped
+      sinon.assert.called(syncthingServiceMock.getDeviceId);
     });
 
     it('should start the events consumer (edge accelerator) and stop it on shutdown', async () => {
@@ -336,6 +417,28 @@ describe('syncthingMonitor tests', () => {
       await clock.tickAsync(15000); // well past debounce and min gap
 
       expect(deploymentProviderMock.listInstalledDeployments.callCount).to.equal(runsAfterStart);
+    });
+
+    it('should accelerate on FolderErrors regardless of folder state', async () => {
+      // FolderErrors is syncthing's own storage-went-bad signal (e.g. the
+      // .stfolder marker vanished with its mount) - always worth an early pass,
+      // even for a folder the state machine is not otherwise transitioning.
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+
+      monitorControl = syncthingMonitor.syncthingApps(
+        mockState,
+        mockGetGlobalStateFn,
+      );
+      await clock.tickAsync(100); // initial run completes
+      const runsAfterStart = deploymentProviderMock.listInstalledDeployments.callCount;
+
+      const handlers = syncthingEventsConsumerMock.start.firstCall.args[0];
+      handlers.onFolderActivity('fluxcomp_untracked', 'FolderErrors');
+
+      await clock.tickAsync(11000); // past the min gap from the last completed pass
+
+      expect(deploymentProviderMock.listInstalledDeployments.callCount).to.equal(runsAfterStart + 1);
     });
 
     it('should prevent overlapping executions', async () => {
