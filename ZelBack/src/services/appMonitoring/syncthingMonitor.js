@@ -98,22 +98,22 @@ async function checkAppFolderMounts(deployments) {
 }
 
 /**
- * Installed apps having at least one component whose docker app identifier is
- * in the given folder-id list (syncthing folder ids ARE the app identifiers).
- * @param {Array} appsInstalled - List of installed apps
- * @param {string[]} folderIds - Syncthing folder ids to match
- * @returns {Array} Matching installed apps
+ * Installed app deployments having at least one component whose docker app
+ * identifier is in the given folder-id set (syncthing folder ids ARE the app
+ * identifiers). componentEntries()/deployComp.identifier are polymorphic over
+ * the spec version, so there is no v1-3-vs-v4+ branching here.
+ * @param {Array} deployments - Installed app deployments
+ * @param {Set<string>} folderIds - Syncthing folder ids that need verifying
+ * @returns {Array} Matching deployments
  */
-function appsMatchingFolderIds(appsInstalled, folderIds) {
-  if (folderIds.length === 0) return [];
-  const wanted = new Set(folderIds);
-  return appsInstalled.filter((installedApp) => {
-    if (installedApp.version <= 3) {
-      return wanted.has(dockerService.getAppIdentifier(installedApp.name));
+function deploymentsMatchingFolderIds(deployments, folderIds) {
+  if (folderIds.size === 0) return [];
+  return deployments.filter((deployment) => {
+    // eslint-disable-next-line no-restricted-syntax
+    for (const [, deployComp] of deployment.componentEntries()) {
+      if (folderIds.has(dockerService.getAppIdentifier(deployComp.identifier))) return true;
     }
-    return (installedApp.compose || []).some(
-      (component) => wanted.has(dockerService.getAppIdentifier(`${component.name}_${installedApp.name}`)),
-    );
+    return false;
   });
 }
 
@@ -333,9 +333,22 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // through the domain provider - no version branching, no separate decrypt.
     const deployments = await deploymentProvider.listInstalledDeployments();
 
+    // Drain the folders syncthing flagged with errors since the last cycle. Mount
+    // safety is verified only at decision points - the first pass after start (the
+    // reboot case: loop mounts may not be up yet) and folders syncthing itself
+    // flagged - never as a steady-state sweep of every folder. A vanished mount
+    // takes the folder's .stfolder marker with it and raises FolderErrors, so the
+    // flagged set catches real mount loss without re-walking healthy folders.
+    const erroredFolderIds = new Set(syncthingEventsConsumer.drainErroredFolderIds());
+    const deploymentsToVerify = state.syncthingAppsFirstRun
+      ? deployments
+      : deploymentsMatchingFolderIds(deployments, erroredFolderIds);
+
     // CRITICAL: Check if app folder mounts are ready before processing
     // This prevents syncthing operations when loop devices aren't mounted after reboot
-    const unmountedApps = await checkAppFolderMounts(deployments);
+    const unmountedApps = deploymentsToVerify.length > 0
+      ? await checkAppFolderMounts(deploymentsToVerify)
+      : [];
     if (unmountedApps.length > 0) {
       const unmountedList = unmountedApps.map((app) => app.appId).join(', ');
       log.warn(`syncthingAppsCore - Skipping processing: ${unmountedApps.length} app folders not mounted yet: ${unmountedList}`);
