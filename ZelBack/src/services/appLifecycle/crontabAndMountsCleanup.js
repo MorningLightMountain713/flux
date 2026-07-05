@@ -37,6 +37,7 @@ async function getInstalledAppIds() {
       // when decryption is unavailable; derive its component ids from the FLUXFSVOL
       // images on disk so its mounts are not reaped as "not installed".
       if (instantiated.isEncrypted) {
+        log.warn(`getInstalledAppIds - could not decrypt ${instantiated.name} (${error.message}); deriving components from volume images on disk`);
         // eslint-disable-next-line no-await-in-loop
         const diskAppIds = await volumeService.getComponentAppIdsFromVolumeFiles(instantiated.name);
         diskAppIds.forEach((appId) => installedAppIds.add(appId));
