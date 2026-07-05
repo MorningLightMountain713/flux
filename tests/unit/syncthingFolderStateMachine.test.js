@@ -24,10 +24,23 @@ const dockerServiceMock = {
 
 const serviceHelperMock = {
   delay: sinon.stub().resolves(),
+  runCommand: sinon.stub().resolves({ error: null }),
 };
 
-const nodecmdMock = {
-  run: sinon.stub(),
+// Default-safe mount checks: verifyFolderMountSafety sees a mounted base dir with
+// content, so the SAFETY BLOCK stays dormant unless a test overrides these.
+const volumeServiceMock = {
+  isPathMounted: sinon.stub().resolves(true),
+  ensureAppVolumeMounted: sinon.stub().resolves({ mounted: true, alreadyMounted: true }),
+  getVolumeFilePath: sinon.stub().resolves('/dat/fluxappFLUXFSVOL'),
+  ensureMountSourcesExist: sinon.stub().resolves(),
+};
+
+const fsMock = {
+  promises: {
+    stat: sinon.stub().resolves({ isDirectory: () => true }),
+    readdir: sinon.stub().resolves([{ name: 'data.txt', isDirectory: () => false, isFile: () => true }]),
+  },
 };
 
 const appReconcilerMock = {
@@ -42,7 +55,8 @@ const stateMachine = proxyquire('../../ZelBack/src/services/appMonitoring/syncth
   '../dockerService': dockerServiceMock,
   '../syncthingService': syncthingServiceMock,
   '../serviceHelper': serviceHelperMock,
-  'node-cmd': nodecmdMock,
+  '../utils/volumeService': volumeServiceMock,
+  'node:fs': fsMock,
   // stub new collaborators so the unit test doesn't load the real module graph
   './appReconciler': appReconcilerMock,
   '../appLifecycle/appUninstaller': appUninstallerMock,
@@ -68,35 +82,21 @@ describe('syncthingFolderStateMachine tests', () => {
     dockerServiceMock.getAppIdentifier.reset();
     serviceHelperMock.delay.reset();
     serviceHelperMock.delay.resolves();
-    nodecmdMock.run.reset();
+    serviceHelperMock.runCommand.reset();
+    serviceHelperMock.runCommand.resolves({ error: null });
+    volumeServiceMock.isPathMounted.reset();
+    volumeServiceMock.isPathMounted.resolves(true);
+    volumeServiceMock.ensureAppVolumeMounted.reset();
+    volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: true });
+    fsMock.promises.stat.reset();
+    fsMock.promises.stat.resolves({ isDirectory: () => true });
+    fsMock.promises.readdir.reset();
+    fsMock.promises.readdir.resolves([{ name: 'data.txt', isDirectory: () => false, isFile: () => true }]);
     appUninstallerMock.uninstallApplication.reset();
     appUninstallerMock.uninstallApplication.resolves();
     appReconcilerMock.setControllerDesired.reset();
     appReconcilerMock.requestStopAndClearData.reset();
     appReconcilerMock.enqueue.reset();
-
-    // Mock successful file system operations for safety checks
-    // This makes verifyFolderMountSafety return isSafe: true
-    // nodecmd.run callback signature: (err, data, stderr)
-    nodecmdMock.run.callsFake((cmd, callback) => {
-      if (cmd.includes('test -d')) {
-        // Directory exists
-        callback(null, 'exists', '');
-      } else if (cmd.includes('mountpoint')) {
-        // Not a mount point (exit code 1) - this causes an error
-        const err = new Error('not a mountpoint');
-        err.code = 1;
-        callback(err, '', '');
-      } else if (cmd.includes('find')) {
-        // Has files (return count > 0)
-        callback(null, '10\n', '');
-      } else if (cmd.includes('chmod')) {
-        // Permission changes succeed
-        callback(null, '', '');
-      } else {
-        callback(null, '', '');
-      }
-    });
   });
 
   describe('isDesignatedLeader', () => {
