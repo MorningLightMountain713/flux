@@ -40,6 +40,15 @@ const FALLBACK_RECHECK_BLOCKS = config.fluxapps.hashSyncFallbackRecheckBlocks ??
 // an update (a partial partition above the degrade floor) can serve stale content.
 const MANIFEST_REFRESH_BLOCKS = config.fluxapps.manifestRefreshBlocks ?? 100;
 const MANIFEST_REFRESH_PEERS = config.fluxapps.manifestRefreshPeers ?? 3;
+// The refresh's own peer-uptime floor, deliberately far below the boot hash sync's
+// MIN_UPTIME_SECONDS anti-flap gate: manifests are owner-signed and the register only
+// moves to a higher signed version, so a young peer can at worst waste one tiny
+// round-trip — while the node that most needs the backstop (just healed from a
+// partition) is exactly the one whose connections are freshest. The 2h gate would
+// blind the refresh to every peer for hours after a heal, quietly stretching the
+// backstop's staleness ceiling from ~50 min to ~2.5 h. The token floor only skips
+// sockets still mid-handshake or dying instantly.
+const MANIFEST_REFRESH_MIN_PEER_UPTIME_SECONDS = config.fluxapps.manifestRefreshMinPeerUptime ?? 30;
 
 // The counted ephemeral sync types — each gates boot readiness. Temp messages are
 // requested with the initial batch but are best-effort and never counted toward it. The
@@ -704,7 +713,9 @@ class AppSyncOrchestrator {
     if (blockHeight < this.#nextManifestRefreshHeight) return;
     this.#nextManifestRefreshHeight = blockHeight + MANIFEST_REFRESH_BLOCKS;
 
-    const eligible = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
+    // The refresh's own (token) uptime floor, NOT the boot sync's anti-flap gate —
+    // see MANIFEST_REFRESH_MIN_PEER_UPTIME_SECONDS.
+    const eligible = this.#getEligibleSyncPeers(MANIFEST_REFRESH_MIN_PEER_UPTIME_SECONDS);
     if (eligible.length === 0) return;
     const sample = this.#samplePeers(eligible, MANIFEST_REFRESH_PEERS);
 

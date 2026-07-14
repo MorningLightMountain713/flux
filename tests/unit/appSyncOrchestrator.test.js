@@ -638,6 +638,21 @@ describe('AppSyncOrchestrator', () => {
       expect(reconcileStub.firstCall.args[0]).to.have.lengthOf(3); // sampled peers
     });
 
+    it('samples refresh peers with its own token uptime floor, not the boot anti-flap gate', async () => {
+      // The node that most needs the backstop (just healed from a partition) has
+      // the freshest connections: the boot sync's ~2h uptime gate would blind the
+      // refresh to every peer for hours after a heal. The refresh consults its own
+      // floor (manifestRefreshMinPeerUptime, default 30s).
+      const catchUp = sinon.stub().resolves();
+      await toReady(catchUp);
+      getEligibleSyncPeersStub.resetHistory();
+
+      blockEmitter.emit('blocksProcessed', 2555200);
+      await clock.tickAsync(0);
+      sinon.assert.calledWith(getEligibleSyncPeersStub, 30);
+      sinon.assert.neverCalledWith(getEligibleSyncPeersStub, 7500);
+    });
+
     it('does not refresh while SYNCING (boot/recovery own convergence)', async () => {
       getEligibleSyncPeersStub.returns([]); // no peers -> manifest never latches, stays SYNCING
       const catchUp = sinon.stub().resolves();
