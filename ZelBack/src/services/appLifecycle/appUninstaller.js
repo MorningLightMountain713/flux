@@ -23,6 +23,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appNetworkLinker = require('./appNetworkLinker');
 const appVolumeService = require('./appVolumeService');
+const contentStore = require('./contentStore');
 const appSwapPoolService = require('./appSwapPoolService');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -1085,6 +1086,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     await telemetryConfigService.remove().catch((e) => log.warn(`telemetry config remove: ${e.message}`));
   }
   if (owner) await fluxShutdowndClient.deleteAppPlanBestEffort(name, owner);
+  // Drop the app's content-artifact store (the peer-served declared blobs). A
+  // re-driven teardown just re-runs the no-op; a re-install refills it as
+  // provisioning resolves the blobs.
+  await contentStore.removeApp(name).catch((e) => log.warn(`content store removal ${name}: ${e.message}`));
 
   // FINISH — drop every component's runtime state (incl. the condemned stamp), then
   // clear the durable record, but ONLY when every stamp dropped: a surviving stamp

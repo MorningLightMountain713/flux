@@ -4,7 +4,6 @@ const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const log = require('../../lib/log');
-const generalService = require('../generalService');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
@@ -418,14 +417,14 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
  * per-app transport key and is never plaintext in transit or to any relay. It is
  * parsed back into the envelope object here; opening (toward the node's transport
  * key) happens downstream once resolveSubmission has the cleartext name/owner +
- * contentHash. The temp file is read into memory (capped at MAX_CONTENT_BYTES) and
+ * contentHash. The temp file is read into memory (capped at maxContentBytes) and
  * removed.
  *
  * @returns {Promise<{ spec: string, content: object|null, ownerSigs: Map<string, object> }>}
  */
 async function parseMultipartSubmission(req) {
   const form = formidable({
-    maxFileSize: contentBlobService.MAX_CONTENT_BYTES,
+    maxFileSize: await contentBlobService.maxContentBytes(),
     multiples: true,
     keepExtensions: false,
   });
