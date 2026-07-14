@@ -123,7 +123,7 @@ async function legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn, c
   if (myLongCache.has('appPrices')) {
     appPrices.push(myLongCache.get('appPrices'));
   } else {
-    const response = await axios.get('https://stats.runonflux.io/apps/getappspecsusdprice', axiosConfig).catch((error) => log.error(error));
+    const response = await axios.get(`${config.stats.apiBaseUrl}/apps/getappspecsusdprice`, axiosConfig).catch((error) => log.error(error));
     if (response && response.data && response.data.status === 'success') {
       myLongCache.set('appPrices', response.data.data);
       appPrices.push(response.data.data);
@@ -200,7 +200,7 @@ async function legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn, c
     actualPriceToPay *= 0.8;
   }
 
-  const marketplaceResponse = await axios.get('https://stats.runonflux.io/marketplace/listapps').catch((error) => log.error(error));
+  const marketplaceResponse = await axios.get(`${config.stats.apiBaseUrl}/marketplace/listapps`).catch((error) => log.error(error));
   let marketPlaceApps = [];
   if (marketplaceResponse && marketplaceResponse.data && marketplaceResponse.data.status === 'success') {
     marketPlaceApps = marketplaceResponse.data.data;
@@ -244,7 +244,7 @@ async function legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn, c
   if (myShortCache.has('fluxRates')) {
     fluxUSDRate = myShortCache.get('fluxRates');
   } else {
-    let fiatRates = await axios.get('https://viprates.runonflux.io/rates', axiosConfig).catch((error) => log.error(error));
+    let fiatRates = await axios.get(config.fiatRates.ratesUrl, axiosConfig).catch((error) => log.error(error));
     if (fiatRates && fiatRates.data) {
       const rateObj = fiatRates.data[0].find((rate) => rate.code === 'USD');
       if (!rateObj) throw new Error('Unable to get USD rate.');
