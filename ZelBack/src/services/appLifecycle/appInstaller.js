@@ -38,12 +38,13 @@ const appsRepository = require('../appDatabase/appsRepository');
 const fluxEventBus = require('../utils/fluxEventBus');
 const config = require('config');
 
-// Write injected content to a mount source as root-owned read-only (0444) — the
-// safe default for declared content the app should not mutate. Root (FluxOS) can
-// still overwrite on redeploy regardless of mode.
+// Write injected content to a mount source as root-owned 0644 — the platform
+// default for declared content (mirrors DeploymentSpec resolveMountPerms). Mode
+// bits are ownership hygiene, not enforcement: a root container writes through
+// any mode, and real read-only intent is the mount's readOnly bind flag.
 async function writeInjectedContent(source, bytes) {
   await fsPromises.writeFile(source, bytes);
-  await fsPromises.chmod(source, 0o444);
+  await fsPromises.chmod(source, 0o644);
 }
 
 /**
