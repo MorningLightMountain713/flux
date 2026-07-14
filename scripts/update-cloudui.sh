@@ -59,7 +59,7 @@ trap cleanup EXIT
 
 echo "1. Fetching latest release information..."
 RELEASE_JSON="$TEMP_DIR/release.json"
-curl -s "$RELEASE_API" -o "$RELEASE_JSON"
+curl -s --max-time 30 "$RELEASE_API" -o "$RELEASE_JSON"
 
 # Check if we got a valid response
 if ! grep -q '"tag_name"' "$RELEASE_JSON"; then
@@ -119,7 +119,7 @@ fi
 echo "   Expected SHA256: $EXPECTED_SHA256"
 
 TARBALL="$TEMP_DIR/dist.tar.gz"
-curl -L -o "$TARBALL" "$DOWNLOAD_URL"
+curl -L --max-time 180 -o "$TARBALL" "$DOWNLOAD_URL"
 
 echo ""
 echo "3. Verifying SHA256 checksum..."
