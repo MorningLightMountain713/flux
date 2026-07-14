@@ -6,7 +6,7 @@ import {
 } from '../framework/wait.js';
 import {
   advanceBlock, enableRpcFailure, disableAllRpcFailure,
-  removeFromNodeList, resetNodeList,
+  removeFromNodeList, resetNodeList, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
@@ -38,33 +38,39 @@ describe('Confirmation service: node list removal → message capability lost', 
 
   before(async function () {
     this.timeout(120000);
+    // The nodelist re-fetch is only TRIGGERED by block events (gated by the
+    // networkStateMinFetchIntervalMs throttle) or a slow 120s loop. In prod,
+    // blocks flow continuously so the trigger never starves - a frozen harness
+    // chain is the artificial condition. Run the ticker so discovery works the
+    // way it does in production, and a fast fetch throttle so the flip is
+    // prompt. (A 2s throttle wedges boot - unexplained, noted as a follow-up -
+    // 10s boots reliably.)
     env = await createTestEnv({
       hookCtx: this,
       nodes: 3,
       tickerAutostart: false,
-      // The node discovers list changes via the nodelist fetch throttle
-      // (networkStateMinFetchIntervalMs, prod 30s): run a fast poll so the
-      // capability flip below is prompt and deterministic instead of racing
-      // the poll phase with a long wait.
-      configOverrides: { fluxapps: { networkStateMinFetchIntervalMs: 2000 } },
+      configOverrides: { fluxapps: { networkStateMinFetchIntervalMs: 10000 } },
     });
     await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
     await Promise.all(env.clients.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
     await advanceBlock();
     await waitForMessageCapabilityChanged(env.clients[0], true, 30000);
+    await startTicker();
   });
 
   after(async function () {
     this.timeout(30000);
+    await stopTicker().catch(() => {});
     await resetNodeList();
     await env?.teardown();
   });
 
   it('should lose message capability when removed from deterministic list', async function () {
-    this.timeout(30000);
+    this.timeout(60000);
     await removeFromNodeList(env.clients[0].ip);
-    await advanceBlock();
-    const event = await waitForMessageCapabilityChanged(env.clients[0], false, 20000);
+    // Blocks keep flowing (ticker), so the next post-throttle block event
+    // re-fetches the list and the flip lands within throttle + tick.
+    const event = await waitForMessageCapabilityChanged(env.clients[0], false, 30000);
     expect(event.data.capable).to.equal(false);
   });
 });
