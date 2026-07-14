@@ -160,6 +160,27 @@ async function checkDirectoryHasSyncScopedContent(dirPath) {
 }
 
 /**
+ * Sync-scoped FILES only (directories excluded from the count, still walked
+ * into). The deletion-broadcast hazard is per-FILE: only a file the index
+ * still lists can be announced as locally deleted, so when the index claims
+ * files (globalFiles > 0) the disk must hold at least one — a surviving
+ * directory skeleton (e.g. a bare appdata/) protects nothing.
+ * @param {string} dirPath - Directory path to check
+ * @returns {Promise<{hasContent: boolean, fileCount: number}>} File status
+ */
+async function checkDirectoryHasSyncScopedFiles(dirPath) {
+  const fileCount = await countFilesUpTo(dirPath, 100, {
+    excludeNames: ['.stignore'],
+    excludeDirs: ['backup', '.stfolder'],
+    countDirs: false,
+  });
+  return {
+    hasContent: fileCount > 0,
+    fileCount,
+  };
+}
+
+/**
  * Verify that a Syncthing folder's mount is properly initialized
  * This is CRITICAL to prevent data loss when mounts are not ready after reboot
  * @param {string} appId - App ID (e.g., fluxwp_myapp)
@@ -248,7 +269,18 @@ async function verifySendReceiveFolderSafety(appId, folderPath) {
   const syncStatus = await getFolderSyncCompletion(appId);
   if (!syncStatus || syncStatus.globalBytes === 0) return result;
 
-  const dataCheck = await checkDirectoryHasSyncScopedContent(folderPath);
+  // The deletion-broadcast hazard is per-FILE, so the discriminator is
+  // files-aware: an index claiming files over a disk with none is phantom
+  // even when a directory skeleton survives (a bare appdata/ protects
+  // nothing), while a dirs-only payload (globalFiles 0, globalBytes > 0 from
+  // directory accounting — the 2026-07-04 false positive) stays healthy over
+  // its dirs-only disk. When the status carries no globalFiles field, fall
+  // back to the entry-level check (directories count).
+  const filesAware = syncStatus.globalFiles != null;
+  if (filesAware && syncStatus.globalFiles === 0) return result;
+  const dataCheck = filesAware
+    ? await checkDirectoryHasSyncScopedFiles(folderPath)
+    : await checkDirectoryHasSyncScopedContent(folderPath);
   if (!dataCheck.hasContent) {
     result.isSafe = false;
     result.reason = 'phantom_index_empty_disk';
@@ -296,6 +328,9 @@ async function getFolderSyncCompletion(folderId) {
     if (statusResponse && statusResponse.status === 'success') {
       const {
         globalBytes = 0, inSyncBytes = 0, state, receiveOnlyChangedFiles = 0,
+        // null (not 0) when absent, so the phantom guard can tell "no files
+        // claimed" apart from "field not reported" and fall back safely
+        globalFiles = null,
       } = statusResponse.data;
 
       const syncPercentage = globalBytes > 0 ? (inSyncBytes / globalBytes) * 100 : 100;
@@ -304,6 +339,7 @@ async function getFolderSyncCompletion(folderId) {
         syncPercentage,
         globalBytes,
         inSyncBytes,
+        globalFiles,
         state,
         // local additions/modifications in a receiveonly folder; invisible to the
         // completion metrics above (they only count cluster data)
@@ -1002,5 +1038,6 @@ module.exports = {
   isPathMounted,
   checkDirectoryHasContent,
   checkDirectoryHasSyncScopedContent,
+  checkDirectoryHasSyncScopedFiles,
   nudgeFolderDevices,
 };
