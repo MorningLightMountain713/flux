@@ -275,11 +275,16 @@ describe('appUninstaller tombstoning teardown', () => {
     });
 
     it('background removal holds the remove lease until the deferred teardown finishes', async () => {
+      // await the real-token release itself rather than counting scheduler ticks —
+      // the detached chain's internal step count is not this test's contract
+      // resolve on the app-level release specifically — runTeardown also releases
+      // per-component 'removing' leases carrying the same stubbed token
+      const released = new Promise((resolve) => {
+        stubs.operationRegistry.release.callsFake((name, token) => { if (name === 'app' && token === 'tok') resolve(); });
+      });
       const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true, background: true });
       expect(res.status).to.equal(appUninstaller.UninstallStatus.REMOVED); // returns fast, before the teardown destroys anything
-      // let the detached teardown chain run
-      await new Promise((r) => { setImmediate(r); });
-      await new Promise((r) => { setImmediate(r); });
+      await released;
       expect(stubs.dockerService.appDockerRemove.called, 'the deferred worker ran').to.be.true;
       // the detached chain (NOT the finally's null no-op) released the real lease token,
       // so the lease was held through the destructive teardown — deferring a same-name install
