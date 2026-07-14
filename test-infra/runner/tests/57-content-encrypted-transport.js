@@ -309,14 +309,15 @@ describe('content encrypted transport (HPKE capstone): open, seal-at-rest, multi
     expect(depStart.id, 'dep must start before web (dependsOn)').to.be.lessThan(webStart.id);
 
     // Install-time content landed (web is up now): every injected file is the cleartext
-    // and root:root 0444 (injected content is read-only, never world-writable).
+    // and root:root 0644 (the platform default; mode bits are ownership hygiene —
+    // read-only enforcement is the mount's readOnly bind flag).
     const expectInjected = async (dest, expectedSubstr, label) => {
       await waitFor(async () => {
         const r = await readFileInContainer(node.container, capApp, 'web', dest);
         return r.exitCode === 0 && r.content.includes(expectedSubstr);
       }, { timeout: 90000, interval: 2000, label });
       const st = await statFileInContainer(node.container, capApp, 'web', dest);
-      expect(st.mode, `${label} mode`).to.equal('444');
+      expect(st.mode, `${label} mode`).to.equal('644');
       expect(st.uid, `${label} uid`).to.equal('0');
       expect(st.gid, `${label} gid`).to.equal('0');
     };
