@@ -1403,6 +1403,11 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       // peer-topology.js. A suite TESTING a threshold sets its own in
       // configOverrides, which merges over this and wins.
       fluxapps: {
+        // Install-trial timings scaled to harness cadence: prod proves a probe-less
+        // first run at 60s and retries at 10s, which would drag every suite's install
+        // converge. Thresholds only - the trial's shape is unchanged.
+        firstRunProofMs: 5000,
+        convergeRetryMs: 2000,
         // Deferred nodes are subtracted alongside stubs, because the ring cannot
         // tell them apart: both hold an index that nothing answers on. 9fcabdc02
         // taught bootAndPeer exactly this and stopped one function short - until
