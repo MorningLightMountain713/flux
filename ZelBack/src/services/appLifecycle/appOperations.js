@@ -115,11 +115,10 @@ function getFdmIndex(appName) {
  */
 async function getMasterIpFromFdm(appName, axiosOptions) {
   const fdmIndex = getFdmIndex(appName);
-  const fdmRegions = [
-    { name: 'EU', baseUrl: `http://fdm-fn-1-${fdmIndex}.runonflux.io:16130` },
-    { name: 'USA', baseUrl: `http://fdm-usa-1-${fdmIndex}.runonflux.io:16130` },
-    { name: 'ASIA', baseUrl: `http://fdm-sg-1-${fdmIndex}.runonflux.io:16130` },
-  ];
+  const fdmRegions = config.fdm.regions.map((region) => ({
+    name: region.name,
+    baseUrl: region.baseUrlTemplate.replace('%i', fdmIndex),
+  }));
 
   for (const region of fdmRegions) {
     try {
