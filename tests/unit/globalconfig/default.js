@@ -457,4 +457,11 @@ module.exports = {
   mongodb: {
     signingKeyBaseUrl: 'https://pgp.mongodb.com',
   },
+  fdm: {
+    regions: [
+      { name: 'EU', baseUrlTemplate: 'http://fdm-fn-1-%i.runonflux.io:16130' },
+      { name: 'USA', baseUrlTemplate: 'http://fdm-usa-1-%i.runonflux.io:16130' },
+      { name: 'ASIA', baseUrlTemplate: 'http://fdm-sg-1-%i.runonflux.io:16130' },
+    ],
+  },
 };

@@ -889,6 +889,15 @@ module.exports = {
   stats: {
     baseUrl: 'https://stats.runonflux.io',
   },
+  fdm: {
+    // Per-region FDM API bases; %i is the app's deterministic server index
+    // (getFdmIndex, by app-name first letter).
+    regions: [
+      { name: 'EU', baseUrlTemplate: 'http://fdm-fn-1-%i.runonflux.io:16130' },
+      { name: 'USA', baseUrlTemplate: 'http://fdm-usa-1-%i.runonflux.io:16130' },
+      { name: 'ASIA', baseUrlTemplate: 'http://fdm-sg-1-%i.runonflux.io:16130' },
+    ],
+  },
   pricing: {
     fluxRatesBaseUrl: 'https://viprates.runonflux.io',
     // Consulted only when the rates service above is unreachable.
