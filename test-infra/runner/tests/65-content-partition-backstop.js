@@ -58,6 +58,11 @@ describe('steady-state manifest backstop converges a silently-stale node', funct
           appSyncDegradedThreshold: 0, // never degrade — reproduce "stayed above the floor"
           manifestRefreshBlocks: 3, // fire the steady-state refresh within the suite
           minOutgoing: 2, minIncoming: 1, // app-submission peer gate, lowered to the 5-node mesh
+          // The partition can genuinely drop the WS connections (not just block
+          // traffic); the healed connections then restart at uptime 0 and the
+          // default 7500s sync-source eligibility would blind the refresh to
+          // every peer for the rest of the suite.
+          appSyncMinPeerUptime: 5,
         },
       },
     });
