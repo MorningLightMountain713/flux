@@ -47,6 +47,14 @@ COPY . .
 
 COPY test-infra/fixtures/userconfig-template.js /flux/config/userconfig.js
 
+# Pre-bake CloudUI: boot awaits checkAndUpdateCloudUI, and a missing folder makes
+# every container shell out to real GitHub (scripts/update-cloudui.sh bypasses the
+# stubbed release API). With content + a version file present, the check goes to
+# the stub, 404s, and boot proceeds without leaving the harness network.
+RUN mkdir -p /flux/CloudUI \
+    && echo '<!doctype html><title>CloudUI harness placeholder</title>' > /flux/CloudUI/index.html \
+    && echo 'harness-prebaked' > /flux/CloudUI/version
+
 RUN touch /flux/debug.log /flux/error.log /flux/info.log /flux/warn.log \
     && ln -s /flux /root/zelflux
 
