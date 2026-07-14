@@ -13,6 +13,14 @@ const appVolumesPath = path.join(fluxDirPath, 'appvolumes');
 // ~/zelfluxappvolumes). Volumes created by older FluxOS still live there, so
 // discovery must keep checking it.
 const legacyAppVolumesPath = `${fluxDirPath}appvolumes`;
+// Node-owned store of declared content blobs (framed ciphertext, one file per
+// hash) — the artifact copy peer-serving reads, never the app's live mount. A
+// sibling of the apps folder so it lands on the appdata partition but can
+// never be reached through a container bind mount. Arcane declares
+// FLUX_CONTENT_STORE in /etc/flux_environment; the sibling derivation covers
+// environments without it (harness, dev).
+const contentStorePath = process.env.FLUX_CONTENT_STORE
+  || path.join(path.dirname(appsFolderPath), 'flux-content');
 
 // Database collections - Daemon
 const scannedHeightCollection = config.database.daemon.collections.scannedHeight;
@@ -94,6 +102,7 @@ module.exports = {
   appsFolder,
   appVolumesPath,
   legacyAppVolumesPath,
+  contentStorePath,
 
   // Database collections
   scannedHeightCollection,
