@@ -5,7 +5,7 @@ import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { deployContentApp, pushContentUpdate } from '../framework/content-helper.js';
 import { getFluxDriveState, resetFluxDrive } from '../framework/fluxdrive-control.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
+import { queueAppTx, advanceBlocks, getState } from '../framework/daemon-control.js';
 import { waitForAppSpecStored } from '../framework/wait.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
@@ -243,15 +243,18 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     const afterId = node.getLastEventId();
 
     // The reaper runs after expireGlobalApplications on the synced block loop, every
-    // 2*speedMultiplier blocks (speedMultiplier=4 above the PON fork → every 8 blocks);
-    // 9 advances guarantee crossing a sweep boundary. One boundary is not enough on
-    // its own: rows younger than contentManifestReapGraceMs (30s here) are never
-    // reaped, and the manifest row can still be younger than that when the first
-    // sweep lands — so keep driving sweep boundaries until one falls past the grace.
+    // 2*speedMultiplier blocks (speedMultiplier=4 above the PON fork → every 8 blocks).
+    // Two subtleties make a single blind advance unreliable: the cadence branch only
+    // evaluates on a block processed AT the tip (an explorer catching up in a batch
+    // sees confirmations >= 2 for all but the last), and rows younger than
+    // contentManifestReapGraceMs (30s here) are never reaped. So each round lands the
+    // tip EXACTLY on a sweep boundary and waits; the reap fires on the first
+    // boundary past the grace.
     const deadline = Date.now() + 120000;
     let reaped;
     for (;;) {
-      await advanceBlocks(9);
+      const { currentHeight } = await getState();
+      await advanceBlocks(8 - (currentHeight % 8) || 8);
       try {
         reaped = await node.waitForEvent(
           'content:manifestReaped',
