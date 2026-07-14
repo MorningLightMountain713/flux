@@ -73,6 +73,22 @@ describe('FluxEventBus tests', () => {
       expect(received[2].id).to.be.greaterThan(received[1].id);
     });
 
+    it('keeps IDs monotonic across a process restart (monotonic-clock seeded)', async () => {
+      // A later-constructed bus stands in for the restarted process: harness
+      // clients hold afterId cursors across restartFluxos, so every id the new
+      // bus issues must exceed every id the old one issued.
+      const received = [];
+      bus.on('event', (entry) => received.push(entry));
+      bus.publish('pre-restart', {});
+      await new Promise((resolve) => { setTimeout(resolve, 5); });
+      const rebooted = new FluxEventBus(true);
+      const after = [];
+      rebooted.on('event', (entry) => after.push(entry));
+      rebooted.publish('post-restart', {});
+      rebooted.removeAllListeners();
+      expect(after[0].id).to.be.greaterThan(received[0].id);
+    });
+
     it('should return events from since() after given ID', () => {
       bus.publish('x', { n: 1 });
       bus.publish('y', { n: 2 });

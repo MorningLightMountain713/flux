@@ -250,6 +250,8 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     await restartFluxos(c2);
     // the reconciler reporting the unavailable volume proves startup (and the
     // crontab cleanup pass that precedes reconciliation) has completed
+    // (event ids are boot-epoch seeded, so the cursor stays valid across the
+    // process restart)
     await waitForReconcileActuated(client, inertIdentifier, 'volumeUnavailable', 120000, { afterId });
 
     expect(await crontabVolumeEntries(c2)).to.equal(1);
