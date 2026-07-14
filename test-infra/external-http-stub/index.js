@@ -413,7 +413,10 @@ const state = {
   // nothing at all.
   moduleMinimumVersions: { syncthing: imageSyncthingVersion(), docker: '26.1.2' },
   marketplaceApps: [],
-  appSpecsUsdPrice: [],
+  // null serves the error envelope, which is what a node meets when the stats
+  // service is unreachable and is the state its config fallback exists for; a
+  // suite that wants real tiers posts them to /usd-prices.
+  appSpecsUsdPrice: null,
   // Fixed rates, so a price assertion is arithmetic rather than a bet on the market.
   // usdPerBtc * btcPerFlux is what the caller multiplies out, and it must equal usdPerFlux
   // so the coingecko fallback cannot change an answer.
@@ -745,8 +748,12 @@ app.get('/marketplace/listdevapps', (req, res) => {
 });
 
 // Stats: per-spec USD pricing.
+// The default error envelope makes the consumer fall back to
+// config.fluxapps.usdprice - deterministic per node config, and the state a node
+// actually meets when the stats service is unreachable.
 app.get('/apps/getappspecsusdprice', (req, res) => {
-  res.json({ status: 'success', data: state.appSpecsUsdPrice });
+  if (state.appSpecsUsdPrice) res.json({ status: 'success', data: state.appSpecsUsdPrice });
+  else res.json({ status: 'error' });
 });
 
 // Pricing: viprates.runonflux.io/rates. The real service answers a two-element array -
@@ -1092,6 +1099,32 @@ control.post('/artifact', (req, res) => {
   return res.json({ ok: true, name, bytes: body.length, declaredLength });
 });
 
+// The stats/fiat state above is served but had no way to be changed; these set it.
+control.post('/module-versions', (req, res) => {
+  state.moduleMinimumVersions = req.body;
+  res.json({ ok: true });
+});
+
+control.post('/marketplace-apps', (req, res) => {
+  state.marketplaceApps = req.body;
+  res.json({ ok: true });
+});
+
+control.post('/usd-prices', (req, res) => {
+  state.appSpecsUsdPrice = req.body;
+  res.json({ ok: true });
+});
+
+// The three rates are set together because usdPerBtc * btcPerFlux must stay equal
+// to usdPerFlux, or the coingecko fallback changes the answer.
+control.post('/fiat-rates', (req, res) => {
+  const { usdPerBtc, btcPerFlux, usdPerFlux } = req.body;
+  state.usdPerBtc = usdPerBtc;
+  state.btcPerFlux = btcPerFlux;
+  state.usdPerFlux = usdPerFlux;
+  res.json({ ok: true });
+});
+
 control.post('/reset', (req, res) => {
   state.blocklist = [];
   state.blockedRepositories = [];
@@ -1103,6 +1136,12 @@ control.post('/reset', (req, res) => {
   artifacts.clear();
   state.ipLocationTampered = null;
   serveIpLocation(buildIpLocationArtifact(1));
+  state.moduleMinimumVersions = { syncthing: imageSyncthingVersion(), docker: '26.1.2' };
+  state.marketplaceApps = [];
+  state.appSpecsUsdPrice = null;
+  state.usdPerBtc = 100000;
+  state.btcPerFlux = 0.000002;
+  state.usdPerFlux = 0.2;
   // Back to a good bundle from a trusted signer. The sequence is NOT reset: a node that has
   // already adopted one refuses anything at or below it, and a reset between suites sharing
   // a fleet would otherwise leave the fleet unable to adopt anything again.
