@@ -1,4 +1,5 @@
 const { EventEmitter } = require('node:events');
+const config = require('config');
 const { FluxController } = require('./fluxController');
 const { normalizeSocketAddress } = require('./socketAddressUtils');
 
@@ -27,7 +28,11 @@ const log = require('../../lib/log');
  */
 
 class NetworkStateManager extends EventEmitter {
-  static #minFetchIntervalMs = 30_000;
+  // Nodelist fetch throttle: block-driven refresh requests inside this window
+  // serve the cached list. Config-backed so the harness can run a fast poll;
+  // everything reacting to nodelist changes (confirmation, capability) inherits
+  // this cadence as its detection latency.
+  static #minFetchIntervalMs = config.fluxapps.networkStateMinFetchIntervalMs ?? 30_000;
 
   /**
    * @type {Array<Fluxnode>}

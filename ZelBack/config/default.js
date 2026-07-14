@@ -386,6 +386,7 @@ module.exports = {
     manifestRefreshBlocks: 100, // steady-state content-manifest anti-entropy cadence (~50 min)
     manifestRefreshPeers: 3, // peers sampled per steady-state manifest refresh
     manifestRefreshMinPeerUptime: 30, // refresh sync-source uptime floor (s) - token, NOT the boot sync's 2h anti-flap gate
+    networkStateMinFetchIntervalMs: 30000, // nodelist fetch throttle - block-driven refreshes inside this window serve the cache
     syncResponseThrottleMs: 300000,
     wsHandshakeTimeoutMs: 10000,
     imageUpdateCheckIntervalMs: 21600000,
