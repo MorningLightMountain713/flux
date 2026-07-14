@@ -5,7 +5,7 @@ import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { deployContentApp, pushContentUpdate } from '../framework/content-helper.js';
 import { getFluxDriveState, resetFluxDrive } from '../framework/fluxdrive-control.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { queueAppTx, advanceBlocks, getState } from '../framework/daemon-control.js';
+import { queueAppTx, advanceBlocks, getState, stopTicker } from '../framework/daemon-control.js';
 import { waitForAppSpecStored } from '../framework/wait.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
@@ -243,25 +243,28 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     const afterId = node.getLastEventId();
 
     // The reaper runs after expireGlobalApplications on the synced block loop, every
-    // 2*speedMultiplier blocks (speedMultiplier=4 above the PON fork → every 8 blocks).
-    // Three subtleties make a single blind advance unreliable: the cadence branch only
-    // evaluates on a block processed AT the tip (an explorer catching up in a batch
-    // sees confirmations >= 2 for all but the last); rows younger than
-    // contentManifestReapGraceMs (30s here) are never reaped; and the explorer
-    // discovers new blocks on a ~30s daemon-info cache, so re-advancing faster than
-    // that keeps it perpetually catching up and no height ever processes as the tip.
-    // So each round lands the tip EXACTLY on a sweep boundary and waits LONGER than
-    // the discovery cache; the reap fires on the first boundary past the grace.
+    // 2*speedMultiplier blocks (speedMultiplier=4 above the PON fork → every 8 blocks)
+    // — but ONLY on a block processed AT the tip (confirmations < 2). With the ticker
+    // mining +1 every 5s the explorer (polling ~10s) processes two blocks per cycle:
+    // the first is always conf=2 and the at-tip one is always odd-height, so an
+    // even (% 8) boundary NEVER evaluates as synced — the cadence is phase-locked out.
+    // Deterministic shape: stop the ticker, park the tip one short of a boundary, let
+    // the explorer swallow the backlog, then single-step the boundary block so IT is
+    // the at-tip synced block. Repeat until a boundary lands past the 30s reap grace.
+    await stopTicker();
     const deadline = Date.now() + 150000;
     let reaped;
     for (;;) {
       const { currentHeight } = await getState();
-      await advanceBlocks(8 - (currentHeight % 8) || 8);
+      const toPreBoundary = (8 - ((currentHeight + 1) % 8)) % 8;
+      if (toPreBoundary > 0) await advanceBlocks(toPreBoundary);
+      await new Promise((r) => setTimeout(r, 12000)); // one explorer poll: catch up to boundary-1
+      await advanceBlocks(1); // the boundary block processes at-tip -> sweep evaluates
       try {
         reaped = await node.waitForEvent(
           'content:manifestReaped',
           (d) => d.count >= 1,
-          35000,
+          15000,
           { afterId },
         );
         break;
