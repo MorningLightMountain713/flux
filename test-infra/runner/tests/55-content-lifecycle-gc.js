@@ -244,13 +244,15 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
 
     // The reaper runs after expireGlobalApplications on the synced block loop, every
     // 2*speedMultiplier blocks (speedMultiplier=4 above the PON fork → every 8 blocks).
-    // Two subtleties make a single blind advance unreliable: the cadence branch only
+    // Three subtleties make a single blind advance unreliable: the cadence branch only
     // evaluates on a block processed AT the tip (an explorer catching up in a batch
-    // sees confirmations >= 2 for all but the last), and rows younger than
-    // contentManifestReapGraceMs (30s here) are never reaped. So each round lands the
-    // tip EXACTLY on a sweep boundary and waits; the reap fires on the first
-    // boundary past the grace.
-    const deadline = Date.now() + 120000;
+    // sees confirmations >= 2 for all but the last); rows younger than
+    // contentManifestReapGraceMs (30s here) are never reaped; and the explorer
+    // discovers new blocks on a ~30s daemon-info cache, so re-advancing faster than
+    // that keeps it perpetually catching up and no height ever processes as the tip.
+    // So each round lands the tip EXACTLY on a sweep boundary and waits LONGER than
+    // the discovery cache; the reap fires on the first boundary past the grace.
+    const deadline = Date.now() + 150000;
     let reaped;
     for (;;) {
       const { currentHeight } = await getState();
@@ -259,7 +261,7 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
         reaped = await node.waitForEvent(
           'content:manifestReaped',
           (d) => d.count >= 1,
-          15000,
+          35000,
           { afterId },
         );
         break;
