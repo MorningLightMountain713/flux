@@ -5,7 +5,7 @@ const { aeadEncrypt } = require('../../ZelBack/src/services/utils/aeadCrypto');
 
 const {
   encryptAndUploadBlob, encryptAndUploadBlobs, decryptAndVerifyBlob, resolveBlob, provisionContentBlobs,
-  serveBlob, fetchBlobFromPeer, MAX_BLOB_BYTES,
+  serveBlob, fetchBlobFromPeer, maxBlobBytes, maxFramedBlobBytes,
 } = contentBlobService;
 
 // A submission spec that declares content blobs at the given hashes — the spec
@@ -51,6 +51,23 @@ async function expectReject(promise, regex) {
   throw new Error('expected promise to reject');
 }
 
+// In-memory stand-in for the on-disk artifact store (contentStore) — resolve
+// and serve tests inject it so no test touches the real filesystem.
+function memStore(seed = {}) {
+  const map = new Map(Object.entries(seed));
+  return {
+    map,
+    puts: [],
+    removes: [],
+    async get(app, hash) { return map.get(`${app}/${hash}`) ?? null; },
+    async put(app, hash, framed) { this.puts.push({ app, hash }); map.set(`${app}/${hash}`, framed); return true; },
+    async remove(app, hash) { this.removes.push({ app, hash }); map.delete(`${app}/${hash}`); },
+    async list(app) {
+      return [...map.keys()].filter((k) => k.startsWith(`${app}/`)).map((k) => k.slice(app.length + 1));
+    },
+  };
+}
+
 describe('contentBlobService', () => {
   describe('encryptAndUploadBlob', () => {
     it('encrypts, signs, and uploads a blob and returns its locator', async () => {
@@ -83,7 +100,7 @@ describe('contentBlobService', () => {
     });
 
     it('rejects an oversized blob', async () => {
-      const bytes = Buffer.alloc(MAX_BLOB_BYTES + 1);
+      const bytes = Buffer.alloc(await maxBlobBytes() + 1);
       await expectReject(encryptAndUploadBlob(
         { appName: 'app', fluxID: '1id', contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: freshTs },
         { benchmark: makeBenchmark(), uploader: makeUploader(), now },
@@ -204,13 +221,39 @@ describe('contentBlobService', () => {
     const validFramed = () => aeadEncrypt(KEY, bytes, Buffer.from(contentHash));
     const noFluxDrive = { fetchBlobByLocator: async () => null };
 
-    it('resolves from the first healthy peer', async () => {
+    it('resolves from the first healthy peer and stores the verified ciphertext', async () => {
       const framed = validFramed();
+      const store = memStore();
       const out = await resolveBlob(
         { appName: 'app', fluxID: '1id', contentHash, peers: ['p1', 'p2'] },
-        { benchmark: makeBenchmark(), peerFetch: async () => framed, fluxDrive: noFluxDrive },
+        { benchmark: makeBenchmark(), peerFetch: async () => framed, fluxDrive: noFluxDrive, store },
       );
       expect(out.equals(bytes)).to.equal(true);
+      expect(store.puts).to.deep.equal([{ app: 'app', hash: contentHash }]);
+      expect(store.map.get(`app/${contentHash}`).equals(framed)).to.equal(true);
+    });
+
+    it('resolves from the artifact store without touching the network', async () => {
+      const store = memStore({ [`app/${contentHash}`]: validFramed() });
+      const peerFetch = async () => { throw new Error('network must not be touched'); };
+      const out = await resolveBlob(
+        { appName: 'app', fluxID: '1id', contentHash, peers: ['p1'] },
+        { benchmark: makeBenchmark(), peerFetch, fluxDrive: { fetchBlobByLocator: peerFetch }, store },
+      );
+      expect(out.equals(bytes)).to.equal(true);
+      expect(store.puts).to.deep.equal([]);
+    });
+
+    it('drops a corrupt store entry and re-fetches from a peer', async () => {
+      const store = memStore({ [`app/${contentHash}`]: Buffer.alloc(40, 7) });
+      const framed = validFramed();
+      const out = await resolveBlob(
+        { appName: 'app', fluxID: '1id', contentHash, peers: ['p1'] },
+        { benchmark: makeBenchmark(), peerFetch: async () => framed, fluxDrive: noFluxDrive, store },
+      );
+      expect(out.equals(bytes)).to.equal(true);
+      expect(store.removes).to.deep.equal([{ app: 'app', hash: contentHash }]);
+      expect(store.map.get(`app/${contentHash}`).equals(framed)).to.equal(true);
     });
 
     it('falls through a failing peer to the next', async () => {
@@ -219,25 +262,27 @@ describe('contentBlobService', () => {
       const peerFetch = async () => { n += 1; if (n === 1) throw new Error('peer down'); return framed; };
       const out = await resolveBlob(
         { appName: 'app', fluxID: '1id', contentHash, peers: ['p1', 'p2'] },
-        { benchmark: makeBenchmark(), peerFetch, fluxDrive: noFluxDrive },
+        { benchmark: makeBenchmark(), peerFetch, fluxDrive: noFluxDrive, store: memStore() },
       );
       expect(out.equals(bytes)).to.equal(true);
       expect(n).to.equal(2);
     });
 
-    it('skips a peer returning garbage and uses the FluxDrive backstop', async () => {
+    it('skips a peer returning garbage, uses the FluxDrive backstop, and stores the result', async () => {
       const fluxDrive = { fetchBlobByLocator: async () => validFramed() };
+      const store = memStore();
       const out = await resolveBlob(
         { appName: 'app', fluxID: '1id', contentHash, peers: ['p1'] },
-        { benchmark: makeBenchmark(), peerFetch: async () => Buffer.alloc(40, 7), fluxDrive },
+        { benchmark: makeBenchmark(), peerFetch: async () => Buffer.alloc(40, 7), fluxDrive, store },
       );
       expect(out.equals(bytes)).to.equal(true);
+      expect(store.puts).to.deep.equal([{ app: 'app', hash: contentHash }]);
     });
 
     it('throws when no source yields verified content', async () => {
       await expectReject(resolveBlob(
         { appName: 'app', fluxID: '1id', contentHash, peers: ['p1'] },
-        { benchmark: makeBenchmark(), peerFetch: async () => null, fluxDrive: noFluxDrive },
+        { benchmark: makeBenchmark(), peerFetch: async () => null, fluxDrive: noFluxDrive, store: memStore() },
       ), /no source/);
     });
   });
@@ -275,34 +320,32 @@ describe('contentBlobService', () => {
   describe('serveBlob', () => {
     const bytes = Buffer.from('served content');
     const contentHash = hashOf(bytes);
-    const deployment = {
-      componentEntries: () => [['web', { contentBlobMounts: () => [{ source: '/dat/app/config', hash: contentHash }] }]],
-    };
-    const getDeployment = async () => deployment;
-    const readFile = async (src) => (src === '/dat/app/config' ? bytes : null);
+    const storedFramed = aeadEncrypt(KEY, bytes, Buffer.from(contentHash));
 
-    it('serves a matching locator as re-encrypted, verifiable ciphertext', async () => {
+    it('serves the stored artifact ciphertext verbatim for a matching locator', async () => {
+      const store = memStore({ [`app/${contentHash}`]: storedFramed });
       const framed = await serveBlob(
         { appName: 'app', fluxID: '1id', locator: 'a'.repeat(64) },
-        { benchmark: makeBenchmark(), getDeployment, readFile },
+        { benchmark: makeBenchmark(), store },
       );
-      expect(Buffer.isBuffer(framed)).to.equal(true);
+      expect(framed.equals(storedFramed)).to.equal(true); // verbatim — never re-read or re-encrypted
       const out = await decryptAndVerifyBlob({ appName: 'app', fluxID: '1id', contentHash, framed }, { benchmark: makeBenchmark() });
       expect(out.equals(bytes)).to.equal(true);
     });
 
-    it('returns null when no mount matches the locator', async () => {
+    it('returns null when no stored artifact matches the locator', async () => {
+      const store = memStore({ [`app/${contentHash}`]: storedFramed });
       const framed = await serveBlob(
         { appName: 'app', fluxID: '1id', locator: 'b'.repeat(64) },
-        { benchmark: makeBenchmark(), getDeployment, readFile },
+        { benchmark: makeBenchmark(), store },
       );
       expect(framed).to.equal(null);
     });
 
-    it('returns null when the app is not installed here', async () => {
+    it('returns null when the app has no stored artifacts', async () => {
       const framed = await serveBlob(
         { appName: 'app', fluxID: '1id', locator: 'a'.repeat(64) },
-        { benchmark: makeBenchmark(), getDeployment: async () => null, readFile },
+        { benchmark: makeBenchmark(), store: memStore() },
       );
       expect(framed).to.equal(null);
     });
@@ -318,6 +361,13 @@ describe('contentBlobService', () => {
     it('returns null on any error', async () => {
       const http = { get: async () => { throw new Error('refused'); } };
       expect(await fetchBlobFromPeer('1.2.3.4:16127', 'app', 'loc', { http })).to.equal(null);
+    });
+
+    it('bounds the response size to the framed-blob ceiling', async () => {
+      let opts;
+      const http = { get: async (url, options) => { opts = options; return { data: Buffer.from('x') }; } };
+      await fetchBlobFromPeer('1.2.3.4:16127', 'app', 'loc', { http });
+      expect(opts.maxContentLength).to.equal(await maxFramedBlobBytes());
     });
   });
 
