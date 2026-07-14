@@ -7,7 +7,7 @@ import { getSubnetConfig } from '../framework/subnet-config.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
-import { waitForUp, assertNoEvent, waitFor } from '../framework/wait.js';
+import { waitForUp, assertNoEvent, waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // B1 end-to-end: backup holds a lease on the WHOLE app under its bare main
@@ -42,11 +42,13 @@ describe('backup leases the whole app against the reconciler', function () {
     app = await seedSyncthingApp(env, { name: appName, mode: 'r', index: 0 });
     await setSynced({ ip: subnet.nodeIp(1), folder: app.folder });
     await waitForUp(env.clients[0], appName, 'app running before backup');
-    // bulk up appdata so the tar phase gives a real lease window
+    // bulk up appdata so the tar phase gives a real lease window - sized so the
+    // backup's own resume-restart cannot land inside the post-sweep assert
+    // window even on a fast host
     // (FLUX_APPS_FOLDER relocates the apps dir in the harness image)
     const bulk = await execInContainer(
       env.clients[0].container,
-      `sh -c "d=\\$(ls -d /mnt/appdata/flux-apps/flux${appName}* | head -1) && dd if=/dev/urandom of=\\$d/appdata/bulk.bin bs=1M count=200 && ls -l \\$d/appdata/bulk.bin"`,
+      `sh -c "d=\\$(ls -d /mnt/appdata/flux-apps/flux${appName}* | head -1) && dd if=/dev/urandom of=\\$d/appdata/bulk.bin bs=1M count=512 && ls -l \\$d/appdata/bulk.bin"`,
     );
     if (bulk.exitCode !== 0) {
       throw new Error(`appdata bulk-up failed (lease window would be too small): ${bulk.stderr || bulk.output}`);
@@ -66,6 +68,13 @@ describe('backup leases the whole app against the reconciler', function () {
 
     // start the backup but do NOT await: the unresolved promise IS the lease window
     const backupDone = client.appendBackupTask(appName, [appName], auth.zelidauth);
+
+    // appendBackupTask only QUEUES the task - the lease opens when the backup
+    // worker drives the app stopped. Wait for that stop actuation before firing
+    // the sweep, or the sweep can legitimately restart the (dockerd-killed)
+    // container before any hold exists and the assert below misreads it as a
+    // lease violation.
+    await waitForReconcileActuated(client, app.identifier, 'stopped', 60000);
 
     // fire the reconnect sweep inside the window
     await restartDockerd(client.container);
