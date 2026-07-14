@@ -244,15 +244,26 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
 
     // The reaper runs after expireGlobalApplications on the synced block loop, every
     // 2*speedMultiplier blocks (speedMultiplier=4 above the PON fork → every 8 blocks);
-    // 9 advances guarantee crossing a sweep boundary.
-    await advanceBlocks(9);
-
-    const reaped = await node.waitForEvent(
-      'content:manifestReaped',
-      (d) => d.count >= 1,
-      120000,
-      { afterId },
-    );
+    // 9 advances guarantee crossing a sweep boundary. One boundary is not enough on
+    // its own: rows younger than contentManifestReapGraceMs (30s here) are never
+    // reaped, and the manifest row can still be younger than that when the first
+    // sweep lands — so keep driving sweep boundaries until one falls past the grace.
+    const deadline = Date.now() + 120000;
+    let reaped;
+    for (;;) {
+      await advanceBlocks(9);
+      try {
+        reaped = await node.waitForEvent(
+          'content:manifestReaped',
+          (d) => d.count >= 1,
+          15000,
+          { afterId },
+        );
+        break;
+      } catch (err) {
+        if (Date.now() > deadline) throw err;
+      }
+    }
     expect(reaped.data.count).to.be.at.least(1);
 
     // The confirmed manifest row for the dead app is gone.
