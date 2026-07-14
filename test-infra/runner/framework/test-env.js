@@ -156,6 +156,11 @@ async function createNetwork() {
   await client.container.dockerode.createNetwork({
     Name: networkName,
     Driver: 'bridge',
+    // Internal enforces the harness boundary: every external dependency must be a
+    // stub on this network. An unstubbed code path (hardcoded URL, shell-out) fails
+    // instantly and loudly here instead of silently reaching the real internet.
+    // Host->container traffic (the runner, pushImage) is unaffected.
+    Internal: true,
     Labels: { 'org.testcontainers.session-id': reaper.sessionId, ...runLabels() },
     IPAM: {
       Driver: 'default',
