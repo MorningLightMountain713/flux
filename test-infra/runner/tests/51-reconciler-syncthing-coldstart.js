@@ -69,8 +69,13 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     await resetSyncState();
     await pushImage(rApp, 'v1');
     await pushImage(gApp, 'v1');
-    const rSpec = await buildSeedableSyncthingApp({ name: rApp, mode: 'r' });
-    const gSpec = await buildSeedableSyncthingApp({ name: gApp, mode: 'g' });
+    // Distinct host ports: both seeds can elect onto the SAME node, and two
+    // apps on the builder's shared default port collide at start ("port is
+    // already allocated") - the second app then crash-ladders instead of
+    // seeding. Election placement varies with the timestamped app names, so
+    // any run can draw the colliding placement.
+    const rSpec = await buildSeedableSyncthingApp({ name: rApp, mode: 'r', ports: [31111] });
+    const gSpec = await buildSeedableSyncthingApp({ name: gApp, mode: 'g', ports: [31112] });
 
     await pinColdStart(holders, `flux${rApp}_${rApp}`);
     await pinColdStart(holders, `flux${gApp}_${gApp}`);
