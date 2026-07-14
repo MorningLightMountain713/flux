@@ -312,37 +312,11 @@ function journaldCapFile() {
   return journaldCapPath;
 }
 
-// masterSlaveApps resolves the FDM by hostname (getMasterIpFromFdm tries EU/USA/ASIA
-// regions, server index from getFdmIndex by the app name's first letter). Every
-// reachable FDM hostname must resolve to the stub for any app name, otherwise the
-// node resolves the real fdm-*.runonflux.io over the internet.
-//
-// FluxOS installs dnsLookup on the global http/https agents, which asks the system's DNS
-// servers and then public ones via dns.resolve (c-ares) and never reads /etc/hosts. A
-// name in extra_hosts alone is therefore resolved on the internet. The names must be
-// served by Docker's embedded DNS, which we do by setting them as network aliases on the
-// stub (see StaticIpContainer.withStaticIp). extra_hosts are kept for any
-// getaddrinfo-based path (curl).
-function fdmHostnames() {
-  const names = [];
-  for (let i = 1; i <= 4; i++) {
-    names.push(`fdm-fn-1-${i}.runonflux.io`);
-    names.push(`fdm-usa-1-${i}.runonflux.io`);
-    names.push(`fdm-sg-1-${i}.runonflux.io`);
-  }
-  return names;
-}
-
 // The global IPv6 address createTestEnv's `globalIpv6` gives node i: one per node in
 // 2001:db8:e2e::/48 (the documentation prefix, RFC 3849), which no stub answers a name with, so
 // a connection to an address a stub does answer leaves by no route and fails at once.
 export function globalIpv6Address(i) {
   return `2001:db8:e2e:${i + 1}::1`;
-}
-
-// testcontainers ExtraHost objects for the built-in .withExtraHosts().
-function fdmExtraHosts(ip) {
-  return fdmHostnames().map((host) => ({ host, ipAddress: ip }));
 }
 
 // A host that confines its own sshd with AppArmor (an Arcane box) has that profile
@@ -1497,7 +1471,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
   watchInfra(env, 'externalStub', externalStub);
 
   const fdmStub = await new StaticIpContainer(image('flux-e2e-fdm-stub'))
-    .withStaticIp(networkName, FDM_IP, fdmHostnames())
+    .withStaticIp(networkName, FDM_IP)
     .withEnvironment({ FDM_PORT: '16130', CONTROL_PORT: '16131' })
     .withWaitStrategy(new HttpPollWaitStrategy(`http://${FDM_IP}:16131/health`))
     .start();
@@ -1797,6 +1771,8 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
         fluxRatesBaseUrl: `http://${EXTERNAL_STUB_IP}:3000`,
         coingeckoBaseUrl: `http://${EXTERNAL_STUB_IP}:3000`,
       },
+      // One stub serves every region/index (a %i-free template leaves the URL as-is).
+      fdm: { regions: [{ name: 'STUB', baseUrlTemplate: `http://${FDM_IP}:16130` }] },
       mongodb: { signingKeyBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
       upnp: { gatewayUrl: `http://${EXTERNAL_STUB_IP}:3000/upnp/device.xml` },
       // Every base URL a node fetches from belongs here, not just in
@@ -1886,7 +1862,6 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       // instead of stalling whatever asked for it until its own deadline.
       // Only the nodes: the stub resolves normally, or it would relay to itself.
       .withDnsServer(EXTERNAL_STUB_IP)
-      .withExtraHosts(fdmExtraHosts(FDM_IP))
       .withBindMounts(bindMounts)
       .withLogConsumer(logCollector)
       .withEnvironment(nodeEnv)

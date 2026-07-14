@@ -23,9 +23,9 @@ import { PARTITION_PEERS } from '../framework/coupled-knobs.js';
 // own copy looks synced and moves to promote itself, on precisely the observation
 // that should have stopped it. On a shared volume that is a second writer.
 //
-// Every fdm-*.runonflux.io name for all four indices is an alias on the one stub
-// container (test-env's fdmHostnames), so closing its socket is not one region
-// failing over to another - it is the whole of FDM going silent, which is the only
+// Every region resolves to the one stub container, because config.fdm.regions
+// carries a single entry (test-env's infraOverride), so closing its socket is not
+// one region failing over to another - it is the whole of FDM going silent, which is the only
 // arrangement that reaches the third answer. clearMaster does not: clearing the
 // primary is FDM answering, and that is the second.
 //
