@@ -391,6 +391,27 @@ async function localHoldings(folderId, skipNames = []) {
 }
 
 /**
+ * Sync-scoped FILES only (directories excluded from the count, still walked
+ * into). The deletion-broadcast hazard is per-FILE: only a file the index
+ * still lists can be announced as locally deleted, so when the index claims
+ * files (globalFiles > 0) the disk must hold at least one — a surviving
+ * directory skeleton (e.g. a bare appdata/) protects nothing.
+ * @param {string} dirPath - Directory path to check
+ * @returns {Promise<{hasContent: boolean, fileCount: number}>} File status
+ */
+async function checkDirectoryHasSyncScopedFiles(dirPath) {
+  const fileCount = await countFilesUpTo(dirPath, 100, {
+    excludeNames: ['.stignore'],
+    excludeDirs: ['backup', '.stfolder'],
+    countDirs: false,
+  });
+  return {
+    hasContent: fileCount > 0,
+    fileCount,
+  };
+}
+
+/**
  * Verify that a Syncthing folder's mount is properly initialized
  * This is CRITICAL to prevent data loss when mounts are not ready after reboot
  * @param {string} appId - App ID (e.g., fluxwp_myapp)
@@ -573,6 +594,7 @@ async function probeFolderSyncCompletion(folderId) {
       // report it reads 0, which is the reading that changes nothing.
       globalFiles,
       inSyncBytes,
+      globalFiles,
       state,
       // local additions/modifications in a receiveonly folder; invisible to the
       // completion metrics above (they only count cluster data)
