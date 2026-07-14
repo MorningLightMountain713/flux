@@ -274,7 +274,11 @@ describe('appNetworkLinker tests', () => {
 
   describe('getRequiredDependencyNamesForNode', () => {
     function placementStub(matches) {
-      return { hasTargets: () => true, matchesTarget: sinon.stub().returns(matches) };
+      return {
+        hasTargets: () => true,
+        matchesTarget: sinon.stub().returns(matches),
+        isPinnedTo(nodeInfo) { return this.hasTargets() && this.matchesTarget(nodeInfo); },
+      };
     }
 
     it('computes the closure over global apps whose placement targets this node', async () => {
@@ -608,7 +612,7 @@ describe('appNetworkLinker tests', () => {
     });
 
     it('refuses the required-set (falls back to not suppressing) when an assigned app is undecryptable', async () => {
-      const enc = instSpec({ name: 'game', encrypted: true, placement: { hasTargets: () => true, matchesTarget: () => true } });
+      const enc = instSpec({ name: 'game', encrypted: true, placement: { hasTargets: () => true, matchesTarget: () => true, isPinnedTo: () => true } });
       appsRepositoryStub.listGlobalAppInfo.resolves([enc]);
       deploymentProviderStub.resolveLinkedAppNames.withArgs(enc).resolves(null);
       await expect(appNetworkLinker.getRequiredDependencyNamesForNode({ ip: '7.7.7.7:16127' })).to.be.rejected;
