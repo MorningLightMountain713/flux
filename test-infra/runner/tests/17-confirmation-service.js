@@ -52,10 +52,13 @@ describe('Confirmation service: node list removal → message capability lost', 
   });
 
   it('should lose message capability when removed from deterministic list', async function () {
-    this.timeout(30000);
+    this.timeout(90000);
     await removeFromNodeList(env.clients[0].ip);
     await advanceBlock();
-    const event = await waitForMessageCapabilityChanged(env.clients[0], false, 20000);
+    // The node discovers its removal via the throttled nodelist poll (~20s min
+    // interval), so the flip lands anywhere in the next poll cycle depending on
+    // phase - the wait must cover a full cycle with margin, not race it.
+    const event = await waitForMessageCapabilityChanged(env.clients[0], false, 60000);
     expect(event.data.capable).to.equal(false);
   });
 });
