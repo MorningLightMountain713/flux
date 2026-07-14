@@ -146,9 +146,11 @@ async function startFluxFunctions() {
     await dbHelper.waitForMongo();
     await dockerService.waitForDocker();
 
-    // Check and update CloudUI if needed (for legacy nodes without watchdog)
+    // Check and update CloudUI if needed (for legacy nodes without watchdog; Arcane
+    // delegates to the watchdog). Detached: a UI-asset download must never gate boot —
+    // nothing downstream reads it, and a slow/unreachable GitHub would stall the node.
     log.info('Checking CloudUI installation...');
-    await cloudUIUpdateService.checkAndUpdateCloudUI();
+    cloudUIUpdateService.checkAndUpdateCloudUI().catch((err) => log.error(`CloudUI update check failed: ${err.message}`));
     // User configured UPnP node with routerIP, UPnP has already been verified and setup
     if (userconfig.initial.routerIP) {
       setInterval(() => {
