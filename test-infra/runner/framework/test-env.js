@@ -716,6 +716,10 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
       geolocation: { ipApiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000`, statsApiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
       stats: { apiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
       fiatRates: { ratesUrl: `http://${EXTERNAL_STUB_IP}:3000/rates` },
+      // Install-trial timings scaled to harness cadence: prod proves a probe-less
+      // first run at 60s / retries at 10s, which would drag every suite's install
+      // converge. Thresholds only - the trial's shape is unchanged.
+      fluxapps: { firstRunProofMs: 5000, convergeRetryMs: 2000 },
       // One stub serves every region/index (%i-free template leaves the URL as-is).
       fdm: { regions: [{ name: 'STUB', baseUrlTemplate: `http://${FDM_IP}:16130` }] },
       fluxDrive: { blobApiUrl: `http://${FLUXDRIVE_IP}:16140` },

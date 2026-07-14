@@ -209,11 +209,32 @@ async function recordRestart(identifier) {
 }
 
 /**
- * Marks that this component has successfully started at least once on this node
- * (set after a successful appDockerStart). Durable, so it survives a restart: it
- * distinguishes a first start (firstStart action; the install-window rollback
- * applies if it can't start) from a restart of a container that has run here
- * before (a later crash backs off, never rolls back). Cleared only by remove().
+ * Marks that docker has accepted at least one start of this component on this
+ * node. Durable. Distinguishes a first start (never seeds restartHistory, so the
+ * ladder's immediate-retry rung stays reachable) from a restart of a container
+ * docker has launched here before. Says nothing about whether the run proved
+ * itself — that is hasSuccessfullyStarted. Cleared only by remove().
+ *
+ * @param {string} identifier
+ */
+async function setEverStarted(identifier) {
+  try {
+    await setFields(identifier, { hasEverStarted: true });
+  } catch (err) {
+    log.error(`appsRuntimeState - failed to record start for ${identifier}: ${err.message}`);
+  }
+}
+
+/**
+ * Marks that this component has PROVEN a run on this node: a declared liveness
+ * probe reported healthy, the process exited cleanly (run-to-completion), or a
+ * probe-less service stayed up through the first-run proof window. Durable.
+ * A component that has never proven a run is still inside the install trial —
+ * exhausting its start attempts fails the install (rollback + error broadcast);
+ * once proven, the crash-backoff ladder owns it and it is never rolled back.
+ * Docker merely accepting a start is NOT proof (an exit-127 container "starts"
+ * a second before dying) — that weaker fact is hasEverStarted. Cleared only by
+ * remove().
  *
  * @param {string} identifier
  */
@@ -454,7 +475,9 @@ async function prepareCollection() {
           // app, and never lose the "teardown owed" intent on a boot dedupe
           condemned: twins.some((t) => t.condemned === true),
           condemnedForce: twins.some((t) => t.condemnedForce === true),
-          // started on any twin = has started here (gates firstStart-vs-restart + the install-window rollback)
+          // started on any twin = has started here (gates firstStart-vs-restart);
+          // proven on any twin = proven here (ends the install trial / rollback eligibility)
+          hasEverStarted: twins.some((t) => t.hasEverStarted === true),
           hasSuccessfullyStarted: twins.some((t) => t.hasSuccessfullyStarted === true),
           // highest desired vs highest actuated restart generation across twins
           restartGeneration: Math.max(0, ...twins.map((t) => t.restartGeneration || 0)),
@@ -488,6 +511,7 @@ module.exports = {
   setCondemned,
   isCondemned,
   recordRestart,
+  setEverStarted,
   setSuccessfullyStarted,
   requestRestart,
   recordRestartGeneration,

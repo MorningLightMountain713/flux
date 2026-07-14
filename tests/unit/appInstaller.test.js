@@ -651,6 +651,21 @@ describe('appInstaller tests', () => {
       expect(uninstallApplication.calledWith('newapp'), 'a non-converging install is rolled back').to.be.true;
     });
 
+    it('stores + broadcasts fluxappinstallingerror when the install trial fails — the network must learn', async () => {
+      const {
+        installer, storeAppInstallingErrorMessage, broadcastMessageToAll,
+      } = loadFresh({ converge: { converged: false, failed: ['web_newapp'] }, components: [['web', mockComponent]] });
+
+      await installer.installApplication(mockInstantiated, {});
+
+      expect(storeAppInstallingErrorMessage.calledOnce, 'error stored locally (feeds error counting)').to.be.true;
+      const stored = storeAppInstallingErrorMessage.firstCall.args[0];
+      expect(stored.type).to.equal('fluxappinstallingerror');
+      expect(stored.name).to.equal('newapp');
+      expect(stored.hash).to.equal('hash1');
+      expect(broadcastMessageToAll.calledOnceWith(stored), 'the same message is broadcast to peers').to.be.true;
+    });
+
     // cancel-vs-install: a cancel/expiry of an app racing its own install must DEFER the
     // install (retry later), never FAIL it — a FAILED status 7-day-poisons the spawner cache
     // and strands a pinned enterprise app. These guard the classification at each gate.
