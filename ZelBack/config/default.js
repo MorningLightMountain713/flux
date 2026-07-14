@@ -385,6 +385,7 @@ module.exports = {
     hashSyncFallbackRecheckBlocks: 100,
     manifestRefreshBlocks: 100, // steady-state content-manifest anti-entropy cadence (~50 min)
     manifestRefreshPeers: 3, // peers sampled per steady-state manifest refresh
+    manifestRefreshMinPeerUptime: 30, // refresh sync-source uptime floor (s) - token, NOT the boot sync's 2h anti-flap gate
     syncResponseThrottleMs: 300000,
     wsHandshakeTimeoutMs: 10000,
     imageUpdateCheckIntervalMs: 21600000,
