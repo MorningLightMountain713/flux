@@ -16,7 +16,7 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // Content slots + bind mounting: the mutable half of v9 content delivery. Proves
 // the owner-signed manifest is recorded/backstopped at register, the declared slot
 // content is injected into the container at install (peers-first, FluxDrive
-// backstop), the injected-file permission model (root:root 0444 default, data
+// backstop), the injected-file permission model (root:root 0644 default, data
 // mounts stay 777, per-mount uid/gid/mode override), and the two delivery axes —
 // an atomic:false single-file bind overwritten in place (inode pinned) vs an
 // atomic:true managed-dir swap under /io.runonflux/ (inode replaced, torn-safe).
@@ -185,12 +185,15 @@ describe('content slots + bind mounting: manifest, injection, perms, atomic deli
     expect(owned.content.trim()).to.equal(OWNED_BYTES.toString());
   });
 
-  it('locks injected slot files to root:root 0444 while data dir mounts stay world-writable (777)', async function () {
+  it('defaults injected slot files to root:root 0644 while data dir mounts stay world-writable (777)', async function () {
     this.timeout(60000);
+    // Mode bits are ownership hygiene, not enforcement (a root container writes
+    // through any mode via CAP_DAC_OVERRIDE); read-only intent is the mount's
+    // readOnly flag (MS_RDONLY bind).
     const slotPerms = await statFileInContainer(baseClient.container, baseApp, 'web', CONF_DEST);
     expect(slotPerms.uid, 'injected slot uid').to.equal('0');
     expect(slotPerms.gid, 'injected slot gid').to.equal('0');
-    expect(slotPerms.mode, 'injected slot mode').to.equal('444');
+    expect(slotPerms.mode, 'injected slot mode').to.equal('644');
 
     // The default /data directory mount (no per-mount perms) keeps today's
     // world-writable behaviour — content perms must not regress it.
