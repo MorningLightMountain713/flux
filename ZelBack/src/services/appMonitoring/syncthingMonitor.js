@@ -456,6 +456,35 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       }
     }
 
+    // Decision-point safety for folders syncthing flagged since the last pass: a
+    // sendreceive folder must pass the FULL check (mount + phantom index) - the
+    // mount gate above is satisfied by a mounted-but-emptied volume, while a stale
+    // index over that empty disk would broadcast every "missing" file as a
+    // deletion. The first-run sweep covers reboot; this covers a live folder whose
+    // storage or index went bad mid-flight (FolderErrors is syncthing's own signal
+    // for it). Steady-state folders are never swept.
+    if (!state.syncthingAppsFirstRun && erroredFolderIds.size > 0) {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const folder of allFoldersResp.data) {
+        if (folder.type !== 'sendreceive' || !erroredFolderIds.has(folder.id)) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const folderSafety = await verifySendReceiveFolderSafety(folder.id, folder.path);
+        if (folderSafety.isSafe) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        log.error(`syncthingAppsCore - SAFETY BLOCK: ${folder.id} sendreceive folder failed its flagged-folder safety check (${folderSafety.reason}); switching to receiveonly and holding the container`);
+        // eslint-disable-next-line no-await-in-loop
+        await syncthingService.adjustConfigFolders('patch', { type: 'receiveonly' }, folder.id).catch((err) => {
+          log.error(`syncthingAppsCore - Failed to switch ${folder.id} to receiveonly: ${err.message}`);
+        });
+        appReconciler.setControllerDesired(folder.id, 'stopped', `sendreceive safety block: ${folderSafety.reason}`);
+      }
+    }
+
     // Initialize tracking arrays
     const devicesIds = [];
     const devicesConfiguration = [];

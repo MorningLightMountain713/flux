@@ -48,6 +48,7 @@ const syncthingFolderStateMachineMock = {
   getFolderSyncCompletion: sinon.stub(),
   isDesignatedLeader: sinon.stub(),
   verifyFolderMountSafety: sinon.stub().resolves({ isSafe: true, isMounted: true, fileCount: 1 }),
+  verifySendReceiveFolderSafety: sinon.stub().resolves({ isSafe: true, isMounted: true, fileCount: 1 }),
 };
 
 const syncthingMonitorHelpersMock = {
@@ -147,6 +148,8 @@ describe('syncthingMonitor tests', () => {
     volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: true });
     syncthingFolderStateMachineMock.verifyFolderMountSafety.reset();
     syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: true, isMounted: true, fileCount: 1 });
+    syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.reset();
+    syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: true, isMounted: true, fileCount: 1 });
     appReconcilerMock.setControllerDesired.reset();
 
     // Default stub behaviors
@@ -299,6 +302,56 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'testapp', 'stopped');
       // the cycle itself was skipped - per-app processing never ran
       sinon.assert.notCalled(syncthingServiceMock.getDeviceId);
+    });
+
+    it('demotes a flagged sendreceive folder whose index claims data over an empty mounted volume (phantom index)', async () => {
+      // the mount gate passes (volume mounted, merely emptied) - only the FULL
+      // sendreceive check sees the stale index; without the demotion the folder
+      // would broadcast every "missing" file as a deletion.
+      deploymentProviderMock.listInstalledDeployments.resolves([{
+        appName: 'testapp',
+        componentEntries: () => [['comp', { identifier: 'testapp', hasSyncthing: () => false }]],
+      }]);
+      syncthingEventsConsumerMock.drainErroredFolderIds.returns(['testapp']);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: true, isMounted: true, fileCount: 0 });
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: true, reason: 'phantom_index_empty_disk' });
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: 'testapp', type: 'sendreceive', path: '/dat/apps/testapp' }] });
+      syncthingServiceMock.getConfigDevices.resolves({ data: [] });
+      syncthingServiceMock.adjustConfigFolders.resolves(); // beforeEach reset() wipes behavior; restore it
+
+      monitorControl = syncthingMonitor.syncthingApps(
+        mockState,
+        mockGetGlobalStateFn,
+      );
+      await clock.tickAsync(100);
+
+      sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, 'patch', { type: 'receiveonly' }, 'testapp');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'testapp', 'stopped');
+    });
+
+    it('leaves a flagged sendreceive folder alone when the full check passes (no phantom)', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([{
+        appName: 'testapp',
+        componentEntries: () => [['comp', { identifier: 'testapp', hasSyncthing: () => false }]],
+      }]);
+      syncthingEventsConsumerMock.drainErroredFolderIds.returns(['testapp']);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: true, isMounted: true, fileCount: 3 });
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: true, isMounted: true, fileCount: 3 });
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: 'testapp', type: 'sendreceive', path: '/dat/apps/testapp' }] });
+      syncthingServiceMock.getConfigDevices.resolves({ data: [] });
+
+      monitorControl = syncthingMonitor.syncthingApps(
+        mockState,
+        mockGetGlobalStateFn,
+      );
+      await clock.tickAsync(100);
+
+      sinon.assert.calledWith(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety, 'testapp', '/dat/apps/testapp');
+      sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
     });
 
     it('does not re-patch an unsafe folder that is already receiveonly', async () => {
