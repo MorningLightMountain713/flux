@@ -38,7 +38,16 @@ describe('Confirmation service: node list removal → message capability lost', 
 
   before(async function () {
     this.timeout(120000);
-    env = await createTestEnv({ hookCtx: this, nodes: 3, tickerAutostart: false });
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: 3,
+      tickerAutostart: false,
+      // The node discovers list changes via the nodelist fetch throttle
+      // (networkStateMinFetchIntervalMs, prod 30s): run a fast poll so the
+      // capability flip below is prompt and deterministic instead of racing
+      // the poll phase with a long wait.
+      configOverrides: { fluxapps: { networkStateMinFetchIntervalMs: 2000 } },
+    });
     await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
     await Promise.all(env.clients.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
     await advanceBlock();
@@ -52,13 +61,10 @@ describe('Confirmation service: node list removal → message capability lost', 
   });
 
   it('should lose message capability when removed from deterministic list', async function () {
-    this.timeout(90000);
+    this.timeout(30000);
     await removeFromNodeList(env.clients[0].ip);
     await advanceBlock();
-    // The node discovers its removal via the throttled nodelist poll (~20s min
-    // interval), so the flip lands anywhere in the next poll cycle depending on
-    // phase - the wait must cover a full cycle with margin, not race it.
-    const event = await waitForMessageCapabilityChanged(env.clients[0], false, 60000);
+    const event = await waitForMessageCapabilityChanged(env.clients[0], false, 20000);
     expect(event.data.capable).to.equal(false);
   });
 });
