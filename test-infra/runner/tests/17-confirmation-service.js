@@ -38,7 +38,16 @@ describe('Confirmation service: node list removal → message capability lost', 
 
   before(async function () {
     this.timeout(120000);
-    env = await createTestEnv({ hookCtx: this, nodes: 3, tickerAutostart: false });
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: 3,
+      tickerAutostart: false,
+      // The node discovers list changes via the nodelist fetch throttle
+      // (networkStateMinFetchIntervalMs, prod 30s): run a fast poll so the
+      // capability flip below is prompt and deterministic instead of racing
+      // the poll phase with a long wait.
+      configOverrides: { fluxapps: { networkStateMinFetchIntervalMs: 2000 } },
+    });
     await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
     await Promise.all(env.clients.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
     await advanceBlock();
