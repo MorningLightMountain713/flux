@@ -8,6 +8,7 @@ const verificationHelper = require('../verificationHelper');
 const signatureVerifier = require('../signatureVerifier');
 const cryptoProvider = require('../providers/FluxOSCryptoProvider');
 const contentBlobService = require('./contentBlobService');
+const contentStore = require('./contentStore');
 const dockerService = require('../dockerService');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
@@ -581,11 +582,12 @@ async function getContentManifestApi(req, res) {
 }
 
 /** Apply an injected file's ownership + mode: the slot mount's resolved perms —
- * the declared per-mount uid/gid/mode, or root-owned 0444 by default (DeploymentSpec
- * resolveMountPerms). Both are set here so a declared mode is honored rather than
- * dropped by a blanket chmod. The node runs as root, so chown/chmod apply directly. */
+ * the declared per-mount uid/gid/mode, or root-owned 0644 by default (DeploymentSpec
+ * resolveMountPerms; mode bits are ownership hygiene — read-only enforcement is the
+ * mount's readOnly bind flag). Both are set here so a declared mode is honored rather
+ * than dropped by a blanket chmod. The node runs as root, so chown/chmod apply directly. */
 async function defaultInjectedPerms(target, mount) {
-  const { uid, gid, mode } = (mount && mount.perms) || { uid: 0, gid: 0, mode: '0444' };
+  const { uid, gid, mode } = (mount && mount.perms) || { uid: 0, gid: 0, mode: '0644' };
   await fs.chown(target, Number(uid), Number(gid));
   await fs.chmod(target, parseInt(mode, 8));
 }
@@ -738,6 +740,24 @@ async function applyManifest(deployment, manifest, ctx, deps = {}) {
   } catch (error) {
     log.warn(`contentSlot: failed to record applied version ${manifest.version} for ${ctx.appName} - ${error.message ?? error}`);
   }
+
+  // Reap artifact-store entries the app no longer declares: keep the spec's
+  // contentRef hashes + this (now-applied) manifest's slot hashes, so
+  // superseded slot versions age out. Best-effort — an orphan costs at most a
+  // few MB until the next apply or the uninstall reap.
+  try {
+    const keep = new Set();
+    for (const [, comp] of deployment.componentEntries()) {
+      for (const { hash } of comp.contentBlobMounts()) keep.add(hash);
+    }
+    for (const entry of Object.values(manifest.slots || {})) {
+      if (entry && entry.hash) keep.add(entry.hash);
+    }
+    await (deps.store ?? contentStore).retainOnly(ctx.appName, keep);
+  } catch (error) {
+    log.warn(`contentSlot: artifact-store reap failed for ${ctx.appName} - ${error.message ?? error}`);
+  }
+
 }
 
 /** Resolve a node's globally-unique, stable collateral txid from its ip:port via the
@@ -1325,7 +1345,7 @@ async function submitContentUpdate(body, deps = {}) {
  * `ownerSigs` JSON field. The envelope is opened downstream in submitContentUpdate.
  */
 async function parseContentUpdate(req) {
-  const form = formidable({ maxFileSize: contentBlobService.MAX_CONTENT_BYTES, multiples: true, keepExtensions: false });
+  const form = formidable({ maxFileSize: await contentBlobService.maxContentBytes(), multiples: true, keepExtensions: false });
   const [fields, files] = await form.parse(req);
   const first = (v) => (Array.isArray(v) ? v[0] : v);
 

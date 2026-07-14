@@ -1396,10 +1396,11 @@ let activeContentServes = 0;
  * Serve a content blob to a peer by locator — the peers-first source for other
  * nodes installing this app. Anti-abuse only: the content is opaque ciphertext
  * and integrity is the requester's own hash-check, so this gates on a
- * concurrency cap (429 over the limit), not auth. Only arcane nodes can
- * re-encrypt (the per-blob key comes over the benchmark channel). fluxID is the
+ * concurrency cap (429 over the limit), not auth. The bytes come verbatim from
+ * this node's artifact store (what it fetched and verified) — never the app's
+ * live mount, which the app may legitimately have mutated. fluxID is the
  * installed app's owner — the same identity the locator was derived from at
- * upload/provision time, so the served mount matches the requested locator.
+ * upload/provision time, so the served artifact matches the requested locator.
  * @param {object} req - Request object (params: appName, locator)
  * @param {object} res - Response object
  */
@@ -1417,14 +1418,12 @@ async function contentBlobServeApi(req, res) {
     try {
       const { appName, locator } = req.params;
       const installed = await appsRepository.getInstalledApp(appName);
-      const deployment = await deploymentProvider.getInstalledDeployment(appName);
-      if (!installed || !deployment) {
+      if (!installed) {
         res.status(404).end();
         return;
       }
       const framed = await contentBlobService.serveBlob(
         { appName, fluxID: installed.owner, locator },
-        { getDeployment: async () => deployment, readFile: (source) => fs.readFile(source) },
       );
       if (!framed) {
         res.status(404).end();

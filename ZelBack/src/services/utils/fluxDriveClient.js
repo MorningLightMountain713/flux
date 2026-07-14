@@ -40,10 +40,12 @@ async function uploadBlob(framed, hdr, deps = {}) {
 /**
  * Fetch ciphertext by locator (the FluxDrive backstop). Returns a Buffer, or
  * null when the locator is unknown (404). The caller re-verifies the content
- * hash, so a wrong/lost entry is self-correcting.
+ * hash, so a wrong/lost entry is self-correcting. Callers that know the
+ * payload's size ceiling pass maxBytes so an oversized response is rejected
+ * during download instead of buffered into memory.
  *
  * @param {string} locator
- * @param {object} [deps] - { http, baseUrl }
+ * @param {object} [deps] - { http, baseUrl, maxBytes }
  * @returns {Promise<Buffer|null>}
  */
 async function fetchBlobByLocator(locator, deps = {}) {
@@ -53,6 +55,7 @@ async function fetchBlobByLocator(locator, deps = {}) {
     const res = await http.get(`${base}/api/v1/blob/${locator}`, {
       responseType: 'arraybuffer',
       timeout: 30_000,
+      ...(deps.maxBytes ? { maxContentLength: deps.maxBytes } : {}),
     });
     return Buffer.from(res.data);
   } catch (error) {

@@ -841,6 +841,42 @@ describe('contentSlotService', () => {
       await service.applyManifest(dep, m, ctx, deps);
       sinon.assert.calledOnce(deps.signal);
     });
+
+    it('reaps artifact-store entries down to the spec blobs + this manifest\'s slot hashes', async () => {
+      const { service } = load();
+      const HBLOB = `sha256:${'9'.repeat(64)}`;
+      const store = { retainOnly: sinon.stub().resolves() };
+      const deps = applyDeps({ store });
+      const dep = {
+        componentEntries: () => [['web', {
+          identifier: 'web_app',
+          contentSlotMounts: () => [{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: null }],
+          contentBlobMounts: () => [{ source: '/dat/app/seed', hash: HBLOB }],
+        }]],
+      };
+      await service.applyManifest(dep, { appName: 'app', version: 5, slots: { cfg: { hash: HCFG } } }, ctx, deps);
+      sinon.assert.calledOnce(store.retainOnly);
+      const [app, keep] = store.retainOnly.firstCall.args;
+      expect(app).to.equal('app');
+      expect([...keep].sort()).to.deep.equal([HCFG, HBLOB].sort());
+    });
+
+    it('defaults injected perms to root-owned 0644 when the mount declares none', async () => {
+      const chown = sinon.stub().resolves();
+      const chmod = sinon.stub().resolves();
+      const service = proxyquire('../../ZelBack/src/services/appLifecycle/contentSlotService', {
+        '../utils/specLibs': { getSpec: sinon.stub().resolves(defaultSpecStub()) },
+        '../appDatabase/appsRepository': fakeRepo(),
+        'node:fs/promises': {
+          chown, chmod, writeFile: sinon.stub().resolves(), rename: sinon.stub().resolves(),
+        },
+      });
+      const deps = { resolve: async () => Buffer.from('bytes'), signal: sinon.spy(), restart: sinon.spy() };
+      const dep = deployment([{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: null }]);
+      await service.applyManifest(dep, { appName: 'app', slots: { cfg: { hash: HCFG } } }, ctx, deps);
+      sinon.assert.calledWith(chown, '/dat/app/cfg', 0, 0);
+      sinon.assert.calledWith(chmod, '/dat/app/cfg', 0o644);
+    });
   });
 
   describe('scheduleContentApplication', () => {

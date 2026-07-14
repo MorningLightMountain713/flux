@@ -47,8 +47,8 @@ describe('appSubmission tests', () => {
   beforeEach(() => {
     stubs = {
       contentBlobService: {
-        MAX_CONTENT_BYTES: 64 * 1024 * 1024,
-        MAX_BLOB_BYTES: 2 * 1024 * 1024,
+        maxContentBytes: sinon.stub().resolves(64 * 1024 * 1024),
+        maxBlobBytes: sinon.stub().resolves(2 * 1024 * 1024),
         specContentHashes: sinon.stub().returns(new Set()),
         encryptAndUploadBlobs: sinon.stub().resolves([]),
       },
