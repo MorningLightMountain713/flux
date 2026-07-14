@@ -88,10 +88,21 @@ const operationDesired = new Map();
 // is a DIRECT in-process observer, never FluxEventBus (a prod no-op).
 const convergeWaiters = new Map(); // id -> (verdict) => void
 const convergeBackstops = new Map(); // id -> backstop timer
-// rollback after this many failed start attempts within the window (default 2 =
-// initial + one retry); a COUNT not a wall clock, so a node issue never rolls back.
-const CONVERGE_FAIL_ATTEMPTS = config.fluxapps.convergeFailAttempts ?? 2;
+// rollback after this many total container-start attempts (initial + retries) for
+// a component that has never proven a run; a COUNT not a wall clock, so a node
+// issue (docker down: no attempt is ever made) never rolls back.
+const CONVERGE_FAIL_ATTEMPTS = config.fluxapps.convergeFailAttempts ?? 3;
 const CONVERGE_BACKSTOP_MS = config.fluxapps.convergeBackstopMs ?? 5 * 60 * 1000;
+// Pacing between install-trial start attempts. The crash ladder protects a node
+// from an ESTABLISHED app gone bad - its minutes-long rungs would starve the
+// bounded "can this run at all?" trial, so unproven converging components retry
+// on this fixed pace instead; the ladder owns pacing from the first proven run.
+const CONVERGE_RETRY_MS = config.fluxapps.convergeRetryMs ?? 10 * 1000;
+// A probe-less service proves its first run by staying up this long. Probed
+// components prove on the first healthy report; run-to-completion ones on a
+// clean exit. Until proven, the install converge stays open - docker accepting
+// a start is not proof (an exit-127 container "starts" a second before dying).
+const FIRST_RUN_PROOF_MS = config.fluxapps.firstRunProofMs ?? 60 * 1000;
 
 // A container start is information the network wants immediately: a backoff
 // straggler that starts minutes after boot must refresh its appsLocations row
@@ -358,6 +369,10 @@ async function dockerActual(identifier) {
     // the container never finished.
     const finishedParsed = Date.parse(info.State?.FinishedAt ?? '');
     const finishedAt = Number.isFinite(finishedParsed) && finishedParsed > 0 ? finishedParsed : null;
+    // start of the CURRENT run (docker resets it on every start) - the first-run
+    // proof window measures uptime against it. Zero value = never started.
+    const startedParsed = Date.parse(info.State?.StartedAt ?? '');
+    const startedAt = Number.isFinite(startedParsed) && startedParsed > 0 ? startedParsed : null;
     return {
       reachable: true,
       exists: true,
@@ -367,6 +382,7 @@ async function dockerActual(identifier) {
       // classified from THIS inspect so the running-branch network check needs no
       // second docker call (and no TOCTOU between two inspects).
       attachment: dockerService.classifyContainerNetworkAttachment(info),
+      startedAt,
       // docker HEALTHCHECK status from a v9 livenessProbe: healthy | unhealthy |
       // starting, or null when the component declares no probe.
       health: info.State?.Health?.Status ?? null,
@@ -576,12 +592,12 @@ async function recreateMissing(identifier) {
     if (appTamperingDetectionService.isNetworkMissingError(err.message)) {
       await appTamperingDetectionService.recordEvent(mainAppName, 'network_pruned', `Docker network missing during recreation: ${err.message}`);
     }
-    // §14.5 principle: a component that has run here before is NOT destroyed on a
-    // failed rebuild (its image is now unpullable, a bad update, a registry blip) —
-    // it degrades to DOWN and backs off, so a broken update can never delete an
-    // established app + its data, fleet-wide. Only a never-ran component (a fresh
-    // install that vanished before it ever started) is removed, mirroring the
-    // install converge-wait's count-based rollback.
+    // §14.5 principle: a component that has PROVEN a run here before is NOT
+    // destroyed on a failed rebuild (its image is now unpullable, a bad update, a
+    // registry blip) — it degrades to DOWN and backs off, so a broken update can
+    // never delete an established app + its data, fleet-wide. Only a never-proven
+    // component (a fresh install that vanished before it ever demonstrated a run)
+    // is removed, mirroring the install trial's count-based rollback.
     const rs = await appsRuntimeState.getState(identifier);
     if (rs && rs.hasSuccessfullyStarted) {
       await appsRuntimeState.recordRestart(identifier);
@@ -1170,6 +1186,7 @@ async function reconcile(rawIdentifier) {
         await appsRuntimeState.recordRestart(identifier);
         log.error(`appReconciler - failed to restart unhealthy ${identifier}: ${err.message}; retrying`);
         fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthyFailed', reason: err.message });
+        if (await failConvergeIfExhausted(identifier)) return;
         scheduleRetry(identifier, MANAGED_RETRY_MS);
         return;
       }
@@ -1177,10 +1194,37 @@ async function reconcile(rawIdentifier) {
       await appsRuntimeState.recordRestart(identifier);
       log.warn(`appReconciler - ${identifier} restarted (was unhealthy)`);
       fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthy' });
+      if (await failConvergeIfExhausted(identifier)) return;
       // A restart is a start: it can come up detached the same way (stale endpoint
       // born at start time), so re-verify the attachment shortly rather than
       // waiting for the hourly sweep.
       scheduleRetry(identifier, POST_START_VERIFY_MS);
+      return;
+    }
+    // First-run proof: an unproven component latches its proven marker here — a
+    // declared probe reporting healthy IS proof; a probe-less service proves by
+    // uptime. Until proven, keep a retry armed so the install converge cannot
+    // settle on a start that is about to die (onSettled requires a retry-free pass).
+    if (!(restartReq && restartReq.hasSuccessfullyStarted)) {
+      if (actual.health === 'healthy') {
+        await appsRuntimeState.setSuccessfullyStarted(identifier);
+        fluxEventBus.publish('reconciler:actuated', { identifier, action: 'firstRunProven', by: 'probe' });
+        return;
+      }
+      if (actual.health === null) {
+        const uptime = actual.startedAt ? Date.now() - actual.startedAt : 0;
+        if (uptime >= FIRST_RUN_PROOF_MS) {
+          await appsRuntimeState.setSuccessfullyStarted(identifier);
+          fluxEventBus.publish('reconciler:actuated', { identifier, action: 'firstRunProven', by: 'uptime' });
+          return;
+        }
+        scheduleRetry(identifier, Math.max(1000, FIRST_RUN_PROOF_MS - uptime));
+        return;
+      }
+      // probe 'starting': its declared grace period is running — re-check shortly.
+      // A probe that never leaves 'starting' rides the converge backstop
+      // ('provisional', never a rollback), matching the node-issue philosophy.
+      scheduleRetry(identifier, MANAGED_RETRY_MS);
       return;
     }
     return; // healthy / starting / probe-less — running and properly attached
@@ -1225,14 +1269,44 @@ async function reconcile(rawIdentifier) {
     return;
   }
 
-  // exists but stopped, should run -> backoff-paced restart (no sleeping; the
-  // worker re-enqueues when the backoff window elapses)
-  const wait = await appsRuntimeState.restartWaitMs(identifier, { lastFinishedAtMs: actual.finishedAt });
-  if (wait > 0) {
-    log.warn(`appReconciler - ${identifier} stopped, backing off ${Math.round(wait / 1000)}s before restart`);
-    fluxEventBus.publish('reconciler:actuated', { identifier, action: 'backoff', waitMs: wait });
-    scheduleRetry(identifier, wait);
-    return;
+  // exists but stopped, should run
+  const priorRuntimeState = await appsRuntimeState.getState(identifier);
+  let proven = !!(priorRuntimeState && priorRuntimeState.hasSuccessfullyStarted);
+  // A clean exit is a proven run: a run-to-completion component that exited 0 has
+  // demonstrated viability even though policy wants it running again. Latch before
+  // the trial check so a cleanly-exited converging component leaves the trial.
+  if (!proven && actual.exitCode === 0) {
+    await appsRuntimeState.setSuccessfullyStarted(identifier);
+    proven = true;
+    fluxEventBus.publish('reconciler:actuated', { identifier, action: 'firstRunProven', by: 'cleanExit' });
+  }
+
+  if (!proven && convergeWaiters.has(identifier)) {
+    // Install trial: bounded attempts at a short fixed pace. The ladder's
+    // minutes-long rungs are steady-state protection and would starve the trial.
+    if (await failConvergeIfExhausted(identifier, priorRuntimeState)) return;
+    const history = (priorRuntimeState && priorRuntimeState.restartHistory) || [];
+    const lastAttempt = Math.max(
+      history.length ? history[history.length - 1] : 0,
+      actual.finishedAt || 0,
+      (priorRuntimeState && priorRuntimeState.lastDiedAt) || 0,
+    );
+    const trialWait = lastAttempt ? Math.max(0, CONVERGE_RETRY_MS - (Date.now() - lastAttempt)) : 0;
+    if (trialWait > 0) {
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'trialBackoff', waitMs: trialWait });
+      scheduleRetry(identifier, trialWait);
+      return;
+    }
+  } else {
+    // steady state -> backoff-paced restart (no sleeping; the worker re-enqueues
+    // when the backoff window elapses)
+    const wait = await appsRuntimeState.restartWaitMs(identifier, { lastFinishedAtMs: actual.finishedAt });
+    if (wait > 0) {
+      log.warn(`appReconciler - ${identifier} stopped, backing off ${Math.round(wait / 1000)}s before restart`);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'backoff', waitMs: wait });
+      scheduleRetry(identifier, wait);
+      return;
+    }
   }
 
   // Recreate any bind-mount paths removed while the container was stopped (e.g.
@@ -1265,11 +1339,12 @@ async function reconcile(rawIdentifier) {
     return;
   }
 
-  // firstStart vs restart keys on the durable hasSuccessfullyStarted marker: a
-  // container that has run here before is a restart even after a crash; one that never
-  // has is a first start.
-  const priorRuntimeState = await appsRuntimeState.getState(identifier);
-  const firstStart = !(priorRuntimeState && priorRuntimeState.hasSuccessfullyStarted);
+  // firstStart vs restart keys on the durable hasEverStarted marker: a container
+  // docker has launched here before is a restart even after a crash; one it never
+  // has is a first start. Proven implies started (covers docs persisted before
+  // the marker split). Read above, before the mount/network awaits — only this
+  // path writes the marker, so the hoisted read cannot go stale.
+  const firstStart = !(priorRuntimeState && (priorRuntimeState.hasEverStarted || priorRuntimeState.hasSuccessfullyStarted));
   try {
     await dockerService.appDockerStart(identifier);
   } catch (err) {
@@ -1299,7 +1374,7 @@ async function reconcile(rawIdentifier) {
   // crashes before its first stable run backs off 30s instead of retrying at once.
   if (!firstStart) await appsRuntimeState.recordRestart(identifier);
   appInspector.startAppMonitoring(identifier, globalState.appsMonitored);
-  if (firstStart) await appsRuntimeState.setSuccessfullyStarted(identifier);
+  if (firstStart) await appsRuntimeState.setEverStarted(identifier);
   // A start satisfies any pending restart request (a "restart" of a stopped
   // container IS a start), so the running reconcile that follows won't re-bounce it.
   const pendingGen = (priorRuntimeState && priorRuntimeState.restartGeneration) || 0;
@@ -1311,7 +1386,10 @@ async function reconcile(rawIdentifier) {
   // A start is exactly when a container can come up attached to no network (a stale
   // endpoint left by an earlier failed start). The attachment we hold was sampled
   // BEFORE this start, so verify the new one shortly - otherwise a detached-at-boot
-  // container waits for the hourly sweep.
+  // container waits for the hourly sweep. The same armed pass drives the first-run
+  // proof for an unproven component: the running branch latches on probe-healthy or
+  // uptime and re-arms itself until proven, so this single retry both verifies the
+  // attachment and holds onSettled open through the proof window.
   scheduleRetry(identifier, POST_START_VERIFY_MS);
 }
 
@@ -1339,17 +1417,26 @@ function resolveConverge(identifier, verdict) {
   resolve(verdict);
 }
 
-// A converging component that has exhausted the install-window start attempts and
-// never started successfully is a failed install — resolve its waiter 'failed' so
-// installApplication rolls it back. A genuine node issue makes no start attempt, so
-// restartHistory never grows and this never fires (the backstop handles that).
-async function failConvergeIfExhausted(identifier) {
-  if (!convergeWaiters.has(identifier)) return;
-  const rs = await appsRuntimeState.getState(identifier);
-  const attempts = rs && rs.restartHistory ? rs.restartHistory.length : 0;
-  if (attempts >= CONVERGE_FAIL_ATTEMPTS && !(rs && rs.hasSuccessfullyStarted)) {
+// A converging component that has exhausted its install-trial start attempts with
+// no proven run is a failed install — resolve its waiter 'failed' so
+// installApplication rolls it back. Attempts = TOTAL container starts: every retry
+// and every start-throw records into restartHistory, and the one successful,
+// deliberately-unrecorded first start is re-added via hasEverStarted (proven
+// implies started, covering docs persisted before the marker split). A genuine
+// node issue makes no start attempt, so this never fires (the backstop handles
+// that). Returns true when it resolved the verdict, so callers stop actuating —
+// the rollback owns the container from here.
+async function failConvergeIfExhausted(identifier, priorState = null) {
+  if (!convergeWaiters.has(identifier)) return false;
+  const rs = priorState ?? await appsRuntimeState.getState(identifier);
+  if (rs && rs.hasSuccessfullyStarted) return false;
+  const history = (rs && rs.restartHistory) || [];
+  const attempts = history.length + (rs && rs.hasEverStarted ? 1 : 0);
+  if (attempts >= CONVERGE_FAIL_ATTEMPTS) {
     resolveConverge(identifier, 'failed');
+    return true;
   }
+  return false;
 }
 
 /**

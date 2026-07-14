@@ -100,7 +100,6 @@ async function performDockerCleanup(onStatus) {
 }
 
 /**
-/**
  * Ensures the per-app docker network (fluxDockerNetwork_<appName>) exists,
  * creating it with a free /24 (172.23.<octet>.0/24) if absent. Safe to call on
  * every install and from the reconciler's heal path, where a pruned network
@@ -192,6 +191,42 @@ async function ensureAppDockerNetwork(appName, res) {
     if (res.flush) res.flush();
   }
   return fluxNet;
+}
+
+/**
+ * Store + broadcast a fluxappinstallingerror so peers learn this app failed to
+ * install here — it feeds their spawn decisions and error counting, and is what
+ * makes one node's discovery of a broken app network-wide knowledge. Both the
+ * provisioning-failure catch and the converge-trial rollback route through here.
+ * Best-effort: a failed store/broadcast must never mask the install failure it
+ * reports.
+ * @param {string} appName
+ * @param {string} hash app hash the error is cached against
+ * @param {Error|string} error failure to report
+ */
+async function storeAndBroadcastInstallError(appName, hash, error) {
+  try {
+    const ip = await fluxNetworkHelper.getLocalSocketAddress();
+    if (!ip) return;
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    const message = {
+      type: 'fluxappinstallingerror',
+      version: 1,
+      name: appName,
+      hash,
+      error: serviceHelper.ensureString(errorResponse),
+      ip,
+      broadcastedAt: Date.now(),
+    };
+    await storeAppInstallingErrorMessage(message);
+    await fluxCommunicationMessagesSender.broadcastMessageToAll(message);
+  } catch (err) {
+    log.error(`storeAndBroadcastInstallError - ${appName}: ${err.message}`);
+  }
 }
 
 /**
@@ -505,23 +540,7 @@ async function installApplication(instantiated, options = {}) {
       const cancelInFlight = globalState.installAborted(appName)
         || await pendingTeardownStore.teardownOwedFor(appName);
       if (!test && !cancelInFlight && error.code !== 'NETWORK_DEPENDENCY_NOT_READY') {
-        const errorResponse = messageHelper.createErrorMessage(
-          error.message || error,
-          error.name,
-          error.code,
-        );
-        const broadcastedAt = Date.now();
-        const newAppRunningMessage = {
-          type: 'fluxappinstallingerror',
-          version: 1,
-          name: appName,
-          hash: instantiated.hash,
-          error: serviceHelper.ensureString(errorResponse),
-          ip: localSocketAddr,
-          broadcastedAt,
-        };
-        await storeAppInstallingErrorMessage(newAppRunningMessage);
-        await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppRunningMessage);
+        await storeAndBroadcastInstallError(appName, instantiated.hash, error);
       }
       throw error;
     }
@@ -626,6 +645,11 @@ async function installApplication(instantiated, options = {}) {
       }
       log.warn(`REMOVAL REASON: ${appName} provisioned but did not converge (${failed.join(', ')}); rolling back (appInstaller)`);
       if (onStatus) onStatus(messageHelper.createErrorMessage(`App ${appName} failed to start; rolling back`));
+      // A failed install trial is an install failure the network must learn about,
+      // exactly like a provisioning failure - without this, every node re-discovers
+      // the broken app from scratch.
+      await storeAndBroadcastInstallError(appName, instantiated.hash,
+        new Error(`App ${appName} failed its install trial: ${failed.join(', ')} never completed a successful run`));
       await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
       return { status: InstallStatus.FAILED, reason: `PROVISIONED-BUT-NOT-RUNNING: ${failed.join(', ')}` };
     }

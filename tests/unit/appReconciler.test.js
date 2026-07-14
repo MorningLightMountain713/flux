@@ -96,6 +96,7 @@ describe('appReconciler tests', () => {
         recordRestart: sinon.stub().resolves(),
         recordExit: sinon.stub().resolves(),
         getState: sinon.stub().resolves(null),
+        setEverStarted: sinon.stub().resolves(),
         setSuccessfullyStarted: sinon.stub().resolves(),
         recordRestartGeneration: sinon.stub().resolves(),
       },
@@ -625,38 +626,174 @@ describe('appReconciler tests', () => {
       expect(stubs.appsRuntimeState.recordRestart.called, 'a clean first start does not seed the crash-backoff ladder').to.be.false;
     });
 
-    it('marks hasSuccessfullyStarted on a first start (the durable signal that gates firstStart vs the install-window rollback)', async () => {
+    it('marks hasEverStarted on a first start — docker accepting the start is NOT a proven run', async () => {
       // getState resolves null by default — never started here, so this is a first start.
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
-      expect(stubs.appsRuntimeState.setSuccessfullyStarted.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.setEverStarted.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.setSuccessfullyStarted.called, 'start-accept must not latch the proven-run marker').to.be.false;
     });
 
-    it('does not re-mark hasSuccessfullyStarted when restarting a component that has run here before', async () => {
-      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasSuccessfullyStarted: true });
+    it('does not re-mark hasEverStarted when restarting a component docker has launched here before', async () => {
+      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasEverStarted: true });
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
-      expect(stubs.appsRuntimeState.setSuccessfullyStarted.called).to.be.false;
+      expect(stubs.appsRuntimeState.setEverStarted.called).to.be.false;
     });
 
     it('records a restart when starting a stopped component that has run here before (crash-ladder paces repeated crashes)', async () => {
-      // hasSuccessfullyStarted true → this start IS a restart (the container ran, crashed,
+      // hasEverStarted true → this start IS a restart (the container ran, crashed,
       // and is being brought back), so it seeds the ladder that paces repeated crashes.
-      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasSuccessfullyStarted: true });
+      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasEverStarted: true });
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
       expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
     });
 
-    it('awaitConvergence resolves settled once a converging component reconciles to running', async () => {
+    it('treats a pre-marker-split proven doc as already-started (proven implies started)', async () => {
+      // docs persisted before the hasEverStarted split carry only hasSuccessfullyStarted;
+      // such a component must restart (recording into the ladder), not "first start".
+      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasSuccessfullyStarted: true });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.setEverStarted.called).to.be.false;
+    });
+
+    it('awaitConvergence resolves settled once a converging PROVEN component reconciles to running', async () => {
       // awaitConvergence registers a waiter, enqueues, and blocks until the reconcile
-      // settles the component (here: a stopped-should-run component starts).
+      // settles the component. A proven component settles on the start itself; an
+      // unproven one holds the converge open through the first-run proof (see the
+      // install-trial describe).
+      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasSuccessfullyStarted: true });
       const result = await appReconciler.awaitConvergence(['www_App']);
       expect(stubs.dockerService.appDockerStart.calledWith('www_App')).to.be.true;
       expect(result.converged).to.be.true;
       expect(result.failed).to.deep.equal([]);
     });
 
+  });
+
+  describe('install trial (first-run proof + bounded attempts)', () => {
+    // In-memory runtime-state fake mirroring the real semantics the trial reads:
+    // recordRestart appends history, the setters latch markers. Timestamps land in
+    // the past so trial pacing never delays a test pass.
+    let rtState;
+    const wireRuntimeStateFake = () => {
+      rtState = {};
+      stubs.appsRuntimeState.getState.callsFake(async (id) => rtState[id] ?? null);
+      stubs.appsRuntimeState.recordRestart.callsFake(async (id) => {
+        rtState[id] = rtState[id] ?? {};
+        rtState[id].restartHistory = [...(rtState[id].restartHistory ?? []), Date.now() - 60000];
+      });
+      stubs.appsRuntimeState.setEverStarted.callsFake(async (id) => {
+        rtState[id] = { ...(rtState[id] ?? {}), hasEverStarted: true };
+      });
+      stubs.appsRuntimeState.setSuccessfullyStarted.callsFake(async (id) => {
+        rtState[id] = { ...(rtState[id] ?? {}), hasSuccessfullyStarted: true };
+      });
+    };
+
+    const waitFor = async (cond, timeoutMs = 1500) => {
+      const until = Date.now() + timeoutMs;
+      while (!cond()) {
+        if (Date.now() > until) throw new Error('waitFor timed out');
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => { setTimeout(resolve, 10); });
+      }
+    };
+
+    it('a starts-then-dies loop fails the converge after 3 total starts (die path)', async () => {
+      wireRuntimeStateFake();
+      // dead container, old death evidence: trial pacing never delays
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: {
+          Running: false, Status: 'exited', ExitCode: 127, FinishedAt: new Date(Date.now() - 60000).toISOString(),
+        },
+      });
+      const convergePromise = appReconciler.awaitConvergence(['www_App']);
+      // each start "succeeds", then the container is found dead again; the enqueues
+      // stand in for the die-event bridge
+      await waitFor(() => stubs.appsRuntimeState.setEverStarted.callCount >= 1);
+      appReconciler.enqueue('www_App');
+      await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 1);
+      appReconciler.enqueue('www_App');
+      await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 2);
+      appReconciler.enqueue('www_App');
+      const result = await convergePromise;
+      expect(result.converged).to.be.false;
+      expect(result.failed).to.deep.equal(['www_App']);
+      expect(stubs.dockerService.appDockerStart.callCount, 'exactly 3 total start attempts').to.equal(3);
+    });
+
+    it('a start-refused loop fails the converge after 3 attempts (throw path)', async () => {
+      wireRuntimeStateFake();
+      stubs.dockerService.appDockerStart.rejects(new Error('oci runtime error: exec not found'));
+      // 'created': docker never ran it, so exitCode is null (no clean-exit latch)
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'created', ExitCode: 0 } });
+      const convergePromise = appReconciler.awaitConvergence(['www_App']);
+      await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 1);
+      appReconciler.enqueue('www_App');
+      await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 2);
+      appReconciler.enqueue('www_App');
+      const result = await convergePromise;
+      expect(result.converged).to.be.false;
+      expect(result.failed).to.deep.equal(['www_App']);
+      expect(stubs.dockerService.appDockerStart.callCount, 'exactly 3 total start attempts').to.equal(3);
+    });
+
+    it('a proven component crashing repeatedly never fails the converge (the ladder owns it)', async () => {
+      wireRuntimeStateFake();
+      rtState.www_App = { hasSuccessfullyStarted: true, restartHistory: [1, 2, 3, 4, 5] };
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: {
+          Running: false, Status: 'exited', ExitCode: 137, FinishedAt: new Date(Date.now() - 60000).toISOString(),
+        },
+      });
+      const result = await appReconciler.awaitConvergence(['www_App']);
+      expect(result.converged, 'a proven app is never rolled back, however deep its history').to.be.true;
+      expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
+    });
+
+    it('a clean exit latches the proven-run marker (run-to-completion counts as a run)', async () => {
+      wireRuntimeStateFake();
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: {
+          Running: false, Status: 'exited', ExitCode: 0, FinishedAt: new Date(Date.now() - 60000).toISOString(),
+        },
+      });
+      await appReconciler.reconcile('www_App');
+      expect(rtState.www_App && rtState.www_App.hasSuccessfullyStarted).to.be.true;
+    });
+
+    it('probe-healthy latches the proven-run marker on a running unproven component', async () => {
+      wireRuntimeStateFake();
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: { Running: true, Status: 'running', Health: { Status: 'healthy' } },
+      });
+      await appReconciler.reconcile('www_App');
+      expect(rtState.www_App && rtState.www_App.hasSuccessfullyStarted).to.be.true;
+    });
+
+    it('uptime past the proof window latches the proven-run marker (probe-less service)', async () => {
+      wireRuntimeStateFake();
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: { Running: true, Status: 'running', StartedAt: new Date(Date.now() - 61000).toISOString() },
+      });
+      await appReconciler.reconcile('www_App');
+      expect(rtState.www_App && rtState.www_App.hasSuccessfullyStarted).to.be.true;
+    });
+
+    it('a probe-less run younger than the proof window does not latch', async () => {
+      wireRuntimeStateFake();
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: { Running: true, Status: 'running', StartedAt: new Date(Date.now() - 1000).toISOString() },
+      });
+      await appReconciler.reconcile('www_App');
+      expect(rtState.www_App && rtState.www_App.hasSuccessfullyStarted, 'must not latch on a 1s-old run').to.not.be.true;
+    });
+  });
+
+  describe('running-state actuation decisions', () => {
     it('hard-kills (not graceful-stops) a running operator-stopped component when force is set', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
@@ -1113,8 +1250,9 @@ describe('appReconciler tests', () => {
       clock.restore();
     });
 
-    it('does not schedule a retry after a successful start', async () => {
+    it('does not schedule a retry after a successful start of a proven component', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasSuccessfullyStarted: true });
 
       await appReconciler.reconcile('www_App');
 
@@ -1122,6 +1260,24 @@ describe('appReconciler tests', () => {
       clock.tick(60 * 1000);
       await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
       expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
+      clock.restore();
+    });
+
+    it('schedules exactly the first-run proof pass after a successful start of an unproven component', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
+
+      // the container is up when the proof pass lands: it observes and latches,
+      // it never re-actuates
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: { Running: true, Status: 'running', StartedAt: new Date(Date.now() - 61000).toISOString() },
+      });
+      clock.tick(60 * 1000);
+      await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
+      expect(stubs.dockerService.appDockerStart.callCount, 'the proof pass observes, never re-starts').to.equal(1);
+      expect(stubs.appsRuntimeState.setSuccessfullyStarted.calledWith('www_App')).to.be.true;
       clock.restore();
     });
 
