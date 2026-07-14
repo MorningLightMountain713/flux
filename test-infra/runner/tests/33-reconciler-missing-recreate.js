@@ -52,7 +52,7 @@ describe('reconciler recreates a missing container', function () {
   });
 
   it('uninstalls locally when recreation fails (image unpullable)', async function () {
-    this.timeout(180000);
+    this.timeout(480000);
     const client = env.clients[idx];
     await waitForUp(client, appName, 'running before forced recreate failure');
 
@@ -64,8 +64,12 @@ describe('reconciler recreates a missing container', function () {
     const afterId = client.getLastEventId();
     await killAppContainer(client.container, appName);
 
-    // recreate fails -> the reconciler reports it and removes the app locally
-    await waitForReconcileActuated(client, identifier, 'recreateFailed', 120000, { afterId });
+    // recreate fails -> the reconciler reports it and removes the app locally.
+    // The wait must outlast a full crash-backoff cycle (~300s): the die-handler
+    // can catch the rm -f MID-removal, restart the container, and count the
+    // removal's second kill as another crash - escalating the backoff before
+    // the pass that finds the container missing and attempts the recreate.
+    await waitForReconcileActuated(client, identifier, 'recreateFailed', 400000, { afterId });
     await waitForAppRemoved(client, appName, 60000, { afterId });
   });
 });
