@@ -706,7 +706,7 @@ async function trySpawningGlobalApplication() {
       const tier = await generalService.nodeTier();
       const appHWrequirements = deployment.totalResources();
       let delay = false;
-      if (specPlacement.matchesTarget(targetInfo)) {
+      if (specPlacement.isPinnedTo(targetInfo)) {
         // The spec pinned this node (IP/outpoint/operator target): there is
         // no other node to defer to, so the politeness deferrals below
         // (static IP, datacenter, capacity gap) must not delay it.
@@ -1044,9 +1044,9 @@ async function notifySpecStored(specDoc) {
     if (!isSoleRequiredInstaller(placement, instantiated.spec.instances ?? 3)) return;
     // 4. pinned to THIS node (by IP - the conservative subset; an outpoint/operator-only
     //    pin simply rides the normal cadence). lastKnownLocalSocketAddr is null until the
-    //    first spawn cycle resolves this node's address, before which matchesTarget yields
+    //    first spawn cycle resolves this node's address, before which isPinnedTo yields
     //    false and the spec rides the normal cadence.
-    if (!placement.matchesTarget({ ip: lastKnownLocalSocketAddr, ipMatcher: socketAddressesMatch })) return;
+    if (!placement.isPinnedTo({ ip: lastKnownLocalSocketAddr, ipMatcher: socketAddressesMatch })) return;
     log.info(`notifySpecStored - ${instantiated.name} is pinned to this node and contention-free; waking spawn loop`);
     wakeIdleLoop();
   } catch (error) {

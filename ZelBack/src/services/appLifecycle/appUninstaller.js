@@ -425,7 +425,7 @@ async function clearSpawnThrottleForPinnedReinstall(appName, { forceKill, backgr
   const placement = globalSpec && globalSpec.placement;
   if (!placement || !placement.hasTargets()) return;
   const localSocketAddress = await fluxNetworkHelper.getLocalSocketAddress();
-  if (!localSocketAddress || !placement.matchesTarget({ ip: localSocketAddress, ipMatcher: socketAddressesMatch })) return;
+  if (!localSocketAddress || !placement.isPinnedTo({ ip: localSocketAddress, ipMatcher: socketAddressesMatch })) return;
   const { trySpawningGlobalAppCache } = globalState;
   if (globalSpec.hash && trySpawningGlobalAppCache && trySpawningGlobalAppCache.has(globalSpec.hash)) {
     trySpawningGlobalAppCache.delete(globalSpec.hash);

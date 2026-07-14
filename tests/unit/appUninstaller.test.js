@@ -147,6 +147,10 @@ describe('appUninstaller tests', () => {
         updateAppSpecsForRestoredNode: sinon.stub().resolves(),
         checkAndNotifyPeersOfRunningApps: sinon.stub().resolves(),
       },
+      '../telemetryConfigService': {
+        ensureNode: sinon.stub().resolves(),
+        remove: sinon.stub().resolves(),
+      },
       '../upnpService': {
         removeMapUpnpPort: sinon.stub().resolves(),
         isUPNP: sinon.stub().returns(false),
@@ -477,7 +481,11 @@ describe('appUninstaller tests', () => {
   describe('clearSpawnThrottleForPinnedReinstall (throttle clear on operator removal)', () => {
     const pinnedSpec = (matches = true, hasTargets = true) => ({
       hash: 'pinhash',
-      placement: { hasTargets: () => hasTargets, matchesTarget: () => matches },
+      placement: {
+        hasTargets: () => hasTargets,
+        matchesTarget: () => matches,
+        isPinnedTo(nodeInfo) { return this.hasTargets() && this.matchesTarget(nodeInfo); },
+      },
     });
 
     it('clears the throttle for a foreground non-force removal of an app pinned to this node', async () => {
