@@ -154,7 +154,11 @@ describe('Enterprise image update redeploy', function () {
   before(async function () {
     this.timeout(300000);
 
-    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
+    // Enterprise (encrypted) apps install only on ArcaneOS - the spawner
+    // defers them everywhere else - so this describe needs an arcane fleet.
+    env = await createTestEnv({
+      hookCtx: this, nodes: 10, tickerAutostart: false, arcane: true,
+    });
     await bootAndPeer(env);
 
     await pushImage(appName, 'v1');

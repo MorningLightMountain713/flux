@@ -92,7 +92,7 @@ describe('Arcane spawner deferrals', function () {
 
   before(async function () {
     this.timeout(300000);
-    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
+    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false, arcane: true });
     await bootAndPeer(env);
   });
 
