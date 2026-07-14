@@ -35,15 +35,15 @@ class FluxEventBus extends EventEmitter {
     // know whether the ring has wrapped. Kept separate from #nextId: ids are
     // seeded from the clock and carry no count information.
     this.#writeCount = 0;
-    // Seeded from the monotonic clock (microseconds since boot) so event ids
-    // stay monotonic across a FluxOS restart on a running host: a fresh process
-    // mints ids larger than anything the previous one served, so a consumer
-    // filtering on last-seen-id - any SSE client sending Last-Event-ID - does
-    // not silently discard every post-restart event. Starting from 1 made the
-    // whole post-restart stream invisible to such a consumer until the counter
-    // happened to climb past the id it last saw, which on a busy node is never.
-    // Not monotonic across a HOST reboot (the clock restarts near zero), which
-    // is fine - no consumer survives one.
+    // Ids must stay monotonic across a FluxOS process restart: harness clients
+    // hold afterId cursors across restartFluxos, and a counter starting at 1
+    // would leave every new-process event below a pre-restart cursor (filtered
+    // forever). Seed from the kernel monotonic clock (µs since host boot —
+    // never steps backwards like wall time, host-wide so a restarted process
+    // always seeds above every id the previous one issued, and µs keeps the
+    // value inside Number-safe range). The +1 per publish keeps ids unique;
+    // any restart gap dwarfs a process's event count. Not monotonic across a
+    // HOST reboot, where the clock restarts near zero — no consumer survives one.
     this.#nextId = Number(process.hrtime.bigint() / 1000n);
     this.#enabled = enabled ?? (config.has('testEventStream') && config.get('testEventStream') === true);
   }
