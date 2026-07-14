@@ -230,6 +230,13 @@ COPY --chown=fluxuser:fluxuser test-infra/fixtures/userconfig-template.js /flux/
 # runs npm install at every start with no registry to reach: it succeeds only
 # when the lockfile and node_modules agree.
 RUN cp /tmp/image-package-lock.json /flux/package-lock.json && chown fluxuser:fluxuser /flux/package-lock.json
+# Pre-bake CloudUI: boot awaits checkAndUpdateCloudUI, and a missing folder makes
+# every container shell out to real GitHub (scripts/update-cloudui.sh bypasses the
+# stubbed release API). With content + a version file present, the check goes to
+# the stub, 404s, and boot proceeds without leaving the harness network.
+RUN mkdir -p /flux/CloudUI \
+    && echo '<!doctype html><title>CloudUI harness placeholder</title>' > /flux/CloudUI/index.html \
+    && echo 'harness-prebaked' > /flux/CloudUI/version
 
 RUN touch /flux/debug.log /flux/error.log /flux/info.log /flux/warn.log \
     && chown fluxuser:fluxuser /flux /flux/debug.log /flux/error.log /flux/info.log /flux/warn.log \
