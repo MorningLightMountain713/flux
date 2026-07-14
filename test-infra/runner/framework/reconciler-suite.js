@@ -235,6 +235,11 @@ export async function seedSyncthingApp(env, {
   const app = await buildSeedableSyncthingApp({ name, mode });
   const folder = `flux${name}_${name}`;
   const identifier = `${name}_${name}`;
+  // The install-settled signal is mode-dependent: decider modes (g:/r:) run the
+  // first-run clean-install reset (dataCleared) before any start, while a
+  // plain-sync (s:) component has no decider and no reset - it just starts, so
+  // dataCleared never fires for it.
+  const settleAction = mode === 's' ? 'firstStart' : 'dataCleared';
 
   const peerIndex = forceNonLeader ? (index === 0 ? env.clients.length - 1 : 0) : null;
   if (forceNonLeader) {
@@ -245,7 +250,7 @@ export async function seedSyncthingApp(env, {
     const afterId = env.clients[index].getLastEventId();
     const peerInstallAfter = env.clients[peerIndex].getLastEventId();
     await installOnNodes(env, app, [peerIndex]);
-    await waitForReconcileActuated(env.clients[peerIndex], identifier, 'dataCleared', 60000, { afterId: peerInstallAfter });
+    await waitForReconcileActuated(env.clients[peerIndex], identifier, settleAction, 60000, { afterId: peerInstallAfter });
     await seedSyncScopedData(env, name, peerIndex);
     await setSynced({ ip: getSubnetConfig().nodeIp(peerIndex + 1), folder });
     await env.clients[index].waitForEvent(
@@ -255,7 +260,7 @@ export async function seedSyncthingApp(env, {
 
   const installAfter = env.clients[index].getLastEventId();
   await installOnNodes(env, app, [index]);
-  await waitForReconcileActuated(env.clients[index], identifier, 'dataCleared', 60000, { afterId: installAfter });
+  await waitForReconcileActuated(env.clients[index], identifier, settleAction, 60000, { afterId: installAfter });
   await seedSyncScopedData(env, name, index);
   return {
     app, index, peerIndex, folder, identifier,
