@@ -82,7 +82,7 @@ describe('Arcane: unencrypted app deferred as unencrypted_on_arcane', function (
 
   before(async function () {
     this.timeout(300000);
-    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
+    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false, arcane: true });
     await bootAndPeer(env);
     await registerApp(env, appName);
   });
@@ -113,7 +113,7 @@ describe('Arcane: enterprise app deferred for static_ip', function () {
 
   before(async function () {
     this.timeout(300000);
-    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
+    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false, arcane: true });
     await bootAndPeer(env);
     await registerApp(env, appName, { enterprise: true, staticip: false });
   });
@@ -145,7 +145,7 @@ describe('Arcane: enterprise app deferred for datacenter', function () {
 
   before(async function () {
     this.timeout(300000);
-    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
+    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false, arcane: true });
     await bootAndPeer(env);
     await registerApp(env, appName, { enterprise: true, staticip: true });
   });
