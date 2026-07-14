@@ -10,6 +10,11 @@ const state = {
   tamperingBlocklist: [],
   latestRelease: { tag_name: 'v0.0.0', name: 'stub-release' },
   geolocation: {},
+  moduleMinimumVersions: {},
+  marketplaceApps: [],
+  appsUsdPrice: null,
+  // viprates shape: [0] = fiat rates array, [1] = per-coin BTC rates
+  fiatRates: [[{ code: 'USD', rate: 1 }], { FLUX: 1 }],
 };
 
 function defaultGeoResponse(ip) {
@@ -92,6 +97,32 @@ app.get('/fluxlocation/:ip', (req, res) => {
   });
 });
 
+// Flux stats service: module minimum versions (systemService package monitor)
+app.get('/getmodulesminimumversions', (req, res) => {
+  res.json({ status: 'success', data: state.moduleMinimumVersions });
+});
+
+// Flux stats service: marketplace apps (pricing multiplier, user-blocked-repo exemption)
+app.get('/marketplace/listapps', (req, res) => {
+  res.json({ status: 'success', data: state.marketplaceApps });
+});
+
+app.get('/marketplace/listdevapps', (req, res) => {
+  res.json({ status: 'success', data: state.marketplaceApps });
+});
+
+// Flux stats service: USD pricing tiers. The default error envelope makes the
+// consumer fall back to config.fluxapps.usdprice - deterministic per node config.
+app.get('/apps/getappspecsusdprice', (req, res) => {
+  if (state.appsUsdPrice) res.json({ status: 'success', data: state.appsUsdPrice });
+  else res.json({ status: 'error' });
+});
+
+// viprates fiat rates
+app.get('/rates', (req, res) => {
+  res.json(state.fiatRates);
+});
+
 // --- Control API ---
 
 const control = express();
@@ -136,6 +167,26 @@ control.delete('/geolocation/:ip', (req, res) => {
   res.json({ ok: true });
 });
 
+control.post('/module-versions', (req, res) => {
+  state.moduleMinimumVersions = req.body;
+  res.json({ ok: true });
+});
+
+control.post('/marketplace-apps', (req, res) => {
+  state.marketplaceApps = req.body;
+  res.json({ ok: true });
+});
+
+control.post('/usd-prices', (req, res) => {
+  state.appsUsdPrice = req.body;
+  res.json({ ok: true });
+});
+
+control.post('/fiat-rates', (req, res) => {
+  state.fiatRates = req.body;
+  res.json({ ok: true });
+});
+
 control.post('/reset', (req, res) => {
   state.blockedRepositories = [];
   state.vettedRepositories = [];
@@ -143,6 +194,10 @@ control.post('/reset', (req, res) => {
   state.tamperingBlocklist = [];
   state.latestRelease = { tag_name: 'v0.0.0', name: 'stub-release' };
   state.geolocation = {};
+  state.moduleMinimumVersions = {};
+  state.marketplaceApps = [];
+  state.appsUsdPrice = null;
+  state.fiatRates = [[{ code: 'USD', rate: 1 }], { FLUX: 1 }];
   res.json({ ok: true });
 });
 

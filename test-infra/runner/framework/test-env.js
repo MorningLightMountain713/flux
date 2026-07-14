@@ -90,32 +90,6 @@ const INITIAL_HEIGHT = 2100000;
 const RUN_LABEL = process.env.E2E_RUN_LABEL || '';
 const runLabels = () => (RUN_LABEL ? { 'flux-e2e-run': RUN_LABEL } : {});
 
-// masterSlaveApps resolves the FDM by hostname (getMasterIpFromFdm tries EU/USA/ASIA
-// regions, server index from getFdmIndex by the app name's first letter). Every
-// reachable FDM hostname must resolve to the stub for any app name, otherwise the
-// node resolves the real fdm-*.runonflux.io over the internet.
-//
-// FluxOS installs cacheable-lookup (apiServer.createDnsCache) on the global http/https
-// agents, which resolves via dns.resolve (c-ares) — and c-ares does NOT consult
-// /etc/hosts. So extra_hosts alone aren't enough: the names must be served by Docker's
-// embedded DNS, which we do by setting them as network aliases on the stub (see
-// StaticIpContainer.withStaticIp). extra_hosts are kept as a belt-and-suspenders for
-// any getaddrinfo-based path (curl, dns.lookup).
-function fdmHostnames() {
-  const names = [];
-  for (let i = 1; i <= 4; i++) {
-    names.push(`fdm-fn-1-${i}.runonflux.io`);
-    names.push(`fdm-usa-1-${i}.runonflux.io`);
-    names.push(`fdm-sg-1-${i}.runonflux.io`);
-  }
-  return names;
-}
-
-// testcontainers ExtraHost objects for the built-in .withExtraHosts().
-function fdmExtraHosts(ip) {
-  return fdmHostnames().map((host) => ({ host, ipAddress: ip }));
-}
-
 class StaticIpContainer extends GenericContainer {
   #staticIp;
   #networkName;
@@ -606,7 +580,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
   containers.externalStub = externalStub;
 
   const fdmStub = await new StaticIpContainer('flux-e2e-fdm-stub')
-    .withStaticIp(networkName, FDM_IP, fdmHostnames())
+    .withStaticIp(networkName, FDM_IP)
     .withEnvironment({ FDM_PORT: '16130', CONTROL_PORT: '16131' })
     .withWaitStrategy(new HttpPollWaitStrategy(`http://${FDM_IP}:16131/health`))
     .withHealthCheck({
@@ -740,6 +714,10 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
       syncthing: { ip: SYNCTHING_IP },
       github: { rawBaseUrl: `http://${EXTERNAL_STUB_IP}:3000`, apiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
       geolocation: { ipApiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000`, statsApiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
+      stats: { apiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
+      fiatRates: { ratesUrl: `http://${EXTERNAL_STUB_IP}:3000/rates` },
+      // One stub serves every region/index (%i-free template leaves the URL as-is).
+      fdm: { regions: [{ name: 'STUB', baseUrlTemplate: `http://${FDM_IP}:16130` }] },
       fluxDrive: { blobApiUrl: `http://${FLUXDRIVE_IP}:16140` },
     };
     const nodeConfig = mergeConfigs(infraOverride, mergeConfigs(configOverrides, nodeConfigOverrides[i]));
@@ -752,7 +730,6 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     const builder = new StaticIpContainer('flux-e2e-fluxos-01')
       .withPrivilegedMode()
       .withStaticIp(networkName, nodeIp)
-      .withExtraHosts(fdmExtraHosts(FDM_IP))
       .withBindMounts(bindMounts)
       .withLogConsumer(logCollector)
       .withEnvironment(nodeEnv)
