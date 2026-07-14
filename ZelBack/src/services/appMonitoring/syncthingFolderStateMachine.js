@@ -594,7 +594,6 @@ async function probeFolderSyncCompletion(folderId) {
       // report it reads 0, which is the reading that changes nothing.
       globalFiles,
       inSyncBytes,
-      globalFiles,
       state,
       // local additions/modifications in a receiveonly folder; invisible to the
       // completion metrics above (they only count cluster data)
