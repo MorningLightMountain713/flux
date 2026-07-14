@@ -27,11 +27,15 @@ import { bootstrapPricing } from './price-helper.js';
 // the stub never rescans, so the disagreement never converges and the app never
 // (re)starts. Call AFTER the sync layer's first-run reset (the dataCleared
 // actuation): the reset clears local appdata at install and deletes anything
-// written earlier. seedSyncthingApp runs this ordering itself; only suites
-// installing through another path need to call it directly.
+// written earlier. The reset removes the appdata DIR itself (recreated by
+// ensureMountSourcesExist only at the next container start), so fabricating the
+// on-disk state includes recreating the dir - without it the seed races the
+// reconciler's next start actuation. seedSyncthingApp runs this ordering itself;
+// only suites installing through another path need to call it directly.
 export async function seedSyncScopedData(env, name, index) {
-  const dataFile = `/mnt/appdata/flux-apps/flux${name}_${name}/appdata/seed-data`;
-  const r = await execInContainer(env.clients[index].container, `sh -c 'echo seeded > ${dataFile}'`);
+  const appDataDir = `/mnt/appdata/flux-apps/flux${name}_${name}/appdata`;
+  const dataFile = `${appDataDir}/seed-data`;
+  const r = await execInContainer(env.clients[index].container, `sh -c 'mkdir -p ${appDataDir} && echo seeded > ${dataFile}'`);
   if (r.exitCode !== 0) {
     throw new Error(`seedSyncScopedData: could not write ${dataFile} on node ${index}: ${r.output}`);
   }
