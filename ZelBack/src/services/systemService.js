@@ -512,7 +512,7 @@ async function monitorSyncthingPackage() {
       const {
         data: { data },
       } = await axios
-        .get('https://stats.runonflux.io/getmodulesminimumversions', {
+        .get(`${config.stats.apiBaseUrl}/getmodulesminimumversions`, {
           timeout: 10000,
         })
         .catch((error) => {
