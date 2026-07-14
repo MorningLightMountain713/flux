@@ -30,7 +30,15 @@ class FluxEventBus extends EventEmitter {
     super();
     this.#buffer = new Array(RING_BUFFER_SIZE);
     this.#writeIndex = 0;
-    this.#nextId = 1;
+    // Ids must stay monotonic across a FluxOS process restart: harness clients
+    // hold afterId cursors across restartFluxos, and a counter starting at 1
+    // would leave every new-process event below a pre-restart cursor (filtered
+    // forever). Seed from the kernel monotonic clock (µs since host boot —
+    // never steps backwards like wall time, host-wide so a restarted process
+    // always seeds above every id the previous one issued, and µs keeps the
+    // value inside Number-safe range). The +1 per publish keeps ids unique;
+    // any restart gap dwarfs a process's event count.
+    this.#nextId = Number(process.hrtime.bigint() / 1000n);
     this.#enabled = enabled ?? (config.has('testEventStream') && config.get('testEventStream') === true);
   }
 
