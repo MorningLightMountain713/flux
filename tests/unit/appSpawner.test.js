@@ -81,7 +81,11 @@ describe('appSpawner tests', () => {
       hasTargets: () => (overrides.targetIps?.length > 0 || overrides.targetOutpoints?.length > 0 || overrides.targetOperators?.length > 0),
       hasGeoRestrictions: () => false,
       matches: () => true,
-      matchesTarget: () => false,
+      // mirrors the real Placement: with no targets set, matchesTarget is
+      // vacuously true ("run anywhere") — never stub it false for an
+      // untargeted spec, that masks pinned-vs-eligible conflation bugs
+      matchesTarget: () => true,
+      isPinnedTo(nodeInfo) { return this.hasTargets() && this.matchesTarget(nodeInfo); },
       ...overrides,
     };
   }
@@ -551,6 +555,17 @@ describe('appSpawner tests', () => {
       buildModule({ candidates: [candidate] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.appsToBeCheckedLater).to.have.lengthOf(0);
+    });
+
+    it('defers an untargeted app for politeness — vacuously-true matchesTarget must not read as pinned', async () => {
+      // real Placement semantics: no targets -> matchesTarget true (run
+      // anywhere). On a static-IP node the static-IP politeness deferral
+      // still applies; only a genuinely pinned app skips it.
+      const candidate = makeCandidate();
+      buildModule({ candidates: [candidate], nodeHasStaticIp: true });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(globalStateStub.appsToBeCheckedLater).to.have.lengthOf(1);
+      expect(logStub.info.calledWithMatch(/targets this node/)).to.be.false;
     });
 
     it('never defers an app that targets this node (politeness rules have nobody to yield to)', async () => {
@@ -1103,6 +1118,7 @@ describe('appSpawner tests', () => {
       targetOutpoints: [],
       targetOperators: [],
       matchesTarget: ({ ip, ipMatcher }) => targetIps.some((t) => ipMatcher(t, ip)),
+      isPinnedTo(nodeInfo) { return targetIps.length > 0 && this.matchesTarget(nodeInfo); },
     });
 
     const passingSpec = (overrides = {}) => ({
@@ -1253,7 +1269,13 @@ describe('appSpawner tests', () => {
           // so the pin-match passes.
           await appSpawner.notifySpecStored({
             name: 'edingoa', owner: 'enterpriseOwnerX', instances: 1,
-            placement: { targetIps: [MY_ADDR], targetOutpoints: [], targetOperators: [], matchesTarget: ({ ip, ipMatcher }) => ipMatcher(MY_ADDR, ip) },
+            placement: {
+              targetIps: [MY_ADDR],
+              targetOutpoints: [],
+              targetOperators: [],
+              matchesTarget: ({ ip, ipMatcher }) => ipMatcher(MY_ADDR, ip),
+              isPinnedTo({ ip, ipMatcher }) { return ipMatcher(MY_ADDR, ip); },
+            },
           });
         }
         return [];

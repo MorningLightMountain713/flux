@@ -278,8 +278,7 @@ async function getRequiredDependencyNamesForNode(nodeIdentity) {
   }
   const globalApps = await appsRepository.listGlobalAppInfo();
   const assigned = (globalApps || []).filter((app) => app && app.placement
-    && app.placement.hasTargets()
-    && app.placement.matchesTarget({
+    && app.placement.isPinnedTo({
       ip, outpoint, operator, ipMatcher: socketAddressesMatch,
     }));
   const { linksByName, complete } = await buildLinksByName(assigned);
