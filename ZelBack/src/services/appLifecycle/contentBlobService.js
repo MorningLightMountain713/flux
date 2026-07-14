@@ -2,14 +2,33 @@ const crypto = require('node:crypto');
 const axios = require('axios');
 const benchmarkService = require('../benchmarkService');
 const fluxDriveClient = require('../utils/fluxDriveClient');
+const contentStore = require('./contentStore');
+const specLibs = require('../utils/specLibs');
 const { aeadEncrypt, aeadDecrypt } = require('../utils/aeadCrypto');
 const fluxEventBus = require('../utils/fluxEventBus');
 
-const MAX_BLOB_BYTES = 2 * 1024 * 1024;
-// Upper bound on the single HPKE-sealed content envelope a submission carries (it
-// holds every blob's base64 ciphertext + the manifest). The per-blob 2 MB cap is
-// re-checked after the envelope is opened; this just bounds the transit payload.
-const MAX_CONTENT_BYTES = 64 * 1024 * 1024;
+// The content byte caps are v9 protocol constants (SpecConstraintsV9) — every
+// node must enforce the same values for verification to be meaningful. flux-spec
+// is ESM, so they are read through the async loader (cached after the first
+// call; every consumer is already async). maxBlobBytes bounds a blob's
+// plaintext; maxContentBytes bounds the single HPKE-sealed submission envelope
+// (every blob's base64 ciphertext + the manifest) — the per-blob cap is
+// re-checked after the envelope opens.
+async function maxBlobBytes() {
+  const { SpecConstraintsV9 } = await specLibs.getSpec();
+  return SpecConstraintsV9.maxContentBlobBytes;
+}
+async function maxContentBytes() {
+  const { SpecConstraintsV9 } = await specLibs.getSpec();
+  return SpecConstraintsV9.maxContentEnvelopeBytes;
+}
+// A valid framed blob is plaintext + 28 bytes (nonce 12 || ciphertext || tag
+// 16); the margin is headroom, anything larger can never verify. Bounds every
+// blob download so a malicious source cannot balloon memory.
+async function maxFramedBlobBytes() {
+  return (await maxBlobBytes()) + 1024;
+}
+
 const FRESHNESS_WINDOW_SECONDS = 300;
 
 function sha256Hex(input) {
@@ -57,7 +76,8 @@ async function encryptAndUploadBlob(blob, deps) {
   const { benchmark = benchmarkService, uploader, now = Date.now } = deps || {};
 
   if (`sha256:${sha256Hex(bytes)}` !== contentHash) throw new Error(`contentBlob: hash mismatch for ${contentHash}`);
-  if (bytes.length > MAX_BLOB_BYTES) throw new Error(`contentBlob: blob exceeds ${MAX_BLOB_BYTES} bytes`);
+  const blobCap = await maxBlobBytes();
+  if (bytes.length > blobCap) throw new Error(`contentBlob: blob exceeds ${blobCap} bytes`);
   // timestamp is the submission timestamp (milliseconds, like the app-message timestamp), so compare in ms.
   if (Math.abs(now() - Number(timestamp)) > FRESHNESS_WINDOW_SECONDS * 1000) throw new Error('contentBlob: owner signature is stale');
 
@@ -181,32 +201,48 @@ async function decryptAndVerifyBlob(blob, deps) {
 }
 
 /**
- * Resolve a content blob at install time: peers first (by locator), then the
- * FluxDrive backstop. Every candidate is decrypted and hash-verified before it is
- * accepted, so a wrong/poisoned/garbage source is skipped and the next is tried.
+ * Resolve a content blob: the node's own artifact store first (a same-version
+ * re-provision needs no network), then peers (by locator), then the FluxDrive
+ * backstop. Every candidate is decrypted and hash-verified before it is
+ * accepted, so a wrong/poisoned/garbage source is skipped and the next is
+ * tried; a corrupt store entry is dropped and re-fetched. A verified network
+ * fetch is written through to the store — the copy peer-serving reads later.
  * Throws only when no source yields verified content (deep-cold — the caller
  * retries later). Peers are tried in the order given; the caller shuffles for
  * herd-safety.
  *
  * @param {object} req - { appName, fluxID, contentHash, peers }
- * @param {object} deps - { benchmark?, fluxDrive?, peerFetch, maxPeerAttempts? }
+ * @param {object} deps - { benchmark?, fluxDrive?, peerFetch, maxPeerAttempts?, store? }
  * @returns {Promise<Buffer>} verified plaintext
  */
 async function resolveBlob(req, deps) {
   const { appName, fluxID, contentHash, peers = [] } = req;
   const {
     benchmark = benchmarkService, fluxDrive = fluxDriveClient, peerFetch, maxPeerAttempts = 3,
+    store = contentStore,
   } = deps || {};
 
-  const locator = await deriveLocator(benchmark, { appName, fluxID, contentHash });
   const verify = (framed) => (framed
     ? decryptAndVerifyBlob({ appName, fluxID, contentHash, framed }, { benchmark }).catch(() => null)
     : null);
+
+  const stored = await store.get(appName, contentHash);
+  if (stored) {
+    const plain = await verify(stored);
+    if (plain) {
+      fluxEventBus.publish('content:blobResolved', { appName, hash: contentHash, source: 'store' });
+      return plain;
+    }
+    await store.remove(appName, contentHash);
+  }
+
+  const locator = await deriveLocator(benchmark, { appName, fluxID, contentHash });
 
   for (const peer of peers.slice(0, maxPeerAttempts)) {
     const framed = await peerFetch(peer, appName, locator).catch(() => null);
     const plain = await verify(framed);
     if (plain) {
+      await store.put(appName, contentHash, framed);
       fluxEventBus.publish('content:blobResolved', { appName, hash: contentHash, source: 'peer' });
       return plain;
     }
@@ -215,9 +251,10 @@ async function resolveBlob(req, deps) {
     fluxEventBus.publish('content:blobPeerMiss', { appName, hash: contentHash, peer });
   }
 
-  const framed = await fluxDrive.fetchBlobByLocator(locator).catch(() => null);
+  const framed = await fluxDrive.fetchBlobByLocator(locator, { maxBytes: await maxFramedBlobBytes() }).catch(() => null);
   const plain = await verify(framed);
   if (plain) {
+    await store.put(appName, contentHash, framed);
     fluxEventBus.publish('content:blobResolved', { appName, hash: contentHash, source: 'fluxdrive' });
     return plain;
   }
@@ -262,32 +299,30 @@ async function provisionContentBlobs(deployment, ctx, deps) {
 
 /**
  * Serve a content blob to a peer (the peers-first source): find which of this
- * app's content mounts matches the requested locator, read its plaintext from
- * disk, and re-encrypt it with a fresh nonce. Returns the framed ciphertext, or
- * null if this node has no mount matching the locator. The requester re-verifies
- * against the signed hash, so a fresh re-encryption is fine.
+ * app's stored artifact blobs derives to the requested locator and return its
+ * framed ciphertext verbatim. The store holds exactly what this node fetched
+ * and verified — never the app's live mount, which the app may legitimately
+ * have mutated (writable content is a feature) — so a serve can never leak
+ * runtime-written data nor waste the requester's round-trip on bytes that
+ * fail its hash check. Slot blobs are served the same way (the apply path
+ * stores them as it resolves them). Returns null when nothing matches; the
+ * requester falls through to FluxDrive.
  *
  * @param {object} req - { appName, fluxID, locator }
- * @param {object} deps - { benchmark?, getDeployment, readFile }
+ * @param {object} deps - { benchmark?, store? }
  * @returns {Promise<Buffer|null>}
  */
 async function serveBlob(req, deps) {
   const { appName, fluxID, locator } = req;
-  const { benchmark = benchmarkService, getDeployment, readFile } = deps || {};
+  const { benchmark = benchmarkService, store = contentStore } = deps || {};
 
-  const deployment = await getDeployment(appName);
-  if (!deployment) return null;
-
-  for (const [, comp] of deployment.componentEntries()) {
-    for (const { source, hash } of comp.contentBlobMounts()) {
-      const derived = await deriveLocator(benchmark, { appName, fluxID, contentHash: hash });
-      if (derived !== locator) continue;
-      const plaintext = await readFile(source);
-      const key = Buffer.from(benchmarkField(await benchmark.contentKey({ appName, fluxID, contentHash: hash }), 'key'), 'base64');
-      const framed = aeadEncrypt(key, plaintext, Buffer.from(hash));
-      fluxEventBus.publish('content:blobServed', { appName, locator });
-      return framed;
-    }
+  for (const hash of await store.list(appName)) {
+    const derived = await deriveLocator(benchmark, { appName, fluxID, contentHash: hash });
+    if (derived !== locator) continue;
+    const framed = await store.get(appName, hash);
+    if (!framed) return null;
+    fluxEventBus.publish('content:blobServed', { appName, locator });
+    return framed;
   }
   return null;
 }
@@ -309,6 +344,10 @@ async function fetchBlobFromPeer(peer, appName, locator, deps = {}) {
     const res = await http.get(`http://${peer}/apps/contentblob/${appName}/${locator}`, {
       responseType: 'arraybuffer',
       timeout: 10_000,
+      // A valid framed blob can never exceed this; without the bound a
+      // malicious peer answering a locator request could stream an unbounded
+      // body into this node's memory before the decrypt-verify rejects it.
+      maxContentLength: await maxFramedBlobBytes(),
     });
     return Buffer.from(res.data);
   } catch (error) {
@@ -328,7 +367,8 @@ module.exports = {
   fetchBlobFromPeer,
   specContentHashes,
   sha256Hex,
-  MAX_BLOB_BYTES,
-  MAX_CONTENT_BYTES,
+  maxBlobBytes,
+  maxContentBytes,
+  maxFramedBlobBytes,
   FRESHNESS_WINDOW_SECONDS,
 };
