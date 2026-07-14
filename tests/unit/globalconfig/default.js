@@ -409,4 +409,17 @@ module.exports = {
     ipApiBaseUrl: 'http://ip-api.com',
     statsApiBaseUrl: 'https://stats.runonflux.io',
   },
+  stats: {
+    apiBaseUrl: 'https://stats.runonflux.io',
+  },
+  fiatRates: {
+    ratesUrl: 'https://viprates.runonflux.io/rates',
+  },
+  fdm: {
+    regions: [
+      { name: 'EU', baseUrlTemplate: 'http://fdm-fn-1-%i.runonflux.io:16130' },
+      { name: 'USA', baseUrlTemplate: 'http://fdm-usa-1-%i.runonflux.io:16130' },
+      { name: 'ASIA', baseUrlTemplate: 'http://fdm-sg-1-%i.runonflux.io:16130' },
+    ],
+  },
 };

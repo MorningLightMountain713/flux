@@ -487,6 +487,22 @@ module.exports = {
     rawBaseUrl: 'https://raw.githubusercontent.com/RunOnFlux/flux/master',
     apiBaseUrl: 'https://api.github.com',
   },
+  stats: {
+    // Flux stats service (module minimum versions, marketplace listapps, app USD pricing).
+    apiBaseUrl: 'https://stats.runonflux.io',
+  },
+  fiatRates: {
+    ratesUrl: 'https://viprates.runonflux.io/rates',
+  },
+  fdm: {
+    // Per-region FDM API bases; %i is the app's deterministic server index
+    // (getFdmIndex, by app-name first letter).
+    regions: [
+      { name: 'EU', baseUrlTemplate: 'http://fdm-fn-1-%i.runonflux.io:16130' },
+      { name: 'USA', baseUrlTemplate: 'http://fdm-usa-1-%i.runonflux.io:16130' },
+      { name: 'ASIA', baseUrlTemplate: 'http://fdm-sg-1-%i.runonflux.io:16130' },
+    ],
+  },
   geolocation: {
     ipApiBaseUrl: 'http://ip-api.com',
     statsApiBaseUrl: 'https://stats.runonflux.io',
