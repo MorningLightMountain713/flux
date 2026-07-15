@@ -14,7 +14,7 @@ describe('componentProvisioner tests', () => {
   // require stubbed, so nothing touches a real service.
   function loadProvisioner(opts = {}) {
     const {
-      teardownOwed = false, isCondemnedStub = null, firewallActive = false, isUPNP = false,
+      teardownOwed = false, isCondemnedStub = null, firewallActive = false, isUPNP = false, pullError = null,
     } = opts;
     appDockerStartStub = sinon.stub().resolves('ok');
     appDockerCreateStub = sinon.stub().resolves();
@@ -44,7 +44,7 @@ describe('componentProvisioner tests', () => {
       '../appManagement/appInspector': { startAppMonitoring: sinon.stub() },
       '../appManagement/appsRuntimeState': { isCondemned: isCondemnedStub || sinon.stub().resolves(false) },
       './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
-      util: { promisify: () => async () => 'pulled' },
+      util: { promisify: () => async () => { if (pullError) throw pullError; return 'pulled'; } },
     });
   }
 
@@ -69,6 +69,53 @@ describe('componentProvisioner tests', () => {
     const provisioner = loadProvisioner();
     await provisioner.installComponent(makeComponent(syncMode), { owner: 'owner1', createVolumes });
   }
+
+  describe('registry-unreachable local-image fallback (recreate)', () => {
+    const transientPullError = () => Object.assign(new Error('dial tcp: connection refused'), { registryErrorClass: 'transient' });
+
+    it('creates from the local image when the pull fails transient and the image is on disk', async () => {
+      const provisioner = loadProvisioner({ pullError: transientPullError() });
+      appDockerImageSizeStub.resolves(5e8); // image present locally
+      await provisioner.installComponent(makeComponent(null), { owner: 'owner1', allowLocalImageFallback: true });
+      sinon.assert.calledOnce(appDockerCreateStub);
+    });
+
+    it('still fails when the image is NOT on disk (nothing to fall back to)', async () => {
+      const provisioner = loadProvisioner({ pullError: transientPullError() });
+      appDockerImageSizeStub.resolves(0);
+      try {
+        await provisioner.installComponent(makeComponent(null), { owner: 'owner1', allowLocalImageFallback: true });
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err.message).to.include('connection refused');
+      }
+      sinon.assert.notCalled(appDockerCreateStub);
+    });
+
+    it('still fails on a permanent pull error even with the image on disk (pull-first, no stale-run policy)', async () => {
+      const provisioner = loadProvisioner({ pullError: new Error('manifest unknown') });
+      appDockerImageSizeStub.resolves(5e8);
+      try {
+        await provisioner.installComponent(makeComponent(null), { owner: 'owner1', allowLocalImageFallback: true });
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err.message).to.include('manifest unknown');
+      }
+      sinon.assert.notCalled(appDockerCreateStub);
+    });
+
+    it('never falls back on a fresh install (the flag is recreate-only)', async () => {
+      const provisioner = loadProvisioner({ pullError: transientPullError() });
+      appDockerImageSizeStub.resolves(5e8);
+      try {
+        await provisioner.installComponent(makeComponent(null), { owner: 'owner1' });
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err.registryErrorClass).to.equal('transient');
+      }
+      sinon.assert.notCalled(appDockerCreateStub);
+    });
+  });
 
   describe('owner guard', () => {
     const component = { identifier: 'web_testapp', appName: 'testapp' };

@@ -125,6 +125,23 @@ class ImageVerifier {
     return this.#lookupErrorMeta;
   }
 
+  /**
+   * The transient/permanent split consumers route verdicts on: 'transient' is a
+   * could-not-ask answer (network path, rate limit, registry 5xx) - retryable and
+   * never the image's fault; 'permanent' is the registry's verdict on the image,
+   * or a malformed tag/manifest. Anything unrecognized reads 'permanent', so an
+   * unknown failure shape degrades to the strict behavior, never to endless retry.
+   * @returns {'transient'|'permanent'|null} null when there is no error
+   */
+  get errorClass() {
+    if (!this.error) return null;
+    const transientTypes = ['network', 'rate_limit', 'server_error'];
+    if (this.#lookupErrorMeta && transientTypes.includes(this.#lookupErrorMeta.errorType)) {
+      return 'transient';
+    }
+    return 'permanent';
+  }
+
   get parts() {
     const parts = [this.provider, this.namespace, this.repository, this.tag];
     return parts.filter((x) => x);
@@ -693,6 +710,10 @@ class ImageVerifier {
       || this.#evaluationErrorDetail,
     );
     error.errorMeta = this.#lookupErrorMeta;
+    // Carry the transient/permanent split on the throw - provisioning consumers
+    // route their verdicts on it (absence reads permanent). Captured before
+    // resetErrors wipes the meta it derives from.
+    error.registryErrorClass = this.errorClass;
     this.resetErrors();
     throw error;
   }
