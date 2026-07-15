@@ -278,9 +278,41 @@ async function dockerContainerChanges(idOrName) {
  */
 function dockerPullStream(pullConfig, res, callback) {
   const {
-    repoTag, provider, authToken, abortSignal,
+    repoTag, provider, authToken, abortSignal, stallMs,
   } = pullConfig;
   const pullOptions = {};
+
+  // Stall watchdog: docker streams a progress event on every layer chunk, so
+  // sustained silence is the black-hole signature (a half-open socket where the
+  // registry accepts and never answers) - abort the transfer and surface a
+  // transient-tagged error. Total pull time is deliberately unbounded: a huge
+  // image that keeps moving is legitimate work, and docker resumes completed
+  // layers, so killing a live transfer on a wall clock can starve a large layer
+  // forever. The caller's own abortSignal (cancel-during-install) chains into
+  // the same controller and keeps its meaning - its error shape is a cancel,
+  // never tagged transient.
+  const stallWindowMs = stallMs ?? config.fluxapps.pullStallMs ?? 90_000;
+  const stallController = new AbortController();
+  let stallTimer = null;
+  let settled = false;
+  const done = (error, data) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(stallTimer);
+    callback(error, data);
+  };
+  const armStallTimer = () => {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      const stallError = new Error(`Pull of ${repoTag} stalled: no progress for ${Math.round(stallWindowMs / 1000)}s`);
+      stallError.registryErrorClass = 'transient';
+      // Report first, then abort: the abort also makes docker stop retrying, and
+      // any error it surfaces afterwards lands on the already-settled callback.
+      done(stallError);
+      stallController.abort();
+    }, stallWindowMs);
+    if (stallTimer.unref) stallTimer.unref();
+  };
 
   // fix this auth token stuff upstream
   if (authToken) {
@@ -297,23 +329,29 @@ function dockerPullStream(pullConfig, res, callback) {
     }
   }
   // Abortable pull (cancel-during-install): docker-modem (>=5) threads abortSignal
-  // onto the request and makes the response stream abortable, so controller.abort()
-  // ends the pull and surfaces an error through followProgress's onFinished below.
+  // onto the request and makes the response stream abortable. The stall
+  // controller is what docker sees; the caller's signal chains into it so
+  // either a stall or a cancel ends the transfer.
   if (abortSignal) {
-    pullOptions.abortSignal = abortSignal;
+    if (abortSignal.aborted) stallController.abort();
+    else abortSignal.addEventListener('abort', () => stallController.abort(), { once: true });
   }
+  pullOptions.abortSignal = stallController.signal;
+
+  armStallTimer();
   docker.pull(repoTag, pullOptions, (err, mystream) => {
     function onFinished(error, output) {
       if (error) {
         // Propagate the stream/abort error - NOT the (null) outer `err`, which would
         // report an aborted/failed pull as success and let the install proceed onto a
         // missing image. The abort relies on this.
-        callback(tagIfRegistryUnreachable(error));
+        done(tagIfRegistryUnreachable(error));
       } else {
-        callback(null, output);
+        done(null, output);
       }
     }
     function onProgress(event) {
+      armStallTimer();
       if (res) {
         res.write(serviceHelper.ensureString(event));
         if (res.flush) res.flush();
@@ -321,7 +359,7 @@ function dockerPullStream(pullConfig, res, callback) {
       log.info(event);
     }
     if (err) {
-      callback(tagIfRegistryUnreachable(err));
+      done(tagIfRegistryUnreachable(err));
     } else {
       docker.modem.followProgress(mystream, onFinished, onProgress);
     }

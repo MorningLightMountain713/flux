@@ -147,9 +147,15 @@ module.exports = {
     convergeFailAttempts: 3,
     convergeBackstopMs: 300000, // 5 min
     // cap on a reconciler recreate's provisioning (registry verify + image pull): a
-    // black-holed registry must fail the recreate, not wedge the component's
-    // reconcile single-flight for the TCP stack's worst case
-    recreateProvisionCapMs: 180000,
+    // a pull whose progress stream goes silent this long is a dead transfer
+    // (black-holed registry, half-open socket) - aborted and classed transient.
+    // Total pull time is unbounded while progress keeps flowing.
+    pullStallMs: 90000,
+    // absolute ceiling on a recreate's provision - the stall detector owns the
+    // dead-registry case, so this only guards the residual non-pull steps (a
+    // sick disk mid volume-create, a hung docker create) from wedging the
+    // component's reconcile single-flight; generous so no live pull ever hits it
+    recreateProvisionCapMs: 900000,
     // in flux main chain per month (blocksLasting)
     price: [
       { // any price fork can be done by adjusting object similarily.
