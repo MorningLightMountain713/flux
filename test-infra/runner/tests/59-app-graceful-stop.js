@@ -65,16 +65,22 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
     await control.reset();
   });
 
-  async function installGraceful(name) {
+  // Every scenario's app gets its own host port: some scenarios leave their app
+  // installed on node 0 by design (gskeep stopped, gsdefer RUNNING with its
+  // teardown owed), and a same-port neighbour is a state the spawner's
+  // port-conflict check forbids on a real network — the direct install bypasses
+  // that check, the container then can't bind, and the install trial correctly
+  // rolls the newcomer back.
+  async function installGraceful(name, port) {
     await pushTestApp(name);
-    const app = await buildSeedableGracefulV8App({ name, gracefulSec: GRACEFUL_S, exitCode: 0 });
+    const app = await buildSeedableGracefulV8App({ name, gracefulSec: GRACEFUL_S, exitCode: 0, port });
     await installOnNodes(env, app, [NODE_IDX]);
     await waitForUp(client, name, `${name} running before stop`);
   }
 
-  async function installPlain(name) {
+  async function installPlain(name, port) {
     await pushTestApp(name);
-    const app = await buildSeedableTestApp({ name, exitCode: 0 });
+    const app = await buildSeedableTestApp({ name, exitCode: 0, port });
     await installOnNodes(env, app, [NODE_IDX]);
     await waitForUp(client, name, `${name} running before stop`);
   }
@@ -86,7 +92,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   it('graceful app expiry drains via the daemon, then removes (no local kill)', async function () {
     this.timeout(180000);
     const name = `gsexpiry${Date.now()}`;
-    await installGraceful(name);
+    await installGraceful(name, 31111);
 
     // a graceful app gets a plan pushed at install time (survives control.reset)
     const state = await control.getState();
@@ -108,7 +114,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   it('reconciler stop-but-keep routes to the daemon; container stops, app is NOT removed', async function () {
     this.timeout(180000);
     const name = `gskeep${Date.now()}`;
-    await installGraceful(name);
+    await installGraceful(name, 31112);
     await control.reset();
 
     const auth = await ownerAuth();
@@ -129,7 +135,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   it('node-pipeline defer: a -32010 reject leaves the app installed (teardown stays owed)', async function () {
     this.timeout(180000);
     const name = `gsdefer${Date.now()}`;
-    await installGraceful(name);
+    await installGraceful(name, 31113);
     await control.reset();
     await control.setBehavior(name, 'reject');
 
@@ -145,7 +151,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   it('daemon-unreachable fallback: the app still removes via a local graceful stop', async function () {
     this.timeout(180000);
     const name = `gsunreach${Date.now()}`;
-    await installGraceful(name);
+    await installGraceful(name, 31114);
     await control.reset();
     await control.refuse(true);
     try {
@@ -162,7 +168,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   it('plain app on Arcane still routes the stop through the daemon', async function () {
     this.timeout(180000);
     const name = `gsplain${Date.now()}`;
-    await installPlain(name);
+    await installPlain(name, 31115);
     await control.reset();
 
     const auth = await ownerAuth();
@@ -177,7 +183,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   it('operator force-remove sends a forceful begin_app_stop (near-now deadline)', async function () {
     this.timeout(180000);
     const name = `gsforce${Date.now()}`;
-    await installGraceful(name);
+    await installGraceful(name, 31116);
     await control.reset();
 
     const auth = await ownerAuth();
@@ -193,7 +199,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   it('operator force preempts an in-flight drain; a non-operator removal does not', async function () {
     this.timeout(240000);
     const name = `gspreempt${Date.now()}`;
-    await installGraceful(name);
+    await installGraceful(name, 31117);
     await control.reset();
     // hold the drain open so it is genuinely in-flight
     await control.setBehavior(name, 'hang');
