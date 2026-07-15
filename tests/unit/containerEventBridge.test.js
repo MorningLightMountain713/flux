@@ -95,6 +95,32 @@ describe('containerEventBridge', () => {
     });
   });
 
+  // destroy = the container was REMOVED. A deliberate teardown holds its stop-aligned
+  // lease while destroying (skip); anything else is an out-of-band removal (docker
+  // rm -f under us) whose vanish the reconciler must discover NOW — the die often
+  // races the rm window ("exists but stopped") and without destroy the vanish waits
+  // for a paced retry or the hourly sweep.
+  describe('destroy', () => {
+    const destroyEvent = (name) => ({ Action: 'destroy', Actor: { Attributes: { name } } });
+
+    it('enqueues a reconcile for an out-of-band removal of a flux container', () => {
+      containerEventBridge.handleContainerDestroy(destroyEvent('fluxwww_app'));
+      expect(stubs.appReconciler.enqueue.calledOnceWith('fluxwww_app')).to.be.true;
+    });
+
+    it('does NOT reconcile a teardown-owned destroy while the removing lease is held', () => {
+      operationRegistry.acquire('fluxwww_app', 'removing', 'test'); // an in-flight uninstall
+      containerEventBridge.handleContainerDestroy(destroyEvent('fluxwww_app'));
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(operationRegistry.isHeld('fluxwww_app')).to.be.true;
+    });
+
+    it('ignores non-flux containers', () => {
+      containerEventBridge.handleContainerDestroy(destroyEvent('some_other_container'));
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
+    });
+  });
+
   describe('start', () => {
     it('wakes the dependents of a started container (satisfies a dependsOn started)', () => {
       containerEventBridge.handleContainerStart(startEvent('fluxdb_app'));
@@ -137,9 +163,12 @@ describe('containerEventBridge', () => {
   });
 
   describe('handleContainerEvent dispatch', () => {
-    it('routes die / start / health_status to the right handler by Action', async () => {
+    it('routes die / destroy / start / health_status to the right handler by Action', async () => {
       await containerEventBridge.handleContainerEvent(dieEvent('fluxa_app', 5));
       expect(stubs.appReconciler.enqueue.calledWith('fluxa_app'), 'die -> enqueue self').to.be.true;
+
+      containerEventBridge.handleContainerEvent({ Action: 'destroy', Actor: { Attributes: { name: 'fluxd_app' } } });
+      expect(stubs.appReconciler.enqueue.calledWith('fluxd_app'), 'destroy -> enqueue self').to.be.true;
 
       containerEventBridge.handleContainerEvent(startEvent('fluxb_app'));
       expect(stubs.appReconciler.enqueueDependents.calledWith('fluxb_app'), 'start -> wake dependents').to.be.true;
@@ -162,12 +191,12 @@ describe('containerEventBridge', () => {
       return stream;
     };
 
-    it('subscribes to die, start and health_status container events', async () => {
+    it('subscribes to die, destroy, start and health_status container events', async () => {
       stubs.dockerService.dockerGetEvents.resolves(makeStream());
       try {
         await containerEventBridge.start();
         const { filters } = stubs.dockerService.dockerGetEvents.firstCall.args[0];
-        expect(filters.event).to.have.members(['die', 'start', 'health_status']);
+        expect(filters.event).to.have.members(['die', 'destroy', 'start', 'health_status']);
       } finally {
         containerEventBridge.stop();
       }

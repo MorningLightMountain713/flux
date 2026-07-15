@@ -1026,6 +1026,25 @@ function acquireTransitionLease(dockerName, type, reason) {
   return token;
 }
 
+// A container that vanishes between a caller's state read and its docker call (an
+// out-of-band `docker rm -f` mid-pass) is not a crash of the workload. Tagged
+// ENOCONTAINER so a caller pacing a crash ladder treats it as "the world changed"
+// (re-read actual state) instead of recording a failed run.
+function containerGoneError(idOrName) {
+  const error = new Error(`Container ${idOrName} not found`);
+  error.code = 'ENOCONTAINER';
+  return error;
+}
+
+// docker's own rejections from the same removal window: the container 404s (removal
+// just finished) or docker refuses the transition while its removal is in progress.
+function tagIfContainerGone(err) {
+  if (err.statusCode === 404 || /removal of container .* is already in progress|marked for removal|being removed/i.test(err.message || '')) {
+    err.code = 'ENOCONTAINER';
+  }
+  return err;
+}
+
 async function appDockerStart(idOrName) {
   const dockerName = getDockerName(idOrName);
   // Hold 'actuating' across the start so a concurrent teardown's remove defers instead
@@ -1033,9 +1052,13 @@ async function appDockerStart(idOrName) {
   const token = acquireTransitionLease(dockerName, 'actuating', `start ${dockerName}`);
   try {
     const dockerContainer = await getDockerContainer(idOrName);
-    if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
+    if (!dockerContainer) throw containerGoneError(idOrName);
 
-    await dockerContainer.start(); // may throw
+    try {
+      await dockerContainer.start(); // may throw
+    } catch (err) {
+      throw tagIfContainerGone(err);
+    }
 
     // Apply CFS burst after start — cgroup paths only exist once the container
     // is running. Eligibility was decided at appDockerCreate time and stamped
@@ -1113,7 +1136,7 @@ async function appDockerStop(idOrName, timeout) {
  */
 async function appDockerRestart(idOrName) {
   const dockerContainer = await getDockerContainer(idOrName);
-  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
+  if (!dockerContainer) throw containerGoneError(idOrName);
 
   const dockerName = getDockerName(idOrName);
   // Check if container is running
@@ -1124,6 +1147,8 @@ async function appDockerRestart(idOrName) {
     const startToken = acquireTransitionLease(dockerName, 'actuating', `restart(start) ${dockerName}`);
     try {
       await dockerContainer.start();
+    } catch (err) {
+      throw tagIfContainerGone(err);
     } finally {
       operationRegistry.release(dockerName, startToken);
     }
@@ -1133,6 +1158,8 @@ async function appDockerRestart(idOrName) {
   const token = acquireTransitionLease(dockerName, 'stopping', `restart ${dockerName}`);
   try {
     await dockerContainer.restart();
+  } catch (err) {
+    throw tagIfContainerGone(err);
   } finally {
     operationRegistry.release(dockerName, token);
   }

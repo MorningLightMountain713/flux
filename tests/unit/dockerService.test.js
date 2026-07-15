@@ -419,6 +419,29 @@ describe('dockerService tests', () => {
       await expect(dockerService.appDockerStart('testing123')).to.eventually.be.rejectedWith('Container testing123 not found');
     });
 
+    // A container that vanishes between the caller's state read and the start (an
+    // out-of-band docker rm mid-pass) is not a crash of the workload: the tag lets
+    // the reconciler skip recording a restart attempt (which would advance the
+    // crash ladder for a removal the workload didn't cause).
+    it('tags a vanished container ENOCONTAINER so callers treat it as gone, not crashed', async () => {
+      const err = await dockerService.appDockerStart('testing123').catch((e) => e);
+      expect(err.code).to.equal('ENOCONTAINER');
+    });
+
+    it('tags docker\'s removal-in-progress rejection ENOCONTAINER (the same rm window, caught by docker itself)', async () => {
+      const conflict = new Error('(HTTP code 409) unexpected - removal of container website is already in progress');
+      conflict.statusCode = 409;
+      dockerStub.rejects(conflict);
+      const err = await dockerService.appDockerStart(appName).catch((e) => e);
+      expect(err.code).to.equal('ENOCONTAINER');
+    });
+
+    it('does not tag an unrelated start failure (a genuine crash must still walk the ladder)', async () => {
+      dockerStub.rejects(new Error('oci runtime error: exec format error'));
+      const err = await dockerService.appDockerStart(appName).catch((e) => e);
+      expect(err.code).to.be.undefined;
+    });
+
     // The 'actuating' lease makes a start mutually exclusive with a concurrent
     // teardown's remove: held across the start (a die inside it is a real crash, NOT
     // swallowed) and released own-lease-only when it settles.
