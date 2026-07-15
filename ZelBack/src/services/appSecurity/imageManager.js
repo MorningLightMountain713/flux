@@ -30,12 +30,16 @@ function classifyVerificationError(error, errorMeta) {
   // Use structured errorMeta if available (from imageVerifier)
   if (errorMeta && errorMeta.errorType) {
     switch (errorMeta.errorType) {
+      // Transient classes are could-not-ask answers, not verdicts on the image:
+      // cache only long enough to pace the re-ask. Hours-scale TTLs here outlive
+      // the outage itself - a registry that heals in a minute must not cost the
+      // app an hour of placement on every node that asked during the blip.
       case 'network':
-        return { ttlMs: FluxCacheManager.oneHour, reason: 'Network/Connection error' };
+        return { ttlMs: 2 * 60 * 1000, reason: 'Network/Connection error' };
       case 'rate_limit':
-        return { ttlMs: 2 * FluxCacheManager.oneHour, reason: 'Rate limiting (429)' };
+        return { ttlMs: 10 * 60 * 1000, reason: 'Rate limiting (429)' };
       case 'server_error':
-        return { ttlMs: 3 * FluxCacheManager.oneHour, reason: 'Server error (5xx)' };
+        return { ttlMs: 5 * 60 * 1000, reason: 'Server error (5xx)' };
       case 'whitelist_fetch_error':
       case 'auth_unavailable':
         return { ttlMs: 2 * FluxCacheManager.oneHour, reason: 'Temporary service issue' };
@@ -92,9 +96,12 @@ async function verifyRepository(repotag, options = {}) {
     log.info('Docker Hub verification cache HIT for '
       + `${repotag} (${architecture || 'any'})`);
 
-    // If cached verification failed, throw the cached error
+    // If cached verification failed, throw the cached error - re-tagged with its
+    // class, or a cached transient failure would read permanent downstream
     if (cached.error) {
-      throw new Error(cached.error);
+      const cachedError = new Error(cached.error);
+      if (cached.errorClass) cachedError.registryErrorClass = cached.errorClass;
+      throw cachedError;
     }
 
     return cached.result;
@@ -156,10 +163,12 @@ async function verifyRepository(repotag, options = {}) {
     log.warn(`Docker Hub verification failed for ${repotag}: ${error.message}`);
     log.warn(`Error classified as: ${reason} (retry in ${ttlMs / 1000 / 60 / 60} hours)`);
 
-    // Cache failure with custom TTL based on error type
+    // Cache failure with custom TTL based on error type; the class travels with
+    // it so a cache-served failure routes the same as a fresh one
     fluxCaching.dockerHubVerificationCache.set(cacheKey, {
       result: null,
       error: error.message,
+      errorClass: error.registryErrorClass ?? null,
     }, { ttl: ttlMs });
 
     throw error;
@@ -431,6 +440,7 @@ async function checkApplicationsCompliance() {
 }
 
 module.exports = {
+  classifyVerificationError,
   verifyRepository,
   getBlockedRepositories,
   getUserBlockedRepositories,

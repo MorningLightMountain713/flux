@@ -808,12 +808,17 @@ async function trySpawningGlobalApplication() {
         architecture,
         appName: instantiated.name,
       }).catch((error) => {
-        // imageManager already handles error classification and caching with intelligent TTLs (1h-7d)
-        // Add to spawn cache with 1-hour TTL to allow retry sooner than default 12h
-        // This lets temporary Docker Hub issues (network, rate limit) be retried faster
-        log.warn(`trySpawningGlobalApplication - Docker Hub verification failed for ${appToRun}: ${error.message}`);
-        globalState.trySpawningGlobalAppCache.set(appHash, '', { ttl: FluxCacheManager.oneHour });
-        throttleIntended = true; // a deliberate 1h Docker-Hub back-off; keep it through the finally
+        // The verifier's class routes the back-off: a transient failure (registry
+        // unreachable/rate-limited) is a could-not-ask answer - minutes, matching
+        // the verification cache's transient TTL, so the app retries as soon as
+        // the outage ends. A permanent verdict keeps the hour. Either way the
+        // cache entry must exist before the rethrow, or the outer catch would
+        // draw its 6h pre-install back-off instead.
+        const transient = error.registryErrorClass === 'transient';
+        const ttl = transient ? 2 * 60 * 1000 : FluxCacheManager.oneHour;
+        log.warn(`trySpawningGlobalApplication - Docker Hub verification failed for ${appToRun}: ${error.message}${transient ? ' (transient; retrying in minutes)' : ''}`);
+        globalState.trySpawningGlobalAppCache.set(appHash, '', { ttl });
+        throttleIntended = true; // a deliberate Docker-Hub back-off; keep it through the finally
         throw error;
       });
     }
