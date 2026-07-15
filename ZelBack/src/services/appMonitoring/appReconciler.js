@@ -536,7 +536,18 @@ async function recreateMissing(identifier) {
       await appsRuntimeState.recordRestart(identifier);
       const wait = Math.max(await appsRuntimeState.restartWaitMs(identifier), MANAGED_RETRY_MS);
       log.warn(`appReconciler - ${identifier} could not be recreated but has run here before; keeping it (down) and retrying in ${Math.round(wait / 1000)}s`);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'recreateFailedKept', waitMs: wait });
       scheduleRetry(identifier, wait);
+      return;
+    }
+    // A never-proven component that cannot even be rebuilt is a failed install. While
+    // the install converge is open the verdict belongs to the installer: resolve
+    // 'failed' so its rollback owns the teardown and the fluxappinstallingerror
+    // broadcast. An uninstall issued from here would race that open converge — the
+    // row disappears, the next pass no-ops, and onSettled would hand the installer a
+    // 'settled' verdict for an app that was just removed.
+    if (convergeWaiters.has(identifier)) {
+      resolveConverge(identifier, 'failed');
       return;
     }
     log.warn(`REMOVAL REASON: Container recreation failure (never ran here) - ${mainAppName} (appReconciler)`);
@@ -840,6 +851,15 @@ async function reconcile(rawIdentifier) {
           scheduleRetry(identifier, MANAGED_RETRY_MS);
           return;
         }
+        if (err.code === 'ENOCONTAINER') {
+          // removed out from under us mid-pass (out-of-band docker rm) — not a crash,
+          // so never advances the ladder. The rm's destroy event drives the prompt
+          // re-read; this paced retry is only the backstop.
+          log.info(`appReconciler - ${identifier} unhealthy restart aborted, the container was removed mid-pass`);
+          fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartUnhealthyDeferred', reason: err.message });
+          scheduleRetry(identifier, MANAGED_RETRY_MS);
+          return;
+        }
         // appDockerRestart owns the stop+start; a thrown restart leaves the container in
         // whatever state docker left it. Record the attempt so a persistent failure walks
         // the ladder, then pace the retry rather than hammering, mirroring the failed-start path.
@@ -976,6 +996,17 @@ async function reconcile(rawIdentifier) {
       // deferral is not one, so it must not advance the backoff ladder. Retry once the
       // transition clears; if it was a teardown, the retry bails at the condemned gate above.
       log.info(`appReconciler - ${identifier} start deferred, a container transition is in flight`);
+      fluxEventBus.publish('reconciler:actuated', { identifier, action: 'startDeferred', reason: err.message });
+      scheduleRetry(identifier, MANAGED_RETRY_MS);
+      return;
+    }
+    if (err.code === 'ENOCONTAINER') {
+      // The container was removed out from under us between the state read and the
+      // start (an out-of-band docker rm mid-pass). Not a crash — recording it would
+      // advance the ladder for a removal the workload didn't cause. The rm's destroy
+      // event drives the prompt re-read; this paced retry is only the backstop, and
+      // the next pass sees the vanish (recreateMissing).
+      log.info(`appReconciler - ${identifier} start aborted, the container was removed mid-pass`);
       fluxEventBus.publish('reconciler:actuated', { identifier, action: 'startDeferred', reason: err.message });
       scheduleRetry(identifier, MANAGED_RETRY_MS);
       return;

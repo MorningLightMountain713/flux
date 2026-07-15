@@ -954,6 +954,44 @@ describe('appReconciler tests', () => {
       expect(stubs.appsRuntimeState.recordRestart.calledWith('www_App')).to.be.true;
     });
 
+    it('publishes recreateFailedKept when a proven app is kept over a failed rebuild (observable keep-vs-remove)', async () => {
+      const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
+      const publishSpy = sinon.spy(fluxEventBus, 'publish');
+      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
+      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('image not found'));
+      stubs.appsRuntimeState.getState.resolves({ hasSuccessfullyStarted: true });
+      await appReconciler.reconcile('www_App');
+      expect(publishSpy.calledWithMatch('reconciler:actuated', sinon.match({ identifier: 'www_App', action: 'recreateFailedKept' }))).to.be.true;
+    });
+
+    // While the install converge is open, the recreate-failure verdict for a
+    // never-proven component belongs to the installer: resolving 'failed' hands it
+    // the rollback (teardown + fluxappinstallingerror broadcast). An uninstall
+    // issued from the reconcile pass would race the open converge - the row
+    // disappears, the next pass no-ops, and onSettled would report 'settled' for
+    // an app that was just removed.
+    it('hands a never-proven recreate failure to an OPEN converge as a failed install (no direct uninstall)', async () => {
+      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
+      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('pull failed'));
+      // getState defaults to null -> never proven
+      const result = await appReconciler.awaitConvergence(['www_App']);
+      expect(result.converged).to.be.false;
+      expect(result.failed).to.deep.equal(['www_App']);
+      expect(stubs.appUninstaller.uninstallApplication.called, 'the installer rollback owns the teardown, not the reconcile pass').to.be.false;
+    });
+
+    it('does not record a restart when the start finds the container removed mid-pass (out-of-band rm)', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 137 } });
+      stubs.appsRuntimeState.getState.resolves({ hasEverStarted: true, hasSuccessfullyStarted: true });
+      const gone = new Error('Container www_App not found');
+      gone.code = 'ENOCONTAINER';
+      stubs.dockerService.appDockerStart.rejects(gone);
+      await appReconciler.reconcile('www_App');
+      expect(stubs.appsRuntimeState.recordRestart.called, 'a removal mid-pass is not a crash - it must never advance the ladder').to.be.false;
+    });
+
     it('retries the reconcile when the post-recreate-failure removal is deferred (busy)', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
