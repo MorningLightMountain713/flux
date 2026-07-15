@@ -15,6 +15,12 @@ const { Privilege, authOf } = require('../utils/privileges');
 // Cache for blocked repositories
 let cacheUserBlockedRepos = null;
 
+// The transient re-ask pace, shared with the spawner's spawn-cache back-off so
+// the two layers stack to a bounded, config-visible ceiling (2x this value).
+function registryTransientBackoffMs() {
+  return config.fluxapps.registryTransientBackoffMs ?? 2 * 60 * 1000;
+}
+
 /**
  * Classify error type and determine appropriate cache TTL
  * @param {Error & {errorMeta?: object}} error - The error from image verification. One thrown by
@@ -36,11 +42,11 @@ function classifyVerificationError(error) {
       // the outage itself - a registry that heals in a minute must not cost the
       // app an hour of placement on every node that asked during the blip.
       case 'network':
-        return { ttlMs: 2 * 60 * 1000, reason: 'Network/Connection error' };
+        return { ttlMs: registryTransientBackoffMs(), reason: 'Network/Connection error' };
       case 'rate_limit':
-        return { ttlMs: 10 * 60 * 1000, reason: 'Rate limiting (429)' };
+        return { ttlMs: 5 * registryTransientBackoffMs(), reason: 'Rate limiting (429)' };
       case 'server_error':
-        return { ttlMs: 5 * 60 * 1000, reason: 'Server error (5xx)' };
+        return { ttlMs: 2.5 * registryTransientBackoffMs(), reason: 'Server error (5xx)' };
       case 'auth_unavailable':
         return { ttlMs: 2 * FluxCacheManager.oneHour, reason: 'Temporary service issue' };
       // Permanent errors - longer cache
