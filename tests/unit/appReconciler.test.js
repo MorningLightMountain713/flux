@@ -1090,6 +1090,20 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
+    it('a same-state controller verdict repeat is a no-op; only a transition re-publishes (decider poll ticks)', () => {
+      // eslint-disable-next-line global-require
+      const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
+      const publishSpy = sinon.spy(fluxEventBus, 'publish');
+      const desiredEvents = () => publishSpy.getCalls().filter((c) => c.args[0] === 'reconciler:desiredChanged').length;
+
+      appReconciler.setControllerDesired('db_App', 'running', 'syncthing syncFirst: ensure-running');
+      appReconciler.setControllerDesired('db_App', 'running', 'syncthing syncFirst: ensure-running');
+      expect(desiredEvents(), 'the repeat must not re-publish/re-enqueue - a syncing app re-asserts every ~3s').to.equal(1);
+
+      appReconciler.setControllerDesired('db_App', 'stopped', 'decider stop');
+      expect(desiredEvents(), 'a genuine transition still publishes').to.equal(2);
+    });
+
     it('starts a g: component once a controller sets it running', async () => {
       localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
       // set desired without triggering the workqueue (boot gate closed -> enqueue held)
