@@ -73,7 +73,8 @@ describe('appReconciler tests', () => {
         // reachability probe used by dockerActual on an inspect failure; resolves => docker up
         dockerListContainers: sinon.stub().resolves([]),
         // final existence re-check before the remove-on-recreate-failure fallback
-        getDockerContainerOnly: sinon.stub().resolves(undefined),
+        // (real getDockerContainer resolves null when the container is absent)
+        getDockerContainer: sinon.stub().resolves(null),
         appDockerStart: sinon.stub().resolves(),
         appDockerStop: sinon.stub().resolves(),
         appDockerRestart: sinon.stub().resolves(),
@@ -158,6 +159,19 @@ describe('appReconciler tests', () => {
   });
 
   afterEach(() => { appReconciler.stop(); operationRegistry.clear(); sinon.restore(); });
+
+  // Stub-fidelity guard: a stubbed dockerService method that does not exist on the
+  // real module keeps every test green while production throws "not a function"
+  // (getDockerContainerOnly survived a rename exactly this way). Function-shaped
+  // stubs must map to real exports; the helpers redefined inline (getAppIdentifier
+  // etc.) are covered too since they exist on the real module.
+  it('dockerService stub mirrors the real module surface (no phantom methods)', () => {
+    // eslint-disable-next-line global-require
+    const realDockerService = require('../../ZelBack/src/services/dockerService');
+    const phantom = Object.keys(stubs.dockerService)
+      .filter((key) => typeof realDockerService[key] !== 'function');
+    expect(phantom, `stubbed dockerService methods missing from the real module: ${phantom.join(', ')}`).to.deep.equal([]);
+  });
 
   // resolves exactly when its .resolve() is called — lets tests await the real
   // completion signal of an async reconcile instead of guessing with timer ticks
@@ -921,8 +935,8 @@ describe('appReconciler tests', () => {
     });
 
     it('recreates a missing container that should run (docker reachable)', async () => {
-      // production shape of a genuinely-missing container: getDockerContainerOnly
-      // returns undefined -> docker.getContainer(undefined.Id) throws a TypeError.
+      // production shape of a genuinely-missing container: the inspect throws a
+      // TypeError (docker.getContainer(undefined.Id)) and the list probe confirms absence.
       stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
       stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
       await appReconciler.reconcile('www_App');
@@ -1056,7 +1070,7 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
       stubs.dockerService.dockerListContainers.resolves([]); // genuinely missing at classification
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('409 Conflict: name already in use'));
-      stubs.dockerService.getDockerContainerOnly.resolves({ Id: 'abc123' }); // exists at re-check
+      stubs.dockerService.getDockerContainer.resolves({ Id: 'abc123' }); // exists at re-check
       await appReconciler.reconcile('www_App');
       expect(stubs.appUninstaller.uninstallApplication.called, 'must not remove - the container exists').to.be.false;
       const recordedFailure = stubs.appTamperingDetectionService.recordEvent.getCalls()

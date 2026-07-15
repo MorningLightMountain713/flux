@@ -540,7 +540,7 @@ async function recreateMissing(identifier) {
     // entry), or our own recreate can fail AFTER creating it (start/network
     // step). If the container exists, the failure is moot: no tamper events,
     // no removal - retry shortly and converge on the actual state.
-    const containerExistsNow = await dockerService.getDockerContainerOnly(identifier).catch(() => undefined);
+    const containerExistsNow = await dockerService.getDockerContainer(identifier).catch(() => undefined);
     if (containerExistsNow) {
       log.info(`appReconciler - recreate of ${identifier} failed (${err.message}) but the container now exists; skipping removal`);
       scheduleRetry(identifier, MANAGED_RETRY_MS);
