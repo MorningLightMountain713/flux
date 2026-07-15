@@ -1,15 +1,11 @@
 import { describe, it, before, after } from 'mocha';
-import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { nodeKey } from '../framework/keys.js';
-import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
+import { buildSeedableApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { advanceBlock, advanceBlocks, startTicker, stopTicker } from '../framework/daemon-control.js';
-import {
-  waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
-  waitForOrchestratorState, waitForAppSpecStored, assertNoEvent, waitFor,
-} from '../framework/wait.js';
+import { assertNoEvent, waitFor } from '../framework/wait.js';
 import { getAppContainerStatus } from '../framework/container.js';
+import { bootAndPeer } from '../framework/reconciler-suite.js';
+import { dbClient } from '../framework/db-client.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
@@ -19,45 +15,34 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 // merely couldn't reach the registry would count toward the network-wide >=5
 // error gate and could suppress a healthy app. When the registry returns, the
 // deferred app installs with no operator action and no bench to expire.
-
-const REGISTRY = REGISTRY_REPO_HOST;
-
-async function bootToSpawnerReady(env) {
-  for (const c of env.clients) await waitForDaemonReady(c);
-  await Promise.all(env.clients.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
-  await advanceBlock();
-  for (const c of env.clients) {
-    await waitForBlockProcessed(c, (d) => d.height > 2100000, 50000);
-  }
-  await env.startDiscovery();
-  await env.clients[0].waitForEvent('peers:added', (d) => d.outbound >= 4, 120000);
-  await env.clients[0].waitForEvent('peers:added', (d) => d.inbound >= 2, 120000);
-  await startTicker();
-  await advanceBlocks(260);
-  await waitForOrchestratorState(env.clients[0], 'READY', 120000);
-}
+//
+// The spec is db-seeded (not API-registered): registration itself verifies the
+// image against the registry, so it cannot happen during the outage - and
+// seeding after the registry stops also means the spawner's first-ever look at
+// this app is already inside the outage (no install-before-outage race).
 
 describe('Spawner: a registry outage during install defers, never fails or broadcasts', function () {
   let env;
   const appName = `e2eregout${Date.now()}`;
-  const repoName = appName;
   dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(600000);
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
-    // the image must exist in the registry BEFORE the outage, so the recovery
-    // half of the test has something real to install
-    await pushImage(repoName, 'v1');
-    await bootToSpawnerReady(env);
+    // the image must reach the registry's store BEFORE the outage, so the
+    // recovery half of the test has something real to install
+    await pushImage(appName, 'v1');
+    await bootAndPeer(env);
 
-    const spec = buildAppSpec({
+    // black-hole the registry, THEN make the app visible
+    await env.containers.registry.stop({ remove: false, removeVolumes: false });
+
+    const app = await buildSeedableApp({
       name: appName,
-      instances: 3,
       compose: [{
         name: appName,
-        description: 'app registered across a registry outage',
-        repotag: `${REGISTRY}/${repoName}:v1`,
+        description: 'app seeded across a registry outage',
+        repotag: `${REGISTRY_REPO_HOST}/${appName}:v1`,
         ports: [39333],
         domains: [''],
         environmentParameters: [],
@@ -70,20 +55,19 @@ describe('Spawner: a registry outage during install defers, never fails or broad
         repoauth: '',
       }],
     });
-
-    // stop the registry BEFORE the spec lands: every spawn attempt during the
-    // outage hits the black hole at the verify step (transient class -> DEFER)
-    await env.containers.registry.stop({ remove: false, removeVolumes: false });
-
-    const result = await registerAndConfirm(env.clients[0].url, nodeKey(1), spec, env.clients);
-    expect(result.status).to.equal('success');
-    await waitForBlockProcessed(env.clients[0], (d) => d.height >= result.targetHeight, 60000);
-    await waitForAppSpecStored(env.clients[0], appName);
+    for (let i = 1; i <= env.nodeCount; i += 1) {
+      const dc = dbClient(i);
+      // eslint-disable-next-line no-await-in-loop
+      await dc.seedGlobalAppSpec(app.spec);
+      // eslint-disable-next-line no-await-in-loop
+      await dc.seedPermanentMessage(app.permanentMessage);
+      // eslint-disable-next-line no-await-in-loop
+      await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
+    }
   });
 
   after(async function () {
     this.timeout(30000);
-    await stopTicker().catch(() => {});
     await env?.teardown();
   });
 
