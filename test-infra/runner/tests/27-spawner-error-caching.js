@@ -190,6 +190,10 @@ describe('Spawner error caching: network-wide error skip', function () {
 
   it('should emit networkErrorSkip when error count >= 5', async function () {
     this.timeout(180000);
+    // precondition, not paranoia: the event wait below can only mean "the gate
+    // never fired" if the seeded docs are provably visible under this hash
+    const seeded = await dbClient(1).countInstallingErrors(appHash);
+    expect(seeded, `seeded install-error docs visible for hash ${appHash}`).to.be.gte(5);
     const event = await Promise.any(
       env.clients.map((c) => c.waitForEvent(
         'spawner:networkErrorSkip',
