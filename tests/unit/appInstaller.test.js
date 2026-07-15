@@ -696,6 +696,22 @@ describe('appInstaller tests', () => {
         expect(storeAppInstallingErrorMessage.called, 'no install-error stored either').to.be.false;
       });
 
+      it('classifies a transient registry failure as DEFERRED — cleanup runs, nothing stored or broadcast', async () => {
+        const {
+          installer, uninstallApplication, broadcastMessageToAll, storeAppInstallingErrorMessage,
+        } = loadFresh({
+          installComponentError: Object.assign(new Error('dial tcp: connection refused'), { registryErrorClass: 'transient' }),
+          components: [['web', mockComponent]],
+        });
+
+        const result = await installer.installApplication(mockInstantiated, {});
+
+        expect(result.status, 'a could-not-ask answer defers, never fails').to.equal(appInstaller.InstallStatus.DEFERRED);
+        expect(uninstallApplication.called, 'the partial install is still cleaned up').to.be.true;
+        expect(storeAppInstallingErrorMessage.called, 'no install-error stored - not a verdict on the app').to.be.false;
+        expect(broadcastMessageToAll.called, 'no fluxappinstallingerror broadcast').to.be.false;
+      });
+
       it('a genuine install failure (no cancel) still FAILS, tears down, and broadcasts the error', async () => {
         const {
           installer, uninstallApplication, broadcastMessageToAll,

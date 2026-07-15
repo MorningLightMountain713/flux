@@ -1006,6 +1006,17 @@ describe('appReconciler tests', () => {
       expect(stubs.appUninstaller.uninstallApplication.called, 'the installer rollback owns the teardown, not the reconcile pass').to.be.false;
     });
 
+    it('resolves an OPEN converge provisional when the recreate failed on an UNREACHABLE registry (node condition, no rollback)', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
+      const unreachable = Object.assign(new Error('dial tcp: connection refused'), { registryErrorClass: 'transient' });
+      stubs.containerHealthMonitor.recreateMissingContainers.rejects(unreachable);
+      // getState defaults to null -> never proven
+      const result = await appReconciler.awaitConvergence(['www_App']);
+      expect(result.converged, 'a could-not-ask answer must not draw the rollback verdict').to.be.true;
+      expect(result.failed).to.deep.equal([]);
+      expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
+    });
+
     it('does not record a restart when the start finds the container removed mid-pass (out-of-band rm)', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 137 } });
       stubs.appsRuntimeState.getState.resolves({ hasEverStarted: true, hasSuccessfullyStarted: true });

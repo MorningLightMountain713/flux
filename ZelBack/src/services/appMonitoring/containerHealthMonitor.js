@@ -60,7 +60,7 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
       await appVolumeService.ensureMountSourcesExist(deployComp);
     }
     await componentProvisioner.installComponent(deployComp, {
-      createVolumes: !volumeMounted, owner: instantiated.owner, requiresEncryption, syslogTarget, crossAppLogCollector, abortSignal,
+      createVolumes: !volumeMounted, owner: instantiated.owner, requiresEncryption, syslogTarget, crossAppLogCollector, abortSignal, allowLocalImageFallback: true,
     });
   }
 
