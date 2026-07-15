@@ -112,4 +112,25 @@ describe('appShutdownCoordinator', () => {
     const second = await coordinator.requestGracefulStop('web_myapp', 'condemned');
     expect(second).to.equal(false);
   });
+
+  it('a COMPLETED drain clears the gate and re-drives - an apprestart issued mid-drain must not stay wedged', async () => {
+    stubs.fluxShutdowndClient.beginAppStop.resolves({ outcome: 'complete' });
+    const res = await coordinator.requestGracefulStop('web_myapp', 'condemned');
+    expect(res).to.equal(true);
+    await flush();
+    // the drain is over: nothing left for the gate to protect. Without the clear,
+    // reconciles stay suppressed for the rest of the budget window and a restart
+    // issued during the drain leaves the app down, broadcasting 'stopping'.
+    expect(stubs.globalState.clearAppLbState.calledWith('myapp')).to.equal(true);
+    expect(stubs.appReconciler.enqueue.calledWith('web_myapp')).to.equal(true);
+  });
+
+  it('rejected_pipeline_active keeps the gate - the node-wide pipeline owns the stop', async () => {
+    stubs.fluxShutdowndClient.beginAppStop.resolves({ outcome: 'rejected_pipeline_active' });
+    const res = await coordinator.requestGracefulStop('web_myapp', 'condemned');
+    expect(res).to.equal(true);
+    await flush();
+    expect(stubs.globalState.clearAppLbState.called).to.equal(false);
+    expect(stubs.appReconciler.enqueue.called).to.equal(false);
+  });
 });
