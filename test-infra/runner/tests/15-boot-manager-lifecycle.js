@@ -145,7 +145,11 @@ describe('Boot manager: daemon timeout', function () {
 
   before(async function () {
     this.timeout(120000);
-    env = await createTestEnv({ hookCtx: this, configOverrides: PRODUCTION_EXPIRIES, nodes: 1, tickerAutostart: false, bootContext: 'rebooted', rpcFailures: [subnet.nodeIp(1)] });
+    // arcane:false is this describe's premise: the daemon-timeout removal branch
+    // is LEGACY boot behavior. An Arcane node fail-closes instead - the capability
+    // verdict polls the dead daemon channel and never latches, so app functions
+    // (deliberately) never start and this suite's subject is never reached.
+    env = await createTestEnv({ hookCtx: this, configOverrides: PRODUCTION_EXPIRIES, nodes: 1, tickerAutostart: false, bootContext: 'rebooted', rpcFailures: [subnet.nodeIp(1)], arcane: false });
     await waitForBootSettledAndLogged(env, 0, { timeout: 60000 });
   });
 
