@@ -38,8 +38,14 @@ describe('backup leases the whole app against the reconciler', function () {
     await resetSyncState();
     // an r: app on its leader path: it starts immediately and uses syncthing,
     // so the backup flow takes the stop -> tar -> restart shape (the lease
-    // window the reconciler must respect)
-    app = await seedSyncthingApp(env, { name: appName, mode: 'r', index: 0 });
+    // window the reconciler must respect). hdd 2GB: the backup archive lands on
+    // the SAME per-component volume as the appdata it tars, and the 512MB
+    // urandom bulk below doesn't compress - bulk + archive must fit or the
+    // backup dies ENOSPC mid-window (observed: the failed backup then never
+    // resumed the app and the final is-up assert timed out).
+    app = await seedSyncthingApp(env, {
+      name: appName, mode: 'r', index: 0, hdd: 2,
+    });
     await setSynced({ ip: subnet.nodeIp(1), folder: app.folder });
     await waitForUp(env.clients[0], appName, 'app running before backup');
     // bulk up appdata so the tar phase gives a real lease window - sized so the
@@ -83,7 +89,10 @@ describe('backup leases the whole app against the reconciler', function () {
     await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === app.identifier && (d.action === 'firstStart' || d.action === 'restart' || d.action === 'stopped' || d.action === 'recreated'), 10000);
 
     const body = await backupDone;
-    expect(body).to.not.match(/Unauthorized/i);
+    // the success path ends with 'Finalizing...' - anything else (ENOSPC on the
+    // archive, an early throw) means the lease window this test measures never
+    // completed, and must fail HERE rather than masquerade as a lease violation
+    expect(body).to.match(/Finalizing/, `backup did not complete: ${body.slice(-300)}`);
 
     // lease released: the level-based contract converges the app back to running
     await waitFor(async () => isUp(client, appName), { timeout: 120000, interval: 3000, label: 'app running again after backup released the lease' });
