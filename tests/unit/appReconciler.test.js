@@ -954,6 +954,22 @@ describe('appReconciler tests', () => {
       expect(stubs.appsRuntimeState.recordRestart.calledWith('www_App')).to.be.true;
     });
 
+    // A recreate provision against a black-holed registry (dead IP behind a stale
+    // DNS cache) hangs rather than refuses. Unbounded, the hung await wedges this
+    // component's reconcile single-flight forever - every later trigger coalesces
+    // into a pass that never runs. The cap fails the recreate instead.
+    it('caps a hung recreate provision - the pass fails the recreate instead of wedging the single-flight', async () => {
+      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
+      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.containerHealthMonitor.recreateMissingContainers.returns(new Promise(() => {})); // black hole
+      stubs.appsRuntimeState.getState.resolves({ hasSuccessfullyStarted: true });
+      await appReconciler.reconcile('www_App'); // must terminate at the cap, not hang
+      expect(stubs.appsRuntimeState.recordRestart.calledWith('www_App'), 'the cap is a recreate failure - the proven app is kept and paced').to.be.true;
+      const opts = stubs.containerHealthMonitor.recreateMissingContainers.firstCall.args[1];
+      expect(opts.abortSignal, 'the provision must receive the abort signal so the pull ends too').to.be.instanceOf(AbortSignal);
+      expect(opts.abortSignal.aborted).to.be.true;
+    });
+
     it('publishes recreateFailedKept when a proven app is kept over a failed rebuild (observable keep-vs-remove)', async () => {
       const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
       const publishSpy = sinon.spy(fluxEventBus, 'publish');
