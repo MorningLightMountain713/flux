@@ -541,19 +541,14 @@ async function redeployApplicationAPI(req, res) {
 }
 
 /**
- * Helper function to send chunk of data to response stream with delay
+ * Helper function to send chunk of data to response stream
  * @param {object} res - Response object
  * @param {string} chunk - Data chunk to send
  * @returns {Promise<void>}
  */
 async function sendChunk(res, chunk) {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      res.write(`${chunk}\n`);
-      if (res.flush) res.flush();
-      resolve();
-    }, 3000); // Adjust the delay as needed
-  });
+  res.write(`${chunk}\n`);
+  if (res.flush) res.flush();
 }
 
 /**
