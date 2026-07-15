@@ -866,9 +866,11 @@ async function handleNewApp(params) {
  */
 async function ensureContainerRunning(appId, requiresSyncBeforeStart) {
   try {
+    // null = docker-confirmed absence (the inspect contract): a missing
+    // container is the recreate machinery's to rebuild, not ours to start.
     const containerInspect = await dockerService.dockerContainerInspect(appId);
 
-    if (!containerInspect.State.Running && requiresSyncBeforeStart) {
+    if (containerInspect && !containerInspect.State.Running && requiresSyncBeforeStart) {
       log.info(`ensureContainerRunning - ${appId} is not running, requesting start`);
       appReconciler.setControllerDesired(appId, 'running', 'syncthing syncFirst: ensure-running');
     }
@@ -1039,5 +1041,6 @@ module.exports = {
   checkDirectoryHasContent,
   checkDirectoryHasSyncScopedContent,
   checkDirectoryHasSyncScopedFiles,
+  ensureContainerRunning,
   nudgeFolderDevices,
 };

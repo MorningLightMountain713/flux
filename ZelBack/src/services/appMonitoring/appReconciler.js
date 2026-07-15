@@ -1229,6 +1229,11 @@ async function enqueueDependents(rawIdentifier) {
  */
 function setControllerDesired(rawIdentifier, state, reason) {
   const identifier = canonical(rawIdentifier);
+  // Same-state repeats are no-ops: deciders re-assert their verdict on poll
+  // ticks (syncthing ensure-running, every ~3s through a sync window), and only
+  // a transition warrants the log/event/enqueue - re-driving stalled work is
+  // the retry machinery's job, not the decider's.
+  if (controllerDesired.get(identifier) === state) return;
   controllerDesired.set(identifier, state);
   log.info(`appReconciler - controllerDesired[${identifier}] = ${state} (${reason})`);
   fluxEventBus.publish('reconciler:desiredChanged', { identifier, state, reason });
