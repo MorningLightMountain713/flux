@@ -33,6 +33,18 @@ function classifyVerificationError(error, errorMeta) {
   // eslint-disable-next-line global-require
   const { FluxCacheManager } = require('../utils/cacheManager');
 
+  // The class rides the thrown error itself and SURVIVES the verifier's error
+  // reset - throwIfError wipes errorMeta before any catch can read it, so meta
+  // is usually absent here and only refines the pacing when it is present.
+  // Without this branch every real verifier throw fell through to the
+  // message-parsing fallback and its hour-scale TTLs.
+  if (error.registryErrorClass === 'transient') {
+    const errorType = errorMeta && errorMeta.errorType;
+    if (errorType === 'rate_limit') return { ttlMs: 5 * registryTransientBackoffMs(), reason: 'Rate limiting (429)' };
+    if (errorType === 'server_error') return { ttlMs: 2.5 * registryTransientBackoffMs(), reason: 'Server error (5xx)' };
+    return { ttlMs: registryTransientBackoffMs(), reason: 'Transient registry failure (could-not-ask)' };
+  }
+
   // Use structured errorMeta if available (from imageVerifier)
   if (errorMeta && errorMeta.errorType) {
     switch (errorMeta.errorType) {

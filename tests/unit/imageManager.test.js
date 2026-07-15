@@ -775,3 +775,20 @@ describe('classifyVerificationError transient TTLs', () => {
     expect(imageManager.classifyVerificationError(err, { errorType: 'never_seen_before' }).ttlMs).to.be.gte(60 * 60 * 1000);
   });
 });
+
+describe('classifyVerificationError class-first routing (the meta-reset gap)', () => {
+  // eslint-disable-next-line global-require
+  const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
+
+  it('routes on the error class with NO errorMeta - throwIfError resets meta before any catch reads it', () => {
+    const err = Object.assign(new Error('Connection Error ECONNABORTED: x not available'), { registryErrorClass: 'transient' });
+    const { ttlMs } = imageManager.classifyVerificationError(err, null);
+    expect(ttlMs).to.equal(2 * 60 * 1000);
+  });
+
+  it('a permanent-class error with no meta still falls back to hour-scale caching', () => {
+    const err = new Error('manifest unknown');
+    const { ttlMs } = imageManager.classifyVerificationError(err, null);
+    expect(ttlMs).to.be.gte(60 * 60 * 1000);
+  });
+});
