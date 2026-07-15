@@ -28,6 +28,14 @@ export async function killAppContainer(container, appName, componentName) {
   return execInContainer(container, `docker rm -f ${name}`);
 }
 
+// Remove an image from the node's LOCAL docker store. With the registry also
+// down, a rebuild then has genuinely nothing to run - the state the keep-path
+// (recreate-failure) tests need now that a local copy satisfies a recreate.
+// -f clears the tag even while stopped containers still reference layers.
+export async function removeAppImage(container, imageRef) {
+  return execInContainer(container, `docker rmi -f ${imageRef}`);
+}
+
 export async function getAppContainerStatus(container, appName, { all = false } = {}) {
   const containers = await listAppContainers(container, { all });
   return containers.find((c) => c.name.includes(appName)) ?? null;
