@@ -127,6 +127,9 @@ module.exports = {
     // small so the hung-provision cap test observes the cap without a long wait;
     // only ever reached by a provision stub that deliberately never resolves
     recreateProvisionCapMs: 250,
+    // pull-stall watchdog window; unit pull tests pass stallMs per-call, this
+    // mirrors the prod key so config reads never fall through to the fallback
+    pullStallMs: 90000,
     // in flux main chain per month (blocksLasting)
     price: [
       { // any price fork can be done by adjusting object similarily.

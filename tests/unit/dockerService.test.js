@@ -1347,18 +1347,89 @@ describe('dockerService tests', () => {
       });
     });
 
-    it('threads abortSignal onto the docker.pull options (abortable pull)', () => {
+    it('chains the caller abortSignal into the signal docker.pull sees (abortable pull)', () => {
       const pullStub = sinon.stub(Dockerode.prototype, 'pull').callsFake((repoTag, opts, cb) => cb(null, 'STREAM'));
       const followStub = sinon.stub(modemProto, 'followProgress').callsFake((stream, onFinished) => onFinished(null, 'done'));
       try {
         const ac = new AbortController();
         dockerService.dockerPullStream({ repoTag: 'nginx:latest', abortSignal: ac.signal }, null, sinon.stub());
         expect(pullStub.calledOnce).to.be.true;
-        expect(pullStub.firstCall.args[1].abortSignal, 'abortSignal passed through to docker.pull').to.equal(ac.signal);
+        const seenSignal = pullStub.firstCall.args[1].abortSignal;
+        expect(seenSignal, 'docker.pull always gets a signal (the stall controller)').to.be.instanceOf(AbortSignal);
+        expect(seenSignal.aborted).to.be.false;
+        ac.abort();
+        expect(seenSignal.aborted, 'a caller cancel aborts the transfer docker sees').to.be.true;
       } finally {
         pullStub.restore();
         followStub.restore();
       }
+    });
+
+    describe('stall watchdog', () => {
+      let clock;
+      let pullStub;
+      let followStub;
+      let onFinished;
+      let onProgress;
+
+      beforeEach(() => {
+        clock = sinon.useFakeTimers();
+        pullStub = sinon.stub(Dockerode.prototype, 'pull').callsFake((repoTag, opts, cb) => cb(null, 'STREAM'));
+        // capture the handlers so the test drives the stream by hand
+        followStub = sinon.stub(modemProto, 'followProgress').callsFake((stream, finished, progress) => {
+          onFinished = finished;
+          onProgress = progress;
+        });
+      });
+
+      afterEach(() => {
+        pullStub.restore();
+        followStub.restore();
+        clock.restore();
+      });
+
+      it('a silent stream stalls out: transient-tagged error, transfer aborted', () => {
+        const cb = sinon.stub();
+        dockerService.dockerPullStream({ repoTag: 'nginx:latest', stallMs: 50 }, null, cb);
+        clock.tick(49);
+        expect(cb.called).to.be.false;
+        clock.tick(1);
+        expect(cb.calledOnce).to.be.true;
+        const err = cb.firstCall.args[0];
+        expect(err).to.be.an('error');
+        expect(err.message).to.include('stalled: no progress for');
+        expect(err.registryErrorClass).to.equal('transient');
+        expect(pullStub.firstCall.args[1].abortSignal.aborted, 'the dead transfer is aborted').to.be.true;
+        // a late modem error after the stall settled must not double-fire the callback
+        onFinished(new Error('aborted'));
+        expect(cb.calledOnce).to.be.true;
+      });
+
+      it('progress events keep resetting the window - a slow pull outlives many windows', () => {
+        const cb = sinon.stub();
+        dockerService.dockerPullStream({ repoTag: 'nginx:latest', stallMs: 50 }, null, cb);
+        for (let i = 0; i < 5; i += 1) {
+          clock.tick(40);
+          onProgress({ status: 'Downloading', id: 'layer1' });
+        }
+        clock.tick(40); // 240ms total elapsed, never 50ms silent
+        expect(cb.called, 'no stall while progress flows').to.be.false;
+        onFinished(null, 'done');
+        expect(cb.calledOnceWith(null, 'done')).to.be.true;
+      });
+
+      it('a caller cancel keeps its own error shape (never stall-tagged)', () => {
+        const cb = sinon.stub();
+        const ac = new AbortController();
+        dockerService.dockerPullStream({ repoTag: 'nginx:latest', stallMs: 50, abortSignal: ac.signal }, null, cb);
+        clock.tick(20);
+        ac.abort();
+        onFinished(Object.assign(new Error('aborted'), { code: 'ERR_CANCELED' }));
+        expect(cb.calledOnce).to.be.true;
+        const err = cb.firstCall.args[0];
+        expect(err.message).to.equal('aborted');
+        expect(err.registryErrorClass, 'a cancel is not a registry verdict').to.equal(undefined);
+      });
     });
   });
 
