@@ -560,6 +560,69 @@ describe('imageVerifier tests', () => {
     });
   });
 
+  describe('errorClass taxonomy tests', () => {
+    let axiosGetStub;
+
+    beforeEach(() => {
+      axiosGetStub = sinon.stub(serviceHelper, 'axiosGet');
+      sinon.stub(serviceHelper, 'axiosInstance').returns({ get: axiosGetStub, interceptors: { request: { use: sinon.stub() } } });
+    });
+
+    const failWith = (mutate) => async () => {
+      const error = new Error('Test Error');
+      mutate(error);
+      throw error;
+    };
+
+    it('classifies a timeout as transient (a socket failure is connectivity, not a registry verdict)', async () => {
+      axiosGetStub.callsFake(failWith((e) => { e.code = 'ETIMEDOUT'; }));
+      const verifier = new ImageVerifier('megachips/ipshow:web');
+      await verifier.verifyImage();
+      expect(verifier.errorClass).to.equal('transient');
+      expect(verifier.errorMeta.errorType).to.equal('network');
+    });
+
+    it('classifies a no-response failure with an unlisted code as transient', async () => {
+      axiosGetStub.callsFake(failWith((e) => { e.code = 'EPROTO'; e.request = {}; }));
+      const verifier = new ImageVerifier('megachips/ipshow:web');
+      await verifier.verifyImage();
+      expect(verifier.errorClass).to.equal('transient');
+    });
+
+    it('classifies a rate limit (429) as transient', async () => {
+      axiosGetStub.callsFake(failWith((e) => { e.response = { status: 429 }; }));
+      const verifier = new ImageVerifier('megachips/ipshow:web');
+      await verifier.verifyImage();
+      expect(verifier.errorClass).to.equal('transient');
+    });
+
+    it('classifies an HTTP rejection (404) as permanent - the registry answered', async () => {
+      axiosGetStub.callsFake(failWith((e) => { e.response = { status: 404 }; }));
+      const verifier = new ImageVerifier('megachips/ipshow:web');
+      await verifier.verifyImage();
+      expect(verifier.errorClass).to.equal('permanent');
+    });
+
+    it('classifies a malformed tag as permanent and reads null with no error', () => {
+      const bad = new ImageVerifier('not a valid tag at all');
+      expect(bad.errorClass).to.equal('permanent');
+      const fine = new ImageVerifier('megachips/ipshow:web');
+      expect(fine.errorClass).to.equal(null);
+    });
+
+    it('throwIfError carries the class on the thrown error', async () => {
+      axiosGetStub.callsFake(failWith((e) => { e.code = 'ECONNREFUSED'; }));
+      const verifier = new ImageVerifier('megachips/ipshow:web');
+      await verifier.verifyImage();
+      try {
+        verifier.throwIfError();
+        expect.fail('throwIfError should have thrown');
+      } catch (err) {
+        expect(err.registryErrorClass).to.equal('transient');
+      }
+    });
+  });
+
   describe('verifyImage tests', async () => {
     let axiosGetStub;
     let axiosInterceptorsUse;

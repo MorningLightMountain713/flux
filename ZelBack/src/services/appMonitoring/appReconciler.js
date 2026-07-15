@@ -582,6 +582,17 @@ async function recreateMissing(identifier) {
     // row disappears, the next pass no-ops, and onSettled would hand the installer a
     // 'settled' verdict for an app that was just removed.
     if (convergeWaiters.has(identifier)) {
+      // ...unless the rebuild failed because the registry could not be REACHED
+      // (transient class, tagged at the pull/verify source). That is a node
+      // condition, not a verdict on the app: resolve 'provisional' (never rolls
+      // back, no error broadcast, no spawn bench) and keep re-driving the
+      // recreate ourselves - unlike 'failed', no rollback owns this component.
+      if (err.registryErrorClass === 'transient') {
+        log.warn(`appReconciler - ${identifier} recreate blocked by an unreachable registry; provisional (retrying)`);
+        resolveConverge(identifier, 'provisional');
+        scheduleRetry(identifier, MANAGED_RETRY_MS);
+        return;
+      }
       resolveConverge(identifier, 'failed');
       return;
     }

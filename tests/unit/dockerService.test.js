@@ -1255,4 +1255,32 @@ describe('dockerService tests', () => {
       }
     });
   });
+
+  describe('tagIfRegistryUnreachable tests', () => {
+    it('tags daemon-reported connectivity failures transient', () => {
+      const shapes = [
+        Object.assign(new Error('Get "https://registry-1.docker.io/v2/": dial tcp: connection refused'), {}),
+        Object.assign(new Error('net/http: TLS handshake timeout'), {}),
+        Object.assign(new Error('toomanyrequests: You have reached your pull rate limit'), {}),
+        Object.assign(new Error('request canceled while waiting for connection (Client.Timeout exceeded)'), {}),
+        Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+        Object.assign(new Error('registry 500'), { statusCode: 503 }),
+      ];
+      shapes.forEach((err) => {
+        expect(dockerService.tagIfRegistryUnreachable(err).registryErrorClass, err.message).to.equal('transient');
+      });
+    });
+
+    it('leaves image verdicts and cancels untagged (they read permanent downstream)', () => {
+      const shapes = [
+        new Error('manifest unknown: manifest unknown'),
+        new Error('pull access denied for foo/bar, repository does not exist'),
+        Object.assign(new Error('aborted'), { code: 'ERR_CANCELED' }),
+        Object.assign(new Error('not found'), { statusCode: 404 }),
+      ];
+      shapes.forEach((err) => {
+        expect(dockerService.tagIfRegistryUnreachable(err).registryErrorClass, err.message).to.equal(undefined);
+      });
+    });
+  });
 });
