@@ -935,10 +935,9 @@ describe('appReconciler tests', () => {
     });
 
     it('recreates a missing container that should run (docker reachable)', async () => {
-      // production shape of a genuinely-missing container: the inspect throws a
-      // TypeError (docker.getContainer(undefined.Id)) and the list probe confirms absence.
-      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
-      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      // production shape of a genuinely-missing container: dockerContainerInspect
+      // resolves null (docker's own container list has no match).
+      stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       await appReconciler.reconcile('www_App');
       expect(stubs.appTamperingDetectionService.recordEvent.calledWithMatch('App', 'container_vanished')).to.be.true;
       expect(stubs.containerHealthMonitor.recreateMissingContainers.calledOnceWith('www_App')).to.be.true;
@@ -946,8 +945,7 @@ describe('appReconciler tests', () => {
     });
 
     it('removes a NEVER-RAN app when recreation fails (fresh-install rollback)', async () => {
-      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
-      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('boom'));
       // getState defaults to null -> never ran here -> removable
       await appReconciler.reconcile('www_App');
@@ -959,8 +957,7 @@ describe('appReconciler tests', () => {
     // failed rebuild (unpullable image, bad update) — it degrades to down + retry,
     // so a broken update can't delete an established app + its data.
     it('keeps a HAS-RUN app down and retries instead of removing it when recreation fails', async () => {
-      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
-      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('image not found'));
       stubs.appsRuntimeState.getState.resolves({ hasSuccessfullyStarted: true });
       await appReconciler.reconcile('www_App');
@@ -973,8 +970,7 @@ describe('appReconciler tests', () => {
     // component's reconcile single-flight forever - every later trigger coalesces
     // into a pass that never runs. The cap fails the recreate instead.
     it('caps a hung recreate provision - the pass fails the recreate instead of wedging the single-flight', async () => {
-      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
-      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.returns(new Promise(() => {})); // black hole
       stubs.appsRuntimeState.getState.resolves({ hasSuccessfullyStarted: true });
       await appReconciler.reconcile('www_App'); // must terminate at the cap, not hang
@@ -987,8 +983,7 @@ describe('appReconciler tests', () => {
     it('publishes recreateFailedKept when a proven app is kept over a failed rebuild (observable keep-vs-remove)', async () => {
       const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
       const publishSpy = sinon.spy(fluxEventBus, 'publish');
-      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
-      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('image not found'));
       stubs.appsRuntimeState.getState.resolves({ hasSuccessfullyStarted: true });
       await appReconciler.reconcile('www_App');
@@ -1002,8 +997,7 @@ describe('appReconciler tests', () => {
     // disappears, the next pass no-ops, and onSettled would report 'settled' for
     // an app that was just removed.
     it('hands a never-proven recreate failure to an OPEN converge as a failed install (no direct uninstall)', async () => {
-      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
-      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('pull failed'));
       // getState defaults to null -> never proven
       const result = await appReconciler.awaitConvergence(['www_App']);
@@ -1024,8 +1018,7 @@ describe('appReconciler tests', () => {
 
     it('retries the reconcile when the post-recreate-failure removal is deferred (busy)', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
-      stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up
+      stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('boom'));
       // a deferred removal means the app is still there - the reconcile must retry, not assume it's gone
       stubs.appUninstaller.uninstallApplication.resolves({ status: UninstallStatus.DEFERRED, reason: 'busy' });
@@ -1046,7 +1039,7 @@ describe('appReconciler tests', () => {
     // container_vanished tamper event and recreate->409->uninstall a healthy
     // app. Defer instead - the next inspect succeeds.
     it('defers when inspect fails but the container appears in the docker list (transient inspect failure)', async () => {
-      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
+      stubs.dockerService.dockerContainerInspect.rejects(new Error('socket hang up'));
       stubs.dockerService.dockerListContainers.resolves([
         { Names: ['/fluxwww_App'], State: 'running' }, // the "missing" container, alive
         { Names: ['/fluxother_Other'], State: 'running' },
@@ -1067,8 +1060,7 @@ describe('appReconciler tests', () => {
     // create the container (hasOperationLease is only sampled at entry), or
     // our own recreate can fail AFTER creating it (start/network step failed).
     it('does not remove the app when the container exists by the time recreation fails', async () => {
-      stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
-      stubs.dockerService.dockerListContainers.resolves([]); // genuinely missing at classification
+      stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('409 Conflict: name already in use'));
       stubs.dockerService.getDockerContainer.resolves({ Id: 'abc123' }); // exists at re-check
       await appReconciler.reconcile('www_App');
@@ -1267,8 +1259,7 @@ describe('appReconciler tests', () => {
       // so it cannot race the volume work.
       it('holds a driven component stopped and does not recreate it when missing during a backup', async () => {
         operationRegistry.acquire('App', 'backup', 'test');
-        stubs.dockerService.dockerContainerInspect.rejects(new TypeError("Cannot read properties of undefined (reading 'Id')"));
-        stubs.dockerService.dockerListContainers.resolves([]); // probe: docker is up, container vanished
+        stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
         await appReconciler.drive(['www_App'], 'stopped');
         expect(stubs.dockerService.appDockerStart.called).to.be.false;
         expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
