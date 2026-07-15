@@ -23,6 +23,12 @@ let cacheUserBlockedRepos = null;
  * @param {object} errorMeta - Error metadata from imageVerifier (httpStatus, errorCode, errorType)
  * @returns {{ttlMs: number, reason: string}}
  */
+// The transient re-ask pace, shared with the spawner's spawn-cache back-off so
+// the two layers stack to a bounded, config-visible ceiling (2x this value).
+function registryTransientBackoffMs() {
+  return config.fluxapps.registryTransientBackoffMs ?? 2 * 60 * 1000;
+}
+
 function classifyVerificationError(error, errorMeta) {
   // eslint-disable-next-line global-require
   const { FluxCacheManager } = require('../utils/cacheManager');
@@ -35,11 +41,11 @@ function classifyVerificationError(error, errorMeta) {
       // the outage itself - a registry that heals in a minute must not cost the
       // app an hour of placement on every node that asked during the blip.
       case 'network':
-        return { ttlMs: 2 * 60 * 1000, reason: 'Network/Connection error' };
+        return { ttlMs: registryTransientBackoffMs(), reason: 'Network/Connection error' };
       case 'rate_limit':
-        return { ttlMs: 10 * 60 * 1000, reason: 'Rate limiting (429)' };
+        return { ttlMs: 5 * registryTransientBackoffMs(), reason: 'Rate limiting (429)' };
       case 'server_error':
-        return { ttlMs: 5 * 60 * 1000, reason: 'Server error (5xx)' };
+        return { ttlMs: 2.5 * registryTransientBackoffMs(), reason: 'Server error (5xx)' };
       case 'whitelist_fetch_error':
       case 'auth_unavailable':
         return { ttlMs: 2 * FluxCacheManager.oneHour, reason: 'Temporary service issue' };

@@ -130,6 +130,8 @@ module.exports = {
     // pull-stall watchdog window; unit pull tests pass stallMs per-call, this
     // mirrors the prod key so config reads never fall through to the fallback
     pullStallMs: 90000,
+    // transient registry back-off mirror (prod value, so TTL tests assert prod math)
+    registryTransientBackoffMs: 120000,
     // in flux main chain per month (blocksLasting)
     price: [
       { // any price fork can be done by adjusting object similarily.
