@@ -3,6 +3,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { nodeKey } from '../framework/keys.js';
 import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
+import { buildSeedableApp } from '../framework/seed-helper.js';
 import { pushBrokenImage, pushImage } from '../framework/registry-helper.js';
 import { advanceBlock, advanceBlocks, startTicker, stopTicker } from '../framework/daemon-control.js';
 import {
@@ -141,7 +142,14 @@ describe('Spawner error caching: network-wide error skip', function () {
     await pushImage(goodRepoName, 'v1');
     await bootToSpawnerReady(env);
 
-    const spec = buildAppSpec({
+    // Db-seeded, NOT API-registered, and errors FIRST: the gate is only consulted
+    // while an app is a fresh candidate. A registered app is visible to the
+    // spawner the moment its spec stores - it gets engaged (deferrals, install
+    // attempts, installing broadcasts) before the error docs land, and every
+    // later pass filters it upstream of the gate, which is then never evaluated
+    // again. Seeding errors before the spec exists makes the first-ever look at
+    // the app hit an armed gate.
+    const app = await buildSeedableApp({
       name: appName,
       instances: 3,
       compose: [{
@@ -160,16 +168,11 @@ describe('Spawner error caching: network-wide error skip', function () {
         repoauth: '',
       }],
     });
-    const result = await registerAndConfirm(env.clients[0].url, nodeKey(1), spec, env.clients);
-    expect(result.status).to.equal('success');
-    appHash = result.appHash;
-    await waitForBlockProcessed(env.clients[0], (d) => d.height >= result.targetHeight, 60000);
-    await waitForAppSpecStored(env.clients[0], appName);
+    appHash = app.hash;
 
-    // Seed 5 install errors on every node so each spawner sees network-wide failures
-    for (let n = 1; n <= env.nodeCount; n++) {
+    for (let n = 1; n <= env.nodeCount; n += 1) {
       const db = dbClient(n);
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 5; i += 1) {
         // eslint-disable-next-line no-await-in-loop
         await db.seedInstallingError({
           name: appName,
@@ -179,6 +182,16 @@ describe('Spawner error caching: network-wide error skip', function () {
           broadcastedAt: Date.now(),
         });
       }
+    }
+
+    for (let n = 1; n <= env.nodeCount; n += 1) {
+      const dc = dbClient(n);
+      // eslint-disable-next-line no-await-in-loop
+      await dc.seedGlobalAppSpec(app.spec);
+      // eslint-disable-next-line no-await-in-loop
+      await dc.seedPermanentMessage(app.permanentMessage);
+      // eslint-disable-next-line no-await-in-loop
+      await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
     }
   });
 
