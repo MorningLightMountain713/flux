@@ -124,6 +124,9 @@ module.exports = {
     convergeBackstopMs: 300000,
     convergeRetryMs: 10000,
     firstRunProofMs: 60000,
+    // small so the hung-provision cap test observes the cap without a long wait;
+    // only ever reached by a provision stub that deliberately never resolves
+    recreateProvisionCapMs: 250,
     // in flux main chain per month (blocksLasting)
     price: [
       { // any price fork can be done by adjusting object similarily.

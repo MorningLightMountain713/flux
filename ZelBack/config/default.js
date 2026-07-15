@@ -146,6 +146,10 @@ module.exports = {
     // caller hanging and never rolls back.
     convergeFailAttempts: 3,
     convergeBackstopMs: 300000, // 5 min
+    // cap on a reconciler recreate's provisioning (registry verify + image pull): a
+    // black-holed registry must fail the recreate, not wedge the component's
+    // reconcile single-flight for the TCP stack's worst case
+    recreateProvisionCapMs: 180000,
     // in flux main chain per month (blocksLasting)
     price: [
       { // any price fork can be done by adjusting object similarily.
