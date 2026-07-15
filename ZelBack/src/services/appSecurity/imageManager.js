@@ -35,6 +35,16 @@ function classifyVerificationError(error) {
 
   const { errorMeta } = error;
 
+  // The verifier decides transient or permanent once (registryErrorClass, derived
+  // from the same errorType); errorMeta refines the pacing of a transient one.
+  if (error.registryErrorClass === 'transient') {
+    const errorType = errorMeta && errorMeta.errorType;
+    if (errorType === 'rate_limit') return { ttlMs: 5 * registryTransientBackoffMs(), reason: 'Rate limiting (429)' };
+    if (errorType === 'server_error') return { ttlMs: 2.5 * registryTransientBackoffMs(), reason: 'Server error (5xx)' };
+    return { ttlMs: registryTransientBackoffMs(), reason: 'Transient registry failure (could-not-ask)' };
+  }
+
+  // Use structured errorMeta if available (from imageVerifier)
   if (errorMeta && errorMeta.errorType) {
     switch (errorMeta.errorType) {
       // Transient classes are could-not-ask answers, not verdicts on the image:
