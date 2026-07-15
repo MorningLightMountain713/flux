@@ -163,7 +163,9 @@ export async function waitForPeersRemoved(node, predicate = () => true, timeout 
 //               failure rolls the install back) | 'restart' (ran here before - a restart,
 //               whose failure walks the crash-backoff ladder). A scenario knows which it
 //               expects; a "must not come up" negative asserts NEITHER fires.
-//   run-state:  'stopped' | 'backoff' | 'recreated' | 'recreateFailed'
+//   run-state:  'stopped' | 'backoff' | 'recreated' | 'recreateFailed' |
+//               'recreateFailedKept' (recreate failed but the component has a proven
+//               run here - kept installed, down, ladder-paced retries; §14.5)
 //   deferrals:  'startDeferred' | 'stopDeferred' | 'restartRequestedDeferred' | 'restartUnhealthyDeferred'
 //               (a transition deferred because a conflicting container operation held the lease)
 //   removal:    'removed' (an owed teardown converged - the app is fully gone) |
