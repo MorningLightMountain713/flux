@@ -111,6 +111,7 @@ export async function buildSeedableSyncthingApp({
   ports = [31111],
   containerPorts = [80],
   sibling = false,
+  hdd = 1,
   ...rest
 }) {
   const compose = [{
@@ -125,7 +126,7 @@ export async function buildSeedableSyncthingApp({
     containerData: `${mode}:/appdata`,
     cpu: 0.1,
     ram: 100,
-    hdd: 1,
+    hdd,
     repoauth: '',
   }];
 
