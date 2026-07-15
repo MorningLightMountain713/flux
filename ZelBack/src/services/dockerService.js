@@ -308,7 +308,7 @@ function dockerPullStream(pullConfig, res, callback) {
         // Propagate the stream/abort error - NOT the (null) outer `err`, which would
         // report an aborted/failed pull as success and let the install proceed onto a
         // missing image. The abort relies on this.
-        callback(error);
+        callback(tagIfRegistryUnreachable(error));
       } else {
         callback(null, output);
       }
@@ -321,7 +321,7 @@ function dockerPullStream(pullConfig, res, callback) {
       log.info(event);
     }
     if (err) {
-      callback(err);
+      callback(tagIfRegistryUnreachable(err));
     } else {
       docker.modem.followProgress(mystream, onFinished, onProgress);
     }
@@ -1041,6 +1041,27 @@ function containerGoneError(idOrName) {
 function tagIfContainerGone(err) {
   if (err.statusCode === 404 || /removal of container .* is already in progress|marked for removal|being removed/i.test(err.message || '')) {
     err.code = 'ENOCONTAINER';
+  }
+  return err;
+}
+
+// A pull that failed because the registry could not be REACHED - a network-path
+// failure, timeout, rate limit, or registry 5xx, as the daemon or socket reports
+// it - is a node-side condition, not a verdict on the image. Tagged 'transient'
+// so provisioning consumers defer or fall back to a local image instead of
+// failing the app; anything unrecognized stays untagged and reads permanent.
+// Deliberately excludes abort/cancel shapes - a cancelled pull belongs to the
+// cancel machinery, not the retry path.
+const REGISTRY_TRANSIENT_TEXT = /connection refused|i\/o timeout|tls handshake timeout|no such host|timeout exceeded|context deadline exceeded|toomanyrequests|too many requests|temporary failure|connection reset|unexpected eof|service unavailable|received unexpected http status: 5\d\d/i;
+const REGISTRY_TRANSIENT_CODES = ['ECONNREFUSED', 'ECONNABORTED', 'ENETUNREACH', 'ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH'];
+function tagIfRegistryUnreachable(err) {
+  if (
+    REGISTRY_TRANSIENT_CODES.includes(err.code)
+    || err.statusCode === 429
+    || (err.statusCode >= 500 && err.statusCode <= 599)
+    || REGISTRY_TRANSIENT_TEXT.test(err.message || '')
+  ) {
+    err.registryErrorClass = 'transient';
   }
   return err;
 }
@@ -1919,6 +1940,7 @@ async function migrateContainerRestartPolicies() {
 module.exports = {
   appDockerCreate,
   appDockerUpdateCpu,
+  tagIfRegistryUnreachable,
   appDockerImageRemove,
   appDockerImageSize,
   appDockerKill,

@@ -440,7 +440,11 @@ async function installApplication(instantiated, options = {}) {
       // broadcasts. Always rethrow so the outer catch runs its classification.
       const cancelInFlight = globalState.installAborted(appName)
         || await pendingTeardownStore.teardownOwedFor(appName);
-      if (!test && !cancelInFlight && error.code !== 'NETWORK_DEPENDENCY_NOT_READY') {
+      // A transient-class registry failure (unreachable/rate-limited/5xx, tagged at
+      // the pull/verify source) is a node condition too: peers must not count it as
+      // the app failing - only a permanent verdict on the image is network knowledge.
+      if (!test && !cancelInFlight && error.code !== 'NETWORK_DEPENDENCY_NOT_READY'
+        && error.registryErrorClass !== 'transient') {
         await storeAndBroadcastInstallError(appName, instantiated.hash, error);
       }
       throw error;
@@ -500,6 +504,14 @@ async function installApplication(instantiated, options = {}) {
       // the hash in the spawner even though the dependency reinstalls minutes later.
       if (error.code === 'NETWORK_DEPENDENCY_NOT_READY') {
         log.warn(`Install of ${appName} deferred: a linked dependency's network vanished mid-install`);
+        return { status: InstallStatus.DEFERRED, reason: error.message };
+      }
+
+      // Registry unreachable/rate-limited (transient class): the node couldn't ask,
+      // which is not a verdict on the app. The partial install is cleaned up above;
+      // DEFER so the spawner retries next cycle instead of 7-day-benching the hash.
+      if (error.registryErrorClass === 'transient') {
+        log.warn(`Install of ${appName} deferred: registry unreachable (${error.message})`);
         return { status: InstallStatus.DEFERRED, reason: error.message };
       }
     }

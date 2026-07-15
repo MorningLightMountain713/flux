@@ -488,12 +488,16 @@ async function trySpawningGlobalApplication() {
 
     log.info(`trySpawningGlobalApplication - App ${appToRun} hash: ${appHash}`);
 
-    // TODO: re-enable once error classification (transient vs permanent) is implemented.
-    // Without classification, transient infra errors suppress healthy apps network-wide.
+    // Only permanent verdicts on the image are broadcast (transient registry
+    // failures defer locally and never store an error), so five distinct nodes
+    // reporting inside the 24h error expiry means the app itself is broken -
+    // skip the install trial this cycle rather than burn one rediscovering it.
+    // Self-healing: the error docs expire, and a respec clears them outright.
     const errorCount = await registryManager.countAppInstallingErrors(appHash);
     if (errorCount >= 5) {
-      log.warn(`trySpawningGlobalApplication - App ${appToRun} hash ${appHash} has ${errorCount} network-wide install failures (not blocking)`);
+      log.warn(`trySpawningGlobalApplication - App ${appToRun} hash ${appHash} has ${errorCount} network-wide install failures; skipping`);
       fluxEventBus.publish('spawner:networkErrorSkip', { appName: appToRun, hash: appHash, errorCount });
+      return delayTime;
     }
 
     runningAppList = await registryManager.appLocation(appToRun);
