@@ -12,6 +12,7 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForAppInstalled, waitForBootSettled, waitForAppRunning,
+  waitForReconcileActuated,
 } from '../framework/wait.js';
 import { waitFor } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -65,6 +66,18 @@ async function seedAndWaitForInstall(env, appName) {
       return i;
     }),
   );
+  // app:installed fires BEFORE convergence: the container exists 'created' and the
+  // reconciler's start + first-run proof are still in flight. Every describe here
+  // tampers with the container (kill/stop/reboot), so hand it over Up AND proven -
+  // an unproven app is still inside its install trial, where a tamper counts toward
+  // the bounded start attempts and can draw a rollback verdict instead of the
+  // recreate/restart these tests assert.
+  const client = env.clients[installed];
+  await waitFor(async () => {
+    const status = await getAppContainerStatus(client.container, appName);
+    return status && status.status.startsWith('Up');
+  }, { timeout: 60000, interval: 2000, label: 'app running after install' });
+  await waitForReconcileActuated(client, `${appName}_${appName}`, 'firstRunProven', 60000);
   return installed;
 }
 
