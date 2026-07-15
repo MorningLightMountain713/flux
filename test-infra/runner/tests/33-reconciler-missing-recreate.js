@@ -36,8 +36,15 @@ describe('reconciler recreates a missing container', function () {
       tickerAutostart: false,
       // Recreate-failure retries and the post-recreate start pace on the crash
       // ladder; at prod rungs (30s/5m) the self-heal assertion would sit minutes
-      // in backoff. Compressed thresholds only — the ladder's shape is unchanged.
-      configOverrides: { fluxapps: { crashBackoffDelaysMs: [0, 2000, 5000, 10000, 15000] } },
+      // in backoff. The stopped registry is a TCP black hole (freed IP), so the
+      // recreate attempt only fails at the provision cap - compress it too.
+      // Thresholds only — ladder shape and recreate flow are unchanged.
+      configOverrides: {
+        fluxapps: {
+          crashBackoffDelaysMs: [0, 2000, 5000, 10000, 15000],
+          recreateProvisionCapMs: 15000,
+        },
+      },
     });
     await bootAndPeer(env);
     ({ index: idx } = await seedSimpleApp(env, appName));
