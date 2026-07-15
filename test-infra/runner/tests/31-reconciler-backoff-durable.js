@@ -45,6 +45,11 @@ describe('reconciler backoff escalates and survives a FluxOS restart', function 
     this.timeout(180000);
     let client = env.clients[idx];
     await waitForUp(client, appName, 'running before first crash');
+    // An unproven app is still inside its bounded install trial: a kill there
+    // draws trial pacing (trialBackoff + restart) instead of the crash ladder,
+    // and counts toward the trial's start attempts. The ladder this test
+    // asserts only owns pacing from the first proven run.
+    await waitForReconcileActuated(client, identifier, 'firstRunProven', 60000);
 
     // crash #1 -> immediate restart (ladder step 0), restartHistory length 1
     let afterId = client.getLastEventId();
