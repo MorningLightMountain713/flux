@@ -899,6 +899,62 @@ describe('appOperations tests', () => {
     });
   });
 
+  // A backup/restore stops the app through the reconciler's transient operation
+  // hold (drive 'stopped'). The hold is in-memory run-state the operation OWES
+  // BACK: an error after the stop (ENOSPC on the archive is the classic) that only
+  // releases the registry lease leaves operationDesired='stopped' for the life of
+  // the process - the app is stranded down and no decider can outrank the hold.
+  describe('appendBackupTask hold unwind', () => {
+    // eslint-disable-next-line global-require
+    const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
+    // eslint-disable-next-line global-require
+    const IOUtils = require('../../ZelBack/src/services/IOUtils');
+
+    const makeRes = () => ({ write: sinon.stub(), end: sinon.stub() });
+
+    it('drives the app back to running when the archive fails after the stop', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ componentEntries: () => [] });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'bkapp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves({
+        componentEntries: () => [['comp1', { identifier: 'comp1_bkapp' }]],
+      });
+      const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      sinon.stub(IOUtils, 'getVolumeInfo').resolves([{ mount: '/vol' }]);
+      sinon.stub(IOUtils, 'checkFileExists').resolves(false);
+      sinon.stub(IOUtils, 'removeFile').resolves();
+      sinon.stub(IOUtils, 'createTarGz').resolves({ status: false, error: 'No space left on device' });
+
+      const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
+      const pending = appOperations.appendBackupTask(req, makeRes());
+      await clock.tickAsync(120000); // flush sendChunk's per-chunk timers + delays
+      const result = await pending;
+      clock.restore();
+
+      expect(result).to.be.false;
+      expect(drive.calledWith(['comp1_bkapp'], 'stopped'), 'the backup must stop through the reconciler hold').to.be.true;
+      expect(drive.calledWith(['comp1_bkapp'], 'running'), 'the failed backup must give the hold back - the app must not stay stranded stopped').to.be.true;
+      expect(operationRegistry.isHeld('bkapp'), 'the backup lease must release on failure').to.be.false;
+    });
+
+    it('never drives run-state when a foreign operation already holds the app', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      operationRegistry.acquire('bkapp', 'install', 'test', 'concurrent install');
+
+      const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
+      const pending = appOperations.appendBackupTask(req, makeRes());
+      await clock.tickAsync(120000);
+      const result = await pending;
+      clock.restore();
+
+      expect(result).to.be.false;
+      expect(drive.called, 'an error before owning the operation must not touch a foreign hold').to.be.false;
+      expect(operationRegistry.isHeld('bkapp'), 'the foreign lease must survive').to.be.true;
+    });
+  });
+
   // Note: verifyAppUpdateParameters, createAppVolume,
   // getPeerAppsInstallingErrorMessages, and stopSyncthingApp are
   // complex integration functions or HTTP request handlers that require extensive

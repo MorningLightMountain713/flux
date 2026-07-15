@@ -854,6 +854,13 @@ async function appendBackupTask(req, res) {
     }
   } catch (error) {
     log.error(error);
+    // The stop hold is run-state this operation owes back: a failed backup (ENOSPC
+    // on the archive is the classic) must never strand the app stopped — the
+    // in-memory hold outlives the error for the life of the process. Only when
+    // this call owned the operation — an error path must never clear a foreign
+    // operation's hold. startApplication settles on legitimate holds (operator
+    // lock, controller), so this never force-starts.
+    if (taskToken) await startApplication(appname);
     operationRegistry.release(appname, taskToken);
     await sendChunk(res, `${error?.message}\n`);
     res.end();
@@ -1010,6 +1017,12 @@ async function appendRestoreTask(req, res) {
     }
   } catch (error) {
     log.error(error);
+    // The stop hold is run-state this operation owes back: a failed restore must
+    // never strand the app stopped (the in-memory hold outlives the error for the
+    // life of the process). Only when this call owned the operation — an error
+    // path must never clear a foreign operation's hold. startApplication settles
+    // on legitimate holds (operator lock, controller), so this never force-starts.
+    if (taskToken) await startApplication(appname);
     operationRegistry.release(appname, taskToken);
     await sendChunk(res, `${error?.message}\n`);
     res.end();
