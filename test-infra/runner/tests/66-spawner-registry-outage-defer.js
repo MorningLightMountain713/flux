@@ -28,7 +28,15 @@ describe('Spawner: a registry outage during install defers, never fails or broad
 
   before(async function () {
     this.timeout(600000);
-    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
+    // Compress the transient re-ask pace (prod 2min; the verification cache and
+    // the spawner back-off stack to 2x): the recovery half must converge within
+    // its wait, not sit out prod-scale pacing. Threshold only.
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: 10,
+      tickerAutostart: false,
+      configOverrides: { fluxapps: { registryTransientBackoffMs: 8000 } },
+    });
     // the image must reach the registry's store BEFORE the outage, so the
     // recovery half of the test has something real to install
     await pushImage(appName, 'v1');

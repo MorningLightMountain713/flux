@@ -815,7 +815,7 @@ async function trySpawningGlobalApplication() {
         // cache entry must exist before the rethrow, or the outer catch would
         // draw its 6h pre-install back-off instead.
         const transient = error.registryErrorClass === 'transient';
-        const ttl = transient ? 2 * 60 * 1000 : FluxCacheManager.oneHour;
+        const ttl = transient ? (config.fluxapps.registryTransientBackoffMs ?? 2 * 60 * 1000) : FluxCacheManager.oneHour;
         log.warn(`trySpawningGlobalApplication - Docker Hub verification failed for ${appToRun}: ${error.message}${transient ? ' (transient; retrying in minutes)' : ''}`);
         globalState.trySpawningGlobalAppCache.set(appHash, '', { ttl });
         throttleIntended = true; // a deliberate Docker-Hub back-off; keep it through the finally
