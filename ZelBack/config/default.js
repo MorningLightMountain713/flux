@@ -151,6 +151,10 @@ module.exports = {
     // (black-holed registry, half-open socket) - aborted and classed transient.
     // Total pull time is unbounded while progress keeps flowing.
     pullStallMs: 90000,
+    // transient (could-not-ask) registry failures pace their re-ask on this;
+    // the verification cache and the spawner's back-off both key on it, so the
+    // worst-case stacked bench is 2x this value
+    registryTransientBackoffMs: 120000,
     // absolute ceiling on a recreate's provision - the stall detector owns the
     // dead-registry case, so this only guards the residual non-pull steps (a
     // sick disk mid volume-create, a hung docker create) from wedging the
