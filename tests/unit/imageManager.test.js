@@ -757,3 +757,21 @@ describe('imageManager tests', () => {
     });
   });
 });
+
+describe('classifyVerificationError transient TTLs', () => {
+  // eslint-disable-next-line global-require
+  const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
+
+  it('paces transient classes in minutes - the cache must not outlive the outage', () => {
+    const err = new Error('x');
+    expect(imageManager.classifyVerificationError(err, { errorType: 'network' }).ttlMs).to.equal(2 * 60 * 1000);
+    expect(imageManager.classifyVerificationError(err, { errorType: 'rate_limit' }).ttlMs).to.equal(10 * 60 * 1000);
+    expect(imageManager.classifyVerificationError(err, { errorType: 'server_error' }).ttlMs).to.equal(5 * 60 * 1000);
+  });
+
+  it('keeps hours-scale caching for permanent verdicts and unknown shapes', () => {
+    const err = new Error('x');
+    expect(imageManager.classifyVerificationError(err, { errorType: 'auth_failed' }).ttlMs).to.be.gte(60 * 60 * 1000);
+    expect(imageManager.classifyVerificationError(err, { errorType: 'never_seen_before' }).ttlMs).to.be.gte(60 * 60 * 1000);
+  });
+});
