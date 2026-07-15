@@ -1,16 +1,19 @@
-import { execSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 // Pause/unpause a HOST-level testcontainer (registry, stubs) via the host docker
 // CLI - testcontainers has no pause API. A paused container models a real
 // service outage faithfully: its DNS alias stays registered and TCP connects
 // black-hole, unlike stop(), which deregisters the alias and turns the failure
 // into a DNS miss that FluxOS's resolver then negative-caches past the outage.
-export function pauseHostContainer(startedContainer) {
-  execSync(`docker pause ${startedContainer.getId()}`);
+export async function pauseHostContainer(startedContainer) {
+  await execFileAsync('docker', ['pause', startedContainer.getId()]);
 }
 
-export function unpauseHostContainer(startedContainer) {
-  execSync(`docker unpause ${startedContainer.getId()}`);
+export async function unpauseHostContainer(startedContainer) {
+  await execFileAsync('docker', ['unpause', startedContainer.getId()]);
 }
 
 export async function execInContainer(container, command) {
