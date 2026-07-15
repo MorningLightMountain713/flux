@@ -84,8 +84,17 @@ async function requestGracefulStop(identifier, reconcilerReason) {
         localFallback.add(appName);
         globalState.clearAppLbState(appName);
         appReconciler.enqueue(identifier);
+        return;
       }
-      // complete|deadline|superseded -> done; rejected_pipeline_active -> node pipeline owns it.
+      // rejected_pipeline_active: the node-wide pipeline owns the stop and the gate
+      // stays up for it (its clear/expiry re-drives recovery).
+      if (res.outcome === 'rejected_pipeline_active') return;
+      // complete|deadline|superseded: the drain is OVER - the gate has nothing left
+      // to protect. Clear it and re-drive: an operator start/restart issued during
+      // the drain already ran its (suppressed) reconcile, and without this the app
+      // sits wedged 'stopping' for the remainder of the budget window.
+      globalState.clearAppLbState(appName);
+      appReconciler.enqueue(identifier);
     })
     .catch((e) => {
       inFlight.delete(appName);
