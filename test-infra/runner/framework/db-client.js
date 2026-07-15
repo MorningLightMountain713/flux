@@ -345,6 +345,11 @@ export function dbClient(nodeNum) {
       });
     },
 
+    async countInstallingErrors(hash = null) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('appsInstallingErrorsLocations').countDocuments(hash ? { hash } : {});
+    },
+
     async dropAndReseed(ip, height) {
       const client = await getClient();
       for (const name of Object.values(dbNames)) {
