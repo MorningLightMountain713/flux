@@ -400,6 +400,11 @@ export function dbClient(nodeNum) {
       await localDb.collection('policydocuments').deleteOne({ _id: 'networkPolicy' });
     },
 
+    async countInstallingErrors(hash = null) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('appsInstallingErrorsLocations').countDocuments(hash ? { hash } : {});
+    },
+
     async dropAndReseed(ip, height) {
       const client = await getClient();
       for (const name of Object.values(dbNames)) {
