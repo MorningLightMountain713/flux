@@ -371,6 +371,16 @@ describe('appSpawner tests', () => {
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
     });
 
+    it('skips the install trial when 5+ nodes report genuine failures (the re-armed network gate)', async () => {
+      // only permanent verdicts are stored/broadcast now, so the count means the
+      // app itself is broken - the node must not burn a trial rediscovering it
+      const candidate = makeCandidate({ placement: { matches: () => true } });
+      buildModule({ candidates: [candidate], errorCount: 5 });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.warn.args.some((a) => a[0]?.includes?.('network-wide install failures; skipping'))).to.be.true;
+      expect(registryManagerStub.storeAppInstallingMessage.called, 'never proceeds to announce/install').to.be.false;
+    });
+
     it('should filter out an app that is mid-teardown (teardown-aware selection)', async () => {
       buildModule({ candidates: [makeCandidate()], teardownOwedFor: sinon.stub().resolves(true) });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -587,11 +597,13 @@ describe('appSpawner tests', () => {
   });
 
   describe('install error caching', () => {
-    it('should add to short-term cache when network error count >= 5', async () => {
+    it('skips cleanly at 5+ network errors without touching either local cache', async () => {
+      // the shared error docs ARE the backoff - they expire in 24h and a respec
+      // clears them, so a local cache entry would only delay the recovery
       const candidate = makeCandidate();
       buildModule({ candidates: [candidate], errorCount: 5 });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
-      expect(globalStateStub.trySpawningGlobalAppCache.has('abc123')).to.be.true;
+      expect(globalStateStub.trySpawningGlobalAppCache.has('abc123')).to.be.false;
       expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.false;
     });
 
@@ -650,14 +662,6 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       sinon.assert.called(registryManagerStub.storeAppInstallingMessage);
       sinon.assert.notCalled(registryManagerStub.removeAppInstallingMessage);
-    });
-
-    it('should not overwrite short-term cache with long-term cache when network errors throw into catch', async () => {
-      const candidate = makeCandidate();
-      buildModule({ candidates: [candidate], errorCount: 5 });
-      await appSpawner.trySpawningGlobalApplication().catch(() => {});
-      expect(globalStateStub.trySpawningGlobalAppCache.has('abc123')).to.be.true;
-      expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.false;
     });
 
     it('retries a failed decrypt next cycle instead of caching the app', async () => {
