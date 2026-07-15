@@ -31,6 +31,17 @@ export function nodeClient(nodeNum) {
   const emitter = new EventEmitter();
   emitter.on('error', () => {});
 
+  // SSE ids are a per-process counter on the node (fluxEventBus #nextId starts
+  // at 1 every FluxOS start), so after a mid-suite restart every event compares
+  // BELOW an afterId captured before it and waitForEvent rejects them forever.
+  // Detect the raw-id regression and lift later ids past everything already
+  // seen, keeping buffered ids (and afterId markers taken from them) strictly
+  // monotonic across FluxOS restarts. Survives reconnects: same-process SSE
+  // replay only serves ids above the client's Last-Event-ID, so raw ids never
+  // legitimately move backwards within one process.
+  let idEpochBase = 0;
+  let lastRawId = 0;
+
   function connectEventStream(timeout = 60000) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -100,10 +111,15 @@ export function nodeClient(nodeNum) {
         'reconciler:swept',
       ]) {
         eventSource.addEventListener(name, (e) => {
+          const rawId = parseInt(e.lastEventId, 10) || 0;
+          if (rawId > 0) {
+            if (rawId < lastRawId) idEpochBase += lastRawId; // FluxOS restarted: ids began again at 1
+            lastRawId = rawId;
+          }
           const entry = {
             event: e.type,
             data: JSON.parse(e.data),
-            id: parseInt(e.lastEventId, 10) || 0,
+            id: idEpochBase + rawId,
           };
           eventBuffer.push(entry);
           emitter.emit(e.type, entry);
