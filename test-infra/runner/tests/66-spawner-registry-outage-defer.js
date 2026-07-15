@@ -3,7 +3,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { assertNoEvent, waitFor } from '../framework/wait.js';
-import { getAppContainerStatus } from '../framework/container.js';
+import { getAppContainerStatus, pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { dbClient } from '../framework/db-client.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -42,8 +42,11 @@ describe('Spawner: a registry outage during install defers, never fails or broad
     await pushImage(appName, 'v1');
     await bootAndPeer(env);
 
-    // black-hole the registry, THEN make the app visible
-    await env.containers.registry.stop({ remove: false, removeVolumes: false });
+    // Black-hole the registry, THEN make the app visible. Pause, not stop: a
+    // real registry outage leaves DNS intact and stops answering - stop() would
+    // deregister the docker alias, and the node's FIRST lookup (the spec is only
+    // seeded now) would negative-cache the DNS miss past the recovery.
+    pauseHostContainer(env.containers.registry);
 
     const app = await buildSeedableApp({
       name: appName,
@@ -76,6 +79,8 @@ describe('Spawner: a registry outage during install defers, never fails or broad
 
   after(async function () {
     this.timeout(30000);
+    // docker refuses to stop a paused container - make teardown unconditional
+    try { unpauseHostContainer(env.containers.registry); } catch { /* already unpaused */ }
     await env?.teardown();
   });
 
@@ -92,7 +97,7 @@ describe('Spawner: a registry outage during install defers, never fails or broad
 
   it('installs cleanly once the registry returns - no bench to expire, no operator action', async function () {
     this.timeout(300000);
-    await env.containers.registry.restart();
+    unpauseHostContainer(env.containers.registry);
 
     // the next spawn cycle picks the app back up (DEFERRED = retry next cycle,
     // not the 7-day bench) and the install runs to a proven first start
