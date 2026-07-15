@@ -309,6 +309,14 @@ async function getLocalComponentSpec(identifier) {
 async function dockerActual(identifier) {
   try {
     const info = await dockerService.dockerContainerInspect(identifier);
+    // null is dockerContainerInspect's contract for "docker's own container list
+    // has no match": docker answered and confirmed absence - vanished, no probe
+    // needed (the probe below disambiguates FAILURES, not a definitive answer).
+    if (info === null) {
+      return {
+        reachable: true, exists: false, running: false, exitCode: null, finishedAt: null, startedAt: null, health: null, networks: null,
+      };
+    }
     const everRan = info.State && info.State.Status !== 'created';
     // docker's record of the last death - the truth even when the die event was
     // missed (reboot, FluxOS restart, stream gap). Zero value (0001-01-01) means
