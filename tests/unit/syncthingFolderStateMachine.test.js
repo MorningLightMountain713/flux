@@ -1295,6 +1295,33 @@ describe('syncthingFolderStateMachine tests', () => {
     });
   });
 
+  describe('ensureContainerRunning', () => {
+    // eslint-disable-next-line global-require
+    const log = require('../../ZelBack/src/lib/log');
+
+    it('requests a start for a stopped syncFirst container', async () => {
+      dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
+
+      await stateMachine.ensureContainerRunning('test-app', true);
+
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+    });
+
+    it('treats a null inspect as confirmed absence, not an error (recreate owns missing containers)', async () => {
+      const errorSpy = sinon.spy(log, 'error');
+      try {
+        dockerServiceMock.dockerContainerInspect.resolves(null);
+
+        await stateMachine.ensureContainerRunning('test-app', true);
+
+        sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
+        sinon.assert.notCalled(errorSpy);
+      } finally {
+        errorSpy.restore();
+      }
+    });
+  });
+
   describe('mount-safety observation logging', () => {
     // eslint-disable-next-line global-require
     const log = require('../../ZelBack/src/lib/log');
