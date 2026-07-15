@@ -8,7 +8,7 @@ const shutdownPlan = require('../appLifecycle/shutdownPlan');
 const { verifyAppVolumeMount } = require('../utils/volumeService');
 
 
-async function recreateMissingContainers(componentIdentifier) {
+async function recreateMissingContainers(componentIdentifier, { abortSignal = null } = {}) {
   const mainAppName = componentIdentifier.split('_')[1] || componentIdentifier;
   const instantiated = await appsRepository.getInstalledApp(mainAppName);
   if (!instantiated) {
@@ -60,7 +60,7 @@ async function recreateMissingContainers(componentIdentifier) {
       await appVolumeService.ensureMountSourcesExist(deployComp);
     }
     await componentProvisioner.installComponent(deployComp, {
-      createVolumes: !volumeMounted, owner: instantiated.owner, requiresEncryption, syslogTarget, crossAppLogCollector,
+      createVolumes: !volumeMounted, owner: instantiated.owner, requiresEncryption, syslogTarget, crossAppLogCollector, abortSignal,
     });
   }
 
