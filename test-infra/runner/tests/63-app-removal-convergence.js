@@ -37,8 +37,11 @@ describe('app removal converges to fully gone via the reconciler', function () {
 
   before(async function () {
     this.timeout(600000);
+    // arcane:false is the suite's premise (see the design comment above): the
+    // legacy stop short-circuit keeps flux-shutdownd out of the teardown, so the
+    // docker outage isolates the container-removal path this suite proves.
     env = await createTestEnv({
-      hookCtx: this, nodes: NODES, tickerAutostart: false,
+      hookCtx: this, nodes: NODES, tickerAutostart: false, arcane: false,
     });
     await bootAndPeer(env, { minOutbound: 2, minInbound: 1 });
     client = env.clients[NODE_IDX];
