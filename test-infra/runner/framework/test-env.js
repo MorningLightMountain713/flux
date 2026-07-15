@@ -404,7 +404,7 @@ function releaseBootLock() {
   }
 }
 
-export async function createTestEnv({ hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [], configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true, tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {}, rpcFailures = [], bootContext = 'running', arcane = false, shutdowndMock = false } = {}) {
+export async function createTestEnv({ hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [], configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true, tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {}, rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true } = {}) {
   await acquireBootLock();
   // The queue wait above must not count against the suite's hook budget. Mocha
   // re-arms a running hook's watchdog from "now" when timeout() is set, so
@@ -693,13 +693,16 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
       NODE_EXTRA_CA_CERTS: '/usr/local/share/ca-certificates/test-registry.crt',
     };
     if (!isLegacy) nodeEnv.FLUXOS_PATH = '/flux';
-    // v9 content/encrypted apps need the arcane verdict, which resolveNodeCapability
-    // gates on FLUX_ARCANE_NODE + a 'arcane' getnodetype (the daemon stub answers
-    // arcane). Opt-in per suite so the existing legacy-verdict suites are unchanged.
+    // Arcane is the harness default: resolveNodeCapability gates the verdict on
+    // FLUX_ARCANE_NODE + an 'arcane' getnodetype (the daemon stub answers arcane).
+    // A suite that tests legacy behavior opts out with arcane:false, or per-node
+    // via legacyNodes.
     if (arcane && !isLegacy) nodeEnv.FLUX_ARCANE_NODE = 'true';
-    // Graceful-stop suites: run the mock flux-shutdownd in-container so the daemon
-    // socket answers and FluxOS's stop routing is exercised. Only meaningful on an
-    // arcane node (the routing short-circuits not_arcane otherwise).
+    // The mock flux-shutdownd pairs with the arcane default: a real arcane node
+    // always has the daemon, so arcane-without-socket is the unreal state (stops
+    // would degrade through the unreachable fallback instead of draining). The
+    // mock runs in-container and its begin_app_stop performs the actual docker
+    // stop, mirroring the daemon's production role.
     if (shutdowndMock && !isLegacy) nodeEnv.FLUX_SHUTDOWND_MOCK = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
