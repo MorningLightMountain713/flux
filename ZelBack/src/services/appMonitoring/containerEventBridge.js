@@ -14,6 +14,13 @@ const appReconciler = require('./appReconciler');
 //   die           -> a flux container exited: enqueue it (the reconciler applies the
 //                    restart policy + backoff). A clean exit (0) can also satisfy a
 //                    dependsOn 'completed', so wake the dependents too.
+//   destroy       -> a flux container was REMOVED. A deliberate teardown holds its
+//                    stop-aligned lease for the duration (skip, like die); anything
+//                    else is an out-of-band removal (a docker rm -f under us) —
+//                    enqueue so the reconciler discovers the vanish now. Without
+//                    this the die often races the rm window (container still listed,
+//                    "exists but stopped") and the vanish is only found by a paced
+//                    retry or the hourly sweep.
 //   start         -> a container came up: can satisfy a dependsOn 'started' -> wake dependents.
 //   health_status -> reconcile the container AND its dependents; the reconciler reads the
 //                    authoritative .State.Health.Status from docker inspect and decides
@@ -87,6 +94,18 @@ async function handleContainerDie(event) {
   if (exitCode === 0) wakeDependents(containerName);
 }
 
+function handleContainerDestroy(event) {
+  const containerName = event.Actor?.Attributes?.name;
+  if (!containerName || !isFluxContainer(containerName)) return;
+  // same skip as die: a deliberate teardown (uninstall/redeploy remove) holds a
+  // stop-aligned lease while it destroys — its removal needs no reconcile.
+  const lease = operationRegistry.get(containerName);
+  if (lease && operationRegistry.isStopAligned(lease.type)) {
+    return;
+  }
+  appReconciler.enqueue(containerName);
+}
+
 function handleContainerStart(event) {
   const containerName = event.Actor?.Attributes?.name;
   if (!containerName || !isFluxContainer(containerName)) return;
@@ -110,6 +129,7 @@ function handleContainerHealth(event) {
 function handleContainerEvent(event) {
   const action = event.Action || event.status || '';
   if (action === 'die') return handleContainerDie(event);
+  if (action === 'destroy') return handleContainerDestroy(event);
   if (action === 'start') return handleContainerStart(event);
   if (action.startsWith('health_status')) return handleContainerHealth(event);
   return undefined;
@@ -122,7 +142,7 @@ async function subscribe() {
 
   try {
     const stream = await dockerService.dockerGetEvents({
-      filters: { type: ['container'], event: ['die', 'start', 'health_status'] },
+      filters: { type: ['container'], event: ['die', 'destroy', 'start', 'health_status'] },
     });
     eventStream = stream;
 
@@ -202,6 +222,7 @@ module.exports = {
   // exposed for tests
   handleContainerEvent,
   handleContainerDie,
+  handleContainerDestroy,
   handleContainerStart,
   handleContainerHealth,
 };
