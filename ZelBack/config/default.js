@@ -144,7 +144,7 @@ module.exports = {
     // install converge-wait (reconciler): roll an install back after this many
     // failed start attempts (a COUNT, not a clock); the backstop only stops the
     // caller hanging and never rolls back.
-    convergeFailAttempts: 2,
+    convergeFailAttempts: 3,
     convergeBackstopMs: 300000, // 5 min
     // in flux main chain per month (blocksLasting)
     price: [
