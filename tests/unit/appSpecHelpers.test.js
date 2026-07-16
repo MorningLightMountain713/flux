@@ -20,14 +20,19 @@ function mockComponent(plain) {
 }
 
 function mockPlacement(plain) {
+  // Legacy-shaped fixtures carry nodes/targetIps as arrays; the Placement
+  // contract is a map identity -> null | [replicaNames].
+  const toMap = (value) => (Array.isArray(value)
+    ? Object.fromEntries(value.map((key) => [key, null]))
+    : (value || {}));
   return {
     staticIp: plain.staticip || false,
     dataCenter: plain.datacenter || false,
     geoAllow: [],
     geoDeny: [],
-    targetIps: plain.nodes || plain.targetIps || [],
-    targetOutpoints: plain.targetOutpoints || [],
-    targetOperators: plain.targetOperators || [],
+    targetIps: toMap(plain.nodes || plain.targetIps),
+    targetOutpoints: toMap(plain.targetOutpoints),
+    targetOperators: toMap(plain.targetOperators),
   };
 }
 

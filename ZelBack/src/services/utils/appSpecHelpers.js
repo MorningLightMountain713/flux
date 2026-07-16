@@ -226,9 +226,11 @@ async function checkFreeAppUpdate(spec, daemonHeight) {
   const extensionSeconds = newRemainingSeconds - oldRemainingSeconds;
 
   const placementMatch = spec.placement.staticIp === prevSpec.placement.staticIp;
-  const targetsMatch = spec.placement.targetIps.length === prevSpec.placement.targetIps.length
-    && spec.placement.targetOutpoints.length === prevSpec.placement.targetOutpoints.length
-    && spec.placement.targetOperators.length === prevSpec.placement.targetOperators.length;
+  // The targeting fields are maps (identity -> null | [replicaNames]); the
+  // free-update bar compares entry counts, mirroring the pre-map length check.
+  const targetsMatch = Object.keys(spec.placement.targetIps).length === Object.keys(prevSpec.placement.targetIps).length
+    && Object.keys(spec.placement.targetOutpoints).length === Object.keys(prevSpec.placement.targetOutpoints).length
+    && Object.keys(spec.placement.targetOperators).length === Object.keys(prevSpec.placement.targetOperators).length;
   const instancesMatch = spec.instances === prevSpec.instances;
   const extensionOk = extensionSeconds <= MAX_FREE_EXTENSION_SECONDS;
 
