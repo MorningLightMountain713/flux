@@ -5,6 +5,9 @@ import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { deployContentApp, pushContentUpdate } from '../framework/content-helper.js';
 import { getFluxDriveState, getFluxDriveManifest, resetFluxDrive } from '../framework/fluxdrive-control.js';
 import { pushImage, pushTestApp } from '../framework/registry-helper.js';
+import { appOwnerKey } from '../framework/keys.js';
+import { blobHash } from '../framework/content-crypto-v9.js';
+import benchCrypto from '../../daemon-stub/benchCrypto.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor } from '../framework/wait.js';
 import { getAppContainerStatus, execInContainer, isAppContainerRunning } from '../framework/container.js';
@@ -20,8 +23,12 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // the slot's onUpdate (restart / signal / none). One app per reaction so each
 // reaction is asserted in isolation; the update is POSTed to the node RUNNING the
 // app so it is both the submitter (contentUpdateApplied / reconcilePushed) and the
-// applier (slotApplied). Asserts on the SSE event bus + the FluxDrive stub state +
-// the appcontentmanifests DB row + docker container state, never log scraping.
+// applier (slotApplied). App D (two slots) pins the carry-over submission contract:
+// rotating one slot attaches one file — the unchanged slot is declared by hash and
+// presence-checked (one HEAD) instead of re-uploaded, and a hash the prior version
+// never delivered is a precise fail-closed reject. Asserts on the SSE event bus +
+// the FluxDrive stub state + the appcontentmanifests DB row + docker container
+// state, never log scraping.
 //
 // nodes:5 with fluxapps.minOutgoing lowered to 2 (a 5-node full mesh only reaches
 // ~2 outbound/node — peers connect inbound first and FluxOS dedups); arcane:true
@@ -55,10 +62,18 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
 
   const base = `slotupd${Date.now()}`;
   // App A drives the version-advance/FluxDrive/reconcile assertions AND the null
-  // (self-watching, atomic) reaction; B is restart; C is signal (test-app fixture).
+  // (self-watching, atomic) reaction; B is restart; C is signal (test-app fixture);
+  // D (two slots) is the carry-over contract — rotating one slot attaches one file.
   const nameNull = `${base}a`;
   const nameRestart = `${base}b`;
   const nameSignal = `${base}c`;
+  const nameCarry = `${base}d`;
+
+  // App D's slot payloads: 'keep' is never rotated (carried over by hash on the
+  // v2 update); 'rotate' moves v1 -> v2 with bytes attached.
+  const KEEP_BYTES = Buffer.from('carry keep v1');
+  const ROTATE_V1 = Buffer.from('carry rotate v1');
+  const ROTATE_V2 = Buffer.from('carry rotate v2');
 
   // The installed node index per app (the spawner self-selects; instances:1 so
   // exactly one node runs each app and is where we POST + assert).
@@ -69,9 +84,9 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
   let aAfterId = 0;
   let aStartedAt = '';
 
-  async function registerSlotApp({ name, image, slot }) {
+  async function registerSlotApp({ name, image, slots }) {
     const res = await deployContentApp(env.clients[0].url, {
-      name, image, instances: 1, contentSlots: [slot],
+      name, image, instances: 1, contentSlots: slots,
     });
     expect(res.status, `register ${name}`).to.equal('success');
     return res.data; // appHash
@@ -116,47 +131,63 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
     await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
     await resetFluxDrive();
 
-    // pause stays up for the restart/none apps (we only inspect docker StartedAt);
-    // the test-app fixture for the signal app (it logs RELOAD SIGHUP to stdout).
+    // pause stays up for the restart/none/carry apps (we only inspect docker
+    // StartedAt); the test-app fixture for the signal app (it logs RELOAD SIGHUP
+    // to stdout).
     await pushImage(nameNull, 'v1');
     await pushImage(nameRestart, 'v1');
     await pushTestApp(nameSignal, 'v1');
+    await pushImage(nameCarry, 'v1');
 
     // A null (self-watching) slot requires atomic delivery under the reserved
     // /io.runonflux/ namespace; restart/signal slots are in-place single-file binds.
     const nullHash = await registerSlotApp({
       name: nameNull,
       image: `${REGISTRY_REPO_HOST}/${nameNull}:v1`,
-      slot: {
+      slots: [{
         name: 'config', destination: '/io.runonflux/config.conf', bytes: Buffer.from('null slot v1'), onUpdate: null, atomic: true,
-      },
+      }],
     });
     const restartHash = await registerSlotApp({
       name: nameRestart,
       image: `${REGISTRY_REPO_HOST}/${nameRestart}:v1`,
-      slot: {
+      slots: [{
         name: 'config', destination: '/etc/slot.conf', bytes: Buffer.from('restart slot v1'), onUpdate: { action: 'restart' },
-      },
+      }],
     });
     const signalHash = await registerSlotApp({
       name: nameSignal,
       image: `${REGISTRY_REPO_HOST}/${nameSignal}:v1`,
-      slot: {
+      slots: [{
         name: 'config', destination: '/etc/slot.conf', bytes: Buffer.from('signal slot v1'), onUpdate: { action: 'signal', signal: 'SIGHUP' },
-      },
+      }],
+    });
+    const carryHash = await registerSlotApp({
+      name: nameCarry,
+      image: `${REGISTRY_REPO_HOST}/${nameCarry}:v1`,
+      slots: [
+        {
+          name: 'keep', destination: '/etc/keep.conf', bytes: KEEP_BYTES, onUpdate: { action: 'restart' },
+        },
+        {
+          name: 'rotate', destination: '/etc/rotate.conf', bytes: ROTATE_V1, onUpdate: { action: 'restart' },
+        },
+      ],
     });
 
-    // Confirm all three (one block drains the whole tx queue), then find where each
+    // Confirm all four (one block drains the whole tx queue), then find where each
     // app landed. No running peer holds them, so the install provisions the bundled
     // v1 manifest from the FluxDrive backstop.
     await queueAppTx(nullHash);
     await queueAppTx(restartHash);
     await queueAppTx(signalHash);
+    await queueAppTx(carryHash);
     await advanceBlocks(3);
 
     node.null = await findRunningIndex(nameNull);
     node.restart = await findRunningIndex(nameRestart);
     node.signal = await findRunningIndex(nameSignal);
+    node.carry = await findRunningIndex(nameCarry);
   });
 
   after(async function () {
@@ -311,6 +342,108 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
 
     // The stored manifest stayed at v2 (the stale push changed nothing).
     const row = await dbClient(client.num).getContentManifest(nameNull);
+    expect(row.version).to.equal(2);
+  });
+
+  it('carry-over: rotating one slot of two attaches one file (one upload, one presence HEAD)', async function () {
+    this.timeout(120000);
+    const client = env.clients[node.carry];
+    const afterId = client.getLastEventId();
+
+    const owner = appOwnerKey().zelid;
+    const locatorOf = (bytes) => benchCrypto.locatorFor({ appName: nameCarry, fluxID: owner, contentHash: blobHash(bytes) });
+    const keepLocator = locatorOf(KEEP_BYTES);
+    const rotateV1Locator = locatorOf(ROTATE_V1);
+    const rotateV2Locator = locatorOf(ROTATE_V2);
+
+    // Pre-update snapshot: the register delivered both slots' blobs. The HEAD
+    // probe log is counted from here so only this update's probes are attributed.
+    const beforeState = await getFluxDriveState();
+    const beforeBlobs = beforeState.blobs.filter((b) => b.appName === nameCarry);
+    expect(beforeBlobs.map((b) => b.locator).sort()).to.deep.equal([keepLocator, rotateV1Locator].sort());
+    const headsBefore = beforeState.heads.length;
+    const keepBefore = beforeBlobs.find((b) => b.locator === keepLocator);
+
+    // v2 rotates 'rotate' (bytes attached + owner-signed) and carries 'keep'
+    // over by hash — no bytes, no signature for the unchanged file.
+    const res = await pushContentUpdate(client.url, {
+      name: nameCarry,
+      version: 2,
+      slots: [
+        { name: 'keep', hash: blobHash(KEEP_BYTES) },
+        { name: 'rotate', bytes: ROTATE_V2 },
+      ],
+    });
+    expect(res.status).to.equal('success');
+
+    await client.waitForEvent(
+      'content:contentUpdateApplied',
+      (d) => d.appName === nameCarry && d.version === 2,
+      60000,
+      { afterId },
+    );
+    await client.waitForEvent(
+      'content:reconcilePushed',
+      (d) => d.appName === nameCarry && d.version === 2,
+      60000,
+      { afterId },
+    );
+
+    const state = await getFluxDriveState();
+
+    // Exactly ONE upload: the rotated slot's v2 ciphertext is the only new locator.
+    const after = state.blobs.filter((b) => b.appName === nameCarry);
+    expect(after.map((b) => b.locator).sort()).to.deep.equal(
+      [keepLocator, rotateV1Locator, rotateV2Locator].sort(),
+    );
+
+    // Exactly ONE presence probe: the carried slot's locator, found in storage.
+    const probes = state.heads.slice(headsBefore);
+    expect(probes.length, 'one HEAD presence probe').to.equal(1);
+    expect(probes[0].locator).to.equal(keepLocator);
+    expect(probes[0].found).to.equal(true);
+
+    // The carried blob was presence-checked, not re-uploaded: its stored entry
+    // is the register-time row verbatim (same timestamp and sigs), still live.
+    const keepAfter = after.find((b) => b.locator === keepLocator);
+    expect(keepAfter).to.deep.equal(keepBefore);
+
+    // The GC reconcile carries the FULL v2 live set (carried + rotated); the
+    // superseded rotate-v1 blob is tombstoned, the carried blob is not.
+    const rec = state.reconciles.find((r) => r.appName === nameCarry && r.source === 'slot' && r.version === 2);
+    expect(rec, 'slot reconcile v2 recorded').to.exist;
+    expect(rec.accepted).to.equal(true);
+    expect([...rec.liveLocators].sort()).to.deep.equal([keepLocator, rotateV2Locator].sort());
+    expect(after.find((b) => b.locator === rotateV1Locator).tombstoned).to.equal(true);
+
+    // The running node's manifest register advanced to v2.
+    const row = await dbClient(client.num).getContentManifest(nameCarry);
+    expect(row.version).to.equal(2);
+  });
+
+  it('rejects a carried-over hash the previous version never delivered', async function () {
+    this.timeout(60000);
+    const client = env.clients[node.carry];
+
+    // v3 declares 'rotate' by a hash no prior version delivered, with no bytes
+    // attached: fail-closed with the precise attach-the-bytes reject — carry-over
+    // is scoped to the immediately previous version, never "any hash ever seen".
+    const res = await pushContentUpdate(client.url, {
+      name: nameCarry,
+      version: 3,
+      slots: [
+        { name: 'keep', hash: blobHash(KEEP_BYTES) },
+        { name: 'rotate', hash: blobHash(Buffer.from('carry rotate v3 never uploaded')) },
+      ],
+    });
+    expect(res.status).to.equal('error');
+    expect(res.data.message).to.include('missing blob part');
+
+    // Nothing advanced, nothing uploaded: register + one rotation = 3 blobs,
+    // manifest still v2.
+    const state = await getFluxDriveState();
+    expect(state.blobs.filter((b) => b.appName === nameCarry).length).to.equal(3);
+    const row = await dbClient(client.num).getContentManifest(nameCarry);
     expect(row.version).to.equal(2);
   });
 });
