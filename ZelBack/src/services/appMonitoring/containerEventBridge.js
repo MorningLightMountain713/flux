@@ -26,6 +26,13 @@ const appReconciler = require('./appReconciler');
 //                    authoritative .State.Health.Status from docker inspect and decides
 //                    (restart if unhealthy; a dependsOn 'healthy' dependent starts once the
 //                    target reads healthy). The event's status is NOT parsed.
+//   disconnect    -> (network event) a container lost an endpoint on a fluxDockerNetwork_*
+//                    network. A live external disconnect leaves the container running but
+//                    unreachable, and no container-type event ever fires for it - without
+//                    this the network-detach heal waits for the hourly sweep. Enqueue only;
+//                    the reconciler re-reads the attachment and owns every heal decision
+//                    (confirm, persistence window, storm guard), so a spurious or already-
+//                    stale event is at most one no-op reconcile.
 
 let eventStream = null;
 let stopped = false;
@@ -126,8 +133,34 @@ function handleContainerHealth(event) {
   wakeDependents(containerName);
 }
 
+async function handleNetworkDisconnect(event) {
+  const networkName = event.Actor?.Attributes?.name;
+  if (!networkName || !networkName.startsWith('fluxDockerNetwork_')) return;
+  const containerId = event.Actor?.Attributes?.container;
+  if (!containerId) return;
+  // The event carries the container ID, not its name - resolve it ourselves (no
+  // getDockerContainerOnly: its not-found error log would fire on every legitimate
+  // teardown, whose disconnect trails the container's removal).
+  const containers = await dockerService.dockerListContainers(true);
+  const match = containers.find((c) => c.Id === containerId);
+  if (!match) return; // container already gone - absence belongs to the destroy handler
+  const containerName = (match.Names?.[0] || '').replace(/^\//, '');
+  if (!containerName || !isFluxContainer(containerName)) return;
+  // same skip as die/destroy: a deliberate teardown disconnects its own endpoints
+  // under a stop-aligned lease - that disconnect needs no reconcile.
+  const lease = operationRegistry.get(containerName);
+  if (lease && operationRegistry.isStopAligned(lease.type)) {
+    return;
+  }
+  appReconciler.enqueue(containerName);
+}
+
 function handleContainerEvent(event) {
   const action = event.Action || event.status || '';
+  if (event.Type === 'network') {
+    if (action === 'disconnect') return handleNetworkDisconnect(event);
+    return undefined;
+  }
   if (action === 'die') return handleContainerDie(event);
   if (action === 'destroy') return handleContainerDestroy(event);
   if (action === 'start') return handleContainerStart(event);
@@ -142,7 +175,7 @@ async function subscribe() {
 
   try {
     const stream = await dockerService.dockerGetEvents({
-      filters: { type: ['container'], event: ['die', 'destroy', 'start', 'health_status'] },
+      filters: { type: ['container', 'network'], event: ['die', 'destroy', 'start', 'health_status', 'disconnect'] },
     });
     eventStream = stream;
 
@@ -225,4 +258,5 @@ module.exports = {
   handleContainerDestroy,
   handleContainerStart,
   handleContainerHealth,
+  handleNetworkDisconnect,
 };
