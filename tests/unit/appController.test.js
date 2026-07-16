@@ -14,6 +14,7 @@ const appInspector = require('../../ZelBack/src/services/appManagement/appInspec
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
+const { deserializeSpec } = require('../../ZelBack/src/services/utils/specCutover');
 
 function mockInstantiatedSpec(spec) {
   if (!spec) return null;
@@ -39,41 +40,64 @@ describe('appController tests', () => {
   let database;
 
   /**
-   * Build a mock InstantiatedSpec for appController tests.
-   * The spec must have .components (object) so the real DeploymentSpec.fromSpec works.
+   * Build an instantiated wrapper around a REAL spec class instance (via the
+   * production deserializeSpec dispatch), so deployment builds exercise the
+   * actual spec interface — placement, effectiveForReplica, linkedAppNames —
+   * instead of a hand-mock that must shadow it. v1-v3 = flat single-container;
+   * v4+ = compose.
    * @param {object} opts - { name, version, compose }
    * compose entries: [{ name: 'Component1' }, ...]
    */
-  function mockInstantiated(opts) {
-    const compose = opts.compose || [];
-    // Build components object keyed by component name, each with minimal fields
-    // that DeploymentSpec.fromSpec needs
-    const components = {};
-    for (const c of compose) {
-      components[c.name] = {
-        image: c.image || 'test/image:latest',
-        ports: {},
-        loadBalancing: {},
-        persistentStorage: null,
-        environment: {},
+  async function mockInstantiated(opts) {
+    const doc = opts.version >= 4
+      ? {
+        version: opts.version,
+        name: opts.name,
+        description: 't',
+        owner: 'testOwner',
+        instances: 3,
+        contacts: [],
+        geolocation: [],
+        expire: 88000,
+        compose: (opts.compose || []).map((c, index) => ({
+          name: c.name,
+          description: 'x',
+          repotag: c.image || 'test/image:latest',
+          ports: [String(31000 + index)],
+          domains: [''],
+          environmentParameters: [],
+          commands: [],
+          containerPorts: ['80'],
+          containerData: '/data',
+          cpu: 0.5,
+          ram: 300,
+          hdd: 5,
+          tiered: false,
+        })),
+      }
+      : {
+        version: opts.version,
+        name: opts.name,
+        description: 't',
+        owner: 'testOwner',
+        repotag: 'test/image:latest',
+        ports: ['31000'],
+        domains: [''],
+        enviromentParameters: [],
         commands: [],
-        secrets: [],
-        containerData: '',
-        // mirrors AppComponentBase.containerIdentifier for compose components
-        containerIdentifier: (appName) => `${c.name}_${appName}`,
+        containerPorts: ['80'],
+        containerData: '/data',
+        cpu: 0.5,
+        ram: 300,
+        hdd: 5,
+        instances: 3,
+        contacts: [],
+        tiered: false,
+        expire: 88000,
       };
-    }
-    const spec = {
-      version: opts.version,
-      name: opts.name,
-      components,
-      // DeploymentSpec.fromSpec reads the app's network links off the spec.
-      linkedAppNames: () => [],
-    };
-    return {
-      name: opts.name,
-      spec,
-    };
+    const spec = await deserializeSpec(doc);
+    if (!spec) throw new Error(`mockInstantiated: deserializeSpec rejected the v${opts.version} fixture`);
+    return { name: opts.name, spec };
   }
 
   // The deployment view that deploymentProvider.buildDeployment returns, with
@@ -117,7 +141,7 @@ describe('appController tests', () => {
 
     it('clears the operator lock and enqueues the reconciler (no direct docker start)', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
+      const instantiated = await mockInstantiated({
         name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
       });
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
@@ -491,7 +515,7 @@ describe('appController tests', () => {
 
     it('should pause app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
+      const instantiated = await mockInstantiated({
         name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
       });
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
@@ -514,7 +538,7 @@ describe('appController tests', () => {
 
     it('should pause all components for version 4+ apps', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
+      const instantiated = await mockInstantiated({
         name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
       });
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
@@ -543,7 +567,7 @@ describe('appController tests', () => {
 
     it('should unpause app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
+      const instantiated = await mockInstantiated({
         name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
       });
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
@@ -566,7 +590,7 @@ describe('appController tests', () => {
 
     it('should unpause all components for version 4+ apps', async () => {
       verificationHelperStub.resolves(true);
-      const instantiated = mockInstantiated({
+      const instantiated = await mockInstantiated({
         name: 'ComposedApp', version: 4, compose: [{ name: 'Component1' }, { name: 'Component2' }],
       });
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);

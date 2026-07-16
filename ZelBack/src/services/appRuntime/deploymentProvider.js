@@ -2,7 +2,40 @@ const appsRepository = require('../appDatabase/appsRepository');
 const { appsFolder } = require('../utils/appConstants');
 const { getSpecBackend } = require('../utils/specLibs');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
+const fluxNetworkHelper = require('../fluxNetworkHelper');
+const generalService = require('../generalService');
+const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const log = require('../../lib/log');
+
+/**
+ * The named replica THIS node runs for a spec, or null for loose/untargeted
+ * placement. Derived on demand, never stored - the spec plus this node's
+ * identity (socket address, collateral outpoint) determine it, so every
+ * deployment build resolves the same answer. One physical node addressed
+ * through both identity forms unions both entries; more than one replica on
+ * this node is co-location, which the runtime does not support yet, so it
+ * fails loud rather than silently picking a subset.
+ *
+ * @param {object} spec - a readable spec instance (placement is cleartext)
+ * @returns {Promise<string|null>}
+ */
+async function resolveLocalReplica(spec) {
+  if (spec.placement.mode() !== 'named') return null;
+
+  const ip = await fluxNetworkHelper.getLocalSocketAddress();
+  const collateral = await generalService.obtainNodeCollateralInformation();
+  const outpoint = `${collateral.txhash}:${collateral.txindex}`;
+
+  const names = spec.placement.replicasFor({ ip, outpoint, ipMatcher: socketAddressesMatch });
+  if (names.length > 1) {
+    throw new Error(`${spec.name} names ${names.length} replicas for this node (${names.join(', ')}) - co-located replicas are not supported yet`);
+  }
+  if (names.length === 0) {
+    log.warn(`deploymentProvider: named placement for ${spec.name} does not target this node - deploying component defaults`);
+    return null;
+  }
+  return names[0];
+}
 
 async function toDeployment(instantiated) {
   const resolved = await resolveInstantiatedSpec(instantiated);
@@ -12,8 +45,10 @@ async function toDeployment(instantiated) {
   // from the real spec instance it wraps (its guard rejects a still-sealed spec).
   const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
 
+  const replica = await resolveLocalReplica(runtimeSpec);
+
   const { DeploymentSpec } = await getSpecBackend();
-  return DeploymentSpec.fromSpec(runtimeSpec, appsFolder);
+  return DeploymentSpec.fromSpec(runtimeSpec, appsFolder, { replica });
 }
 
 async function listInstalledDeployments() {
@@ -75,5 +110,6 @@ module.exports = {
   listInstalledDeployments,
   getInstalledDeployment,
   resolveLinkedAppNames,
+  resolveLocalReplica,
   buildDeployment: toDeployment,
 };
