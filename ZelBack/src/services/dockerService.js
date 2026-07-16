@@ -9,6 +9,7 @@ const generalService = require('./generalService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const log = require('../lib/log');
 const { extractIp } = require('./utils/socketAddressUtils');
+const { getSpec } = require('./utils/specLibs');
 const { obtainPayloadFromStorage } = require('./utils/fluxStorageRefs');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
 const shutdownPlan = require('./appLifecycle/shutdownPlan');
@@ -997,14 +998,25 @@ async function appDockerCreate(deployComp, options = {}) {
     }
   }
 
+  // Platform env — one map, delivered two ways. The component's spec-derived
+  // share (FLUX_APP_NAME, FLUX_REPLICA under named placement, FLUX_PORT_<name>
+  // per declared port with its effective hostPort) plus the node-scoped facts
+  // only the runtime knows. ${FLUX_*} references in user env values resolve
+  // against the same map (validated at submission; an unresolvable token stays
+  // verbatim rather than silently emptying), and every variable is appended
+  // after the user's entries — docker's last-duplicate-wins makes platform
+  // values authoritative.
+  const { substitutePlatformEnv } = await getSpec();
+  const platformEnv = deployComp.platformEnv();
   const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
   const nodeHostIp = localSocketAddr ? extractIp(localSocketAddr) : null;
   if (nodeHostIp) {
-    containerConfig.Env.push(`FLUX_NODE_HOST_IP=${nodeHostIp}`);
+    platformEnv.FLUX_NODE_HOST_IP = nodeHostIp;
   } else {
     log.warn(`FLUX_NODE_HOST_IP not injected for ${identifier}: node IP not available`);
   }
-  containerConfig.Env.push(`FLUX_APP_NAME=${appName}`);
+  containerConfig.Env = containerConfig.Env.map((entry) => substitutePlatformEnv(entry, platformEnv));
+  containerConfig.Env.push(...Object.entries(platformEnv).map(([name, value]) => `${name}=${value}`));
 
 
 

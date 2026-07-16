@@ -9,6 +9,7 @@ const path = require('path');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
+const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -1193,6 +1194,7 @@ describe('dockerService tests', () => {
         toDockerMemoryBytes: () => 1887436800,
         toDockerMemorySwapBytes: () => 1887436800 + (2 * 1024 * 1024 * 1024),
         restartPolicyName: () => 'unless-stopped',
+        platformEnv: () => ({ FLUX_APP_NAME: 'fluxwebsite' }),
         ...overrides,
       };
     }
@@ -1205,6 +1207,8 @@ describe('dockerService tests', () => {
     afterEach(() => {
       dockerStub.restore();
       volumeStub.restore();
+      // Restores any per-test stubs (e.g. the node-address stub) too.
+      sinon.restore();
     });
 
     it('should create a container with correct image and resource limits', async () => {
@@ -1321,6 +1325,52 @@ describe('dockerService tests', () => {
       const badComp = { testing: 'testing' };
 
       await expect(dockerService.appDockerCreate(badComp)).to.eventually.be.rejected;
+    });
+
+    it('appends the platform env after user env (platform values authoritative)', async () => {
+      const deployComp = makeDeployComp({
+        toDockerEnv: () => ['LOG=SEND'],
+        platformEnv: () => ({ FLUX_APP_NAME: 'fluxwebsite', FLUX_REPLICA: 's2', FLUX_PORT_game: '35001' }),
+      });
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const { Env } = dockerStub.firstCall.args[0];
+      expect(Env.indexOf('LOG=SEND')).to.be.below(Env.indexOf('FLUX_APP_NAME=fluxwebsite'));
+      expect(Env).to.include('FLUX_REPLICA=s2');
+      expect(Env).to.include('FLUX_PORT_game=35001');
+    });
+
+    it('resolves ${FLUX_*} references in user env against the platform map', async () => {
+      const deployComp = makeDeployComp({
+        toDockerEnv: () => [
+          'ADVERTISE=${FLUX_PORT_game}',
+          'WHOAMI=${FLUX_REPLICA}',
+          'SHELLISH=${HOME}/data',
+          'GHOST=${FLUX_PORT_ghost}',
+        ],
+        platformEnv: () => ({ FLUX_APP_NAME: 'fluxwebsite', FLUX_REPLICA: 's2', FLUX_PORT_game: '35001' }),
+      });
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const { Env } = dockerStub.firstCall.args[0];
+      expect(Env).to.include('ADVERTISE=35001');
+      expect(Env).to.include('WHOAMI=s2');
+      // Not our namespace — untouched.
+      expect(Env).to.include('SHELLISH=${HOME}/data');
+      // Unresolvable stays verbatim (fail-visible), never silently emptied.
+      expect(Env).to.include('GHOST=${FLUX_PORT_ghost}');
+    });
+
+    it('adds FLUX_NODE_HOST_IP when the node address is known', async () => {
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('44.55.66.77:16127');
+      const deployComp = makeDeployComp();
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const { Env } = dockerStub.firstCall.args[0];
+      expect(Env).to.include('FLUX_NODE_HOST_IP=44.55.66.77');
     });
   });
 
