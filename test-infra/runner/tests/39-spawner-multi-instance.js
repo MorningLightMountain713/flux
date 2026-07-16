@@ -6,7 +6,6 @@ import { buildSeedableTestApp } from '../framework/seed-helper.js';
 import {
   bootAndPeer, seedSpawnerApp, waitForInstanceCount,
 } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // The spawner places the requested number of instances across the network by
 // independent per-node self-selection (trySpawningGlobalApplication) — no central
@@ -21,7 +20,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('spawner places the requested number of instances', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(360000);

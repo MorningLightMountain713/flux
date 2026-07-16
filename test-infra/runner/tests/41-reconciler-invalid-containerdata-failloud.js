@@ -4,7 +4,6 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableMixedMountApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Fail-loud gate for the canonical g: classifier (commits 19ed49b98 / 84f982984).
 //
@@ -22,7 +21,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('install rejects a non-primary-sync (invalid) containerData', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2ebad${Date.now()}`;
 
   before(async function () {

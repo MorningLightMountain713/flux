@@ -14,7 +14,6 @@ import { waitForAppInstalled, waitForDown, waitForAppFullyGone } from '../framew
 import { isAppFullyGone } from '../framework/container.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { shutdowndControl, waitForShutdowndCall } from '../framework/shutdownd-control.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // The graceful-stop routing (M7) for the PRODUCTION shape: an encrypted v9 app with
 // a native `shutdown.gracefulTimeout` component field. This exercises a code path the
@@ -52,7 +51,6 @@ function gracefulComponents(name) {
 
 describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypted v9)', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(600000);

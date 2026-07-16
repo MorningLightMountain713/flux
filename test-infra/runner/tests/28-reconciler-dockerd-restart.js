@@ -10,7 +10,6 @@ import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForAppInstalled, waitFor, waitForReconcileActuated,
 } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Must-pass fleet gate. A dockerd restart underneath a running FluxOS leaves the
 // app containers exited with no die event reaching the watcher. When the docker
@@ -72,7 +71,6 @@ async function seedAndWaitForInstall(env, appName) {
 
 describe('reconciler recovers orphaned containers after a dockerd restart', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let installedOnIndex;
   const appName = `e2edockerd${Date.now()}`;
   const identifier = `${appName}_${appName}`; // bare component id the reconciler uses

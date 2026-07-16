@@ -4,21 +4,19 @@ import { createTestEnv } from '../framework/test-env.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState,
-  waitForPeerThreshold, waitForPeersBelowThreshold, waitForBootSettled,
-  waitForBootSettledAndLogged, waitForDosChanged, waitFor,
+  waitForPeerThreshold, waitForPeersBelowThreshold,
+  waitForBootSettledAndLogged, waitForDosChanged,
 } from '../framework/wait.js';
 import {
   advanceBlock, advanceBlocks, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
 import { fluxTeamKey } from '../framework/keys.js';
 import { authenticate } from '../auth.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Suite 1: Peer threshold boundaries
 
 describe('Boundary: peer thresholds', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(180000);
@@ -69,7 +67,6 @@ describe('Boundary: peer thresholds', function () {
 
 describe('Boundary: DOS state', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let fluxTeamAuth;
 
   before(async function () {
@@ -111,7 +108,6 @@ describe('Boundary: DOS state', function () {
 
 describe('Boundary: block timer', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(180000);
@@ -150,7 +146,6 @@ describe('Boundary: block timer', function () {
 
 describe('Boundary: clean shutdown within SIGTERM_EXPIRY', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -180,7 +175,6 @@ describe('Boundary: clean shutdown within SIGTERM_EXPIRY', function () {
 
 describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);

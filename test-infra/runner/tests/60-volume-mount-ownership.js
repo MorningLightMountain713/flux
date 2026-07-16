@@ -10,7 +10,6 @@ import {
 import { bootAndPeer, seedSyncthingApp, seedSyncScopedData, installOnNodes } from '../framework/reconciler-suite.js';
 import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey } from '../framework/keys.js';
 
@@ -87,7 +86,6 @@ async function installPlainApp(env, name, index, port) {
 
 describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   const ts = Date.now();
   const syncName = `e2evolsync${ts}`; // r: app on node 0 (invariants, self-heal, legacy cleanup)

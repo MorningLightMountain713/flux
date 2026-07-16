@@ -9,7 +9,6 @@ import { queueAppTx, advanceBlocks, getState, stopTicker } from '../framework/da
 import { waitForAppSpecStored } from '../framework/wait.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Content lifecycle GC: the permanent content-manifest register is reaped to the
 // live-app set and the FluxDrive blob set is reconciled to the live slot-locator
@@ -35,7 +34,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-wins', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   const appName = `lifecyclegc${Date.now()}`;
   const SLOT = 'config';

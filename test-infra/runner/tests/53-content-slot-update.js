@@ -13,7 +13,6 @@ import { waitFor } from '../framework/wait.js';
 import { getAppContainerStatus, execInContainer, isAppContainerRunning } from '../framework/container.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Standalone content-slot updates (POST /apps/contentupdate): the owner pushes a
 // new owner-signed manifest version with fresh slot bytes, sealed as one HPKE
@@ -58,7 +57,6 @@ async function containerLogs(client, appName) {
 
 describe('content slot updates (contentupdate): version advance + onUpdate reactions', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   const base = `slotupd${Date.now()}`;
   // App A drives the version-advance/FluxDrive/reconcile assertions AND the null

@@ -3,7 +3,6 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { waitForDaemonReady, waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 
 const subnet = getSubnetConfig();

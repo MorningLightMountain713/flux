@@ -9,10 +9,8 @@ import { advanceBlock, advanceBlocks, startTicker, stopTicker } from '../framewo
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForOrchestratorState, waitForAppSpecStored,
-  waitFor,
 } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 const REGISTRY = REGISTRY_REPO_HOST;
@@ -38,7 +36,6 @@ describe('Spawner error caching: local install failure', function () {
   const appName = `e2eBroken${Date.now()}`;
   const repoName = 'broken-app';
   const brokenRepotag = `${REGISTRY}/${repoName}:v1`;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -134,7 +131,6 @@ describe('Spawner error caching: network-wide error skip', function () {
   const goodRepoName = 'good-app';
   const goodRepotag = `${REGISTRY}/${goodRepoName}:v1`;
   let appHash;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);

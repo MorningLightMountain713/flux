@@ -5,17 +5,15 @@ import { fluxTeamKey } from '../framework/keys.js';
 import { authenticate } from '../auth.js';
 import { setNodeStatus, clearNodeStatus, advanceBlock, advanceBlocks } from '../framework/daemon-control.js';
 import {
-  waitForDaemonReady, waitForNodeStatus, waitForDosChanged, waitFor,
-  waitForBlockProcessed, waitForOrchestratorState, waitForSpawnerBlocked,
+  waitForDaemonReady, waitForNodeStatus, waitForDosChanged,
+  waitForBlockProcessed, waitForOrchestratorState,
 } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 
 const subnet = getSubnetConfig();
 
 describe('Confirmation loss consequences', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -53,7 +51,6 @@ describe('Confirmation loss consequences', function () {
 
 describe('DOS loginPhrase consequences', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let fluxTeamAuth;
 
   before(async function () {

@@ -4,9 +4,8 @@ import { createTestEnv } from '../framework/test-env.js';
 import { startTicker, advanceBlock, setNodeStatus, clearNodeStatus } from '../framework/daemon-control.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
-  waitForPeersRemoved, waitFor,
+  waitFor,
 } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 
 const subnet = getSubnetConfig();
@@ -28,7 +27,6 @@ async function bootAndPeer(env) {
 
 describe('Peers disconnect on confirmation loss (4019)', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -61,7 +59,6 @@ describe('Peers disconnect on confirmation loss (4019)', function () {
 
 describe('Inbound connections rejected when unconfirmed', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -105,7 +102,6 @@ describe('Inbound connections rejected when unconfirmed', function () {
 
 describe('Full confirmation loss and regain lifecycle', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -121,7 +117,6 @@ describe('Full confirmation loss and regain lifecycle', function () {
   it('should disconnect peers on loss and reconnect on regain', async function () {
     this.timeout(180000);
     const client = env.clients[0];
-    const observer = env.clients[1];
     const nodeIp = subnet.nodeIp(1);
 
     const peersBefore = await client.getPeers();

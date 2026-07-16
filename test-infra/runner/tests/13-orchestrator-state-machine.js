@@ -1,17 +1,16 @@
-import { describe, it, before, after, afterEach } from 'mocha';
+import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState,
-  waitForPeerThreshold, waitForPeersBelowThreshold,
-  waitForSpawnerResumed, waitForSpawnerPaused, waitFor,
+  waitForPeerThreshold,
+  waitForSpawnerResumed, waitForSpawnerPaused,
 } from '../framework/wait.js';
 import {
   advanceBlock, advanceBlocks, startTicker, stopTicker,
-  clearAllNodeStatus, setNodeStatus, disableAllRpcFailure,
+  clearAllNodeStatus, setNodeStatus,
 } from '../framework/daemon-control.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 async function bootNodes(env, { discover = false } = {}) {
   await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
@@ -30,7 +29,6 @@ async function bootNodes(env, { discover = false } = {}) {
 
 describe('Orchestrator: INITIALIZING to SYNCING', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -77,7 +75,6 @@ describe('Orchestrator: INITIALIZING to SYNCING', function () {
 describe('Orchestrator: SYNCING to READY', function () {
   describe('normal path (all conditions met)', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(300000);
@@ -104,7 +101,6 @@ describe('Orchestrator: SYNCING to READY', function () {
 
   describe('block timer fallback (insufficient peers)', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(300000);
@@ -153,7 +149,6 @@ describe('Orchestrator: SYNCING to READY', function () {
 
 describe('Orchestrator: READY to DEGRADED', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -185,7 +180,6 @@ describe('Orchestrator: READY to DEGRADED', function () {
 
 describe('Orchestrator: peer drop during SYNCING', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -223,7 +217,6 @@ describe('Orchestrator: peer drop during SYNCING', function () {
 
 describe('Orchestrator: DEGRADED recovery cycle', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -266,7 +259,6 @@ describe('Orchestrator: DEGRADED recovery cycle', function () {
 
 describe('Orchestrator: block timer during RESYNCING', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -304,7 +296,6 @@ describe('Orchestrator: block timer during RESYNCING', function () {
 describe('Orchestrator: message capability loss', function () {
   describe('loss during READY', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(300000);
@@ -342,7 +333,6 @@ describe('Orchestrator: message capability loss', function () {
 
   describe('loss during SYNCING', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(120000);

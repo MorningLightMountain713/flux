@@ -7,12 +7,10 @@ import { buildAppSpec, registerApp, registerAndConfirm, checkPermanentSpec } fro
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
 import { waitForDaemonReady, waitFor, waitForBlockProcessed, waitForNodeStatus } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 let env;
 
 describe('App registration', function () {
-  dumpLogsOnFailure(() => env);
   before(async function () {
     this.timeout(300000);
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
@@ -108,7 +106,6 @@ describe('App registration', function () {
   });
 
   describe('blockchain confirmation', function () {
-    let appHash;
     const appName = `e2eConfirm${Date.now()}`;
 
     before(async function () {
@@ -116,7 +113,6 @@ describe('App registration', function () {
       const spec = buildAppSpec({ name: appName });
       const result = await registerAndConfirm(env.clients[0].url, nodeKey(1), spec, env.clients);
       expect(result.status).to.equal('success');
-      appHash = result.appHash;
       await waitForBlockProcessed(env.clients[0], (d) => d.height >= result.targetHeight, 60000);
     });
 
