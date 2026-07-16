@@ -1247,10 +1247,12 @@ async function updateAppGlobaly(params) {
 
   // Content rides as ONE HPKE-sealed envelope — never plaintext in transit. Open it
   // toward this node's per-app transport key and upload synchronously so it is
-  // durably stored before the spec is gossiped.
+  // durably stored before the spec is gossiped. The superseded spec's contentRef
+  // hashes are carried over (already stored under identical locators), so the
+  // envelope attaches only new or changed files.
   if (contentCtx) {
     await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
-      ref: cleanContentHash, timestamp: cleanTimestamp,
+      ref: cleanContentHash, timestamp: cleanTimestamp, priorSpec: priorCleartext,
     });
   }
 

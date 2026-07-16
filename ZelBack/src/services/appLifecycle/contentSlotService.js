@@ -158,8 +158,11 @@ async function openManifestSlots(manifest, ctx, deps = {}) {
  * a content blob (source 'slot', reusing the blob dual-sig upload), then return the
  * gossip-form manifest (slots sealed for an encrypted app) ready to store + gossip.
  * The blob parts are matched to the manifest's slot hashes exactly like content
- * blobs: every declared slot needs a blob, and every supplied blob must be
- * referenced (a stray blob is an anti-abuse reject).
+ * blobs: every supplied blob must be referenced (a stray blob is an anti-abuse
+ * reject), and every declared hash must either carry its blob part or be CARRIED
+ * OVER — already delivered by the stored prior manifest, so its bytes sit in
+ * FluxDrive under the identical locator. A carried-over hash is presence-checked
+ * instead of re-uploaded, so rotating one slot attaches one file.
  *
  * @param {object} input - { manifest, spec, owner, encrypted, blobs, ownerSigs }
  * @param {object} deps - { getLatest?, uploader, benchmark?, now?, verify?, provider? }
@@ -180,15 +183,31 @@ async function processManifestSubmission(input, deps) {
     throw new Error(`contentSlot: manifest version ${manifest.version} is not newer than stored ${prior.version}`);
   }
 
-  const declaredHashes = new Set(Object.values(manifest.slots).map((s) => s.hash));
-  for (const hash of declaredHashes) {
-    if (!blobs.has(hash)) throw new Error(`contentSlot: missing blob part for ${hash}`);
+  // Hashes the stored prior manifest already delivered are carried over: their
+  // bytes sit in FluxDrive under the identical locator, so this update attaches
+  // only changed slots. The prior body is gossip-form (slots sealed for an
+  // encrypted app) — open it to read the hashes.
+  let carriedOver = new Set();
+  if (prior && prior.data && prior.data.manifest) {
+    const opened = await openManifestSlots(prior.data.manifest, { owner, encrypted }, { provider });
+    carriedOver = new Set(Object.values(opened.slots).map((s) => s.hash));
   }
+
+  const declaredHashes = new Set(Object.values(manifest.slots).map((s) => s.hash));
   for (const hash of blobs.keys()) {
     if (!declaredHashes.has(hash)) throw new Error(`contentSlot: blob ${hash} is not referenced by the manifest`);
   }
 
   for (const hash of declaredHashes) {
+    if (!blobs.has(hash)) {
+      if (!carriedOver.has(hash)) throw new Error(`contentSlot: missing blob part for ${hash}`);
+      // eslint-disable-next-line no-await-in-loop
+      await contentBlobService.assertBlobStored(
+        { appName: manifest.appName, fluxID: owner, contentHash: hash },
+        { uploader, benchmark },
+      );
+      continue;
+    }
     const ownerSig = ownerSigs.get(hash);
     if (!ownerSig || !ownerSig.sig || ownerSig.timestamp == null) {
       throw new Error(`contentSlot: missing owner signature for ${hash}`);

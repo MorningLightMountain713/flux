@@ -130,35 +130,69 @@ function specContentHashes(spec) {
 }
 
 /**
- * Upload every content blob a submission declares — synchronously, so all blobs
- * are durably stored before the spec enters gossip. Matches the decrypted spec's
- * contentRef mounts to the supplied blob parts by plaintext hash: every declared
- * hash must have a blob, and every supplied blob must be referenced by the spec
- * (a stray blob is an anti-abuse reject). Each match is encrypted, dual-signed,
- * and uploaded via encryptAndUploadBlob; any mismatch or upload failure throws so
- * the caller never broadcasts a spec whose content is not stored.
+ * Assert a carried-over blob is still present in FluxDrive. An update may omit
+ * the bytes for a hash its previous version already delivered — the locator is
+ * identical (appName:fluxID:contentHash), so the previous upload is the durable
+ * copy. This presence check closes the pathological gap (the backstop lost it)
+ * with a precise reject instead of a silent hole every cold-start install hits.
  *
- * @param {object} spec - decrypted submission spec (name, owner, components)
- * @param {Map<string, Buffer>} blobs - plaintext bytes keyed by "sha256:<hex>"
- * @param {Map<string, { sig: string, timestamp: string|number }>} ownerSigs - owner sig + signed timestamp, keyed by hash
- * @param {object} deps - { uploader, benchmark?, now? }
- * @returns {Promise<Array<{ hash: string, locator: string }>>}
+ * @param {object} ref - { appName, fluxID, contentHash }
+ * @param {object} deps - { uploader, benchmark? }
+ * @returns {Promise<string>} the locator
  */
-async function encryptAndUploadBlobs(spec, blobs, ownerSigs, deps) {
+async function assertBlobStored(ref, deps) {
+  const { uploader, benchmark } = deps || {};
+  const locator = await deriveLocator(benchmark, ref);
+  const exists = await uploader.blobExists(locator);
+  if (!exists) {
+    throw new Error(`contentBlob: ${ref.contentHash} is carried over from the previous version but is not in storage — attach the file bytes`);
+  }
+  return locator;
+}
+
+/**
+ * Upload a submission's content blobs — synchronously, so all declared content is
+ * durably stored before the spec enters gossip. Matches the decrypted spec's
+ * contentRef mounts to the supplied blob parts by plaintext hash. Every supplied
+ * blob must be referenced by the spec (a stray blob is an anti-abuse reject), and
+ * every declared hash must either carry its blob part or be CARRIED OVER —
+ * declared by the immediately previous version of this app (priorSpec), whose
+ * bytes already sit in FluxDrive under this exact locator. A carried-over hash is
+ * presence-checked instead of re-uploaded, so an update attaches only what
+ * changed; a register (no priorSpec) attaches everything. Owner signatures are
+ * required only for attached blobs. Any mismatch, missing part, or upload failure
+ * throws so the caller never broadcasts a spec whose content is not stored.
+ *
+ * @param {object} input - { spec, priorSpec?, blobs, ownerSigs }
+ *   spec - decrypted submission spec (name, owner, components)
+ *   priorSpec - the decrypted spec this update supersedes (absent on register)
+ *   blobs - Map of plaintext bytes keyed by "sha256:<hex>"
+ *   ownerSigs - Map of { sig, timestamp } keyed by hash (attached blobs only)
+ * @param {object} deps - { uploader, benchmark?, now? }
+ * @returns {Promise<Array<{ hash: string, locator: string }>>} the uploads performed
+ */
+async function encryptAndUploadBlobs(input, deps) {
+  const {
+    spec, priorSpec, blobs, ownerSigs,
+  } = input;
   const { uploader, benchmark, now } = deps || {};
   const appName = spec.name;
   const fluxID = spec.owner;
   const declared = specContentHashes(spec);
+  const carriedOver = priorSpec ? specContentHashes(priorSpec) : new Set();
 
-  for (const hash of declared) {
-    if (!blobs.has(hash)) throw new Error(`contentBlob: missing blob part for ${hash}`);
-  }
   for (const hash of blobs.keys()) {
     if (!declared.has(hash)) throw new Error(`contentBlob: blob ${hash} is not referenced by the spec`);
   }
 
   const uploaded = [];
   for (const hash of declared) {
+    if (!blobs.has(hash)) {
+      if (!carriedOver.has(hash)) throw new Error(`contentBlob: missing blob part for ${hash}`);
+      // eslint-disable-next-line no-await-in-loop
+      await assertBlobStored({ appName, fluxID, contentHash: hash }, { uploader, benchmark });
+      continue;
+    }
     const owner = ownerSigs.get(hash);
     if (!owner || !owner.sig || owner.timestamp == null) {
       throw new Error(`contentBlob: missing owner signature for ${hash}`);
@@ -358,6 +392,7 @@ async function fetchBlobFromPeer(peer, appName, locator, deps = {}) {
 module.exports = {
   encryptAndUploadBlob,
   encryptAndUploadBlobs,
+  assertBlobStored,
   deriveLocator,
   signUploadMessage,
   decryptAndVerifyBlob,
