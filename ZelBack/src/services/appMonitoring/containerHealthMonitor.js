@@ -39,6 +39,13 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
   // every recreate below would loop forever on "network not found". Recreate it
   // first; ensureAppDockerNetwork returns early (no create, no firewall work) when
   // the network already exists, so the common intact-network recreate stays cheap.
+  // Required lazily: appInstaller -> appReconciler -> containerHealthMonitor is a
+  // cycle, and a top-level require resolves to a partial module here, so the call
+  // below would be a TypeError on every recreate. Severing that cycle is what the
+  // componentProvisioner extraction is for; this is the one call that still needs
+  // the installer, and the codebase's established way of asking for it.
+  // eslint-disable-next-line global-require
+  const appInstaller = require('../appLifecycle/appInstaller');
   await appInstaller.ensureAppDockerNetwork(mainAppName);
 
   // Recompute the app-wide feature gate so a recreated container keeps its budget
