@@ -7,7 +7,6 @@ import {
   enableRpcFailure, disableRpcFailure, setNodeList, removeFromNodeList, restoreToNodeList,
   resetAll,
 } from '../framework/daemon-control.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 
 const subnet = getSubnetConfig();

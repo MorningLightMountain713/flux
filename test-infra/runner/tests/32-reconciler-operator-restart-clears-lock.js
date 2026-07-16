@@ -6,7 +6,6 @@ import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { waitForUp, waitForDown, assertNoEvent } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // B4 end-to-end: a user apprestart is an explicit "make it run" - it must clear
 // the durable operator stop lock with appstart's exact semantics. Without the
@@ -16,7 +15,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('apprestart clears the operator stop lock (app stays running)', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2erestart${Date.now()}`;
   const identifier = `${appName}_${appName}`;
   let idx;

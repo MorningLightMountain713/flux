@@ -11,7 +11,6 @@ import {
 import { waitFor, waitForOrchestratorState, waitForNodeStatus } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // A node that degrades AND loses daemon confirmation must still reconcile its content-manifest
 // register on recovery. FluxOS gates peer discovery on confirmation (fluxDiscovery throws while
@@ -42,7 +41,6 @@ async function waitForSpecEverywhere(env, name, timeout = 150000) {
 describe('content manifest recovery through a message-capability round-trip', function () {
   let env;
   let dbClients;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(540000);

@@ -9,7 +9,6 @@ import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForAppSpecStored, waitForAppInstalled, waitForSpawnerDeferred,
 } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 function localRegistryCompose(appName) {
@@ -77,7 +76,6 @@ function anyDeferralEvent(env, appName, reason) {
 
 describe('Arcane: unencrypted app deferred as unencrypted_on_arcane', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2earcdefer${Date.now()}`;
 
   before(async function () {
@@ -108,7 +106,6 @@ describe('Arcane: unencrypted app deferred as unencrypted_on_arcane', function (
 
 describe('Arcane: enterprise app deferred for static_ip', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2eentstatip${Date.now()}`;
 
   before(async function () {
@@ -140,7 +137,6 @@ describe('Arcane: enterprise app deferred for static_ip', function () {
 
 describe('Arcane: enterprise app deferred for datacenter', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2eentdc${Date.now()}`;
 
   before(async function () {
@@ -174,7 +170,6 @@ describe('Arcane: enterprise app deferred for datacenter', function () {
 
 describe('Legacy: non-enterprise app deferred for static_ip', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2elegstatip${Date.now()}`;
 
   before(async function () {
@@ -206,7 +201,6 @@ describe('Legacy: non-enterprise app deferred for static_ip', function () {
 
 describe('Legacy: non-enterprise app deferred for datacenter', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2elegdc${Date.now()}`;
 
   before(async function () {

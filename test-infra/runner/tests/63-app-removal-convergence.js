@@ -12,7 +12,6 @@ import {
   pauseDockerd, resumeDockerd, restartFluxos,
 } from '../framework/container.js';
 import { waitForUp, waitForAppFullyGone } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Removal is a converged reconciler desired state ("gone"), not a one-shot job. Every
 // permanent removal writes a durable owed-teardown record before deleting the local row;
@@ -33,7 +32,6 @@ const NODE_IDX = 0; // install + drive every scenario on node 0
 describe('app removal converges to fully gone via the reconciler', function () {
   let env;
   let client;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(600000);

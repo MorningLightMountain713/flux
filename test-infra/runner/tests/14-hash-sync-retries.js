@@ -11,7 +11,6 @@ import {
   advanceBlock, advanceBlocks, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
 import { dbClient } from '../framework/db-client.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 async function bootToReady(env) {
   await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
@@ -38,7 +37,6 @@ async function bootToSyncing(env) {
 
 describe('Hash sync: retry on failure', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -80,7 +78,6 @@ describe('Hash sync: retry on failure', function () {
 
 describe('Hash sync: retry exhaustion', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -122,7 +119,6 @@ describe('Hash sync: retry exhaustion', function () {
 
 describe('Hash sync: retry timer cancelled during DEGRADED', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -166,7 +162,6 @@ describe('Hash sync: retry timer cancelled during DEGRADED', function () {
 
 describe('Hash sync: attempts reset after degrade/recover', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -264,7 +259,6 @@ describe('Hash sync: attempts reset after degrade/recover', function () {
 
 describe('Hash sync: block-timer retry with unresolvable hash', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);

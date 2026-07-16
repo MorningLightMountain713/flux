@@ -10,9 +10,8 @@ import { startTicker, advanceBlock, advanceBlocks } from '../framework/daemon-co
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForAppInstalled, waitForAppSpecStored,
-  waitForImageUpdateRedeploy, waitForImageUpdateRedeployComplete,
+  waitForImageUpdateRedeployComplete,
 } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 function localRegistryCompose(appName) {
   return [{
@@ -49,7 +48,6 @@ async function bootAndPeer(env) {
 
 describe('Non-enterprise image update redeploy', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2eimgupd${Date.now()}`;
   let installedNodeIndex;
 
@@ -147,7 +145,6 @@ describe('Non-enterprise image update redeploy', function () {
 
 describe('Enterprise image update redeploy', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2eentupd${Date.now()}`;
   let installedNodeIndex;
 

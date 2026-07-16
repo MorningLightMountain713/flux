@@ -9,7 +9,6 @@ import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForAppInstalled, waitForOrchestratorState,
 } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { fluxTeamKey } from '../framework/keys.js';
 import { authenticate } from '../auth.js';
@@ -34,7 +33,6 @@ async function bootAndPeer(env, nodeIndices) {
 
 describe('State sync: app running state (0x21)', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2esynrun${Date.now()}`;
 
   before(async function () {
@@ -104,7 +102,6 @@ describe('State sync: app running state (0x21)', function () {
 
 describe('State sync: hash resolution', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2esynhash${Date.now()}`;
 
   before(async function () {
@@ -171,7 +168,6 @@ describe('State sync: hash resolution', function () {
 
 describe('State sync: 3-peer ephemeral sync', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2esyn3p${Date.now()}`;
 
   before(async function () {
@@ -302,7 +298,6 @@ describe('State sync: 3-peer ephemeral sync', function () {
 
 describe('State sync: failed sync peer is replaced', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2esynrep${Date.now()}`;
   // 4 sources and a late joiner that needs 4 peers and 4 completions: it must
   // ask every source, so the single poisoned source is deterministically in

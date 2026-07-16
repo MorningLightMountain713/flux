@@ -6,7 +6,6 @@ import { appOwnerKey } from '../framework/keys.js';
 import { getAppContainerStatus } from '../framework/container.js';
 import { waitFor, assertNoEvent } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // An operator appstop is durable: operatorStopped is persisted in appsRuntimeState
 // and is the highest-priority desired-state input, so the reconciler must never
@@ -29,7 +28,6 @@ async function waitForDown(client, appName, label) {
 
 describe('reconciler honours a durable operator stop', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let idx;
   const appName = `e2eopstop${Date.now()}`;
   const identifier = `${appName}_${appName}`;

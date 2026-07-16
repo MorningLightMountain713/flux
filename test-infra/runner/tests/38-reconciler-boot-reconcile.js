@@ -3,7 +3,6 @@ import { createTestEnv } from '../framework/test-env.js';
 import { getAppContainerStatus } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // On a FluxOS restart the inner dockerd's app containers come back exited.
 // appStartupManager enqueues each installed app once the boot gate opens; the
@@ -13,7 +12,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('reconciler restarts app containers on FluxOS boot', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let idx;
   const appName = `e2eboot${Date.now()}`;
   const identifier = `${appName}_${appName}`;

@@ -6,7 +6,6 @@ import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { waitForUp, waitForDown, assertNoEvent } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // B6 end-to-end: a deliberate stop whose die event is LOST (docker event stream
 // down) must not wedge anything. The stoppingContainers flag is OPERATION-
@@ -21,7 +20,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('deliberate stop during an event-stream outage neither wedges nor flaps', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2estreamout${Date.now()}`;
   const identifier = `${appName}_${appName}`;
   let idx;

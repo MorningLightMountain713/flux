@@ -1,11 +1,10 @@
 import { describe, it, before, after, afterEach } from 'mocha';
-import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState,
   waitForPeerThreshold,
-  waitForSpawnerPaused, waitForSpawnerResumed, waitForSpawnerBlocked,
+  waitForSpawnerPaused, waitForSpawnerResumed,
 } from '../framework/wait.js';
 import {
   advanceBlock, startTicker, stopTicker,
@@ -13,7 +12,6 @@ import {
 } from '../framework/daemon-control.js';
 import { fluxTeamKey } from '../framework/keys.js';
 import { authenticate } from '../auth.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 async function bootToReady(env) {
   await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
@@ -31,7 +29,6 @@ async function bootToReady(env) {
 
 describe('Spawner gate conditions', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let fluxTeamAuth;
 
   before(async function () {

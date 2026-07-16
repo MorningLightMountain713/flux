@@ -11,7 +11,6 @@ import { waitForAppInstalled, waitFor } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
 import { readFileInContainer, statFileInContainer, inodeInContainer } from '../framework/container.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // The HPKE capstone for v9 content delivery. Every content app the harness deploys
 // is ALWAYS transport-encrypted (the sparse spec is HPKE-sealed toward the node's
@@ -34,7 +33,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('content encrypted transport (HPKE capstone): open, seal-at-rest, multi-component', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   const stamp = Date.now();
   // App names: lowercase-alnum (also used verbatim as registry repo names).

@@ -8,11 +8,9 @@ import {
   advanceBlock, enableRpcFailure, disableAllRpcFailure,
   removeFromNodeList, resetNodeList, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('Confirmation service: CONFIRMED detection', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -34,7 +32,6 @@ describe('Confirmation service: CONFIRMED detection', function () {
 
 describe('Confirmation service: node list removal → message capability lost', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -77,7 +74,6 @@ describe('Confirmation service: node list removal → message capability lost', 
 
 describe('Confirmation service: RPC failure windows', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);

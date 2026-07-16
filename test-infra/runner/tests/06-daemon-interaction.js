@@ -2,8 +2,7 @@ import { describe, it, before, after, afterEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { setNodeStatus, clearNodeStatus, removeFromNodeList, restoreToNodeList, resetNodeList, enableRpcFailure, disableRpcFailure } from '../framework/daemon-control.js';
-import { waitForDaemonReady, waitForDaemonPolled, waitForNodeStatus, waitForDaemonUnreachable, waitForDaemonRecovered } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { waitForDaemonReady, waitForNodeStatus, waitForDaemonUnreachable, waitForDaemonRecovered } from '../framework/wait.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 
 const subnet = getSubnetConfig();

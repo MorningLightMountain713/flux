@@ -5,7 +5,6 @@ import { getAppContainerStatus, restartFluxos, execInContainer } from '../framew
 import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { waitForReconcileActuated, waitFor } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // R2 regression. A FluxOS *process* restart (`systemctl restart fluxos`) wipes the
 // in-memory controllerDesired map while the inner dockerd and the app containers
@@ -34,7 +33,6 @@ async function startedAt(client, containerName) {
 
 describe('reconciler keeps a running syncthing app up across a FluxOS process restart', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let idx; let folder; let identifier;
   const appName = `e2efxrestart${Date.now()}`;
 

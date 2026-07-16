@@ -8,7 +8,6 @@ import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
 import { waitForUp, assertNoEvent, waitFor, waitForReconcileActuated } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // B1 end-to-end: backup holds a lease on the WHOLE app under its bare main
 // name. While the lease is held, no reconcile of any component may actuate -
@@ -27,7 +26,6 @@ const subnet = getSubnetConfig();
 
 describe('backup leases the whole app against the reconciler', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2eblease${Date.now()}`;
   let app;
 

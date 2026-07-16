@@ -151,9 +151,9 @@ async function removeNetwork(networkName) {
 }
 
 // Every env this process ever booted, including partially-built ones whose boot
-// threw. log-on-failure falls back to this when the suite's own `env` variable
-// was never assigned (createTestEnv threw inside a before-hook) — the one case
-// where the suite-side getter cannot reach the resources holding the evidence.
+// threw. log-on-failure's root hooks read this registry — envs carry an
+// `ownerSuite` tag (from hookCtx) so a failure dumps only the envs attributed to
+// the failing describe's chain, untagged envs included as unattributable.
 // Envs stay registered after teardown on purpose: the failure dump runs in an
 // after-all hook, i.e. potentially after teardown, and reads in-memory log lines
 // and event snapshots that outlive the containers. A module singleton is safe
@@ -430,6 +430,11 @@ export async function createTestEnv({
   }
   const networkName = await createNetwork();
   const env = makeEnvShell(networkName);
+  // Attribute the env to the describe whose hook is booting it — log-on-failure
+  // uses this to dump only the envs that belong to a failing suite's chain.
+  env.ownerSuite = (hookCtx && typeof hookCtx.runnable === 'function')
+    ? (hookCtx.runnable()?.parent ?? null)
+    : null;
   activeEnvs.add(env);
 
   try {
