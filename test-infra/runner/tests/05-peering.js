@@ -7,6 +7,8 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 let env;
 
 describe('Peering', function () {
+  dumpLogsOnFailure(() => env);
+
   before(async function () {
     this.timeout(180000);
     env = await createTestEnv({ hookCtx: this, nodes: 5, tickerAutostart: false });

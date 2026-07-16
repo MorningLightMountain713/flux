@@ -4,7 +4,7 @@
 process.env.TESTCONTAINERS_HOST_OVERRIDE ??= '127.0.0.1';
 process.env.TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT ??= '5s';
 
-import { GenericContainer, Network, Wait, getContainerRuntimeClient } from 'testcontainers';
+import { GenericContainer, Wait, getContainerRuntimeClient } from 'testcontainers';
 import { readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -14,7 +14,7 @@ import { nodeClient } from './node-client.js';
 import { execInContainer } from './container.js';
 import { HttpPollWaitStrategy } from './http-wait-strategy.js';
 import { TcpPollWaitStrategy } from './tcp-wait-strategy.js';
-import { getSubnetConfig, REGISTRY_ALIAS, REGISTRY_REPO_HOST } from './subnet-config.js';
+import { getSubnetConfig, REGISTRY_ALIAS } from './subnet-config.js';
 import { closeDb } from './db-client.js';
 import { stubPeerClient } from './stub-peer-helper.js';
 import { pushImage } from './registry-helper.js';
@@ -404,12 +404,24 @@ function releaseBootLock() {
   }
 }
 
-export async function createTestEnv({ hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [], configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true, tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {}, rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true } = {}) {
+export async function createTestEnv({
+  hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [],
+  configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true,
+  tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
+  rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
+} = {}) {
+  const queuedFrom = process.hrtime.bigint();
   await acquireBootLock();
-  // The queue wait above must not count against the suite's hook budget. Mocha
-  // re-arms a running hook's watchdog from "now" when timeout() is set, so
-  // restart it with the suite's own declared value at the moment boot begins.
-  if (hookCtx && typeof hookCtx.timeout === 'function') hookCtx.timeout(hookCtx.timeout());
+  // The queue wait above must not count against the suite's hook budget. Setting
+  // a hook's timeout mid-run re-arms mocha's watchdog from "now", but mocha ALSO
+  // fails a hook that COMPLETES with a total duration over the timeout value
+  // (Runnable done()'s duration check) — so the value itself must grow by the
+  // time spent queued; re-setting the same value is a no-op against that check.
+  // Skipped when the hook's timeouts are disabled (0): extending would re-enable.
+  if (hookCtx && typeof hookCtx.timeout === 'function' && hookCtx.timeout() > 0) {
+    const queuedMs = Number((process.hrtime.bigint() - queuedFrom) / 1000000n);
+    hookCtx.timeout(hookCtx.timeout() + queuedMs);
+  }
   const networkName = await createNetwork();
   const env = makeEnvShell(networkName);
   activeEnvs.add(env);
@@ -863,8 +875,8 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     // the same serve-auth readiness the initial fleet build uses.
     async restartNode(index, { timeout = 15000 } = {}) {
       if (clients[index]) clients[index].disconnectEventStream();
-      const container = fluxNodes[index].container;
-      const saved = container.waitStrategy;
+      const { container } = fluxNodes[index];
+      const { waitStrategy: saved } = container;
       container.waitStrategy = nodeReadyWaitStrategy(fluxNodes[index].ip);
       try {
         await container.restart({ timeout });
