@@ -9,7 +9,6 @@ import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForAppSpecStored, waitForAppInstalled, waitForSpawnerDeferred,
 } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 function localRegistryCompose(appName) {
@@ -88,7 +87,6 @@ function anyDeferralEvent(env, appName, reason) {
 
 describe('Arcane spawner deferrals', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -174,7 +172,6 @@ describe('Arcane spawner deferrals', function () {
 
 describe('Legacy spawner deferrals', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);

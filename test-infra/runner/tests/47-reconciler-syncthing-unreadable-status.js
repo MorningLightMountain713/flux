@@ -8,7 +8,6 @@ import {
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { assertNoEvent } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // MUST-PASS data-safety gate: an unreadable folder status means the node can
 // verify NOTHING - neither that its data is synced nor that any peer holds it.
@@ -26,7 +25,6 @@ const subnet = getSubnetConfig();
 
 describe('reconciler never removes (or starts) on an unreadable sync status', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2eunread${Date.now()}`;
   let app;
 

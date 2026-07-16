@@ -14,7 +14,6 @@ import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { syncthingSeedIndex } from '../framework/g-app-placement.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // COLD START: a sync app placed on several nodes AT ONCE, with NO node holding the
 // data and NO connected peer that holds it. This is the one shape the forceNonLeader
@@ -86,7 +85,6 @@ async function pinHolding(index, folder, bytes) {
 
 describe('reconciler cold start - fresh multi-node placement, no seeded source', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const rApp = `e2ecoldr${Date.now()}`;
   const gApp = `e2ecoldg${Date.now()}`;
   const claimApp = `e2ecoldclaim${Date.now()}`;

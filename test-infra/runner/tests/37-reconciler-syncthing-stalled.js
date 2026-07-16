@@ -9,7 +9,6 @@ import {
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { waitForAppRemoved, assertNoEvent, waitFor } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // MUST-PASS data-safety gate for the stall ladder. Flat bytes alone are NOT a
 // stall - the responses depend on WHY no blocks arrive:
@@ -35,7 +34,6 @@ const subnet = getSubnetConfig();
 
 describe('reconciler stall ladder: nudge with evidence, remove only with proof, never restart syncthing', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const activeApp = `e2eactive${Date.now()}`;
   const ladderApp = `e2eladder${Date.now()}`;
   const offlineApp = `e2eoffline${Date.now()}`;

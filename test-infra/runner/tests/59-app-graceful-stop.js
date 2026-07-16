@@ -13,7 +13,6 @@ import { waitForUp, waitForDown, waitFor } from '../framework/wait.js';
 import {
   shutdowndControl, waitForShutdowndCall, assertNoShutdowndCall,
 } from '../framework/shutdownd-control.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Per-app graceful-stop (M7): on an Arcane node the stop is routed through
 // flux-shutdownd — a graceful drain, or a zero-budget force — rather than a local
@@ -41,7 +40,6 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   let env;
   let client;
   let control;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(600000);

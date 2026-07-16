@@ -11,7 +11,6 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // The silent-staleness gap: change-only manifest gossip is fire-once, and the boot/recovery
 // reconcile only re-arms when a node DEGRADES (drops below the peer floor). A node held in a
@@ -42,7 +41,6 @@ async function waitForSpecEverywhere(env, name, timeout = 150000) {
 describe('steady-state manifest backstop converges a silently-stale node', function () {
   let env;
   let dbClients;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(540000);

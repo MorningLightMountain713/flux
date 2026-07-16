@@ -7,7 +7,6 @@ import {
 } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // The events consumer is the EDGE half of the level-triggered design: it only
 // accelerates the same evaluation the periodic poll drives, so every stream
@@ -30,7 +29,6 @@ const subnet = getSubnetConfig();
 
 describe('syncthing events-stream outage degrades to the poll, never to wrong actions', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2eevout${Date.now()}`;
   let app;
 

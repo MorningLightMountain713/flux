@@ -6,7 +6,6 @@ import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForPeersRemoved,
 } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 
 const subnet = getSubnetConfig();
@@ -28,7 +27,6 @@ async function bootAndPeer(env) {
 
 describe('Peers disconnect on confirmation loss (4019)', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -69,7 +67,6 @@ describe('Peers disconnect on confirmation loss (4019)', function () {
 
 describe('Inbound connections rejected when unconfirmed', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -113,7 +110,6 @@ describe('Inbound connections rejected when unconfirmed', function () {
 
 describe('Full confirmation loss and regain lifecycle', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);

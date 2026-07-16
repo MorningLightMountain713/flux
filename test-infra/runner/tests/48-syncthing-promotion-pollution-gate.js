@@ -8,7 +8,6 @@ import {
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { waitFor } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // MUST-PASS data-safety gate: a receiveonly follower whose folder carries LOCAL
 // foreign files must not be promoted to sendreceive - promotion broadcasts the
@@ -28,7 +27,6 @@ const subnet = getSubnetConfig();
 
 describe('syncthing promotion gate reverts local pollution before flipping to sendreceive', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2epollute${Date.now()}`;
   let app;
 

@@ -9,7 +9,6 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitForAppInstalled } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { appOwnerKey } from '../framework/keys.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Content blobs (contentRef): the smallest content-delivery surface. Proves the
 // real v9 submission path end to end — the multipart /apps/appregister, the HPKE
@@ -25,7 +24,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('content blobs (contentRef): register, upload, provision', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2eblob${Date.now()}`;
   const contentBytes = Buffer.from('immutable contentRef payload for the e2e blob suite');
   let appHash;

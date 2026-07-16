@@ -4,14 +4,13 @@ import { createTestEnv } from '../framework/test-env.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState,
-  waitForPeerThreshold, waitForPeersBelowThreshold,
+  waitForPeerThreshold,
   waitForSpawnerPaused, waitForSpawnerResumed,
 } from '../framework/wait.js';
 import {
   advanceBlock, advanceBlocks, startTicker, stopTicker,
   enableRpcFailure, disableAllRpcFailure, clearAllNodeStatus,
 } from '../framework/daemon-control.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 async function bootToReady(env) {
   await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
@@ -29,7 +28,6 @@ async function bootToReady(env) {
 
 describe('Compound failures: peer loss + daemon failure during READY', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -83,7 +81,6 @@ describe('Compound failures: peer loss + daemon failure during READY', function 
 
 describe('Compound failures: rapid peer oscillation', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);

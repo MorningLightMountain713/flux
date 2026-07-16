@@ -4,7 +4,6 @@ import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableMultiSyncthingApp } from '../framework/seed-helper.js';
 import { assertNoEvent } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Classifier acceptance of a valid MULTI-g app — every component carries a g:
 // PRIMARY mount (like real SimpleXxFTP: xftp + onion, both g:). The
@@ -18,7 +17,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('install accepts a valid multi-g (every component g:) app', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2emg${Date.now()}`;
   const id0 = `${appName}c0_${appName}`;
   const id1 = `${appName}c1_${appName}`;

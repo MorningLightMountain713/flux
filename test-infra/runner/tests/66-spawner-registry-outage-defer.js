@@ -6,7 +6,6 @@ import { assertNoEvent, waitFor } from '../framework/wait.js';
 import { getAppContainerStatus, pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { dbClient } from '../framework/db-client.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 // A registry outage during a fresh install is a NODE condition, not a verdict on
@@ -24,7 +23,6 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 describe('Spawner: a registry outage during install defers, never fails or broadcasts', function () {
   let env;
   const appName = `e2eregout${Date.now()}`;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(600000);

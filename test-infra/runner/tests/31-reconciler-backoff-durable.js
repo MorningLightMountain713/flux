@@ -4,7 +4,6 @@ import { createTestEnv } from '../framework/test-env.js';
 import { getAppContainerStatus, crashAppContainer } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // The crash-recovery backoff escalates along the ladder [0, 30s, 5m, ...] and is
 // DURABLE: restartHistory lives in appsRuntimeState (mongo), so a FluxOS restart
@@ -24,7 +23,6 @@ async function waitForUp(client, appName, label) {
 
 describe('reconciler backoff escalates and survives a FluxOS restart', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let idx;
   const appName = `e2ebackoff${Date.now()}`;
   const identifier = `${appName}_${appName}`;

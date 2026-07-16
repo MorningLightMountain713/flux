@@ -13,7 +13,6 @@ import {
   waitFor, waitForReconcileActuated, waitForReconcilerDesiredChanged, assertNoEvent,
 } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 const subnet = getSubnetConfig();
 
@@ -38,7 +37,6 @@ async function waitForDown(client, appName, label) {
 
 describe('reconciler enforces masterSlave g: election', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let holders; // node indices that installed the app
   const appName = `e2egw${Date.now()}`;
   const identifier = `${appName}_${appName}`;

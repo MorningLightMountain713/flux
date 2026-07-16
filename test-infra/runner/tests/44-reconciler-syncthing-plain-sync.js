@@ -7,7 +7,6 @@ import {
   waitFor, waitForReconcileActuated, assertNoEvent,
 } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // s: (plain sync) replicates data between instances but, unlike activeStandby
 // (the election decides which instance runs) and syncFirst (the sync readiness
@@ -25,7 +24,6 @@ async function waitForUp(client, appName, label) {
 
 describe('plain-sync (s:) components run like normal components', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let idx; let folder; let identifier;
   const appName = `e2eplains${Date.now()}`;
 
