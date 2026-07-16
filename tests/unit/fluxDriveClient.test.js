@@ -1,6 +1,6 @@
 const { expect } = require('chai');
 const {
-  uploadBlob, fetchBlobByLocator, putManifest, reconcile, fetchManifest,
+  uploadBlob, fetchBlobByLocator, blobExists, putManifest, reconcile, fetchManifest,
 } = require('../../ZelBack/src/services/utils/fluxDriveClient');
 
 const BASE = 'https://drive.example';
@@ -59,6 +59,31 @@ describe('fluxDriveClient', () => {
       let threw = false;
       try {
         await fetchBlobByLocator('loc', { http, baseUrl: BASE });
+      } catch (e) {
+        threw = e.message === 'boom';
+      }
+      expect(threw).to.equal(true);
+    });
+  });
+
+  describe('blobExists', () => {
+    it('HEADs the fetch route and returns true on 200', async () => {
+      const calls = [];
+      const http = { head: async (url) => { calls.push(url); return { status: 200 }; } };
+      expect(await blobExists('loc', { http, baseUrl: BASE })).to.equal(true);
+      expect(calls).to.deep.equal([`${BASE}/api/v1/blob/loc`]);
+    });
+
+    it('returns false on 404', async () => {
+      const http = { head: async () => { const e = new Error('nf'); e.response = { status: 404 }; throw e; } };
+      expect(await blobExists('loc', { http, baseUrl: BASE })).to.equal(false);
+    });
+
+    it('rethrows non-404 errors', async () => {
+      const http = { head: async () => { const e = new Error('boom'); e.response = { status: 500 }; throw e; } };
+      let threw = false;
+      try {
+        await blobExists('loc', { http, baseUrl: BASE });
       } catch (e) {
         threw = e.message === 'boom';
       }
