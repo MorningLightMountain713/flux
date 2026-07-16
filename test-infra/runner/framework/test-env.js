@@ -410,17 +410,23 @@ export async function createTestEnv({
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
 } = {}) {
+  // The boot-lock queue wait must not count against the suite's hook budget.
+  // Mocha enforces a hook's timeout twice: the watchdog timer (which would fire
+  // MID-QUEUE whenever the queue alone outlasts the budget), and a completion-time
+  // duration check that fails any hook whose TOTAL elapsed time exceeds the
+  // timeout VALUE — so merely re-setting the same value re-arms the watchdog but
+  // still fails the hook once it completes. Disable the timeout while queued
+  // (queue liveness is the lock's own job: a dead owner's claim is reclaimed),
+  // then set declared + queued: that value passes the duration check with exactly
+  // the declared budget left for the boot, and setting it re-arms the watchdog.
+  // Hooks that disabled their timeout (0) are left disabled.
+  const declaredMs = (hookCtx && typeof hookCtx.timeout === 'function') ? hookCtx.timeout() : 0;
+  if (declaredMs > 0) hookCtx.timeout(0);
   const queuedFrom = process.hrtime.bigint();
   await acquireBootLock();
-  // The queue wait above must not count against the suite's hook budget. Setting
-  // a hook's timeout mid-run re-arms mocha's watchdog from "now", but mocha ALSO
-  // fails a hook that COMPLETES with a total duration over the timeout value
-  // (Runnable done()'s duration check) — so the value itself must grow by the
-  // time spent queued; re-setting the same value is a no-op against that check.
-  // Skipped when the hook's timeouts are disabled (0): extending would re-enable.
-  if (hookCtx && typeof hookCtx.timeout === 'function' && hookCtx.timeout() > 0) {
+  if (declaredMs > 0) {
     const queuedMs = Number((process.hrtime.bigint() - queuedFrom) / 1000000n);
-    hookCtx.timeout(hookCtx.timeout() + queuedMs);
+    hookCtx.timeout(declaredMs + queuedMs);
   }
   const networkName = await createNetwork();
   const env = makeEnvShell(networkName);
