@@ -36,9 +36,15 @@ function makeBenchmark(overrides = {}) {
   };
 }
 
-function makeUploader() {
+function makeUploader({ exists = true } = {}) {
   const calls = [];
-  return { calls, uploadBlob: async (framed, headers) => { calls.push({ framed, headers }); } };
+  const headCalls = [];
+  return {
+    calls,
+    headCalls,
+    uploadBlob: async (framed, headers) => { calls.push({ framed, headers }); },
+    blobExists: async (locator) => { headCalls.push(locator); return exists; },
+  };
 }
 
 async function expectReject(promise, regex) {
@@ -139,7 +145,8 @@ describe('contentBlobService', () => {
       const blobs = new Map([[ha, a], [hb, b]]);
 
       const out = await encryptAndUploadBlobs(
-        specDeclaringContent([ha, hb]), blobs, ownerSigs, { benchmark: makeBenchmark(), uploader, now },
+        { spec: specDeclaringContent([ha, hb]), blobs, ownerSigs },
+        { benchmark: makeBenchmark(), uploader, now },
       );
 
       expect(out.map((u) => u.hash)).to.have.members([ha, hb]);
@@ -147,13 +154,84 @@ describe('contentBlobService', () => {
       expect(uploader.calls.map((c) => c.headers.ownerSig)).to.have.members(['sig-a', 'sig-b']);
     });
 
-    it('rejects when a declared contentRef has no blob part', async () => {
+    it('rejects when a declared contentRef has no blob part (no prior spec)', async () => {
       const a = Buffer.from('content-a');
       const ha = hashOf(a);
       await expectReject(encryptAndUploadBlobs(
-        specDeclaringContent([ha]), new Map(), new Map([[ha, { sig: 's', timestamp: freshTs }]]),
+        { spec: specDeclaringContent([ha]), blobs: new Map(), ownerSigs: new Map([[ha, { sig: 's', timestamp: freshTs }]]) },
         { benchmark: makeBenchmark(), uploader: makeUploader(), now },
       ), /missing blob part/);
+    });
+
+    it('rejects a missing blob part the prior spec does not declare either', async () => {
+      const a = Buffer.from('content-a');
+      const c = Buffer.from('content-c');
+      await expectReject(encryptAndUploadBlobs(
+        {
+          spec: specDeclaringContent([hashOf(a)]),
+          priorSpec: specDeclaringContent([hashOf(c)]),
+          blobs: new Map(),
+          ownerSigs: new Map(),
+        },
+        { benchmark: makeBenchmark(), uploader: makeUploader(), now },
+      ), /missing blob part/);
+    });
+
+    it('carries over a prior-spec hash: presence-checked, not re-uploaded, no owner sig needed', async () => {
+      const a = Buffer.from('content-a');
+      const b = Buffer.from('content-b');
+      const ha = hashOf(a);
+      const hb = hashOf(b);
+      const uploader = makeUploader({ exists: true });
+
+      const out = await encryptAndUploadBlobs(
+        {
+          spec: specDeclaringContent([ha, hb]),
+          priorSpec: specDeclaringContent([hb]),
+          blobs: new Map([[ha, a]]),
+          ownerSigs: new Map([[ha, { sig: 'sig-a', timestamp: freshTs }]]),
+        },
+        { benchmark: makeBenchmark(), uploader, now },
+      );
+
+      expect(out.map((u) => u.hash)).to.have.members([ha]);
+      expect(uploader.calls.length).to.equal(1);
+      expect(uploader.calls[0].headers.ownerSig).to.equal('sig-a');
+      expect(uploader.headCalls.length).to.equal(1);
+    });
+
+    it('rejects a carried-over hash that is no longer in storage', async () => {
+      const a = Buffer.from('content-a');
+      const ha = hashOf(a);
+      await expectReject(encryptAndUploadBlobs(
+        {
+          spec: specDeclaringContent([ha]),
+          priorSpec: specDeclaringContent([ha]),
+          blobs: new Map(),
+          ownerSigs: new Map(),
+        },
+        { benchmark: makeBenchmark(), uploader: makeUploader({ exists: false }), now },
+      ), /not in storage/);
+    });
+
+    it('uploads a carried-over hash anyway when its bytes are attached', async () => {
+      const a = Buffer.from('content-a');
+      const ha = hashOf(a);
+      const uploader = makeUploader();
+
+      const out = await encryptAndUploadBlobs(
+        {
+          spec: specDeclaringContent([ha]),
+          priorSpec: specDeclaringContent([ha]),
+          blobs: new Map([[ha, a]]),
+          ownerSigs: new Map([[ha, { sig: 'sig-a', timestamp: freshTs }]]),
+        },
+        { benchmark: makeBenchmark(), uploader, now },
+      );
+
+      expect(out.map((u) => u.hash)).to.have.members([ha]);
+      expect(uploader.calls.length).to.equal(1);
+      expect(uploader.headCalls.length).to.equal(0);
     });
 
     it('rejects a stray blob the spec does not reference', async () => {
@@ -162,9 +240,11 @@ describe('contentBlobService', () => {
       const stray = Buffer.from('stray');
       const hs = hashOf(stray);
       await expectReject(encryptAndUploadBlobs(
-        specDeclaringContent([ha]),
-        new Map([[ha, a], [hs, stray]]),
-        new Map([[ha, { sig: 's', timestamp: freshTs }], [hs, { sig: 's', timestamp: freshTs }]]),
+        {
+          spec: specDeclaringContent([ha]),
+          blobs: new Map([[ha, a], [hs, stray]]),
+          ownerSigs: new Map([[ha, { sig: 's', timestamp: freshTs }], [hs, { sig: 's', timestamp: freshTs }]]),
+        },
         { benchmark: makeBenchmark(), uploader: makeUploader(), now },
       ), /not referenced by the spec/);
     });
@@ -173,7 +253,7 @@ describe('contentBlobService', () => {
       const a = Buffer.from('content-a');
       const ha = hashOf(a);
       await expectReject(encryptAndUploadBlobs(
-        specDeclaringContent([ha]), new Map([[ha, a]]), new Map(),
+        { spec: specDeclaringContent([ha]), blobs: new Map([[ha, a]]), ownerSigs: new Map() },
         { benchmark: makeBenchmark(), uploader: makeUploader(), now },
       ), /missing owner signature/);
     });

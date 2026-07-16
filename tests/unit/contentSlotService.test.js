@@ -58,9 +58,15 @@ function makeBenchmark(overrides = {}) {
   };
 }
 
-function makeUploader() {
+function makeUploader({ exists = true } = {}) {
   const calls = [];
-  return { calls, uploadBlob: async (framed, headers) => { calls.push({ framed, headers }); } };
+  const headCalls = [];
+  return {
+    calls,
+    headCalls,
+    uploadBlob: async (framed, headers) => { calls.push({ framed, headers }); },
+    blobExists: async (locator) => { headCalls.push(locator); return exists; },
+  };
 }
 
 // A deterministic, reversible stand-in for the app-secret seal/unseal provider.
@@ -216,6 +222,64 @@ describe('contentSlotService', () => {
         service.processManifestSubmission(baseInput({ blobs: new Map() }), baseDeps()),
         /missing blob part/,
       );
+    });
+
+    // A stored prior row whose gossip-form body seals the given slots map with
+    // the fakeProvider shape — what getLatest hands back for an encrypted app.
+    function priorRow(version, slots) {
+      return {
+        version,
+        data: {
+          manifest: {
+            appName: 'app',
+            version,
+            slots: { sealed: { algorithm: 'fake', ciphertext: Buffer.from(JSON.stringify(slots)).toString('base64'), nonce: 'n', tag: 't' } },
+            rollout: { strategy: 'immediate' },
+            timestamp: NOW_MS - 1000,
+            ownerSignature: 'prior-sig',
+          },
+        },
+      };
+    }
+
+    it('carries over an unchanged slot hash: presence-checked, not re-uploaded, no owner sig needed', async () => {
+      const { service } = load();
+      const fresh = Buffer.from('rotated content');
+      const freshHash = hashOf(fresh);
+      const uploader = makeUploader({ exists: true });
+      const input = baseInput({
+        manifest: manifest({ slots: { 'app-config': { hash: CFG_HASH }, 'tls-cert': { hash: freshHash } } }),
+        spec: specWithSlots(['app-config', 'tls-cert']),
+        blobs: new Map([[freshHash, fresh]]),
+        ownerSigs: new Map([[freshHash, { sig: 'osig-new', timestamp: freshTs }]]),
+      });
+      const deps = baseDeps({ uploader, getLatest: async () => priorRow(1, { 'app-config': { hash: CFG_HASH } }) });
+
+      const out = await service.processManifestSubmission(input, deps);
+
+      expect(uploader.calls.length).to.equal(1);
+      expect(uploader.calls[0].headers.ownerSig).to.equal('osig-new');
+      expect(uploader.headCalls.length).to.equal(1);
+      expect(out.slots).to.have.property('sealed');
+    });
+
+    it('rejects a carried-over slot hash that is no longer in storage', async () => {
+      const { service } = load();
+      const input = baseInput({ blobs: new Map(), ownerSigs: new Map() });
+      const deps = baseDeps({
+        uploader: makeUploader({ exists: false }),
+        getLatest: async () => priorRow(1, { 'app-config': { hash: CFG_HASH } }),
+      });
+      await expectReject(service.processManifestSubmission(input, deps), /not in storage/);
+    });
+
+    it('rejects a missing blob part the prior manifest does not cover', async () => {
+      const { service } = load();
+      const input = baseInput({ blobs: new Map(), ownerSigs: new Map() });
+      const deps = baseDeps({
+        getLatest: async () => priorRow(1, { 'app-config': { hash: hashOf(Buffer.from('older content')) } }),
+      });
+      await expectReject(service.processManifestSubmission(input, deps), /missing blob part/);
     });
 
     it('rejects a stray blob the manifest does not reference', async () => {

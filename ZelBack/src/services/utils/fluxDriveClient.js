@@ -65,6 +65,28 @@ async function fetchBlobByLocator(locator, deps = {}) {
 }
 
 /**
+ * Does FluxDrive hold a blob under this locator? A cheap HEAD against the fetch
+ * route (Express serves HEAD through the GET handler). Used to presence-check
+ * carried-over content — a hash the previous version already delivered — so an
+ * update can omit its bytes without silently trusting the backstop still has them.
+ *
+ * @param {string} locator
+ * @param {object} [deps] - { http, baseUrl }
+ * @returns {Promise<boolean>}
+ */
+async function blobExists(locator, deps = {}) {
+  const http = deps.http || axios;
+  const base = blobApiBase(deps.baseUrl);
+  try {
+    await http.head(`${base}/api/v1/blob/${locator}`, { timeout: 30_000 });
+    return true;
+  } catch (error) {
+    if (error.response && error.response.status === 404) return false;
+    throw error;
+  }
+}
+
+/**
  * PUT the latest owner-signed manifest to the FluxDrive backstop. Body is JSON
  * `{ version, timestamp, arcaneSig, ownerSig, manifest }` — FluxDrive authorizes the
  * operational dual-signature over sha256(appName:version:timestamp) (the node's
@@ -143,5 +165,5 @@ async function fetchManifest(appName, deps = {}) {
 }
 
 module.exports = {
-  uploadBlob, fetchBlobByLocator, putManifest, reconcile, fetchManifest,
+  uploadBlob, fetchBlobByLocator, blobExists, putManifest, reconcile, fetchManifest,
 };
