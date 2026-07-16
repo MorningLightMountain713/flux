@@ -283,6 +283,13 @@ module.exports = {
       // is 32 MB/s from each over one 2 s tick.
       minFreeBytes: 64 * 1024 * 1024,
     },
+    // network-detach heal windows: in-pass confirm settle, wall-clock persistence a
+    // detach must show before the destructive heal, re-check pace while the app's
+    // network is missing, and the post-start attachment verify
+    networkHealConfirmMs: 3000,
+    networkHealDetachedPersistMs: 60000,
+    networkHealPrunedRetryMs: 300000,
+    postStartVerifyMs: 30000,
     // install converge-wait (reconciler): roll an install back after this many
     // failed start attempts (a COUNT, not a clock); the backstop only stops the
     // caller hanging and never rolls back.
