@@ -1,6 +1,7 @@
 const config = require('config');
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
+const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const dockerOperations = require('../appManagement/dockerOperations');
 const globalState = require('../utils/globalState');
@@ -680,23 +681,23 @@ async function recreateMissing(identifier) {
  * Deliberately NOT recreateMissing: a failure here must not escalate to
  * uninstalling the whole app (the trigger is a transient host-networking
  * conflict, not tampering). On failure we just re-arm a retry; the next pass
- * paces it on the heal ladder. For a g: component recreateMissingContainers
- * creates but does not start - the normal reconcile flow starts it on a later
- * pass. The durable heal-removal flag is NOT cleared here: only seeing the
- * container back proves the heal worked.
+ * paces it on the heal ladder. The durable heal-removal flag is NOT cleared
+ * here: only seeing the container back proves the heal worked.
  */
 async function recreateForNetworkHeal(identifier) {
-  const mainAppName = identifier.split('_')[1] || identifier;
+  const mainAppName = appNameFromIdentifier(identifier);
   try {
-    // softOnly: a hard install would REFORMAT the app's data volume (createAppVolume
-    // fallocates + mke2fs). We removed a live container whose data was intact, so a
-    // recreate that cannot verify the volume must fail and be retried - never wipe it.
-    await containerHealthMonitor.recreateMissingContainers(identifier, { softOnly: true });
-    appInspector.startAppMonitoring(identifier, globalState.appsMonitored);
+    // allowVolumeCreation: false — creating a volume REFORMATS it (fallocate +
+    // mke2fs). We removed a live container whose data was intact, so a recreate
+    // that cannot verify the volume must fail and be retried - never wipe it.
+    await containerHealthMonitor.recreateMissingContainers(identifier, { allowVolumeCreation: false });
     log.info(`appReconciler - recreated ${identifier} to clear a detached network endpoint`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'recreated', reason: 'networkDetached' });
-    notifyContainerStarted(identifier);
-    scheduleRetry(identifier, POST_START_VERIFY_MS); // verify it came up attached
+    // The container is provisioned in Docker 'created' state (installComponent
+    // never starts) — enqueue so the reconciler's start branch starts it,
+    // registers monitoring, notifies the network, and arms the post-start
+    // attachment verify.
+    enqueue(identifier);
   } catch (err) {
     // Same diagnostics the vanished path emits - minus the uninstall escalation.
     // Without these a heal-removed container whose recreate keeps failing (e.g. its
@@ -736,21 +737,14 @@ async function clearNetworkHealState(identifier) {
  * or a reason string.
  */
 async function networkHealBlocker(identifier, spec) {
-  // recreateMissingContainers throws unconditionally on a spec with no compose
-  // array (v1-3 apps, which getLocalComponentSpec explicitly supports). Removing
-  // such a container destroys it forever: the recreate can never succeed, and the
-  // heal - by design - never escalates to an uninstall that would re-place the app.
-  if (!(spec.appSpec.version >= 4 && Array.isArray(spec.appSpec.compose) && spec.appSpec.compose.length)) {
-    return 'the app has no compose spec, so its container cannot be recreated';
-  }
-  // The recreate refuses to reformat (softOnly), so an unverifiable volume means it
-  // would fail AFTER we destroyed the container. Check the same thing the recreate
-  // checks, before committing.
-  const mainAppName = identifier.split('_')[1] || identifier;
-  const componentName = identifier.split('_')[0];
-  const isComponent = identifier.includes('_');
+  // The recreate refuses to create/reformat a volume (allowVolumeCreation: false),
+  // so an unverifiable volume means it would fail AFTER we destroyed the container.
+  // Check the same thing the recreate checks, before committing. (Recreatability of
+  // the spec itself is already proven: spec.deployment was built from the installed
+  // app by getLocalComponentSpec, the same domain object the recreate installs from.)
+  const mainAppName = appNameFromIdentifier(identifier);
   const volumeMounted = await volumeService
-    .verifyAppVolumeMount(mainAppName, true, isComponent ? componentName : spec.comp.name)
+    .verifyAppVolumeMount(mainAppName, true, spec.comp.name)
     .catch(() => false);
   if (!volumeMounted) {
     return 'its data volume cannot be verified as mounted, so the recreate would fail';
@@ -858,11 +852,11 @@ async function healDetachedNetwork(identifier, mainAppName, spec) {
 
   // The ONLY ownership sample was at reconcile entry, and everything above this
   // point - the settle, two inspects, the network probe, the volume check - has
-  // taken seconds. A redeploy/backup/uninstall may have taken the container over in
-  // the meantime, and force-removing it from under them is exactly what
-  // isManagedElsewhere exists to prevent. Re-check at actuation time (the same
+  // taken seconds. A redeploy/backup/uninstall may have taken a lease on the
+  // container in the meantime, and force-removing it from under them is exactly
+  // what the lease check exists to prevent. Re-check at actuation time (the same
   // re-read-before-acting discipline the controller verdict and recreateMissing use).
-  if (isManagedElsewhere(identifier)) {
+  if (hasBlockingLease(identifier)) {
     log.info(`appReconciler - ${identifier} was taken over by another operation during the heal confirmation; aborting the recreate`);
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
@@ -898,8 +892,9 @@ async function healDetachedNetwork(identifier, mainAppName, spec) {
   // error-spamming. The recreate re-establishes it via startAppMonitoring.
   appInspector.stopAppMonitoring(identifier, true, globalState.appsMonitored);
   try {
-    // v=false: Flux data lives on bind mounts; the recreate reuses them via a soft
-    // install (enforced: recreateForNetworkHeal passes softOnly).
+    // v=false: Flux data lives on bind mounts; the recreate reuses them without
+    // volume creation (enforced: recreateForNetworkHeal passes allowVolumeCreation
+    // false).
     await dockerService.appDockerForceRemove(identifier, false);
   } catch (err) {
     // The container is still there (or partially removed): put monitoring back so a
