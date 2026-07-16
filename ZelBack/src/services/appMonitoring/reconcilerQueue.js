@@ -25,6 +25,9 @@ const inFlight = new Set(); // ids currently reconciling (per-key single-flight)
 const dirty = new Set(); // ids re-requested while in flight -> reconcile again
 const bootPending = new Set(); // ids enqueued before the boot gate opened
 const backoffTimers = new Map(); // id -> scheduled retry timeout
+// ids whose armed timer is a surveillance glance (post-start attachment verify),
+// not outstanding work: it must not hold a converge open (see scheduleRetry)
+const nonSettleHolding = new Set();
 
 // The boot-drain gate: opens once every boot-held component has completed ONE
 // reconcile pass (started, backoff-deferred, awaiting-controller, or failed
@@ -72,11 +75,23 @@ function settleBootDrain(reason) {
 /**
  * Arm a paced retry of one component (backoff ladder / managed-defer): re-enqueues
  * after delayMs. Called by the engine from its backoff/defer paths.
+ *
+ * holdsSettle (default true): whether the armed timer counts as outstanding work
+ * for the settle verdict. A retry that defers real work (backoff, managed hold,
+ * heal pacing) must hold a converging component open. A surveillance glance — the
+ * post-start attachment verify, which re-checks a container that is already
+ * running and settled — must NOT: it would add its whole delay to every install/
+ * redeploy convergence, and "settled" never promised more than the level-based
+ * reconciler's standing watch. One timer per id: a later real retry replaces a
+ * glance (and its classification), and vice versa.
  */
-function scheduleRetry(identifier, delayMs) {
+function scheduleRetry(identifier, delayMs, { holdsSettle = true } = {}) {
   if (backoffTimers.has(identifier)) clearTimeout(backoffTimers.get(identifier));
+  if (holdsSettle) nonSettleHolding.delete(identifier);
+  else nonSettleHolding.add(identifier);
   const timer = setTimeout(() => {
     backoffTimers.delete(identifier);
+    nonSettleHolding.delete(identifier);
     enqueue(identifier);
   }, delayMs);
   if (timer.unref) timer.unref();
@@ -97,9 +112,13 @@ function runReconcile(identifier) {
         setImmediate(() => enqueue(identifier));
         return;
       }
-      // Final pass for this id (no retry armed): hand to the engine so it can
-      // resolve a converging component to a settled verdict.
-      if (onSettledFn) onSettledFn(identifier, { retryArmed: backoffTimers.has(identifier) });
+      // Final pass for this id (no work-holding retry armed): hand to the engine so
+      // it can resolve a converging component to a settled verdict. An armed
+      // surveillance glance does not block the verdict.
+      if (onSettledFn) {
+        const retryArmed = backoffTimers.has(identifier) && !nonSettleHolding.has(identifier);
+        onSettledFn(identifier, { retryArmed });
+      }
     });
 }
 
@@ -150,6 +169,7 @@ function beginBootDrain() {
 function stopQueue() {
   backoffTimers.forEach((t) => clearTimeout(t));
   backoffTimers.clear();
+  nonSettleHolding.clear();
   if (bootDrainCapTimer) {
     clearTimeout(bootDrainCapTimer);
     bootDrainCapTimer = null;
