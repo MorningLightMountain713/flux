@@ -35,16 +35,18 @@ function matchingLines(file, regex) {
 describe('reconciler run-authority guard', () => {
   const files = jsFiles(SERVICES);
 
-  it('only the allowlisted owners call appDockerStart/Stop/Restart/Kill', () => {
+  it('only the allowlisted owners call appDockerStart/Stop/Restart/Kill/ForceRemove', () => {
     // file (relative to services) -> exact number of appDocker* run-state calls allowed.
     // A count mismatch (new call in an owner) fails just like a brand-new offender file.
+    // ForceRemove counts: destroying a (possibly running) container is the strongest
+    // run-state mutation there is.
     const owners = {
-      'appMonitoring/appReconciler.js': 7, // the sole authority: volume-unavailable pending stop, data-clear stop, force kill, graceful stop, restart-gen bounce, unhealthy restart, start
-      'appLifecycle/appUninstaller.js': 4, // terminal teardown: uninstallComponent (redeploy) kill+stop, runTeardown worker kill+stop
+      'appMonitoring/appReconciler.js': 8, // the sole authority: volume-unavailable pending stop, data-clear stop, force kill, graceful stop, restart-gen bounce, unhealthy restart, start, network-detach heal force-remove
+      'appLifecycle/appUninstaller.js': 7, // terminal teardown: uninstallComponent (redeploy) kill+stop+force-remove, runTeardown worker kill+stop + 2 paced force-removes
       'appLifecycle/componentProvisioner.js': 1, // test-install inline start (synchronous fail-fast)
       'appManagement/appController.js': 1, // stopAllNonFluxRunningApps janitor (foreign, non-Flux containers)
     };
-    const call = /\.appDocker(Start|Stop|Restart|Kill)\(/;
+    const call = /\.appDocker(Start|Stop|Restart|Kill|ForceRemove)\(/;
     const offenders = [];
     const counts = {};
     for (const file of files) {
