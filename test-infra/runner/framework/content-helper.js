@@ -147,8 +147,12 @@ export async function registerEncryptedV9App(nodeUrl, opts) {
  * version with new slot bytes, sealed as one HPKE content envelope (AAD ref
  * manifest:v<version>) with the owner-signed manifest + the FluxDrive dual-sigs.
  *
+ * A slot entry is either { name, bytes } (rotated: bytes attached + owner-signed)
+ * or { name, hash } (carried over: declared in the manifest with no bytes and no
+ * sig — the node presence-checks the stored copy from the prior version instead).
+ *
  * @param {string} nodeUrl
- * @param {object} opts - { name, owner?, version, slots: [{ name, bytes }], ownerKey?, timestamp?, rollout? }
+ * @param {object} opts - { name, owner?, version, slots: [{ name, bytes } | { name, hash }], ownerKey?, timestamp?, rollout? }
  * @returns {Promise<object>} the /apps/contentupdate response
  */
 export async function pushContentUpdate(nodeUrl, opts) {
@@ -161,8 +165,8 @@ export async function pushContentUpdate(nodeUrl, opts) {
   const slotMap = {};
   const blobs = {};
   for (const s of opts.slots || []) {
-    const h = tk.blobHash(s.bytes);
-    blobs[h] = s.bytes;
+    const h = s.bytes ? tk.blobHash(s.bytes) : s.hash;
+    if (s.bytes) blobs[h] = s.bytes;
     slotMap[s.name] = { hash: h };
   }
 
