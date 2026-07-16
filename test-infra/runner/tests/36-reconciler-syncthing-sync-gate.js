@@ -9,7 +9,6 @@ import {
   waitFor, waitForReconcileActuated, waitForReconcilerDesiredChanged, assertNoEvent,
 } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // An r: (receive-only sync) app must NOT start until its data is synced — starting
 // on un-synced data would propagate an inconsistent state to peers. The syncthing
@@ -26,7 +25,6 @@ async function isUp(client, appName) {
 
 describe('reconciler waits for syncthing r: sync before first start', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let idx; let folder; let identifier;
   const appName = `e2esync${Date.now()}`;
 

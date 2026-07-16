@@ -6,7 +6,6 @@ import { waitFor, waitForReconcileActuated, waitForBootSettled } from '../framew
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { enableRpcFailure, disableRpcFailure } from '../framework/daemon-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey } from '../framework/keys.js';
 
@@ -20,7 +19,6 @@ const subnet = getSubnetConfig();
 
 describe('reconciler restarts app containers on FluxOS boot', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let idx;
   const appName = `e2eboot${Date.now()}`;
   const identifier = `${appName}_${appName}`;

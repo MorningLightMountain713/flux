@@ -4,7 +4,6 @@ import { createTestEnv } from '../framework/test-env.js';
 import { getAppContainerStatus, stopAppContainer } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, seedTestApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // A clean exit (code 0) is restarted under the default 'always' restart policy.
 // This is the regression for the client whose containers exit 0 to free memory:
@@ -17,7 +16,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('reconciler restarts a cleanly-exited (exit 0) container by default', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let idx; let identifier;
   const appName = `e2eexit0${Date.now()}`;
 

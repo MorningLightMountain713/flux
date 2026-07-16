@@ -11,7 +11,6 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitFor } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Multi-node content propagation: the slot-manifest register is a permanent latest-wins
 // value that must converge to the same version on every node by TWO complementary paths,
@@ -58,7 +57,6 @@ async function waitForSpecEverywhere(env, name, timeout = 150000) {
 describe('content propagation across a multi-node fleet', function () {
   let env;
   let dbClients;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(540000);

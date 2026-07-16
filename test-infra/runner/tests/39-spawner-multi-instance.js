@@ -8,7 +8,6 @@ import {
 } from '../framework/reconciler-suite.js';
 import { waitFor } from '../framework/wait.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // The spawner places the requested number of instances across the network by
 // independent per-node self-selection (trySpawningGlobalApplication) — no central
@@ -52,7 +51,6 @@ const RIVAL_BACKDATE_MS = 30 * 1000;
 
 describe('spawner places the requested number of instances', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   const subnet = getSubnetConfig();
   const stubIps = new Set(STUB_INDICES.map((i) => subnet.nodeIp(i + 1)));
@@ -175,7 +173,6 @@ describe('spawner places the requested number of instances', function () {
 // spawner.
 describe('spawner places on every node when instances == nodeCount', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(420000);

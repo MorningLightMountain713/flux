@@ -1,4 +1,4 @@
-import { describe, it, before, after, afterEach } from 'mocha';
+import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
@@ -9,9 +9,8 @@ import {
 } from '../framework/wait.js';
 import {
   advanceBlock, advanceBlocks, startTicker, stopTicker,
-  clearAllNodeStatus, setNodeStatus, disableAllRpcFailure,
+  clearAllNodeStatus, setNodeStatus,
 } from '../framework/daemon-control.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { loadSharedConfig, peerDeathMs, PARTITION_PEERS } from '../framework/coupled-knobs.js';
 
 // How long a node takes to notice a peer that has been unplugged rather than
@@ -79,7 +78,6 @@ async function bootNodes(env, { discover = false } = {}) {
 
 describe('Orchestrator: INITIALIZING to SYNCING', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -126,7 +124,6 @@ describe('Orchestrator: INITIALIZING to SYNCING', function () {
 describe('Orchestrator: SYNCING to READY', function () {
   describe('normal path (all conditions met)', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(300000);
@@ -162,7 +159,6 @@ describe('Orchestrator: SYNCING to READY', function () {
   // claim, plus the case that proves the timer still does its actual job.
   describe('a node short of the peer threshold never reaches READY', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(300000);
@@ -244,7 +240,6 @@ describe('Orchestrator: SYNCING to READY', function () {
   // road left.
   describe('block timer fallback with the peer set up', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(300000);
@@ -291,7 +286,6 @@ describe('Orchestrator: SYNCING to READY', function () {
 
 describe('Orchestrator: READY to DEGRADED', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -330,7 +324,6 @@ describe('Orchestrator: READY to DEGRADED', function () {
 // which is the block above, not this one.
 describe('Orchestrator: peer drop during SYNCING', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -367,7 +360,6 @@ describe('Orchestrator: peer drop during SYNCING', function () {
 
 describe('Orchestrator: DEGRADED recovery cycle', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -407,7 +399,6 @@ describe('Orchestrator: DEGRADED recovery cycle', function () {
 
 describe('Orchestrator: block timer during RESYNCING', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(300000);
@@ -449,7 +440,6 @@ describe('Orchestrator: block timer during RESYNCING', function () {
 // the same reason, without being asked.
 describe('Orchestrator: the block budget starts again after the peer set goes', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   // appSyncFallbackMinutes 5 at BLOCKS_PER_MINUTE 2.
   const BUDGET_BLOCKS = 10;
@@ -515,7 +505,6 @@ describe('Orchestrator: the block budget starts again after the peer set goes', 
 describe('Orchestrator: message capability loss', function () {
   describe('loss during READY', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(300000);
@@ -553,7 +542,6 @@ describe('Orchestrator: message capability loss', function () {
 
   describe('loss during SYNCING', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(120000);

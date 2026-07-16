@@ -4,7 +4,6 @@ import { createTestEnv } from '../framework/test-env.js';
 import { dbClient } from '../framework/db-client.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { waitForUp } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { PRODUCTION } from '../framework/coupled-knobs.js';
 
 // B3 end-to-end: the first post-boot fluxapprunning broadcast.
@@ -24,7 +23,6 @@ import { PRODUCTION } from '../framework/coupled-knobs.js';
 
 describe('first post-boot broadcast: complete, never empty, never destructive', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2ebootbc${Date.now()}`;
   let idx; // node running the app
   let peerIdx; // observer peer

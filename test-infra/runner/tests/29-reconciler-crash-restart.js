@@ -4,7 +4,6 @@ import { createTestEnv } from '../framework/test-env.js';
 import { getAppContainerStatus, crashAppContainer } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // A container that crashes (non-zero exit) is restarted by the reconciler. The
 // Docker `die` event enqueues the component; the reconciler sees desired=running,
@@ -12,7 +11,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('reconciler restarts a crashed container', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let installedOnIndex;
   const appName = `e2ecrash${Date.now()}`;
   const identifier = `${appName}_${appName}`;

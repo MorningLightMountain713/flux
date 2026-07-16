@@ -11,7 +11,6 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitForAppInstalled, assertNoEvent } from '../framework/wait.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Content-delivery FAILURE modes: the negative paths the happy-path suites
 // (51/53/54) don't cover. Four independent scenarios, all asserted on the SSE
@@ -36,7 +35,6 @@ const ARCANE = [0, 1, 2, 3];
 
 describe('content delivery: failure modes', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   const base = `cfm${Date.now()}`;
 

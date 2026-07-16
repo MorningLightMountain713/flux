@@ -14,7 +14,6 @@ import {
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // The network-detach heal (dev PR #1766, ported onto the v9 lifecycle): a RUNNING
 // container whose libnetwork endpoint is gone (NetworkMode still names its network,
@@ -55,7 +54,6 @@ async function waitForHealRecreated(client, identifier, timeout, afterId) {
 
 describe('reconciler network-detach heal', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let idx;
   let client;
   const healName = `e2eheal${Date.now()}`;

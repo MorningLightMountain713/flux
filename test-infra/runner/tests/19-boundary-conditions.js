@@ -12,14 +12,12 @@ import {
 } from '../framework/daemon-control.js';
 import { fluxTeamKey } from '../framework/keys.js';
 import { authenticate } from '../auth.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { PRODUCTION } from '../framework/coupled-knobs.js';
 
 // Suite 1: Peer threshold boundaries
 
 describe('Boundary: peer thresholds', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(180000);
@@ -75,7 +73,6 @@ describe('Boundary: peer thresholds', function () {
 
 describe('Boundary: DOS state', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let fluxTeamAuth;
 
   before(async function () {
@@ -117,7 +114,6 @@ describe('Boundary: DOS state', function () {
 
 describe('Boundary: block timer', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(180000);
@@ -202,7 +198,6 @@ const PRODUCTION_EXPIRIES = {
 
 describe('Boundary: clean shutdown within SIGTERM_EXPIRY', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -234,7 +229,6 @@ describe('Boundary: clean shutdown within SIGTERM_EXPIRY', function () {
 
 describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);

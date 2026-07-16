@@ -12,7 +12,6 @@ import {
 } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { bootstrapPricing } from '../framework/price-helper.js';
 
 // Content-manifest sync: the permanent latest-wins register reconciled OFF the
@@ -55,7 +54,6 @@ async function bootAndPeerInitial(env, nodeIndices) {
 
 describe('content manifest sync: cold-boot in-band reconcile off the ephemeral plane', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `manifestsync${Date.now()}`;
   const contentSlots = [{
     name: 'conf',

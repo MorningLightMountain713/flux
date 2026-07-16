@@ -9,7 +9,6 @@ import {
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { waitFor } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // MUST-PASS data-safety gate (B1). The promotion FSM's isSynced is percentage-
 // based, so an EMPTY global index (globalBytes 0) reads as a vacuous 100% even
@@ -59,7 +58,6 @@ const subnet = getSubnetConfig();
 
 describe('syncthing promotion gate never reverts/promotes against an empty global', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appEmpty = `e2eemptyglobal${Date.now()}`;
   const appSource = `e2esourceexists${Date.now()}`;
   const appPart = `e2epartrevert${Date.now()}`;

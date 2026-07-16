@@ -6,7 +6,6 @@ import { buildSeedableEnterpriseApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { waitForUp } from '../framework/wait.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // B2 end-to-end: enterprise apps (spec stored encrypted - version 8, compose
 // empty, AES blob) must be covered by the reconnect sweep exactly like plain
@@ -21,7 +20,6 @@ async function isUp(client, appName) {
 
 describe('reconnect sweep covers enterprise apps (encrypted at rest)', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `e2eent${Date.now()}`;
   let identifier;
 

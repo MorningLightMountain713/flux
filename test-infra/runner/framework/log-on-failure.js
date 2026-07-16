@@ -1,4 +1,3 @@
-import { afterEach, after } from 'mocha';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { activeTestEnvs } from './test-env.js';
@@ -17,15 +16,6 @@ function sanitize(label) {
   return (label || 'unknown').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120);
 }
 
-// Dump each node's logs and SSE events to its OWN file under test-logs/<label>/,
-// plus one file per infra container (mongo, the stubs, the registry). A merged
-// stdout dump interleaves all nodes, which makes "which node did what" impossible
-// to read (every node logs the same identifiers every cycle). Per-node files keep
-// each node's timeline clean; stdout only gets a pointer to them.
-//
-// The infra files are what explains an INFRA-DEAD run: a mongo that takes SIGSEGV
-// writes its own backtrace, and until it was captured here that evidence was
-// thrown away with the container.
 // A container start that fails inside the runtime reports the same sentence
 // whether the parent cgroup no longer delegates a controller or the container's
 // own cgroup is absent: `openat2 .../memory.max: no such file or directory`.
@@ -133,122 +123,154 @@ async function readFromNodes(env, script) {
   }));
 }
 
-export function dumpLogsOnFailure(getEnv) {
+// DUMP_LOGS=always dumps per-node logs after every test (pass or fail), not just
+// failures — used to measure timing on green runs while investigating flakes.
+const ALWAYS = process.env.DUMP_LOGS === 'always';
 
-  async function dump(label) {
-    // The suite's own env when it was assigned; otherwise every env this process
-    // booted (createTestEnv threw mid-boot — the suite's variable never existed,
-    // but the partially-built env still holds the log collectors and SSE buffers;
-    // see activeTestEnvs in test-env.js).
-    const own = getEnv();
-    const envs = own ? [own] : activeTestEnvs();
-    if (!envs.length) return;
-    const dir = join(LOG_ROOT, sanitize(label));
-    try {
-      rmSync(dir, { recursive: true, force: true });
-      mkdirSync(dir, { recursive: true });
-    } catch (err) {
-      console.log(`log-on-failure: could not create ${dir}: ${err.message}`);
-      return;
-    }
+function ancestorChain(suite) {
+  const chain = new Set();
+  for (let s = suite; s; s = s.parent) chain.add(s);
+  return chain;
+}
 
-    // Node diagnostics are already in memory; infra logs come off the docker
-    // daemon, so they are fetched up front and written alongside them. Each entry
-    // is best-effort (see env.infraDiagnostics) — a log fetch that failed carries
-    // an `error` and is reported, never thrown.
-    // Everything below reads the nodes through their docker, which a suite may
-    // have left frozen.
-    await Promise.all(envs.map((env) => thawEveryNode(env.clients ?? [])));
-    const infraByEnv = await Promise.all(envs.map((env) => env.infraDiagnostics()));
-    const cgroupsByEnv = await Promise.all(envs.map((env) => cgroupState(env).catch(
-      (err) => `cgroup probe failed: ${err.message}\n`,
-    )));
-    // What a node's units write to the journal rather than to the container stream
-    // the log collectors read; see env.nodeJournals.
-    const journalsByEnv = await Promise.all(envs.map((env) => env.nodeJournals().catch(
-      (err) => [{ index: 0, text: `journal read failed: ${err.message}\n` }],
-    )));
-    const nodeFilesByEnv = await Promise.all(envs.map(async (env) => ({
-      syncthing: await readFromNodes(env, SYNCTHING_LOGS),
-      apps: await readFromNodes(env, APP_LOGS),
-      network: await readFromNodes(env, NETWORK_STATE),
-    })));
+// The envs whose evidence belongs to a failure in `suite`: every env created by
+// a hook of `suite` or one of its ancestors (createTestEnv tags env.ownerSuite
+// from the hookCtx it already receives), plus any env that carries no tag (a
+// createTestEnv call without hookCtx cannot be attributed, so it is never
+// filtered out). If attribution matches nothing, fall back to every env this
+// process booted — noisy evidence beats none. A createTestEnv that threw mid-boot
+// still counts: the partially-built env holds the log collectors and SSE buffers
+// (activeTestEnvs in test-env.js).
+function envsFor(suite) {
+  const all = activeTestEnvs();
+  const chain = ancestorChain(suite);
+  const picked = all.filter((env) => !env.ownerSuite || chain.has(env.ownerSuite));
+  return picked.length ? picked : all;
+}
 
-    const written = [];
-    envs.forEach((env, e) => {
-      const prefix = envs.length > 1 ? `env${e + 1}-` : '';
-      const cgroups = cgroupsByEnv[e];
-      if (cgroups && cgroups.trim()) {
-        const file = join(dir, `${prefix}cgroup-state.log`);
-        writeFileSync(file, cgroups.endsWith('\n') ? cgroups : `${cgroups}\n`);
-        written.push(file);
-      }
-      for (const { name, text, error } of infraByEnv[e]) {
-        if (error) {
-          console.log(`log-on-failure: no logs for infra container ${name}: ${error}`);
-          continue;
-        }
-        if (!text.trim()) continue;
-        const file = join(dir, `${prefix}infra-${sanitize(name)}.log`);
-        writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`);
-        written.push(`${file} (${text.trimEnd().split('\n').length} lines)`);
-      }
-      for (const { index, ip, lines, events } of env.nodeDiagnostics()) {
-        if (!lines.length && !events.length) continue;
-
-        const parts = [`=== Node ${index} (ip ${ip ?? '?'}) — ${lines.length} log lines ===`];
-        parts.push(...lines);
-        if (events.length) {
-          parts.push('', `=== Node ${index} SSE events (${events.length}) ===`);
-          events.forEach((ev) => parts.push(`${ev.event}: ${JSON.stringify(ev.data)}`));
-        }
-        const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}.log`);
-        writeFileSync(file, `${parts.join('\n')}\n`);
-        written.push(`${file} (${lines.length} lines, ${events.length} events)`);
-      }
-      for (const { index, text } of journalsByEnv[e]) {
-        if (!text.trim()) continue;
-        const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}-journal.log`);
-        writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`);
-        written.push(`${file} (${text.trimEnd().split('\n').length} lines)`);
-      }
-      for (const [kind, results] of Object.entries(nodeFilesByEnv[e])) {
-        for (const { index, output, error } of results) {
-          if (error) {
-            console.log(`log-on-failure: no ${kind} logs for node ${index}: ${error}`);
-            continue;
-          }
-          if (!output.trim()) continue;
-          const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}-${kind}.log`);
-          writeFileSync(file, output.endsWith('\n') ? output : `${output}\n`);
-          written.push(`${file} (${output.trimEnd().split('\n').length} lines)`);
-        }
-      }
-    });
-
-    if (written.length) {
-      console.log(`\n--- per-container logs written to ${dir} ---`);
-      written.forEach((w) => console.log(`  ${w}`));
-    } else {
-      console.log(`\n--- no container logs captured for ${label} ---`);
-    }
+// Dump each node's logs and SSE events to its OWN file under test-logs/<label>/,
+// plus one file per infra container (mongo, the stubs, the registry). A merged
+// stdout dump interleaves all nodes, which makes "which node did what" impossible
+// to read (every node logs the same identifiers every cycle). Per-node files keep
+// each node's timeline clean; stdout only gets a pointer to them.
+//
+// The infra files are what explains an INFRA-DEAD run: a mongo that takes SIGSEGV
+// writes its own backtrace, which leaves with the container.
+async function dump(label, envs) {
+  if (!envs.length) return;
+  const dir = join(LOG_ROOT, sanitize(label));
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    console.log(`log-on-failure: could not create ${dir}: ${err.message}`);
+    return;
   }
 
-  // DUMP_LOGS=always dumps per-node logs after every test (pass or fail), not just
-  // failures — used to measure timing on green runs while investigating flakes.
-  const always = process.env.DUMP_LOGS === 'always';
+  // Node diagnostics are already in memory; infra logs come off the docker
+  // daemon, so they are fetched up front and written alongside them. Each entry
+  // is best-effort (see env.infraDiagnostics) — a log fetch that failed carries
+  // an `error` and is reported, never thrown.
+  // Everything below reads the nodes through their docker, which a suite may
+  // have left frozen.
+  await Promise.all(envs.map((env) => thawEveryNode(env.clients ?? [])));
+  const infraByEnv = await Promise.all(envs.map((env) => env.infraDiagnostics()));
+  const cgroupsByEnv = await Promise.all(envs.map((env) => cgroupState(env).catch(
+    (err) => `cgroup probe failed: ${err.message}\n`,
+  )));
+  // What a node's units write to the journal rather than to the container stream
+  // the log collectors read; see env.nodeJournals.
+  const journalsByEnv = await Promise.all(envs.map((env) => env.nodeJournals().catch(
+    (err) => [{ index: 0, text: `journal read failed: ${err.message}\n` }],
+  )));
+  const nodeFilesByEnv = await Promise.all(envs.map(async (env) => ({
+    syncthing: await readFromNodes(env, SYNCTHING_LOGS),
+    apps: await readFromNodes(env, APP_LOGS),
+    network: await readFromNodes(env, NETWORK_STATE),
+  })));
 
-  afterEach(async function () {
-    if (always || this.currentTest.state === 'failed') await dump(this.currentTest.fullTitle());
+  const written = [];
+  envs.forEach((env, e) => {
+    const prefix = envs.length > 1 ? `env${e + 1}-` : '';
+    const cgroups = cgroupsByEnv[e];
+    if (cgroups && cgroups.trim()) {
+      const file = join(dir, `${prefix}cgroup-state.log`);
+      writeFileSync(file, cgroups.endsWith('\n') ? cgroups : `${cgroups}\n`);
+      written.push(file);
+    }
+    for (const { name, text, error } of infraByEnv[e]) {
+      if (error) {
+        console.log(`log-on-failure: no logs for infra container ${name}: ${error}`);
+        continue;
+      }
+      if (!text.trim()) continue;
+      const file = join(dir, `${prefix}infra-${sanitize(name)}.log`);
+      writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`);
+      written.push(`${file} (${text.trimEnd().split('\n').length} lines)`);
+    }
+    for (const { index, ip, lines, events } of env.nodeDiagnostics()) {
+      if (!lines.length && !events.length) continue;
+
+      const parts = [`=== Node ${index} (ip ${ip ?? '?'}) — ${lines.length} log lines ===`];
+      parts.push(...lines);
+      if (events.length) {
+        parts.push('', `=== Node ${index} SSE events (${events.length}) ===`);
+        events.forEach((ev) => parts.push(`${ev.event}: ${JSON.stringify(ev.data)}`));
+      }
+      const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}.log`);
+      writeFileSync(file, `${parts.join('\n')}\n`);
+      written.push(`${file} (${lines.length} lines, ${events.length} events)`);
+    }
+    for (const { index, text } of journalsByEnv[e]) {
+      if (!text.trim()) continue;
+      const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}-journal.log`);
+      writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`);
+      written.push(`${file} (${text.trimEnd().split('\n').length} lines)`);
+    }
+    for (const [kind, results] of Object.entries(nodeFilesByEnv[e])) {
+      for (const { index, output, error } of results) {
+        if (error) {
+          console.log(`log-on-failure: no ${kind} logs for node ${index}: ${error}`);
+          continue;
+        }
+        if (!output.trim()) continue;
+        const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}-${kind}.log`);
+        writeFileSync(file, output.endsWith('\n') ? output : `${output}\n`);
+        written.push(`${file} (${output.trimEnd().split('\n').length} lines)`);
+      }
+    }
   });
+
+  if (written.length) {
+    console.log(`\n--- per-container logs written to ${dir} ---`);
+    written.forEach((w) => console.log(`  ${w}`));
+  } else {
+    console.log(`\n--- no container logs captured for ${label} ---`);
+  }
+}
+
+// Root hook plugin (.mocharc.json `require`): every suite file gets failure
+// dumps automatically — no per-suite registration.
+export const mochaHooks = {
+  async afterEach() {
+    if (!ALWAYS && this.currentTest.state !== 'failed') return;
+    await dump(this.currentTest.fullTitle(), envsFor(this.currentTest.parent));
+  },
 
   // afterEach never fires for a failed hook, which is when setup blew up and the
-  // node logs matter most. Any hook that failed anywhere under this suite is
+  // node logs matter most. A hook that failed anywhere under a suite file is
   // dumped here, under that hook's title, whatever passed before it.
-  after(async function () {
+  async afterAll() {
     const root = this.test?.parent;
     if (!root) return;
-    const [first] = failedHooks(root);
-    if (first) await dump(first.fullTitle());
-  });
-}
+    await Promise.all(root.suites.map(async (suite) => {
+      const [first] = failedHooks(suite);
+      if (first) await dump(first.fullTitle(), envsFor(first.parent));
+    }));
+  },
+};
+
+// The root hooks above cover every suite file with no registration, so this does
+// nothing; suites that still call it keep loading.
+// eslint-disable-next-line no-unused-vars
+export function dumpLogsOnFailure(getEnv) {}

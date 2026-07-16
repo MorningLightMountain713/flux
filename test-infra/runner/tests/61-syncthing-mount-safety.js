@@ -16,7 +16,6 @@ import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { destroyVolume } from '../framework/volume-fixture.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // The syncthing mount-safety guard gates on the MOUNTPOINT, not on content
 // (the deletion-propagation incident regressions):
@@ -61,7 +60,6 @@ async function folderType(nodeIp, folderId) {
 
 describe('syncthing mount-safety guard demotes unsafe sendreceive folders', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   const ts = Date.now();
   const leakName = `e2eleak${ts}`; // node 0: unmounted dir with leaked content

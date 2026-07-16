@@ -11,7 +11,6 @@ import {
   readFileInContainer, statFileInContainer, inodeInContainer, assertNodeRunsAsRoot,
 } from '../framework/container.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Content slots + bind mounting: the mutable half of v9 content delivery. Proves
 // the owner-signed manifest is recorded/backstopped at register, the declared slot
@@ -30,7 +29,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('content slots + bind mounting: manifest, injection, perms, atomic delivery', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   const SUITE = `slots${Date.now()}`;
   const baseApp = `${SUITE}base`;

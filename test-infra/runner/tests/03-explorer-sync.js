@@ -4,7 +4,6 @@ import { createTestEnv } from '../framework/test-env.js';
 import { waitForDaemonReady, waitForBlockProcessed } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 import { advanceBlock, getState } from '../framework/daemon-control.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 let env;
 

@@ -7,7 +7,6 @@ import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
 import { waitForDaemonReady, waitForBlockProcessed, waitFor, waitForNodeStatus } from '../framework/wait.js';
 import { advanceBlock, startTicker } from '../framework/daemon-control.js';
 import { dbClient } from '../framework/db-client.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 async function bootAndPeer(env) {
   for (const client of env.clients) {
@@ -45,15 +44,13 @@ async function waitForHashResolved(nodeNum, initialResolved, timeout = 120000) {
 
 describe('Hash sync: late-joining node', function () {
   let env;
-  dumpLogsOnFailure(() => env);
-  let appHash;
 
   before(async function () {
     this.timeout(300000);
     env = await createTestEnv({ hookCtx: this, nodes: 10, deferredNodes: 1, tickerAutostart: false });
     await bootAndPeer(env);
 
-    ({ appHash } = await registerApp(env));
+    await registerApp(env);
 
     await waitFor(async () => {
       const counts = await dbClient(1).hashCounts();
@@ -94,8 +91,6 @@ describe('Hash sync: late-joining node', function () {
 
 describe('Hash sync: network partition', function () {
   let env;
-  dumpLogsOnFailure(() => env);
-  let appHash;
 
   before(async function () {
     this.timeout(300000);
@@ -104,7 +99,7 @@ describe('Hash sync: network partition', function () {
 
     await env.disconnectNode(env.lastNodeIndex);
 
-    ({ appHash } = await registerApp(env, { excludeNodes: [env.lastNodeIndex] }));
+    await registerApp(env, { excludeNodes: [env.lastNodeIndex] });
 
     await waitFor(async () => {
       const counts = await dbClient(1).hashCounts();
@@ -146,7 +141,6 @@ describe('Hash sync: network partition', function () {
 // from the copy its temporary pool still holds.
 describe('Hash sync: stale state recovery', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let appHash;
   let db;
   let audit;

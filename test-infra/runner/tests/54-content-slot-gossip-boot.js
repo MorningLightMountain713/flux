@@ -11,7 +11,6 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Content-slot manifest GOSSIP + BOOT recovery. A slot app's owner-signed manifest
 // is a permanent latest-wins register that rides the change-only gossip plane for
@@ -43,7 +42,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 describe('content slots: manifest gossip propagation + boot recovery', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   const appName = `gossipboot${Date.now()}`;
   const slotName = 'conf';
   const slotDestination = '/etc/app/conf';

@@ -7,7 +7,6 @@ import {
 import {
   clearAllNodeStatus,
 } from '../framework/daemon-control.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { PRODUCTION } from '../framework/coupled-knobs.js';
 
@@ -46,7 +45,6 @@ const PRODUCTION_EXPIRIES = {
 
 describe('Boot manager: FluxOS-only restart', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -75,7 +73,6 @@ describe('Boot manager: FluxOS-only restart', function () {
 
 describe('Boot manager: machine reboot with clean shutdown', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -106,7 +103,6 @@ describe('Boot manager: machine reboot with clean shutdown', function () {
 
 describe('Boot manager: first boot', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -141,7 +137,6 @@ describe('Boot manager: first boot', function () {
 
 describe('Boot manager: daemon timeout', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -169,7 +164,6 @@ describe('Boot manager: daemon timeout', function () {
 
 describe('Boot manager: not confirmed', function () {
   let env;
-  dumpLogsOnFailure(() => env);
 
   before(async function () {
     this.timeout(120000);
@@ -198,7 +192,6 @@ describe('Boot manager: not confirmed', function () {
 describe('Boot manager: shutdownReason sequence', function () {
   describe('clean shutdown (SIGTERM writes shutdownReason)', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(120000);
@@ -221,7 +214,6 @@ describe('Boot manager: shutdownReason sequence', function () {
 
   describe('unclean shutdown (no shutdownReason in heartbeat)', function () {
     let env;
-    dumpLogsOnFailure(() => env);
 
     before(async function () {
       this.timeout(120000);

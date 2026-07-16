@@ -4,7 +4,6 @@ import { getAppContainerStatus, killAppContainer, removeAppImage } from '../fram
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // A vanished container (docker emits destroy; no die fires for absence) is recreated
 // by the reconciler when Docker is reachable. When the registry cannot be REACHED
@@ -26,7 +25,6 @@ async function waitForUp(client, appName, label) {
 
 describe('reconciler recreates a missing container', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let idx;
   const appName = `e2emissing${Date.now()}`;
   const identifier = `${appName}_${appName}`;
