@@ -19,6 +19,10 @@ const blobs = new Map();
 const manifests = new Map();
 // every reconcile call, in arrival order, for assertions
 const reconciles = [];
+// every HEAD presence probe on the blob fetch route, in arrival order — the
+// carry-over submission contract asserts on these (a carried-over hash is
+// presence-checked instead of re-uploaded)
+const heads = [];
 // `${appName}:${source}` -> highest accepted version (strict floor)
 const floors = new Map();
 
@@ -34,6 +38,7 @@ function reset() {
   blobs.clear();
   manifests.clear();
   reconciles.length = 0;
+  heads.length = 0;
   floors.clear();
   mode.strict = false;
   mode.slow = 0;
@@ -89,6 +94,12 @@ app.post('/api/v1/blob', express.raw({ type: '*/*', limit: '64mb' }), (req, res)
 // hex, never containing '/'. 404 -> the client returns null and falls through.
 app.get('/api/v1/blob/:locator', (req, res) => {
   const entry = blobs.get(req.params.locator);
+  // Express routes HEAD through this GET handler; record the presence probe.
+  // The real service answers HEAD from the row alone (no body read) — the
+  // response is the same 200/404 either way, Express just drops the body.
+  if (req.method === 'HEAD') {
+    heads.push({ locator: req.params.locator, found: !!entry, at: new Date().toISOString() });
+  }
   if (!entry) {
     res.status(404).json({ error: 'not found' });
     return;
@@ -174,7 +185,8 @@ control.use(express.json({ limit: '64mb' }));
 control.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // Full snapshot for assertions: blob metadata (not bytes), stored manifests,
-// the reconcile log, the strict floors, and the active mode.
+// the reconcile log, the HEAD presence-probe log, the strict floors, and the
+// active mode.
 control.get('/state', (req, res) => {
   res.json({
     blobs: [...blobs.entries()].map(([locator, e]) => ({
@@ -183,6 +195,7 @@ control.get('/state', (req, res) => {
     })),
     manifests: Object.fromEntries(manifests),
     reconciles,
+    heads,
     floors: Object.fromEntries(floors),
     mode,
   });
