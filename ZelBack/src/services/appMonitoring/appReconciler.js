@@ -1203,8 +1203,10 @@ async function reconcile(rawIdentifier) {
       fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartRequested', generation: desiredGen });
       notifyContainerStarted(identifier);
       // A restart is a start: it can come up detached the same way (stale endpoint
-      // born at start time), so re-verify the attachment shortly.
-      scheduleRetry(identifier, POST_START_VERIFY_MS);
+      // born at start time), so re-verify the attachment shortly. Surveillance for
+      // a proven component (no converge hold); an unproven one still owes its
+      // first-run proof, so there the armed pass must hold.
+      scheduleRetry(identifier, POST_START_VERIFY_MS, { holdsSettle: !(restartReq && restartReq.hasSuccessfullyStarted) });
       return;
     }
     // A running container whose v9 livenessProbe HEALTHCHECK has failed its retries
@@ -1258,8 +1260,10 @@ async function reconcile(rawIdentifier) {
       if (await failConvergeIfExhausted(identifier)) return;
       // A restart is a start: it can come up detached the same way (stale endpoint
       // born at start time), so re-verify the attachment shortly rather than
-      // waiting for the hourly sweep.
-      scheduleRetry(identifier, POST_START_VERIFY_MS);
+      // waiting for the hourly sweep. Surveillance for a proven component (no
+      // converge hold); for an unproven one the armed pass also re-drives the
+      // first-run proof, so it must hold.
+      scheduleRetry(identifier, POST_START_VERIFY_MS, { holdsSettle: !(restartReq && restartReq.hasSuccessfullyStarted) });
       return;
     }
     // First-run proof: an unproven component latches its proven marker here — a
@@ -1458,11 +1462,13 @@ async function reconcile(rawIdentifier) {
   // A start is exactly when a container can come up attached to no network (a stale
   // endpoint left by an earlier failed start). The attachment we hold was sampled
   // BEFORE this start, so verify the new one shortly - otherwise a detached-at-boot
-  // container waits for the hourly sweep. The same armed pass drives the first-run
-  // proof for an unproven component: the running branch latches on probe-healthy or
-  // uptime and re-arms itself until proven, so this single retry both verifies the
-  // attachment and holds onSettled open through the proof window.
-  scheduleRetry(identifier, POST_START_VERIFY_MS);
+  // container waits for the hourly sweep. For a PROVEN component this is pure
+  // surveillance and must not hold a converge open (holdsSettle false - the settle
+  // verdict was never a promise beyond the reconciler's standing watch). For an
+  // UNPROVEN one the same armed pass drives the first-run proof (the running branch
+  // latches on probe-healthy or uptime and re-arms until proven), so there it IS the
+  // proof-window hold.
+  scheduleRetry(identifier, POST_START_VERIFY_MS, { holdsSettle: !proven });
 }
 
 // --- install converge-wait (direct observer; resolved by the reconcile loop) ---
