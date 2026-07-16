@@ -452,15 +452,19 @@ async function parseMultipartSubmission(req) {
  * in the immutable spec) upload here, and the AAD is bound to the submission via
  * `ref` (the signed contentHash) so a captured envelope can't be replayed onto a
  * different submission. Any non-contentRef blobs belong to content-slot mounts and
- * are returned (with the manifest) for the slot path. Shared by register + update.
+ * are returned (with the manifest) for the slot path. Shared by register + update:
+ * an update passes the spec it supersedes (priorSpec), whose contentRef hashes are
+ * carried over — already stored under identical locators — so the envelope attaches
+ * only new or changed files; a register has no prior and attaches everything.
  *
  * @param {object} spec - resolved submission spec (name, owner, contentRef mounts)
  * @param {object} content - the sealed TransportEnvelope JSON
  * @param {Map} ownerSigs - per-blob owner signatures
- * @param {object} bind - { ref, timestamp } for the transport AAD
+ * @param {object} bind - { ref, timestamp, priorSpec? } — transport AAD + the
+ *   decrypted spec this update supersedes (absent on register)
  * @returns {Promise<{ payload: object, blobs: Map<string, Buffer> }>}
  */
-async function uploadSealedContent(spec, content, ownerSigs, { ref, timestamp }) {
+async function uploadSealedContent(spec, content, ownerSigs, { ref, timestamp, priorSpec }) {
   const opened = await transportHelper.openContentEnvelope(content, {
     appName: spec.name, owner: spec.owner, ref, timestamp,
   });
@@ -469,7 +473,9 @@ async function uploadSealedContent(spec, content, ownerSigs, { ref, timestamp })
 
   const refHashes = contentBlobService.specContentHashes(spec);
   const refBlobs = new Map([...blobs].filter(([h]) => refHashes.has(h)));
-  await contentBlobService.encryptAndUploadBlobs(spec, refBlobs, ownerSigs, { uploader: fluxDriveClient });
+  await contentBlobService.encryptAndUploadBlobs({
+    spec, priorSpec, blobs: refBlobs, ownerSigs,
+  }, { uploader: fluxDriveClient });
 
   // A slot app bundles its INITIAL owner-signed manifest with the submission: upload
   // the slot blobs, store the manifest, and gossip it so the network has the slots'

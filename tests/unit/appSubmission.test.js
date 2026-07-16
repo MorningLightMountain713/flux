@@ -454,11 +454,24 @@ describe('appSubmission tests', () => {
       });
       // Only the contentRef blob (HA) is uploaded; the slot blob (HSLOT) is left for the slot path.
       sinon.assert.calledOnce(stubs.contentBlobService.encryptAndUploadBlobs);
-      const refBlobs = stubs.contentBlobService.encryptAndUploadBlobs.firstCall.args[1];
+      const { blobs: refBlobs, priorSpec } = stubs.contentBlobService.encryptAndUploadBlobs.firstCall.args[0];
       expect([...refBlobs.keys()]).to.deep.equal([HA]);
       expect(refBlobs.get(HA).toString()).to.equal('ref-bytes');
+      expect(priorSpec).to.equal(undefined); // register — nothing carried over
       // The full opened payload (incl. the slot blob) is returned for the manifest path.
       expect([...out.blobs.keys()]).to.have.members([HA, HSLOT]);
+    });
+
+    it('forwards the superseded spec on update so unchanged content is carried over', async () => {
+      appSubmission = load();
+      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({ blobs: {} })));
+      stubs.contentBlobService.specContentHashes.returns(new Set([HA]));
+
+      const prior = { name: 'myapp', owner: '1id' };
+      await appSubmission.uploadSealedContent(spec, envelope, new Map(), { ref: 'HASH123', timestamp: 1, priorSpec: prior });
+
+      const input = stubs.contentBlobService.encryptAndUploadBlobs.firstCall.args[0];
+      expect(input.priorSpec).to.equal(prior);
     });
   });
 });
