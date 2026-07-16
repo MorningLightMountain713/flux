@@ -8,7 +8,23 @@ const shutdownPlan = require('../appLifecycle/shutdownPlan');
 const { verifyAppVolumeMount } = require('../utils/volumeService');
 
 
-async function recreateMissingContainers(componentIdentifier, { abortSignal = null } = {}) {
+/**
+ * Recreates the container(s) for an app/component from its installed spec.
+ *
+ * allowVolumeCreation: whether a component whose data volume cannot be verified
+ * as mounted may have its volume (re)created (installComponent createVolumes,
+ * which fallocates + mke2fs's the volume file — i.e. REFORMATS the app's data).
+ * That is acceptable when recreating a container that is gone and whose volume
+ * is genuinely unverifiable, but it is catastrophic for a caller that
+ * deliberately removed a live container whose data was intact (the
+ * network-detach heal): a transient verifyAppVolumeMount failure would wipe the
+ * user's data. Such callers pass false and get a throw instead, so they can
+ * retry rather than reformat.
+ *
+ * @param {string} componentIdentifier
+ * @param {{abortSignal?: AbortSignal, allowVolumeCreation?: boolean}} [options]
+ */
+async function recreateMissingContainers(componentIdentifier, { abortSignal = null, allowVolumeCreation = true } = {}) {
   const mainAppName = componentIdentifier.split('_')[1] || componentIdentifier;
   const instantiated = await appsRepository.getInstalledApp(mainAppName);
   if (!instantiated) {
@@ -58,6 +74,9 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
       // still fails the create and can escalate to removal. Fully closing it needs a
       // rearchitect (pruner coordination / sources outside the synced tree).
       await appVolumeService.ensureMountSourcesExist(deployComp);
+    }
+    if (!volumeMounted && !allowVolumeCreation) {
+      throw new Error(`Cannot recreate ${componentIdentifier} without creating (reformatting) its data volume: the volume for ${mainAppName} could not be verified as mounted`);
     }
     await componentProvisioner.installComponent(deployComp, {
       createVolumes: !volumeMounted, owner: instantiated.owner, requiresEncryption, syslogTarget, crossAppLogCollector, abortSignal, allowLocalImageFallback: true,
