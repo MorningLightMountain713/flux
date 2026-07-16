@@ -190,7 +190,9 @@ const volumeMissingNoted = new Set();
 // purpose" (otherwise a restart between the remove and the recreate makes the next
 // reconcile read the absence as tampering and, on a failed recreate, uninstall the
 // app). That lives in appsRuntimeState.networkHealRemoval, not here.
-const NETWORK_DETACH_CONFIRM_MS = 3000;
+// Windows tunable via config (harness compression); the literals are the
+// production defaults - same idiom as the crash-backoff ladder.
+const NETWORK_DETACH_CONFIRM_MS = config.fluxapps.networkHealConfirmMs ?? 3000;
 // ...and the detach must ALSO have persisted for this long since we first saw it.
 // A dockerd restart with live-restore can answer an inspect before libnetwork has
 // re-populated endpoint IPs on running containers - and the event-stream reconnect
@@ -198,7 +200,7 @@ const NETWORK_DETACH_CONFIRM_MS = 3000;
 // would rebuild every container on the node. This is wall-clock since the first
 // sighting, NOT a count of reconcile passes (two passes can land in the same
 // instant), so it is a real settle window whatever the trigger cadence.
-const DETACHED_PERSIST_MS = 60 * 1000;
+const DETACHED_PERSIST_MS = config.fluxapps.networkHealDetachedPersistMs ?? 60 * 1000;
 // id -> ms epoch of the first detached sighting of the current episode
 const detachedSince = new Map();
 // One container detached is a stale endpoint. Several at once is the daemon, not
@@ -206,13 +208,13 @@ const detachedSince = new Map();
 const DETACH_STORM_THRESHOLD = 3;
 // a pruned network cannot be repaired by recreating the container - re-check on a
 // slow pace so a restored network is picked up without an hour's wait
-const NETWORK_PRUNED_RETRY_MS = 5 * 60 * 1000;
+const NETWORK_PRUNED_RETRY_MS = config.fluxapps.networkHealPrunedRetryMs ?? 5 * 60 * 1000;
 // a container is normally verified attached only on the reconcile after its start,
 // i.e. the hourly sweep. But this pathology is BORN at start time, so re-check
 // shortly after every start/recreate we perform: detached-at-boot then heals in
 // under a minute, with the sweep as the backstop. (Docker network events cannot
 // cover this: a container born detached never emits a disconnect.)
-const POST_START_VERIFY_MS = 30 * 1000;
+const POST_START_VERIFY_MS = config.fluxapps.postStartVerifyMs ?? 30 * 1000;
 
 // identifiers whose detach/prune was already recorded as a tampering event, so the
 // paced retries record it once per episode rather than once per attempt (the count

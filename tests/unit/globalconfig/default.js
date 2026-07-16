@@ -120,6 +120,10 @@ module.exports = {
   fluxapps: {
     crashBackoffDelaysMs: [0, 30000, 300000, 900000, 1800000],
     crashBackoffStableRunMs: 600000,
+    networkHealConfirmMs: 3000,
+    networkHealDetachedPersistMs: 60000,
+    networkHealPrunedRetryMs: 300000,
+    postStartVerifyMs: 30000,
     convergeFailAttempts: 3,
     convergeBackstopMs: 300000,
     convergeRetryMs: 10000,
