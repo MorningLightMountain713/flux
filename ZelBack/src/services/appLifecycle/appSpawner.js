@@ -56,17 +56,19 @@ let wakePending = false;
 
 /**
  * Number of nodes a spec pins via the placement model (IP / outpoint / operator
- * targets) - the v9 successor to the flat v8 `nodes` IP list. Summing the three
- * target arrays can over-count when one physical node is pinned by two identifiers
- * (e.g. IP and outpoint); that is conservative - it only ever demotes a true
- * sole-installer to "contended" (losing the fast path), never the reverse, so it
- * cannot cause an instance overshoot.
+ * targeting maps) - the v9 successor to the flat v8 `nodes` IP list. Summing the
+ * three maps' entry counts can over-count when one physical node is pinned by two
+ * identifiers (e.g. IP and outpoint); that is conservative - it only ever demotes
+ * a true sole-installer to "contended" (losing the fast path), never the reverse,
+ * so it cannot cause an instance overshoot.
  * @param {object} placement - the spec's Placement
  * @returns {number}
  */
 function placementPinCount(placement) {
   if (!placement) return 0;
-  return placement.targetIps.length + placement.targetOutpoints.length + placement.targetOperators.length;
+  return Object.keys(placement.targetIps).length
+    + Object.keys(placement.targetOutpoints).length
+    + Object.keys(placement.targetOperators).length;
 }
 
 /**
@@ -451,11 +453,11 @@ async function trySpawningGlobalApplication() {
       }
       log.info(`trySpawningGlobalApplication - Found ${globalAppNamesLocation.length} apps that are missing instances on the network and can be selected to try to spawn on my node.`);
 
-      const ipTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetIps.length > 0
+      const ipTargeted = globalAppNamesLocation.filter((c) => Object.keys(c.instantiated.spec.placement.targetIps).length > 0
         && c.instantiated.spec.placement.matchesTarget({ ip: localSocketAddr, ipMatcher: socketAddressesMatch }));
-      const outpointTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetOutpoints.length > 0
+      const outpointTargeted = globalAppNamesLocation.filter((c) => Object.keys(c.instantiated.spec.placement.targetOutpoints).length > 0
         && c.instantiated.spec.placement.matchesTarget({ outpoint: nodeOutpoint }));
-      const operatorTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetOperators.length > 0
+      const operatorTargeted = globalAppNamesLocation.filter((c) => Object.keys(c.instantiated.spec.placement.targetOperators).length > 0
         && c.instantiated.spec.placement.matchesTarget({ operator: nodeOperator }));
 
       const pool = ipTargeted.length > 0 ? ipTargeted
