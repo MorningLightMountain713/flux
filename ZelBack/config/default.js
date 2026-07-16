@@ -141,6 +141,13 @@ module.exports = {
     // and the run length that counts as stable (resets the ladder)
     crashBackoffDelaysMs: [0, 30000, 300000, 900000, 1800000],
     crashBackoffStableRunMs: 600000,
+    // network-detach heal windows: in-pass confirm settle, wall-clock persistence a
+    // detach must show before the destructive heal, re-check pace while the app's
+    // network is missing, and the post-start attachment verify
+    networkHealConfirmMs: 3000,
+    networkHealDetachedPersistMs: 60000,
+    networkHealPrunedRetryMs: 300000,
+    postStartVerifyMs: 30000,
     // install converge-wait (reconciler): roll an install back after this many
     // failed start attempts (a COUNT, not a clock); the backstop only stops the
     // caller hanging and never rolls back.

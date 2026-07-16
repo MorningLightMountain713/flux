@@ -192,6 +192,56 @@ export async function getAppNetwork(container, appName) {
   return names.find((n) => n === fluxAppNetworkName(appName)) ?? null;
 }
 
+// ── Network-detach synthesis (the network-heal suite) ─────────────────
+// A live `docker network disconnect` leaves the container RUNNING with
+// NetworkMode still naming its network but no endpoint on it - the stale-
+// endpoint state the reconciler's network-detach heal exists for.
+
+export async function disconnectAppNetwork(container, appName, componentName) {
+  return execInContainer(container,
+    `docker network disconnect ${fluxAppNetworkName(appName)} ${appContainerName(appName, componentName)}`);
+}
+
+export async function connectAppNetwork(container, appName, componentName) {
+  return execInContainer(container,
+    `docker network connect ${fluxAppNetworkName(appName)} ${appContainerName(appName, componentName)}`);
+}
+
+// The subnet of the app's docker network - capture BEFORE pruning it, so a
+// restore recreates the network the recreated container's static IP fits into.
+export async function getAppNetworkSubnet(container, appName) {
+  const { stdout } = await execInContainer(container,
+    `docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' ${fluxAppNetworkName(appName)} 2>/dev/null || echo ""`);
+  return stdout.trim() || null;
+}
+
+export async function removeAppNetworkRaw(container, appName) {
+  return execInContainer(container, `docker network rm ${fluxAppNetworkName(appName)}`);
+}
+
+export async function createAppNetworkRaw(container, appName, subnet) {
+  const subnetFlag = subnet ? ` --subnet ${subnet}` : '';
+  return execInContainer(container, `docker network create${subnetFlag} ${fluxAppNetworkName(appName)}`);
+}
+
+// Docker's container ID: survives nothing - a recreate mints a new one - so ID
+// equality across a window proves the container was never touched.
+export async function getAppContainerId(container, appName, componentName) {
+  const { stdout } = await execInContainer(container,
+    `docker inspect --format '{{.Id}}' ${appContainerName(appName, componentName)} 2>/dev/null || echo ""`);
+  return stdout.trim() || null;
+}
+
+// Whether the container holds an endpoint (with an IP) on its OWN app network -
+// the same fact dockerService.classifyContainerNetworkAttachment reads.
+export async function getAppContainerAttachment(container, appName, componentName) {
+  const net = fluxAppNetworkName(appName);
+  const { stdout } = await execInContainer(container,
+    `docker inspect --format '{{with index .NetworkSettings.Networks "${net}"}}{{.IPAddress}}{{end}}' ${appContainerName(appName, componentName)} 2>/dev/null || echo ""`);
+  const ip = stdout.trim();
+  return { attached: !!ip, ip: ip || null };
+}
+
 // The node's flux appdata root (harness FLUX_APPS_FOLDER). Per-component appdata lives at
 // <root>/flux<component>_<app>, loop-mounted then umount+rm -rf'd by the teardown.
 const APPDATA_ROOT = '/mnt/appdata/flux-apps';

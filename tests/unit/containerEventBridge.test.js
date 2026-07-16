@@ -191,12 +191,13 @@ describe('containerEventBridge', () => {
       return stream;
     };
 
-    it('subscribes to die, destroy, start and health_status container events', async () => {
+    it('subscribes to the container lifecycle events and network disconnects', async () => {
       stubs.dockerService.dockerGetEvents.resolves(makeStream());
       try {
         await containerEventBridge.start();
         const { filters } = stubs.dockerService.dockerGetEvents.firstCall.args[0];
-        expect(filters.event).to.have.members(['die', 'destroy', 'start', 'health_status']);
+        expect(filters.type).to.have.members(['container', 'network']);
+        expect(filters.event).to.have.members(['die', 'destroy', 'start', 'health_status', 'disconnect']);
       } finally {
         containerEventBridge.stop();
       }
@@ -240,6 +241,59 @@ describe('containerEventBridge', () => {
         containerEventBridge.stop();
         clock.restore();
       }
+    });
+  });
+
+  describe('network disconnect', () => {
+    // docker network events carry the CONTAINER ID (Actor.Attributes.container) and
+    // the NETWORK name (Actor.Attributes.name) - the handler resolves the id itself
+    const disconnectEvent = (networkName, containerId) => ({
+      Type: 'network', Action: 'disconnect', Actor: { Attributes: { name: networkName, container: containerId } },
+    });
+
+    beforeEach(() => {
+      stubs.dockerService.dockerListContainers = sinon.stub().resolves([
+        { Id: 'abc123', Names: ['/fluxwww_app'] },
+      ]);
+    });
+
+    it('enqueues a reconcile when a flux container is disconnected from its flux network', async () => {
+      await containerEventBridge.handleNetworkDisconnect(disconnectEvent('fluxDockerNetwork_app', 'abc123'));
+      expect(stubs.appReconciler.enqueue.calledOnceWith('fluxwww_app')).to.be.true;
+    });
+
+    it('ignores disconnects on networks flux does not own', async () => {
+      await containerEventBridge.handleNetworkDisconnect(disconnectEvent('bridge', 'abc123'));
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.dockerService.dockerListContainers.called, 'must not even resolve the container').to.be.false;
+    });
+
+    it('ignores a disconnect whose container is already gone (the destroy handler owns absence)', async () => {
+      stubs.dockerService.dockerListContainers.resolves([]);
+      await containerEventBridge.handleNetworkDisconnect(disconnectEvent('fluxDockerNetwork_app', 'abc123'));
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.log.error.called, 'a trailing disconnect after removal is normal, never an error').to.be.false;
+    });
+
+    it('ignores a disconnect of a non-flux container from a flux network', async () => {
+      stubs.dockerService.dockerListContainers.resolves([{ Id: 'abc123', Names: ['/interloper'] }]);
+      await containerEventBridge.handleNetworkDisconnect(disconnectEvent('fluxDockerNetwork_app', 'abc123'));
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
+    });
+
+    it('does NOT reconcile a deliberate teardown disconnect while its stop-aligned lease is held', async () => {
+      operationRegistry.acquire('fluxwww_app', 'stopping', 'test');
+      await containerEventBridge.handleNetworkDisconnect(disconnectEvent('fluxDockerNetwork_app', 'abc123'));
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(operationRegistry.isHeld('fluxwww_app'), 'the lease belongs to the operation, never released here').to.be.true;
+    });
+
+    it('routes Type network/disconnect through the dispatcher and ignores other network actions', async () => {
+      await containerEventBridge.handleContainerEvent(disconnectEvent('fluxDockerNetwork_app', 'abc123'));
+      expect(stubs.appReconciler.enqueue.calledOnceWith('fluxwww_app')).to.be.true;
+      stubs.appReconciler.enqueue.resetHistory();
+      await containerEventBridge.handleContainerEvent({ Type: 'network', Action: 'connect', Actor: { Attributes: { name: 'fluxDockerNetwork_app', container: 'abc123' } } });
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
     });
   });
 });
