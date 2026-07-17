@@ -154,7 +154,8 @@ async function openManifestSlots(manifest, ctx, deps = {}) {
 
 /**
  * Process a manifest submission: verify it against the app's spec/owner, enforce
- * version monotonicity against the stored manifest, upload every slot's content as
+ * the strict-successor version rule (first manifest is 1, every later one exactly
+ * current + 1), upload every slot's content as
  * a content blob (source 'slot', reusing the blob dual-sig upload), then return the
  * gossip-form manifest (slots sealed for an encrypted app) ready to store + gossip.
  * The blob parts are matched to the manifest's slot hashes exactly like content
@@ -165,7 +166,7 @@ async function openManifestSlots(manifest, ctx, deps = {}) {
  * instead of re-uploaded, so rotating one slot attaches one file.
  *
  * @param {object} input - { manifest, spec, owner, encrypted, blobs, ownerSigs }
- * @param {object} deps - { getLatest?, uploader, benchmark?, now?, verify?, provider? }
+ * @param {object} deps - { getLatest?, refresh?, uploader, benchmark?, now?, verify?, provider? }
  * @returns {Promise<object>} the gossip-form manifest
  */
 async function processManifestSubmission(input, deps) {
@@ -173,14 +174,29 @@ async function processManifestSubmission(input, deps) {
     manifest, spec, owner, encrypted, blobs, ownerSigs,
   } = input;
   const {
-    getLatest = getLatestManifest, uploader, benchmark, now, verify, provider,
+    getLatest = getLatestManifest, refresh = refreshLatestManifest, uploader, benchmark, now, verify, provider,
   } = deps;
 
   await verifyManifest(manifest, { owner, spec }, { verify });
 
-  const prior = await getLatest(manifest.appName);
-  if (prior && manifest.version <= prior.version) {
-    throw new Error(`contentSlot: manifest version ${manifest.version} is not newer than stored ${prior.version}`);
+  // Strict successor: the submission door is the only stage that can be strict —
+  // gossip / boot-sync / the FluxDrive backstop must tolerate gaps (a receiver's
+  // gap just means missed messages), but every submission is owner-interactive, so
+  // requiring exactly current + 1 here keeps the network-wide sequence gapless and
+  // bounds a leaked owner key to advancing the never-resetting counter one step per
+  // signed update instead of burning the version space.
+  let prior = await getLatest(manifest.appName);
+  let expected = prior ? prior.version + 1 : 1;
+  if (manifest.version > expected) {
+    // Ahead of this node's view, which may just be stale (gossip lag, restart):
+    // catch up once, then re-derive. A version BELOW expected is hopeless either
+    // way — the floor only rises — so a stale resubmit costs no network round-trip.
+    await refresh(manifest.appName, { owner, encrypted, spec }, { verify, provider });
+    prior = await getLatest(manifest.appName);
+    expected = prior ? prior.version + 1 : 1;
+  }
+  if (manifest.version !== expected) {
+    throw new Error(`contentSlot: manifest version must be ${expected} (current is ${prior ? prior.version : 'none'}), got ${manifest.version}`);
   }
 
   // Hashes the stored prior manifest already delivered are carried over: their
@@ -571,6 +587,50 @@ async function fetchManifestFromPeers(appName, peers, ctx, deps = {}) {
     }
   }
   return best;
+}
+
+/**
+ * Catch this node's stored manifest row up to the freshest version the network can
+ * prove: running peers first (best-of-3, full owner-sig verification), then the
+ * FluxDrive backstop (an untrusted store, so its copy passes the same decrypt +
+ * owner-sig gate before adoption). Adopted bodies land through the strictly-higher-
+ * wins upsert, so a stale or lying source can never regress the row. Failures are
+ * swallowed: the caller re-reads the store and enforces against whatever view
+ * survives — the refresh is an accuracy aid, never a new failure mode.
+ *
+ * @param {string} appName
+ * @param {object} ctx - { owner, encrypted, spec }
+ * @param {object} [deps] - { getLatest?, getPeers?, fetchPeers?, fetchFromDrive?, store?, verify?, provider? }
+ * @returns {Promise<void>}
+ */
+async function refreshLatestManifest(appName, ctx, deps = {}) {
+  const { owner, encrypted, spec } = ctx;
+  const {
+    getLatest = getLatestManifest,
+    getPeers = listAppPeers,
+    fetchPeers = fetchManifestFromPeers,
+    fetchFromDrive = fluxDriveClient.fetchManifest,
+    store = storeManifest,
+    verify, provider,
+  } = deps;
+  try {
+    const stored = await getLatest(appName);
+    const floor = stored ? stored.version : 0;
+    const peers = await getPeers(appName);
+    const fetched = await fetchPeers(appName, peers, { owner, encrypted, spec }, { verify, provider });
+    if (fetched && fetched.gossip.version > floor) {
+      await store(fetched.gossip);
+      return;
+    }
+    const fromDrive = await fetchFromDrive(appName);
+    if (fromDrive && fromDrive.manifest && Number(fromDrive.version) > floor) {
+      const opened = await openManifestSlots(fromDrive.manifest, { owner, encrypted }, { provider });
+      await verifyManifest(opened, { owner, spec }, { verify });
+      await store(fromDrive.manifest);
+    }
+  } catch (error) {
+    log.warn(`contentSlot: manifest catch-up failed for ${appName} (enforcing against the stored view) - ${error.message ?? error}`);
+  }
 }
 
 /**
@@ -1439,5 +1499,6 @@ module.exports = {
   listAppPeers,
   fetchManifestFromPeer,
   fetchManifestFromPeers,
+  refreshLatestManifest,
   getContentManifestApi,
 };
