@@ -229,21 +229,54 @@ describe('registryManager tests', () => {
     it('should reject message with unsupported version', async () => {
       const wrongVersionMessage = {
         ...validMessage,
-        version: 2,
+        version: 3,
       };
 
       try {
         await registryManager.storeAppInstallingMessage(wrongVersionMessage);
         expect.fail('Should have thrown an error');
       } catch (error) {
-        expect(error.message).to.include('version 2 not supported');
+        expect(error.message).to.include('version 3 not supported');
       }
+    });
+
+    it('should reject version 2 message without announcedAt', async () => {
+      const missingAnnouncedAt = {
+        ...validMessage,
+        version: 2,
+      };
+
+      try {
+        await registryManager.storeAppInstallingMessage(missingAnnouncedAt);
+        expect.fail('Should have thrown an error');
+      } catch (error) {
+        expect(error.message).to.include('announcedAt required for version 2');
+      }
+    });
+
+    it('should store a version 2 message with announcedAt on the row', async () => {
+      const announcedAt = Date.now() - 60 * 1000;
+      const v2Message = {
+        ...validMessage,
+        version: 2,
+        name: 'TestAppV2',
+        announcedAt,
+        broadcastedAt: Date.now(),
+      };
+
+      const result = await registryManager.storeAppInstallingMessage(v2Message);
+
+      expect(result).to.be.true;
+      const collection = config.database.appsglobal.collections.appsInstallingLocations;
+      const row = await database.collection(collection).findOne({ name: 'TestAppV2' });
+      expect(row.announcedAt).to.deep.equal(new Date(announcedAt));
+      expect(row.expireAt).to.deep.equal(new Date(v2Message.broadcastedAt + 15 * 60 * 1000));
     });
 
     it('should reject old messages past valid time', async () => {
       const oldMessage = {
         ...validMessage,
-        broadcastedAt: Date.now() - (10 * 60 * 1000), // 10 minutes ago
+        broadcastedAt: Date.now() - (20 * 60 * 1000), // past the 15-minute row lifetime
       };
 
       const result = await registryManager.storeAppInstallingMessage(oldMessage);

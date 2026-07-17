@@ -252,6 +252,7 @@ describe('appSpawner tests', () => {
         globalAppsInformation: 'appsInformation',
         localAppsInformation: 'localAppsInformation',
         appsFolder: '/tmp/apps',
+        INSTALLING_RENEWAL_MS: 12 * 60 * 1000,
       },
       '../utils/enterpriseNetwork': {
         getCachedEnterpriseIdentity: sinon.stub().returns(opts.getCachedEnterpriseIdentity ?? false),
@@ -1075,6 +1076,178 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
       expect(installStub.called, 'the collision-return pass must reach the election and install the index-0 winner').to.equal(true);
+    });
+  });
+
+  describe('installing claims (v2 announce / renewal / clear)', () => {
+    const contendedPlacement = () => ({
+      targetIps: ['192.168.1.1', '10.0.0.7'], // 2 pins, 1 instance -> real contention
+      hasTargets: () => true,
+      matchesTarget: () => true,
+    });
+
+    it('announces v1 to everyone and the v2 claim to claim-capable peers, storing the claim locally', async () => {
+      const broadcastAllStub = sinon.stub().resolves();
+      buildModule({ candidates: [makeCandidate()], broadcastAllStub });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      const stored = registryManagerStub.storeAppInstallingMessage.firstCall.args[0];
+      expect(stored.version).to.equal(2);
+      expect(stored.announcedAt).to.be.a('number');
+      expect(stored.broadcastedAt).to.equal(stored.announcedAt + 1);
+
+      const calls = broadcastAllStub.getCalls();
+      const v1Call = calls.find((c) => c.args[0].version === 1);
+      const v2Call = calls.find((c) => c.args[0].version === 2 && !c.args[0].cleared);
+      expect(v1Call, 'v1 announce must broadcast unfiltered').to.exist;
+      expect(v1Call.args[1]).to.equal(undefined);
+      expect(v2Call, 'v2 claim must broadcast capability-filtered').to.exist;
+      expect(v2Call.args[0].announcedAt).to.equal(v1Call.args[0].broadcastedAt);
+      expect(v2Call.args[1]).to.deep.equal({ requireCapability: 'appInstallingClaims' });
+    });
+
+    it('broadcasts a neutral cleared claim when the install fails', async () => {
+      const broadcastAllStub = sinon.stub().resolves();
+      buildModule({
+        candidates: [makeCandidate()],
+        broadcastAllStub,
+        installStub: sinon.stub().resolves({ status: InstallStatus.FAILED, reason: 'boom' }),
+      });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      sinon.assert.called(registryManagerStub.removeAppInstallingMessage);
+      const clearedCall = broadcastAllStub.getCalls().find((c) => c.args[0].cleared === true);
+      expect(clearedCall, 'a failed attempt must release its seat fleet-wide').to.exist;
+      expect(clearedCall.args[0].version).to.equal(2);
+      expect(clearedCall.args[1]).to.deep.equal({ requireCapability: 'appInstallingClaims' });
+    });
+
+    it('does not clear when the install succeeds', async () => {
+      const broadcastAllStub = sinon.stub().resolves();
+      buildModule({ candidates: [makeCandidate()], broadcastAllStub });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(broadcastAllStub.getCalls().find((c) => c.args[0].cleared === true)).to.equal(undefined);
+    });
+
+    it('first pass of a pinned-contended app leaves the claim standing for the parked election', async () => {
+      const broadcastAllStub = sinon.stub().resolves();
+      const candidate = makeCandidate({ name: 'conApp', hash: 'con1', required: 1, placement: contendedPlacement() });
+      buildModule({ candidates: [candidate], broadcastAllStub });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      // The claim IS the deferred election entry: retracting or clearing it here would
+      // withdraw this node from an election it intends to contest on the second pass.
+      sinon.assert.notCalled(registryManagerStub.removeAppInstallingMessage);
+      expect(broadcastAllStub.getCalls().find((c) => c.args[0].cleared === true)).to.equal(undefined);
+      const queued = globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conApp');
+      expect(queued.announcedAt, 'the deferred entry must carry the announce time').to.be.a('number');
+    });
+
+    it('second pass failure retracts the re-adopted claim and broadcasts the clear', async () => {
+      const broadcastAllStub = sinon.stub().resolves();
+      const installStub = sinon.stub().resolves({ status: InstallStatus.FAILED, reason: 'boom' });
+      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      buildModule({
+        candidates: [makeCandidate({ name: 'placeholder', hash: 'ph1' })],
+        installStub,
+        globalAppInfoStub,
+        broadcastAllStub,
+        globalStateOverrides: {
+          appsToBeCheckedLater: [{
+            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: Date.now() - 60000,
+          }],
+        },
+      });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      sinon.assert.called(registryManagerStub.removeAppInstallingMessage);
+      const clearedCall = broadcastAllStub.getCalls().find((c) => c.args[0].cleared === true);
+      expect(clearedCall, 'the second pass owns the claim again, so its failure must clear it').to.exist;
+    });
+
+    it('election ranks by announcedAt when present: a renewed claim (late broadcastedAt) still wins by announce order', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      buildModule({
+        candidates: [makeCandidate({ name: 'placeholder', hash: 'ph1' })],
+        installStub,
+        globalAppInfoStub,
+        globalStateOverrides: {
+          appsToBeCheckedLater: [{
+            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: 1000,
+          }],
+        },
+      });
+      // Our row renewed (broadcastedAt moved to 5000) but announced first (1000); the
+      // peer announced second (2000, v1 row - no announcedAt). broadcastedAt ordering
+      // would rank us last; announce ordering must rank us first.
+      registryManagerStub.appInstallingLocation.resolves([
+        { ip: '192.168.1.1', broadcastedAt: 5000, announcedAt: 1000 },
+        { ip: '10.0.0.7', broadcastedAt: 2000 },
+      ]);
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(installStub.called, 'the first announcer must win the election even after renewing').to.equal(true);
+    });
+
+    it('election ranks by announcedAt when present: a later announcer loses despite an older broadcastedAt', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      buildModule({
+        candidates: [makeCandidate({ name: 'placeholder', hash: 'ph1' })],
+        installStub,
+        globalAppInfoStub,
+        globalStateOverrides: {
+          appsToBeCheckedLater: [{
+            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: 3000,
+          }],
+        },
+      });
+      registryManagerStub.appInstallingLocation.resolves([
+        { ip: '192.168.1.1', broadcastedAt: 1000, announcedAt: 3000 },
+        { ip: '10.0.0.7', broadcastedAt: 2000 },
+      ]);
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(installStub.called, 'a later announcer must stand down for the required-1 seat').to.equal(false);
+    });
+
+    it('renews the claim while the install is in flight (same announcedAt, fresh broadcastedAt)', async () => {
+      const clock = sinon.useFakeTimers({ now: 1_000_000, toFake: ['setInterval', 'clearInterval', 'Date'] });
+      try {
+        let resolveInstall;
+        const installStub = sinon.stub().returns(new Promise((resolve) => { resolveInstall = resolve; }));
+        const broadcastAllStub = sinon.stub().resolves();
+        buildModule({ candidates: [makeCandidate()], installStub, broadcastAllStub });
+
+        const run = appSpawner.trySpawningGlobalApplication();
+        await clock.tickAsync(0); // drive the attempt to the in-flight install await
+        await clock.tickAsync(12 * 60 * 1000);
+
+        const renewal = broadcastAllStub.getCalls().map((c) => c.args)
+          .find(([m]) => m.version === 2 && !m.cleared && m.broadcastedAt > m.announcedAt + 1);
+        expect(renewal, 'a 12-minute in-flight install must renew its claim').to.exist;
+        expect(renewal[0].announcedAt, 'renewals must not move the announce time').to.equal(1_000_000);
+        expect(renewal[1]).to.deep.equal({ requireCapability: 'appInstallingClaims' });
+
+        resolveInstall({ status: InstallStatus.INSTALLED, reason: null });
+        await run;
+
+        // the finally must disarm the renewal: no further renewals after completion
+        const broadcastsAfterRun = broadcastAllStub.callCount;
+        await clock.tickAsync(12 * 60 * 1000);
+        expect(broadcastAllStub.callCount).to.equal(broadcastsAfterRun);
+      } finally {
+        clock.restore();
+      }
     });
   });
 

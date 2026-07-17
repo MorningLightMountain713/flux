@@ -25,6 +25,7 @@ const {
   globalAppsInstallingErrorsBroadcasts,
   appsHashesCollection,
   scannedHeightCollection,
+  INSTALLING_EXPIRY_MS,
 } = require('../utils/appConstants');
 
 let reindexRunning = false;
@@ -255,11 +256,17 @@ async function storeAppInstallingMessage(message) {
     throw new Error('Invalid Flux App Installing message for storing');
   }
 
-  if (message.version !== 1) {
+  if (message.version !== 1 && message.version !== 2) {
     throw new Error(`Invalid Flux App Installing message for storing version ${message.version} not supported`);
   }
 
-  const validTill = message.broadcastedAt + (5 * 60 * 1000); // 5 minutes
+  if (message.version === 2 && typeof message.announcedAt !== 'number') {
+    throw new Error('Invalid Flux App Installing message for storing announcedAt required for version 2');
+  }
+
+  // Same row lifetime peers grant the broadcast copy: the node must not forget its
+  // own claim before the fleet does.
+  const validTill = message.broadcastedAt + INSTALLING_EXPIRY_MS;
   if (validTill < Date.now()) {
     log.warn(`Rejecting old/not valid fluxappinstalling message, message:${JSON.stringify(message)}`);
     // reject old message
@@ -275,6 +282,9 @@ async function storeAppInstallingMessage(message) {
     broadcastedAt: new Date(message.broadcastedAt),
     expireAt: new Date(validTill),
   };
+  if (message.version === 2) {
+    newAppInstallingMessage.announcedAt = new Date(message.announcedAt);
+  }
 
   // indexes over name, hash, ip. Then name + ip and name + ip + broadcastedAt.
   const queryFind = { name: newAppInstallingMessage.name, ip: newAppInstallingMessage.ip };
