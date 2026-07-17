@@ -1804,6 +1804,23 @@ async function dbRevert(folder) {
 }
 
 /**
+ * To request an immediate scan of a folder. Syncthing reloads ignore patterns
+ * before each scan, so this makes an updated .stignore enforce right away
+ * instead of waiting for the watcher delay or the rescan interval. Takes the
+ * mandatory parameter {folder}.
+ * @param {string} folder Folder ID.
+ */
+async function dbScan(folder) {
+  let apiPath = '/rest/db/scan';
+  if (folder) {
+    apiPath += `?folder=${folder}`;
+  } else {
+    throw new Error('folder parameter is mandatory');
+  }
+  return performRequest('post', apiPath);
+}
+
+/**
  * To request immediate scan. Takes the optional parameters {folder} (folder ID), {sub} (path relative to the folder root) and {next} (time in seconds)
  * @param {object} req Request.
  * @param {object} res Response.
@@ -3402,6 +3419,7 @@ module.exports = {
   postDbPrio,
   postDbRevert,
   dbRevert,
+  dbScan,
   postDbScan,
   // EVENTS
   getEvents,

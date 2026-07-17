@@ -193,8 +193,11 @@ async function applyMountPerms(mount) {
 
 /**
  * (Re)generate a component's `.stignore` from its current spec — the single source
- * of truth, idempotent (full overwrite), so it never goes stale across a redeploy
- * that keeps the volume (where `createAppVolume` does not run). Reserved entries
+ * of truth, idempotent (full overwrite, skipped when the content is already
+ * current), so it never goes stale across a redeploy that keeps the volume
+ * (where `createAppVolume` does not run). A changed ignore set on an existing
+ * file is followed by a targeted syncthing scan request so it enforces
+ * immediately. Reserved entries
  * come FIRST (syncthing is first-match-wins), so the owner's `sync.exclude` can
  * extend the set but can never un-exclude `/backup` or an injected content path.
  * Injected content is node-local — content delivery writes it on every node — and
@@ -219,7 +222,23 @@ async function writeStignore(deployComp) {
   const injected = deployComp.injectedSyncExcludes().map((source) => `/${path.relative(compDir, source)}`);
   const ownerExcludes = deployComp.sync.exclude || [];
   const lines = [...new Set(['/backup', ...injected, ...ownerExcludes].filter(Boolean))];
-  await fs.writeFile(`${compDir}/.stignore`, `${lines.join('\n')}\n`);
+  const content = `${lines.join('\n')}\n`;
+  const stignorePath = `${compDir}/.stignore`;
+  const existing = await fs.readFile(stignorePath, 'utf8').catch(() => null);
+  if (existing === content) return;
+  await fs.writeFile(stignorePath, content);
+  // Syncthing reloads ignore patterns only before its next scan/sync — on an
+  // idle folder that can be the full rescan interval. A targeted scan request
+  // makes a changed exclude enforce immediately. Skipped on the first write:
+  // the folder is not registered yet, and syncthing loads the patterns when it
+  // adds the folder. Best-effort — the watcher/rescan remains the fallback.
+  if (existing !== null) {
+    try {
+      await syncthingService.dbScan(dockerService.getAppIdentifier(deployComp.identifier));
+    } catch (error) {
+      log.warn(`writeStignore: syncthing scan request for ${deployComp.identifier} failed - ${error.message ?? error}`);
+    }
+  }
 }
 
 /**
