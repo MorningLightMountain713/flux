@@ -51,19 +51,26 @@ async function sealExport(plaintext, aadBytes, recipientPubB64) {
 // Build a sparse v9 submission spec. A single component by default, with optional
 // content mounts: contentRefHash adds an immutable contentRef file mount, and each
 // contentSlots entry adds a mutable contentSlot file mount. Pass `components` to
-// override entirely (e.g. the multi-component capstone).
+// override entirely (e.g. the multi-component capstone), `placement` for the
+// targeting maps. Named placement derives `instances` from the replica-name count,
+// so the field is omitted unless authored; loose/untargeted placement requires it
+// (defaulted to 3). Pass `instances: null` to force omission.
 export function buildV9ContentSpec({
   name = 'e2e-content-app',
   owner,
   image = 'nginx:latest',
-  instances = 3,
+  instances,
   ttl = 2592000,
   contentRefHash = null,
   contentSlots = [],
   components,
+  placement,
   ...overrides
 } = {}) {
   if (!owner) throw new Error('buildV9ContentSpec: owner required');
+  const targetingMaps = placement ? Object.values(placement) : [];
+  const named = targetingMaps.some((map) => map && Object.values(map).some(Array.isArray));
+  const instancesValue = instances === undefined && !named ? 3 : instances;
   const mounts = { '/data': { source: 'data', destination: '/data' } };
   if (contentRefHash) {
     mounts['/etc/ref.conf'] = {
@@ -88,9 +95,10 @@ export function buildV9ContentSpec({
     name,
     description: 'E2E content-delivery test app',
     owner,
-    instances,
+    ...(instancesValue == null ? {} : { instances: instancesValue }),
     ttl,
     contacts: { email: ['admin@example.com'] },
+    ...(placement ? { placement } : {}),
     components: components || {
       web: {
         name: 'web',
@@ -125,10 +133,14 @@ export async function signV9Event({
 // Build the signed `spec` field of a v9 register: HPKE-seal the sparse spec toward
 // the node's transport key (spec leg AAD), wrap with cleartext name/owner, compute
 // the contentHash, and owner-sign the event. Registration requires extend=true.
+// Pass `contentHash` to skip local canonicalization for a deliberately-INVALID
+// submission spec (canonicalizing one throws here, in the test process): the AAD
+// and signature stay self-consistent around the given hash, so the node opens the
+// envelope and its own validation is what rejects — the actual surface under test.
 export async function buildSignedRegistration({
-  submissionSpec, ownerKey, transportPubB64, timestamp = Date.now(), type = 'fluxappregister', extend = true,
+  submissionSpec, ownerKey, transportPubB64, timestamp = Date.now(), type = 'fluxappregister', extend = true, contentHash: givenHash,
 }) {
-  const contentHash = contentHashOf(submissionSpec);
+  const contentHash = givenHash || contentHashOf(submissionSpec);
   const aad = buildTransportAad({ contentHash, timestamp, type });
   const transportEncrypted = await sealExport(Buffer.from(JSON.stringify(submissionSpec)), aad, transportPubB64);
   const appSpecification = { name: submissionSpec.name, owner: submissionSpec.owner, transportEncrypted };
