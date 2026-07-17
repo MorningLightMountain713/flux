@@ -12,7 +12,7 @@ const messageVerifier = require('../appMessaging/messageVerifier');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
 const { validateSubmissionSpec, getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
-const { deserializeSpec } = require('../utils/specCutover');
+const { ensureProvidersRegistered } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const entitlementsState = require('../entitlementsState');
@@ -124,13 +124,18 @@ async function resolveSubmission(appSpecification, {
 }) {
   const wasTransportEncrypted = Boolean(appSpecification && appSpecification.transportEncrypted);
 
-  // STAGE 1 — v9 transport-open (no-op when there is no envelope)
+  // v9 transport-open (no-op when there is no envelope)
   const submissionBlob = await transportHelper.openTransportEnvelope(appSpecification, {
     contentHash, timestamp, type,
   });
 
-  // STAGE 2 — parse + validate as a submission (strict, class-first)
-  const wireSpec = await deserializeSpec(submissionBlob);
+  // Parse strictly, class-first. The tolerant specCutover wrapper (null on
+  // any parse error) is for reading stored docs where a bad row must not
+  // crash a loop; a submission error must reach the submitter with the
+  // validator's field-precise message, so the validation error propagates.
+  await ensureProvidersRegistered();
+  const { deserializeSpec: parseSubmission } = await getSpecBackend();
+  const wireSpec = await parseSubmission(submissionBlob);
   if (!wireSpec) throw new Error('Could not deserialize app specifications');
 
   let spec;
@@ -156,17 +161,16 @@ async function resolveSubmission(appSpecification, {
     }
   }
 
-  // STAGE 3 — runtime image registry + architecture checks
   await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner, isEncrypted });
 
-  // STAGE 4 — feature entitlements + marketplace-template gate. Total across
-  // versions: a v1-v8 spec exposes no gated features and carries no marketplace
-  // block, so both calls are a no-op for legacy specs — no version branch needed.
+  // Feature entitlements + marketplace-template gate. Total across versions:
+  // a v1-v8 spec exposes no gated features and carries no marketplace block,
+  // so both calls are a no-op for legacy specs — no version branch needed.
   const cleartextSpec = spec.spec || spec;
   await entitlementsState.assertSpecEntitled(cleartextSpec, spec.owner, daemonHeight, isEncrypted);
   await assertMatchesMarketplaceTemplate(cleartextSpec);
 
-  // STAGE 5 — wire form for broadcast/storage; never cleartext for encrypted apps
+  // Wire form for broadcast/storage; never cleartext for encrypted apps
   let broadcastBlob;
   if (wasTransportEncrypted) {
     // v9 transport submission — backend-encrypt the validated cleartext for

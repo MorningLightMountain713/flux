@@ -53,7 +53,7 @@ describe('appSubmission tests', () => {
         encryptAndUploadBlobs: sinon.stub().resolves([]),
       },
       transportHelper: { openTransportEnvelope: sinon.stub(), openContentEnvelope: sinon.stub() },
-      specCutover: { deserializeSpec: sinon.stub() },
+      specCutover: { ensureProvidersRegistered: sinon.stub().resolves() },
       specLibs: {
         validateSubmissionSpec: sinon.stub(),
         getSpec: sinon.stub().resolves({ FluxAppSpecV9: { fromSubmission: sinon.stub().returns({ templateSpec: true }) } }),
@@ -67,6 +67,10 @@ describe('appSubmission tests', () => {
       daemonServiceMiscRpcs: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
       appSpecHistory: { getPreviousSpec: sinon.stub() },
     };
+    // resolveSubmission parses via the strict backend deserializer; the default
+    // backend carries only that (a test needing sealForStorage adds it).
+    stubs.parseSpec = sinon.stub();
+    stubs.specLibs.getSpecBackend.resolves({ deserializeSpec: stubs.parseSpec });
   });
 
   afterEach(() => {
@@ -79,7 +83,7 @@ describe('appSubmission tests', () => {
       const spec = v9Spec();
       const submission = { version: 9, name: 'myapp', owner: 'owner1' };
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
-      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
 
       const result = await appSubmission.resolveSubmission(submission, {
@@ -87,10 +91,11 @@ describe('appSubmission tests', () => {
       });
 
       expect(result.isEncrypted).to.be.false;
+      // v9 cleartext is gated and not backend-encrypted: the wire form is the
+      // spec's own serialization (the stubbed backend has no sealForStorage,
+      // so reaching it would throw).
       expect(result.broadcastBlob).to.deep.equal({ form: 'cleartext-v9' });
-      // v9 cleartext is gated and not backend-encrypted
       sinon.assert.calledOnce(stubs.entitlementsState.assertSpecEntitled);
-      sinon.assert.notCalled(stubs.specLibs.getSpecBackend);
     });
 
     it('backend-encrypts a transport-encrypted v9 submission and never broadcasts cleartext', async () => {
@@ -101,11 +106,11 @@ describe('appSubmission tests', () => {
         version: 9, name: 'myapp', owner: 'owner1', transportEncrypted: { algorithm: 'x' },
       };
       stubs.transportHelper.openTransportEnvelope.resolves(sparse);
-      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
       const encryptedSpec = { serialize: sinon.stub().returns({ form: 'EncryptedSpecV9' }) };
       const sealForStorage = sinon.stub().resolves(encryptedSpec);
-      stubs.specLibs.getSpecBackend.resolves({ sealForStorage });
+      stubs.specLibs.getSpecBackend.resolves({ deserializeSpec: stubs.parseSpec, sealForStorage });
 
       const result = await appSubmission.resolveSubmission(submission, {
         contentHash: 'HASH123', timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
@@ -131,7 +136,7 @@ describe('appSubmission tests', () => {
       };
       const submission = { version: 8, name: 'myapp' };
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
-      stubs.specCutover.deserializeSpec.resolves(wireSpec);
+      stubs.parseSpec.resolves(wireSpec);
 
       const result = await appSubmission.resolveSubmission(submission, {
         timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
@@ -152,7 +157,7 @@ describe('appSubmission tests', () => {
         name: 'myapp', owner: 'owner1', version: 8, serialize: sinon.stub().returns({ form: 'v8-cleartext' }),
       };
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 8, name: 'myapp', owner: 'owner1' });
-      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
 
       const result = await appSubmission.resolveSubmission({ version: 8, name: 'myapp', owner: 'owner1' }, {
@@ -170,7 +175,7 @@ describe('appSubmission tests', () => {
       appSubmission = load();
       const spec = v9Spec({ contentHash: sinon.stub().returns('ACTUAL') });
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
-      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
 
       try {
@@ -186,7 +191,7 @@ describe('appSubmission tests', () => {
       appSubmission = load();
       const spec = v9Spec();
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
-      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
       const denial = new Error('feature networkSharing not entitled');
       denial.code = 'FEATURE_NOT_ENTITLED';
@@ -206,7 +211,7 @@ describe('appSubmission tests', () => {
       appSubmission = load();
       const spec = v9Spec();
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
-      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
       stubs.appSpecHistory.getPreviousSpec.resolves(v9Spec());
       const lockErr = new Error('referral is registration-locked and cannot change');
@@ -225,7 +230,7 @@ describe('appSubmission tests', () => {
       appSubmission = load();
       const spec = v9Spec();
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
-      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
       stubs.appSpecHistory.getPreviousSpec.resolves(null);
 
@@ -251,7 +256,7 @@ describe('appSubmission tests', () => {
       };
       const previousSpec = { name: 'myapp', owner: 'owner1', version: 7 };
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 8 });
-      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(updateSpec);
       stubs.appSpecHistory.getPreviousSpec.resolves(previousSpec);
 
@@ -279,7 +284,7 @@ describe('appSubmission tests', () => {
     async function submit(spec, submission = { version: 9, name: 'myapp', owner: 'owner1' }) {
       appSubmission = load();
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
-      stubs.specCutover.deserializeSpec.resolves({ isEncrypted: false });
+      stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
       return appSubmission.resolveSubmission(submission, {
         contentHash: 'HASH123', timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
