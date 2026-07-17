@@ -1747,20 +1747,45 @@ async function reconcileInstalledApps() {
         const registrySpec = await appsRepository.getGlobalAppInfo(installed.name);
         if (!registrySpec) continue;
 
-        // eslint-disable-next-line no-await-in-loop
-        const runningAppList = await registryManager.appLocation(installed.name);
-        const minInstances = installed.spec.instances || config.fluxapps.minimumInstances;
-        if (localSocketAddr && runningAppList.length > minInstances && isNewestInstance(runningAppList, localSocketAddr)) {
-          log.warn(`REMOVAL REASON: Too many instances - ${installed.name} running on ${runningAppList.length} instances (max: ${minInstances}) - This node is the newest instance`);
+        if (registrySpec.placement.mode() === 'named') {
+          // Named placement is declarative: the targeting maps name exactly which
+          // nodes run a replica, so an installed copy on a node the current global
+          // spec does not name is removed — precisely the replica the owner
+          // deleted, nothing else. Checked against the desired spec regardless of
+          // hash equality, so it also heals a node whose identity drifted out of
+          // the targeting maps. The count-based over-instance eviction below must
+          // not run for named mode: it sheds the NEWEST instance, which during a
+          // scale-down or mode switch can be a still-targeted replica.
           // eslint-disable-next-line no-await-in-loop
-          const removal = await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
-          if (removal.status === appUninstaller.UninstallStatus.DEFERRED || removal.status === appUninstaller.UninstallStatus.FAILED) {
-            // Removal didn't land (busy or errored); this sweep re-checks next cycle.
-            log.warn(`Over-instance removal of ${installed.name} ${removal.status} (${removal.reason}); will retry next cycle`);
+          const replica = await deploymentProvider.resolveLocalReplica(registrySpec);
+          if (replica === null) {
+            log.warn(`REMOVAL REASON: Named placement does not target this node - ${installed.name}`);
+            // eslint-disable-next-line no-await-in-loop
+            const removal = await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
+            if (removal.status === appUninstaller.UninstallStatus.DEFERRED || removal.status === appUninstaller.UninstallStatus.FAILED) {
+              // Removal didn't land (busy or errored); this sweep re-checks next cycle.
+              log.warn(`De-targeted removal of ${installed.name} ${removal.status} (${removal.reason}); will retry next cycle`);
+            }
+            // eslint-disable-next-line no-await-in-loop
+            await serviceHelper.delay(config.fluxapps.removal.delay * 1000);
+            continue;
           }
+        } else {
           // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(config.fluxapps.removal.delay * 1000);
-          continue;
+          const runningAppList = await registryManager.appLocation(installed.name);
+          const minInstances = installed.spec.instances || config.fluxapps.minimumInstances;
+          if (localSocketAddr && runningAppList.length > minInstances && isNewestInstance(runningAppList, localSocketAddr)) {
+            log.warn(`REMOVAL REASON: Too many instances - ${installed.name} running on ${runningAppList.length} instances (max: ${minInstances}) - This node is the newest instance`);
+            // eslint-disable-next-line no-await-in-loop
+            const removal = await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
+            if (removal.status === appUninstaller.UninstallStatus.DEFERRED || removal.status === appUninstaller.UninstallStatus.FAILED) {
+              // Removal didn't land (busy or errored); this sweep re-checks next cycle.
+              log.warn(`Over-instance removal of ${installed.name} ${removal.status} (${removal.reason}); will retry next cycle`);
+            }
+            // eslint-disable-next-line no-await-in-loop
+            await serviceHelper.delay(config.fluxapps.removal.delay * 1000);
+            continue;
+          }
         }
 
         if (registrySpec.hash === installed.hash) continue;
