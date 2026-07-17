@@ -1730,87 +1730,6 @@ async function shutdownPlanResync() {
   }
 }
 
-async function reconcileInstalledApps() {
-  try {
-    const synced = await generalService.checkSynced();
-    if (synced !== true) {
-      log.info('Reconciliation paused. Not yet synced');
-      return;
-    }
-
-    const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-    const installedApps = await appsRepository.listInstalledApps();
-
-    for (const installed of installedApps) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const registrySpec = await appsRepository.getGlobalAppInfo(installed.name);
-        if (!registrySpec) continue;
-
-        if (registrySpec.placement.mode() === 'named') {
-          // Named placement is declarative: the targeting maps name exactly which
-          // nodes run a replica, so an installed copy on a node the current global
-          // spec does not name is removed — precisely the replica the owner
-          // deleted, nothing else. Checked against the desired spec regardless of
-          // hash equality, so it also heals a node whose identity drifted out of
-          // the targeting maps. The count-based over-instance eviction below must
-          // not run for named mode: it sheds the NEWEST instance, which during a
-          // scale-down or mode switch can be a still-targeted replica.
-          // eslint-disable-next-line no-await-in-loop
-          const replica = await deploymentProvider.resolveLocalReplica(registrySpec);
-          if (replica === null) {
-            log.warn(`REMOVAL REASON: Named placement does not target this node - ${installed.name}`);
-            // eslint-disable-next-line no-await-in-loop
-            const removal = await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
-            if (removal.status === appUninstaller.UninstallStatus.DEFERRED || removal.status === appUninstaller.UninstallStatus.FAILED) {
-              // Removal didn't land (busy or errored); this sweep re-checks next cycle.
-              log.warn(`De-targeted removal of ${installed.name} ${removal.status} (${removal.reason}); will retry next cycle`);
-            }
-            // eslint-disable-next-line no-await-in-loop
-            await serviceHelper.delay(config.fluxapps.removal.delay * 1000);
-            continue;
-          }
-        } else {
-          // eslint-disable-next-line no-await-in-loop
-          const runningAppList = await registryManager.appLocation(installed.name);
-          const minInstances = installed.spec.instances || config.fluxapps.minimumInstances;
-          if (localSocketAddr && runningAppList.length > minInstances && isNewestInstance(runningAppList, localSocketAddr)) {
-            log.warn(`REMOVAL REASON: Too many instances - ${installed.name} running on ${runningAppList.length} instances (max: ${minInstances}) - This node is the newest instance`);
-            // eslint-disable-next-line no-await-in-loop
-            const removal = await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
-            if (removal.status === appUninstaller.UninstallStatus.DEFERRED || removal.status === appUninstaller.UninstallStatus.FAILED) {
-              // Removal didn't land (busy or errored); this sweep re-checks next cycle.
-              log.warn(`Over-instance removal of ${installed.name} ${removal.status} (${removal.reason}); will retry next cycle`);
-            }
-            // eslint-disable-next-line no-await-in-loop
-            await serviceHelper.delay(config.fluxapps.removal.delay * 1000);
-            continue;
-          }
-        }
-
-        if (registrySpec.hash === installed.hash) continue;
-
-        // Encrypted apps require an attested ArcaneOS node. The verdict is resolved
-        // before this runs, so a non-arcane verdict is definitive — uninstall the
-        // now-ineligible encrypted app.
-        if (registrySpec.isEncrypted && !globalState.isArcane()) {
-          log.warn(`REMOVAL REASON: Enterprise app requires arcaneOS - ${installed.name}`);
-          // eslint-disable-next-line no-await-in-loop
-          await appUninstaller.uninstallApplication(installed.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
-          continue;
-        }
-
-        // eslint-disable-next-line no-await-in-loop
-        await reconcileApp(installed, registrySpec);
-      } catch (error) {
-        log.error(`Reconciliation failed for ${installed.name}: ${error.message}`);
-      }
-    }
-  } catch (error) {
-    log.error(error);
-  }
-}
-
 /**
  * Force cleanup of applications that are not in the installed apps list
  * @returns {Promise<void>}
@@ -2369,7 +2288,7 @@ module.exports = {
   appendRestoreTask,
   removeTestAppMount,
   testAppMount,
-  reconcileInstalledApps,
+  reconcileApp,
   shutdownPlanResync,
   forceAppRemovals,
   coordinateActiveStandbyApps,

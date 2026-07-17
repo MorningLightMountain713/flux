@@ -3,6 +3,7 @@ const explorerService = require('../../ZelBack/src/services/explorerService');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
+const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
 const daemonServiceTransactionRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceTransactionRpcs');
@@ -756,7 +757,7 @@ describe('explorerService tests', () => {
       dbStubUpdate = sinon.stub(dbHelper, 'updateOneInDatabase');
       dbStubCollectionStats = sinon.stub(dbHelper, 'collectionStats');
       expireGlobalApplicationsStub = sinon.stub(appUninstaller, 'expireGlobalApplications');
-      reconcileInstalledAppsStub = sinon.stub(appOperations, 'reconcileInstalledApps');
+      reconcileInstalledAppsStub = sinon.stub(specReconciler, 'requestFullConvergence');
       restorePortsSupportStub = sinon.stub(portManager, 'restorePortsSupport');
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
@@ -1714,7 +1715,7 @@ describe('explorerService tests', () => {
         avgObjSize: 1111,
       });
       sinon.stub(appUninstaller, 'expireGlobalApplications').returns(true);
-      sinon.stub(appOperations, 'reconcileInstalledApps').returns(true);
+      sinon.stub(specReconciler, 'requestFullConvergence').resolves();
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').returns({
         status: 'success',
         data: {

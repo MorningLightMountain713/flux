@@ -27,6 +27,7 @@ const daemonHealthMonitor = require('./appMonitoring/daemonHealthMonitor');
 const containerEventBridge = require('./appMonitoring/containerEventBridge');
 const appReconciler = require('./appMonitoring/appReconciler');
 const appOperations = require('./appLifecycle/appOperations');
+const specReconciler = require('./appLifecycle/specReconciler');
 const appShutdownCoordinator = require('./appLifecycle/appShutdownCoordinator');
 const imageManager = require('./appSecurity/imageManager');
 const appSpawner = require('./appLifecycle/appSpawner');
@@ -387,11 +388,15 @@ async function startFluxFunctions() {
     // route the reconciler's graceful stop-but-keep through flux-shutdownd on Arcane;
     // returns false off Arcane (or when the daemon is unavailable) so it stops locally
     appReconciler.setRequestGracefulStop((id, reason) => appShutdownCoordinator.requestGracefulStop(id, reason));
-    // wake the spawn loop the instant a spec this node must install is committed,
-    // rather than waiting for the next poll. notifySpecStored self-gates to the
-    // contention-free enterprise-pinned-to-this-node case; every other spec is
-    // ignored and rides the normal cadence.
-    registryManager.setOnSpecStored((specDoc) => appSpawner.notifySpecStored(specDoc));
+    // A committed spec fans out to both reactors: the spawner wakes when the
+    // spec is one this node must INSTALL (self-gated to contention-free pinned
+    // cases), and the spec reconciler converges an app this node already RUNS
+    // (adoption is staggered inside it, removal acts promptly). Everything else
+    // rides the per-block convergence pass.
+    registryManager.setOnSpecStored((specDoc) => {
+      appSpawner.notifySpecStored(specDoc);
+      specReconciler.notifySpecStored(specDoc);
+    });
     log.info('App Spawner initialized');
 
     fluxNetworkHelper.adjustFirewall();
@@ -503,7 +508,7 @@ async function startFluxFunctions() {
       log.info('DB ready - starting db-dependent services');
       // Warm the marketplace template cache (best-effort; cache-miss fetch covers any gaps).
       marketplaceTemplateCache.bootstrapCache().catch((error) => log.error(error));
-      appOperations.reconcileInstalledApps();
+      specReconciler.requestFullConvergence({ reason: 'boot', includeCompliance: true });
       // Backstop the flux-shutdownd plan store against anything missed while
       // fluxos was down (Arcane-only, best-effort).
       appOperations.shutdownPlanResync().catch((error) => log.error(error));
@@ -574,8 +579,10 @@ async function startFluxFunctions() {
     orchestrator.start(bootContext);
     log.info('AppSyncOrchestrator started');
     setInterval(async () => {
-      await imageManager.checkApplicationsCompliance();
-      // Orphan hook: the compliance sweep is the main out-of-band remover of a pinned image
+      // A deep convergence pass carries the image-compliance step (it needs
+      // full deployment views, so the per-block pass skips it).
+      await specReconciler.requestFullConvergence({ reason: 'blocklist', includeCompliance: true });
+      // Orphan hook: the compliance step is the main out-of-band remover of a pinned image
       // (a blacklisted one), so reconcile cache records against docker right after it runs.
       if (imageCacheEnabled) {
         await imageCacheMaintenance.reconcileOrphanedRecords()

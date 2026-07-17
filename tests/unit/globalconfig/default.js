@@ -320,6 +320,8 @@ module.exports = {
     imageCacheMaxPullRetries: 3,
     imageCacheJobTtlMs: 10800000,
     imageReaperIntervalMs: 86400000,
+    adoptionStaggerStepMs: 60000,
+    adoptionStaggerWindowMs: 300000,
     forceRemovalIntervalMs: 7200000,
     installCollisionWaitMs: 90000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout

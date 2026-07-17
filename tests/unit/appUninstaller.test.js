@@ -387,46 +387,6 @@ describe('appUninstaller tests', () => {
     });
   });
 
-  describe('expireInstalledApplications (per-block at-tip local expiry)', () => {
-    const spec = (name, height, expired) => ({ name, height, isExpired: () => expired });
-    const wasExpired = (name) => logStub.warn.getCalls()
-      .some((c) => String(c.args[0]).includes(`App expired - ${name} reached expiration date (at-tip sweep)`));
-
-    it('removes an installed app whose authoritative global row is expired', async () => {
-      appsRepositoryStub.listInstalledApps.resolves([spec('gone', 100, false)]);
-      appsRepositoryStub.listGlobalAppInfo.resolves([spec('gone', 100, true)]);
-      await appUninstaller.expireInstalledApplications(1000000);
-      expect(wasExpired('gone')).to.equal(true);
-    });
-
-    it('trusts the authoritative global row over a stale local one (renewed app stays)', async () => {
-      appsRepositoryStub.listInstalledApps.resolves([spec('renewed', 100, true)]);
-      appsRepositoryStub.listGlobalAppInfo.resolves([spec('renewed', 100, false)]);
-      await appUninstaller.expireInstalledApplications(1000000);
-      expect(wasExpired('renewed')).to.equal(false);
-    });
-
-    it('never expires a forever app (global height 0)', async () => {
-      appsRepositoryStub.listInstalledApps.resolves([spec('forever', 100, true)]);
-      appsRepositoryStub.listGlobalAppInfo.resolves([spec('forever', 0, false)]);
-      await appUninstaller.expireInstalledApplications(1000000);
-      expect(wasExpired('forever')).to.equal(false);
-    });
-
-    it('leaves an app with no global row to the periodic sweep', async () => {
-      appsRepositoryStub.listInstalledApps.resolves([spec('manual', 100, true)]);
-      appsRepositoryStub.listGlobalAppInfo.resolves([]);
-      await appUninstaller.expireInstalledApplications(1000000);
-      expect(wasExpired('manual')).to.equal(false);
-    });
-
-    it('skips the global query entirely when nothing is installed', async () => {
-      appsRepositoryStub.listInstalledApps.resolves([]);
-      await appUninstaller.expireInstalledApplications(1000000);
-      expect(appsRepositoryStub.listGlobalAppInfo.called).to.equal(false);
-    });
-  });
-
   describe('runTeardown stop routing through flux-shutdownd', () => {
     const doc = () => ({
       key: 'myapp',
