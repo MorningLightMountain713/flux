@@ -814,6 +814,10 @@ async function processBlock(blockHeight, isInsightExplorer) {
       blockEmitter.emit('blocksProcessed', scannedHeight);
 
       if (globalState.dbReady && blockDataVerbose.height >= config.fluxapps.epochstart) {
+        // Local expiry enforced at every tip block (cheap - scans only this
+        // node's installed rows), so a cancel/expiry tears down ~the block it
+        // becomes eligible instead of waiting for the periodic sweep below.
+        await appUninstaller.expireInstalledApplications(blockHeight);
         if (blockHeight % (2 * speedMultiplier) === 0) {
           await appUninstaller.expireGlobalApplications();
           // Converge the content-manifest register to the live-app set on the same
