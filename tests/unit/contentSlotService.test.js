@@ -194,7 +194,16 @@ describe('contentSlotService', () => {
     }
     function baseDeps(overrides = {}) {
       return {
-        getLatest: async () => null, uploader: makeUploader(), benchmark: makeBenchmark(), now, verify: () => true, provider: fakeProvider(),
+        // Stored view defaults to version 1 with no slots, so the fixture manifest
+        // (version 2) is its strict successor. refresh defaults inert — a test that
+        // wants the catch-up path injects its own.
+        getLatest: async () => priorRow(1, {}),
+        refresh: async () => {},
+        uploader: makeUploader(),
+        benchmark: makeBenchmark(),
+        now,
+        verify: () => true,
+        provider: fakeProvider(),
         ...overrides,
       };
     }
@@ -208,12 +217,52 @@ describe('contentSlotService', () => {
       expect(out.slots).to.have.property('sealed');
     });
 
-    it('rejects a manifest no newer than the stored one', async () => {
+    it('rejects a version that is not the strict successor of the stored one', async () => {
       const { service } = load();
       await expectReject(
         service.processManifestSubmission(baseInput(), baseDeps({ getLatest: async () => ({ version: 5 }) })),
-        /not newer than stored/,
+        /must be 6/,
       );
+    });
+
+    it('accepts the first manifest at version 1 when nothing is stored', async () => {
+      const { service } = load();
+      const uploader = makeUploader();
+      const input = baseInput({ manifest: manifest({ version: 1 }) });
+      const out = await service.processManifestSubmission(input, baseDeps({ uploader, getLatest: async () => null }));
+      expect(uploader.calls.length).to.equal(1);
+      expect(out.slots).to.have.property('sealed');
+    });
+
+    it('rejects a first manifest above version 1', async () => {
+      const { service } = load();
+      await expectReject(
+        service.processManifestSubmission(baseInput(), baseDeps({ getLatest: async () => null })),
+        /must be 1/,
+      );
+    });
+
+    it('rejects a version jump past the successor', async () => {
+      const { service } = load();
+      await expectReject(
+        service.processManifestSubmission(baseInput({ manifest: manifest({ version: 5 }) }), baseDeps()),
+        /must be 2/,
+      );
+    });
+
+    it('catches up a stale stored view once before enforcing', async () => {
+      const { service } = load();
+      const uploader = makeUploader();
+      let refreshed = false;
+      const deps = baseDeps({
+        uploader,
+        getLatest: async () => (refreshed ? priorRow(1, {}) : null),
+        refresh: async () => { refreshed = true; },
+      });
+      const out = await service.processManifestSubmission(baseInput(), deps);
+      expect(refreshed).to.equal(true);
+      expect(uploader.calls.length).to.equal(1);
+      expect(out.slots).to.have.property('sealed');
     });
 
     it('rejects a declared slot with no blob part', async () => {
@@ -298,6 +347,65 @@ describe('contentSlotService', () => {
         service.processManifestSubmission(baseInput({ ownerSigs: new Map() }), baseDeps()),
         /missing owner signature/,
       );
+    });
+  });
+
+  describe('refreshLatestManifest', () => {
+    const ctx = () => ({ owner: '1id', encrypted: true, spec: specWithSlots(['app-config']) });
+    const sealedSlots = (slots) => ({ sealed: { algorithm: 'fake', ciphertext: Buffer.from(JSON.stringify(slots)).toString('base64'), nonce: 'n', tag: 't' } });
+
+    it('adopts a higher-version peer manifest through the latest-wins store', async () => {
+      const { service } = load();
+      const store = sinon.spy();
+      const gossip = { appName: 'app', version: 3 };
+      await service.refreshLatestManifest('app', ctx(), {
+        getLatest: async () => ({ version: 1 }),
+        getPeers: async () => ['1.2.3.4'],
+        fetchPeers: async () => ({ gossip, plaintext: {} }),
+        fetchFromDrive: sinon.stub().resolves(null),
+        store,
+        verify: () => true,
+        provider: fakeProvider(),
+      });
+      sinon.assert.calledOnceWithExactly(store, gossip);
+    });
+
+    it('falls back to the FluxDrive backstop, re-verifying before adoption', async () => {
+      const { service } = load();
+      const store = sinon.spy();
+      const driveManifest = {
+        appName: 'app',
+        version: 4,
+        slots: sealedSlots({ 'app-config': { hash: CFG_HASH } }),
+        rollout: { strategy: 'immediate' },
+        timestamp: NOW_MS,
+        ownerSignature: 'sig',
+      };
+      await service.refreshLatestManifest('app', ctx(), {
+        getLatest: async () => ({ version: 1 }),
+        getPeers: async () => [],
+        fetchPeers: async () => null,
+        fetchFromDrive: async () => ({ version: 4, manifest: driveManifest }),
+        store,
+        verify: () => true,
+        provider: fakeProvider(),
+      });
+      sinon.assert.calledOnceWithExactly(store, driveManifest);
+    });
+
+    it('adopts nothing at or below the stored version and swallows source failures', async () => {
+      const { service } = load();
+      const store = sinon.spy();
+      await service.refreshLatestManifest('app', ctx(), {
+        getLatest: async () => ({ version: 3 }),
+        getPeers: async () => [],
+        fetchPeers: async () => ({ gossip: { appName: 'app', version: 3 }, plaintext: {} }),
+        fetchFromDrive: async () => { throw new Error('drive down'); },
+        store,
+        verify: () => true,
+        provider: fakeProvider(),
+      });
+      sinon.assert.notCalled(store);
     });
   });
 
@@ -601,9 +709,12 @@ describe('contentSlotService', () => {
         ...overrides,
       };
     }
+    // The register already stored this app's initial manifest (version 1), so the
+    // fixture update (version 2) is its strict successor.
+    const loadSub = () => load(defaultSpecStub(), fakeRepo({ getContentManifest: sinon.stub().resolves({ version: 1 }) }));
 
     it('transport-opens, processes, stores, and gossips the sealed manifest', async () => {
-      const { service } = load();
+      const { service } = loadSub();
       const deps = subDeps();
       const out = await service.submitContentUpdate(subBody(), deps);
       expect(out.slots).to.have.property('sealed'); // at-rest sealed for gossip
@@ -613,7 +724,7 @@ describe('contentSlotService', () => {
     });
 
     it('stores the exact signed broadcast it gossiped (envelope + verbatim data) for boot-sync re-serving', async () => {
-      const { service, repo } = load();
+      const { service, repo } = loadSub();
       const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: { sealed: true } };
       const signed = {
         version: 1, timestamp: 7, pubKey: 'pk', signature: 's', data,
@@ -643,7 +754,7 @@ describe('contentSlotService', () => {
     });
 
     it('schedules local application when the submitter also runs the app', async () => {
-      const { service } = load();
+      const { service } = loadSub();
       const deps = subDeps({ isInstalledHere: async () => ({ name: 'app' }) });
       await service.submitContentUpdate(subBody(), deps);
       sinon.assert.calledOnce(deps.schedule);
@@ -651,7 +762,7 @@ describe('contentSlotService', () => {
     });
 
     it('PUTs the manifest to the FluxDrive backstop with the owner PUT-sig from the sealed payload', async () => {
-      const { service } = load();
+      const { service } = loadSub();
       const backstop = sinon.spy();
       const sealedWithSig = Buffer.from(JSON.stringify({
         manifest: manifest(),
