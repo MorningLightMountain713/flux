@@ -910,7 +910,7 @@ describe('appOperations tests', () => {
     // eslint-disable-next-line global-require
     const IOUtils = require('../../ZelBack/src/services/IOUtils');
     // eslint-disable-next-line global-require
-    const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
+    const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
 
     const makeRes = () => ({ write: sinon.stub(), end: sinon.stub() });
 
@@ -925,7 +925,7 @@ describe('appOperations tests', () => {
           ['worker', { identifier: 'worker_bkapp', hasSyncthing: () => false }],
         ],
       });
-      const removeFolder = sinon.stub(appVolumeService, 'removeSyncthingFolder').resolves();
+      const removeFolder = sinon.stub(syncthingMonitorHelpers, 'removeSyncthingFolder').resolves();
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'bkapp' });
       sinon.stub(deploymentProvider, 'buildDeployment').resolves({
         componentEntries: () => [['web', { identifier: 'web_bkapp' }]],
