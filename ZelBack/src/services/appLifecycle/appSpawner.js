@@ -489,11 +489,13 @@ async function trySpawningGlobalApplication() {
         log.info(`trySpawningGlobalApplication - Application ${appToRun} is already spawned or being installed on ${runningAppList.length + installingAppList.length} instances.`);
         return shortDelayTime;
       }
-      // Encrypted apps can only install on an attested ArcaneOS node. The verdict is
-      // resolved before this runs, so a non-arcane verdict is definitive: refuse and
-      // remember (long-error cache).
-      if (selectedCandidate.instantiated.isEncrypted && !globalState.isArcane()) {
-        log.info(`trySpawningGlobalApplication - Application ${appToRun} is encrypted, can only install on ArcaneOS`);
+      // Apps whose spec demands Arcane — an encrypted envelope, or any
+      // Arcane-requiring feature (telemetry, content delivery, graceful
+      // shutdown, preStop) — can only install on an attested ArcaneOS node.
+      // The verdict is resolved before this runs, so a non-arcane verdict is
+      // definitive: refuse and remember (long-error cache).
+      if (selectedCandidate.instantiated.requiresArcane() && !globalState.isArcane()) {
+        log.info(`trySpawningGlobalApplication - Application ${appToRun} requires ArcaneOS; refusing on this node`);
         globalState.spawnErrorsLongerAppCache.set(appHash, '');
         return shortDelayTime;
       }

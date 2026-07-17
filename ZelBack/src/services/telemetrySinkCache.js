@@ -13,17 +13,37 @@ function key(appName) {
 }
 
 /**
- * Pull the sink out of a built deployment. Returns null when the app has
- * no telemetry or no usable credential. `site` is left to the spec/daemon
- * default when absent.
+ * Pull the sink out of a built deployment, dispatched on provider. Returns
+ * null when the app has no telemetry or the entry is unusable.
+ *
+ * - otlp: the DECLARED target `{provider, component, port}` — which
+ *   component in the app hosts the receiver. The identity service resolves
+ *   it to a concrete node-local endpoint from the live container and puts
+ *   only `{provider, endpoint}` on the wire.
+ * - credentialed providers (datadog): `{provider, apiKey, site?}`, passed
+ *   to the daemon as-is. `site` is left to the spec/daemon default when
+ *   absent.
  */
 function extractSink(deployment) {
   const telemetry = deployment && deployment.telemetry;
-  if (!telemetry || !telemetry.apiKey) return null;
+  if (!telemetry) return null;
 
+  if (telemetry.provider === 'otlp') {
+    if (!telemetry.component) return null;
+    return { provider: 'otlp', component: telemetry.component, port: telemetry.port ?? 4318 };
+  }
+
+  if (!telemetry.apiKey) return null;
   const sink = { provider: telemetry.provider, apiKey: telemetry.apiKey };
   if (telemetry.site) sink.site = telemetry.site;
   return sink;
+}
+
+/** A sink the identity service can act on: a credential, or an otlp target. */
+function isUsableSink(sink) {
+  if (!sink) return false;
+  if (sink.provider === 'otlp') return Boolean(sink.component);
+  return Boolean(sink.apiKey);
 }
 
 // Single change observer (the identity service registers its resync here).
@@ -35,11 +55,11 @@ function onChange(listener) {
   changeListener = listener;
 }
 
-/** Set (or clear, when sink is null) the routing entry for an app. */
+/** Set (or clear, when sink is null/unusable) the routing entry for an app. */
 function setSink(appName, sink) {
   const k = key(appName);
   const prev = sinks.get(k) || null;
-  if (sink && sink.apiKey) {
+  if (isUsableSink(sink)) {
     sinks.set(k, sink);
   } else {
     sinks.delete(k);
