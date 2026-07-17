@@ -19,6 +19,15 @@ const dockerServiceStub = {
 
 const deploymentProviderStub = {
   listInstalledDeployments: sinon.stub(),
+  getInstalledDeployment: sinon.stub(),
+};
+
+const imageCacheServiceStub = {
+  reconcilePinnedImage: sinon.stub(),
+};
+
+const imageReaperStub = {
+  pruneUnusedImages: sinon.stub(),
 };
 
 const appsRepositoryStub = {};
@@ -72,6 +81,8 @@ const imageUpdateService = proxyquire('../../ZelBack/src/services/imageUpdateSer
   './appRuntime/deploymentProvider': deploymentProviderStub,
   './appDatabase/appsRepository': appsRepositoryStub,
   './appLifecycle/appOperations': appOperationsStub,
+  './appLifecycle/imageCacheService': imageCacheServiceStub,
+  './appLifecycle/imageReaper': imageReaperStub,
   './utils/registryCredentialHelper': registryCredentialHelperStub,
   './utils/imageVerifier': { ImageVerifier: MockImageVerifier },
   './serviceHelper': serviceHelperStub,
@@ -88,6 +99,12 @@ describe('imageUpdateService tests', () => {
 
     deploymentProviderStub.listInstalledDeployments.reset();
     deploymentProviderStub.listInstalledDeployments.resolves([]);
+    deploymentProviderStub.getInstalledDeployment.reset();
+    deploymentProviderStub.getInstalledDeployment.resolves(null);
+    imageCacheServiceStub.reconcilePinnedImage.reset();
+    imageCacheServiceStub.reconcilePinnedImage.resolves();
+    imageReaperStub.pruneUnusedImages.reset();
+    imageReaperStub.pruneUnusedImages.resolves();
 
     appOperationsStub.redeployApplication.reset();
 
