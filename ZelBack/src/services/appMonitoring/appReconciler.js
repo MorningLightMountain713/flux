@@ -17,6 +17,7 @@ const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
 const appVolumeService = require('../appLifecycle/appVolumeService');
 const appSwapPoolService = require('../appLifecycle/appSwapPoolService');
 const volumeService = require('../utils/volumeService');
+const syncthingMonitorHelpers = require('./syncthingMonitorHelpers');
 const containerHealthMonitor = require('./containerHealthMonitor');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
@@ -1378,8 +1379,13 @@ async function reconcile(rawIdentifier) {
 
   // Recreate any bind-mount paths removed while the container was stopped (e.g.
   // Syncthing cleanup of a replicated data folder) before starting — otherwise the
-  // start fails on a missing mount source and the app backoff-loops forever.
-  await appVolumeService.ensureMountSourcesExist(spec.comp);
+  // start fails on a missing mount source and the app backoff-loops forever. A
+  // changed ignore set gets a targeted scan: syncthing reloads .stignore only
+  // before its next scan/sync, which on an idle folder is the rescan interval.
+  const stignoreChanged = await appVolumeService.ensureMountSourcesExist(spec.comp);
+  if (stignoreChanged) {
+    await syncthingMonitorHelpers.requestFolderScan(spec.comp.identifier);
+  }
 
   // Wire the container's network memberships before it runs: every creation
   // path hands the container to this start in docker 'created' state, so this

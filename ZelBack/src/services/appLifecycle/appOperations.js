@@ -47,6 +47,7 @@ const appQueryService = require('../appQuery/appQueryService');
 const { listRunningContainers } = appQueryService;
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appReconciler = require('../appMonitoring/appReconciler');
+const syncthingMonitorHelpers = require('../appMonitoring/syncthingMonitorHelpers');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appVolumeService = require('./appVolumeService');
 const appUninstaller = require('./appUninstaller');
@@ -799,7 +800,7 @@ async function appendBackupTask(req, res) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
         for (const comp of backupSynced) {
           // eslint-disable-next-line no-await-in-loop
-          await appVolumeService.removeSyncthingFolder(comp.identifier, res);
+          await syncthingMonitorHelpers.removeSyncthingFolder(comp.identifier, res);
         }
       }
 
@@ -836,7 +837,7 @@ async function appendBackupTask(req, res) {
       }
       await serviceHelper.delay(5 * 1000);
       await sendChunk(res, 'Starting application...\n');
-      if (!hasSyncthing) {
+      if (!backupSynced.length) {
         await startApplication(appname);
       } else {
         for (const [compName, comp] of backupDeployment.componentEntries()) {
@@ -928,7 +929,7 @@ async function appendRestoreTask(req, res) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
         for (const comp of restoreSynced) {
           // eslint-disable-next-line no-await-in-loop
-          await appVolumeService.removeSyncthingFolder(comp.identifier, res);
+          await syncthingMonitorHelpers.removeSyncthingFolder(comp.identifier, res);
         }
       }
       await sendChunk(res, 'Stopping application...\n');
@@ -1009,7 +1010,7 @@ async function appendRestoreTask(req, res) {
       await serviceHelper.delay(1 * 5 * 1000);
       await sendChunk(res, 'Starting application...\n');
       await startApplication(appname);
-      if (restoreHasSyncthing) {
+      if (restoreSynced.length) {
         await sendChunk(res, 'Redeploying other instances...\n');
         // eslint-disable-next-line global-require
         const appController = require('../appManagement/appController');
