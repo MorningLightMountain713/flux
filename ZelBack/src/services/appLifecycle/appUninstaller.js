@@ -1285,6 +1285,49 @@ async function removeAppLocallyApi(req, res) {
  * lifecycle action — the data layer must not orchestrate teardown.
  * @returns {Promise<void>}
  */
+/**
+ * Per-block local expiry: evaluate only THIS node's installed apps against
+ * their authoritative global rows and remove the ones past expiry. Cheap (a
+ * handful of local rows), so it runs at every tip block and a cancel/expiry
+ * is enforced ~the block it becomes eligible instead of waiting for the
+ * periodic global sweep — which remains the global-collection cleanup and
+ * the deterministic backstop.
+ *
+ * @param {number} explorerHeight
+ * @returns {Promise<void>}
+ */
+async function expireInstalledApplications(explorerHeight) {
+  try {
+    const installedApps = await appsRepository.listInstalledApps();
+    if (!installedApps.length) return;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const installedNames = installedApps.map((app) => app.name);
+    const globalRows = await appsRepository.listGlobalAppInfo({ filter: { name: { $in: installedNames } } });
+    const globalByName = new Map(globalRows.map((spec) => [spec.name, spec]));
+    // eslint-disable-next-line no-restricted-syntax
+    for (const app of installedApps) {
+      // The authoritative global spec decides expiry (a stale local row must
+      // neither remove a renewed app nor keep a cancelled one). An app with no
+      // global row (manual/forever installs, or one whose global row an earlier
+      // sweep already reaped) is the periodic sweep's concern; height 0 never
+      // expires.
+      const authoritative = globalByName.get(app.name);
+      if (!authoritative || authoritative.height === 0) continue;
+      if (!authoritative.height || authoritative.isExpired(nowSeconds, explorerHeight)) {
+        log.warn(`REMOVAL REASON: App expired - ${app.name} reached expiration date (at-tip sweep)`);
+        // Same shape as the periodic sweep: backgrounded so the prelude
+        // enforces promptly while the graceful drain runs detached.
+        // eslint-disable-next-line no-await-in-loop
+        await uninstallApplication(app.name, {
+          forceKill: false, skipGuard: true, broadcastRemoval: true, background: true,
+        });
+      }
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
 async function expireGlobalApplications() {
   // check if synced
   try {
@@ -1379,6 +1422,7 @@ module.exports = {
   removeAppLocallyApi,
   setOnComponentRemoved,
   expireGlobalApplications,
+  expireInstalledApplications,
   runTeardown,
   driveOwedTeardown,
   recoverOwedTeardowns,
