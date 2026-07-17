@@ -117,6 +117,11 @@ describe('appSpawner tests', () => {
       hash: overrides.hash || 'abc123',
       spec,
       isEncrypted: !!overrides.encrypted,
+      // Mirrors InstantiatedSpec.requiresArcane(): every encrypted spec
+      // requires Arcane; a cleartext spec only via an Arcane-requiring
+      // feature (telemetry, content, shutdown, preStop) — forced in tests
+      // with overrides.requiresArcane.
+      requiresArcane: () => !!overrides.encrypted || !!overrides.requiresArcane,
       serialize: () => overrides,
     };
   }
@@ -359,6 +364,14 @@ describe('appSpawner tests', () => {
       globalStateStub.trySpawningGlobalAppCache.set('abc123', '');
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('No app currently to be processed'))).to.be.true;
+    });
+
+    it('refuses a cleartext Arcane-requiring app on a non-Arcane node and remembers it', async () => {
+      const candidate = makeCandidate({ requiresArcane: true });
+      buildModule({ candidates: [candidate] });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123'), 'long-error cache remembers the refusal').to.be.true;
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('requires ArcaneOS'))).to.be.true;
     });
 
     it('should filter out apps that fail placement.matches', async () => {

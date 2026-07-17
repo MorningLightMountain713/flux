@@ -212,6 +212,18 @@ async function installApplication(instantiated, options = {}) {
 
     await checkPlacement(instantiated);
 
+    // Apps whose spec demands Arcane — an encrypted envelope, or any
+    // Arcane-requiring feature (telemetry, content delivery, graceful
+    // shutdown, preStop) — may only install on an attested ArcaneOS node.
+    // The spawner refuses these before selection; this covers direct and
+    // targeted installs, and turns the encrypted case's decrypt failure
+    // into a clean rejection.
+    if (instantiated.requiresArcane() && !globalState.isArcane()) {
+      const reason = `Flux App ${appName} requires an attested ArcaneOS node`;
+      if (onStatus) onStatus(messageHelper.createErrorMessage(reason));
+      return { status: InstallStatus.REJECTED, reason };
+    }
+
     deployment = await deploymentProvider.buildDeployment(instantiated);
     // Check resources and reserve them atomically: two concurrent installs of
     // different apps must not both pass before either is accounted (the in-flight

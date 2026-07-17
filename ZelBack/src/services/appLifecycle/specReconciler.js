@@ -190,10 +190,13 @@ async function convergeApp(installed, registrySpec, ctx) {
     }
   }
 
-  // Encrypted apps require an attested ArcaneOS node. The verdict is resolved
-  // before convergence runs, so a non-arcane verdict is definitive.
-  if (registrySpec.isEncrypted && !globalState.isArcane()) {
-    log.warn(`REMOVAL REASON: Enterprise app requires arcaneOS - ${installed.name}`);
+  // Apps whose spec demands Arcane — an encrypted envelope, or any
+  // Arcane-requiring feature (telemetry, content delivery, graceful
+  // shutdown, preStop) — may only run on an attested ArcaneOS node. The
+  // verdict is resolved before convergence runs, so a non-arcane verdict
+  // is definitive.
+  if (registrySpec.requiresArcane() && !globalState.isArcane()) {
+    log.warn(`REMOVAL REASON: App requires arcaneOS - ${installed.name}`);
     await appUninstaller.uninstallApplication(installed.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
     return 'removed';
   }

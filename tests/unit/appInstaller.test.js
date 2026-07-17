@@ -329,6 +329,7 @@ describe('appInstaller tests', () => {
         componentEntries: () => [],
       },
       isEncrypted: false,
+      requiresArcane: () => false,
       serialize: () => ({
         version: 2,
         name: 'testapp',
@@ -446,6 +447,7 @@ describe('appInstaller tests', () => {
         placement: mockPlacement,
         spec: { version: 2, name: 'newapp', placement: mockPlacement, componentEntries: () => [] },
         isEncrypted: false,
+        requiresArcane: () => false,
         serialize: () => ({ version: 2, name: 'newapp' }),
       };
       // installApplication will proceed past the prune guard before eventually failing on network setup
@@ -553,7 +555,7 @@ describe('appInstaller tests', () => {
         './pendingTeardownStore': { teardownOwedFor },
         './componentProvisioner': { installComponent },
         '../utils/globalState': {
-          installingApps: new Map(), installAborted: sinon.stub().returns(installAborted), abortInstall, runningAppsCache: new Set(),
+          installingApps: new Map(), installAborted: sinon.stub().returns(installAborted), abortInstall, runningAppsCache: new Set(), isArcane: sinon.stub().returns(false),
         },
         // appNetworkLinker.reconnectLinkedApps runs on the success path (the call kept during
         // the rebase); without this stub the install throws before reaching the broadcast.
@@ -625,8 +627,19 @@ describe('appInstaller tests', () => {
       placement: mockPlacement,
       spec: { version: 2, name: 'newapp', placement: mockPlacement, componentEntries: () => [] },
       isEncrypted: false,
+      requiresArcane: () => false,
       serialize: () => ({ version: 2, name: 'newapp' }),
     };
+
+    it('rejects an Arcane-requiring app on a non-Arcane node before any provisioning', async () => {
+      const { installer, installComponent } = loadFresh({ converge: { converged: true, failed: [] }, components: [['web', mockComponent]] });
+
+      const result = await installer.installApplication({ ...mockInstantiated, requiresArcane: () => true }, {});
+
+      expect(result.status).to.equal(installer.InstallStatus.REJECTED);
+      expect(result.reason).to.include('ArcaneOS');
+      expect(installComponent.called, 'nothing may be provisioned').to.be.false;
+    });
 
     it('runs onInstallComplete/app:installed and hands off to the reconciler on a successful install', async () => {
       const {
