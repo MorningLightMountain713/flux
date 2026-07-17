@@ -182,6 +182,14 @@ export function dbClient(nodeNum) {
       return globalDb.collection('appstateevents').find({ ip, ...(type ? { type } : {}) }).toArray();
     },
 
+    // This node's installed-app row. Its `hash` is the spec message the node
+    // actually runs — after an update confirms, the reconcile sweep rewrites the
+    // row to the new spec, so hash catching up to the update hash IS adoption.
+    async getLocalApp(appName) {
+      const localDb = await db('appsLocal');
+      return localDb.collection('zelappsinformation').findOne({ name: appName }, { projection: { _id: 0 } });
+    },
+
     async eventCounts() {
       const globalDb = await db('appsGlobal');
       const col = globalDb.collection('appstateevents');
