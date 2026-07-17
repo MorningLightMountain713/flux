@@ -5,8 +5,10 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const axios = require('axios');
 const fsp = require('node:fs/promises');
+const path = require('node:path');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const volumeService = require('../../ZelBack/src/services/utils/volumeService');
+const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const helpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
 
 describe('syncthingMonitorHelpers tests', () => {
@@ -353,6 +355,53 @@ describe('syncthingMonitorHelpers tests', () => {
       const result = await helpers.ensureStfolderExists('/apps/fluxcomp_app');
 
       expect(result).to.be.false;
+    });
+  });
+
+  describe('removeSyncthingFolder', () => {
+    // the module derives the same base at load time
+    const appsBase = `${process.env.FLUX_APPS_FOLDER || path.join(process.env.HOME, 'zelflux', 'ZelApps')}/`;
+
+    it('removes a composed component folder matched by its identifier-derived path', async () => {
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves({
+        status: 'success',
+        data: [{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }],
+      });
+      const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({});
+      sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ status: 'success', data: { requiresRestart: false } });
+
+      await helpers.removeSyncthingFolder('web_app');
+
+      sinon.assert.calledOnceWithExactly(adjust, 'delete', undefined, 'fluxweb_app');
+    });
+
+    it('does not match a composed folder by the bare app name', async () => {
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves({
+        status: 'success',
+        data: [{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }],
+      });
+      const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({});
+      sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ status: 'success', data: { requiresRestart: false } });
+
+      await helpers.removeSyncthingFolder('app');
+
+      sinon.assert.notCalled(adjust);
+    });
+  });
+
+  describe('requestFolderScan', () => {
+    it('requests a db scan of the component identifier-derived folder id', async () => {
+      const dbScan = sandbox.stub(syncthingService, 'dbScan').resolves({ status: 'success' });
+
+      await helpers.requestFolderScan('web_app');
+
+      sinon.assert.calledOnceWithExactly(dbScan, 'fluxweb_app');
+    });
+
+    it('swallows a failed scan request (the watcher/rescan remains the fallback)', async () => {
+      sandbox.stub(syncthingService, 'dbScan').rejects(new Error('syncthing down'));
+
+      await helpers.requestFolderScan('web_app');
     });
   });
 });

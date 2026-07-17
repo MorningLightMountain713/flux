@@ -4,6 +4,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
+const dockerService = require('../dockerService');
+const syncthingService = require('../syncthingService');
 const volumeService = require('../utils/volumeService');
 const {
   DEVICE_ID_REQUEST_TIMEOUT_MS,
@@ -265,6 +267,78 @@ function folderNeedsUpdate(existingFolder, newFolder) {
   );
 }
 
+const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
+const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
+const appsFolder = `${appsFolderPath}/`;
+
+function emitFolderStatus(res, status) {
+  log.info(status);
+  if (res) {
+    res.write(serviceHelper.ensureString(status));
+    if (res.flush) res.flush();
+  }
+}
+
+/**
+ * Remove a component's syncthing folder registration (config-plane only — the
+ * on-disk volume is untouched; the monitor re-adds the folder while the spec
+ * still declares sync). Folders are registered per component as
+ * flux<identifier>, so composed apps must be removed component by component —
+ * the bare app name matches nothing for them.
+ *
+ * @param {string} appComponentName - component identifier (flat app name for v1-3 specs)
+ * @param {object} [res] - optional response stream for status lines
+ */
+async function removeSyncthingFolder(appComponentName, res) {
+  try {
+    const identifier = appComponentName;
+    const appId = dockerService.getAppIdentifier(identifier);
+    const folder = `${appsFolder + appId}`;
+    const allSyncthingFolders = await syncthingService.getConfigFolders();
+    if (allSyncthingFolders.status === 'error') {
+      return;
+    }
+    let folderId = null;
+    for (const syncthingFolder of allSyncthingFolders.data) {
+      if (syncthingFolder.path === folder || syncthingFolder.path.includes(`${folder}/`)) {
+        folderId = syncthingFolder.id;
+      }
+      if (folderId) {
+        // eslint-disable-next-line no-await-in-loop
+        await syncthingService.adjustConfigFolders('delete', undefined, folderId);
+        // eslint-disable-next-line no-await-in-loop
+        const restartRequired = await syncthingService.getConfigRestartRequired();
+        if (restartRequired.status === 'success' && restartRequired.data.requiresRestart === true) {
+          log.info('Syncthing restart required, restarting...');
+          // eslint-disable-next-line no-await-in-loop
+          await syncthingService.systemRestart();
+        }
+        emitFolderStatus(res, { status: `Stopping syncthing on folder ${syncthingFolder.path}...` });
+        emitFolderStatus(res, { status: 'Syncthing adjusted' });
+      }
+      folderId = null;
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+/**
+ * Best-effort request for an immediate scan of a component's syncthing folder.
+ * Syncthing reloads .stignore before each scan, so this makes a changed ignore
+ * set enforce right away instead of waiting for the watcher delay or the
+ * rescan interval. Never throws — the watcher/rescan remains the fallback.
+ *
+ * @param {string} appComponentName - component identifier
+ */
+async function requestFolderScan(appComponentName) {
+  try {
+    await syncthingService.dbScan(dockerService.getAppIdentifier(appComponentName));
+  } catch (error) {
+    log.warn(`requestFolderScan: syncthing scan request for ${appComponentName} failed - ${error.message ?? error}`);
+  }
+}
+
 module.exports = {
   getDeviceID,
   getDeviceIDCached,
@@ -275,4 +349,6 @@ module.exports = {
   ensureStfolderExists,
   getContainerFolderPath,
   folderNeedsUpdate,
+  removeSyncthingFolder,
+  requestFolderScan,
 };

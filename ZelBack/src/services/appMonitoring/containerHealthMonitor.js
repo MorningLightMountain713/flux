@@ -2,6 +2,7 @@ const log = require('../../lib/log');
 const componentProvisioner = require('../appLifecycle/componentProvisioner');
 const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
 const appVolumeService = require('../appLifecycle/appVolumeService');
+const syncthingMonitorHelpers = require('./syncthingMonitorHelpers');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const shutdownPlan = require('../appLifecycle/shutdownPlan');
@@ -64,7 +65,10 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
       // pulls the image before appDockerCreate binds, so a re-prune in that window
       // still fails the create and can escalate to removal. Fully closing it needs a
       // rearchitect (pruner coordination / sources outside the synced tree).
-      await appVolumeService.ensureMountSourcesExist(deployComp);
+      const stignoreChanged = await appVolumeService.ensureMountSourcesExist(deployComp);
+      if (stignoreChanged) {
+        await syncthingMonitorHelpers.requestFolderScan(deployComp.identifier);
+      }
     }
     if (!volumeMounted && !allowVolumeCreation) {
       throw new Error(`Cannot recreate ${componentIdentifier} without creating (reformatting) its data volume: the volume for ${mainAppName} could not be verified as mounted`);
