@@ -18,7 +18,7 @@ const messageVerifier = require('./appMessaging/messageVerifier');
 const { appPaymentPositions } = require('./appPaymentPositions');
 const appsRepository = require('./appDatabase/appsRepository');
 const appUninstaller = require('./appLifecycle/appUninstaller');
-const appOperations = require('./appLifecycle/appOperations');
+const specReconciler = require('./appLifecycle/specReconciler');
 const benchmarkService = require('./benchmarkService');
 const fluxNetworkhelper = require('./fluxNetworkHelper');
 const { extractIp } = require('./utils/socketAddressUtils');
@@ -56,8 +56,6 @@ let appsTransactions = [];
 let isSynced = false;
 let cachedDaemonVersion = null;
 
-// updateFluxAppsPeriod can be between every 4 to 9 blocks
-let updateFluxAppsPeriod = Math.floor(Math.random() * 6 + 4);
 // When the work below that is paced by the chain is due.
 let cadence = new BlockCadence();
 
@@ -920,10 +918,11 @@ async function processBlock(blockHeight, isInsightExplorer) {
       blockEmitter.emit('blocksProcessed', scannedHeight);
 
       if (globalState.dbReady && blockDataVerbose.height >= config.fluxapps.epochstart) {
-        // Local expiry enforced at every tip block (cheap - scans only this
-        // node's installed rows), so a cancel/expiry tears down ~the block it
-        // becomes eligible instead of waiting for the periodic sweep below.
-        await appUninstaller.expireInstalledApplications(blockHeight);
+        // Desired-state convergence at every tip block: cheap (this node's
+        // handful of installed rows), level-triggered, and the reconciler
+        // staggers any actual redeploys itself — so evaluating every block
+        // cannot stampede anything.
+        await specReconciler.requestFullConvergence({ reason: 'block' });
         if (blockWorkDue('expireGlobalApplications', blockHeight, 2 * speedMultiplier)) {
           await appUninstaller.expireGlobalApplications();
           // Converge the content-manifest register to the live-app set on the same
@@ -935,10 +934,6 @@ async function processBlock(blockHeight, isInsightExplorer) {
           } catch (error) {
             log.error(`Content-manifest reap failed: ${error.message ?? error}`);
           }
-        }
-        if (blockWorkDue('reinstallOldApplications', blockHeight, updateFluxAppsPeriod * speedMultiplier)) {
-          appOperations.reconcileInstalledApps();
-          updateFluxAppsPeriod = Math.floor(Math.random() * 6 + 4);
         }
       }
       const benchPeriod = config.fluxapps.benchUpnpPeriod * speedMultiplier;
