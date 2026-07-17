@@ -5,7 +5,6 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const messageHelper = require('../messageHelper');
 const deviceHelper = require('../deviceHelper');
-const syncthingService = require('../syncthingService');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const pendingTeardownStore = require('./pendingTeardownStore');
@@ -195,9 +194,12 @@ async function applyMountPerms(mount) {
  * (Re)generate a component's `.stignore` from its current spec — the single source
  * of truth, idempotent (full overwrite, skipped when the content is already
  * current), so it never goes stale across a redeploy that keeps the volume
- * (where `createAppVolume` does not run). A changed ignore set on an existing
- * file is followed by a targeted syncthing scan request so it enforces
- * immediately. Reserved entries
+ * (where `createAppVolume` does not run). Returns true when an EXISTING ignore
+ * file's content changed — syncthing reloads patterns only before its next
+ * scan/sync, so the caller should follow with a targeted folder scan
+ * (`syncthingMonitorHelpers.requestFolderScan`). False on a first write (the
+ * folder is not registered yet; syncthing loads the patterns when it adds the
+ * folder), when the content is unchanged, and when sync is off. Reserved entries
  * come FIRST (syncthing is first-match-wins), so the owner's `sync.exclude` can
  * extend the set but can never un-exclude `/backup` or an injected content path.
  * Injected content is node-local — content delivery writes it on every node — and
@@ -208,7 +210,7 @@ async function applyMountPerms(mount) {
  * @param {object} deployComp - DeploymentComponent (carries dir, sync, injected views)
  */
 async function writeStignore(deployComp) {
-  if (!deployComp.dir) return;
+  if (!deployComp.dir) return false;
   const compDir = deployComp.dir;
   if (!deployComp.sync) {
     // No sync (never had it, or a spec update dropped it on a kept volume):
@@ -217,7 +219,7 @@ async function writeStignore(deployComp) {
     // marker on a folder that is about to be pruned is harmless.
     await fs.rm(`${compDir}/.stignore`, { force: true });
     await fs.rm(`${compDir}/.stfolder`, { recursive: true, force: true });
-    return;
+    return false;
   }
   const injected = deployComp.injectedSyncExcludes().map((source) => `/${path.relative(compDir, source)}`);
   const ownerExcludes = deployComp.sync.exclude || [];
@@ -225,20 +227,9 @@ async function writeStignore(deployComp) {
   const content = `${lines.join('\n')}\n`;
   const stignorePath = `${compDir}/.stignore`;
   const existing = await fs.readFile(stignorePath, 'utf8').catch(() => null);
-  if (existing === content) return;
+  if (existing === content) return false;
   await fs.writeFile(stignorePath, content);
-  // Syncthing reloads ignore patterns only before its next scan/sync — on an
-  // idle folder that can be the full rescan interval. A targeted scan request
-  // makes a changed exclude enforce immediately. Skipped on the first write:
-  // the folder is not registered yet, and syncthing loads the patterns when it
-  // adds the folder. Best-effort — the watcher/rescan remains the fallback.
-  if (existing !== null) {
-    try {
-      await syncthingService.dbScan(dockerService.getAppIdentifier(deployComp.identifier));
-    } catch (error) {
-      log.warn(`writeStignore: syncthing scan request for ${deployComp.identifier} failed - ${error.message ?? error}`);
-    }
-  }
+  return existing !== null;
 }
 
 /**
@@ -266,6 +257,8 @@ async function removeOrphanedInjectedContent(oldComp, newComp) {
  * idempotent (`mkdir -p` / `touch`), so there is no check-then-act (TOCTOU) window
  * inside this helper. Also regenerates `.stignore` so a volume-keeping redeploy
  * picks up an added/removed injected exclude (decoupled from `createAppVolume`).
+ * Passes writeStignore's verdict through: true when an existing ignore set
+ * changed and the caller should request a targeted syncthing folder scan.
  */
 async function ensureMountSourcesExist(deployComp) {
   for (const mount of deployComp.mounts) {
@@ -279,42 +272,8 @@ async function ensureMountSourcesExist(deployComp) {
     // eslint-disable-next-line no-await-in-loop
     await applyMountPerms(mount);
   }
-  await writeStignore(deployComp);
-}
-
-async function removeSyncthingFolder(appComponentName, res) {
-  try {
-    const identifier = appComponentName;
-    const appId = dockerService.getAppIdentifier(identifier);
-    const folder = `${appsFolder + appId}`;
-    const allSyncthingFolders = await syncthingService.getConfigFolders();
-    if (allSyncthingFolders.status === 'error') {
-      return;
-    }
-    let folderId = null;
-    for (const syncthingFolder of allSyncthingFolders.data) {
-      if (syncthingFolder.path === folder || syncthingFolder.path.includes(`${folder}/`)) {
-        folderId = syncthingFolder.id;
-      }
-      if (folderId) {
-        const adjustSyncthingA = { status: `Stopping syncthing on folder ${syncthingFolder.path}...` };
-        // eslint-disable-next-line no-await-in-loop
-        await syncthingService.adjustConfigFolders('delete', undefined, folderId);
-        // eslint-disable-next-line no-await-in-loop
-        const restartRequired = await syncthingService.getConfigRestartRequired();
-        if (restartRequired.status === 'success' && restartRequired.data.requiresRestart === true) {
-          log.info('Syncthing restart required, restarting...');
-          // eslint-disable-next-line no-await-in-loop
-          await syncthingService.systemRestart();
-        }
-        emitStatus(res, adjustSyncthingA);
-        emitStatus(res, { status: 'Syncthing adjusted' });
-      }
-      folderId = null;
-    }
-  } catch (error) {
-    log.error(error);
-  }
+  const stignoreChanged = await writeStignore(deployComp);
+  return stignoreChanged;
 }
 
 module.exports = {
@@ -323,5 +282,4 @@ module.exports = {
   applyMountPerms,
   writeStignore,
   removeOrphanedInjectedContent,
-  removeSyncthingFolder,
 };

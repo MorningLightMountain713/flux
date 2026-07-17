@@ -6,7 +6,6 @@ const os = require('node:os');
 const path = require('node:path');
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 
 describe('appVolumeService.writeStignore', () => {
@@ -59,40 +58,31 @@ describe('appVolumeService.writeStignore', () => {
     expect(survivors).to.not.include('.stfolder');
   });
 
-  it('requests a targeted syncthing scan when an existing ignore set changes', async () => {
-    const dbScan = sinon.stub(syncthingService, 'dbScan').resolves({ status: 'success' });
+  it('reports a change to an existing ignore set so the caller can request a scan', async () => {
     await fs.writeFile(path.join(tmp, '.stignore'), '/backup\n/old\n');
 
-    await appVolumeService.writeStignore({
+    const changed = await appVolumeService.writeStignore({
       dir: tmp,
-      identifier: 'comp1_app',
       sync: { exclude: ['/new'] },
       injectedSyncExcludes: () => [],
     });
 
     const content = await fs.readFile(path.join(tmp, '.stignore'), 'utf8');
     expect(content).to.equal('/backup\n/new\n');
-    // syncthing reloads ignores only at the next scan/sync, so the change is
-    // pushed through a targeted scan of the registered folder id
-    expect(dbScan.calledOnceWith('fluxcomp1_app')).to.equal(true);
+    expect(changed).to.equal(true);
   });
 
-  it('skips the rewrite and the scan when the ignore set is unchanged, and never scans on first write', async () => {
-    const dbScan = sinon.stub(syncthingService, 'dbScan').resolves({ status: 'success' });
+  it('reports no change on a first write or when the ignore set is unchanged', async () => {
     const deployComp = {
       dir: tmp,
-      identifier: 'comp1_app',
       sync: { exclude: [] },
       injectedSyncExcludes: () => [],
     };
 
-    // first write: file created, but no scan — the folder is not registered yet
-    await appVolumeService.writeStignore(deployComp);
-    expect(dbScan.called).to.equal(false);
-
-    // unchanged content: no scan either
-    await appVolumeService.writeStignore(deployComp);
-    expect(dbScan.called).to.equal(false);
+    // first write: the folder is not registered with syncthing yet
+    expect(await appVolumeService.writeStignore(deployComp)).to.equal(false);
+    // unchanged content: nothing to enforce
+    expect(await appVolumeService.writeStignore(deployComp)).to.equal(false);
   });
 
   it('dedups against the reserved entries and drops empty patterns', async () => {

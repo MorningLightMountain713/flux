@@ -22,7 +22,6 @@ const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appNetworkLinker = require('./appNetworkLinker');
-const appVolumeService = require('./appVolumeService');
 const contentStore = require('./contentStore');
 const appSwapPoolService = require('./appSwapPoolService');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
@@ -51,6 +50,7 @@ const pendingTeardownStore = require('./pendingTeardownStore');
 const imageCacheRetention = require('./imageCacheRetention');
 const shutdownPlan = require('./shutdownPlan');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
+const syncthingMonitorHelpers = require('../appMonitoring/syncthingMonitorHelpers');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
@@ -101,7 +101,7 @@ async function stopSyncthingAndCleanup(monitoredName, appId) {
   // place.
   globalState.folderHoldings?.delete(appId);
   try {
-    await appVolumeService.removeSyncthingFolder(monitoredName);
+    await syncthingMonitorHelpers.removeSyncthingFolder(monitoredName);
 
     // Hard removal - delete syncthing cache since data will be deleted
     // eslint-disable-next-line no-shadow, global-require

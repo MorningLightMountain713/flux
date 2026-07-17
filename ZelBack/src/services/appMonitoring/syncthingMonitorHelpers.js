@@ -4,7 +4,10 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
+const dockerService = require('../dockerService');
+const syncthingService = require('../syncthingService');
 const volumeService = require('../utils/volumeService');
+const { SYNCTHING_IGNORE_LINES } = require('../appSystem/volumeReservedNames');
 const {
   DEVICE_ID_REQUEST_TIMEOUT_MS,
   SYNCTHING_RESCAN_INTERVAL_SECONDS,
@@ -265,6 +268,130 @@ function folderNeedsUpdate(existingFolder, newFolder) {
   );
 }
 
+/**
+ * Ensure a folder's syncthing ignores carry every FluxOS policy line.
+ *
+ * .stignore is syncthing's own control file - it writes it atomically, runs as
+ * root so it lands on any legacy root-owned file, and never replicates it or
+ * its temp. So FluxOS sets the patterns through syncthing's API rather than
+ * writing the file: there is no temp, no ownership dance, and nothing on the
+ * volume to orphan on a powercut. Volume creation still seeds the file directly
+ * for a brand-new folder syncthing does not yet know; this converges every
+ * EXISTING folder whose ignores predate a policy line.
+ *
+ * Asserted by POSITION, not by presence. syncthing takes the FIRST pattern that
+ * matches, so a policy line sitting below anything is a policy line something
+ * else can answer for - an `!/backup` above it un-ignores the very directory
+ * this exists to keep off the network, and a presence test would call that
+ * converged. The policy lines therefore lead, and everything else follows in the
+ * order it already had. That is the same rule the v9 spec-driven writer states,
+ * where the owner supplies patterns of their own: they extend the set, they
+ * never un-exclude what FluxOS put there.
+ *
+ * Nothing is lost. syncthing's POST replaces the whole set, so the desired list
+ * is built FROM the current one and only duplicate copies of our own lines drop
+ * out. Nothing is posted when the folder already reads that way, so a converged
+ * folder is neither rewritten nor rescanned - which is what makes this safe on
+ * every monitor pass. Every syncthing call returns its outcome in-band and never
+ * throws, so status is checked rather than caught.
+ *
+ * Call only for a folder syncthing already knows (the caller checks); on an
+ * unknown folder the API would answer with an error and nothing would converge.
+ *
+ * @param {string} folderId - the syncthing folder id (the app identifier)
+ */
+async function ensureStignoreCovers(folderId) {
+  const read = await syncthingService.getFolderIgnores(folderId);
+  if (read.status !== 'success') {
+    log.error(`ensureStignoreCovers - could not read ignores for ${folderId}: ${read.data?.message ?? 'unknown error'}`);
+    return;
+  }
+  const current = Array.isArray(read.data?.ignore) ? read.data.ignore : [];
+  const rest = current.filter((line) => !SYNCTHING_IGNORE_LINES.includes(line));
+  const desired = [...SYNCTHING_IGNORE_LINES, ...rest];
+  const converged = desired.length === current.length
+    && desired.every((line, index) => line === current[index]);
+  if (converged) return;
+  const written = await syncthingService.setFolderIgnores(folderId, desired);
+  if (written.status !== 'success') {
+    log.error(`ensureStignoreCovers - could not set ignores for ${folderId}: ${written.data?.message ?? 'unknown error'}`);
+    return;
+  }
+  log.info(`ensureStignoreCovers - ${folderId} ignores now lead with ${SYNCTHING_IGNORE_LINES.join(', ')}`);
+}
+
+const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
+const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
+const appsFolder = `${appsFolderPath}/`;
+
+function emitFolderStatus(res, status) {
+  log.info(status);
+  if (res) {
+    res.write(serviceHelper.ensureString(status));
+    if (res.flush) res.flush();
+  }
+}
+
+/**
+ * Remove a component's syncthing folder registration (config-plane only — the
+ * on-disk volume is untouched; the monitor re-adds the folder while the spec
+ * still declares sync). Folders are registered per component as
+ * flux<identifier>, so composed apps must be removed component by component —
+ * the bare app name matches nothing for them.
+ *
+ * @param {string} appComponentName - component identifier (flat app name for v1-3 specs)
+ * @param {object} [res] - optional response stream for status lines
+ */
+async function removeSyncthingFolder(appComponentName, res) {
+  try {
+    const identifier = appComponentName;
+    const appId = dockerService.getAppIdentifier(identifier);
+    const folder = `${appsFolder + appId}`;
+    const allSyncthingFolders = await syncthingService.getConfigFolders();
+    if (allSyncthingFolders.status === 'error') {
+      return;
+    }
+    let folderId = null;
+    for (const syncthingFolder of allSyncthingFolders.data) {
+      if (syncthingFolder.path === folder || syncthingFolder.path.includes(`${folder}/`)) {
+        folderId = syncthingFolder.id;
+      }
+      if (folderId) {
+        // eslint-disable-next-line no-await-in-loop
+        await syncthingService.adjustConfigFolders('delete', undefined, folderId);
+        // eslint-disable-next-line no-await-in-loop
+        const restartRequired = await syncthingService.getConfigRestartRequired();
+        if (restartRequired.status === 'success' && restartRequired.data.requiresRestart === true) {
+          log.info('Syncthing restart required, restarting...');
+          // eslint-disable-next-line no-await-in-loop
+          await syncthingService.systemRestart();
+        }
+        emitFolderStatus(res, { status: `Stopping syncthing on folder ${syncthingFolder.path}...` });
+        emitFolderStatus(res, { status: 'Syncthing adjusted' });
+      }
+      folderId = null;
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+/**
+ * Best-effort request for an immediate scan of a component's syncthing folder.
+ * Syncthing reloads .stignore before each scan, so this makes a changed ignore
+ * set enforce right away instead of waiting for the watcher delay or the
+ * rescan interval. Never throws — the watcher/rescan remains the fallback.
+ *
+ * @param {string} appComponentName - component identifier
+ */
+async function requestFolderScan(appComponentName) {
+  try {
+    await syncthingService.dbScan(dockerService.getAppIdentifier(appComponentName));
+  } catch (error) {
+    log.warn(`requestFolderScan: syncthing scan request for ${appComponentName} failed - ${error.message ?? error}`);
+  }
+}
+
 module.exports = {
   getDeviceID,
   getDeviceIDCached,
@@ -275,4 +402,6 @@ module.exports = {
   ensureStfolderExists,
   getContainerFolderPath,
   folderNeedsUpdate,
+  removeSyncthingFolder,
+  requestFolderScan,
 };
