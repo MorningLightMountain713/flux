@@ -426,8 +426,13 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
       async () => (await runningIndexes(nameLoose)).join(',') === '0',
       { rounds: 60, label: `${nameLoose} converged to node 1 only` },
     );
-    const envMap = await containerEnv(env.clients[0], nameLoose);
-    expect(envMap.FLUX_REPLICA).to.equal('m1');
+    // The kept node's own adoption is a scheduled rolling redeploy (the
+    // de-targeted removals land first, deliberately) — wait for the recreated
+    // container to carry the replica identity.
+    await waitFor(
+      async () => (await containerEnv(env.clients[0], nameLoose))?.FLUX_REPLICA === 'm1',
+      { timeout: 120000, interval: 3000, label: `${nameLoose} node 1 adopted the named identity` },
+    );
   });
 
   it('mode-switches named -> loose: candidate semantics return, replica identity drops', async function () {
