@@ -409,6 +409,7 @@ export async function createTestEnv({
   configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true,
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
+  telemetrydMock = false,
 } = {}) {
   // The boot-lock queue wait must not count against the suite's hook budget.
   // Mocha enforces a hook's timeout twice: the watchdog timer (which would fire
@@ -438,7 +439,7 @@ export async function createTestEnv({
   activeEnvs.add(env);
 
   try {
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -481,7 +482,7 @@ function mergeConfigs(base, override) {
   return result;
 }
 
-async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock) {
+async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -727,6 +728,12 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     // mock runs in-container and its begin_app_stop performs the actual docker
     // stop, mirroring the daemon's production role.
     if (shutdowndMock && !isLegacy) nodeEnv.FLUX_SHUTDOWND_MOCK = 'true';
+    // The mock flux-telemetryd is the CLIENT of FluxOS's identity socket (the
+    // inverse of shutdownd's direction). Opt-in: only the telemetry suites pay
+    // for the identity server + stub; the entrypoint also creates the
+    // /run/flux/telemetry runtime dir the identity server's Arcane write-probe
+    // demands.
+    if (telemetrydMock && !isLegacy) nodeEnv.FLUX_TELEMETRYD_MOCK = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files (shared.js / node-NN) carry the default 198.18 addresses; NODE_CONFIG
