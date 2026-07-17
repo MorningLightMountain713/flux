@@ -6,13 +6,13 @@ import { buildSeedableIndexRefApp } from '../framework/seed-helper.js';
 import { assertNoEvent } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 
-// Classifier/volumeConstructor handling of component index-ref mounts (`N:`
+// Classifier/deployment handling of component index-ref mounts (`N:`
 // references component N's volume):
 //   VALID  — a two-component app whose second (plain) component references the
 //            first's volume (index 1 -> 0, like SimpleXxFTP's `|0:/srv/xftp`):
 //            installs cleanly, no invalidSpec.
 //   INVALID— a single-component app that self-references (index 0 -> 0, like real
-//            baserow `g:/data|0:/x`): volumeConstructor rejects it at install.
+//            baserow `g:/data|0:/x`): the deployment path rejects it at install.
 // The rejection reason is wrapped in the install-stream failure, so we assert the
 // install is rejected (and names the app), as suite 41 does. Background: BUG B in
 // BUG-gapp-nonprimary-sync-segment.md / project_harness_gaps #1.
