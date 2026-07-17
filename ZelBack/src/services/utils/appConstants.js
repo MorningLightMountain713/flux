@@ -94,7 +94,11 @@ const defaultNodeSpecs = {
 // break - that was messageVerifier -> registryManager -> messageStore ->
 // messageVerifier, entirely between services, and `config` is a leaf this file
 // already requires for the collection names above.
-const GOSSIP_VALIDITY_MS = 5 * 60 * 1000;
+// The freshness window for accepting app gossip. Config-driven for the same reason
+// as the rest of the block: the harness compresses the TTLs these messages are
+// stamped against, and a validity window that does not move with them makes peers
+// refuse each other's perfectly current broadcasts.
+const GOSSIP_VALIDITY_MS = (config.fluxapps.gossipValidityS ?? 300) * 1000;
 const RUNNING_EXPIRY_MS = (config.fluxapps.locationTtlS ?? 7500) * 1000;
 const INSTALLING_EXPIRY_MS = (config.fluxapps.installingTtlS ?? 900) * 1000;
 // Renewal cadence for a long-running install's fluxappinstalling claim: re-broadcast
@@ -105,8 +109,13 @@ const INSTALLING_EXPIRY_MS = (config.fluxapps.installingTtlS ?? 900) * 1000;
 // a harness that compresses installingTtlS and leaves a hardcoded renewal behind
 // inverts the pair, and a renewal longer than the expiry means a live install loses
 // its seat mid-pull - the exact failure the claim exists to prevent. 80% of the TTL
-// is 12 minutes at the 900s default.
-const INSTALLING_RENEWAL_MS = Math.floor(INSTALLING_EXPIRY_MS * 0.8);
+// is 12 minutes at the 900s default, which is what installingRenewalS carries.
+//
+// An explicit key wins where one is set (the harness tunes it against a compressed
+// TTL); the derivation is the fallback, so an absent key can never invert the pair.
+const INSTALLING_RENEWAL_MS = config.fluxapps.installingRenewalS
+  ? config.fluxapps.installingRenewalS * 1000
+  : Math.floor(INSTALLING_EXPIRY_MS * 0.8);
 const INSTALLING_ERRORS_EXPIRY_MS = (config.fluxapps.installErrorTtlS ?? 86400) * 1000;
 // The grace a node gets after announcing its own shutdown, before peers treat
 // its locations as gone. Config-driven like the three above, and for the same

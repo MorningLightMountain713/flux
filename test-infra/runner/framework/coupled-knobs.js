@@ -58,6 +58,7 @@ export const PRODUCTION = Object.freeze({
   // can miss goes out. Only the product of the two means anything.
   wsMaxMissedPongs: 3,
   wsPingIntervalMs: 15000,
+  installingTtlS: 900,
 });
 
 /**
@@ -403,6 +404,32 @@ export function assertDepartureIsVisibleInTime(fluxapps) {
 }
 
 /**
+ * A claim renewal must undercut the claim's own TTL.
+ *
+ * fluxappinstalling v2 claims are renewed while an install is in flight, and the
+ * renewal is what keeps the seat. At or above the TTL the row expires between
+ * renewals, so a live install loses the seat it is still using and a peer spawns
+ * a second copy - the exact over-spawn the claim exists to prevent.
+ *
+ * Only checked when a suite PINS the renewal: unset, appConstants derives it from
+ * the TTL and the ordering cannot be broken.
+ * @param {object} fluxapps Effective fluxapps config for the fleet.
+ * @throws {Error} When the renewal does not undercut the TTL.
+ */
+export function assertRenewalUndercutsTtl(fluxapps) {
+  if (!fluxapps.installingRenewalS) return;
+  const ttlS = fluxapps.installingTtlS ?? PRODUCTION.installingTtlS;
+  if (fluxapps.installingRenewalS < ttlS) return;
+  throw new Error(
+    'coupled-knobs: installingRenewalS does not undercut installingTtlS.\n'
+    + `  renewal ${fluxapps.installingRenewalS}s, ttl ${ttlS}s\n`
+    + '  A claim renewed no sooner than it expires is a claim that lapses mid-install,\n'
+    + '  and a peer that sees the seat free spawns a second copy. Leave it unset to let\n'
+    + '  appConstants derive 80% of whatever the TTL is.',
+  );
+}
+
+/**
  * Every coupled-knob rule this harness enforces, in one call.
  * @param {object} fluxapps Effective fluxapps config for the fleet.
  * @throws {Error} When any relationship does not hold.
@@ -410,6 +437,7 @@ export function assertDepartureIsVisibleInTime(fluxapps) {
 export function assertCoupledRatios(fluxapps) {
   if (!fluxapps) return;
   assertSigtermOrdering(fluxapps);
+  assertRenewalUndercutsTtl(fluxapps);
   if (!fluxapps.residentialQueueStepMs) return;
   assertDepartureOutlivesTicket(fluxapps);
   const blockCost = harnessBlockCostMs(fluxapps);

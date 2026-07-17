@@ -220,7 +220,13 @@ module.exports = {
     // real failed installs, and suite 27 waits for five of them to reach the
     // network-wide threshold. No knob paces that, so there is no ratio to hold.
     installErrorTtlS: 86400,
+    // installingRenewalS is deliberately NOT set here. appConstants derives it as
+    // 80% of installingTtlS, and that TTL is uncompressed above for reasons that
+    // apply to the renewal identically - it paces a real install, not a clock. A
+    // pinned value would have to be re-derived every time the TTL moved.
     tempMsgTtlS: 300,
+    gossipValidityS: 300,
+    sigtermTtlS: 420,
     hashSyncIntervalMs: 30000,
     cpuCheckIntervalMs: 30000,
     statsSampleIntervalMs: 2000,

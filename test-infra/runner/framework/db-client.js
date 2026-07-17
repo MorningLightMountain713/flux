@@ -83,6 +83,15 @@ export function dbClient(nodeNum) {
       return globalDb.collection('appsinstallinglocations').countDocuments({});
     },
 
+    // This node's view of who claims to be installing an app (the rows
+    // fluxappinstalling messages upsert). Cleared claims and the winner's
+    // running broadcast both delete rows here, so an empty result after
+    // convergence means every seat was released, not TTL'd.
+    async getAppInstallingLocations(appName) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('appsinstallinglocations').find({ name: appName }).toArray();
+    },
+
     async installingErrorCount() {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('appsInstallingErrorsLocations').countDocuments({});

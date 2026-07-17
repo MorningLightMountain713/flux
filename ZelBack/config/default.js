@@ -584,6 +584,14 @@ module.exports = {
     // shutdown gets no grace at all.
     sigtermExpiryS: 420,
     installingTtlS: 900, // an in-progress install: 15 minutes
+    // Renewal cadence for an in-flight install's fluxappinstalling claim. MUST
+    // undercut installingTtlS with slack for gossip propagation, or a live install
+    // loses the seat it is still using. Absent, appConstants derives 80% of the TTL.
+    installingRenewalS: 720,
+    // Freshness window for accepting an app gossip broadcast. Compressed with the
+    // TTLs above by the harness; a window that does not move with them makes peers
+    // refuse each other's current messages.
+    gossipValidityS: 300,
     // 24 hours. This was 3600 while a collection-level TTL index on `cachedAt`
     // drove it; that index was dropped when expiry moved per-document, and the
     // key kept the old mechanism's number for three months while nothing read
