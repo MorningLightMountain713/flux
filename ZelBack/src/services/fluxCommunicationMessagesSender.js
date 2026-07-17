@@ -264,11 +264,13 @@ async function relay(data, excludeKey) {
 /**
  * Sign once, send to all connected peers (both directions).
  * @param {object} dataToBroadcast Data to broadcast.
+ * @param {object} [options]
+ * @param {string} [options.requireCapability] Only send to peers advertising this capability.
  */
-async function broadcastMessageToAll(dataToBroadcast) {
+async function broadcastMessageToAll(dataToBroadcast, options = {}) {
   const serialisedData = await serialiseAndSignFluxBroadcast(dataToBroadcast);
   if (!serialisedData) return null;
-  await relay(serialisedData);
+  await peerManager.broadcast(serialisedData, { requireCapability: options.requireCapability });
   return JSON.parse(serialisedData);
 }
 

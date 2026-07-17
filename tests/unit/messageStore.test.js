@@ -560,6 +560,21 @@ describe('messageStore tests', () => {
     it('should return error for unsupported version', async () => {
       const message = {
         type: 'fluxappinstalling',
+        version: 3,
+        name: 'testapp',
+        broadcastedAt: Date.now(),
+        ip: '192.168.1.1',
+      };
+
+      const result = await messageStore.storeAppInstallingMessage(message);
+
+      expect(result).to.be.instanceOf(Error);
+      expect(result.message).to.include('version 3 not supported');
+    });
+
+    it('should return error for version 2 without announcedAt', async () => {
+      const message = {
+        type: 'fluxappinstalling',
         version: 2,
         name: 'testapp',
         broadcastedAt: Date.now(),
@@ -569,7 +584,7 @@ describe('messageStore tests', () => {
       const result = await messageStore.storeAppInstallingMessage(message);
 
       expect(result).to.be.instanceOf(Error);
-      expect(result.message).to.include('version 2 not supported');
+      expect(result.message).to.include('announcedAt required for version 2');
     });
 
     it('should store valid installing message', async () => {
@@ -590,6 +605,184 @@ describe('messageStore tests', () => {
 
       expect(result).to.be.true;
       expect(dbHelperStub.updateOneInDatabase.calledOnce).to.be.true;
+    });
+
+    it('should store version 2 message with announcedAt on the row', async () => {
+      const broadcastedAt = Date.now();
+      const announcedAt = broadcastedAt - 1000;
+      const message = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'testapp',
+        announcedAt,
+        broadcastedAt,
+        ip: '192.168.1.1',
+      };
+
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.updateOneInDatabase.resolves();
+
+      const result = await messageStore.storeAppInstallingMessage(message);
+
+      expect(result).to.be.true;
+      const setDoc = dbHelperStub.updateOneInDatabase.firstCall.args[3].$set;
+      expect(setDoc.announcedAt).to.deep.equal(new Date(announcedAt));
+      expect(setDoc.broadcastedAt).to.deep.equal(new Date(broadcastedAt));
+      expect(setDoc.expireAt).to.deep.equal(new Date(broadcastedAt + 15 * 60 * 1000));
+    });
+
+    it('should refresh the row on a renewal (newer broadcastedAt, same announcedAt)', async () => {
+      const announcedAt = Date.now() - 10 * 60 * 1000;
+      const broadcastedAt = Date.now();
+      const message = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'testapp',
+        announcedAt,
+        broadcastedAt,
+        ip: '192.168.1.1',
+      };
+
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves({
+        name: 'testapp', ip: '192.168.1.1', announcedAt: new Date(announcedAt), broadcastedAt: new Date(announcedAt),
+      });
+      dbHelperStub.updateOneInDatabase.resolves();
+
+      const result = await messageStore.storeAppInstallingMessage(message);
+
+      expect(result).to.be.true;
+      const setDoc = dbHelperStub.updateOneInDatabase.firstCall.args[3].$set;
+      expect(setDoc.announcedAt).to.deep.equal(new Date(announcedAt));
+      expect(setDoc.expireAt).to.deep.equal(new Date(broadcastedAt + 15 * 60 * 1000));
+    });
+
+    it('should reject a duplicate or older message than the stored row', async () => {
+      const broadcastedAt = Date.now();
+      const message = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'testapp',
+        announcedAt: broadcastedAt,
+        broadcastedAt,
+        ip: '192.168.1.1',
+      };
+
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves({
+        name: 'testapp', ip: '192.168.1.1', broadcastedAt: new Date(broadcastedAt + 5000),
+      });
+
+      const result = await messageStore.storeAppInstallingMessage(message);
+
+      expect(result).to.be.false;
+      expect(dbHelperStub.updateOneInDatabase.called).to.be.false;
+    });
+
+    it('should delete the row and archived broadcast on cleared', async () => {
+      const broadcastedAt = Date.now();
+      const message = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'testapp',
+        cleared: true,
+        broadcastedAt,
+        ip: '192.168.1.1',
+      };
+
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves({
+        name: 'testapp', ip: '192.168.1.1', broadcastedAt: new Date(broadcastedAt - 60 * 1000),
+      });
+      dbHelperStub.removeDocumentsFromCollection.resolves();
+
+      const result = await messageStore.storeAppInstallingMessage(message);
+
+      expect(result).to.be.true;
+      expect(dbHelperStub.updateOneInDatabase.called).to.be.false;
+      expect(dbHelperStub.removeDocumentsFromCollection.calledTwice).to.be.true;
+      expect(dbHelperStub.removeDocumentsFromCollection.firstCall.args[1]).to.equal('appsInstallingLocations');
+      expect(dbHelperStub.removeDocumentsFromCollection.firstCall.args[2]).to.deep.equal({ name: 'testapp', ip: '192.168.1.1' });
+      expect(dbHelperStub.removeDocumentsFromCollection.secondCall.args[2]).to.deep.equal({ 'data.name': 'testapp', 'data.ip': '192.168.1.1' });
+    });
+
+    it('should ignore a stale cleared that arrives after a newer announce', async () => {
+      const broadcastedAt = Date.now() - 60 * 1000;
+      const message = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'testapp',
+        cleared: true,
+        broadcastedAt,
+        ip: '192.168.1.1',
+      };
+
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves({
+        name: 'testapp', ip: '192.168.1.1', broadcastedAt: new Date(broadcastedAt + 30 * 1000),
+      });
+
+      const result = await messageStore.storeAppInstallingMessage(message);
+
+      expect(result).to.be.false;
+      expect(dbHelperStub.removeDocumentsFromCollection.called).to.be.false;
+    });
+
+    it('should relay a cleared with no stored row (peers may still hold one)', async () => {
+      const message = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'testapp',
+        cleared: true,
+        broadcastedAt: Date.now(),
+        ip: '192.168.1.1',
+      };
+
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.removeDocumentsFromCollection.resolves();
+
+      const result = await messageStore.storeAppInstallingMessage(message);
+
+      expect(result).to.be.true;
+      expect(dbHelperStub.removeDocumentsFromCollection.calledTwice).to.be.true;
+    });
+  });
+
+  describe('storeSignedAppInstallingBroadcast', () => {
+    it('should archive a normal installing broadcast', async () => {
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.updateOneInDatabase.resolves();
+
+      await messageStore.storeSignedAppInstallingBroadcast({
+        version: 1,
+        timestamp: Date.now(),
+        pubKey: 'pub',
+        signature: 'sig',
+        data: { name: 'testapp', ip: '192.168.1.1', broadcastedAt: Date.now() },
+      });
+
+      expect(dbHelperStub.updateOneInDatabase.calledOnce).to.be.true;
+    });
+
+    it('should not archive a cleared broadcast', async () => {
+      await messageStore.storeSignedAppInstallingBroadcast({
+        version: 1,
+        timestamp: Date.now(),
+        pubKey: 'pub',
+        signature: 'sig',
+        data: { name: 'testapp', ip: '192.168.1.1', broadcastedAt: Date.now(), cleared: true },
+      });
+
+      expect(dbHelperStub.updateOneInDatabase.called).to.be.false;
     });
   });
 
