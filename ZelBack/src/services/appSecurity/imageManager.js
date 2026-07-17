@@ -413,50 +413,6 @@ async function checkDockerAccessibility(req, res) {
   });
 }
 
-async function checkApplicationsCompliance() {
-  // eslint-disable-next-line global-require
-  const deploymentProvider = require('../appRuntime/deploymentProvider');
-  // eslint-disable-next-line global-require
-  const appUninstaller = require('../appLifecycle/appUninstaller');
-
-  try {
-    const installedSpecs = await appsRepository.listInstalledApps();
-    const deployments = await deploymentProvider.listInstalledDeployments();
-    const deploymentByName = new Map();
-    for (const d of deployments) {
-      deploymentByName.set(d.appName, d);
-    }
-
-    const appsToRemoveNames = [];
-    for (const inst of installedSpecs) {
-      const deployment = deploymentByName.get(inst.name);
-      const images = deployment ? deployment.allImages() : [];
-      // eslint-disable-next-line no-await-in-loop
-      const result = await isImageBlocked(inst.name, images, { owner: inst.owner, hash: inst.hash });
-      if (result.blocked) {
-        if (!appsToRemoveNames.includes(inst.name)) {
-          appsToRemoveNames.push(inst.name);
-        }
-      }
-    }
-    for (const appName of appsToRemoveNames) {
-      log.warn(`Application ${appName} is blacklisted, removing`);
-      log.warn(`REMOVAL REASON: Blacklisted image - ${appName} uses a blacklisted Docker image (imageManager)`);
-      // eslint-disable-next-line no-await-in-loop
-      const removal = await appUninstaller.uninstallApplication(appName, { broadcastRemoval: true });
-      if (removal.status !== appUninstaller.UninstallStatus.REMOVED
-        && removal.status !== appUninstaller.UninstallStatus.SKIPPED) {
-        // The blocked app may still be running - surface it; the next sweep retries.
-        log.error(`Blacklisted app ${appName} was not removed (${removal.status}: ${removal.reason}); it may still be running`);
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(3 * 60 * 1000);
-    }
-  } catch (error) {
-    log.error(error);
-  }
-}
-
 module.exports = {
   classifyVerificationError,
   verifyRepository,
@@ -466,5 +422,4 @@ module.exports = {
   isAppVetted,
   isImageBlocked,
   checkDockerAccessibility,
-  checkApplicationsCompliance,
 };

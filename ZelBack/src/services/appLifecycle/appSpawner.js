@@ -24,6 +24,7 @@ const globalState = require('../utils/globalState');
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const { FluxCacheManager } = require('../utils/cacheManager');
 const appInstaller = require('./appInstaller');
+const specReconciler = require('./specReconciler');
 const appNetworkLinker = require('./appNetworkLinker');
 const appUninstaller = require('./appUninstaller');
 const pendingTeardownStore = require('./pendingTeardownStore');
@@ -101,57 +102,6 @@ function isSoleRequiredInstaller(placement, minInstances) {
 function isPinnedContended(placement, minInstances) {
   const pinCount = placementPinCount(placement);
   return pinCount > 0 && pinCount > minInstances;
-}
-
-/**
- * Over-instance self-evict check: if more than the required instances are running and this node is
- * the surplus one (newest by runningSince), remove the local instance. Used both inline (a
- * non-pinned app, after its propagation wait) and detached after a wait (a contended app).
- */
-async function overInstanceSelfEvictCheck(appToRun, appHash, minInstances, localSocketAddr) {
-  const runningAppList = await registryManager.appLocation(appToRun);
-  if (runningAppList.length > minInstances) {
-    runningAppList.sort((a, b) => {
-      if (!a.runningSince && b.runningSince) {
-        return -1;
-      }
-      if (a.runningSince && !b.runningSince) {
-        return 1;
-      }
-      if (a.runningSince < b.runningSince) {
-        return -1;
-      }
-      if (a.runningSince > b.runningSince) {
-        return 1;
-      }
-      return 0;
-    });
-    const index = runningAppList.findIndex((x) => socketAddressesMatch(x.ip, localSocketAddr));
-    log.info(`trySpawningGlobalApplication - Application ${appToRun} is already spawned on ${runningAppList.length} instances, my instance is number ${index + 1}`);
-    if (index + 1 > minInstances) {
-      log.info(`trySpawningGlobalApplication - Application ${appToRun} is going to be removed as already passed the instances required.`);
-      log.warn(`REMOVAL REASON: Exceeded required instances - ${appToRun} already has sufficient instances, removing local installation (appSpawner)`);
-      globalState.trySpawningGlobalAppCache.delete(appHash);
-      // No skipGuard: trimming a surplus instance is never an emergency, so it must
-      // defer on any in-flight operation (esp. a graceful teardown already draining
-      // this app) rather than barge past it and force-kill mid-drain.
-      appUninstaller.uninstallApplication(appToRun, { forceKill: true, broadcastRemoval: true }).catch((error) => log.error(error));
-    }
-  }
-}
-
-/**
- * Detached wrapper for the over-instance self-evict of a contended (non-sole-installer) app. Run
- * fire-and-forget after the install so the post-install propagation wait never blocks the serial
- * spawn loop (an inline 60s sleep head-of-line-blocks every queued app). Errors are logged.
- */
-async function scheduleOverInstanceSelfEvict(appToRun, appHash, minInstances, localSocketAddr) {
-  try {
-    await serviceHelper.delay(1 * 60 * 1000); // give peers' running-broadcasts time to propagate
-    await overInstanceSelfEvictCheck(appToRun, appHash, minInstances, localSocketAddr);
-  } catch (error) {
-    log.error(error);
-  }
 }
 
 function initialize() {
@@ -967,19 +917,14 @@ async function trySpawningGlobalApplication() {
     // reality, so the finally must not retract it.
     installSucceeded = true;
 
-    if (pinnedContended) {
-      // Multi-node contention: the post-install over-instance self-evict needs peers' running-
-      // broadcasts to propagate, but that wait must NOT block the serial spawn loop (an inline 60s
-      // sleep head-of-line-blocks every queued app). Run it detached - the app is already installed,
-      // so this only trims a surplus local instance if the election overshot.
-      scheduleOverInstanceSelfEvict(appToRun, appHash, minInstances, localSocketAddr);
-    } else {
-      // Non-pinned apps keep the legacy inline propagation wait before the check; sole-installers can
-      // never over-install (pin set <= required) so they need neither the wait nor a real check.
-      if (!soleRequiredInstaller) {
-        await serviceHelper.delay(1 * 60 * 1000); // give running-broadcasts time to propagate
-      }
-      await overInstanceSelfEvictCheck(appToRun, appHash, minInstances, localSocketAddr);
+    // Surplus trimming is the spec reconciler's decision: request a post-install
+    // convergence after the propagation window (peers' running-broadcasts need
+    // time to land), detached so the serial spawn loop never blocks on it. Sole
+    // required installers cannot over-install (pin set <= required instances),
+    // so they skip the request entirely.
+    if (!soleRequiredInstaller) {
+      specReconciler.requestAppConvergence(appToRun, { reason: 'postInstall', delayMs: 1 * 60 * 1000 })
+        .catch((error) => log.error(error));
     }
 
     log.info('trySpawningGlobalApplication - Reinitiating possible app installation');
@@ -1025,39 +970,39 @@ function wakeIdleLoop() {
 
 /**
  * React to a freshly-stored global app spec by waking the spawn loop early - but ONLY
- * for the contention-free enterprise case where this node is a mandatory installer, so
- * reacting instantly cannot cause an install race:
- *   1. this is an enterprise node,
- *   2. the app is enterprise-owned,
- *   3. its pin set is no larger than its required instances (isSoleRequiredInstaller -
- *      no overshoot, so no install race), and
- *   4. it is pinned to THIS node.
- * Every other spec is left to the normal poll cadence. Best-effort: it only ever ends
- * an idle wait early, never installs directly, and never throws into the caller (the
- * spec-store path). The raw stored doc is hydrated into an InstantiatedSpec at the
- * perimeter so the gate reads domain accessors + Placement domain methods, never raw
- * doc fields.
+ * where this node is a mandatory installer, so reacting instantly cannot cause an
+ * install race: any NAMED-placement spec pinned to this node (each replica name pins
+ * exactly one node - contention-free by construction), or the contention-free
+ * enterprise case (enterprise node, enterprise-owned app, pin set no larger than the
+ * required instances). Every other spec is left to the normal poll cadence.
+ * Best-effort: it only ever ends an idle wait early, never installs directly, and
+ * never throws into the caller (the spec-store path). The raw stored doc is hydrated
+ * into an InstantiatedSpec at the perimeter so the gate reads domain accessors +
+ * Placement domain methods, never raw doc fields.
  * @param {object} specDoc - spec doc just committed to globalAppsInformation
  */
 async function notifySpecStored(specDoc) {
   try {
     if (!specDoc || globalState.spawnerPaused) return;
-    // 1. enterprise node only (null = identity not yet resolved -> skip). Cheap sync
-    //    gate first, so a non-enterprise node never pays to hydrate the spec.
-    if (enterpriseNetwork.getCachedEnterpriseIdentity() !== true) return;
     const { InstantiatedSpec } = await getSpecBackend();
     const instantiated = InstantiatedSpec.deserialize(specDoc);
-    // 2. enterprise-owned app only
-    if (!enterpriseNetwork.isEnterpriseAppOwner(instantiated.owner)) return;
     const { placement } = instantiated;
-    // 3. contention-free: pinned, with pin set <= required instances. The instances
-    //    default mirrors the global aggregation's $ifNull: ['$instances', 3].
-    if (!isSoleRequiredInstaller(placement, instantiated.spec.instances ?? 3)) return;
-    // 4. pinned to THIS node (by IP - the conservative subset; an outpoint/operator-only
-    //    pin simply rides the normal cadence). lastKnownLocalSocketAddr is null until the
-    //    first spawn cycle resolves this node's address, before which isPinnedTo yields
-    //    false and the spec rides the normal cadence.
+    // Pinned to THIS node (by IP - the conservative subset; an outpoint/operator-only
+    // pin simply rides the normal cadence). lastKnownLocalSocketAddr is null until the
+    // first spawn cycle resolves this node's address, before which isPinnedTo yields
+    // false and the spec rides the normal cadence.
     if (!placement.isPinnedTo({ ip: lastKnownLocalSocketAddr, ipMatcher: socketAddressesMatch })) return;
+    // Named placement is contention-free by construction (each name pins exactly
+    // one node), so any named spec targeting this node wakes the loop. A loose
+    // pinned spec races other candidates, so it wakes only for the contention-free
+    // enterprise case: enterprise node, enterprise-owned app, pin set no larger
+    // than required instances (the instances default mirrors the global
+    // aggregation's $ifNull: ['$instances', 3]).
+    if (placement.mode() !== 'named') {
+      if (enterpriseNetwork.getCachedEnterpriseIdentity() !== true) return;
+      if (!enterpriseNetwork.isEnterpriseAppOwner(instantiated.owner)) return;
+      if (!isSoleRequiredInstaller(placement, instantiated.spec.instances ?? 3)) return;
+    }
     log.info(`notifySpecStored - ${instantiated.name} is pinned to this node and contention-free; waking spawn loop`);
     wakeIdleLoop();
   } catch (error) {

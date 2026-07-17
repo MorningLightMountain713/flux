@@ -121,6 +121,23 @@ async function appLocation(appname) {
 }
 
 /**
+ * The explorer's scanned height — the height app expiry is evaluated against.
+ * @returns {Promise<number>}
+ * @throws {Error} when scanning has not initiated
+ */
+async function getScannedHeight() {
+  const daemonDb = dbHelper.databaseConnection().db(config.database.daemon.database);
+  const result = await dbHelper.findOneInDatabase(
+    daemonDb,
+    scannedHeightCollection,
+    { generalScannedHeight: { $gte: 0 } },
+    { projection: { _id: 0, generalScannedHeight: 1 } },
+  );
+  if (!result) throw new Error('Scanning not initiated');
+  return serviceHelper.ensureNumber(result.generalScannedHeight);
+}
+
+/**
  * Get app installing locations
  * @param {string} appname - Optional app name filter
  * @returns {Promise<Array>} Array of installing locations
@@ -1375,6 +1392,7 @@ async function updateAppSpecifications(appSpecs) {
 }
 
 module.exports = {
+  getScannedHeight,
   setOnSpecStored,
   getAppHashes,
   appLocation,

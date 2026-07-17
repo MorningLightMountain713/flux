@@ -367,6 +367,8 @@ module.exports = {
     imageCacheMaxPullRetries: 3, // transient-failure retries before a pull is marked failed
     imageCacheJobTtlMs: 10800000, // in-memory download-job/progress retention (3h)
     imageReaperIntervalMs: 86400000, // cold-unused-image reaper cadence (daily; runs on ALL nodes, not gated on imageCacheEnabled)
+    adoptionStaggerStepMs: 60000, // named-replica rolling-update step (floors at the app's graceful-shutdown budget)
+    adoptionStaggerWindowMs: 300000, // loose-instance adoption spread window (bounds the fleet-wide restart stagger)
     forceRemovalIntervalMs: 7200000,
     installCollisionWaitMs: 90000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout

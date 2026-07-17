@@ -128,17 +128,15 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     return res.data; // update message hash
   }
 
-  // Update convergence needs the reconcile sweep, and the sweep fires when a
-  // block whose height divides its modulus (period 4-9 x the post-fork
-  // multiplier 4: 16..36 — every one EVEN) is processed AT THE TIP — a block
-  // processed during catch-up carries 2+ confirmations and skips the periodic
-  // section. So each round advances ONE block and waits for every node to
-  // process THAT height. Anchoring on the height matters: a wait satisfied by
-  // "any new block event" resolves on the PREVIOUS height's event whenever the
-  // explorer runs a block behind, and that lag then locks alternate heights
-  // into catch-up — with even moduli, the sweep never fires. Waiting for the
-  // advanced height drains any lag each round, so every height lands at tip
-  // and one sweep is guaranteed within 36 rounds.
+  // Update convergence runs at every block processed AT THE TIP — a block
+  // processed during catch-up carries 2+ confirmations and skips the
+  // convergence pass. So each round advances ONE block and waits for every
+  // node to process THAT height. Anchoring on the height matters: a wait
+  // satisfied by "any new block event" resolves on the PREVIOUS height's
+  // event whenever the explorer runs a block behind, locking alternate
+  // heights into catch-up. Waiting for the advanced height drains any lag
+  // each round, so every height lands at tip and convergence (plus any
+  // staggered adoption delay) is bounded within the round budget.
   async function untilWithBlocks(check, { rounds = 45, label } = {}) {
     for (let i = 0; i < rounds; i += 1) {
       // eslint-disable-next-line no-await-in-loop
@@ -179,6 +177,11 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
           // (NODE_CONFIG deep-merges, so the sibling spawnDeferrals keys keep
           // their defaults.)
           spawnDeferrals: { targetedNodesMs: { encrypted: 30000, standard: 30000 } },
+          // Adoption staggering (rolling updates) is production pacing; shrink
+          // it so a loose instance's bounded-window adoption lands inside the
+          // test windows.
+          adoptionStaggerStepMs: 15000,
+          adoptionStaggerWindowMs: 15000,
         },
       },
     });
