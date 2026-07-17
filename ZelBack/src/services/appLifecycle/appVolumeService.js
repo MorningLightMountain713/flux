@@ -176,7 +176,7 @@ async function createAppVolume(deployComp, res, test = false) {
  * Apply a bind-mount source's effective ownership/permissions, resolved by
  * flux-spec into `mount.perms`. `null` is the data-mount role default — world-
  * writable, today's behavior (no regression). An object pins owner + mode so
- * injected content (root-owned `0444`) is never left world-readable/writable in the
+ * injected content (root-owned `0644` default) is never left world-writable in the
  * container. One helper for every site, so the rule lives in exactly one place.
  *
  * @param {object} mount - a DeploymentComponent mount ({ Source, perms })
@@ -198,13 +198,24 @@ async function applyMountPerms(mount) {
  * come FIRST (syncthing is first-match-wins), so the owner's `sync.exclude` can
  * extend the set but can never un-exclude `/backup` or an injected content path.
  * Injected content is node-local — content delivery writes it on every node — and
- * must never replicate. No-op when the component has no syncthing folder.
+ * must never replicate. Without sync it instead removes any lingering
+ * `.stignore`/`.stfolder` from the kept volume (idempotent), so dropping sync in
+ * a spec update leaves no stale syncthing bookkeeping behind.
  *
  * @param {object} deployComp - DeploymentComponent (carries dir, sync, injected views)
  */
 async function writeStignore(deployComp) {
-  if (!deployComp.sync || !deployComp.dir) return;
+  if (!deployComp.dir) return;
   const compDir = deployComp.dir;
+  if (!deployComp.sync) {
+    // No sync (never had it, or a spec update dropped it on a kept volume):
+    // remove the syncthing bookkeeping files so they don't linger. The monitor
+    // prunes the folder registration separately; a briefly missing .stfolder
+    // marker on a folder that is about to be pruned is harmless.
+    await fs.rm(`${compDir}/.stignore`, { force: true });
+    await fs.rm(`${compDir}/.stfolder`, { recursive: true, force: true });
+    return;
+  }
   const injected = deployComp.injectedSyncExcludes().map((source) => `/${path.relative(compDir, source)}`);
   const ownerExcludes = deployComp.sync.exclude || [];
   const lines = [...new Set(['/backup', ...injected, ...ownerExcludes].filter(Boolean))];
