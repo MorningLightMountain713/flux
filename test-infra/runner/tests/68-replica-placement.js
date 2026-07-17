@@ -436,10 +436,12 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
   });
 
   it('mode-switches named -> loose: candidate semantics return, replica identity drops', async function () {
-    // Generous budget: stale appsinstallinglocations rows from the earlier
-    // phases' churn (~15min TTL) suppress the candidates' respawn ("already
-    // spawned or being installed") until they drain.
-    this.timeout(1200000);
+    // Churn from the earlier phases used to strand appsinstallinglocations rows
+    // until their TTL — this test's old 1200s budget existed only to outwait
+    // them. Aborted attempts and election losers now broadcast cleared claims,
+    // and the compressed harness TTL (installingTtlS, 60s) is honored as the
+    // crash backstop, so normal convergence pace bounds the respawn.
+    this.timeout(300000);
     await updateApp(nameLoose, {
       placement: { targetIps: { [nodeIp(1)]: null, [nodeIp(2)]: null, [nodeIp(5)]: null } },
       instances: 2,
@@ -465,6 +467,20 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
       const envMap = await containerEnv(env.clients[i], nameLoose);
       expect(envMap.FLUX_REPLICA, 'loose instances carry no replica identity').to.equal(undefined);
     }
+
+    // Every seat reservation for the app must already be released on every
+    // node — the winners' rows by their running broadcasts, aborted and losing
+    // attempts' by cleared claims. The short wait absorbs gossip propagation
+    // only; a row that needed the TTL to die fails this.
+    await waitFor(
+      async () => {
+        const rows = await Promise.all(
+          env.clients.map((c) => dbClient(c.num).getAppInstallingLocations(nameLoose)),
+        );
+        return rows.every((r) => r.length === 0);
+      },
+      { timeout: 30000, interval: 2000, label: `${nameLoose} installing claims all released` },
+    );
   });
 
   // The reject cases pass a precomputed contentHash: canonicalizing an invalid
