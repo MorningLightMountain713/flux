@@ -525,12 +525,14 @@ async function handleAppInstallingMessage(message, fromIP, port) {
   try {
     const rebroadcastToPeers = await messageStore.storeAppInstallingMessage(message.data);
     if (rebroadcastToPeers === true) {
-      // Version 2 withdraws the sender's claim rather than recording one and
-      // arrives through this handler too, so the event names which it was.
+      // Version 2 either withdraws the sender's claim or renews it, and both
+      // arrive through this handler, so the event names which it was. Accepts
+      // development's `withdrawn` and v9's `cleared` - the same fact, two
+      // spellings, both on the wire in a mixed fleet.
       fluxEventBus.publish('network:appinstalling', {
         ip: message.data.ip,
         name: message.data.name,
-        withdrawn: message.data.withdrawn === true,
+        withdrawn: message.data.withdrawn === true || message.data.cleared === true,
       });
     }
     messageStore.storeSignedAppInstallingBroadcast(message);

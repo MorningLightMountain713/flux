@@ -97,6 +97,16 @@ const defaultNodeSpecs = {
 const GOSSIP_VALIDITY_MS = 5 * 60 * 1000;
 const RUNNING_EXPIRY_MS = (config.fluxapps.locationTtlS ?? 7500) * 1000;
 const INSTALLING_EXPIRY_MS = (config.fluxapps.installingTtlS ?? 900) * 1000;
+// Renewal cadence for a long-running install's fluxappinstalling claim: re-broadcast
+// before INSTALLING_EXPIRY_MS lapses so a live install keeps its seat, with slack for
+// gossip propagation. A dead node stops renewing and its claim expires on the TTL.
+//
+// DERIVED from the expiry rather than declared, for the reason the block above gives:
+// a harness that compresses installingTtlS and leaves a hardcoded renewal behind
+// inverts the pair, and a renewal longer than the expiry means a live install loses
+// its seat mid-pull - the exact failure the claim exists to prevent. 80% of the TTL
+// is 12 minutes at the 900s default.
+const INSTALLING_RENEWAL_MS = Math.floor(INSTALLING_EXPIRY_MS * 0.8);
 const INSTALLING_ERRORS_EXPIRY_MS = (config.fluxapps.installErrorTtlS ?? 86400) * 1000;
 // The grace a node gets after announcing its own shutdown, before peers treat
 // its locations as gone. Config-driven like the three above, and for the same
@@ -190,6 +200,7 @@ module.exports = {
   ANNOUNCE_INTERVAL_MS,
   ANNOUNCE_CYCLE_WAIT_MS,
   INSTALLING_EXPIRY_MS,
+  INSTALLING_RENEWAL_MS,
   INSTALLING_ERRORS_EXPIRY_MS,
   SIGTERM_EXPIRY_MS,
   EVICTED_EXPIRY_MS,

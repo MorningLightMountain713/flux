@@ -868,15 +868,16 @@ class FluxPeerManager extends EventEmitter {
    * @param {string} [options.direction] - DIRECTION.INBOUND or DIRECTION.OUTBOUND
    * @param {string} [options.exclude] - peer key to skip
    * @param {number} [options.delayMs=25] - delay between sends
+   * @param {string} [options.requireCapability] - only send to peers advertising this capability
    */
   async broadcast(data, options = {}) {
-    const { direction, exclude, delayMs = 25 } = options;
+    const { direction, exclude, delayMs = 25, requireCapability } = options;
     if (direction) {
-      await this.#broadcastToGroup(data, direction, exclude, delayMs);
+      await this.#broadcastToGroup(data, direction, exclude, delayMs, requireCapability);
     } else {
-      await this.#broadcastToGroup(data, DIRECTION.OUTBOUND, exclude, delayMs);
+      await this.#broadcastToGroup(data, DIRECTION.OUTBOUND, exclude, delayMs, requireCapability);
       await serviceHelper.delay(500);
-      await this.#broadcastToGroup(data, DIRECTION.INBOUND, exclude, delayMs);
+      await this.#broadcastToGroup(data, DIRECTION.INBOUND, exclude, delayMs, requireCapability);
     }
   }
 
@@ -886,9 +887,10 @@ class FluxPeerManager extends EventEmitter {
    * @param {string} direction - DIRECTION.INBOUND or DIRECTION.OUTBOUND
    * @param {string} [exclude] - peer key to skip
    * @param {number} delayMs - delay between sends
+   * @param {string} [requireCapability] - only send to peers advertising this capability
    * @private
    */
-  async #broadcastToGroup(data, direction, exclude, delayMs) {
+  async #broadcastToGroup(data, direction, exclude, delayMs, requireCapability) {
     // The keys are taken once, and each is looked up again at the moment it is
     // sent to. This loop awaits between sends, so the peer map is free to change
     // under it - a peer dropped by the monitor, a peer this loop evicts itself -
@@ -900,6 +902,7 @@ class FluxPeerManager extends EventEmitter {
       if (exclude && key === exclude) continue;
       const peer = this.#peers.get(key);
       if (!peer) continue;
+      if (requireCapability && !peer.remoteCapabilities.has(requireCapability)) continue;
       try {
         await serviceHelper.delay(delayMs);
         if (!peer.send(data)) {

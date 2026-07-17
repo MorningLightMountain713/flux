@@ -28,17 +28,24 @@ function epochMs(value) {
 }
 
 /**
- * Orders installing claims for the collision resolver: earliest broadcastedAt
- * first, a claim without a timestamp last (it cannot assert seniority), equal
- * timestamps broken by socket address ascending - the lower address wins the
- * slot.
- * @param {{ip: string, broadcastedAt?: Date|number|string}} a Installing claim.
- * @param {{ip: string, broadcastedAt?: Date|number|string}} b Installing claim.
+ * Orders installing claims for the collision resolver: earliest claim first, a
+ * claim without a timestamp last (it cannot assert seniority), equal timestamps
+ * broken by socket address ascending - the lower address wins the slot.
+ *
+ * Keyed on `announcedAt` where the row has one, `broadcastedAt` otherwise. A
+ * fluxappinstalling v2 claim is RENEWED while its install is in flight, which
+ * moves `broadcastedAt` - so ordering on that alone would make a long install
+ * look like the newest contender and lose its own seat to a latecomer.
+ * `announcedAt` is the immutable first-announce time and never moves. A v1 row
+ * carries no `announcedAt`, but its `broadcastedAt` never moves either, so the
+ * two keys are directly comparable and mixed fleets rank consistently.
+ * @param {{ip: string, announcedAt?: Date|number|string, broadcastedAt?: Date|number|string}} a Installing claim.
+ * @param {{ip: string, announcedAt?: Date|number|string, broadcastedAt?: Date|number|string}} b Installing claim.
  * @returns {number} Comparator result for Array.prototype.sort.
  */
 function compareInstallingClaims(a, b) {
-  const aTime = epochMs(a.broadcastedAt) ?? Number.MAX_SAFE_INTEGER;
-  const bTime = epochMs(b.broadcastedAt) ?? Number.MAX_SAFE_INTEGER;
+  const aTime = epochMs(a.announcedAt) ?? epochMs(a.broadcastedAt) ?? Number.MAX_SAFE_INTEGER;
+  const bTime = epochMs(b.announcedAt) ?? epochMs(b.broadcastedAt) ?? Number.MAX_SAFE_INTEGER;
   if (aTime !== bTime) {
     return aTime - bTime;
   }
