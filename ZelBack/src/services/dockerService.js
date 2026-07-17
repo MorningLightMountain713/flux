@@ -276,7 +276,7 @@ async function dockerContainerChanges(idOrName) {
  */
 function dockerPullStream(pullConfig, res, callback) {
   const {
-    repoTag, provider, authToken, abortSignal, stallMs,
+    repoTag, provider, authToken, authConfig, abortSignal, stallMs, progressTap,
   } = pullConfig;
   const pullOptions = {};
 
@@ -312,8 +312,17 @@ function dockerPullStream(pullConfig, res, callback) {
     if (stallTimer.unref) stallTimer.unref();
   };
 
-  // fix this auth token stuff upstream
-  if (authToken) {
+  // Preferred: an explicit { username, password } object - unambiguous for
+  // passwords that contain ':' (the string form below splits on the first one).
+  if (authConfig && authConfig.username && authConfig.password) {
+    pullOptions.authconfig = {
+      username: authConfig.username,
+      password: authConfig.password,
+    };
+    if (provider) {
+      pullOptions.authconfig.serveraddress = provider;
+    }
+  } else if (authToken) {
     if (authToken.includes(':')) { // specified by username:token
       pullOptions.authconfig = {
         username: authToken.split(':')[0],
@@ -362,6 +371,15 @@ function dockerPullStream(pullConfig, res, callback) {
       if (res) {
         res.write(serviceHelper.ensureString(event));
         if (res.flush) res.flush();
+      }
+      // Optional capture hook (the image cache renders per-layer progress from
+      // it); a tap failure must never break the pull itself.
+      if (typeof progressTap === 'function') {
+        try {
+          progressTap(event);
+        } catch (tapError) {
+          log.warn(`dockerPullStream progressTap error: ${tapError.message}`);
+        }
       }
       log.info(event);
     }
@@ -1858,6 +1876,20 @@ async function appDockerImageRemove(idOrName) {
 }
 
 /**
+ * Inspects a docker image by id or repotag. Resolves the inspect object when the image
+ * is present; rejects (statusCode 404) when it is absent. Authoritative present/absent
+ * check for a single image - more reliable than scanning dockerListImages().
+ *
+ * @param {string} idOrName
+ * @returns {Promise<object>} the docker image inspect result
+ */
+async function dockerImageInspect(idOrName) {
+  const dockerImage = docker.getImage(idOrName);
+  const info = await dockerImage.inspect();
+  return info;
+}
+
+/**
  * Reads a container's network attachment against its own configured NetworkMode.
  *
  * A Flux app component container is created with NetworkMode =
@@ -2667,6 +2699,7 @@ module.exports = {
   loadImage,
   archiveNames,
   tagImage,
+  dockerImageInspect,
   appDockerImageSize,
   appDockerKill,
   appDockerRemove,

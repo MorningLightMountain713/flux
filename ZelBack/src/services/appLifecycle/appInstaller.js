@@ -71,15 +71,28 @@ const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Je
 const legacyPinnedOctets = appsThatMightBeUsingOldGatewayIpAssignment.map((name) => name.charCodeAt(name.length - 1));
 
 /**
- * Perform Docker cleanup (prune containers, networks, volumes, images)
- * @param {object} res - Response object for streaming
+ * Formerly the pre-install docker prune. Now a no-op - see the body for why
+ * neither half of it survived. Kept (rather than deleted with its call site)
+ * because that is a separate change; F13 records the decision.
+ * @param {object} onStatus - Status callback for streaming
  * @returns {Promise<void>}
  */
 async function performDockerCleanup(onStatus) {
-  log.info('Clearing up unused docker images...');
-  if (onStatus) onStatus({ status: 'Clearing up unused docker images...' });
-  await dockerService.pruneImages();
-  if (onStatus) onStatus({ status: 'Docker images cleaned.' });
+  // Nothing is pruned here any more, for two independent reasons that arrived
+  // from opposite directions and both hold:
+  //
+  // Containers, networks and volumes: development deleted those prune primitives
+  // (9d30697bd). Docker's "unused" is a runtime predicate - nothing attached
+  // right now - which is equally true of a healthy app whose container is
+  // momentarily down, of a container FluxOS runs for itself, and of anything the
+  // node operator left stopped on their own machine. The guard in front of this
+  // call only ever knew about installed app components.
+  //
+  // Images: reclamation belongs to imageReaper.pruneUnusedImages (boot /
+  // post-update / daily), which is reference-gated and honours enterprise
+  // image-cache pins. It subsumes the old dangling prune - an untagged image
+  // still falls straight through to removal - without destroying a peer-
+  // delivered image that arrived addressed by id and therefore carries no tag.
 }
 
 /**

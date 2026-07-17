@@ -41,6 +41,7 @@ const appSubmission = require('./services/appRequirements/appSubmission');
 const placementFeasibility = require('./services/appPlacement/placementFeasibility');
 const appSpecHelpers = require('./services/utils/appSpecHelpers');
 const appInspector = require('./services/appManagement/appInspector');
+const imageCacheController = require('./services/appManagement/imageCacheController');
 const appController = require('./services/appManagement/appController');
 const appInstaller = require('./services/appLifecycle/appInstaller');
 const appUninstaller = require('./services/appLifecycle/appUninstaller');
@@ -606,6 +607,16 @@ module.exports = (app) => {
   }));
   app.get('/daemon/submitblock/:hexdata?/:jsonparametersobject?', asyncRoute((req, res) => {
     return daemonServiceMiningRpcs.submitBlock(req, res);
+  }));
+  // Enterprise image cache (owner-scoped; gated to allowed owners on this enterprise node)
+  app.get('/apps/imagecache', asyncRoute((req, res) => {
+    return imageCacheController.getImageCacheList(req, res);
+  }));
+  app.get('/apps/imagecache/status/:jobId', asyncRoute((req, res) => {
+    return imageCacheController.getImageCacheStatus(req, res);
+  }));
+  app.get('/apps/imagecache/item', asyncRoute((req, res) => {
+    return imageCacheController.getImageCacheItem(req, res);
   }));
 
   app.get('/id/loggedsessions', asyncRoute((req, res) => {
@@ -1202,6 +1213,12 @@ module.exports = (app) => {
   }));
   app.post('/apps/bloblocator', asyncRoute((req, res) => {
     return cryptographicKeys.getBlobLocator(req, res);
+  }));
+  app.post('/apps/imagecache', asyncRoute((req, res) => {
+    return imageCacheController.postImageCache(req, res);
+  }));
+  app.post('/apps/imagecache/remove', asyncRoute((req, res) => {
+    return imageCacheController.removeImageCache(req, res);
   }));
 
   // POST PROTECTED API - FluxNode owner level

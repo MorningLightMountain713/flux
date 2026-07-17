@@ -14,6 +14,8 @@ const registryCredentialHelper = require('./utils/registryCredentialHelper');
 const { ImageVerifier } = require('./utils/imageVerifier');
 const serviceHelper = require('./serviceHelper');
 const deploymentProvider = require('./appRuntime/deploymentProvider');
+const imageCacheService = require('./appLifecycle/imageCacheService');
+const imageReaper = require('./appLifecycle/imageReaper');
 const operationRegistry = require('./utils/operationRegistry');
 const fluxEventBus = require('./utils/fluxEventBus');
 
@@ -271,6 +273,25 @@ async function triggerAppUpdate(appName) {
     await appOperations.redeployApplication(appName, { createVolumes: false });
 
     fluxEventBus.publish('imageUpdate:redeployComplete', { appName });
+
+    // The redeploy moves an updated image's tag onto a newer digest. If any of
+    // this app's images are pinned in the enterprise image cache, re-reconcile
+    // their records so the pin tracks the live image (otherwise the quota
+    // under-counts the new image and inspect reports the superseded snapshot).
+    // Best-effort — a cache reconcile must never fail the update.
+    const deployment = await deploymentProvider.getInstalledDeployment(appName);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const repotag of (deployment ? deployment.allImages() : [])) {
+      // eslint-disable-next-line no-await-in-loop
+      await imageCacheService.reconcilePinnedImage(repotag)
+        .catch((err) => log.warn(`imageCache reconcile after update for ${repotag}: ${err.message}`));
+    }
+
+    // The redeploy orphaned the superseded digest's layers. Reap cold images now
+    // so a soft-update doesn't leak them until the daily run. Best-effort and
+    // all-nodes; the reaper protects pinned/in-use images itself.
+    await imageReaper.pruneUnusedImages()
+      .catch((err) => log.warn(`imageReaper after update for ${appName}: ${err.message}`));
 
     return true;
   } catch (error) {

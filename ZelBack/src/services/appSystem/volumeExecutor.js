@@ -1078,12 +1078,15 @@ function stopImagePrefetch() {
  * dockerd is replaced; the check is one inspect when it is present, so paying
  * it every time costs nothing and removes a whole class of "worked yesterday".
  *
- * `performDockerCleanup` is NOT one of the things that removes it, despite
- * running before every app install: `pruneImages` filters on dangling, and a
- * tagged image is not dangling. That holds for BOTH routes only because the
- * peer route names what it took - an archive addressed by id carries no names,
- * so an untagged arrival would be dangling and this would be false for exactly
- * the nodes that cannot reach the registry.
+ * `imageReaper.pruneUnusedImages` IS one of the things that removes it, which is
+ * the whole reason this check is per-operation. The reaper runs at boot, after
+ * every image update and daily, and deliberately reclaims a cold TAGGED image
+ * once no container holds it and no enterprise cache pin protects it - and
+ * between file operations nothing holds this one. (`performDockerCleanup`, which
+ * used to prune only dangling images before every install, no longer prunes
+ * anything.) So the image is not guaranteed to persist between operations; what
+ * makes that survivable is the peer route below, which is what a node that
+ * cannot reach the registry falls back to.
  *
  * A caller waits a short while and is then told to come back. It does not wait
  * for the fetch's own patience - a peer has two minutes to hand over thirteen
