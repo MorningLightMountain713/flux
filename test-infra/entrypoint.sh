@@ -102,6 +102,18 @@ if [ "$FLUX_SHUTDOWND_MOCK" = "true" ]; then
   echo "started mock flux-shutdownd (control port ${SHUTDOWND_MOCK_CONTROL_PORT:-16199})"
 fi
 
+# Optional mock flux-telemetryd for the telemetry suites. The real daemon is a
+# host-side client of FluxOS's identity socket; the mock plays that client role
+# in-container. The runtime dir must exist BEFORE fluxos boots — FluxOS's
+# write-probe on /run/flux/telemetry is its Arcane gate for the identity server
+# (on a real Arcane node the daemon's package ships the dir). The mock itself
+# retries until the socket appears. Node built-ins only.
+if [ "$FLUX_TELEMETRYD_MOCK" = "true" ]; then
+  mkdir -p /run/flux/telemetry
+  node /flux/test-infra/telemetryd-stub/index.js &
+  echo "started mock flux-telemetryd (control port ${TELEMETRYD_MOCK_CONTROL_PORT:-16198})"
+fi
+
 # Write boot_id for test harness control.
 # FLUX_BOOT_ID is set per-container by the test harness.
 # The harness seeds a heartbeat with matching or different value to
