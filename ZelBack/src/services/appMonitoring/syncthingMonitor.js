@@ -214,6 +214,10 @@ async function processContainerData(params) {
       syncthingFolder,
       installedAppName,
       mountVerifyNeeded: state.syncthingAppsFirstRun || erroredFolderIds.has(appId),
+      // Injected content is written by content delivery on every node and
+      // .stignore'd, so the disk-emptiness walks must not count it as synced
+      // payload (a fresh volume holding only delivered files is still empty).
+      injectedExcludePaths: deployComp.injectedSyncExcludes(),
     });
 
     // Update cache if provided
@@ -424,6 +428,18 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       log.info('syncthingAppsCore - First run detected, performing mount safety verification on existing folders');
       let unsafeFoldersCount = 0;
 
+      // Injected-content paths per folder id: content delivery rewrites these
+      // on every node and .stignore excludes them, so the emptiness walk must
+      // skip them too - a content+sync app always has its delivered files on
+      // disk right after a reboot, which would otherwise mask a wiped dataset.
+      const injectedExcludesByAppId = new Map();
+      // eslint-disable-next-line no-restricted-syntax
+      for (const deployment of deployments) {
+        for (const [, comp] of deployment.componentEntries()) {
+          injectedExcludesByAppId.set(dockerService.getAppIdentifier(comp.identifier), comp.injectedSyncExcludes());
+        }
+      }
+
       // eslint-disable-next-line no-restricted-syntax
       for (const folder of allFoldersResp.data) {
         if (folder.type === 'sendreceive') {
@@ -432,7 +448,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
           const folderPath = folder.path;
 
           // eslint-disable-next-line no-await-in-loop
-          const mountSafety = await verifySendReceiveFolderSafety(appId, folderPath);
+          const mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, injectedExcludesByAppId.get(appId) || []);
 
           if (!mountSafety.isSafe) {
             unsafeFoldersCount += 1;

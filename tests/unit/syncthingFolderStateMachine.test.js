@@ -1204,6 +1204,50 @@ describe('syncthingFolderStateMachine tests', () => {
       expect(result.reason).to.equal('phantom_index_empty_disk');
     });
 
+    it('still flags a phantom when the disk holds only injected content (excludes passed)', async () => {
+      // a content+sync app on a fresh/wiped volume: content delivery has
+      // already written its files (a delivered config + the io.runonflux
+      // managed dir) but no synced data has arrived. Those paths are
+      // .stignore'd - absent from the index - so they must not read as synced
+      // payload, or the phantom guard is masked on exactly the nodes it
+      // protects.
+      fsMock.promises.readdir.resolves([]);
+      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
+        dirent('.stignore'), dirent('.stfolder', false), dirent('config.yaml'), dirent('io.runonflux', false),
+      ]);
+      syncthingServiceMock.getDbStatus.resolves({
+        status: 'success',
+        data: {
+          globalBytes: 100000, inSyncBytes: 0, globalFiles: 3, state: 'idle',
+        },
+      });
+
+      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', [
+        '/apps/test-app/config.yaml',
+        '/apps/test-app/io.runonflux',
+      ]);
+
+      expect(result.isSafe).to.be.false;
+      expect(result.reason).to.equal('phantom_index_empty_disk');
+    });
+
+    it('counts injected content as payload when no excludes are given (default behavior)', async () => {
+      fsMock.promises.readdir.resolves([]);
+      fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
+        dirent('.stignore'), dirent('.stfolder', false), dirent('config.yaml'), dirent('io.runonflux', false),
+      ]);
+      syncthingServiceMock.getDbStatus.resolves({
+        status: 'success',
+        data: {
+          globalBytes: 100000, inSyncBytes: 0, globalFiles: 3, state: 'idle',
+        },
+      });
+
+      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app');
+
+      expect(result.isSafe).to.be.true;
+    });
+
     it('is unsafe when the index claims FILES over a surviving directory skeleton (files-aware)', async () => {
       // the wiped-files case a directory skeleton must NOT mask: the index
       // still lists real files (globalFiles > 0) while the disk holds only an
