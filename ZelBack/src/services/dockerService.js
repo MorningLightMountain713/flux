@@ -348,7 +348,16 @@ function dockerPullStream(pullConfig, res, callback) {
         // missing image. The abort relies on this.
         done(tagIfRegistryUnreachable(error));
       } else {
-        done(null, output);
+        // docker reports a registry/blob failure (e.g. a CDN EOF mid-blob) as an
+        // in-band {error} event and then ends the stream cleanly. followProgress
+        // only fails on a socket-level error, so without this a failed pull is
+        // reported as success onto a missing image.
+        const errorEvent = Array.isArray(output) ? output.find((e) => e && e.error) : null;
+        if (errorEvent) {
+          done(tagIfRegistryUnreachable(new Error((errorEvent.errorDetail && errorEvent.errorDetail.message) || errorEvent.error)));
+        } else {
+          done(null, output);
+        }
       }
     }
     function onProgress(event) {
