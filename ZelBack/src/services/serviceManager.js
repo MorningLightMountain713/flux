@@ -27,6 +27,7 @@ const daemonHealthMonitor = require('./appMonitoring/daemonHealthMonitor');
 const containerEventBridge = require('./appMonitoring/containerEventBridge');
 const appReconciler = require('./appMonitoring/appReconciler');
 const appOperations = require('./appLifecycle/appOperations');
+const specReconciler = require('./appLifecycle/specReconciler');
 const appShutdownCoordinator = require('./appLifecycle/appShutdownCoordinator');
 const imageManager = require('./appSecurity/imageManager');
 const appSpawner = require('./appLifecycle/appSpawner');
@@ -283,15 +284,6 @@ async function startFluxFunctions() {
     // resolution, the spawn loop, app-spec validation) have data before they run; the
     // disk read and github fetch are both bounded (10s fetch timeout) so boot is never
     // stuck on this. A failed/invalid sync keeps the last-good value.
-    // De-auth hook: after each successful owner-map refresh, drop image-cache pins owned by a
-    // FluxId no longer allowed on this node. Tied to the refresh (not a blind timer) because the
-    // owner list is the only input and it changes only here. Enterprise-only via imageCacheEnabled;
-    // a no-op elsewhere. (On a node whose github sync is disabled this never fires — boot covers it.)
-    const onOwnerMapRefreshed = imageCacheEnabled
-      ? () => imageCacheMaintenance.cleanupDeauthorizedOwners()
-        .catch((err) => log.error(`imageCache - de-auth cleanup error: ${err.message}`))
-      : undefined;
-    await enterpriseConfig.startSync(onOwnerMapRefreshed).catch((err) => log.error(`enterpriseConfig sync start error: ${err.message}`));
     // Hard dependencies — nothing starts until these are confirmed.
     await dbHelper.waitForMongo();
     await dockerService.waitForDocker();
@@ -667,11 +659,15 @@ async function startFluxFunctions() {
     // route the reconciler's graceful stop-but-keep through flux-shutdownd on Arcane;
     // returns false off Arcane (or when the daemon is unavailable) so it stops locally
     appReconciler.setRequestGracefulStop((id, reason) => appShutdownCoordinator.requestGracefulStop(id, reason));
-    // wake the spawn loop the instant a spec this node must install is committed,
-    // rather than waiting for the next poll. notifySpecStored self-gates to the
-    // contention-free enterprise-pinned-to-this-node case; every other spec is
-    // ignored and rides the normal cadence.
-    registryManager.setOnSpecStored((specDoc) => appSpawner.notifySpecStored(specDoc));
+    // A committed spec fans out to both reactors: the spawner wakes when the
+    // spec is one this node must INSTALL (self-gated to contention-free pinned
+    // cases), and the spec reconciler converges an app this node already RUNS
+    // (adoption is staggered inside it, removal acts promptly). Everything else
+    // rides the per-block convergence pass.
+    registryManager.setOnSpecStored((specDoc) => {
+      appSpawner.notifySpecStored(specDoc);
+      specReconciler.notifySpecStored(specDoc);
+    });
     log.info('App Spawner initialized');
 
     fluxNetworkHelper.adjustFirewall();
@@ -851,7 +847,7 @@ async function startFluxFunctions() {
       ipLocationSync.startSync().catch((err) => log.error(`ipLocationSync start error: ${err.message}`));
       // Warm the marketplace template cache (best-effort; cache-miss fetch covers any gaps).
       marketplaceTemplateCache.bootstrapCache().catch((error) => log.error(error));
-      appOperations.reconcileInstalledApps();
+      specReconciler.requestFullConvergence({ reason: 'boot', includeCompliance: true });
       // Backstop the flux-shutdownd plan store against anything missed while
       // fluxos was down (Arcane-only, best-effort).
       appOperations.shutdownPlanResync().catch((error) => log.error(error));
@@ -921,15 +917,17 @@ async function startFluxFunctions() {
     // Hash sync and spawner startup are now managed by the AppSyncOrchestrator (event-driven)
     orchestrator.start(bootContext);
     log.info('AppSyncOrchestrator started');
-    // The compliance sweep is not on a clock (it follows the policy); this interval only
-    // reconciles image-cache records against docker, since the sweep is the main
-    // out-of-band remover of a pinned image.
-    if (imageCacheEnabled) {
-      setInterval(async () => {
+    setInterval(async () => {
+      // A deep convergence pass carries the image-compliance step (it needs
+      // full deployment views, so the per-block pass skips it).
+      await specReconciler.requestFullConvergence({ reason: 'blocklist', includeCompliance: true });
+      // Orphan hook: the compliance step is the main out-of-band remover of a pinned image
+      // (a blacklisted one), so reconcile cache records against docker right after it runs.
+      if (imageCacheEnabled) {
         await imageCacheMaintenance.reconcileOrphanedRecords()
           .catch((err) => log.error(`imageCache - orphan reconcile error: ${err.message}`));
-      }, imageComplianceIntervalMs);
-    }
+      }
+    }, imageComplianceIntervalMs);
     // Cold-image reaper (ALL nodes — deliberately NOT gated on imageCacheEnabled): reclaim
     // unused tagged images. Delayed first run so docker has loaded its container objects, then
     // daily. Also triggered at the end of every image update (imageUpdateService).

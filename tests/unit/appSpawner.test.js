@@ -1120,10 +1120,11 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
     }
 
-    const placementFor = (targetIps) => ({
+    const placementFor = (targetIps, mode = 'loose') => ({
       targetIps,
       targetOutpoints: [],
       targetOperators: [],
+      mode: () => mode,
       matchesTarget: ({ ip, ipMatcher }) => targetIps.some((t) => ipMatcher(t, ip)),
       isPinnedTo(nodeInfo) { return targetIps.length > 0 && this.matchesTarget(nodeInfo); },
     });
@@ -1280,6 +1281,7 @@ describe('appSpawner tests', () => {
               targetIps: [MY_ADDR],
               targetOutpoints: [],
               targetOperators: [],
+              mode: () => 'loose',
               matchesTarget: ({ ip, ipMatcher }) => ipMatcher(MY_ADDR, ip),
               isPinnedTo({ ip, ipMatcher }) { return ipMatcher(MY_ADDR, ip); },
             },
