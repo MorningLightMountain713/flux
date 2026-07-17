@@ -436,7 +436,10 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
   });
 
   it('mode-switches named -> loose: candidate semantics return, replica identity drops', async function () {
-    this.timeout(420000);
+    // Generous budget: stale appsinstallinglocations rows from the earlier
+    // phases' churn (~15min TTL) suppress the candidates' respawn ("already
+    // spawned or being installed") until they drain.
+    this.timeout(1200000);
     await updateApp(nameLoose, {
       placement: { targetIps: { [nodeIp(1)]: null, [nodeIp(2)]: null, [nodeIp(5)]: null } },
       instances: 2,
@@ -454,7 +457,7 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
         last = key;
         return stable >= 2;
       },
-      { rounds: 90, label: `${nameLoose} back to 2 candidate instances` },
+      { rounds: 200, label: `${nameLoose} back to 2 candidate instances` },
     );
     const running = await runningIndexes(nameLoose);
     for (const i of running) {
