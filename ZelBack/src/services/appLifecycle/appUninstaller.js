@@ -32,6 +32,7 @@ const imageManager = require('../appSecurity/imageManager');
 const fluxEventBus = require('../utils/fluxEventBus');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const pendingTeardownStore = require('./pendingTeardownStore');
+const imageCacheRetention = require('./imageCacheRetention');
 const shutdownPlan = require('./shutdownPlan');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
@@ -285,6 +286,14 @@ async function reclaimUnusedImages(images, status) {
   for (const image of distinct) {
     if (inUse.has(image)) {
       status(`Image ${image} still referenced by another container; leaving it`);
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    // An image pinned in the enterprise image cache survives its app's teardown
+    // so a later reinstall is a local layer-cache hit instead of a full re-pull.
+    // eslint-disable-next-line no-await-in-loop
+    if (await imageCacheRetention.shouldRetainImage(image)) {
+      status(`Image ${image} pinned in the enterprise image cache; leaving it`);
       // eslint-disable-next-line no-continue
       continue;
     }

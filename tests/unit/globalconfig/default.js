@@ -55,6 +55,7 @@ module.exports = {
       collections: {
         appsInformation: 'zelappsinformation',
         appsRuntimeState: 'zelappsruntimestate',
+        cachedImages: 'cachedimages',
       },
     },
     appsglobal: {
@@ -311,6 +312,14 @@ module.exports = {
     cpuCheckIntervalMs: 900000,
     portRestoreIntervalMs: 600000,
     imageComplianceIntervalMs: 3600000,
+    imageCacheEnabled: true,
+    imageCachePerFluxIdQuotaGb: 20,
+    imageCachePerImageBurstCapGb: 5,
+    imageCacheNodeMaxGb: 60,
+    imageCacheMaxConcurrentPulls: 3,
+    imageCacheMaxPullRetries: 3,
+    imageCacheJobTtlMs: 10800000,
+    imageReaperIntervalMs: 86400000,
     forceRemovalIntervalMs: 7200000,
     installCollisionWaitMs: 90000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout

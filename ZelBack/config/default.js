@@ -64,6 +64,7 @@ module.exports = {
         appsInformation: 'zelappsinformation',
         appsRuntimeState: 'zelappsruntimestate', // node-local per-component controller state: desiredState, restartHistory (crash backoff), last exit
         pendingAppTeardowns: 'zelappspendingteardowns', // durable owed-teardown records: the crash-safe handoff between the removal prelude and the deferred destructive teardown
+        cachedImages: 'cachedimages', // enterprise image cache: owner-pinned docker images (the durable pin the uninstall retention gate + per-fluxId quota consult)
       },
     },
     appsglobal: {
@@ -358,6 +359,14 @@ module.exports = {
     cpuCheckIntervalMs: 900000,
     portRestoreIntervalMs: 600000,
     imageComplianceIntervalMs: 3600000,
+    imageCacheEnabled: true, // master switch for the image-cache API + retention pin
+    imageCachePerFluxIdQuotaGb: 20, // soft per-fluxId quota, accounted from real docker df() on-disk size
+    imageCachePerImageBurstCapGb: 5, // per-image admission cap vs (compressed * 2); bounds the burst to ~one image
+    imageCacheNodeMaxGb: 60, // node-wide cap across all owners (the only node-side guard until disk-fit integrates)
+    imageCacheMaxConcurrentPulls: 3, // parallel pull bound (a congested registry link favours few-at-once)
+    imageCacheMaxPullRetries: 3, // transient-failure retries before a pull is marked failed
+    imageCacheJobTtlMs: 10800000, // in-memory download-job/progress retention (3h)
+    imageReaperIntervalMs: 86400000, // cold-unused-image reaper cadence (daily; runs on ALL nodes, not gated on imageCacheEnabled)
     forceRemovalIntervalMs: 7200000,
     installCollisionWaitMs: 90000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout

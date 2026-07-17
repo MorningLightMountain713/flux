@@ -30,6 +30,7 @@ const registryManager = require('./services/appDatabase/registryManager');
 const appSubmission = require('./services/appRequirements/appSubmission');
 const appSpecHelpers = require('./services/utils/appSpecHelpers');
 const appInspector = require('./services/appManagement/appInspector');
+const imageCacheController = require('./services/appManagement/imageCacheController');
 const appController = require('./services/appManagement/appController');
 const appInstaller = require('./services/appLifecycle/appInstaller');
 const appUninstaller = require('./services/appLifecycle/appUninstaller');
@@ -502,6 +503,16 @@ module.exports = (app) => {
   });
 
   // GET PROTECTED API - User level
+  // Enterprise image cache (owner-scoped; gated to allowed owners on this enterprise node)
+  app.get('/apps/imagecache', (req, res) => {
+    imageCacheController.getImageCacheList(req, res);
+  });
+  app.get('/apps/imagecache/status/:jobId', (req, res) => {
+    imageCacheController.getImageCacheStatus(req, res);
+  });
+  app.get('/apps/imagecache/item', (req, res) => {
+    imageCacheController.getImageCacheItem(req, res);
+  });
   app.get('/daemon/prioritisetransaction/:txid?/:prioritydelta?/:feedelta?', cache('30 seconds'), (req, res) => {
     daemonServiceMiningRpcs.prioritiseTransaction(req, res);
   });
@@ -1397,6 +1408,13 @@ module.exports = (app) => {
   });
   app.post('/apps/getpublickey', (req, res) => {
     cryptographicKeys.getPublicKey(req, res);
+  });
+  // Enterprise image cache: submit an encrypted image set (202 + jobId) / remove a cached image
+  app.post('/apps/imagecache', (req, res) => {
+    imageCacheController.postImageCache(req, res);
+  });
+  app.post('/apps/imagecache/remove', (req, res) => {
+    imageCacheController.removeImageCache(req, res);
   });
   app.get('/apps/transportpubkey/:appname', (req, res) => {
     cryptographicKeys.getTransportPublicKey(req, res);
