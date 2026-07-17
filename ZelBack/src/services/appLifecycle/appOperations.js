@@ -628,8 +628,9 @@ async function applyPermissionsFix(appname, appId) {
     } else {
       // The container only sees its bind-mounted sources, so fix each in ONE pass —
       // never recursively 777 the whole tree and walk content back. A data/synced
-      // tree gets the recursive 777; injected content gets its own root-owned 0444
-      // (world-readable so the container reads it, never writable). No path twice.
+      // tree gets the recursive 777; injected content gets its own root-owned 0644
+      // default (world-readable so the container reads it, never world-writable).
+      // No path twice.
       await serviceHelper.runCommand('chmod', { params: ['777', appPath], runAsRoot: true });
       for (const mount of mounts) {
         if (mount.perms) {
@@ -788,10 +789,18 @@ async function appendBackupTask(req, res) {
       // reconcile, so it's mutually exclusive with them (no feature carve-out).
       taskToken = operationRegistry.acquire(appname, 'backup', 'appOperations', `backup ${appname}`);
       const backupDeployment = await deploymentProvider.getInstalledDeployment(appname);
-      const hasSyncthing = backupDeployment && backupDeployment.componentEntries().some(([, comp]) => comp.hasSyncthing());
-      if (hasSyncthing) {
+      // Syncthing folders are registered per component as flux<identifier> —
+      // the bare app name matches nothing for a composed app, so the folder
+      // must be removed component by component (same as the uninstaller).
+      const backupSynced = backupDeployment
+        ? backupDeployment.componentEntries().filter(([, comp]) => comp.hasSyncthing()).map(([, comp]) => comp)
+        : [];
+      if (backupSynced.length) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
-        await appVolumeService.removeSyncthingFolder(appname, res);
+        for (const comp of backupSynced) {
+          // eslint-disable-next-line no-await-in-loop
+          await appVolumeService.removeSyncthingFolder(comp.identifier, res);
+        }
       }
 
       await sendChunk(res, 'Stopping application...\n');
@@ -910,10 +919,17 @@ async function appendRestoreTask(req, res) {
       // remove/reconcile.
       taskToken = operationRegistry.acquire(appname, 'restore', 'appOperations', `restore ${appname}`);
       const restoreDeployment = await deploymentProvider.getInstalledDeployment(appname);
-      const restoreHasSyncthing = restoreDeployment && restoreDeployment.componentEntries().some(([, comp]) => comp.hasSyncthing());
-      if (restoreHasSyncthing) {
+      // Per-component removal for the same reason as backup: composed apps'
+      // folders are flux<identifier>, never flux<appname>.
+      const restoreSynced = restoreDeployment
+        ? restoreDeployment.componentEntries().filter(([, comp]) => comp.hasSyncthing()).map(([, comp]) => comp)
+        : [];
+      if (restoreSynced.length) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
-        await appVolumeService.removeSyncthingFolder(appname, res);
+        for (const comp of restoreSynced) {
+          // eslint-disable-next-line no-await-in-loop
+          await appVolumeService.removeSyncthingFolder(comp.identifier, res);
+        }
       }
       await sendChunk(res, 'Stopping application...\n');
       await stopApplication(appname);
