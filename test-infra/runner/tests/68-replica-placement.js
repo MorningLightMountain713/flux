@@ -128,13 +128,18 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     return res.data; // update message hash
   }
 
-  // Update convergence needs the reconcile sweep, and the sweep needs blocks:
-  // advance a small batch per round and re-check until the condition holds.
-  // 20 rounds x 4 blocks safely spans the worst-case 36-block sweep modulus.
-  async function untilWithBlocks(check, { rounds = 20, label } = {}) {
+  // Update convergence needs the reconcile sweep, and the sweep needs blocks —
+  // ONE at a time. The sweep fires when the processed TIP's height is divisible
+  // by its modulus (period 4-9 x the post-fork multiplier 4: 16..36, all
+  // multiples of 4), and only the tip of an advance-batch runs the periodic
+  // section (earlier batch blocks carry 2+ confirmations and skip it). Batch
+  // stepping therefore pins tips to one residue class mod the step and can
+  // miss every multiple forever; single-block steps evaluate every height, so
+  // one sweep is guaranteed within 36 rounds.
+  async function untilWithBlocks(check, { rounds = 45, label } = {}) {
     for (let i = 0; i < rounds; i += 1) {
       // eslint-disable-next-line no-await-in-loop
-      await advanceBlocks(4);
+      await advanceBlocks(1);
       // eslint-disable-next-line no-await-in-loop
       if (await check()) return;
       // eslint-disable-next-line no-await-in-loop
@@ -411,7 +416,7 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
 
     await untilWithBlocks(
       async () => (await runningIndexes(nameLoose)).join(',') === '0',
-      { rounds: 30, label: `${nameLoose} converged to node 1 only` },
+      { rounds: 60, label: `${nameLoose} converged to node 1 only` },
     );
     const envMap = await containerEnv(env.clients[0], nameLoose);
     expect(envMap.FLUX_REPLICA).to.equal('m1');
@@ -436,7 +441,7 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
         last = key;
         return stable >= 2;
       },
-      { rounds: 30, label: `${nameLoose} back to 2 candidate instances` },
+      { rounds: 90, label: `${nameLoose} back to 2 candidate instances` },
     );
     const running = await runningIndexes(nameLoose);
     for (const i of running) {
