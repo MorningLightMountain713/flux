@@ -1,0 +1,22 @@
+[Unit]
+# The telemetry suites only (FLUX_TELEMETRYD_MOCK, entrypoint.sh). The real daemon
+# is a host-side client of FluxOS's identity socket; the mock plays that role in
+# the node and retries until the socket appears.
+Description=Mock flux-telemetryd (harness node)
+# FluxOS's write-probe on /run/flux/telemetry is its Arcane gate for the identity
+# server, so the directory exists before FluxOS starts.
+Before=fluxos.service pm2-fluxuser.service
+
+[Service]
+EnvironmentFile=/etc/fluxos-harness.env
+RuntimeDirectory=flux/telemetry
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/node /flux/test-infra/telemetryd-stub/index.js
+Restart=always
+RestartSec=1
+# The node's output stream, where the harness reads the unit's lines (entrypoint.sh).
+StandardOutput=append:/var/lib/flux-harness/stream
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target

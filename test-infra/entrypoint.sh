@@ -335,6 +335,10 @@ fi
 if [ "$FLUX_SHUTDOWND_MOCK" = "true" ]; then
   ln -sf /etc/systemd/system/flux-shutdownd-mock.service /etc/systemd/system/multi-user.target.wants/flux-shutdownd-mock.service
 fi
+# The mock flux-telemetryd the telemetry suites drive (telemetryd-stub).
+if [ "$FLUX_TELEMETRYD_MOCK" = "true" ]; then
+  ln -sf /etc/systemd/system/flux-telemetryd-mock.service /etc/systemd/system/multi-user.target.wants/flux-telemetryd-mock.service
+fi
 
 # Container hygiene: kernel modules cannot be loaded here, and a tmpfs
 # over /tmp would shadow the harness's /tmp/flux-boot-config bind mount.
