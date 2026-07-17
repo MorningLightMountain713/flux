@@ -93,6 +93,79 @@ describe('telemetryIdentityService tests', () => {
     });
   });
 
+  describe('otlp endpoint resolution (refreshAgentEndpoint + wire sink)', () => {
+    const otlpSink = { provider: 'otlp', component: 'otelagent', port: 4318 };
+    const agentNetworks = { fluxDockerNetwork_MyApp: { IPAddress: '172.23.11.3' } };
+
+    it('an otlp container stays unannounced until the agent endpoint resolves', () => {
+      sinkCacheStub.getSink.returns(otlpSink);
+      expect(service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA')).to.be.null;
+    });
+
+    it('resolves the endpoint from the agent container and projects the wire sink', () => {
+      sinkCacheStub.getSink.returns(otlpSink);
+      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(true);
+      const id = service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA');
+      // The wire carries only provider + endpoint — never the declared
+      // component/port shape the cache holds.
+      expect(id.sink).to.deep.equal({ provider: 'otlp', endpoint: 'http://172.23.11.3:4318' });
+    });
+
+    it('ignores containers that are not the declared agent component', () => {
+      sinkCacheStub.getSink.returns(otlpSink);
+      expect(service.refreshAgentEndpoint('/fluxweb_MyApp', agentNetworks)).to.equal(false);
+    });
+
+    it('ignores containers of non-otlp apps', () => {
+      sinkCacheStub.getSink.returns(datadogSink);
+      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(false);
+    });
+
+    it('reports unchanged endpoints as false and a moved agent as true', () => {
+      sinkCacheStub.getSink.returns(otlpSink);
+      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(true);
+      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(false);
+      const moved = { fluxDockerNetwork_MyApp: { IPAddress: '172.23.11.9' } };
+      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', moved)).to.equal(true);
+      const id = service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA');
+      expect(id.sink.endpoint).to.equal('http://172.23.11.9:4318');
+    });
+
+    it('prefers the app network address, falling back to any attached network', () => {
+      sinkCacheStub.getSink.returns(otlpSink);
+      const foreignOnly = { fluxDockerNetwork_OtherApp: { IPAddress: '172.23.77.2' } };
+      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', foreignOnly)).to.equal(true);
+      expect(service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA').sink.endpoint)
+        .to.equal('http://172.23.77.2:4318');
+    });
+
+    it('sendSync resolves agent endpoints from the live container list', async () => {
+      sinkCacheStub.getSink.returns(otlpSink);
+      dockerServiceStub.dockerListContainers.resolves([
+        {
+          Id: 'a'.repeat(64),
+          Names: ['/fluxotelagent_MyApp'],
+          Image: 'otel/opentelemetry-collector-contrib:latest',
+          NetworkSettings: { Networks: agentNetworks },
+        },
+        {
+          Id: 'b'.repeat(64),
+          Names: ['/fluxweb_MyApp'],
+          Image: 'nginx:1',
+          NetworkSettings: { Networks: {} },
+        },
+      ]);
+      const socket = { destroyed: false, write: sinon.stub() };
+      await service.sendSync(socket);
+      const payload = JSON.parse(socket.write.firstCall.args[0]);
+      expect(payload.op).to.equal('sync');
+      expect(payload.containers).to.have.length(2);
+      for (const entry of payload.containers) {
+        expect(entry.identity.sink).to.deep.equal({ provider: 'otlp', endpoint: 'http://172.23.11.3:4318' });
+      }
+    });
+  });
+
   describe('resolveIdentity', () => {
     const containerId = 'a'.repeat(64);
 

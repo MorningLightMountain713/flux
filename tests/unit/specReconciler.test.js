@@ -24,6 +24,7 @@ describe('specReconciler tests', () => {
   // the actual mode/resolution machinery rather than a hand-mocked shadow.
   async function specWith(placementBlob, {
     name = 'myapp', hash = 'h1', height = 100, expired = false, isEncrypted = false,
+    requiresArcane = false,
   } = {}) {
     const { Placement } = await import('@runonflux/flux-spec');
     return {
@@ -32,6 +33,9 @@ describe('specReconciler tests', () => {
       height,
       owner: 'owner1',
       isEncrypted,
+      // Mirrors InstantiatedSpec.requiresArcane(): every encrypted spec
+      // requires Arcane; cleartext only via an Arcane-requiring feature.
+      requiresArcane: () => isEncrypted || requiresArcane,
       placement: Placement.from(placementBlob),
       isExpired: () => expired,
       spec: { instances: 1 },
@@ -186,6 +190,27 @@ describe('specReconciler tests', () => {
       const blocked = sinon.stub(imageManager, 'isImageBlocked');
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(blocked.called).to.equal(false);
+    });
+  });
+
+  describe('Arcane placement (requiresArcane)', () => {
+    it('removes a cleartext Arcane-requiring app from a non-Arcane node', async () => {
+      setup({
+        installed: [await specWith({}, { name: 'otlpapp' })],
+        globalRows: [await specWith({}, { name: 'otlpapp', requiresArcane: true })],
+      });
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.calledOnceWith('otlpapp', sinon.match({ forceKill: true, broadcastRemoval: true }))).to.equal(true);
+    });
+
+    it('keeps the app when the node is Arcane', async () => {
+      setup({
+        installed: [await specWith({}, { name: 'otlpapp' })],
+        globalRows: [await specWith({}, { name: 'otlpapp', requiresArcane: true })],
+      });
+      sinon.stub(globalState, 'isArcane').returns(true);
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.called).to.equal(false);
     });
   });
 

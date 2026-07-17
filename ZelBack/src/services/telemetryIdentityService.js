@@ -31,6 +31,14 @@ const TAG_ALLOWLIST = new Set([
 let server = null;
 const sockets = new Set();
 
+// Resolved OTLP agent origins, keyed by lowercased app name. The cached sink
+// for an otlp app names a component; the daemon needs a concrete node-local
+// endpoint. Resolved from the agent container's address on the app's Docker
+// network (static from `docker create`) and refreshed whenever the agent
+// container is announced — a recreate with a new IP re-resolves here and the
+// resync makes the daemon rotate its exporter.
+const otlpEndpoints = new Map();
+
 // Docker event subscription state (container start/die -> announce/stop).
 let eventStream = null;
 let stopped = false;
@@ -66,9 +74,60 @@ async function nodeRegion() {
 }
 
 /**
+ * Project a cached sink into the shape the daemon consumes. Credentialed
+ * sinks pass through; an otlp sink becomes `{provider, endpoint}` once the
+ * agent's endpoint is resolved, and null before that — the container stays
+ * unannounced until the agent's announce triggers the resync.
+ */
+function wireSink(appName, sink) {
+  if (sink.provider !== 'otlp') return sink;
+  const endpoint = otlpEndpoints.get(String(appName).toLowerCase());
+  return endpoint ? { provider: 'otlp', endpoint } : null;
+}
+
+/**
+ * If this container is the OTLP agent component of its app, resolve the
+ * node-local receiver origin from its address on the app's Docker network
+ * and cache it. Returns true when the cached endpoint changed — callers
+ * resync so the app's containers re-announce with the new sink.
+ */
+function refreshAgentEndpoint(rawName, networks) {
+  if (!rawName) return false;
+  const dockerName = rawName.startsWith('/') ? rawName.slice(1) : rawName;
+  const parsed = parseContainerName(dockerName);
+  if (!parsed || !parsed.componentName) return false;
+
+  const sink = telemetrySinkCache.getSink(parsed.appName);
+  if (!sink || sink.provider !== 'otlp') return false;
+  if (parsed.componentName.toLowerCase() !== String(sink.component).toLowerCase()) return false;
+
+  const nets = networks || {};
+  const appNet = nets[`fluxDockerNetwork_${parsed.appName}`];
+  const ip = (appNet && appNet.IPAddress)
+    || Object.values(nets).map((n) => n && n.IPAddress).find(Boolean);
+  if (!ip) return false;
+
+  const endpoint = `http://${ip}:${sink.port}`;
+  const k = String(parsed.appName).toLowerCase();
+  if (otlpEndpoints.get(k) === endpoint) return false;
+  otlpEndpoints.set(k, endpoint);
+  log.info(`telemetry identity: otlp agent for ${parsed.appName} at ${endpoint}`);
+  return true;
+}
+
+/** Drop endpoints whose app no longer routes to an otlp sink. */
+function pruneOtlpEndpoints() {
+  for (const k of otlpEndpoints.keys()) {
+    const sink = telemetrySinkCache.getSink(k);
+    if (!sink || sink.provider !== 'otlp') otlpEndpoints.delete(k);
+  }
+}
+
+/**
  * Build the identity a telemetry app's container is announced with. Returns
- * null when the container is not a telemetry app (no cached sink) — the
- * scoping gate that keeps non-telemetry containers off the wire entirely.
+ * null when the container is not a telemetry app (no cached sink), or when
+ * its otlp sink has no resolved endpoint yet — the scoping gate that keeps
+ * non-telemetry (and not-yet-routable) containers off the wire entirely.
  */
 function buildIdentity(rawName, image, region) {
   if (!rawName) return null;
@@ -77,7 +136,9 @@ function buildIdentity(rawName, image, region) {
   if (!parsed) return null;
 
   const { appName, componentName } = parsed;
-  const sink = telemetrySinkCache.getSink(appName);
+  const cached = telemetrySinkCache.getSink(appName);
+  if (!cached) return null;
+  const sink = wireSink(appName, cached);
   if (!sink) return null;
 
   const tags = {};
@@ -122,6 +183,15 @@ function notifyStopped(containerId) {
 async function sendSync(socket) {
   const containers = await dockerService.dockerListContainers(false);
   const region = await nodeRegion();
+
+  // Resolve otlp agent endpoints from the live list before building
+  // identities, so a sync taken after a fluxos restart (no docker events
+  // replayed) routes otlp apps without waiting for an agent event.
+  for (const container of containers) {
+    const rawName = container.Names && container.Names[0];
+    refreshAgentEndpoint(rawName, container.NetworkSettings && container.NetworkSettings.Networks);
+  }
+
   const entries = [];
   for (const container of containers) {
     const rawName = container.Names && container.Names[0];
@@ -149,6 +219,7 @@ function scheduleSinkResync() {
   sinkResyncTimer = setTimeout(() => {
     sinkResyncTimer = null;
     (async () => {
+      pruneOtlpEndpoints();
       if (!telemetrySinkCache.hasAnyTelemetryApps()) return;
       await telemetryConfigService.ensureNode();
       resyncAll();
@@ -194,6 +265,12 @@ async function announce(idOrName, { identifierType = 'name' } = {}) {
   if (!server) return;
   const inspect = await dockerService.dockerContainerInspect(idOrName, { identifierType });
   if (!inspect || !inspect.Id) return;
+
+  // An otlp app's agent container coming up (or back up with a new IP) is
+  // what makes the whole app routable — resolve its endpoint and resync so
+  // every container of the app re-announces with the fresh sink.
+  const networks = inspect.NetworkSettings && inspect.NetworkSettings.Networks;
+  if (refreshAgentEndpoint(inspect.Name, networks)) scheduleSinkResync();
 
   const region = await nodeRegion();
   const image = inspect.Config && inspect.Config.Image;
@@ -440,6 +517,7 @@ module.exports = {
   stop,
   parseContainerName,
   buildIdentity,
+  refreshAgentEndpoint,
   resolveIdentity,
   sendSync,
   handleRequest,
