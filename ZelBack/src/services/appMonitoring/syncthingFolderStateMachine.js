@@ -72,12 +72,16 @@ function noteSafetyObservation(appId, observation, logFn, message) {
  * make a safety guard misread a populated folder as empty).
  * @param {string} dirPath - Directory to scan
  * @param {number} limit - Stop counting once this many entries are found
- * @param {{excludeNames?: string[], excludeDirs?: string[], countDirs?: boolean}} options -
- *   Skips, and whether a (non-excluded) directory counts as content in its own
- *   right rather than only as a subtree to descend into.
+ * @param {{excludeNames?: string[], excludeDirs?: string[], countDirs?: boolean, excludePaths?: string[]}} options -
+ *   Skips (by name, by dir name, or by exact absolute path), and whether a
+ *   (non-excluded) directory counts as content in its own right rather than
+ *   only as a subtree to descend into.
  * @returns {Promise<number>} Number of entries found (capped at limit)
  */
-async function countFilesUpTo(dirPath, limit, { excludeNames = [], excludeDirs = [], countDirs = false } = {}) {
+async function countFilesUpTo(dirPath, limit, { excludeNames = [], excludeDirs = [], countDirs = false, excludePaths = [] } = {}) {
+  // excludePaths: exact absolute paths (files or dirs) skipped wholesale -
+  // the anchored form the injected-content excludes arrive in.
+  const excludePathSet = new Set(excludePaths);
   let count = 0;
   const pending = [dirPath];
   while (pending.length > 0 && count < limit) {
@@ -93,6 +97,11 @@ async function countFilesUpTo(dirPath, limit, { excludeNames = [], excludeDirs =
     }
     // eslint-disable-next-line no-restricted-syntax
     for (const entry of entries) {
+      const entryPath = path.join(current, entry.name);
+      if (excludePathSet.has(entryPath)) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       if (entry.isDirectory()) {
         if (excludeDirs.includes(entry.name)) {
           // eslint-disable-next-line no-continue
@@ -107,7 +116,7 @@ async function countFilesUpTo(dirPath, limit, { excludeNames = [], excludeDirs =
           count += 1;
           if (count >= limit) break;
         }
-        pending.push(path.join(current, entry.name));
+        pending.push(entryPath);
       } else if (entry.isFile() && !excludeNames.includes(entry.name)) {
         count += 1;
         if (count >= limit) break;
@@ -135,9 +144,12 @@ async function checkDirectoryHasContent(dirPath) {
  * SCOPE - the same scope the syncthing index describes (globalBytes). Two
  * kinds of on-disk entry are NOT synced payload and are skipped so they cannot
  * mask a genuinely empty dataset: housekeeping that FluxOS/syncthing recreate
- * on any fresh or wiped volume (`.stignore`, the `.stfolder` marker), and the
- * `/backup` subtree `.stignore` tells syncthing to ignore. Everything else
- * counts - crucially INCLUDING directories, because the index counts each
+ * on any fresh or wiped volume (`.stignore`, the `.stfolder` marker), the
+ * `/backup` subtree `.stignore` tells syncthing to ignore, and the
+ * injected-content paths content delivery writes on every node
+ * (`injectedExcludePaths` - the same reserved `.stignore` set, so a fresh
+ * volume holding only delivered config/secrets still reads empty). Everything
+ * else counts - crucially INCLUDING directories, because the index counts each
  * directory entry too: a folder whose synced payload is only (empty)
  * directories has globalBytes > 0 with zero regular files, and a files-only
  * walk misread that as a phantom index over an empty disk (the 2026-07-04
@@ -145,12 +157,14 @@ async function checkDirectoryHasContent(dirPath) {
  * A truly wiped disk keeps only the skipped housekeeping, so it still reads
  * empty and the phantom guard still fires.
  * @param {string} dirPath - Directory path to check
+ * @param {string[]} [injectedExcludePaths] - absolute injected-content paths to skip
  * @returns {Promise<{hasContent: boolean, fileCount: number}>} Content status
  */
-async function checkDirectoryHasSyncScopedContent(dirPath) {
+async function checkDirectoryHasSyncScopedContent(dirPath, injectedExcludePaths = []) {
   const fileCount = await countFilesUpTo(dirPath, 100, {
     excludeNames: ['.stignore'],
     excludeDirs: ['backup', '.stfolder'],
+    excludePaths: injectedExcludePaths,
     countDirs: true,
   });
   return {
@@ -166,12 +180,14 @@ async function checkDirectoryHasSyncScopedContent(dirPath) {
  * files (globalFiles > 0) the disk must hold at least one — a surviving
  * directory skeleton (e.g. a bare appdata/) protects nothing.
  * @param {string} dirPath - Directory path to check
+ * @param {string[]} [injectedExcludePaths] - absolute injected-content paths to skip
  * @returns {Promise<{hasContent: boolean, fileCount: number}>} File status
  */
-async function checkDirectoryHasSyncScopedFiles(dirPath) {
+async function checkDirectoryHasSyncScopedFiles(dirPath, injectedExcludePaths = []) {
   const fileCount = await countFilesUpTo(dirPath, 100, {
     excludeNames: ['.stignore'],
     excludeDirs: ['backup', '.stfolder'],
+    excludePaths: injectedExcludePaths,
     countDirs: false,
   });
   return {
@@ -260,9 +276,12 @@ async function verifyFolderMountSafety(appId, folderPath) {
  * (globalBytes 0, e.g. a cold-start seed) does not trip this.
  * @param {string} appId - App ID (also the syncthing folder id)
  * @param {string} folderPath - Syncthing folder path
+ * @param {string[]} [injectedExcludePaths] - absolute injected-content paths
+ *   (deployComp.injectedSyncExcludes()) excluded from the disk-emptiness walk,
+ *   so a volume holding only delivered content still reads empty
  * @returns {Promise<{isSafe: boolean, reason: string, isMounted: boolean, hasContent: boolean}>}
  */
-async function verifySendReceiveFolderSafety(appId, folderPath) {
+async function verifySendReceiveFolderSafety(appId, folderPath, injectedExcludePaths = []) {
   const result = await verifyFolderMountSafety(appId, folderPath);
   if (!result.isSafe) return result;
 
@@ -279,8 +298,8 @@ async function verifySendReceiveFolderSafety(appId, folderPath) {
   const filesAware = syncStatus.globalFiles != null;
   if (filesAware && syncStatus.globalFiles === 0) return result;
   const dataCheck = filesAware
-    ? await checkDirectoryHasSyncScopedFiles(folderPath)
-    : await checkDirectoryHasSyncScopedContent(folderPath);
+    ? await checkDirectoryHasSyncScopedFiles(folderPath, injectedExcludePaths)
+    : await checkDirectoryHasSyncScopedContent(folderPath, injectedExcludePaths);
   if (!dataCheck.hasContent) {
     result.isSafe = false;
     result.reason = 'phantom_index_empty_disk';
@@ -633,6 +652,7 @@ async function handleReceiveOnlyTransition(params) {
     localSocketAddr,
     requiresSyncBeforeStart,
     syncthingFolder,
+    injectedExcludePaths = [],
   } = params;
 
   log.info(`handleReceiveOnlyTransition - ${appId} in cache and not restarted, processing receive-only logic`);
@@ -685,7 +705,7 @@ async function handleReceiveOnlyTransition(params) {
     // over an empty disk); an unmounted dir, or a stale index claiming bytes
     // over an empty volume, must never seed: sendreceive would broadcast the
     // missing files as deletions.
-    const seedSafety = await verifySendReceiveFolderSafety(appId, folderPath);
+    const seedSafety = await verifySendReceiveFolderSafety(appId, folderPath, injectedExcludePaths);
     if (!seedSafety.isSafe) {
       log.warn(`handleReceiveOnlyTransition - ${appId} elected leader but not safe to seed (${seedSafety.reason}); staying receiveonly`);
       syncthingFolder.type = 'receiveonly';
@@ -738,7 +758,7 @@ async function handleReceiveOnlyTransition(params) {
       // Same pre-flip verification as the seed above: completion metrics come
       // from the index, and an index can be stale - promotion requires the disk
       // to actually hold the data the index claims.
-      const promoteSafety = await verifySendReceiveFolderSafety(appId, folderPath);
+      const promoteSafety = await verifySendReceiveFolderSafety(appId, folderPath, injectedExcludePaths);
       if (!promoteSafety.isSafe) {
         log.warn(`handleReceiveOnlyTransition - ${appId} is synced but not safe to promote (${promoteSafety.reason}); staying receiveonly`);
         return { syncthingFolder, cache };
@@ -898,6 +918,7 @@ async function manageFolderSyncState(params) {
     syncthingFolder,
     installedAppName,
     mountVerifyNeeded = true,
+    injectedExcludePaths = [],
   } = params;
 
   // Check if folder already exists and is in sendreceive mode
@@ -911,7 +932,7 @@ async function manageFolderSyncState(params) {
     // caller flags exactly those folders here
     if (mountVerifyNeeded) {
       const folderPath = syncFolder.path || `${appsFolder}${appId}/appdata`;
-      let mountSafety = await verifySendReceiveFolderSafety(appId, folderPath);
+      let mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, injectedExcludePaths);
 
       if (!mountSafety.isSafe && !mountSafety.isMounted) {
         // The detection is actionable: the backing image normally still exists,
@@ -921,7 +942,7 @@ async function manageFolderSyncState(params) {
         const mountAttempt = await volumeService.ensureAppVolumeMounted(appId);
         if (mountAttempt.mounted) {
           log.info(`manageFolderSyncState - ${appId} volume was not mounted; mounted it, re-verifying folder safety`);
-          mountSafety = await verifySendReceiveFolderSafety(appId, folderPath);
+          mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, injectedExcludePaths);
         }
       }
 
@@ -991,6 +1012,7 @@ async function manageFolderSyncState(params) {
       localSocketAddr,
       requiresSyncBeforeStart,
       syncthingFolder,
+      injectedExcludePaths,
     });
     return result;
   }
