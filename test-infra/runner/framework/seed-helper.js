@@ -525,7 +525,7 @@ export async function buildSeedableMultiSyncthingApp({
  * N's volume). `selfRef:false` (default) builds a VALID two-component app whose
  * second component references the first (index 1 -> 0, like real SimpleXxFTP's
  * `…|0:/srv/xftp`). `selfRef:true` builds the INVALID single-component self-ref
- * (`g:/data|0:/x`, like real baserow) that volumeConstructor must reject
+ * (`g:/data|0:/x`, like real baserow) that the deployment path must reject
  * ("Component 0 cannot reference component 0"). See project_harness_gaps #1.
  */
 export async function buildSeedableIndexRefApp({
