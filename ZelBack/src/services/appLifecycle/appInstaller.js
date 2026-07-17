@@ -93,10 +93,9 @@ async function performDockerCleanup(onStatus) {
   await dockerService.pruneVolumes();
   if (onStatus) onStatus({ status: 'Docker volumes cleaned.' });
 
-  log.info('Clearing up unused docker images...');
-  if (onStatus) onStatus({ status: 'Clearing up unused docker images...' });
-  await dockerService.pruneImages();
-  if (onStatus) onStatus({ status: 'Docker images cleaned.' });
+  // Images are deliberately not touched here: reclamation belongs to the
+  // imageReaper (boot / post-update / daily), which is reference-gated and
+  // respects enterprise image-cache pins.
 }
 
 /**
