@@ -1462,6 +1462,30 @@ describe('dockerService tests', () => {
       });
     });
 
+    it('fails the pull on an in-band {error} event in a cleanly-ended stream', (done) => {
+      // docker reports a registry/blob failure (e.g. a CDN EOF mid-blob) as an
+      // in-band error event and ends the stream cleanly - followProgress calls
+      // onFinished with no error and the event in the output.
+      const output = [
+        { status: 'Downloading', id: 'layer1' },
+        { errorDetail: { message: 'unexpected EOF' }, error: 'unexpected EOF' },
+      ];
+      const pullStub = sinon.stub(Dockerode.prototype, 'pull').callsFake((repoTag, opts, cb) => cb(null, 'STREAM'));
+      const followStub = sinon.stub(modemProto, 'followProgress').callsFake((stream, onFinished) => onFinished(null, output));
+      dockerService.dockerPullStream({ repoTag: 'nginx:latest' }, null, (err) => {
+        try {
+          expect(err, 'an in-band docker error is a failed pull, never success onto a missing image').to.be.an('error');
+          expect(err.message).to.include('unexpected EOF');
+          done();
+        } catch (assertErr) {
+          done(assertErr);
+        } finally {
+          pullStub.restore();
+          followStub.restore();
+        }
+      });
+    });
+
     it('chains the caller abortSignal into the signal docker.pull sees (abortable pull)', () => {
       const pullStub = sinon.stub(Dockerode.prototype, 'pull').callsFake((repoTag, opts, cb) => cb(null, 'STREAM'));
       const followStub = sinon.stub(modemProto, 'followProgress').callsFake((stream, onFinished) => onFinished(null, 'done'));
