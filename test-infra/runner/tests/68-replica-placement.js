@@ -128,22 +128,26 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     return res.data; // update message hash
   }
 
-  // Update convergence needs the reconcile sweep, and the sweep needs blocks —
-  // ONE at a time. The sweep fires when the processed TIP's height is divisible
-  // by its modulus (period 4-9 x the post-fork multiplier 4: 16..36, all
-  // multiples of 4), and only the tip of an advance-batch runs the periodic
-  // section (earlier batch blocks carry 2+ confirmations and skip it). Batch
-  // stepping therefore pins tips to one residue class mod the step and can
-  // miss every multiple forever; single-block steps evaluate every height, so
-  // one sweep is guaranteed within 36 rounds.
+  // Update convergence needs the reconcile sweep, and the sweep fires when a
+  // block whose height divides its modulus (period 4-9 x the post-fork
+  // multiplier 4: 16..36) is processed AT THE TIP — a block processed during
+  // catch-up carries 2+ confirmations and skips the periodic section. So the
+  // driver must advance ONE block at a time AND wait for every node to process
+  // it before the next: if the explorer falls behind the stub, the skipped
+  // heights are caught up in a batch and a firing height can be silently lost.
+  // With every height evaluated at tip on every node, one sweep is guaranteed
+  // within 36 rounds.
   async function untilWithBlocks(check, { rounds = 45, label } = {}) {
     for (let i = 0; i < rounds; i += 1) {
+      const marks = env.clients.map((c) => c.getLastEventId());
       // eslint-disable-next-line no-await-in-loop
       await advanceBlocks(1);
       // eslint-disable-next-line no-await-in-loop
-      if (await check()) return;
+      await Promise.all(env.clients.map((c, idx) => c.waitForEvent(
+        'block:processed', () => true, 30000, { afterId: marks[idx] },
+      )));
       // eslint-disable-next-line no-await-in-loop
-      await new Promise((resolve) => { setTimeout(resolve, 2500); });
+      if (await check()) return;
     }
     throw new Error(`${label} not reached within ${rounds} block-advancing rounds`);
   }
