@@ -331,11 +331,6 @@ export async function createAppNetworkRaw(container, appName, subnet) {
 
 // Docker's container ID: survives nothing - a recreate mints a new one - so ID
 // equality across a window proves the container was never touched.
-export async function getAppContainerId(container, appName, componentName) {
-  const { stdout } = await execInContainer(container,
-    `docker inspect --format '{{.Id}}' ${appContainerName(appName, componentName)} 2>/dev/null || echo ""`);
-  return stdout.trim() || null;
-}
 
 // Whether the container holds an endpoint (with an IP) on its OWN app network -
 // the same fact dockerService.classifyContainerNetworkAttachment reads.
