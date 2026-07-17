@@ -31,7 +31,7 @@ async function resolveLocalReplica(spec) {
     throw new Error(`${spec.name} names ${names.length} replicas for this node (${names.join(', ')}) - co-located replicas are not supported yet`);
   }
   if (names.length === 0) {
-    log.warn(`deploymentProvider: named placement for ${spec.name} does not target this node - deploying component defaults`);
+    log.warn(`deploymentProvider: named placement for ${spec.name} does not target this node`);
     return null;
   }
   return names[0];
