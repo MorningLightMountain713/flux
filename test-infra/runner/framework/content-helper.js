@@ -22,7 +22,7 @@ export async function fetchTransportPubKey(nodeUrl, appName, owner) {
  * Deploy a v9 content app via the real submission path.
  *
  * @param {string} nodeUrl
- * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?,
+ * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?,
  *   contentRef?: Buffer, contentSlots?: [{ name, destination, bytes, onUpdate?, atomic? }],
  *   ownerKey?, timestamp? }
  * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName }
@@ -43,6 +43,7 @@ export async function deployContentApp(nodeUrl, opts) {
     instances: opts.instances,
     ttl: opts.ttl,
     components: opts.components,
+    placement: opts.placement,
     contentRefHash,
     contentSlots: contentSlots.map((s) => ({
       name: s.name, destination: s.destination, source: s.source, onUpdate: s.onUpdate, atomic: s.atomic, uid: s.uid, gid: s.gid, mode: s.mode,
@@ -105,7 +106,7 @@ export async function deployContentApp(nodeUrl, opts) {
  * sibling for the no-content case.
  *
  * @param {string} nodeUrl
- * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, ownerKey?, timestamp? }
+ * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?, ownerKey?, timestamp? }
  *   `components` is the full v9 components map (pass shutdown/preStop/etc. on a component here).
  * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName }
  */
@@ -122,11 +123,12 @@ export async function registerEncryptedV9App(nodeUrl, opts) {
     instances: opts.instances,
     ttl: opts.ttl,
     components: opts.components,
+    placement: opts.placement,
   });
 
   const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
   const { specField, contentHash } = await tk.buildSignedRegistration({
-    submissionSpec, ownerKey, transportPubB64, timestamp,
+    submissionSpec, ownerKey, transportPubB64, timestamp, contentHash: opts.contentHash,
   });
 
   const auth = await authenticate(nodeUrl, ownerKey);
@@ -134,6 +136,51 @@ export async function registerEncryptedV9App(nodeUrl, opts) {
   form.append('spec', JSON.stringify(specField));
 
   const res = await fetch(`${nodeUrl}/apps/appregister`, {
+    method: 'POST',
+    headers: { zelidauth: auth.zelidauth },
+    body: form,
+  });
+  const data = await res.json();
+  return { ...data, contentHash, appName: name };
+}
+
+/**
+ * Update an encrypted v9 app's SPEC (POST /apps/appupdate): a signed fluxappupdate
+ * carrying the full new submission spec, HPKE-sealed toward the node's per-app
+ * transport key — registerEncryptedV9App's update sibling. The response data is the
+ * update message hash; confirm it on-chain (queueAppTx + advanceBlocks) the same way
+ * as a registration, then the fleet converges on the new spec.
+ *
+ * @param {string} nodeUrl
+ * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?, ownerKey?, timestamp? }
+ * @returns {Promise<object>} the /apps/appupdate response + { contentHash, appName }
+ */
+export async function updateEncryptedV9App(nodeUrl, opts) {
+  const ownerKey = opts.ownerKey || appOwnerKey();
+  const owner = opts.owner || ownerKey.zelid;
+  const name = opts.name;
+  const timestamp = opts.timestamp || Date.now();
+
+  const submissionSpec = tk.buildV9ContentSpec({
+    name,
+    owner,
+    image: opts.image,
+    instances: opts.instances,
+    ttl: opts.ttl,
+    components: opts.components,
+    placement: opts.placement,
+  });
+
+  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
+  const { specField, contentHash } = await tk.buildSignedRegistration({
+    submissionSpec, ownerKey, transportPubB64, timestamp, type: 'fluxappupdate',
+  });
+
+  const auth = await authenticate(nodeUrl, ownerKey);
+  const form = new FormData();
+  form.append('spec', JSON.stringify(specField));
+
+  const res = await fetch(`${nodeUrl}/apps/appupdate`, {
     method: 'POST',
     headers: { zelidauth: auth.zelidauth },
     body: form,
