@@ -49,6 +49,42 @@ describe('telemetrySinkCache tests', () => {
     });
   });
 
+  describe('extractSink (otlp)', () => {
+    it('returns the declared target for an otlp telemetry entry', () => {
+      const deployment = { telemetry: { provider: 'otlp', component: 'otelagent', port: 4318 } };
+      expect(cache.extractSink(deployment)).to.deep.equal({ provider: 'otlp', component: 'otelagent', port: 4318 });
+    });
+
+    it('defaults the port when the entry has none', () => {
+      const deployment = { telemetry: { provider: 'otlp', component: 'otelagent' } };
+      expect(cache.extractSink(deployment)).to.deep.equal({ provider: 'otlp', component: 'otelagent', port: 4318 });
+    });
+
+    it('returns null for an otlp entry without a component', () => {
+      expect(cache.extractSink({ telemetry: { provider: 'otlp' } })).to.be.null;
+    });
+
+    it('never returns a credential field for otlp', () => {
+      const deployment = { telemetry: { provider: 'otlp', component: 'otelagent', port: 4318 } };
+      expect(cache.extractSink(deployment)).to.not.have.property('apiKey');
+    });
+  });
+
+  describe('set/get/delete (otlp)', () => {
+    it('stores an otlp sink (usable without a credential)', () => {
+      const sink = { provider: 'otlp', component: 'otelagent', port: 4318 };
+      cache.setSink('OtlpApp', sink);
+      expect(cache.getSink('otlpapp')).to.deep.equal(sink);
+      expect(cache.hasAnyTelemetryApps()).to.equal(true);
+    });
+
+    it('clears the entry for an otlp sink without a component', () => {
+      cache.setSink('OtlpApp', { provider: 'otlp', component: 'otelagent', port: 4318 });
+      cache.setSink('OtlpApp', { provider: 'otlp', port: 4318 });
+      expect(cache.getSink('OtlpApp')).to.be.null;
+    });
+  });
+
   describe('set/get/delete', () => {
     it('stores and retrieves a sink', () => {
       cache.setSink('MyApp', { provider: 'datadog', apiKey: 'k1' });
