@@ -366,14 +366,25 @@ async function storeAppInstallingMessage(message) {
   * @param broadcastedAt number
   * @param name string
   * @param ip string
+  * v2 additions:
+  * @param announcedAt number - immutable first-announce time; broadcastedAt moves on
+  *   renewals, so elections must order contenders by announcedAt
+  * @param cleared boolean (optional) - retract the (name, ip) claim with no verdict on
+  *   the app, unlike fluxappinstallingerror which also feeds peers' error counting
   */
   if (!message || typeof message !== 'object' || typeof message.type !== 'string' || typeof message.version !== 'number'
     || typeof message.broadcastedAt !== 'number' || typeof message.ip !== 'string' || typeof message.name !== 'string') {
     return new Error('Invalid Flux App Installing message for storing');
   }
 
-  if (message.version !== 1) {
+  if (message.version !== 1 && message.version !== 2) {
     return new Error(`Invalid Flux App Installing message for storing version ${message.version} not supported`);
+  }
+
+  const cleared = message.version === 2 && message.cleared === true;
+
+  if (message.version === 2 && !cleared && typeof message.announcedAt !== 'number') {
+    return new Error('Invalid Flux App Installing message for storing announcedAt required for version 2');
   }
 
   if (message.broadcastedAt + GOSSIP_VALIDITY_MS < Date.now()) {
@@ -384,21 +395,35 @@ async function storeAppInstallingMessage(message) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
 
+  const queryFind = { name: message.name, ip: message.ip };
+  const projection = { _id: 0 };
+  const result = await dbHelper.findOneInDatabase(database, globalAppsInstallingLocations, queryFind, projection);
+
+  if (cleared) {
+    // A strictly-newer announce supersedes a late-arriving clear from an older
+    // attempt; on an equal timestamp the clear wins - the emitter sequences the
+    // clear after its own announce, so same-millisecond means announce-then-clear.
+    if (result && result.broadcastedAt && result.broadcastedAt > new Date(message.broadcastedAt)) {
+      return false;
+    }
+    // Delete the archived broadcast too so message sync cannot resurrect the claim.
+    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, queryFind);
+    await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, { 'data.name': message.name, 'data.ip': message.ip });
+    return true;
+  }
+
   const newAppInstallingMessage = {
     name: message.name,
     ip: message.ip,
     broadcastedAt: new Date(message.broadcastedAt),
     expireAt: new Date(message.broadcastedAt + INSTALLING_EXPIRY_MS),
   };
+  if (message.version === 2) {
+    newAppInstallingMessage.announcedAt = new Date(message.announcedAt);
+  }
 
-  // indexes over name, hash, ip. Then name + ip and name + ip + broadcastedAt.
-  const queryFind = { name: newAppInstallingMessage.name, ip: newAppInstallingMessage.ip };
-  const projection = { _id: 0 };
-  // we already have the exact same data
-  // eslint-disable-next-line no-await-in-loop
-  const result = await dbHelper.findOneInDatabase(database, globalAppsInstallingLocations, queryFind, projection);
+  // we already have the exact same data (or newer - e.g. a renewal already landed)
   if (result && result.broadcastedAt && result.broadcastedAt >= newAppInstallingMessage.broadcastedAt) {
-    // found a message that was already stored/probably from duplicated message processsed
     return false;
   }
 
@@ -407,7 +432,6 @@ async function storeAppInstallingMessage(message) {
   const options = {
     upsert: true,
   };
-  // eslint-disable-next-line no-await-in-loop
   await dbHelper.updateOneInDatabase(database, globalAppsInstallingLocations, queryUpdate, update, options);
 
   // all stored, rebroadcast
@@ -805,6 +829,9 @@ async function storeBatchAppRunningEvents(verifiedBroadcasts) {
 function storeSignedAppInstallingBroadcast(signedBroadcast) {
   const { data } = signedBroadcast;
   if (!data || !data.ip || !data.name || !data.broadcastedAt) return;
+  // A cleared message is a retraction: storeAppInstallingMessage already deleted the
+  // archived announce, and archiving the clear would re-serve a dead claim over sync.
+  if (data.cleared === true) return;
   if (data.broadcastedAt + INSTALLING_EXPIRY_MS < Date.now()) return;
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
@@ -836,6 +863,7 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
 
   for (const broadcast of verifiedBroadcasts) {
     const { data } = broadcast;
+    if (data.cleared === true) continue;
     const validTill = data.broadcastedAt + INSTALLING_EXPIRY_MS;
     if (validTill < Date.now()) continue;
 
@@ -861,15 +889,19 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
     const incomingDate = new Date(data.broadcastedAt);
     const incomingExpiry = new Date(validTill);
     const isNewer = { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] };
+    const locationSet = {
+      name: data.name,
+      ip: data.ip,
+      broadcastedAt: { $cond: [isNewer, incomingDate, '$broadcastedAt'] },
+      expireAt: { $cond: [isNewer, incomingExpiry, '$expireAt'] },
+    };
+    if (typeof data.announcedAt === 'number') {
+      locationSet.announcedAt = { $cond: [isNewer, new Date(data.announcedAt), '$announcedAt'] };
+    }
     locationOps.push({
       updateOne: {
         filter: { name: data.name, ip: data.ip },
-        update: [{ $set: {
-          name: data.name,
-          ip: data.ip,
-          broadcastedAt: { $cond: [isNewer, incomingDate, '$broadcastedAt'] },
-          expireAt: { $cond: [isNewer, incomingExpiry, '$expireAt'] },
-        } }],
+        update: [{ $set: locationSet }],
         upsert: true,
       },
     });

@@ -87,6 +87,10 @@ const appsMonitoredTemplate = {
 const GOSSIP_VALIDITY_MS = 5 * 60 * 1000;
 const RUNNING_EXPIRY_MS = 125 * 60 * 1000;
 const INSTALLING_EXPIRY_MS = 15 * 60 * 1000;
+// Renewal cadence for a long-running install's fluxappinstalling claim: re-broadcast
+// before INSTALLING_EXPIRY_MS lapses so a live install keeps its seat, with slack for
+// gossip propagation. A dead node stops renewing and its claim expires on the TTL.
+const INSTALLING_RENEWAL_MS = 12 * 60 * 1000;
 const INSTALLING_ERRORS_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const SIGTERM_EXPIRY_MS = 420 * 1000;
 const EVICTED_EXPIRY_MS = RUNNING_EXPIRY_MS;
@@ -132,6 +136,7 @@ module.exports = {
   GOSSIP_VALIDITY_MS,
   RUNNING_EXPIRY_MS,
   INSTALLING_EXPIRY_MS,
+  INSTALLING_RENEWAL_MS,
   INSTALLING_ERRORS_EXPIRY_MS,
   SIGTERM_EXPIRY_MS,
   EVICTED_EXPIRY_MS,

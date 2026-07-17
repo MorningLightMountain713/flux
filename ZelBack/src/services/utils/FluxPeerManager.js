@@ -665,15 +665,16 @@ class FluxPeerManager extends EventEmitter {
    * @param {string} [options.direction] - DIRECTION.INBOUND or DIRECTION.OUTBOUND
    * @param {string} [options.exclude] - peer key to skip
    * @param {number} [options.delayMs=25] - delay between sends
+   * @param {string} [options.requireCapability] - only send to peers advertising this capability
    */
   async broadcast(data, options = {}) {
-    const { direction, exclude, delayMs = 25 } = options;
+    const { direction, exclude, delayMs = 25, requireCapability } = options;
     if (direction) {
-      await this.#broadcastToGroup(data, direction, exclude, delayMs);
+      await this.#broadcastToGroup(data, direction, exclude, delayMs, requireCapability);
     } else {
-      await this.#broadcastToGroup(data, DIRECTION.OUTBOUND, exclude, delayMs);
+      await this.#broadcastToGroup(data, DIRECTION.OUTBOUND, exclude, delayMs, requireCapability);
       await serviceHelper.delay(500);
-      await this.#broadcastToGroup(data, DIRECTION.INBOUND, exclude, delayMs);
+      await this.#broadcastToGroup(data, DIRECTION.INBOUND, exclude, delayMs, requireCapability);
     }
   }
 
@@ -683,12 +684,14 @@ class FluxPeerManager extends EventEmitter {
    * @param {string} direction - DIRECTION.INBOUND or DIRECTION.OUTBOUND
    * @param {string} [exclude] - peer key to skip
    * @param {number} delayMs - delay between sends
+   * @param {string} [requireCapability] - only send to peers advertising this capability
    * @private
    */
-  async #broadcastToGroup(data, direction, exclude, delayMs) {
+  async #broadcastToGroup(data, direction, exclude, delayMs, requireCapability) {
     const iter = direction === DIRECTION.INBOUND ? this.inboundValues() : this.outboundValues();
     for (const peer of iter) {
       if (exclude && peer.key === exclude) continue;
+      if (requireCapability && !peer.remoteCapabilities.has(requireCapability)) continue;
       try {
         await serviceHelper.delay(delayMs);
         if (!peer.send(data)) {

@@ -409,7 +409,7 @@ async function handleAppInstallingMessage(message, fromIP, port) {
   try {
     const rebroadcastToPeers = await messageStore.storeAppInstallingMessage(message.data);
     if (rebroadcastToPeers === true) {
-      fluxEventBus.publish('network:appinstalling', { ip: message.data.ip, name: message.data.name });
+      fluxEventBus.publish('network:appinstalling', { ip: message.data.ip, name: message.data.name, cleared: message.data.cleared === true });
     }
     messageStore.storeSignedAppInstallingBroadcast(message);
     const currentTimeStamp = Date.now();
