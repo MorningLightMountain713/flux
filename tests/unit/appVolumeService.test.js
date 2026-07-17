@@ -35,7 +35,7 @@ describe('appVolumeService.writeStignore', () => {
     expect(content).to.equal('/backup\n/seed\n/io.runonflux/conf\n/var/data\ncache\n');
   });
 
-  it('does nothing when the component has no syncthing folder', async () => {
+  it('writes no .stignore when the component has no syncthing folder', async () => {
     await appVolumeService.writeStignore({ dir: tmp, sync: null, injectedSyncExcludes: () => [] });
 
     let missing = false;
@@ -45,6 +45,17 @@ describe('appVolumeService.writeStignore', () => {
       missing = true;
     }
     expect(missing).to.equal(true);
+  });
+
+  it('removes lingering .stignore/.stfolder when sync was dropped on a kept volume', async () => {
+    await fs.writeFile(path.join(tmp, '.stignore'), '/backup\n');
+    await fs.mkdir(path.join(tmp, '.stfolder'));
+
+    await appVolumeService.writeStignore({ dir: tmp, sync: null, injectedSyncExcludes: () => [] });
+
+    const survivors = await fs.readdir(tmp);
+    expect(survivors).to.not.include('.stignore');
+    expect(survivors).to.not.include('.stfolder');
   });
 
   it('dedups against the reserved entries and drops empty patterns', async () => {
