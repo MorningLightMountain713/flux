@@ -284,14 +284,15 @@ async function requestAppConvergence(appName, { reason, delayMs = 0 } = {}) {
  * responsiveness between blocks; the per-block pass is the level-triggered
  * backstop.
  */
-function notifySpecStored(specDoc) {
-  if (!specDoc || !specDoc.name) return;
-  appsRepository.existsInstalledApp(specDoc.name)
-    .then((installedHere) => {
-      if (!installedHere) return null;
-      return requestAppConvergence(specDoc.name, { reason: 'specStored' });
-    })
-    .catch((error) => log.error(`specReconciler.notifySpecStored: ${error.message}`));
+async function notifySpecStored(specDoc) {
+  try {
+    if (!specDoc || !specDoc.name) return;
+    const installedHere = await appsRepository.existsInstalledApp(specDoc.name);
+    if (!installedHere) return;
+    await requestAppConvergence(specDoc.name, { reason: 'specStored' });
+  } catch (error) {
+    log.error(`specReconciler.notifySpecStored: ${error.message}`);
+  }
 }
 
 module.exports = {
