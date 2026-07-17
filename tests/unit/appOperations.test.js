@@ -909,8 +909,43 @@ describe('appOperations tests', () => {
     const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
     // eslint-disable-next-line global-require
     const IOUtils = require('../../ZelBack/src/services/IOUtils');
+    // eslint-disable-next-line global-require
+    const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 
     const makeRes = () => ({ write: sinon.stub(), end: sinon.stub() });
+
+    it('removes the syncthing folder per synced component identifier, never by bare app name', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      // Composed app: folders are registered as flux<component>_<app>, so the
+      // removal must target component identifiers - flux<app> matches nothing.
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({
+        componentEntries: () => [
+          ['web', { identifier: 'web_bkapp', hasSyncthing: () => true }],
+          ['worker', { identifier: 'worker_bkapp', hasSyncthing: () => false }],
+        ],
+      });
+      const removeFolder = sinon.stub(appVolumeService, 'removeSyncthingFolder').resolves();
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'bkapp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves({
+        componentEntries: () => [['web', { identifier: 'web_bkapp' }]],
+      });
+      sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      sinon.stub(IOUtils, 'getVolumeInfo').resolves([{ mount: '/vol' }]);
+      sinon.stub(IOUtils, 'checkFileExists').resolves(false);
+      sinon.stub(IOUtils, 'removeFile').resolves();
+      sinon.stub(IOUtils, 'createTarGz').resolves({ status: false, error: 'No space left on device' });
+
+      const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
+      const pending = appOperations.appendBackupTask(req, makeRes());
+      await clock.tickAsync(120000);
+      await pending;
+      clock.restore();
+
+      expect(removeFolder.calledWith('web_bkapp'), 'the synced component folder must be removed').to.be.true;
+      expect(removeFolder.calledWith('worker_bkapp'), 'unsynced components must be untouched').to.be.false;
+      expect(removeFolder.calledWith('bkapp'), 'the bare app name matches no composed folder').to.be.false;
+    });
 
     it('drives the app back to running when the archive fails after the stop', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
