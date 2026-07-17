@@ -352,8 +352,11 @@ module.exports = {
     removalSpacingMs: 60000,
     locationTtlS: 7500,
     installingTtlS: 900,
-    installErrorTtlS: 3600,
+    installingRenewalS: 720, // in-flight install claim renewal cadence; undercuts installingTtlS with gossip slack
+    installErrorTtlS: 86400,
     tempMsgTtlS: 3600,
+    gossipValidityS: 300, // freshness window for accepting app gossip broadcasts
+    sigtermTtlS: 420, // grace window a sigterm-announced node's app rows stay alive before expiry
     hashSyncIntervalMs: 1800000,
     peerNotifyIntervalMs: 3600000,
     cpuCheckIntervalMs: 900000,

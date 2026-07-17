@@ -83,16 +83,17 @@ const appsMonitoredTemplate = {
   // },
 };
 
-// Expiry / TTL constants (milliseconds)
-const GOSSIP_VALIDITY_MS = 5 * 60 * 1000;
-const RUNNING_EXPIRY_MS = 125 * 60 * 1000;
-const INSTALLING_EXPIRY_MS = 15 * 60 * 1000;
+// Expiry / TTL constants (milliseconds), derived from config (fluxapps) — the
+// integrity-checked tunable surface. Config carries these in seconds.
+const GOSSIP_VALIDITY_MS = config.fluxapps.gossipValidityS * 1000;
+const RUNNING_EXPIRY_MS = config.fluxapps.locationTtlS * 1000;
+const INSTALLING_EXPIRY_MS = config.fluxapps.installingTtlS * 1000;
 // Renewal cadence for a long-running install's fluxappinstalling claim: re-broadcast
 // before INSTALLING_EXPIRY_MS lapses so a live install keeps its seat, with slack for
 // gossip propagation. A dead node stops renewing and its claim expires on the TTL.
-const INSTALLING_RENEWAL_MS = 12 * 60 * 1000;
-const INSTALLING_ERRORS_EXPIRY_MS = 24 * 60 * 60 * 1000;
-const SIGTERM_EXPIRY_MS = 420 * 1000;
+const INSTALLING_RENEWAL_MS = config.fluxapps.installingRenewalS * 1000;
+const INSTALLING_ERRORS_EXPIRY_MS = config.fluxapps.installErrorTtlS * 1000;
+const SIGTERM_EXPIRY_MS = config.fluxapps.sigtermTtlS * 1000;
 const EVICTED_EXPIRY_MS = RUNNING_EXPIRY_MS;
 
 // Hash sync constants (blocks, at 30s per block)
