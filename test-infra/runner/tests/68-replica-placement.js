@@ -5,7 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/content-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
+import { queueAppTx, advanceBlock, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor } from '../framework/wait.js';
 import { getAppContainerStatus, isAppContainerRunning, execInContainer } from '../framework/container.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
@@ -130,21 +130,22 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
 
   // Update convergence needs the reconcile sweep, and the sweep fires when a
   // block whose height divides its modulus (period 4-9 x the post-fork
-  // multiplier 4: 16..36) is processed AT THE TIP — a block processed during
-  // catch-up carries 2+ confirmations and skips the periodic section. So the
-  // driver must advance ONE block at a time AND wait for every node to process
-  // it before the next: if the explorer falls behind the stub, the skipped
-  // heights are caught up in a batch and a firing height can be silently lost.
-  // With every height evaluated at tip on every node, one sweep is guaranteed
-  // within 36 rounds.
+  // multiplier 4: 16..36 — every one EVEN) is processed AT THE TIP — a block
+  // processed during catch-up carries 2+ confirmations and skips the periodic
+  // section. So each round advances ONE block and waits for every node to
+  // process THAT height. Anchoring on the height matters: a wait satisfied by
+  // "any new block event" resolves on the PREVIOUS height's event whenever the
+  // explorer runs a block behind, and that lag then locks alternate heights
+  // into catch-up — with even moduli, the sweep never fires. Waiting for the
+  // advanced height drains any lag each round, so every height lands at tip
+  // and one sweep is guaranteed within 36 rounds.
   async function untilWithBlocks(check, { rounds = 45, label } = {}) {
     for (let i = 0; i < rounds; i += 1) {
-      const marks = env.clients.map((c) => c.getLastEventId());
       // eslint-disable-next-line no-await-in-loop
-      await advanceBlocks(1);
+      const { currentHeight } = await advanceBlock();
       // eslint-disable-next-line no-await-in-loop
-      await Promise.all(env.clients.map((c, idx) => c.waitForEvent(
-        'block:processed', () => true, 30000, { afterId: marks[idx] },
+      await Promise.all(env.clients.map((c) => c.waitForEvent(
+        'block:processed', (d) => d.height >= currentHeight, 60000,
       )));
       // eslint-disable-next-line no-await-in-loop
       if (await check()) return;
