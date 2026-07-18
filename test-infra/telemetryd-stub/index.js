@@ -2,7 +2,7 @@
 //
 // Stands in for the real Rust daemon at the FluxOS boundary — as a CLIENT: the
 // real daemon connects to FluxOS's identity socket and consumes the pushed
-// NDJSON stream (sync / started / stopped, each started carrying the app's
+// NDJSON stream (sync / track / untrack, each track carrying the app's
 // sink). The mock speaks that client role so FluxOS's real server
 // (ZelBack/src/services/telemetryIdentityService.js) is exercised unmodified.
 // It is NOT the daemon — no cgroup sampling, no log tailing, no exporters. It
