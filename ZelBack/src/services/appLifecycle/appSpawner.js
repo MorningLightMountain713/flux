@@ -1275,7 +1275,7 @@ async function trySpawningGlobalApplication() {
     // unable to tell a refusal from an app that was simply never selected.
     let installError = null;
     try {
-      installResult = await appInstaller.installApplication(instantiated);
+      installResult = await appInstaller.installAssignedReplicas(instantiated);
     } catch (error) {
       log.error(error);
       installError = error.message ?? String(error);

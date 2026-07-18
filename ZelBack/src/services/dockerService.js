@@ -1182,6 +1182,11 @@ async function appDockerCreate(deployComp, options = {}) {
     throw error;
   });
 
+  // The container exists, so there is no absence of it to attribute to anyone.
+  // The other half of the removal funnels' record: while an entry stands, this
+  // container is missing because FluxOS took it.
+  globalState.fluxRemovedContainers.delete(getDockerName(identifier));
+
   return app;
 }
 

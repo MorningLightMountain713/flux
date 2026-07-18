@@ -183,6 +183,8 @@ describe('appUninstaller tests', () => {
       },
       '../appRuntime/deploymentProvider': {
         getInstalledDeployment: sinon.stub().resolves(null),
+        buildDeployment: sinon.stub().resolves(null),
+        localIdentities: sinon.stub().resolves([null]),
       },
       '../providers/FluxOSLegacyCryptoProvider': {
         create: sinon.stub().resolves({
