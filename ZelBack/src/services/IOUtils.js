@@ -247,9 +247,12 @@ async function getVolumeInfo(appname, component, multiplier, decimal, fields) {
     const filesystems = await deviceHelper.listMountedFilesystems();
     let regex;
     if (component === 'null') {
+      // v1-3 single-component form; never named, so never replica-qualified.
       regex = new RegExp(`flux${appname}$`);
     } else {
-      regex = new RegExp(`flux${component}_${appname}$`);
+      // The optional third segment is a replica name (co-located named
+      // replicas mount one volume per replica; all of them match here).
+      regex = new RegExp(`flux${component}_${appname}(?:_[a-z0-9-]+)?$`);
     }
     const allowedFields = fields ? fields.split(',') : null;
     const divisor = bytesPerUnit(multiplier);
