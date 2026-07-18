@@ -11,9 +11,7 @@ const operationRegistry = require('../utils/operationRegistry');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const log = require('../../lib/log');
-const {
-  localAppsInformation, globalAppsMessages,
-} = require('../utils/appConstants');
+const { globalAppsMessages } = require('../utils/appConstants');
 const config = require('config');
 const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -979,6 +977,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   const {
     key, name, networkName, forceKill, owner, components, reason, shutdownBudgetSeconds,
   } = doc;
+  // The identity this teardown owns: a replica name scopes the daemon stop to
+  // exactly its containers (a scale-down must not drain the sibling); null is
+  // the whole-app stop (loose, and full removals of pre-qualification installs).
+  const replica = doc.replica ?? null;
   const list = components || [];
   const status = (msg) => { log.info(msg); if (onStatus) onStatus(msg); };
 
@@ -996,12 +998,13 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   // forceful teardown has nothing to escalate.
   if (!forceKill) {
     teardownEscalations.set(name, () => {
-      fluxShutdowndClient.forceAppStop(owner, name).catch((e) => log.warn(`forceAppStop ${name}: ${e.message}`));
+      fluxShutdowndClient.forceAppStop(owner, name, replica).catch((e) => log.warn(`forceAppStop ${name}: ${e.message}`));
     });
   }
   const stop = await fluxShutdowndClient.beginAppStop(owner, name, stopReason, {
     force: Boolean(forceKill),
     deadline: stopDeadline,
+    replica,
   });
   teardownEscalations.delete(name);
   if (stop.outcome === 'rejected_pipeline_active') {

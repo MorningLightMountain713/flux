@@ -367,6 +367,16 @@ describe('appUninstaller tests', () => {
       expect(name).to.equal('myapp');
       expect(reason).to.equal('user-cancel');
       expect(opts.force).to.equal(false);
+      // A doc with no replica is a whole-app stop: replica must arrive as
+      // definite null, never undefined.
+      expect(opts.replica).to.equal(null);
+    });
+
+    it('scopes the daemon stop to the teardown doc identity (a scale-down never drains the sibling)', async () => {
+      fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'rejected_pipeline_active' });
+      await appUninstaller.runTeardown({ ...doc(), key: 'myapp_s2', replica: 's2' });
+      const opts = fluxShutdowndClientStub.beginAppStop.firstCall.args[3];
+      expect(opts.replica).to.equal('s2');
     });
 
     it('defers (no local stop, no remove) when a node-wide shutdown owns the stop', async () => {

@@ -118,17 +118,20 @@ async function upsertAppPlan(plan) {
 }
 
 /**
- * Remove an app's shutdown plan on uninstall.
+ * Remove one identity's shutdown plan on uninstall. `replica` is
+ * required-and-nullable on the wire: always sent, null for loose placement
+ * (the legacy whole-app key).
  * @param {string} appName
  * @param {string} ownerFluxId
+ * @param {string|null} replica
  */
-async function deleteAppPlan(appName, ownerFluxId) {
-  return callRpc('delete_app_plan', { app_name: appName, owner_flux_id: ownerFluxId });
+async function deleteAppPlan(appName, ownerFluxId, replica = null) {
+  return callRpc('delete_app_plan', { app_name: appName, owner_flux_id: ownerFluxId, replica });
 }
 
 /**
  * List the plan summaries the daemon currently holds, for resync-on-boot.
- * @returns {Promise<Array<{app_name: string, owner_flux_id: string, spec_hash: string}>>}
+ * @returns {Promise<Array<{app_name: string, owner_flux_id: string, replica: string|null, spec_hash: string}>>}
  */
 async function listAppPlans() {
   return callRpc('list_app_plans', {});
@@ -149,9 +152,9 @@ async function upsertAppPlanBestEffort(plan) {
 /**
  * Best-effort wrapper for uninstall.
  */
-async function deleteAppPlanBestEffort(appName, ownerFluxId) {
+async function deleteAppPlanBestEffort(appName, ownerFluxId, replica = null) {
   try {
-    await deleteAppPlan(appName, ownerFluxId);
+    await deleteAppPlan(appName, ownerFluxId, replica);
   } catch (error) {
     log.warn(`flux-shutdownd deleteAppPlan(${appName}) failed: ${error.message}`);
   }
@@ -176,14 +179,19 @@ function isTimeout(err) {
  *
  * Seeds the `stopping` LB gate synchronously BEFORE the first await, so even a
  * fire-and-don't-await caller suppresses container recovery for the whole drain.
+ * The gate is app-scoped even for a replica-scoped stop — drain STATE is
+ * app-wide by design; only the stop's container set narrows.
  *
  * @param {string} ownerFluxId
  * @param {string} appName
  * @param {string} reason one of SHUTDOWN_REASON
- * @param {{force?: boolean, deadline: number}} opts deadline is an absolute unix time (s)
+ * @param {{force?: boolean, deadline: number, replica?: string|null}} opts
+ *   deadline is an absolute unix time (s); replica is required-and-nullable on
+ *   the wire — a name stops exactly that identity's containers, null stops the
+ *   whole app (loose, and every whole-app path)
  * @returns {Promise<{outcome: string}>}
  */
-async function beginAppStop(ownerFluxId, appName, reason, { force = false, deadline } = {}) {
+async function beginAppStop(ownerFluxId, appName, reason, { force = false, deadline, replica = null } = {}) {
   // Non-Arcane nodes have no daemon socket: short-circuit before opening anything
   // or arming a timeout, and without touching the LB gate.
   if (!globalState.isArcane()) return { outcome: 'not_arcane' };
@@ -197,7 +205,7 @@ async function beginAppStop(ownerFluxId, appName, reason, { force = false, deadl
     const res = await callRpc(
       'begin_app_stop',
       {
-        owner_flux_id: ownerFluxId, app_name: appName, reason, force, deadline,
+        owner_flux_id: ownerFluxId, app_name: appName, replica, reason, force, deadline,
       },
       { timeoutMs },
     );
@@ -219,12 +227,14 @@ async function beginAppStop(ownerFluxId, appName, reason, { force = false, deadl
  *
  * @param {string} ownerFluxId
  * @param {string} appName
+ * @param {string|null} [replica] - escalate exactly this identity's drain; null
+ *   escalates the whole app's
  * @returns {Promise<{outcome: string}>}
  */
-async function forceAppStop(ownerFluxId, appName) {
+async function forceAppStop(ownerFluxId, appName, replica = null) {
   if (!globalState.isArcane()) return { outcome: 'not_arcane' };
   try {
-    const res = await callRpc('force_app_stop', { owner_flux_id: ownerFluxId, app_name: appName });
+    const res = await callRpc('force_app_stop', { owner_flux_id: ownerFluxId, app_name: appName, replica });
     return { outcome: res.end_state };
   } catch {
     return { outcome: 'unreachable' };
