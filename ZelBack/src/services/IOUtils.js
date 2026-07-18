@@ -272,7 +272,17 @@ async function getVolumeInfo(appname, component, multiplier, decimal, fields) {
 
     // A path the KERNEL reports as a mountpoint, selected by the request - never
     // a path built from it. The worst a hostile appname can do is match nothing.
-    const matched = mounts.filter((mount) => path.basename(mount.target) === identifier);
+    // Co-located named replicas mount one volume each, as `<identifier>_<replica>`:
+    // the replica is the third segment and no name may contain an underscore, so
+    // what follows the identifier is unambiguously one replica name. The v1-3
+    // single-component form is never named, so never replica-qualified.
+    const namesThisApp = (name) => {
+      if (name === identifier) return true;
+      if (component === 'null' || !name.startsWith(`${identifier}_`)) return false;
+      const replica = name.slice(identifier.length + 1);
+      return replica.length > 0 && !replica.includes('_');
+    };
+    const matched = mounts.filter((mount) => namesThisApp(path.basename(mount.target)));
     if (!matched.length) return { error: null, mounts: [] };
 
     const divisor = {
