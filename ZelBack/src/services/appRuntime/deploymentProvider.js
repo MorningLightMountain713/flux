@@ -1,4 +1,5 @@
 const appsRepository = require('../appDatabase/appsRepository');
+const dockerService = require('../dockerService');
 const { appsFolder } = require('../utils/appConstants');
 const { getSpecBackend } = require('../utils/specLibs');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
@@ -74,6 +75,65 @@ async function toDeployment(instantiated, opts = {}) {
 
   const { DeploymentSpec } = await getSpecBackend();
   return DeploymentSpec.fromSpec(runtimeSpec, appsFolder, { replica });
+}
+
+/**
+ * The definite identity for a single-identity operation on this node: null for
+ * loose placement, the assigned replica for named-single, and a loud throw for
+ * a co-located set (the caller must say which replica it means). Callers
+ * normalize their options into this ONCE at entry, so downstream code passes a
+ * definite `{ replica }` everywhere instead of threading a tri-state.
+ *
+ * @param {object} instantiated - InstantiatedSpec
+ * @returns {Promise<string|null>}
+ */
+async function resolveDeploymentIdentity(instantiated) {
+  const resolved = await resolveInstantiatedSpec(instantiated);
+  if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
+  const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
+  const replica = await resolveLocalReplica(runtimeSpec);
+  return replica;
+}
+
+/**
+ * Every identity this node is ASSIGNED by the spec: the named replicas
+ * targeting it ([] when named elsewhere), or [null] for loose placement.
+ * The install-side counterpart of localIdentities, which is teardown-side
+ * (it also sees what is merely present).
+ *
+ * @param {object} instantiated - InstantiatedSpec
+ * @returns {Promise<Array<string|null>>}
+ */
+async function assignedIdentities(instantiated) {
+  const resolved = await resolveInstantiatedSpec(instantiated);
+  if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
+  const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
+  const replicas = await resolveLocalReplicas(runtimeSpec);
+  return replicas === null ? [null] : replicas;
+}
+
+/**
+ * Every identity this node OWES management for. Assigned replicas when named
+ * placement targets this node; when it no longer does, the identities actually
+ * present on this node's labeled containers (a de-targeted teardown must match
+ * what exists, not what the spec now says); [null] for loose placement or when
+ * nothing is present.
+ *
+ * @param {object} instantiated - InstantiatedSpec
+ * @returns {Promise<Array<string|null>>}
+ */
+async function localIdentities(instantiated) {
+  const resolved = await resolveInstantiatedSpec(instantiated);
+  if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
+  const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
+
+  const assigned = await resolveLocalReplicas(runtimeSpec);
+  if (assigned === null) return [null];
+  if (assigned.length > 0) return assigned;
+
+  const present = await dockerService.getAppContainerObjects(instantiated.name).catch(() => []);
+  const replicasPresent = [...new Set(present.map((c) => (c.Labels && c.Labels['runonflux.replica']) || null))];
+  return replicasPresent.length > 0 ? replicasPresent : [null];
 }
 
 /**
@@ -189,6 +249,9 @@ module.exports = {
   resolveLinkedAppNames,
   resolveLocalReplica,
   resolveLocalReplicas,
+  resolveDeploymentIdentity,
+  assignedIdentities,
+  localIdentities,
   buildDeployment: toDeployment,
   buildDeployments: toDeployments,
 };
