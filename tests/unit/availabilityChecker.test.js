@@ -10,7 +10,6 @@ const axios = require('axios');
 const config = require('config');
 
 const availabilityChecker = require('../../ZelBack/src/services/appMonitoring/availabilityChecker');
-const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
@@ -32,6 +31,12 @@ describe('availabilityChecker tests', () => {
   beforeEach(() => {
     listInstalledAppsStub = sinon.stub(appsRepository, 'listInstalledApps').resolves([]);
     buildDeploymentStub = sinon.stub(deploymentProvider, 'buildDeployment');
+    // Delegates at call time so per-test overrides of buildDeployment flow
+    // through the plural entry the checker uses.
+    sinon.stub(deploymentProvider, 'buildDeployments').callsFake(async (inst) => {
+      const deployment = await deploymentProvider.buildDeployment(inst);
+      return deployment ? [deployment] : [];
+    });
     mockDosState = {
       dosMessage: null,
       dosMountMessage: null,

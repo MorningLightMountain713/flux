@@ -39,7 +39,18 @@ describe('containerHealthMonitor tests', () => {
     };
 
     appsRepositoryStub = { getInstalledApp: sinon.stub().resolves(instantiated) };
-    deploymentProviderStub = { buildDeployment: sinon.stub().resolves(fakeDeployment) };
+    deploymentProviderStub = {
+      buildDeployment: sinon.stub().resolves(fakeDeployment),
+      // Delegates at call time so per-test overrides of buildDeployment flow
+      // through the plural (whole-app) entry the monitor uses.
+      get buildDeployments() {
+        const single = this.buildDeployment;
+        return async (inst) => {
+          const deployment = await single(inst);
+          return deployment ? [deployment] : [];
+        };
+      },
+    };
     shutdownPlanStub = { appRequiresDaemonShutdown: sinon.stub().returns(true) };
     dockerServiceStub = { getDockerContainer: sinon.stub().resolves(null) };
     componentProvisionerStub = { installComponent: sinon.stub().resolves() };

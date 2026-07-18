@@ -22,6 +22,15 @@ const appsRepositoryMock = {
 
 const deploymentProviderMock = {
   buildDeployment: sinon.stub(),
+  // Delegates at call time so per-test withArgs overrides (incl. rejects)
+  // flow through the plural entry the cleanup uses.
+  get buildDeployments() {
+    const single = this.buildDeployment;
+    return async (inst) => {
+      const deployment = await single(inst);
+      return deployment ? [deployment] : [];
+    };
+  },
 };
 
 const dockerServiceMock = {

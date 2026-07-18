@@ -19,6 +19,19 @@ const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepos
 const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
 
 describe('appOperations tests', () => {
+  beforeEach(() => {
+    // Delegate the plural provider entries to the singular stubs each test
+    // installs, at call time, so per-test failure injection flows through.
+    sinon.stub(deploymentProvider, 'getInstalledDeployments').callsFake(async (name) => {
+      const deployment = await deploymentProvider.getInstalledDeployment(name);
+      return deployment ? [deployment] : [];
+    });
+    sinon.stub(deploymentProvider, 'buildDeployments').callsFake(async (inst) => {
+      const deployment = await deploymentProvider.buildDeployment(inst, { replica: null });
+      return deployment ? [deployment] : [];
+    });
+  });
+
   afterEach(() => {
     sinon.restore();
     operationRegistry.clear();
