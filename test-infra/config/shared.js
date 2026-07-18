@@ -1,6 +1,7 @@
 module.exports = {
   testEventStream: true,
   logConsole: true,
+  logLevel: 'debug',
   fluxTeamFluxID: '19J4Ef396goaQhrqgNLTFvtCXYqjFAx2Js',
   daemon: { host: '198.18.0.3' },
   benchmark: { host: '198.18.0.3' },

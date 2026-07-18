@@ -55,8 +55,7 @@ RUN mkdir -p /flux/CloudUI \
     && echo '<!doctype html><title>CloudUI harness placeholder</title>' > /flux/CloudUI/index.html \
     && echo 'harness-prebaked' > /flux/CloudUI/version
 
-RUN touch /flux/debug.log /flux/error.log /flux/info.log /flux/warn.log \
-    && ln -s /flux /root/zelflux
+RUN ln -s /flux /root/zelflux
 
 ENV NODE_CONFIG_DIR=/flux/ZelBack/config
 

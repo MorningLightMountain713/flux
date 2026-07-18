@@ -107,6 +107,12 @@ module.exports = {
       },
     },
   },
+  // Log verbosity (pino level names: error/warn/info/debug). Where systemd
+  // runs fluxos, stdout is the one sink and journald owns storage; elsewhere
+  // a rolling fluxos.N.log is written beside the checkout, and logConsole
+  // additionally mirrors NDJSON to stdout (dev + the test harness — humans
+  // pipe through pino-pretty).
+  logLevel: 'info',
   logConsole: false,
   upnp: {
     gatewayUrl: '',

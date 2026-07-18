@@ -32,6 +32,7 @@ const daemonServiceBenchmarkRpcs = require('../../ZelBack/src/services/daemonSer
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+const logLib = require('../../ZelBack/src/lib/log');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const geolocationService = require('../../ZelBack/src/services/geolocationService');
 const packageJson = require('../../package.json');
@@ -72,6 +73,8 @@ const generateResponse = () => {
   res.status = sinon.stub().returns(res);
   res.json = sinon.fake((param) => `Response: ${param}`);
   res.download = sinon.fake(() => 'File downloaded');
+  res.attachment = sinon.stub();
+  res.send = sinon.fake(() => 'Sent');
   res.end = sinon.stub();
   return res;
 };
@@ -1459,139 +1462,111 @@ describe('fluxService tests', () => {
     });
   });
 
-  describe('fluxLog tests', () => {
-    it('should trigger download ', async () => {
-      const res = generateResponse();
-      const filename = 'test';
-      const filepath = path.join(__dirname, `../../${filename}.log`);
-
-      await fluxService.fluxLog(res, filename);
-
-      sinon.assert.calledOnceWithExactly(res.download, filepath, `${filename}.log`);
-    });
-  });
-
-  describe('fluxErrorLog tests', () => {
+  describe('flux log endpoints (sink-aware)', () => {
+    const tmpLog = path.join(os.tmpdir(), 'fluxservice-log-endpoint-test.log');
+    const FIXTURE = [
+      '{"level":30,"time":"2026-07-18T10:00:00.000Z","msg":"an info line"}',
+      '{"level":40,"time":"2026-07-18T10:00:01.000Z","msg":"a warn line"}',
+      '{"level":50,"time":"2026-07-18T10:00:02.000Z","err":{"type":"Error","message":"boom","stack":"Error: boom\\n    at x"},"msg":"boom"}',
+      'a stray non-json stdout line',
+    ].join('\n');
     let verifyPrivilegeStub;
+    let sinkInfoStub;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
+      await fs.writeFile(tmpLog, FIXTURE);
+      sinkInfoStub = sinon.stub(logLib, 'sinkInfo').returns({ journald: false, file: tmpLog });
     });
 
     afterEach(() => {
       sinon.restore();
     });
 
-    it('should return error when unauthorized ', async () => {
+    it('fluxLog serves the selected level as a rendered .log attachment', async () => {
       const res = generateResponse();
-      verifyPrivilegeStub.returns(false);
-      const expectedResponse = {
-        data: {
-          code: 401,
-          message: 'Unauthorized. Access denied.',
-          name: 'Unauthorized',
-        },
-        status: 'error',
-      };
-      await fluxService.fluxErrorLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
+      await fluxService.fluxLog(res, 'error');
+      sinon.assert.calledOnceWithExactly(res.attachment, 'error.log');
+      const text = res.send.firstCall.args[0];
+      expect(text).to.include('2026-07-18T10:00:02.000Z ERROR boom');
+      expect(text).to.include('Error: boom');
+      expect(text).to.not.include('an info line');
+      expect(text).to.not.include('a warn line');
     });
 
-    it('should return file download', async () => {
+    it('warn serves exactly warn; info includes non-NDJSON strays; debug serves everything', async () => {
+      const res1 = generateResponse();
+      await fluxService.fluxLog(res1, 'warn');
+      expect(res1.send.firstCall.args[0]).to.include('WARN a warn line');
+      expect(res1.send.firstCall.args[0]).to.not.include('an info line');
+
+      const res2 = generateResponse();
+      await fluxService.fluxLog(res2, 'info');
+      expect(res2.send.firstCall.args[0]).to.include('INFO an info line');
+      expect(res2.send.firstCall.args[0]).to.include('a stray non-json stdout line');
+      expect(res2.send.firstCall.args[0]).to.not.include('boom');
+
+      const res3 = generateResponse();
+      await fluxService.fluxLog(res3, 'debug');
+      const all = res3.send.firstCall.args[0];
+      expect(all).to.include('an info line');
+      expect(all).to.include('a warn line');
+      expect(all).to.include('ERROR boom');
+      expect(all).to.include('a stray non-json stdout line');
+    });
+
+    it('under journald the lines come from journalctl -u fluxos -o json', async () => {
+      sinkInfoStub.returns({ journald: true, file: null });
+      const journal = [
+        JSON.stringify({ MESSAGE: '{"level":50,"time":"2026-07-18T11:00:00.000Z","msg":"journal error"}' }),
+        JSON.stringify({ MESSAGE: '{"level":30,"time":"2026-07-18T11:00:01.000Z","msg":"journal info"}' }),
+      ].join('\n');
+      const runCmdStub = sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: journal });
+
       const res = generateResponse();
-      verifyPrivilegeStub.returns(true);
-      const filepath = path.join(__dirname, '../../error.log');
+      await fluxService.fluxLog(res, 'error');
 
-      await fluxService.fluxErrorLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.download, filepath, 'error.log');
-    });
-  });
-
-  describe('fluxInfoLog tests', () => {
-    let verifyPrivilegeStub;
-
-    beforeEach(() => {
-      verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
+      sinon.assert.calledWithMatch(runCmdStub, 'journalctl', {
+        params: ['-u', 'fluxos', '-o', 'json', '-n', '100000', '--no-pager'],
+      });
+      expect(res.send.firstCall.args[0]).to.include('ERROR journal error');
+      expect(res.send.firstCall.args[0]).to.not.include('journal info');
     });
 
-    afterEach(() => {
-      sinon.restore();
-    });
+    for (const [fn, level] of [
+      ['fluxErrorLog', 'error.log'], ['fluxWarnLog', 'warn.log'],
+      ['fluxInfoLog', 'info.log'], ['fluxDebugLog', 'debug.log'],
+    ]) {
+      it(`${fn} rejects unauthorized users`, async () => {
+        const res = generateResponse();
+        verifyPrivilegeStub.returns(false);
+        const expectedResponse = {
+          data: { code: 401, message: 'Unauthorized. Access denied.', name: 'Unauthorized' },
+          status: 'error',
+        };
+        await fluxService[fn](undefined, res);
+        sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
+      });
 
-    it('should return error when unauthorized ', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(false);
-      const expectedResponse = {
-        data: {
-          code: 401,
-          message: 'Unauthorized. Access denied.',
-          name: 'Unauthorized',
-        },
-        status: 'error',
-      };
-      await fluxService.fluxInfoLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-    });
-
-    it('should return file download', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(true);
-      const filepath = path.join(__dirname, '../../info.log');
-
-      await fluxService.fluxInfoLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.download, filepath, 'info.log');
-    });
-  });
-
-  describe('fluxDebugLog tests', () => {
-    let verifyPrivilegeStub;
-
-    beforeEach(() => {
-      verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('should return error when unauthorized ', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(false);
-      const expectedResponse = {
-        data: {
-          code: 401,
-          message: 'Unauthorized. Access denied.',
-          name: 'Unauthorized',
-        },
-        status: 'error',
-      };
-      await fluxService.fluxDebugLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-    });
-
-    it('should return file download', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(true);
-      const filepath = path.join(__dirname, '../../debug.log');
-
-      await fluxService.fluxDebugLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.download, filepath, 'debug.log');
-    });
+      it(`${fn} serves the attachment when authorized`, async () => {
+        const res = generateResponse();
+        verifyPrivilegeStub.returns(true);
+        await fluxService[fn](undefined, res);
+        await serviceHelper.delay(50);
+        sinon.assert.calledOnceWithExactly(res.attachment, level);
+      });
+    }
   });
 
   describe('tailFluxLog tests', () => {
+    const tmpLog = path.join(os.tmpdir(), 'fluxservice-log-endpoint-test.log');
     let verifyPrivilegeStub;
-    let runCmdStub;
+    let sinkInfoStub;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
-      runCmdStub = sinon.stub(serviceHelper, 'runCommand');
+      await fs.writeFile(tmpLog, '{"level":30,"time":"2026-07-18T10:00:00.000Z","msg":"tail me"}');
+      sinkInfoStub = sinon.stub(logLib, 'sinkInfo').returns({ journald: false, file: tmpLog });
     });
 
     afterEach(() => {
@@ -1602,247 +1577,72 @@ describe('fluxService tests', () => {
       verifyPrivilegeStub.returns(false);
       const res = generateResponse();
       const expectedResponse = {
-        data: {
-          code: 401,
-          message: 'Unauthorized. Access denied.',
-          name: 'Unauthorized',
-        },
+        data: { code: 401, message: 'Unauthorized. Access denied.', name: 'Unauthorized' },
         status: 'error',
       };
-
       await fluxService.tailFluxLog(undefined, res);
-
       sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
     });
 
-    it('should return debug log file if the user is an admin', async () => {
+    it('returns the last lines as a success message when authorized', async () => {
       verifyPrivilegeStub.returns(true);
       const res = generateResponse();
-      runCmdStub.resolves({ error: null, stdout: 'success message' });
-
-      await fluxService.tailFluxLog(undefined, res);
-      await serviceHelper.delay(200);
-
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'success',
-        data: { code: undefined, name: undefined, message: 'success message' },
-      });
+      await fluxService.tailFluxLog(undefined, res, 'info');
+      const payload = res.json.firstCall.args[0];
+      expect(payload.status).to.equal('success');
+      expect(payload.data.message).to.include('INFO tail me');
     });
 
-    it('should return error if cmd exec throws error ', async () => {
+    it('should return error if the journal read fails', async () => {
       verifyPrivilegeStub.returns(true);
-      runCmdStub.resolves({
-        error: {
-          message: 'This is an error',
-          code: 403,
-          name: 'testing error',
-        },
+      sinkInfoStub.returns({ journald: true, file: null });
+      sinon.stub(serviceHelper, 'runCommand').resolves({
+        error: { message: 'This is an error', code: 403, name: 'testing error' },
       });
-      const nodePath = path.join(__dirname, '../../test.log');
       const expectedResponse = {
-        data: {
-          code: 403,
-          message: 'Error obtaining Flux log file: This is an error',
-          name: 'testing error',
-        },
+        data: { code: 403, message: 'Error obtaining Flux log file: This is an error', name: 'testing error' },
         status: 'error',
       };
       const res = generateResponse();
-
-      await fluxService.tailFluxLog(undefined, res, 'test');
-      await serviceHelper.delay(200);
-
+      await fluxService.tailFluxLog(undefined, res, 'debug');
       sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-      sinon.assert.calledWithMatch(runCmdStub, 'tail', { params: ['-n', '100', nodePath] });
     });
   });
 
-  describe('tailFluxErrorLog tests', () => {
+  describe('tail level wrappers', () => {
+    const tmpLog = path.join(os.tmpdir(), 'fluxservice-log-endpoint-test.log');
     let verifyPrivilegeStub;
-    let runCmdStub;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
-      runCmdStub = sinon.stub(serviceHelper, 'runCommand');
+      await fs.writeFile(tmpLog, '{"level":50,"time":"2026-07-18T10:00:00.000Z","msg":"tail err"}');
+      sinon.stub(logLib, 'sinkInfo').returns({ journald: false, file: tmpLog });
     });
 
     afterEach(() => {
       sinon.restore();
     });
 
-    it('should return error when unauthorized', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(false);
-      const expectedResponse = {
-        data: {
-          code: 401,
-          message: 'Unauthorized. Access denied.',
-          name: 'Unauthorized',
-        },
-        status: 'error',
-      };
-      await fluxService.tailFluxErrorLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-    });
-
-    it('should return file download', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(true);
-      runCmdStub.resolves({ error: null, stdout: 'success message' });
-
-      await fluxService.tailFluxErrorLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'success',
-        data: {
-          code: undefined,
-          name: undefined,
-          message: 'success message',
-        },
+    for (const fn of ['tailFluxErrorLog', 'tailFluxWarnLog', 'tailFluxInfoLog', 'tailFluxDebugLog']) {
+      it(`${fn} rejects unauthorized users`, async () => {
+        const res = generateResponse();
+        verifyPrivilegeStub.returns(false);
+        const expectedResponse = {
+          data: { code: 401, message: 'Unauthorized. Access denied.', name: 'Unauthorized' },
+          status: 'error',
+        };
+        await fluxService[fn](undefined, res);
+        sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
       });
-    });
-  });
 
-  describe('tailFluxWarnLog tests', () => {
-    let verifyPrivilegeStub;
-    let runCmdStub;
-
-    beforeEach(() => {
-      verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
-      runCmdStub = sinon.stub(serviceHelper, 'runCommand');
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('should return error when unauthorized ', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(false);
-      const expectedResponse = {
-        data: {
-          code: 401,
-          message: 'Unauthorized. Access denied.',
-          name: 'Unauthorized',
-        },
-        status: 'error',
-      };
-      await fluxService.tailFluxWarnLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-    });
-
-    it('should return file download', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(true);
-      runCmdStub.resolves({ error: null, stdout: 'success message' });
-
-      await fluxService.tailFluxWarnLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'success',
-        data: {
-          code: undefined,
-          name: undefined,
-          message: 'success message',
-        },
+      it(`${fn} returns a success message when authorized`, async () => {
+        const res = generateResponse();
+        verifyPrivilegeStub.returns(true);
+        await fluxService[fn](undefined, res);
+        const payload = res.json.firstCall.args[0];
+        expect(payload.status).to.equal('success');
       });
-    });
-  });
-
-  describe('tailFluxInfoLog tests', () => {
-    let verifyPrivilegeStub;
-    let runCmdStub;
-
-    beforeEach(() => {
-      verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
-      runCmdStub = sinon.stub(serviceHelper, 'runCommand');
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('should return error when unauthorized ', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(false);
-      const expectedResponse = {
-        data: {
-          code: 401,
-          message: 'Unauthorized. Access denied.',
-          name: 'Unauthorized',
-        },
-        status: 'error',
-      };
-      await fluxService.tailFluxInfoLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-    });
-
-    it('should return file download', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(true);
-      runCmdStub.resolves({ error: null, stdout: 'success message' });
-
-      await fluxService.tailFluxInfoLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'success',
-        data: {
-          code: undefined,
-          name: undefined,
-          message: 'success message',
-        },
-      });
-    });
-  });
-
-  describe('tailFluxDebugLog tests', () => {
-    let verifyPrivilegeStub;
-    let runCmdStub;
-
-    beforeEach(() => {
-      verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
-      runCmdStub = sinon.stub(serviceHelper, 'runCommand');
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('should return error when unauthorized ', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(false);
-      const expectedResponse = {
-        data: {
-          code: 401,
-          message: 'Unauthorized. Access denied.',
-          name: 'Unauthorized',
-        },
-        status: 'error',
-      };
-      await fluxService.tailFluxDebugLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-    });
-
-    it('should return file download', async () => {
-      const res = generateResponse();
-      verifyPrivilegeStub.returns(true);
-      runCmdStub.resolves({ error: null, stdout: 'success message' });
-
-      await fluxService.tailFluxDebugLog(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'success',
-        data: {
-          code: undefined,
-          name: undefined,
-          message: 'success message',
-        },
-      });
-    });
+    }
   });
 
   describe('getFluxTimezone tests', () => {
