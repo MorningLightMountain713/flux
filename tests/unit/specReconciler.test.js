@@ -15,6 +15,7 @@ const globalState = require('../../ZelBack/src/services/utils/globalState');
 const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
 const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+const dockerService = require('../../ZelBack/src/services/dockerService');
 
 describe('specReconciler tests', () => {
   const LOCAL_IP = '44.55.66.77:16127';
@@ -55,6 +56,9 @@ describe('specReconciler tests', () => {
     sinon.stub(appsRepository, 'listInstalledApps').resolves(installed);
     sinon.stub(appsRepository, 'listGlobalAppInfo').resolves(globalRows);
     sinon.stub(registryManager, 'getScannedHeight').resolves(1000000);
+    // The named-mode per-identity diff enumerates this app's containers; no
+    // real docker in unit tests (and none of these fixtures have containers).
+    sinon.stub(dockerService, 'getAppContainerObjects').resolves([]);
     appLocationStub = sinon.stub(registryManager, 'appLocation').resolves([]);
     uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves({ status: appUninstaller.UninstallStatus.REMOVED });
     reconcileAppStub = sinon.stub(appOperations, 'reconcileApp').resolves();
@@ -134,7 +138,35 @@ describe('specReconciler tests', () => {
       expect(appLocationStub.called, 'named mode never counts instances').to.equal(false);
     });
 
-    it('leaves the app untouched when a co-located union fails the resolution loud', async () => {
+    it('sheds exactly a de-targeted identity: the sibling replica is untouched', async () => {
+      const blob = { targetIps: { '44.55.66.77': ['s1'] } };
+      setup({
+        installed: [await specWith(blob)],
+        globalRows: [await specWith(blob)],
+      });
+      // The node still runs s1 AND s2, but the spec now assigns only s1.
+      dockerService.getAppContainerObjects.resolves([
+        { Names: ['/fluxweb_myapp_s1'], Labels: { 'runonflux.app': 'myapp', 'runonflux.replica': 's1' } },
+        { Names: ['/fluxweb_myapp_s2'], Labels: { 'runonflux.app': 'myapp', 'runonflux.replica': 's2' } },
+      ]);
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true, replica: 's2' }))).to.equal(true);
+    });
+
+    it('requalifies a pre-qualification install: the unlabeled identity is shed', async () => {
+      const blob = { targetIps: { '44.55.66.77': ['s1'] } };
+      setup({
+        installed: [await specWith(blob)],
+        globalRows: [await specWith(blob)],
+      });
+      dockerService.getAppContainerObjects.resolves([
+        { Names: ['/fluxweb_myapp'], Labels: { 'runonflux.app': 'myapp' } },
+      ]);
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true, replica: null }))).to.equal(true);
+    });
+
+    it('a co-located union with nothing locally present removes nothing', async () => {
       const blob = {
         targetIps: { '44.55.66.77': ['s1'] },
         targetOutpoints: { [`${OUTPOINT_TXID}:0`]: ['s2'] },
@@ -144,7 +176,7 @@ describe('specReconciler tests', () => {
         globalRows: [await specWith(blob)],
       });
       await specReconciler.requestFullConvergence({ reason: 'test' });
-      expect(uninstallStub.called, 'a failed resolution must not remove anything').to.equal(false);
+      expect(uninstallStub.called, 'assigned identities with no local containers must not remove anything').to.equal(false);
     });
   });
 

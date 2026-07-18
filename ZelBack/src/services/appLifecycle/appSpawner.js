@@ -994,7 +994,7 @@ async function trySpawningGlobalApplication() {
     // install the app
     let installResult;
     try {
-      installResult = await appInstaller.installApplication(instantiated);
+      installResult = await appInstaller.installAssignedReplicas(instantiated);
     } catch (error) {
       log.error(error);
       installResult = { status: appInstaller.InstallStatus.FAILED, reason: error.message || String(error) };

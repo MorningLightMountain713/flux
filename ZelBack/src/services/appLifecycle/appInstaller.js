@@ -119,6 +119,10 @@ async function installApplication(instantiated, options = {}) {
   const test = options.test || false;
   const createVolumes = options.createVolumes !== false;
   const sendRemovalMessage = options.sendRemovalMessage || false;
+  // The identity this install provisions: a replica name (named placement) or
+  // null (loose). Normalized to a definite value right after the lease, so
+  // every downstream build/uninstall passes a uniform { replica }.
+  let replica = 'replica' in options ? options.replica : undefined;
   const appName = instantiated.name;
   // Hoisted out of the try so the post-finally converge-wait can read its components.
   let deployment;
@@ -158,6 +162,10 @@ async function installApplication(instantiated, options = {}) {
       throw new Error('Unable to detect Flux IP address');
     }
 
+    if (replica === undefined) {
+      replica = await deploymentProvider.resolveDeploymentIdentity(instantiated);
+    }
+
     log.info('Running initial checks for Flux App...');
     if (onStatus) onStatus({ status: 'Running initial checks for Flux App...' });
 
@@ -168,8 +176,20 @@ async function installApplication(instantiated, options = {}) {
     log.info('Checking database...');
     if (onStatus) onStatus({ status: 'Checking database...' });
     if (await appsRepository.existsInstalledApp(appName)) {
-      log.error(`Flux App ${appName} already installed`);
-      return { status: InstallStatus.SKIPPED, reason: `Flux App ${appName} already installed` };
+      if (replica == null) {
+        log.error(`Flux App ${appName} already installed`);
+        return { status: InstallStatus.SKIPPED, reason: `Flux App ${appName} already installed` };
+      }
+      // The row is per APP; a sibling replica's install wrote it. This replica
+      // is installed iff its own containers exist (labels are the identity
+      // authority; the name suffix covers pre-label containers).
+      const appContainers = await dockerService.getAppContainerObjects(appName);
+      const replicaPresent = appContainers.some((c) => (c.Labels && c.Labels['runonflux.replica']) === replica
+        || (c.Names || []).some((n) => n.endsWith(`_${replica}`)));
+      if (replicaPresent) {
+        log.error(`Flux App ${appName} replica ${replica} already installed`);
+        return { status: InstallStatus.SKIPPED, reason: `Flux App ${appName} replica ${replica} already installed` };
+      }
     }
 
     // Install-side interlock (cancel-vs-install): refuse to adopt a name while a teardown
@@ -198,7 +218,7 @@ async function installApplication(instantiated, options = {}) {
       return { status: InstallStatus.REJECTED, reason };
     }
 
-    deployment = await deploymentProvider.buildDeployment(instantiated);
+    deployment = await deploymentProvider.buildDeployment(instantiated, { replica });
     // Check resources and reserve them atomically: two concurrent installs of
     // different apps must not both pass before either is accounted (the in-flight
     // double-admit race). The reservation is released once the app is durably in
@@ -270,14 +290,23 @@ async function installApplication(instantiated, options = {}) {
     const dbSpecs = instantiated.serialize();
 
     if (await appsRepository.existsInstalledApp(appName)) {
-      log.warn(`Found existing database entry for ${appName} during registration. Cleaning up stale entry.`);
-      await appsRepository.removeInstalledApp(appName);
-      log.info(`Stale database entry for ${appName} removed. Proceeding with fresh insert.`);
+      if (replica != null) {
+        // The row is per APP and a sibling replica owns it; refresh the spec
+        // content in place - never remove it out from under the sibling.
+        log.info(`Database entry for ${appName} already present (sibling replica); upserting spec`);
+        await appsRepository.upsertInstalledApp(appName, dbSpecs);
+      } else {
+        log.warn(`Found existing database entry for ${appName} during registration. Cleaning up stale entry.`);
+        await appsRepository.removeInstalledApp(appName);
+        log.info(`Stale database entry for ${appName} removed. Proceeding with fresh insert.`);
+      }
     }
 
-    const insertResult = await appsRepository.insertInstalledApp(dbSpecs);
-    if (!insertResult) {
-      throw new Error(`CRITICAL: Failed to create database entry for ${appName}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
+    if (!await appsRepository.existsInstalledApp(appName)) {
+      const insertResult = await appsRepository.insertInstalledApp(dbSpecs);
+      if (!insertResult) {
+        throw new Error(`CRITICAL: Failed to create database entry for ${appName}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
+      }
     }
     log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
     // Now counted by appsResources (it is in the DB); drop the pending reservation
@@ -290,7 +319,9 @@ async function installApplication(instantiated, options = {}) {
       }
       log.info(`Database entry validated for ${appName} before Docker container creation`);
 
-      const deployment = await deploymentProvider.getInstalledDeployment(appName);
+      const freshInst = await appsRepository.getInstalledApp(appName);
+      if (!freshInst) throw new Error(`Failed to read back installed spec for ${appName}`);
+      const deployment = await deploymentProvider.buildDeployment(freshInst, { replica });
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
 
       // Record this app's telemetry sink (Arcane-only; null/no-op otherwise)
@@ -454,7 +485,7 @@ async function installApplication(instantiated, options = {}) {
       }
       log.info(`Error occured. Initiating Flux App ${appName} removal`);
       if (onStatus) onStatus(messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appName} removal`));
-      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
+      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus, replica });
       log.info(`Cleanup completed for ${appName} after installation failure`);
 
       // A linked dependency's network vanished mid-install (attach-time
@@ -489,7 +520,7 @@ async function installApplication(instantiated, options = {}) {
     admissionControl.release(appName);
     if (test) {
       try {
-        await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true });
+        await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, replica });
         log.info(`Test cleanup completed for ${appName}`);
       } catch (cleanupError) {
         log.error(`Error during test cleanup for ${appName}: ${cleanupError.message}`);
@@ -523,7 +554,7 @@ async function installApplication(instantiated, options = {}) {
       // the broken app from scratch.
       await storeAndBroadcastInstallError(appName, instantiated.hash,
         new Error(`App ${appName} failed its install trial: ${failed.join(', ')} never completed a successful run`));
-      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus });
+      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus, replica });
       return { status: InstallStatus.FAILED, reason: `PROVISIONED-BUT-NOT-RUNNING: ${failed.join(', ')}` };
     }
   }
@@ -664,9 +695,47 @@ async function testInstallApplicationAPI(req, res) {
   }
 }
 
+// Worst-first: any failure outranks a rejection outranks a deferral; a fully
+// skipped fan-out reports SKIPPED, anything actually installed reports INSTALLED.
+const STATUS_SEVERITY = [
+  InstallStatus.FAILED, InstallStatus.REJECTED, InstallStatus.DEFERRED,
+  InstallStatus.INSTALLED, InstallStatus.SKIPPED,
+];
+
+/**
+ * Install every identity this node is assigned for a spec, sequentially - the
+ * per-app operation lease serializes replica operations by design, and the
+ * per-identity skip guard makes an already-present replica a no-op, so this is
+ * the one installer entry a driver (spawner, adoption) needs. Loose placement
+ * installs the single unqualified identity, exactly today's install.
+ *
+ * @param {object} instantiated - InstantiatedSpec
+ * @param {object} [options] - forwarded to installApplication per identity
+ * @returns {Promise<{status: string, reason: string|null, results: object[]}>}
+ *   the worst per-identity outcome, with every identity's result attached
+ */
+async function installAssignedReplicas(instantiated, options = {}) {
+  const identities = await deploymentProvider.assignedIdentities(instantiated);
+  const results = [];
+  // eslint-disable-next-line no-restricted-syntax
+  for (const identity of identities) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await installApplication(instantiated, { ...options, replica: identity });
+    results.push({ replica: identity, ...result });
+  }
+  if (results.length === 0) {
+    return { status: InstallStatus.SKIPPED, reason: `${instantiated.name} names no replicas for this node`, results };
+  }
+  const worst = results.reduce((acc, r) => (
+    STATUS_SEVERITY.indexOf(r.status) < STATUS_SEVERITY.indexOf(acc.status) ? r : acc
+  ));
+  return { status: worst.status, reason: worst.reason, results };
+}
+
 module.exports = {
   InstallStatus,
   installApplication,
+  installAssignedReplicas,
   installApplicationAPI,
   testInstallApplicationAPI,
   setOnInstallComplete,

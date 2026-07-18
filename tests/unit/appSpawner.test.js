@@ -273,6 +273,15 @@ describe('appSpawner tests', () => {
       './appInstaller': {
         InstallStatus,
         installApplication: opts.installStub ?? sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null }),
+        // Delegates at call time so per-test overrides of installApplication
+        // flow through the fan-out entry the spawner now uses.
+        get installAssignedReplicas() {
+          const single = this.installApplication;
+          return async (inst, o = {}) => {
+            const result = await single(inst, { ...o, replica: null });
+            return { ...result, results: [{ replica: null, ...result }] };
+          };
+        },
       },
       './appNetworkLinker': {
         // Default: every candidate's network links are satisfied and no candidate

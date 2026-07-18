@@ -186,6 +186,7 @@ describe('appInstaller tests', () => {
       },
       '../appRuntime/deploymentProvider': {
         listInstalledDeployments: sinon.stub().resolves([]),
+        resolveDeploymentIdentity: sinon.stub().resolves(null),
       },
       './appVolumeService': {
         createAppVolume: sinon.stub().resolves(),
@@ -465,12 +466,14 @@ describe('appInstaller tests', () => {
           existsInstalledApp: (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
           insertInstalledApp: sinon.stub().resolves({ insertedId: 'id1' }),
           removeInstalledApp: sinon.stub().resolves(),
+          getInstalledApp: sinon.stub().resolves({ name: 'newapp' }),
           getTempMessageByName: sinon.stub().resolves(null),
         },
         '../appRuntime/deploymentProvider': {
           listInstalledDeployments: sinon.stub().resolves([]),
           getInstalledDeployment: sinon.stub().resolves(deployment),
           buildDeployment: sinon.stub().resolves(deployment),
+          resolveDeploymentIdentity: sinon.stub().resolves(null),
         },
         './appVolumeService': { createAppVolume: sinon.stub().resolves() },
         '../utils/specLibs': { getSpecBackend: sinon.stub().resolves({}) },

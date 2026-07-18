@@ -600,6 +600,10 @@ async function uninstallApplication(appName, options = {}) {
     reason = null,
     operatorForce = false,
   } = options;
+  // The identity this removal targets: a replica name tears down ONLY that
+  // replica's containers/volumes (the app row survives while a sibling
+  // remains); omitted/null removes the whole app as today.
+  const replica = 'replica' in options ? options.replica : undefined;
 
   const status = (msg) => {
     log.info(msg);
@@ -722,9 +726,27 @@ async function uninstallApplication(appName, options = {}) {
     // durable record below carries everything the deferred worker needs, so the local
     // install row can be deleted up front (every reader then sees the app as gone). An
     // app whose deployment can't be built falls back to one best-effort descriptor.
-    const deployment = await deploymentProvider.getInstalledDeployment(appName);
+    // A replica-targeted removal captures THAT identity's view (qualified
+    // identifiers), so the teardown touches only its containers and volumes. A
+    // whole-app removal captures every identity this node owes
+    // (deploymentProvider.localIdentities: assigned replicas, or the ones
+    // actually present when the spec no longer targets this node).
+    let deployments = [];
+    try {
+      const identities = replica !== undefined ? [replica] : await deploymentProvider.localIdentities(spec);
+      // eslint-disable-next-line no-restricted-syntax
+      for (const identity of identities) {
+        // eslint-disable-next-line no-await-in-loop
+        const deployment = await deploymentProvider.buildDeployment(spec, { replica: identity });
+        if (deployment) deployments.push(deployment);
+      }
+    } catch (err) {
+      log.warn(`uninstall ${appName}: deployment build failed (${err.message}); using best-effort descriptor`);
+      deployments = [];
+    }
     const components = [];
-    if (deployment) {
+    // eslint-disable-next-line no-restricted-syntax
+    for (const deployment of deployments) {
       // eslint-disable-next-line no-restricted-syntax
       for (const [, c] of deployment.componentEntries({ reverse: true })) {
         components.push({
@@ -744,9 +766,12 @@ async function uninstallApplication(appName, options = {}) {
     }
 
     // The durable owed-teardown record — the crash-safe handoff to the deferred worker.
+    // A replica-targeted removal keys its own record so a sibling's teardown can
+    // coexist; `name` stays the app for the owed-teardown install gate.
     teardownDoc = {
-      key: appName,
+      key: replica != null ? `${appName}_${replica}` : appName,
       name: appName,
+      replica: replica ?? null,
       networkName: appName,
       forceKill,
       broadcastRemoval,
@@ -754,7 +779,7 @@ async function uninstallApplication(appName, options = {}) {
       // The stop reason + budget the deferred teardown hands flux-shutdownd. Persisted
       // because the authoritative spec may be gone by teardown time.
       reason,
-      shutdownBudgetSeconds: deployment ? shutdownPlan.appShutdownBudgetSeconds(deployment) : 0,
+      shutdownBudgetSeconds: deployments[0] ? shutdownPlan.appShutdownBudgetSeconds(deployments[0]) : 0,
       createdAt: Date.now(),
       attempts: 0,
       components,
@@ -788,22 +813,39 @@ async function uninstallApplication(appName, options = {}) {
     fluxEventBus.publish('app:removed', { name: appName });
     // Tell the network it's gone NOW — fire-and-forget, never blocking the prelude on a
     // broadcast — and drop it from the local running-apps cache.
+    // A sibling replica keeps the app alive on this node: its containers still
+    // run, so the install row and the running-name cache must survive - only
+    // the last identity's removal deletes them. (An old peer receiving the
+    // replica-tagged appremoved clears its whole collapsed row; the sibling's
+    // next presence broadcast recreates it within a cycle.)
+    let lastReplica = true;
+    if (replica != null) {
+      const remaining = await dockerService.getAppContainerObjects(appName).catch(() => []);
+      lastReplica = !remaining.some((c) => {
+        const r = (c.Labels && c.Labels['runonflux.replica']) || null;
+        return r != null && r !== replica;
+      });
+    }
     if (broadcastRemoval) {
       const ip = await fluxNetworkHelper.getLocalSocketAddress();
       if (ip) {
         const appRemovedMessage = {
           type: 'fluxappremoved', version: 1, appName, ip, broadcastedAt: Date.now(),
+          ...(replica != null ? { replica } : {}),
         };
         log.info('Broadcasting appremoved message to the network');
         fluxCommunicationMessagesSender.broadcastMessageToAll(appRemovedMessage)
           .catch((e) => log.warn(`appremoved broadcast failed: ${e.message}`));
-        const { runningAppsCache } = globalState;
-        if (runningAppsCache.has(appName)) runningAppsCache.delete(appName);
+        if (lastReplica) {
+          const { runningAppsCache } = globalState;
+          if (runningAppsCache.has(appName)) runningAppsCache.delete(appName);
+        }
       }
     }
-    // Delete the local install row so every reader sees the app as gone with zero filtering.
-    const appsDatabase = dbHelper.databaseConnection().db(config.database.appslocal.database);
-    await dbHelper.findOneAndDeleteInDatabase(appsDatabase, localAppsInformation, { name: appName }, {});
+    if (lastReplica) {
+      // Delete the local install row so every reader sees the app as gone with zero filtering.
+      await appsRepository.removeInstalledApp(appName);
+    }
 
     // Drive the deferred destructive teardown. A background removal (cancel/expiry) fires
     // it and returns now; a foreground removal (redeploy/rollback/REST) awaits it.
