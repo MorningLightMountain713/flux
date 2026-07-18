@@ -54,11 +54,14 @@ describe('telemetryIdentityService tests', () => {
 
   describe('parseContainerName', () => {
     it('parses a flux-prefixed name', () => {
-      expect(service.parseContainerName('fluxMyApp')).to.deep.equal({ appName: 'MyApp', componentName: null });
+      expect(service.parseContainerName('fluxMyApp')).to.deep.equal({ appName: 'MyApp', componentName: null, replica: null });
     });
 
-    it('parses a component name (first underscore is the separator)', () => {
-      expect(service.parseContainerName('db_My_Complex_App')).to.deep.equal({ appName: 'My_Complex_App', componentName: 'db' });
+    it('parses a component name: app at segment [1], replica at [2]', () => {
+      // No component, app, or replica name may contain '_' (schema-enforced),
+      // so the segments are unambiguous.
+      expect(service.parseContainerName('fluxdb_MyApp')).to.deep.equal({ appName: 'MyApp', componentName: 'db', replica: null });
+      expect(service.parseContainerName('fluxdb_MyApp_s1')).to.deep.equal({ appName: 'MyApp', componentName: 'db', replica: 's1' });
     });
 
     it('returns null for empty or non-flux names', () => {

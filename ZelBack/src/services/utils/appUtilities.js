@@ -231,16 +231,20 @@ function parseContainerName(containerName) {
   if (name.startsWith('flux')) {
     cleanName = name.substring(4);
   }
-  const underscoreIndex = cleanName.indexOf('_');
-  if (underscoreIndex > 0) {
+  // <component>_<app>[_<replica>] - no segment may contain '_', so the app is
+  // always [1] and a third segment is the replica name.
+  const parts = cleanName.split('_');
+  if (parts.length >= 2 && parts[0]) {
     return {
-      componentName: cleanName.substring(0, underscoreIndex),
-      appName: cleanName.substring(underscoreIndex + 1),
+      componentName: parts[0],
+      appName: parts[1],
+      replica: parts[2] ?? null,
     };
   }
   return {
     componentName: cleanName,
     appName: cleanName,
+    replica: null,
   };
 }
 

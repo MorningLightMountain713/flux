@@ -1773,9 +1773,15 @@ function escapeRegExp(str) {
 async function getAppContainerObjects(appName) {
   const containers = await dockerListContainers(true);
   const singleComponentSlashName = getAppDockerNameIdentifier(appName);
-  const componentRegex = new RegExp(`^/(?:flux|zel)[a-zA-Z0-9]+_${escapeRegExp(appName)}$`);
+  // The optional third segment is a replica name (co-located named replicas).
+  const componentRegex = new RegExp(`^/(?:flux|zel)[a-zA-Z0-9]+_${escapeRegExp(appName)}(?:_[a-z0-9-]+)?$`);
 
   return (containers || []).filter((container) => {
+    // Labels are the identity authority; the name regex remains for pre-label
+    // containers (created before identity labels shipped, never recreated).
+    if (container.Labels && container.Labels['runonflux.app']) {
+      return container.Labels['runonflux.app'] === appName;
+    }
     const names = container.Names || [];
     return names.some((name) => name === singleComponentSlashName || componentRegex.test(name));
   });
