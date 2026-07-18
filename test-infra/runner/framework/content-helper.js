@@ -172,6 +172,9 @@ export async function updateEncryptedV9App(nodeUrl, opts) {
     ttl: opts.ttl,
     components: opts.components,
     placement: opts.placement,
+    // Extra top-level v9 spec fields (e.g. a telemetry block) — spread last
+    // by the builder, so they land on the submission verbatim.
+    ...(opts.specOverrides || {}),
   });
 
   const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
