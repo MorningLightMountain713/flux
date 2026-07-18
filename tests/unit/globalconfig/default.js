@@ -85,6 +85,7 @@ module.exports = {
     },
   },
   logConsole: false,
+  logLevel: 'debug',
   upnp: {
     gatewayUrl: '',
     nodeIp: '',

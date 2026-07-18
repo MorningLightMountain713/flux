@@ -3,7 +3,6 @@ const nodeHttps = require('node:https');
 
 const express = require('express');
 const cors = require('cors');
-const morgan = require('morgan');
 const compression = require('compression');
 const routes = require('../routes');
 const { analyticsMiddleware, startFlushTimer } = require('../services/analyticsService');
@@ -26,7 +25,6 @@ class FluxServer {
 
   static defaultMiddlewares = [
     compression(),
-    morgan('combined'),
     bodyParser,
     cors(),
     analyticsMiddleware,

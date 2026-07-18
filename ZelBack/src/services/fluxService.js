@@ -1068,16 +1068,97 @@ async function tailBenchmarkDebug(req, res) {
 }
 
 /**
- * To download a specified FluxOS log file.
+ * FluxOS log reading, sink-aware (see lib/log.js sinkInfo): under systemd
+ * the journal owns the lines (journalctl -u fluxos -o json); elsewhere the
+ * rolling fluxos.N.log file does. Lines are NDJSON either way; each is
+ * rendered back to "<iso-time> <LEVEL> <msg>" (+ stack) so these endpoints
+ * keep serving human-readable text.
+ *
+ * Level selection mirrors the retired per-level files: error/warn/info
+ * serve exactly their level (error includes fatal), debug serves
+ * everything — debug.log always carried every line.
+ */
+const LOG_LEVEL_LABELS = {
+  10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'FATAL',
+};
+const JOURNAL_READ_CAP = 100000; // lines; the retired files capped at 25MB
+
+function logRecordMatches(level, record) {
+  if (level === 'debug') return true;
+  if (level === 'error') return record.level >= 50;
+  if (level === 'warn') return record.level === 40;
+  return record.level === 30; // info
+}
+
+function renderLogRecord(record) {
+  const {
+    level, time, msg, err, ...fields
+  } = record;
+  const label = LOG_LEVEL_LABELS[level] || String(level);
+  const extras = Object.keys(fields).length ? ` ${JSON.stringify(fields)}` : '';
+  let line = `${time} ${label} ${msg !== undefined ? msg : ''}${extras}`;
+  if (err && typeof err.stack === 'string') line += `\n${err.stack}`;
+  return line;
+}
+
+/**
+ * The selected level's lines as rendered text. Journal MESSAGE payloads (or
+ * file lines) that are not NDJSON — stray stdout from dependencies — count
+ * as info-level so they stay visible without a level of their own.
+ * @param {string} level - error | warn | info | debug
+ * @param {number|null} tail - keep only the last N lines (null = all)
+ * @returns {Promise<string>}
+ */
+async function readFluxLog(level, tail) {
+  const sink = log.sinkInfo();
+  let rawLines;
+  if (sink.journald) {
+    const { stdout, error } = await serviceHelper.runCommand('journalctl', {
+      params: ['-u', 'fluxos', '-o', 'json', '-n', String(JOURNAL_READ_CAP), '--no-pager'],
+    });
+    if (error) throw error;
+    rawLines = stdout.split('\n').filter(Boolean).map((entry) => {
+      try {
+        return JSON.parse(entry).MESSAGE;
+      } catch {
+        return null;
+      }
+    }).filter((m) => typeof m === 'string');
+  } else if (sink.file) {
+    const content = await fs.readFile(sink.file, 'utf8').catch(() => '');
+    rawLines = content.split('\n').filter(Boolean);
+  } else {
+    rawLines = [];
+  }
+
+  const rendered = [];
+  for (const raw of rawLines) {
+    let record;
+    try {
+      record = JSON.parse(raw);
+    } catch {
+      record = null;
+    }
+    if (record && typeof record.level === 'number') {
+      if (logRecordMatches(level, record)) rendered.push(renderLogRecord(record));
+    } else if (level === 'debug' || level === 'info') {
+      rendered.push(raw);
+    }
+  }
+  const kept = tail ? rendered.slice(-tail) : rendered;
+  return kept.join('\n');
+}
+
+/**
+ * To download a specified FluxOS log level as a .log file.
  * @param {object} res Response.
- * @param {string} filelog Log file name (excluding `.log`).
- * @returns {Promise<object>} FluxOS .log file.
+ * @param {string} filelog Log level (error | warn | info | debug).
+ * @returns {Promise<void>}
  */
 async function fluxLog(res, filelog) {
-  const homeDirPath = path.join(__dirname, '../../../');
-  const filepath = `${homeDirPath}${filelog}.log`;
-
-  return res.download(filepath, `${filelog}.log`);
+  const text = await readFluxLog(filelog, null);
+  res.attachment(`${filelog}.log`);
+  res.send(text);
 }
 
 /**
@@ -1161,10 +1242,11 @@ async function fluxDebugLog(req, res) {
 }
 
 /**
- * To get a specified FluxOS tail log file (executes the command `tail -n 100` for the specified .log file on the node machine). Only accessible by admins and Flux team members.
+ * To get the last 100 lines of a FluxOS log level. Only accessible by admins
+ * and Flux team members.
  * @param {object} req Request.
  * @param {object} res Response.
- * @param {Promise<string>} logfile Log file name (excluding `.log`).
+ * @param {Promise<string>} logfile Log level (error | warn | info | debug).
  */
 async function tailFluxLog(req, res, logfile) {
   const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
@@ -1174,21 +1256,14 @@ async function tailFluxLog(req, res, logfile) {
     return;
   }
 
-  const homeDirPath = path.join(__dirname, '../../../');
-  const filepath = path.join(homeDirPath, `${logfile}.log`);
-
-  const { stdout, error } = await serviceHelper.runCommand('tail', {
-    params: ['-n', '100', filepath],
-  });
-
-  if (error) {
+  try {
+    const stdout = await readFluxLog(logfile, 100);
+    const message = messageHelper.createSuccessMessage(stdout);
+    res.json(message);
+  } catch (error) {
     const errMessage = messageHelper.createErrorMessage(`Error obtaining Flux log file: ${error.message}`, error.name, error.code);
     res.json(errMessage);
-    return;
   }
-
-  const message = messageHelper.createSuccessMessage(stdout);
-  res.json(message);
 }
 
 /**
