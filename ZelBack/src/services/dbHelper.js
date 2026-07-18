@@ -369,6 +369,36 @@ async function removeDocumentsFromCollection(database, collection, query) {
 }
 
 /**
+ * Create an index, self-healing a definition change: when an index with the same
+ * key spec exists under different options (or the same name under a different
+ * key spec), the existing index is dropped and recreated with the requested
+ * definition. Every other error bubbles up.
+ *
+ * @param {object} collection - Mongo collection handle
+ * @param {object} spec - index key spec
+ * @param {object} options - index options
+ *
+ * @returns {Promise<void>}
+ */
+async function ensureIndex(collection, spec, options = {}) {
+  try {
+    await collection.createIndex(spec, options);
+  } catch (err) {
+    const conflict = err && (err.codeName === 'IndexOptionsConflict' || err.codeName === 'IndexKeySpecsConflict');
+    if (!conflict) throw err;
+    const specKeys = JSON.stringify(spec);
+    const indexes = await collection.listIndexes().toArray();
+    const match = indexes.find((idx) => JSON.stringify(idx.key) === specKeys);
+    const dropName = match?.name;
+    if (dropName) {
+      log.warn(`ensureIndex - conflicting index '${dropName}' on ${collection.collectionName} (key: ${specKeys}), dropping and recreating`);
+      await collection.dropIndex(dropName);
+    }
+    await collection.createIndex(spec, options);
+  }
+}
+
+/**
  * Drops the whole collection.
  *
  * @param {string} database
@@ -430,6 +460,7 @@ module.exports = {
   databaseConnection,
   distinctDatabase,
   dropCollection,
+  ensureIndex,
   findInDatabase,
   findOneAndDeleteInDatabase,
   findOneAndUpdateInDatabase,

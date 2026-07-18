@@ -420,20 +420,7 @@ async function startFluxFunctions() {
       { key: { createdAt: 1 } },
     ]);
     log.info('App state events collection prepared');
-    await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingBroadcasts).dropIndex('broadcastedAt_1').catch(() => {});
-    await ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingBroadcasts), [
-      { key: { expireAt: 1 }, expireAfterSeconds: 0 },
-      { key: { broadcastedAt: 1 } },
-      { key: { 'data.name': 1, 'data.ip': 1 }, unique: true, recover: dedupeByKey },
-    ]);
-    log.info('Signed appinstalling broadcasts collection prepared');
-    await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingLocations).dropIndex('broadcastedAt_1').catch(() => {});
-    await ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingLocations), [
-      { key: { expireAt: 1 }, expireAfterSeconds: 0 },
-      { key: { name: 1 }, name: 'query for getting flux app install location based on specs name' },
-      { key: { name: 1, ip: 1 }, name: 'query for getting flux app install location based on specs name and node ip' },
-    ]);
-    log.info('Flux Apps installing locations prepared');
+    await registryManager.prepareInstallingClaimsCollections();
     await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations).dropIndex('cachedAt_1').catch(() => {});
     await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations).dropIndex('broadcastedAt_1').catch(() => {});
     await ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations), [

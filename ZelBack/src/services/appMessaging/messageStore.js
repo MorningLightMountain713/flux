@@ -14,12 +14,12 @@ const {
   globalAppsTempMessages,
   globalAppsLocations,
   globalAppsInstallingLocations,
+  globalAppsInstallingBroadcasts: appsInstallingBroadcasts,
   globalAppsInstallingErrorsLocations,
   globalAppsInstallingErrorsBroadcasts,
   globalAppStateEvents,
   appsHashesCollection,
 } = require('../utils/appConstants');
-const { appsInstallingBroadcasts } = config.database.appsglobal.collections;
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 
 const {
@@ -352,15 +352,21 @@ async function storeAppRunningMessage(message) {
   }
 
   for (const app of appsMessages) {
-    // A replica-tagged entry releases exactly its own claim; untagged releases
-    // every claim for the (name, ip) - the v1 whole-app semantics.
-    const queryFind = typeof app.replica === 'string'
+    // A replica-tagged entry releases exactly its own claim (location row AND
+    // archived announce - a sibling still mid-install must keep both, or message
+    // sync would strip its seat); untagged releases every claim for the
+    // (name, ip) - the v1 whole-app semantics.
+    const tagged = typeof app.replica === 'string';
+    const queryFind = tagged
       ? { name: app.name, ip: message.ip, replica: app.replica }
       : { name: app.name, ip: message.ip };
+    const broadcastQuery = tagged
+      ? { 'data.name': app.name, 'data.ip': message.ip, 'data.replica': app.replica }
+      : { 'data.name': app.name, 'data.ip': message.ip };
     // eslint-disable-next-line no-await-in-loop
     await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, queryFind);
     // eslint-disable-next-line no-await-in-loop
-    await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, { 'data.name': app.name, 'data.ip': message.ip });
+    await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, broadcastQuery);
   }
 
   return { stored: anyStored, rebroadcast: anyStored };
@@ -402,8 +408,11 @@ async function storeAppInstallingMessage(message) {
   * v2 additions:
   * @param announcedAt number - immutable first-announce time; broadcastedAt moves on
   *   renewals, so elections must order contenders by announcedAt
-  * @param cleared boolean (optional) - retract the (name, ip) claim with no verdict on
-  *   the app, unlike fluxappinstallingerror which also feeds peers' error counting.
+  * @param replica string (optional) - the claimed identity for named placement; rows
+  *   key on (name, ip, replica ?? null), one seat per replica
+  * @param cleared boolean (optional) - retract the claim with no verdict on the app,
+  *   unlike fluxappinstallingerror which also feeds peers' error counting; tagged
+  *   clears release exactly their replica's seat, untagged release every (name, ip) row.
   *   `withdrawn: true` is the same fact under development's spelling, which shipped in
   *   8.18.0 and is on the wire today; both are accepted, and a retraction carries no
   *   announcedAt because it asserts no claim.
@@ -435,26 +444,52 @@ async function storeAppInstallingMessage(message) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
 
-  const queryFind = { name: message.name, ip: message.ip };
-  const projection = { _id: 0 };
-  const result = await dbHelper.findOneInDatabase(database, globalAppsInstallingLocations, queryFind, projection);
+  // Peer input: normalize the identity tag tolerantly (a malformed tag degrades to
+  // the untagged row) - the local writer's store (registryManager) is the strict one.
+  const replica = message.version === 2 && typeof message.replica === 'string' ? message.replica : null;
 
   if (cleared) {
+    // A replica-tagged clear releases exactly its own claim; untagged releases
+    // every (name, ip) claim - the v1/loose whole-app semantics.
+    const clearQuery = replica !== null
+      ? { name: message.name, ip: message.ip, replica }
+      : { name: message.name, ip: message.ip };
     // A strictly-newer announce supersedes a late-arriving clear from an older
     // attempt; on an equal timestamp the clear wins - the emitter sequences the
     // clear after its own announce, so same-millisecond means announce-then-clear.
-    if (result && result.broadcastedAt && result.broadcastedAt > new Date(message.broadcastedAt)) {
+    const rows = await dbHelper.findInDatabase(database, globalAppsInstallingLocations, clearQuery, { projection: { _id: 0, broadcastedAt: 1 } });
+    const clearedAt = new Date(message.broadcastedAt);
+    if (rows.some((row) => row.broadcastedAt && row.broadcastedAt > clearedAt)) {
       return false;
     }
-    // Delete the archived broadcast too so message sync cannot resurrect the claim.
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, queryFind);
-    await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, { 'data.name': message.name, 'data.ip': message.ip });
+    // Delete the archived broadcast(s) too so message sync cannot resurrect the claim.
+    const broadcastQuery = replica !== null
+      ? { 'data.name': message.name, 'data.ip': message.ip, 'data.replica': replica }
+      : { 'data.name': message.name, 'data.ip': message.ip };
+    // Carried on both deletes rather than rested on the read above. The read proves
+    // the stored claim was not newer a moment ago; the guard proves it at the moment
+    // of deletion, which is what the batch path does and what closes the window where
+    // a newer claim lands in between. The broadcast row needs it in its own right too
+    // - it is a separate collection written by a separate path, so a claim newer than
+    // this clear can exist there while the location the read consulted is still old.
+    // `$lte`, not `$lt`: the read lets an equal timestamp clear win (the emitter
+    // sequences the clear after its own announce), so the equal row must go too.
+    const notNewerThanClear = { broadcastedAt: { $lte: clearedAt } };
+    await dbHelper.removeDocumentsFromCollection(
+      database, globalAppsInstallingLocations, { ...clearQuery, ...notNewerThanClear },
+    );
+    await dbHelper.removeDocumentsFromCollection(
+      database, appsInstallingBroadcasts, { ...broadcastQuery, ...notNewerThanClear },
+    );
     return true;
   }
 
   const newAppInstallingMessage = {
     name: message.name,
     ip: message.ip,
+    // One claim row per identity: a replica name for named placement, null
+    // (loose / v1 senders) - null also matches legacy rows without the field.
+    replica,
     broadcastedAt: new Date(message.broadcastedAt),
     expireAt: new Date(message.broadcastedAt + INSTALLING_EXPIRY_MS),
   };
@@ -462,36 +497,15 @@ async function storeAppInstallingMessage(message) {
     newAppInstallingMessage.announcedAt = new Date(message.announcedAt);
   }
 
+  const queryFind = { name: message.name, ip: message.ip, replica };
+  const projection = { _id: 0 };
+  const result = await dbHelper.findOneInDatabase(database, globalAppsInstallingLocations, queryFind, projection);
   // we already have the exact same data (or newer - e.g. a renewal already landed)
   if (result && result.broadcastedAt && result.broadcastedAt >= newAppInstallingMessage.broadcastedAt) {
     return false;
   }
 
-  if (message.version === 2) {
-    // The comparison above is what makes a withdrawal safe to apply late: a node
-    // may claim, stand aside, and claim again on a later pass, and a withdrawal
-    // that arrives after the newer claim must not erase it. Reaching here means
-    // the stored claim is older than this withdrawal, so it is the one being
-    // retracted. Nothing is recorded in its place - the sender holds no claim.
-    // Carried on both deletes rather than rested on the read above. The read
-    // proves the stored claim was older a moment ago; the guard proves it at the
-    // moment of deletion, which is what the batch path does and what closes the
-    // window where a newer claim lands in between. The broadcast row needs it in
-    // its own right too - it is a separate collection written by a separate path,
-    // so a claim newer than this withdrawal can exist there while the location
-    // the read consulted is still the old one.
-    const olderThanWithdrawal = { broadcastedAt: { $lt: newAppInstallingMessage.broadcastedAt } };
-    await dbHelper.removeDocumentsFromCollection(
-      database, globalAppsInstallingLocations, { ...queryFind, ...olderThanWithdrawal },
-    );
-    await dbHelper.removeDocumentsFromCollection(
-      database, appsInstallingBroadcasts,
-      { 'data.name': message.name, 'data.ip': message.ip, ...olderThanWithdrawal },
-    );
-    return true;
-  }
-
-  const queryUpdate = { name: newAppInstallingMessage.name, ip: newAppInstallingMessage.ip };
+  const queryUpdate = queryFind;
   const update = { $set: newAppInstallingMessage };
   const options = {
     upsert: true,
@@ -960,7 +974,9 @@ function storeSignedAppInstallingBroadcast(signedBroadcast) {
   };
   return dbHelper.updateOneInDatabase(
     database, appsInstallingBroadcasts,
-    { 'data.name': data.name, 'data.ip': data.ip },
+    // One archived announce per claim identity; null matches legacy docs
+    // archived without the field.
+    { 'data.name': data.name, 'data.ip': data.ip, 'data.replica': data.replica ?? null },
     { $set: doc },
     { upsert: true },
   ).catch((err) => log.error(`storeSignedAppInstallingBroadcast: ${err.message}`));
@@ -978,22 +994,31 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
 
   for (const broadcast of verifiedBroadcasts) {
     const { data } = broadcast;
-    if (data.cleared === true) continue;
     const validTill = data.broadcastedAt + INSTALLING_EXPIRY_MS;
     if (validTill < Date.now()) continue;
 
-    // A version 2 message withdraws its sender's claim. Reaching the claim path
-    // with one would store the very claim it retracts, so it is deleted here
-    // instead - and only where the stored claim is older, so a withdrawal that
-    // arrives after the sender has claimed again cannot erase the newer claim.
-    if (data.version === 2) {
-      // A v2 retraction, under either spelling (see the validator above:
-      // development ships `withdrawn`, v9 ships `cleared`). Anything else at
-      // v2 is a CLAIM and is stored, not deleted.
-      if (data.withdrawn !== true && data.cleared !== true) continue;
+    // The claim identity: one archived announce and one location row per replica;
+    // null (loose / v1) matches legacy docs stored without the field.
+    const replica = typeof data.replica === 'string' ? data.replica : null;
+
+    // A v2 RETRACTION, under either spelling - development ships `withdrawn`, v9
+    // ships `cleared`, both accepted so a mixed fleet interoperates (F15). Reaching
+    // the claim path with one would archive the very claim it retracts, so it is
+    // deleted here instead - and only where the stored claim is older, so a
+    // retraction arriving after the sender has claimed again cannot erase the newer
+    // claim. Anything else at v2 is a CLAIM and is stored below.
+    if (data.version === 2 && (data.withdrawn === true || data.cleared === true)) {
       withdrawalOps.push({
-        deleteOne: {
-          filter: { name: data.name, ip: data.ip, broadcastedAt: { $lt: new Date(data.broadcastedAt) } },
+        // deleteMANY: a tagged retraction releases exactly its replica's seat, an
+        // untagged one releases every (name, ip) row - the v1/loose whole-app
+        // semantics, which under per-replica keying is more than one document.
+        deleteMany: {
+          filter: {
+            name: data.name,
+            ip: data.ip,
+            ...(replica !== null ? { replica } : {}),
+            broadcastedAt: { $lt: new Date(data.broadcastedAt) },
+          },
         },
       });
       continue;
@@ -1001,7 +1026,7 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
 
     signedOps.push({
       updateOne: {
-        filter: { 'data.name': data.name, 'data.ip': data.ip },
+        filter: { 'data.name': data.name, 'data.ip': data.ip, 'data.replica': replica },
         update: {
           $set: {
             version: broadcast.version,
@@ -1024,6 +1049,7 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
     const locationSet = {
       name: data.name,
       ip: data.ip,
+      replica,
       broadcastedAt: { $cond: [isNewer, incomingDate, '$broadcastedAt'] },
       expireAt: { $cond: [isNewer, incomingExpiry, '$expireAt'] },
     };
@@ -1032,7 +1058,7 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
     }
     locationOps.push({
       updateOne: {
-        filter: { name: data.name, ip: data.ip },
+        filter: { name: data.name, ip: data.ip, replica },
         update: [{ $set: locationSet }],
         upsert: true,
       },
@@ -1058,11 +1084,13 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
       // other leaves a claim nothing can serve during sync. Same object, so
       // the two cannot come apart.
       withdrawalOps.map((op) => ({
-        deleteOne: {
+        deleteMany: {
           filter: {
-            'data.name': op.deleteOne.filter.name,
-            'data.ip': op.deleteOne.filter.ip,
-            broadcastedAt: op.deleteOne.filter.broadcastedAt,
+            'data.name': op.deleteMany.filter.name,
+            'data.ip': op.deleteMany.filter.ip,
+            ...('replica' in op.deleteMany.filter
+              ? { 'data.replica': op.deleteMany.filter.replica } : {}),
+            broadcastedAt: op.deleteMany.filter.broadcastedAt,
           },
         },
       })),
