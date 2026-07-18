@@ -1394,16 +1394,31 @@ describe('dockerService tests', () => {
 
     it('appends the platform env after user env (platform values authoritative)', async () => {
       const deployComp = makeDeployComp({
-        toDockerEnv: () => ['LOG=SEND'],
+        toDockerEnv: () => ['MY_SETTING=user'],
         platformEnv: () => ({ FLUX_APP_NAME: 'fluxwebsite', FLUX_REPLICA: 's2', FLUX_PORT_game: '35001' }),
       });
 
       await dockerService.appDockerCreate(deployComp);
 
       const { Env } = dockerStub.firstCall.args[0];
-      expect(Env.indexOf('LOG=SEND')).to.be.below(Env.indexOf('FLUX_APP_NAME=fluxwebsite'));
+      expect(Env.indexOf('MY_SETTING=user')).to.be.below(Env.indexOf('FLUX_APP_NAME=fluxwebsite'));
       expect(Env).to.include('FLUX_REPLICA=s2');
       expect(Env).to.include('FLUX_PORT_game=35001');
+    });
+
+    it('a LOG=SEND / LOG=COLLECT env is inert — every container gets json-file logging', async () => {
+      // The GELF log-shipping rig is gone from v9: log shipping is the otlp
+      // telemetry block's job. The old env DSL must mean nothing — no driver
+      // swap, no collector resolution, just an ordinary user env var.
+      const deployComp = makeDeployComp({
+        toDockerEnv: () => ['LOG=SEND', 'LOG=COLLECT'],
+      });
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const { Env, HostConfig } = dockerStub.firstCall.args[0];
+      expect(HostConfig.LogConfig.Type).to.equal('json-file');
+      expect(Env).to.include('LOG=SEND');
     });
 
     it('resolves ${FLUX_*} references in user env against the platform map', async () => {

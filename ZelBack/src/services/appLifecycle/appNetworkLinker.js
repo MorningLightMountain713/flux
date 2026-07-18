@@ -578,77 +578,6 @@ async function reconcileAllAppNetworkLinks() {
   }
 }
 
-/**
- * For a SEND component being installed in an app whose own components do NOT
- * contain a LOG=COLLECT component, looks at every app this app is linked to and
- * returns the first linked app that owns a COLLECT component. The actual
- * container name resolution happens in the caller.
- *
- * Encrypted linked apps whose deployment cannot be built on this node are
- * skipped — the SEND container falls back to json-file logging.
- *
- * Takes the resolved link names (from the DECRYPTED deployment view) rather than
- * the parent spec, so an encrypted consumer's links are visible here too — the
- * sealed vantage would report none and silently drop cross-app log routing.
- *
- * @param {string[]} linkedAppNames - decrypted linked app names of the parent app
- * @returns {Promise<{linkedAppName: string, collectorComponentName: string}|null>}
- */
-async function findLinkedAppLogCollector(linkedAppNames) {
-  if (!linkedAppNames || !linkedAppNames.length) {
-    return null;
-  }
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const linkedAppName of linkedAppNames) {
-    let deployment;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      deployment = await deploymentProvider.getInstalledDeployment(linkedAppName);
-    } catch (error) {
-      log.warn(`findLinkedAppLogCollector: failed to build deployment for ${linkedAppName}: ${error.message}`);
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    if (!deployment) {
-      // No deployment to scan — typical for encrypted apps on non-Arcane nodes.
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    const collector = deployment.componentEntries().find(([, component]) => component
-      .toDockerEnv().some((env) => typeof env === 'string' && env.startsWith('LOG=COLLECT')));
-    if (collector) {
-      return { linkedAppName, collectorComponentName: collector[0] };
-    }
-  }
-  return null;
-}
-
-/**
- * Resolves where a SEND component's syslog stream should land: the app's own
- * LOG=COLLECT component when it has one, otherwise the first linked
- * (shareWith) app exposing one. Resolved by the orchestrating caller and
- * passed down to installComponent, so the docker primitive never depends on
- * this module. Every path that creates a container must thread the result —
- * a container created without it silently falls back to json-file logging.
- *
- * Reads links from the DECRYPTED deployment (the view already in hand), so an
- * encrypted consumer resolves its cross-app collector too — the sealed spec view
- * would report no links and silently fall back to json-file logging.
- *
- * @param {object} deployment - DeploymentSpec (decrypted view)
- * @returns {Promise<{syslogTarget: string|null, crossAppLogCollector: {linkedAppName: string, collectorComponentName: string}|null}>}
- */
-async function resolveLogCollector(deployment) {
-  const syslogCollector = deployment.componentEntries()
-    .find(([, c]) => c.toDockerEnv().some((e) => typeof e === 'string' && e.startsWith('LOG=COLLECT')));
-  const syslogTarget = syslogCollector ? syslogCollector[0] : null;
-  const crossAppLogCollector = syslogTarget
-    ? null
-    : await findLinkedAppLogCollector(deployment.linkedApps);
-  return { syslogTarget, crossAppLogCollector };
-}
-
 module.exports = {
   isAppRunning,
   isPureFollower,
@@ -664,6 +593,4 @@ module.exports = {
   ensureContainerNetworkMembership,
   reconnectLinkedApps,
   reconcileAllAppNetworkLinks,
-  findLinkedAppLogCollector,
-  resolveLogCollector,
 };

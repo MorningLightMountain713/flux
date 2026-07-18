@@ -449,8 +449,6 @@ describe('appInstaller tests', () => {
           reconnectLinkedApps: sinon.stub().resolves(),
           checkAppNetworkRequirements,
           connectComponentToLinkedApps,
-          findLinkedAppLogCollector: sinon.stub().returns(null),
-          resolveLogCollector: sinon.stub().resolves({ syslogTarget: null, crossAppLogCollector: null }),
         },
         '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves(), broadcastMessageToAll },
         '../appMessaging/messageStore': { storeAppInstallingErrorMessage, storeAppRunningMessage: sinon.stub().resolves() },
