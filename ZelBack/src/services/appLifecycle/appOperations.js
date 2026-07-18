@@ -1618,7 +1618,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
         log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
       }
     } else {
-      await fluxShutdowndClient.deleteAppPlanBestEffort(freshDeployment.appName, registrySpec.owner);
+      await fluxShutdowndClient.deleteAppPlanBestEffort(freshDeployment.appName, registrySpec.owner, freshDeployment.replica ?? null);
     }
   }
 }
@@ -1678,26 +1678,37 @@ async function shutdownPlanResync() {
 
   try {
     const installedApps = await appsRepository.listInstalledApps();
-    const planKey = (owner, name) => `${owner}:${name}`;
-    const stored = new Map(summaries.map((s) => [planKey(s.owner_flux_id, s.app_name), s]));
+    // One plan per deployed identity: loose keeps the legacy owner:name key,
+    // a named replica appends its segment (replica names cannot contain ':').
+    const planKey = (owner, name, replica) => (replica != null ? `${owner}:${name}:${replica}` : `${owner}:${name}`);
+    const stored = new Map(summaries.map((s) => [planKey(s.owner_flux_id, s.app_name, s.replica ?? null), s]));
     const live = new Set();
     let pushed = 0;
     let deleted = 0;
 
     for (const installed of installedApps) {
-      const key = planKey(installed.owner, installed.name);
-      const summary = stored.get(key);
-      // A stored plan whose hash still matches: the app is graceful (it has a plan)
-      // and its spec is unchanged — keep it live, nothing to push.
-      if (summary && summary.spec_hash === installed.hash) {
-        live.add(key);
-        continue;
-      }
+      // Couldn't evaluate the app: keep every plan it holds rather than orphan them.
+      const keepAllStored = () => {
+        for (const [key, s] of stored) {
+          if (s.app_name === installed.name && s.owner_flux_id === installed.owner) live.add(key);
+        }
+      };
+      let deployments;
       try {
         // eslint-disable-next-line no-await-in-loop
-        const deployment = await deploymentProvider.buildDeployment(installed);
-        if (!deployment) {
-          live.add(key); // couldn't evaluate; keep any existing plan rather than orphan it
+        deployments = await deploymentProvider.buildDeployments(installed);
+      } catch (error) {
+        log.warn(`shutdown plan resync build failed for ${installed.name}: ${error.message}`);
+        keepAllStored();
+        continue;
+      }
+      for (const deployment of deployments) {
+        const key = planKey(installed.owner, installed.name, deployment.replica ?? null);
+        const summary = stored.get(key);
+        // A stored plan whose hash still matches: the identity is graceful (it has
+        // a plan) and its spec is unchanged — keep it live, nothing to push.
+        if (summary && summary.spec_hash === installed.hash) {
+          live.add(key);
           continue;
         }
         if (!shutdownPlan.appRequiresDaemonShutdown(deployment)) {
@@ -1706,21 +1717,22 @@ async function shutdownPlanResync() {
           continue;
         }
         live.add(key);
-        // eslint-disable-next-line no-await-in-loop
-        await fluxShutdowndClient.upsertAppPlanBestEffort(
-          shutdownPlan.buildShutdownPlan(installed, deployment),
-        );
-        pushed += 1;
-      } catch (error) {
-        log.warn(`shutdown plan resync upsert failed for ${installed.name}: ${error.message}`);
-        live.add(key); // couldn't evaluate; keep any existing plan rather than orphan it
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await fluxShutdowndClient.upsertAppPlanBestEffort(
+            shutdownPlan.buildShutdownPlan(installed, deployment),
+          );
+          pushed += 1;
+        } catch (error) {
+          log.warn(`shutdown plan resync upsert failed for ${installed.name}: ${error.message}`);
+        }
       }
     }
 
     for (const [key, summary] of stored) {
       if (live.has(key)) continue;
       // eslint-disable-next-line no-await-in-loop
-      await fluxShutdowndClient.deleteAppPlanBestEffort(summary.app_name, summary.owner_flux_id);
+      await fluxShutdowndClient.deleteAppPlanBestEffort(summary.app_name, summary.owner_flux_id, summary.replica ?? null);
       deleted += 1;
     }
 

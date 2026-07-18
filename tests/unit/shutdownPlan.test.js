@@ -117,6 +117,23 @@ describe('shutdownPlan', () => {
       expect(workerPlan.shutdown).to.equal(null);
       expect(workerPlan.pre_stop).to.equal(null);
       expect(workerPlan.ports).to.deep.equal([]);
+      // replica is required-and-nullable on the wire: always present, null for
+      // a loose deployment (no replica on the deployment view).
+      expect(plan.replica).to.equal(null);
+    });
+
+    it('carries the deployment identity: a named replica keys its own plan', () => {
+      const instantiated = { owner: '1owner', hash: 'msg-hash-1' };
+      const deployment = {
+        appName: 'myapp',
+        replica: 's1',
+        startupOrder: ['web'],
+        componentEntries: () => [['web', webComponent()]],
+      };
+
+      const plan = shutdownPlan.buildShutdownPlan(instantiated, deployment);
+
+      expect(plan.replica).to.equal('s1');
     });
   });
 

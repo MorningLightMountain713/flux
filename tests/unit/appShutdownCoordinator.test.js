@@ -21,7 +21,18 @@ describe('appShutdownCoordinator', () => {
     stubs = {
       log: { warn: sinon.stub(), info: sinon.stub(), error: sinon.stub() },
       appsRepository: { getInstalledApp: sinon.stub().resolves({ name: 'myapp', owner: '1own' }) },
-      deploymentProvider: { buildDeployment: sinon.stub().resolves({ componentEntries: () => [] }) },
+      deploymentProvider: {
+        buildDeployment: sinon.stub().resolves({ componentEntries: () => [] }),
+        // Delegates at call time so per-test overrides of buildDeployment flow
+        // through the plural entry the coordinator uses.
+        get buildDeployments() {
+          const single = this.buildDeployment;
+          return async (inst) => {
+            const deployment = await single(inst);
+            return deployment ? [deployment] : [];
+          };
+        },
+      },
       globalState: {
         isArcane: sinon.stub().returns(true),
         setAppLbState: sinon.stub(),
