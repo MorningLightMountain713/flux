@@ -1085,6 +1085,37 @@ describe('appSpawner tests', () => {
 
       expect(installStub.called, 'the collision-return pass must reach the election and install the index-0 winner').to.equal(true);
     });
+
+    it('second pass when the app reached target while parked: an empty scan still runs the entry, and the loser retracts + clears', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      const broadcastAllStub = sinon.stub().resolves();
+      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      buildModule({
+        // NOTHING is missing instances any more - the winners filled the app while
+        // this contender sat parked. The no-candidates prefilter must not starve the
+        // due entry, or the parked claim stands until the TTL (a phantom seat).
+        candidates: [],
+        installStub,
+        broadcastAllStub,
+        globalAppInfoStub,
+        globalStateOverrides: {
+          appsToBeCheckedLater: [{
+            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: 500,
+          }],
+        },
+      });
+      // One running instance fills the single seat; our standing claim is the only
+      // installing row, so the election ranks us out (running + index + 1 > required).
+      registryManagerStub.appLocation.resolves([{ ip: '10.0.0.7', runningSince: new Date() }]);
+      registryManagerStub.appInstallingLocation.resolves([{ ip: '192.168.1.1', broadcastedAt: 500, announcedAt: 500 }]);
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(installStub.called, 'a fully-served app must not install').to.equal(false);
+      sinon.assert.calledWithMatch(registryManagerStub.removeAppInstallingMessage, 'conApp');
+      const clearedSent = broadcastAllStub.getCalls().some((c) => c.args[0] && c.args[0].name === 'conApp' && c.args[0].cleared === true);
+      expect(clearedSent, 'the parked claim must be cleared, not left to the TTL').to.equal(true);
+    });
   });
 
   describe('installing claims (v2 announce / renewal / clear)', () => {
