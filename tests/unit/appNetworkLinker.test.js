@@ -319,36 +319,6 @@ describe('appNetworkLinker tests', () => {
     });
   });
 
-  describe('resolveLogCollector', () => {
-    it('prefers the app\'s own LOG=COLLECT component (no cross-app lookup)', async () => {
-      const own = deployment([
-        ['web', ['FOO=BAR']],
-        ['logsink', ['LOG=COLLECT']],
-      ], ['appA']);
-      const result = await appNetworkLinker.resolveLogCollector(own);
-      expect(result).to.eql({ syslogTarget: 'logsink', crossAppLogCollector: null });
-      sinon.assert.notCalled(deploymentProviderStub.getInstalledDeployment);
-    });
-
-    it('falls back to a linked app\'s collector, read from the DECRYPTED deployment links', async () => {
-      // The links come from deployment.linkedApps (the decrypted view), so an
-      // encrypted consumer - whose sealed spec would report no links - still
-      // resolves its cross-app collector. That is the cross-4 fix.
-      deploymentProviderStub.getInstalledDeployment.withArgs('appA').resolves(deployment([
-        ['collector', ['LOG=COLLECT']],
-      ]));
-      const own = deployment([['web', ['FOO=BAR']]], ['appA']);
-      const result = await appNetworkLinker.resolveLogCollector(own);
-      expect(result).to.eql({ syslogTarget: null, crossAppLogCollector: { linkedAppName: 'appA', collectorComponentName: 'collector' } });
-    });
-
-    it('resolves to nothing for an app with no collector anywhere', async () => {
-      const own = deployment([['web', ['FOO=BAR']]], []);
-      const result = await appNetworkLinker.resolveLogCollector(own);
-      expect(result).to.eql({ syslogTarget: null, crossAppLogCollector: null });
-    });
-  });
-
   describe('attach serialization under the host mutation lock', () => {
     // eslint-disable-next-line global-require
     const { withHostMutationLock } = require('../../ZelBack/src/services/utils/hostMutationLock');
@@ -542,53 +512,6 @@ describe('appNetworkLinker tests', () => {
     it('is not eligible for a non-flux network', async () => {
       dockerServiceStub.isFluxAppNetwork.withArgs('bridge').resolves(false);
       expect(await appNetworkLinker.isDisconnectEligibleFluxNetwork('bridge')).to.equal(false);
-    });
-  });
-
-  describe('findLinkedAppLogCollector', () => {
-    it('returns null when there are no linked apps', async () => {
-      const result = await appNetworkLinker.findLinkedAppLogCollector([]);
-      expect(result).to.equal(null);
-      sinon.assert.notCalled(deploymentProviderStub.getInstalledDeployment);
-    });
-
-    it('returns the first linked app exposing a LOG=COLLECT component', async () => {
-      deploymentProviderStub.getInstalledDeployment.withArgs('appA').resolves(deployment([
-        ['web', ['FOO=BAR']],
-        ['logsink', ['LOG=COLLECT']],
-      ]));
-
-      const result = await appNetworkLinker.findLinkedAppLogCollector(['appA']);
-      expect(result).to.eql({ linkedAppName: 'appA', collectorComponentName: 'logsink' });
-    });
-
-    it('skips linked apps whose deployment cannot be built (encrypted on non-Arcane)', async () => {
-      deploymentProviderStub.getInstalledDeployment.withArgs('appA').resolves(null);
-      deploymentProviderStub.getInstalledDeployment.withArgs('appC').resolves(deployment([
-        ['collector', ['LOG=COLLECT']],
-      ]));
-
-      const result = await appNetworkLinker.findLinkedAppLogCollector(['appA', 'appC']);
-      expect(result).to.eql({ linkedAppName: 'appC', collectorComponentName: 'collector' });
-    });
-
-    it('returns null when no linked app exposes a LOG=COLLECT component', async () => {
-      deploymentProviderStub.getInstalledDeployment.withArgs('appA').resolves(deployment([
-        ['web', ['FOO=BAR']],
-      ]));
-
-      const result = await appNetworkLinker.findLinkedAppLogCollector(['appA']);
-      expect(result).to.equal(null);
-    });
-
-    it('continues past a deployment build that throws', async () => {
-      deploymentProviderStub.getInstalledDeployment.withArgs('appA').rejects(new Error('db down'));
-      deploymentProviderStub.getInstalledDeployment.withArgs('appC').resolves(deployment([
-        ['collector', ['LOG=COLLECT']],
-      ]));
-
-      const result = await appNetworkLinker.findLinkedAppLogCollector(['appA', 'appC']);
-      expect(result).to.eql({ linkedAppName: 'appC', collectorComponentName: 'collector' });
     });
   });
 
