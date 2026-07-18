@@ -65,11 +65,20 @@ async function requestGracefulStop(identifier, reconcilerReason) {
 
   const instantiated = await appsRepository.getInstalledApp(appName);
   if (!instantiated) return false;
-  const deployment = await deploymentProvider.buildDeployment(instantiated);
-  if (!deployment) return false;
+  // This is a whole-app stop (operator stop / hold / condemned drains every local
+  // replica together), so the deadline budgets for ALL of this node's deployments -
+  // the daemon drains them sequentially within the app.
+  let deployments;
+  try {
+    deployments = await deploymentProvider.buildDeployments(instantiated);
+  } catch {
+    return false;
+  }
+  if (deployments.length === 0) return false;
 
   const reason = RECONCILER_REASON_TO_SHUTDOWN[reconcilerReason] || SHUTDOWN_REASON.MANUAL;
-  const deadline = Math.floor(Date.now() / 1000) + shutdownPlan.appShutdownBudgetSeconds(deployment);
+  const budgetSeconds = deployments.reduce((sum, d) => sum + shutdownPlan.appShutdownBudgetSeconds(d), 0);
+  const deadline = Math.floor(Date.now() / 1000) + budgetSeconds;
 
   // beginAppStop seeds the 'stopping' LB gate synchronously before its first await, so
   // the gate is set before we return and suppresses the reconciler's subsequent passes.
