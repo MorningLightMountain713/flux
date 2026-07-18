@@ -973,20 +973,48 @@ function renderLogRecord(record) {
 }
 
 /**
+ * Optional filters from an endpoint's query string. All backward compatible —
+ * absent params mean the pre-filter behavior.
+ * - lines: keep only the last N (capped; tails default to 100 regardless)
+ * - since: ISO 8601 timestamp, or relative <N>{s|m|h|d} (e.g. "30m", "2h")
+ * - grep: case-insensitive substring over the rendered line
+ */
+function parseLogFilters(query) {
+  const q = query || {};
+  const filters = {};
+  if (q.lines !== undefined) {
+    const n = Number.parseInt(q.lines, 10);
+    if (Number.isFinite(n) && n > 0) filters.tail = Math.min(n, 100000);
+  }
+  if (q.since) {
+    const rel = /^(\d+)([smhd])$/.exec(String(q.since));
+    const cutoff = rel
+      ? new Date(Date.now() - Number(rel[1]) * { s: 1000, m: 60000, h: 3600000, d: 86400000 }[rel[2]])
+      : new Date(String(q.since));
+    if (!Number.isNaN(cutoff.getTime())) filters.since = cutoff;
+  }
+  if (q.grep) filters.grep = String(q.grep).toLowerCase();
+  return filters;
+}
+
+/**
  * The selected level's lines as rendered text. Journal MESSAGE payloads (or
  * file lines) that are not NDJSON — stray stdout from dependencies — count
- * as info-level so they stay visible without a level of their own.
+ * as info-level so they stay visible without a level of their own (they
+ * carry no timestamp, so a `since` filter drops them).
  * @param {string} level - error | warn | info | debug
- * @param {number|null} tail - keep only the last N lines (null = all)
+ * @param {object} [filters] - { tail, since, grep } from parseLogFilters
  * @returns {Promise<string>}
  */
-async function readFluxLog(level, tail) {
+async function readFluxLog(level, { tail = null, since = null, grep = null } = {}) {
   const sink = log.sinkInfo();
   let rawLines;
   if (sink.journald) {
-    const { stdout, error } = await serviceHelper.runCommand('journalctl', {
-      params: ['-u', 'fluxos', '-o', 'json', '-n', String(JOURNAL_READ_CAP), '--no-pager'],
-    });
+    const params = ['-u', 'fluxos', '-o', 'json', '-n', String(JOURNAL_READ_CAP), '--no-pager'];
+    // Bound the journal read server-side too; the per-record check below
+    // still applies (file mode has no such pre-filter).
+    if (since) params.push('--since', `@${Math.floor(since.getTime() / 1000)}`);
+    const { stdout, error } = await serviceHelper.runCommand('journalctl', { params });
     if (error) throw error;
     rawLines = stdout.split('\n').filter(Boolean).map((entry) => {
       try {
@@ -1010,10 +1038,17 @@ async function readFluxLog(level, tail) {
     } catch {
       record = null;
     }
+    let line = null;
     if (record && typeof record.level === 'number') {
-      if (logRecordMatches(level, record)) rendered.push(renderLogRecord(record));
-    } else if (level === 'debug' || level === 'info') {
-      rendered.push(raw);
+      if (logRecordMatches(level, record)
+        && (!since || (record.time && new Date(record.time) >= since))) {
+        line = renderLogRecord(record);
+      }
+    } else if ((level === 'debug' || level === 'info') && !since) {
+      line = raw;
+    }
+    if (line !== null && (!grep || line.toLowerCase().includes(grep))) {
+      rendered.push(line);
     }
   }
   const kept = tail ? rendered.slice(-tail) : rendered;
@@ -1021,13 +1056,15 @@ async function readFluxLog(level, tail) {
 }
 
 /**
- * To download a specified FluxOS log level as a .log file.
+ * To download a specified FluxOS log level as a .log file, honoring the
+ * optional lines/since/grep query filters.
+ * @param {object} req Request (may be undefined for legacy callers).
  * @param {object} res Response.
  * @param {string} filelog Log level (error | warn | info | debug).
  * @returns {Promise<void>}
  */
-async function fluxLog(res, filelog) {
-  const text = await readFluxLog(filelog, null);
+async function fluxLog(req, res, filelog) {
+  const text = await readFluxLog(filelog, parseLogFilters(req && req.query));
   res.attachment(`${filelog}.log`);
   res.send(text);
 }
@@ -1046,7 +1083,7 @@ async function fluxErrorLog(req, res) {
       res.json(errMessage);
       return;
     }
-    fluxLog(res, 'error');
+    fluxLog(req, res, 'error');
   } catch (error) {
     log.error(error);
   }
@@ -1066,7 +1103,7 @@ async function fluxWarnLog(req, res) {
       res.json(errMessage);
       return;
     }
-    fluxLog(res, 'warn');
+    fluxLog(req, res, 'warn');
   } catch (error) {
     log.error(error);
   }
@@ -1086,7 +1123,7 @@ async function fluxInfoLog(req, res) {
       res.json(errMessage);
       return;
     }
-    fluxLog(res, 'info');
+    fluxLog(req, res, 'info');
   } catch (error) {
     log.error(error);
   }
@@ -1106,7 +1143,7 @@ async function fluxDebugLog(req, res) {
       res.json(errMessage);
       return;
     }
-    fluxLog(res, 'debug');
+    fluxLog(req, res, 'debug');
   } catch (error) {
     log.error(error);
   }
@@ -1128,7 +1165,7 @@ async function tailFluxLog(req, res, logfile) {
   }
 
   try {
-    const stdout = await readFluxLog(logfile, 100);
+    const stdout = await readFluxLog(logfile, { tail: 100, ...parseLogFilters(req && req.query) });
     const message = messageHelper.createSuccessMessage(stdout);
     res.json(message);
   } catch (error) {
