@@ -1527,7 +1527,7 @@ describe('fluxService tests', () => {
       await fluxService.fluxLog(undefined, res, 'error');
 
       sinon.assert.calledWithMatch(runCmdStub, 'journalctl', {
-        params: ['-u', 'fluxos', '-o', 'json', '-n', '100000', '--no-pager'],
+        params: ['-u', 'fluxos', '_TRANSPORT=stdout', '-o', 'json', '-n', '100000', '--no-pager'],
       });
       expect(res.send.firstCall.args[0]).to.include('ERROR journal error');
       expect(res.send.firstCall.args[0]).to.not.include('journal info');

@@ -1010,7 +1010,12 @@ async function readFluxLog(level, { tail = null, since = null, grep = null } = {
   const sink = log.sinkInfo();
   let rawLines;
   if (sink.journald) {
-    const params = ['-u', 'fluxos', '-o', 'json', '-n', String(JOURNAL_READ_CAP), '--no-pager'];
+    // _TRANSPORT=stdout narrows -u to the unit's own stream (service stdout
+    // AND stderr ride the stdout transport): without it the journal also
+    // returns systemd manager lines about the unit ("Started
+    // fluxos.service…"), which are not FluxOS log lines and the retired
+    // files never carried.
+    const params = ['-u', 'fluxos', '_TRANSPORT=stdout', '-o', 'json', '-n', String(JOURNAL_READ_CAP), '--no-pager'];
     // Bound the journal read server-side too; the per-record check below
     // still applies (file mode has no such pre-filter).
     if (since) params.push('--since', `@${Math.floor(since.getTime() / 1000)}`);
