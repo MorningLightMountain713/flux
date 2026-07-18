@@ -24,4 +24,13 @@ function componentNameFromIdentifier(identifier) {
   return specLibs.getSpecBackendSync().DeploymentSpec.componentNameFromIdentifier(identifier);
 }
 
-module.exports = { appNameFromIdentifier, componentNameFromIdentifier };
+/**
+ * @param {string} identifier
+ * @returns {string|null} the replica name of a qualified
+ *   `{component}_{app}_{replica}` identifier, null for an unqualified one
+ */
+function replicaFromIdentifier(identifier) {
+  return specLibs.getSpecBackendSync().DeploymentSpec.replicaFromIdentifier(identifier);
+}
+
+module.exports = { appNameFromIdentifier, componentNameFromIdentifier, replicaFromIdentifier };
