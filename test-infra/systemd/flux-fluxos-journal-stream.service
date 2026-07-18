@@ -1,0 +1,17 @@
+[Unit]
+# A node whose FluxOS writes to the journal (FLUX_FLUXOS_JOURNAL, entrypoint.sh):
+# this streams its journal into the node's output, where the harness reads
+# FluxOS's lines.
+Description=FluxOS journal stream (harness node)
+After=fluxos.service
+BindsTo=fluxos.service
+
+[Service]
+ExecStart=/bin/journalctl -u fluxos -f -o cat -n 0 --no-pager
+StandardOutput=append:/var/lib/flux-harness/stream
+StandardError=inherit
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

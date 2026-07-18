@@ -331,6 +331,14 @@ fi
 if [ -n "$FLUX_SYNCTHING_HOST" ]; then
   ln -sf /etc/systemd/system/syncthing-forward.service /etc/systemd/system/multi-user.target.wants/syncthing-forward.service
 fi
+# FluxOS writing to the journal, as on a production host whose unit connects its
+# stdout there (the logging suites read it back through journalctl -u fluxos); the
+# stream unit keeps its lines in the node's output.
+if [ "$FLUX_FLUXOS_JOURNAL" = "true" ]; then
+  mkdir -p /etc/systemd/system/fluxos.service.d
+  printf '[Service]\nStandardOutput=journal\nStandardError=journal\n' > /etc/systemd/system/fluxos.service.d/journal.conf
+  ln -sf /etc/systemd/system/flux-fluxos-journal-stream.service /etc/systemd/system/multi-user.target.wants/flux-fluxos-journal-stream.service
+fi
 # The mock flux-shutdownd the graceful-stop suites drive (shutdownd-stub).
 if [ "$FLUX_SHUTDOWND_MOCK" = "true" ]; then
   ln -sf /etc/systemd/system/flux-shutdownd-mock.service /etc/systemd/system/multi-user.target.wants/flux-shutdownd-mock.service

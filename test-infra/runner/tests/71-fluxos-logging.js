@@ -7,6 +7,9 @@ import { waitFor } from '../framework/wait.js';
 import { execInContainer } from '../framework/container.js';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey } from '../framework/keys.js';
+import {
+  NDJSON_PREFIX, ISO_TIME, splitRecords, recordLabel,
+} from '../framework/log-records.js';
 
 // FluxOS logging (pino NDJSON, one sink — ZelBack/src/lib/log.js): harness
 // containers run the NON-journald mode (no systemd, so no JOURNAL_STREAM),
@@ -37,33 +40,11 @@ import { fluxTeamKey } from '../framework/keys.js';
 const MARKER = 'E2E-71-LOG-GREP-MARKER';
 const PROVOKED_ERROR = 'Blocked Ports is not a valid array';
 
-// pino always emits `level` as the first key, so a fluxos NDJSON line on the
-// mixed container stdout (entrypoint/dockerd noise included) is exactly a
-// line with this prefix.
-const NDJSON_PREFIX = '{"level":';
 // Docker's json-file logger stores one entry per written line, splitting
 // only lines that exceed its 16KB frame buffer — the head fragment of such a
 // split is the only legitimately unparseable NDJSON-prefixed "line", and it
 // is always ~16384 chars. Anything shorter must parse.
 const DOCKER_LINE_SPLIT = 16000;
-
-const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-// Endpoint rendering: `<iso-time> <LEVEL> <msg>`; a record's continuation
-// lines (rendered error stacks) never start with an iso timestamp.
-const RECORD_START = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z /;
-
-// Rendered endpoint text -> records: a record starts at an "<iso> LEVEL ..."
-// line; continuation lines attach to the record above them.
-function splitRecords(text) {
-  const records = [];
-  for (const line of text.split('\n')) {
-    if (RECORD_START.test(line) || records.length === 0) records.push([line]);
-    else records[records.length - 1].push(line);
-  }
-  return records.map((lines) => lines.join('\n')).filter((r) => r.trim() !== '');
-}
-
-const recordLabel = (record) => record.split('\n')[0].split(' ')[1];
 
 describe('fluxos logging: pino NDJSON sink and the admin log endpoints (non-journald mode)', function () {
   let env;
