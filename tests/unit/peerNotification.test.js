@@ -155,7 +155,7 @@ describe('peerNotification tests', () => {
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
       expect(getAppLocationStub.calledOnce).to.be.true;
-      expect(getAppLocationStub.firstCall.args).to.deep.equal(['app1', '192.168.1.1:16127']);
+      expect(getAppLocationStub.firstCall.args).to.deep.equal(['app1', '192.168.1.1:16127', null]);
     });
 
     it('broadcasts an installed app as present even when no container is running', async () => {
