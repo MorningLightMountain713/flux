@@ -5,7 +5,7 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const dockerOperations = require('../appManagement/dockerOperations');
 const globalState = require('../utils/globalState');
-const { appNameFromIdentifier } = require('../utils/componentIdentifier');
+const { appNameFromIdentifier, replicaFromIdentifier } = require('../utils/componentIdentifier');
 const operationRegistry = require('../utils/operationRegistry');
 const specLibs = require('../utils/specLibs');
 const appInspector = require('../appManagement/appInspector');
@@ -304,9 +304,24 @@ async function getLocalComponentSpec(identifier) {
   }
   if (!inst) return null;
 
-  let deployment;
+  let deployments;
   try {
-    deployment = await deploymentProvider.buildDeployment(inst);
+    const replica = replicaFromIdentifier(identifier);
+    if (replica != null) {
+      // A qualified identifier names its exact identity - build that view.
+      deployments = [await deploymentProvider.buildDeployment(inst, { replica })];
+    } else {
+      // Unqualified: every local identity - loose yields the one unqualified
+      // view; named yields each assigned replica (the app-level expand path
+      // below needs all of them on a co-located node).
+      deployments = await deploymentProvider.buildDeployments(inst);
+      if (deployments.length === 0) {
+        // Named placement that no longer targets this node: build the
+        // unqualified view so a lingering container still resolves its spec -
+        // the specReconciler's de-target rung owns the removal decision.
+        deployments = [await deploymentProvider.buildDeployment(inst, { replica: null })];
+      }
+    }
   } catch (err) {
     if (inst.isEncrypted) {
       // Decryption failed (e.g. the enterprise key isn't loaded yet at boot).
@@ -326,27 +341,34 @@ async function getLocalComponentSpec(identifier) {
   // available. The boot-time cache rebuild races fluxbenchd's unseal and
   // orphans the cache when it loses (observed live on cabbage); this seam
   // already defer-retries on exactly that dependency, so re-seed here.
-  telemetrySinkCache.setSink(mainAppName, telemetrySinkCache.extractSink(deployment));
+  // The sink is spec-level (one per app), so any deployment view carries it.
+  telemetrySinkCache.setSink(mainAppName, telemetrySinkCache.extractSink(deployments[0]));
 
   // Resolve by matching each component's own identifier - never by parsing
   // the string. A bare app name resolves directly only for v1-v3 flat
   // deployments (whose single component IS the app); for v4+ it matches
   // nothing, including a component named like the app, whose identifier is
   // the name_name stutter.
-  const entries = deployment.componentEntries();
-  const comp = deployment.componentForIdentifier(identifier);
+  let deployment;
+  let comp;
+  for (const d of deployments) {
+    comp = d.componentForIdentifier(identifier);
+    if (comp) { deployment = d; break; }
+  }
   if (!comp) {
     // An app-level identifier: callers that hold only an app name (boot
     // recovery, the hourly sweep) cannot derive component identifiers - the
     // deployment owns them, sometimes behind encryption - so the reconciler
-    // expands the identifier itself. Replicated components are safe to
-    // include: they hold at awaitingController until a decider speaks.
+    // expands the identifier itself, across every local replica of a
+    // co-located app. Replicated components are safe to include: they hold
+    // at awaitingController until a decider speaks.
     if (!identifier.includes('_')) {
-      const expandTo = entries.map(([, c]) => c.identifier);
+      const expandTo = deployments.flatMap((d) => d.componentEntries().map(([, c]) => c.identifier));
       if (expandTo.length > 0) return { expandTo };
     }
     // A component-style identifier that resolves to nothing is a real
-    // mismatch (renamed component, stale enqueue) - surface it instead of
+    // mismatch (renamed component, stale enqueue, or a pre-qualification
+    // container awaiting its requalifying adoption) - surface it instead of
     // dropping the recovery as if the app were uninstalled.
     return { missingComponent: true };
   }

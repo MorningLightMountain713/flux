@@ -65,6 +65,12 @@ describe('appReconciler tests', () => {
       // activeStandby, r:/s: => replicated sync (full parsing lives in flux-spec)
       deploymentProvider: {
         buildDeployment: sinon.stub().callsFake(async () => fakeDeployment(localSpec)),
+        // Delegates at call time so per-test failure injection on buildDeployment
+        // flows through the plural path the same way the real provider fails.
+        get buildDeployments() {
+          const single = this.buildDeployment;
+          return async (inst) => [await single(inst)];
+        },
       },
       appVolumeService: { ensureMountSourcesExist: sinon.stub().resolves() },
       volumeService: {
@@ -169,8 +175,9 @@ describe('appReconciler tests', () => {
       '../telemetrySinkCache': stubs.telemetrySinkCache,
       '../utils/appConstants': { localAppsInformation: 'zelappsinformation' },
       '../utils/componentIdentifier': {
-        appNameFromIdentifier: (id) => { const i = id.lastIndexOf('_'); return i === -1 ? id : id.slice(i + 1); },
-        componentNameFromIdentifier: (id) => { const i = id.lastIndexOf('_'); return i === -1 ? id : id.slice(0, i); },
+        appNameFromIdentifier: (id) => { const parts = id.split('_'); return parts.length <= 1 ? id : parts[1]; },
+        componentNameFromIdentifier: (id) => id.split('_')[0],
+        replicaFromIdentifier: (id) => { const parts = id.split('_'); return parts.length >= 3 ? parts[2] : null; },
       },
       '../utils/specLibs': { getSpecBackend: sinon.stub().resolves() },
     });
