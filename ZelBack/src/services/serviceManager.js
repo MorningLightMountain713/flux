@@ -241,18 +241,9 @@ async function prepareDatabaseSchema() {
     { key: { 'envelope.pubKey': 1, type: 1 }, name: 'events by signing key' },
   ]);
   log.info('App state events collection prepared');
-  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingBroadcasts), [
-    { key: { expireAt: 1 }, expireAfterSeconds: 0 },
-    { key: { broadcastedAt: 1 } },
-    { key: { 'data.name': 1, 'data.ip': 1 }, unique: true, recover: dbHelper.dedupeByKey },
-  ]);
-  log.info('Signed appinstalling broadcasts collection prepared');
-  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingLocations), [
-    { key: { expireAt: 1 }, expireAfterSeconds: 0 },
-    { key: { name: 1 }, name: 'query for getting flux app install location based on specs name' },
-    { key: { name: 1, ip: 1 }, name: 'query for getting flux app install location based on specs name and node ip' },
-  ]);
-  log.info('Flux Apps installing locations prepared');
+  // The installing-claims collections key on (name, ip, replica); their owner
+  // prepares them.
+  await registryManager.prepareInstallingClaimsCollections();
   // Content-slot manifests: one row per app (unique appName — the atomic
   // compare-and-set guard storeManifest relies on), plus a PARTIAL TTL that
   // auto-reaps quarantined (unverified, confirmed:false) rows by their expireAt;
