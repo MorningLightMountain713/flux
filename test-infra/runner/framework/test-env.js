@@ -6,7 +6,7 @@ process.env.TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT ??= '5s';
 
 import { GenericContainer, Wait, getContainerRuntimeClient } from 'testcontainers';
 import { readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
@@ -420,7 +420,7 @@ export async function createTestEnv({
   configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true,
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
-  telemetrydMock = false, systemdMode = false,
+  telemetrydMock = false, systemdMode = false, telemetrydReal = false,
 } = {}) {
   // The boot-lock queue wait must not count against the suite's hook budget.
   // Mocha enforces a hook's timeout twice: the watchdog timer (which would fire
@@ -450,7 +450,7 @@ export async function createTestEnv({
   activeEnvs.add(env);
 
   try {
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -493,7 +493,7 @@ function mergeConfigs(base, override) {
   return result;
 }
 
-async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode) {
+async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -711,6 +711,20 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
       { source: join(fixturesDir, 'registry-tls', 'ca.pem'), target: '/usr/local/share/ca-certificates/test-registry.crt', mode: 'ro' },
       { source: bootIdDir, target: '/tmp/flux-boot-config' },
     ];
+    // Real flux-telemetryd (systemd mode only): the daemon binary from the
+    // runner host's vendored cargo build plus its REAL hardened unit, both
+    // bind-mounted; the entrypoint installs them and FluxOS starts the unit
+    // (production flow). Paths overridable for a non-default checkout.
+    if (telemetrydReal) {
+      const distBinary = process.env.TELEMETRYD_BINARY
+        ?? join(homedir(), 'flux-e2e', 'flux-telemetryd', 'target', 'release', 'flux-telemetryd');
+      const distUnit = process.env.TELEMETRYD_UNIT
+        ?? join(homedir(), 'flux-e2e', 'flux-telemetryd', 'packaging', 'systemd', 'flux-telemetryd.service');
+      bindMounts.push(
+        { source: distBinary, target: '/opt/telemetryd-dist/flux-telemetryd', mode: 'ro' },
+        { source: distUnit, target: '/opt/telemetryd-dist/flux-telemetryd.service', mode: 'ro' },
+      );
+    }
     const isLegacy = legacyNodes.includes(i);
     const nodeEnv = {
       NODE_CONFIG_DIR: `/flux/test-infra/config/node-${num}`,
@@ -753,6 +767,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     // the shutdownd/telemetryd mocks) do not exist under systemd; suites
     // using them must stay in the default mode.
     if (systemdMode) nodeEnv.FLUX_SYSTEMD_MODE = 'true';
+    if (telemetrydReal) nodeEnv.FLUX_TELEMETRYD_REAL = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files (shared.js / node-NN) carry the default 198.18 addresses; NODE_CONFIG

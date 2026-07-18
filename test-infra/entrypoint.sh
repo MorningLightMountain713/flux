@@ -82,7 +82,7 @@ if [ "$FLUX_SYSTEMD_MODE" = "true" ]; then
     fs.writeFileSync("/etc/fluxos-harness.env", lines.join("\n") + "\n");
   '
 
-  cp /flux/test-infra/systemd/*.service /etc/systemd/system/
+  cp /flux/test-infra/systemd/*.service /flux/test-infra/systemd/*.slice /etc/systemd/system/
   mkdir -p /etc/systemd/system/multi-user.target.wants
   ln -sf /etc/systemd/system/dockerd.service /etc/systemd/system/multi-user.target.wants/dockerd.service
   ln -sf /etc/systemd/system/fluxos.service /etc/systemd/system/multi-user.target.wants/fluxos.service
@@ -95,6 +95,64 @@ if [ "$FLUX_SYSTEMD_MODE" = "true" ]; then
   # harness's /tmp/flux-boot-config bind mount.
   ln -sf /dev/null /etc/systemd/system/systemd-modules-load.service
   ln -sf /dev/null /etc/systemd/system/tmp.mount
+
+  # ── Arcane host shape ────────────────────────────────────────────────
+  # systemd mode IS the Arcane-shaped node: the same docker layout the ISO
+  # provisions, so FluxOS's managed-storage capability probe (a real-state
+  # check: xfs/prjquota docker root + host-swap fence + flux-apps.slice +
+  # swap pool dir) passes and app containers land where production puts
+  # them — /sys/fs/cgroup/flux.slice/flux-apps.slice, the path
+  # flux-telemetryd's cgroup sampler reads.
+
+  # docker-ce's packaged containerd.service would boot under systemd and
+  # dockerd then prefers it — with its snapshotter on the overlayfs root
+  # (EINVAL on overlay-on-overlay). Masked, dockerd spawns its own
+  # containerd under the data-root, exactly like the default mode.
+  ln -sf /dev/null /etc/systemd/system/containerd.service
+
+  # The Arcane docker data-root on a real xfs+prjquota filesystem: docker's
+  # overlay2 cannot back onto the container's own overlayfs, so the fs is a
+  # loop-mounted image on the node volume.
+  if [ ! -f /mnt/appdata/docker-xfs.img ]; then
+    truncate -s 24G /mnt/appdata/docker-xfs.img
+    mkfs.xfs -q /mnt/appdata/docker-xfs.img
+  fi
+  mkdir -p /dat/var/lib/docker
+  mount -o loop,prjquota /mnt/appdata/docker-xfs.img /dat/var/lib/docker
+
+  # daemon.json mirrors the ISO's docker_daemon.json + the systemd cgroup
+  # driver (CgroupParent=flux-apps.slice needs it; probe-validated in the
+  # nested node). The dockerd unit carries no flags — this file owns it.
+  mkdir -p /etc/docker
+  cat > /etc/docker/daemon.json <<EOF
+{
+  "data-root": "/dat/var/lib/docker",
+  "exec-opts": ["native.cgroupdriver=systemd"]
+}
+EOF
+
+  # Host-swap fence (finite MemorySwapMax on system.slice) + app swap pool
+  # dir — the remaining capability-probe surfaces.
+  mkdir -p /etc/systemd/system/system.slice.d /dat/app-swap
+  cat > /etc/systemd/system/system.slice.d/fence.conf <<EOF
+[Slice]
+MemorySwapMax=1G
+EOF
+
+  # ── Real flux-telemetryd (opt-in; the telemetryd e2e suite) ──────────
+  # The daemon binary and its REAL hardened unit are bind-mounted from the
+  # runner host (cindy's vendored cargo build). Installed but NOT enabled:
+  # FluxOS itself starts the unit when a telemetry app installs
+  # (telemetryConfigService.ensureNode) — the production flow under test.
+  if [ "$FLUX_TELEMETRYD_REAL" = "true" ]; then
+    groupadd -f -r flux-telemetry
+    id -u flux-telemetry >/dev/null 2>&1 || useradd -r -g flux-telemetry -s /usr/sbin/nologin flux-telemetry
+    # /run is a fresh tmpfs once systemd boots — the runtime dir must come
+    # from tmpfiles.d, not a pre-exec mkdir (which the mount would shadow).
+    echo 'd /run/flux/telemetry 0750 root flux-telemetry -' > /etc/tmpfiles.d/flux-telemetry.conf
+    install -m 0755 /opt/telemetryd-dist/flux-telemetryd /usr/local/bin/flux-telemetryd
+    cp /opt/telemetryd-dist/flux-telemetryd.service /etc/systemd/system/
+  fi
 
   exec /lib/systemd/systemd
 fi
