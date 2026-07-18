@@ -16,10 +16,13 @@ function key(appName) {
  * Pull the sink out of a built deployment, dispatched on provider. Returns
  * null when the app has no telemetry or the entry is unusable.
  *
- * - otlp: the DECLARED target `{provider, component, port}` — which
- *   component in the app hosts the receiver. The identity service resolves
- *   it to a concrete node-local endpoint from the live container and puts
- *   only `{provider, endpoint}` on the wire.
+ * - otlp: the DECLARED target `{provider, app?, component, port,
+ *   components?}` — which component hosts the receiver (in this app, or in
+ *   the shareWith-linked `app` when set), and which of THIS app's
+ *   components ship (`components`; absent = every component except a
+ *   same-app collector). The identity service resolves the target to a
+ *   concrete node-local endpoint from the live container and puts only
+ *   `{provider, endpoint}` on the wire.
  * - credentialed providers (datadog): `{provider, apiKey, site?}`, passed
  *   to the daemon as-is. `site` is left to the spec/daemon default when
  *   absent.
@@ -30,7 +33,10 @@ function extractSink(deployment) {
 
   if (telemetry.provider === 'otlp') {
     if (!telemetry.component) return null;
-    return { provider: 'otlp', component: telemetry.component, port: telemetry.port ?? 4318 };
+    const sink = { provider: 'otlp', component: telemetry.component, port: telemetry.port ?? 4318 };
+    if (telemetry.app !== undefined) sink.app = telemetry.app;
+    if (telemetry.components !== undefined) sink.components = [...telemetry.components];
+    return sink;
   }
 
   if (!telemetry.apiKey) return null;
@@ -74,6 +80,17 @@ function getSink(appName) {
   return sinks.get(key(appName)) || null;
 }
 
+/**
+ * Every cached [appKey, sink] pair. The identity service scans this on a
+ * container announce to answer the inverse question — "which consumer apps
+ * route to THIS container as their collector?" — which is what makes one
+ * shared collector serve many shareWith-linked apps.
+ * @returns {IterableIterator<[string, Object]>}
+ */
+function entries() {
+  return sinks.entries();
+}
+
 function deleteSink(appName) {
   setSink(appName, null);
 }
@@ -107,6 +124,7 @@ module.exports = {
   extractSink,
   setSink,
   getSink,
+  entries,
   deleteSink,
   hasAnyTelemetryApps,
   reconcileFromInstalled,

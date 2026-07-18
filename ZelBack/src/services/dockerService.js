@@ -5,7 +5,6 @@ const path = require('path');
 const serviceHelper = require('./serviceHelper');
 const deviceHelper = require('./deviceHelper');
 const hostStorageCapability = require('./utils/hostStorageCapability');
-const generalService = require('./generalService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const log = require('../lib/log');
 const { extractIp } = require('./utils/socketAddressUtils');
@@ -728,35 +727,6 @@ async function getNextAvailableIPForApp(appName) {
   }
 }
 
-/**
- * Retrieves the IP address of a running Docker container.
- *
- * @param {string} containerName - The name of the container.
- * @returns {Promise<string|null>} - The container's IP address, or null if not found.
- * @throws {Error} - If the container has no network or IP address.
- */
-const getContainerIP = async (containerName) => {
-  try {
-    const container = await docker.getContainer(containerName).inspect();
-    const networks = Object.keys(container.NetworkSettings.Networks);
-
-    if (!Array.isArray(networks) || networks.length === 0) {
-      throw new Error('No networks found for container');
-    }
-
-    const networkName = networks[0]; // Automatically selects the first network
-    const ipAddressOfContainer = container.NetworkSettings.Networks[networkName].IPAddress ?? null;
-
-    if (!ipAddressOfContainer) {
-      throw new Error('No IPAddress found for container');
-    }
-
-    return ipAddressOfContainer;
-  } catch (error) {
-    log.error(`Failed to retrieve IP for ${containerName}: ${error.message}`);
-    return null;
-  }
-};
 
 /**
  * Creates an app container.
@@ -771,8 +741,6 @@ async function appDockerCreate(deployComp, options = {}) {
   const burstEligible = options.burstEligible || false;
   const restartPolicyOverride = options.restartPolicy || null;
   const extraEnv = options.extraEnv || [];
-  let syslogTarget = options.syslogTarget || null;
-  const crossAppLogCollector = options.crossAppLogCollector || null;
   const measuredImageSizeBytes = options.measuredImageSizeBytes || 0;
   // Managed-storage host (host-swap fence + flux-apps.slice + xfs/prjquota). Cached, local check.
   const managedStorage = await hostStorageCapability.supportsManagedStorage();
@@ -810,70 +778,17 @@ async function appDockerCreate(deployComp, options = {}) {
     }
     : null;
 
-  const isSender = envParams.some((env) => env.startsWith('LOG=SEND'));
-  const isCollector = envParams.some((env) => env.startsWith('LOG=COLLECT'));
-
-  let syslogIP = null;
-
-  if (syslogTarget && isSender) {
-    syslogIP = await getContainerIP(`flux${syslogTarget}_${appName}`);
-  }
-
-  if (syslogTarget && isCollector) {
-    syslogIP = await getNextAvailableIPForApp(appName);
-  }
-
-  // Cross-app LOG=SEND → LOG=COLLECT: if this is a SEND component and the app
-  // has no in-spec collector, the caller resolves the collector in a linked
-  // (shareWith) app and passes it here. Reachability is provided by
-  // appNetworkLinker attaching this container to the linked app's docker network.
-  if (!syslogTarget && isSender && crossAppLogCollector) {
-    const collectorContainerName = `flux${crossAppLogCollector.collectorComponentName}_${crossAppLogCollector.linkedAppName}`;
-    const linkedIP = await getContainerIP(collectorContainerName);
-    if (linkedIP) {
-      syslogTarget = crossAppLogCollector.collectorComponentName;
-      syslogIP = linkedIP;
-      log.info(`Cross-app LOG: ${appName} sender will ship to ${collectorContainerName} at ${syslogIP}`);
-    } else {
-      log.warn(`Cross-app LOG: collector ${collectorContainerName} not reachable; ${appName} will fall back to json-file logging`);
-    }
-  }
-
-  let nodeId = null;
-  let nodeSocketAddr = null;
-  let labels = null;
-  if (syslogTarget && syslogIP) {
-    const nodeCollateralInfo = await generalService.obtainNodeCollateralInformation().catch(() => { throw new Error('Host Identifier information not available at the moment'); });
-    nodeId = nodeCollateralInfo.txhash + nodeCollateralInfo.txindex;
-    nodeSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-    if (!nodeSocketAddr) {
-      throw new Error('Not possible to get node IP');
-    }
-    labels = {
-      app_name: `${appName}`,
-      host_id: `${nodeId}`,
-      host_ip: `${nodeSocketAddr}`,
-    };
-  }
-  log.info(`syslogTarget=${syslogTarget}, syslogIP=${syslogIP}`);
-
-  const logConfig = syslogTarget && syslogIP
-    ? {
-      Type: 'gelf',
-      Config: {
-        'gelf-address': `udp://${syslogIP}:514`,
-        'gelf-compression-type': 'none',
-        tag: deployComp.name,
-        labels: 'app_name,host_id,host_ip',
-      },
-    }
-    : {
-      Type: 'json-file',
-      Config: {
-        'max-file': '1',
-        'max-size': '20m',
-      },
-    };
+  // json-file is the one log driver: `docker logs`, the FluxOS log
+  // endpoints, and flux-telemetryd's tailer all read it. Log shipping is
+  // the otlp telemetry block's job (spec-declared, identity-socket routed)
+  // — never a per-container driver swap.
+  const logConfig = {
+    Type: 'json-file',
+    Config: {
+      'max-file': '1',
+      'max-size': '20m',
+    },
+  };
   const autoAssignedIP = await getNextAvailableIPForApp(appName);
 
   const burstLabels = burstEligible
@@ -892,7 +807,7 @@ async function appDockerCreate(deployComp, options = {}) {
     ? shutdownPlan.componentBudgetLabels(deployComp)
     : null;
   const containerLabels = {
-    ...identityLabels, ...(budgetLabels || {}), ...(labels || {}), ...(burstLabels || {}),
+    ...identityLabels, ...(budgetLabels || {}), ...(burstLabels || {}),
   };
   if (burstEligible) {
     log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${effectiveCpu})`);

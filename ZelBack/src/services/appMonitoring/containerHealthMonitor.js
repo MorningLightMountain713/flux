@@ -1,6 +1,5 @@
 const log = require('../../lib/log');
 const componentProvisioner = require('../appLifecycle/componentProvisioner');
-const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
 const appVolumeService = require('../appLifecycle/appVolumeService');
 const syncthingMonitorHelpers = require('./syncthingMonitorHelpers');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -36,9 +35,6 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
   // Recompute the app-wide feature gate so a recreated container keeps its budget
   // labels (identity labels are always stamped) — never silently downgraded.
   const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(deployment);
-  // Same for syslog routing - a container recreated without it silently falls
-  // back to json-file logging.
-  const { syslogTarget, crossAppLogCollector } = await appNetworkLinker.resolveLogCollector(deployment);
   const isComponent = componentIdentifier.includes('_');
   const componentName = isComponent ? componentIdentifier.split('_')[0] : null;
   const components = componentName
@@ -74,7 +70,7 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
       throw new Error(`Cannot recreate ${componentIdentifier} without creating (reformatting) its data volume: the volume for ${mainAppName} could not be verified as mounted`);
     }
     await componentProvisioner.installComponent(deployComp, {
-      createVolumes: !volumeMounted, owner: instantiated.owner, requiresEncryption, syslogTarget, crossAppLogCollector, abortSignal, allowLocalImageFallback: true,
+      createVolumes: !volumeMounted, owner: instantiated.owner, requiresEncryption, abortSignal, allowLocalImageFallback: true,
     });
   }
 
