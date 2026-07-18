@@ -9,6 +9,7 @@ const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
 const appsRepository = require('../appDatabase/appsRepository');
 const appQueryService = require('../appQuery/appQueryService');
+const dockerService = require('../dockerService');
 const appReconciler = require('../appMonitoring/appReconciler');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 
@@ -103,18 +104,29 @@ async function checkAndNotifyPeersOfRunningApps() {
       // eslint-disable-next-line no-restricted-syntax
       for (const application of applicationsToBroadcast) {
         const appName = application.name;
+        // One entry per identity this node runs: a co-located app reports each
+        // replica (from its containers' identity labels); loose and
+        // pre-qualification installs report the single untagged entry.
         // eslint-disable-next-line no-await-in-loop
-        const result = await appsRepository.getAppLocation(appName, localSocketAddr);
-        let runningOnMyNodeSince = new Date().toISOString();
-        if (result && result.runningSince) {
-          runningOnMyNodeSince = result.runningSince;
+        const appContainers = await dockerService.getAppContainerObjects(appName).catch(() => []);
+        const replicas = [...new Set(appContainers.map((c) => (c.Labels && c.Labels['runonflux.replica']) || null))];
+        const identities = replicas.length > 0 ? replicas : [null];
+        // eslint-disable-next-line no-restricted-syntax
+        for (const identity of identities) {
+          // eslint-disable-next-line no-await-in-loop
+          const result = await appsRepository.getAppLocation(appName, localSocketAddr, identity);
+          let runningOnMyNodeSince = new Date().toISOString();
+          if (result && result.runningSince) {
+            runningOnMyNodeSince = result.runningSince;
+          }
+          apps.push({
+            name: appName,
+            hash: application.hash || '',
+            runningSince: runningOnMyNodeSince,
+            state: globalState.getAppLbState(appName) ?? 'active',
+            ...(identity != null ? { replica: identity } : {}),
+          });
         }
-        apps.push({
-          name: appName,
-          hash: application.hash || '',
-          runningSince: runningOnMyNodeSince,
-          state: globalState.getAppLbState(appName) ?? 'active',
-        });
       }
       // An empty snapshot is NEVER broadcast: the receive side treats an empty
       // v2 message as "delete every appsLocations row for this IP" - and we

@@ -303,6 +303,9 @@ async function storeAppRunningMessage(message) {
       name: app.name,
       hash: app.hash,
       ip: message.ip,
+      // One row per identity: a co-located node reports one entry per replica.
+      // null (loose / old senders) matches rows without the field.
+      replica: typeof app.replica === 'string' ? app.replica : null,
       broadcastedAt: incomingDate,
       expireAt,
       osUptime: message.osUptime,
@@ -320,7 +323,7 @@ async function storeAppRunningMessage(message) {
     // eslint-disable-next-line no-await-in-loop
     const result = await dbHelper.updateOneInDatabase(
       database, globalAppsLocations,
-      { name: app.name, ip: message.ip },
+      { name: app.name, ip: message.ip, replica: incoming.replica },
       [{ $set: conditionalSet }],
       { upsert: true },
     );
@@ -344,7 +347,11 @@ async function storeAppRunningMessage(message) {
   }
 
   for (const app of appsMessages) {
-    const queryFind = { name: app.name, ip: message.ip };
+    // A replica-tagged entry releases exactly its own claim; untagged releases
+    // every claim for the (name, ip) - the v1 whole-app semantics.
+    const queryFind = typeof app.replica === 'string'
+      ? { name: app.name, ip: message.ip, replica: app.replica }
+      : { name: app.name, ip: message.ip };
     // eslint-disable-next-line no-await-in-loop
     await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, queryFind);
     // eslint-disable-next-line no-await-in-loop
@@ -479,9 +486,13 @@ async function storeAppRemovedMessage(message) {
 
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
-  const query = { ip: message.ip, name: message.appName };
-  const projection = {};
-  await dbHelper.findOneAndDeleteInDatabase(database, globalAppsLocations, query, projection);
+  // A replica-tagged removal (one co-located identity scaled away) clears only
+  // its own row; an untagged removal clears every row the node held for the
+  // app - which for a co-located pair is all of its replica rows.
+  const query = typeof message.replica === 'string'
+    ? { ip: message.ip, name: message.appName, replica: message.replica }
+    : { ip: message.ip, name: message.appName };
+  await dbHelper.removeDocumentsFromCollection(database, globalAppsLocations, query);
 
   // all stored, rebroadcast
   return true;
