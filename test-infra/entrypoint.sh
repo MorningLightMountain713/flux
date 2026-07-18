@@ -289,7 +289,7 @@ node -e '
   fs.writeFileSync("/etc/fluxos-harness.env", lines.join("\n") + "\n");
 '
 
-cp /flux/test-infra/systemd/*.service /etc/systemd/system/
+cp /flux/test-infra/systemd/*.service /flux/test-infra/systemd/*.slice /etc/systemd/system/
 mkdir -p /etc/systemd/system/multi-user.target.wants
 for unit in dockerd flux-node-network; do
   ln -sf "/etc/systemd/system/$unit.service" "/etc/systemd/system/multi-user.target.wants/$unit.service"
@@ -378,6 +378,49 @@ cat > /etc/docker/daemon.json <<EOF
   "data-root": "/mnt/appdata/docker"
 }
 EOF
+
+# ── Arcane host shape (FLUX_ARCANE_HOST) ───────────────────────────────
+# The docker layout the ISO provisions, so FluxOS's managed-storage capability
+# probe (a real-state check: xfs/prjquota docker root + host-swap fence +
+# flux-apps.slice + swap pool dir) passes and app containers land where
+# production puts them — /sys/fs/cgroup/flux.slice/flux-apps.slice, the path
+# flux-telemetryd's cgroup sampler reads.
+if [ "$FLUX_ARCANE_HOST" = "true" ]; then
+  # docker's overlay2 cannot back onto the container's own overlayfs, so the
+  # xfs filesystem is a loop-mounted image on the node volume.
+  if [ ! -f /mnt/appdata/docker-xfs.img ]; then
+    truncate -s 24G /mnt/appdata/docker-xfs.img
+    mkfs.xfs -q /mnt/appdata/docker-xfs.img
+  fi
+  mkdir -p /dat/var/lib/docker
+  mount -o loop,prjquota /mnt/appdata/docker-xfs.img /dat/var/lib/docker
+  # The ISO's data-root, which is also flux-telemetryd's log-tail root.
+  cat > /etc/docker/daemon.json <<EOF
+{
+  "data-root": "/dat/var/lib/docker"
+}
+EOF
+  # Host-swap fence (finite MemorySwapMax on system.slice) + app swap pool dir.
+  mkdir -p /etc/systemd/system/system.slice.d /dat/app-swap
+  cat > /etc/systemd/system/system.slice.d/fence.conf <<EOF
+[Slice]
+MemorySwapMax=1G
+EOF
+fi
+
+# ── Real flux-telemetryd (FLUX_TELEMETRYD_REAL) ────────────────────────
+# The daemon binary and its REAL hardened unit are bind-mounted from the runner
+# host. Installed but NOT enabled: FluxOS itself starts the unit when a telemetry
+# app installs (telemetryConfigService.ensureNode) — the production flow under
+# test. /run is a fresh tmpfs once systemd boots, so the runtime dir comes from
+# tmpfiles.d.
+if [ "$FLUX_TELEMETRYD_REAL" = "true" ]; then
+  groupadd -f -r flux-telemetry
+  id -u flux-telemetry >/dev/null 2>&1 || useradd -r -g flux-telemetry -s /usr/sbin/nologin flux-telemetry
+  echo 'd /run/flux/telemetry 0750 root flux-telemetry -' > /etc/tmpfiles.d/flux-telemetry.conf
+  install -m 0755 /opt/telemetryd-dist/flux-telemetryd /usr/local/bin/flux-telemetryd
+  cp /opt/telemetryd-dist/flux-telemetryd.service /etc/systemd/system/
+fi
 
 # The handoff marker. Everything above runs as PID 1's shell, whose output IS the
 # container's stdout; after it, the units' lines reach that stdout only through the

@@ -52,6 +52,8 @@ RUN set -eu; \
     systemd \
     dbus \
     openssh-client \
+    xfsprogs \
+    acl \
     && rm -rf /var/lib/apt/lists/*
 
 # The node's docker: the newest release unless DOCKER_VERSION names one, as apt

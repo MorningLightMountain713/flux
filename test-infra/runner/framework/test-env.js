@@ -9,7 +9,7 @@ import {
   readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync,
 } from 'node:fs';
 import { execFile, execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
@@ -1004,6 +1004,14 @@ export async function createTestEnv({
   // through the journal (JOURNAL_STREAM set) instead of a rolling file. Uniform
   // across the fleet; the journald logging suite asks for it.
   fluxosJournal = false,
+  // The node laid out as an Arcane host is: docker's data-root on an xfs+prjquota
+  // filesystem, the host-swap fence, flux-apps.slice and the app swap pool, so
+  // FluxOS's managed-storage capability passes on real state and app containers
+  // land in /sys/fs/cgroup/flux.slice/flux-apps.slice. Uniform across the fleet.
+  arcaneHost = false,
+  // Real flux-telemetryd (with arcaneHost): the vendored cargo build and its
+  // production hardened unit, bind-mounted from the runner host.
+  telemetrydReal = false,
 } = {}) {
   if (syncthing !== 'stub' && syncthing !== 'binary') {
     throw new Error(`createTestEnv: syncthing must be 'stub' or 'binary', got '${syncthing}'`);
@@ -1315,7 +1323,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdowndMock, telemetrydMock, fluxosJournal);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdowndMock, telemetrydMock, fluxosJournal, arcaneHost, telemetrydReal);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1344,7 +1352,7 @@ function mergeConfigs(base, override) {
   return result;
 }
 
-async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, pm2Nodes = {}, pausedSyncthingNodes = [], sharedKeys = {}, networkShapes = {}, globalIpv6 = [], dnsRecords = [], firewall = false, collateralOf = {}, syncthingFaults = {}, configuredIp = {}, nodeImageTags = {}, freezableDockerRoot = [], symlinkedAppsFolder = [], arcane = false, shutdowndMock = false, telemetrydMock = false, fluxosJournal = false) {
+async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, pm2Nodes = {}, pausedSyncthingNodes = [], sharedKeys = {}, networkShapes = {}, globalIpv6 = [], dnsRecords = [], firewall = false, collateralOf = {}, syncthingFaults = {}, configuredIp = {}, nodeImageTags = {}, freezableDockerRoot = [], symlinkedAppsFolder = [], arcane = false, shutdowndMock = false, telemetrydMock = false, fluxosJournal = false, arcaneHost = false, telemetrydReal = false) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -1680,6 +1688,20 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
         { source: journaldCapFile(), target: '/etc/systemd/journald.conf.d/99-harness.conf', mode: 'ro' },
       );
     }
+    // Real flux-telemetryd: the daemon binary from the
+    // runner host's vendored cargo build plus its REAL hardened unit, both
+    // bind-mounted; the entrypoint installs them and FluxOS starts the unit
+    // (production flow). Paths overridable for a non-default checkout.
+    if (telemetrydReal) {
+      const distBinary = process.env.TELEMETRYD_BINARY
+        ?? join(homedir(), 'flux-e2e', 'flux-telemetryd', 'target', 'release', 'flux-telemetryd');
+      const distUnit = process.env.TELEMETRYD_UNIT
+        ?? join(homedir(), 'flux-e2e', 'flux-telemetryd', 'packaging', 'systemd', 'flux-telemetryd.service');
+      bindMounts.push(
+        { source: distBinary, target: '/opt/telemetryd-dist/flux-telemetryd', mode: 'ro' },
+        { source: distUnit, target: '/opt/telemetryd-dist/flux-telemetryd.service', mode: 'ro' },
+      );
+    }
     const isLegacy = legacyNodes.includes(i);
     const nodeEnv = {
       NODE_CONFIG_DIR: `/flux/test-infra/config/node-${num}`,
@@ -1770,6 +1792,8 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
     // FluxOS's stdout journal-connected (JOURNAL_STREAM set, the Arcane sink mode),
     // so journalctl serves the admin log endpoints; the entrypoint routes it.
     if (fluxosJournal) nodeEnv.FLUX_FLUXOS_JOURNAL = 'true';
+    if (arcaneHost) nodeEnv.FLUX_ARCANE_HOST = 'true';
+    if (telemetrydReal) nodeEnv.FLUX_TELEMETRYD_REAL = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files carry the default 31.200.0 addresses; this is written into the node's
