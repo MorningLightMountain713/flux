@@ -1485,7 +1485,7 @@ describe('fluxService tests', () => {
 
     it('fluxLog serves the selected level as a rendered .log attachment', async () => {
       const res = generateResponse();
-      await fluxService.fluxLog(res, 'error');
+      await fluxService.fluxLog(undefined, res, 'error');
       sinon.assert.calledOnceWithExactly(res.attachment, 'error.log');
       const text = res.send.firstCall.args[0];
       expect(text).to.include('2026-07-18T10:00:02.000Z ERROR boom');
@@ -1496,18 +1496,18 @@ describe('fluxService tests', () => {
 
     it('warn serves exactly warn; info includes non-NDJSON strays; debug serves everything', async () => {
       const res1 = generateResponse();
-      await fluxService.fluxLog(res1, 'warn');
+      await fluxService.fluxLog(undefined, res1, 'warn');
       expect(res1.send.firstCall.args[0]).to.include('WARN a warn line');
       expect(res1.send.firstCall.args[0]).to.not.include('an info line');
 
       const res2 = generateResponse();
-      await fluxService.fluxLog(res2, 'info');
+      await fluxService.fluxLog(undefined, res2, 'info');
       expect(res2.send.firstCall.args[0]).to.include('INFO an info line');
       expect(res2.send.firstCall.args[0]).to.include('a stray non-json stdout line');
       expect(res2.send.firstCall.args[0]).to.not.include('boom');
 
       const res3 = generateResponse();
-      await fluxService.fluxLog(res3, 'debug');
+      await fluxService.fluxLog(undefined, res3, 'debug');
       const all = res3.send.firstCall.args[0];
       expect(all).to.include('an info line');
       expect(all).to.include('a warn line');
@@ -1524,13 +1524,42 @@ describe('fluxService tests', () => {
       const runCmdStub = sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: journal });
 
       const res = generateResponse();
-      await fluxService.fluxLog(res, 'error');
+      await fluxService.fluxLog(undefined, res, 'error');
 
       sinon.assert.calledWithMatch(runCmdStub, 'journalctl', {
         params: ['-u', 'fluxos', '-o', 'json', '-n', '100000', '--no-pager'],
       });
       expect(res.send.firstCall.args[0]).to.include('ERROR journal error');
       expect(res.send.firstCall.args[0]).to.not.include('journal info');
+    });
+
+    it('honors lines, since, and grep query filters', async () => {
+      const res1 = generateResponse();
+      await fluxService.fluxLog({ query: { grep: 'WARN' } }, res1, 'debug');
+      expect(res1.send.firstCall.args[0]).to.equal('2026-07-18T10:00:01.000Z WARN a warn line');
+
+      const res2 = generateResponse();
+      await fluxService.fluxLog({ query: { lines: '1' } }, res2, 'debug');
+      expect(res2.send.firstCall.args[0]).to.equal('a stray non-json stdout line');
+
+      // since drops older records and unstamped strays
+      const res3 = generateResponse();
+      await fluxService.fluxLog({ query: { since: '2026-07-18T10:00:01.500Z' } }, res3, 'debug');
+      const text = res3.send.firstCall.args[0];
+      expect(text).to.include('ERROR boom');
+      expect(text).to.not.include('a warn line');
+      expect(text).to.not.include('stray');
+    });
+
+    it('passes since through to journalctl as an epoch bound', async () => {
+      sinkInfoStub.returns({ journald: true, file: null });
+      const runCmdStub = sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: '' });
+      const res = generateResponse();
+      await fluxService.fluxLog({ query: { since: '2026-07-18T10:00:00.000Z' } }, res, 'debug');
+      const { params } = runCmdStub.firstCall.args[1];
+      const sinceIdx = params.indexOf('--since');
+      expect(sinceIdx).to.be.greaterThan(-1);
+      expect(params[sinceIdx + 1]).to.equal(`@${Math.floor(new Date('2026-07-18T10:00:00.000Z').getTime() / 1000)}`);
     });
 
     for (const [fn, level] of [
@@ -1591,6 +1620,13 @@ describe('fluxService tests', () => {
       const payload = res.json.firstCall.args[0];
       expect(payload.status).to.equal('success');
       expect(payload.data.message).to.include('INFO tail me');
+    });
+
+    it('applies query filters on tails too', async () => {
+      verifyPrivilegeStub.returns(true);
+      const res = generateResponse();
+      await fluxService.tailFluxLog({ query: { grep: 'no-such-text' } }, res, 'info');
+      expect(res.json.firstCall.args[0].data.message).to.equal('');
     });
 
     it('should return error if the journal read fails', async () => {
