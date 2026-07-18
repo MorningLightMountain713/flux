@@ -39,6 +39,15 @@ function makeStubs() {
   const deploymentProviderStub = {
     listInstalledDeployments: sinon.stub().resolves([]),
     buildDeployment: sinon.stub().callsFake(async (inst) => mockDeployment(inst)),
+    // Delegates at call time so per-test overrides of buildDeployment flow
+    // through the plural entry the port collector uses.
+    get buildDeployments() {
+      const single = this.buildDeployment;
+      return async (inst) => {
+        const deployment = await single(inst);
+        return deployment ? [deployment] : [];
+      };
+    },
   };
 
   const verificationHelperStub = {

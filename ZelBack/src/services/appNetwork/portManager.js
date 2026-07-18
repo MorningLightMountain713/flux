@@ -49,11 +49,14 @@ async function assignedPortsGlobalApps(appNames) {
   const apps = [];
   for (const inst of globalApps) {
     try {
+      // Every local identity's effective ports: co-located replicas carry
+      // distinct hostPort overrides, so one replica's view would under-guard
+      // the siblings'.
       // eslint-disable-next-line no-await-in-loop
-      const deployment = await deploymentProvider.buildDeployment(inst);
-      const ports = deployment.allHostPorts();
+      const deployments = await deploymentProvider.buildDeployments(inst);
+      const ports = deployments.flatMap((deployment) => deployment.allHostPorts());
       if (ports.length > 0) {
-        apps.push({ name: deployment.appName, ports });
+        apps.push({ name: inst.name, ports });
       }
     } catch (err) {
       log.warn(`assignedPortsGlobalApps: skipping ${inst.name}: ${err.message}`);

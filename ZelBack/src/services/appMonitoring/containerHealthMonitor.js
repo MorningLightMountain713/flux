@@ -5,6 +5,7 @@ const syncthingMonitorHelpers = require('./syncthingMonitorHelpers');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const shutdownPlan = require('../appLifecycle/shutdownPlan');
+const { replicaFromIdentifier } = require('../utils/componentIdentifier');
 const { verifyAppVolumeMount } = require('../utils/volumeService');
 
 
@@ -31,8 +32,6 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
     throw new Error(`App ${mainAppName} not found in local database`);
   }
 
-  const deployment = await deploymentProvider.buildDeployment(instantiated);
-
   // A container can only be (re)created onto an existing docker network, but the
   // per-app network (fluxDockerNetwork_<app>) is otherwise created only at install
   // time (registerAppLocally). If it was pruned - docker prune, daemon restart -
@@ -41,14 +40,25 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
   // the network already exists, so the common intact-network recreate stays cheap.
   await appInstaller.ensureAppDockerNetwork(mainAppName);
 
-  // Recompute the app-wide feature gate so a recreated container keeps its budget
-  // labels (identity labels are always stamped) — never silently downgraded.
-  const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(deployment);
   const isComponent = componentIdentifier.includes('_');
   const componentName = isComponent ? componentIdentifier.split('_')[0] : null;
-  const components = componentName
-    ? [[componentName, deployment.getComponent(componentName)]]
-    : deployment.componentEntries();
+  let components;
+  let requiresEncryption;
+  if (isComponent) {
+    // The identifier carries its identity: a qualified name recreates exactly
+    // that replica's container (its own ports/env), an unqualified one the
+    // loose view.
+    const deployment = await deploymentProvider.buildDeployment(instantiated, { replica: replicaFromIdentifier(componentIdentifier) });
+    // Recompute the app-wide feature gate so a recreated container keeps its budget
+    // labels (identity labels are always stamped) — never silently downgraded.
+    requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(deployment);
+    components = [[componentName, deployment.getComponent(componentName)]];
+  } else {
+    // A bare app name recreates every local identity's containers.
+    const deployments = await deploymentProvider.buildDeployments(instantiated);
+    requiresEncryption = deployments.length > 0 && shutdownPlan.appRequiresDaemonShutdown(deployments[0]);
+    components = deployments.flatMap((deployment) => deployment.componentEntries());
+  }
 
   for (const [, deployComp] of components) {
     if (!deployComp) {
