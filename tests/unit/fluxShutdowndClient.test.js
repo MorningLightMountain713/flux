@@ -120,6 +120,20 @@ describe('fluxShutdowndClient', () => {
       expect(await p).to.deep.equal({ outcome: 'complete' });
     });
 
+    it('always sends replica on the wire: null for a whole-app stop, the name for one identity', async () => {
+      for (const [opts, wire] of [[{}, null], [{ replica: 's1' }, 's1']]) {
+        const { client, sockets } = load();
+        // eslint-disable-next-line no-await-in-loop
+        const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline(), ...opts });
+        sockets[0].emit('connect');
+        const request = JSON.parse(sockets[0].write.firstCall.args[0]);
+        expect(request.params.replica).to.equal(wire);
+        sockets[0].emit('data', Buffer.from(okLine({ end_state: 'complete' })));
+        // eslint-disable-next-line no-await-in-loop
+        await p;
+      }
+    });
+
     it('passes through deadline and superseded end-states', async () => {
       for (const endState of ['deadline', 'superseded']) {
         const { client, sockets } = load();
@@ -200,6 +214,22 @@ describe('fluxShutdowndClient', () => {
       const p = client.forceAppStop('1own', 'app');
       sockets[0].emit('error', new Error('ECONNREFUSED'));
       expect(await p).to.deep.equal({ outcome: 'unreachable' });
+    });
+  });
+
+  describe('deleteAppPlan', () => {
+    it('always sends replica: null deletes the legacy whole-app key, a name its identity', async () => {
+      for (const [args, wire] of [[['app', '1own'], null], [['app', '1own', 's2'], 's2']]) {
+        const { client, sockets } = load();
+        // eslint-disable-next-line no-await-in-loop
+        const p = client.deleteAppPlan(...args);
+        sockets[0].emit('connect');
+        const request = JSON.parse(sockets[0].write.firstCall.args[0]);
+        expect(request.params).to.deep.equal({ app_name: 'app', owner_flux_id: '1own', replica: wire });
+        sockets[0].emit('data', Buffer.from(okLine({ deleted: true })));
+        // eslint-disable-next-line no-await-in-loop
+        await p;
+      }
     });
   });
 });

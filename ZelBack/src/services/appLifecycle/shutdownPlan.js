@@ -123,13 +123,16 @@ function buildPorts(deployComp) {
 }
 
 /**
- * The full shutdown plan for an app, pushed to flux-shutdownd at deploy time.
- * `spec_hash` is the AppEvent message hash (provenance) used as the daemon's
- * idempotency / drift-detection key — recomputable cheaply at resync without
- * decryption.
+ * The full shutdown plan for one deployment of an app, pushed to flux-shutdownd
+ * at deploy time. `spec_hash` is the AppEvent message hash (provenance) used as
+ * the daemon's idempotency / drift-detection key — recomputable cheaply at
+ * resync without decryption. `replica` is required-and-nullable: always present,
+ * null for loose placement — the daemon keys its plan store per identity, so a
+ * co-located pair holds one plan per replica (their effective host ports
+ * differ).
  *
  * @param {object} instantiated - an InstantiatedSpec
- * @param {object} deployment - a DeploymentSpec
+ * @param {object} deployment - a DeploymentSpec (one identity's view)
  * @returns {object}
  */
 function buildShutdownPlan(instantiated, deployment) {
@@ -155,6 +158,7 @@ function buildShutdownPlan(instantiated, deployment) {
   return {
     app_name: deployment.appName,
     owner_flux_id: instantiated.owner,
+    replica: deployment.replica ?? null,
     spec_hash: instantiated.hash,
     shutdown_budget_app_wide_s: budget,
     startup_order: [...deployment.startupOrder],

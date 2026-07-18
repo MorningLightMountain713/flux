@@ -665,7 +665,8 @@ describe('appOperations tests', () => {
     });
 
     function loadWith({
-      arcane = true, installed = [], plans = [], deployment = {}, requires = true,
+      arcane = true, installed = [], plans = [], deployment = {}, deployments = null,
+      buildThrows = false, requires = true,
     } = {}) {
       const client = {
         SOCKET_PATH: '/run/flux-shutdownd/daemon.sock',
@@ -677,13 +678,28 @@ describe('appOperations tests', () => {
       const fsPromises = {
         access: arcane ? sinon.stub().resolves() : sinon.stub().rejects(new Error('ENOENT')),
       };
+      const providerStub = {
+        buildDeployment: sinon.stub().resolves(deployment),
+        // Delegates at call time so per-test overrides of buildDeployment flow
+        // through the plural entry the resync uses; `deployments`/`buildThrows`
+        // exercise the multi-identity and build-failure paths directly.
+        get buildDeployments() {
+          if (buildThrows) return async () => { throw new Error('resolve failed'); };
+          if (deployments) return async () => deployments;
+          const single = this.buildDeployment;
+          return async (inst) => {
+            const built = await single(inst);
+            return built ? [built] : [];
+          };
+        },
+      };
       const mod = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
         'node:fs/promises': fsPromises,
         '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
         '../appDatabase/appsRepository': { listInstalledApps: sinon.stub().resolves(installed) },
-        '../appRuntime/deploymentProvider': { buildDeployment: sinon.stub().resolves(deployment) },
+        '../appRuntime/deploymentProvider': providerStub,
         './shutdownPlan': {
-          buildShutdownPlan: sinon.stub().returns({ app_name: 'plan' }),
+          buildShutdownPlan: sinon.stub().callsFake((inst, dep) => ({ app_name: inst.name, replica: dep.replica ?? null })),
           appRequiresDaemonShutdown: sinon.stub().returns(requires),
         },
         '../utils/fluxShutdowndClient': client,
@@ -743,6 +759,52 @@ describe('appOperations tests', () => {
       await mod.shutdownPlanResync();
       expect(client.upsertAppPlanBestEffort.called).to.be.false;
       expect(client.deleteAppPlanBestEffort.called).to.be.false;
+    });
+
+    it('keys per replica: re-pushes each assigned identity and orphan-deletes a de-assigned one', async () => {
+      const { mod, client } = loadWith({
+        installed: [{ name: 'app1', owner: '1own', hash: 'hashNEW' }],
+        plans: [
+          { app_name: 'app1', owner_flux_id: '1own', replica: 's1', spec_hash: 'hashOLD' },
+          { app_name: 'app1', owner_flux_id: '1own', replica: 's2', spec_hash: 'hashOLD' },
+        ],
+        deployments: [{ replica: 's1' }],
+      });
+      await mod.shutdownPlanResync();
+      expect(client.upsertAppPlanBestEffort.calledOnce).to.be.true;
+      expect(client.upsertAppPlanBestEffort.firstCall.args[0].replica).to.equal('s1');
+      // s2 is no longer assigned here: its plan is an orphan, deleted by identity.
+      expect(client.deleteAppPlanBestEffort.calledOnceWith('app1', '1own', 's2')).to.be.true;
+    });
+
+    it('a matching hash keeps each replica plan without a re-push', async () => {
+      const { mod, client } = loadWith({
+        installed: [{ name: 'app1', owner: '1own', hash: 'h' }],
+        plans: [
+          { app_name: 'app1', owner_flux_id: '1own', replica: 's1', spec_hash: 'h' },
+          { app_name: 'app1', owner_flux_id: '1own', replica: 's2', spec_hash: 'h' },
+        ],
+        deployments: [{ replica: 's1' }, { replica: 's2' }],
+      });
+      await mod.shutdownPlanResync();
+      expect(client.upsertAppPlanBestEffort.called).to.be.false;
+      expect(client.deleteAppPlanBestEffort.called).to.be.false;
+    });
+
+    it('keeps every stored plan of an app whose deployments cannot be built', async () => {
+      const { mod, client } = loadWith({
+        installed: [{ name: 'app1', owner: '1own', hash: 'hashNEW' }],
+        plans: [
+          { app_name: 'app1', owner_flux_id: '1own', replica: 's1', spec_hash: 'hashOLD' },
+          { app_name: 'app1', owner_flux_id: '1own', replica: 's2', spec_hash: 'hashOLD' },
+        ],
+        buildThrows: true,
+      });
+      await mod.shutdownPlanResync();
+      // Couldn't evaluate the app: keeping a possibly stale plan beats orphaning
+      // a live one.
+      expect(client.deleteAppPlanBestEffort.called).to.be.false;
+      expect(client.upsertAppPlanBestEffort.called).to.be.false;
     });
   });
 
