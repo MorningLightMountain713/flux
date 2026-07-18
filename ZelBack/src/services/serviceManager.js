@@ -29,11 +29,11 @@ const appReconciler = require('./appMonitoring/appReconciler');
 const appOperations = require('./appLifecycle/appOperations');
 const specReconciler = require('./appLifecycle/specReconciler');
 const appShutdownCoordinator = require('./appLifecycle/appShutdownCoordinator');
-const imageManager = require('./appSecurity/imageManager');
 const appSpawner = require('./appLifecycle/appSpawner');
 const registryManager = require('./appDatabase/registryManager');
 const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
+const appJanitor = require('./appLifecycle/appJanitor');
 const containerMountRecovery = require('./appLifecycle/containerMountRecovery');
 const appStartupManager = require('./appLifecycle/appStartupManager');
 const contentSlotService = require('./appLifecycle/contentSlotService');
@@ -83,7 +83,7 @@ const { bootDelayMultiplier } = config.fluxapps;
 function bootDelay(ms) { return Math.round(ms * bootDelayMultiplier); }
 
 const {
-  portRestoreIntervalMs, cpuCheckIntervalMs, imageComplianceIntervalMs, forceRemovalIntervalMs, tempMsgTtlS,
+  portRestoreIntervalMs, cpuCheckIntervalMs, imageComplianceIntervalMs, tempMsgTtlS,
   imageReaperIntervalMs, imageCacheEnabled,
 } = config.fluxapps;
 
@@ -620,12 +620,7 @@ async function startFluxFunctions() {
         imageReaper.pruneUnusedImages().catch((err) => log.error(`imageReaper error: ${err.message}`));
       }, imageReaperIntervalMs);
     }, bootDelay(10 * 60 * 1000));
-    setTimeout(() => {
-      appOperations.forceAppRemovals();
-      setInterval(() => {
-        appOperations.forceAppRemovals();
-      }, forceRemovalIntervalMs);
-    }, bootDelay(30 * 60 * 1000));
+    appJanitor.start();
     setTimeout(() => {
       daemonHealthMonitor.checkDaemonHealthAndCleanup();
       setInterval(() => {

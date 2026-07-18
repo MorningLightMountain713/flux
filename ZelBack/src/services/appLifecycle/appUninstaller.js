@@ -12,7 +12,7 @@ const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const log = require('../../lib/log');
 const {
-  localAppsInformation, globalAppsMessages, scannedHeightCollection, globalAppsInstallingErrorsLocations,
+  localAppsInformation, globalAppsMessages,
 } = require('../utils/appConstants');
 const config = require('config');
 const upnpService = require('../upnpService');
@@ -1286,99 +1286,6 @@ async function removeAppLocallyApi(req, res) {
   }
 }
 
-/**
- * Remove expired applications from the global database and local installations.
- * A lifecycle maintenance sweep: it reads the explorer height, finds apps past
- * their expiration, drops their global records, and uninstalls any local install.
- * Lives here (not in the data-access registry) because removing an app is a
- * lifecycle action — the data layer must not orchestrate teardown.
- * @returns {Promise<void>}
- */
-async function expireGlobalApplications() {
-  // check if synced
-  try {
-    // get current height
-    const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.database.daemon.database);
-    const query = { generalScannedHeight: { $gte: 0 } };
-    const projection = {
-      projection: {
-        _id: 0,
-        generalScannedHeight: 1,
-      },
-    };
-    const result = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
-    if (!result) {
-      throw new Error('Scanning not initiated');
-    }
-    const explorerHeight = serviceHelper.ensureNumber(result.generalScannedHeight);
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    const candidates = await appsRepository.listGlobalAppInfo();
-    const appsToExpire = candidates.filter(
-      (is) => is.isExpired(nowSeconds, explorerHeight),
-    );
-    const appNamesToExpire = appsToExpire.map((is) => is.name);
-    // remove appNamesToExpire apps from global database
-    const databaseApps = dbopen.db(config.database.appsglobal.database);
-    // eslint-disable-next-line no-restricted-syntax
-    for (const app of appsToExpire) {
-      log.info(`Expiring application ${app.name}`);
-      // eslint-disable-next-line no-await-in-loop
-      await appsRepository.removeGlobalAppInfo(app.name);
-      // eslint-disable-next-line no-await-in-loop
-      await dbHelper.removeDocumentsFromCollection(databaseApps, globalAppsInstallingErrorsLocations, { name: app.name });
-    }
-
-    const installedApps = await appsRepository.listInstalledApps();
-    // Expiry is a property of the network-confirmed spec, so evaluate each installed
-    // app against the AUTHORITATIVE global row, not the lazily-refreshed local install
-    // row: a stale shorter local expire would wrongly remove a renewed, still-paid app
-    // (a stale longer one would skip a cancelled one). The local rows only scope WHICH
-    // apps this node runs. Scope the global read to those names so a renewed app
-    // excluded from the height-filtered `candidates` above is still re-evaluated here.
-    const installedNames = installedApps.map((app) => app.name);
-    const globalRows = installedNames.length
-      ? await appsRepository.listGlobalAppInfo({ filter: { name: { $in: installedNames } } })
-      : [];
-    const globalByName = new Map(globalRows.map((spec) => [spec.name, spec]));
-    const appsToRemoveNames = [];
-    // eslint-disable-next-line no-restricted-syntax
-    for (const app of installedApps) {
-      // Prefer the authoritative global spec; fall back to the local row only when the
-      // app has no global registration (forever/manual installs, or one a prior sweep
-      // already removed from global — the appNamesToExpire branch still reaps those).
-      const authoritative = globalByName.get(app.name) || app;
-      if (appNamesToExpire.includes(app.name)) {
-        appsToRemoveNames.push(app.name);
-      } else if (authoritative.height === 0) {
-        // forever-lasting app — never expires. Checked BEFORE !height so a height-0
-        // app is not swallowed by the !height branch (which would force-expire it).
-      } else if (!authoritative.height) {
-        appsToRemoveNames.push(app.name);
-      } else if (authoritative.isExpired(nowSeconds, explorerHeight)) {
-        appsToRemoveNames.push(app.name);
-      }
-    }
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const appName of appsToRemoveNames) {
-      log.warn(`Application ${appName} is expired, removing`);
-      log.warn(`REMOVAL REASON: App expired - ${appName} reached expiration date (appUninstaller)`);
-      // background: the prelude condemns + records + deletes the row fast, then the
-      // destructive teardown runs deferred (serialized by the host-mutation lock), so
-      // the at-tip sweep enforces every expiry promptly instead of blocking ~1 min/app.
-      // forceKill:false so the deferred teardown drains the app gracefully via
-      // flux-shutdownd (or a local appDockerStop) — never a bare SIGKILL on expiry/cancel.
-      // eslint-disable-next-line no-await-in-loop
-      await uninstallApplication(appName, {
-        forceKill: false, skipGuard: true, broadcastRemoval: true, background: true,
-      });
-    }
-  } catch (error) {
-    log.error(error);
-  }
-}
-
 module.exports = {
   UninstallStatus,
   uninstallApplication,
@@ -1387,7 +1294,6 @@ module.exports = {
   denyPorts,
   removeAppLocallyApi,
   setOnComponentRemoved,
-  expireGlobalApplications,
   runTeardown,
   driveOwedTeardown,
   recoverOwedTeardowns,

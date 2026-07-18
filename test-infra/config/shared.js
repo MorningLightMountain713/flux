@@ -115,7 +115,8 @@ module.exports = {
     cpuCheckIntervalMs: 30000,
     portRestoreIntervalMs: 30000,
     imageComplianceIntervalMs: 60000,
-    forceRemovalIntervalMs: 120000,
+    orphanSweepIntervalMs: 120000,
+    dockerDebrisIntervalMs: 21600000,
     installCollisionWaitMs: 5000,
     portTestPeerTimeoutMs: 3000,
     // the whole harness fleet shares one /24, so the mainnet /16-diversity rule
