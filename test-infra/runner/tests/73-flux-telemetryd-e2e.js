@@ -9,6 +9,9 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitFor } from '../framework/wait.js';
 import { pushTestApp, pushOtlpReceiver } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execInContainer } from '../framework/container.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -145,6 +148,16 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     expect(cfg.exitCode, cfg.output).to.equal(0);
     expect(cfg.stdout).to.include('opaqueId');
 
+    // The running daemon is the PINNED one: build.rs stamps the source
+    // commit into --version, and dist/ is built from the pin — the guard
+    // against a stale dist silently testing the wrong daemon.
+    const pin = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'flux-telemetryd', 'pin'),
+      'utf-8',
+    ).trim();
+    const version = await X('/usr/local/bin/flux-telemetryd --version');
+    expect(version.stdout, 'daemon binary commit matches the pin').to.include(pin.slice(0, 12));
+
     await waitFor(async () => {
       const sync = await daemonJournal('received container sync');
       const track = await daemonJournal('tracking container');
@@ -186,7 +199,7 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     }, { timeout: 90000, interval: 3000, label: 'the provoked log line arriving at the collector' });
   });
 
-  it('untracks on app removal and the daemon stays healthy', async function () {
+  it('untracks on removal, then FluxOS stops the daemon with the last telemetry app', async function () {
     this.timeout(180000);
     const untracksBefore = await countIn('journalctl -u flux-telemetryd -o cat --no-pager | grep -F "untracking container"');
 
@@ -198,6 +211,14 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       return untracks > untracksBefore;
     }, { timeout: 120000, interval: 3000, label: 'daemon untracked the removed containers' });
 
-    expect((await X('systemctl is-active flux-telemetryd')).stdout.trim()).to.equal('active');
+    // Lifecycle ownership closes the loop: appUninstaller stops the unit and
+    // removes config.toml once no telemetry apps remain — a clean stop, not
+    // a crash ('inactive', never 'failed').
+    await waitFor(async () => (await X('systemctl is-active flux-telemetryd')).stdout.trim() === 'inactive',
+      { timeout: 60000, interval: 2000, label: 'FluxOS stopped the daemon after the last telemetry app' });
+    const failed = await X('systemctl is-failed flux-telemetryd');
+    expect(failed.stdout.trim(), 'unit must not be in a failed state').to.not.equal('failed');
+    const cfg = await X('test -f /run/flux/telemetry/config.toml');
+    expect(cfg.exitCode, 'config.toml removed with the daemon').to.not.equal(0);
   });
 });
