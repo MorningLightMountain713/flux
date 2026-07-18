@@ -25,8 +25,10 @@ import {
 // This suite stands up an Arcane fleet with the mock flux-telemetryd
 // (telemetrydMock — the daemon-side CLIENT of the identity socket) and drives
 // the FluxOS half end to end: registration through the real submission door,
-// install, announce, reconnect-sync, agent recreation, the scoping gate, and a
-// port-changing spec update.
+// install, announce (send-set gated — the same-app collector stays out by
+// default), reconnect-sync, agent recreation, the scoping gate, a
+// port-changing spec update that also overrides the send set, and inter-app
+// collector routing via shareWith.
 // The daemon's own half (cgroup sampling, OTLP protobuf emission, exporter
 // rotation on a changed endpoint) is covered by the daemon's unit tests and the
 // live-node validation — the harness cannot run a host daemon.
@@ -38,6 +40,8 @@ const AGENT = 'otelagent';
 const AGENT_PORT = 4318;
 const UPDATED_PORT = 4317;
 const PLAIN = 'otlplainapp';
+const COLLECTOR_APP = 'otlplogstack';
+const SHIPPER = 'otlpshipper';
 
 const agentContainer = `flux${AGENT}_${APP}`;
 
@@ -68,25 +72,28 @@ const components = {
   },
 };
 
-// The agent's address on the app's network, read from the node's inner dockerd
-// (each node is DinD; app containers live inside it). Polls: during a recreate
-// there is a window where the container is absent or created-but-unstarted, and
-// an unset address renders as "invalid IP" (netip zero value), not "".
-async function agentIp(client, { timeout = 30000 } = {}) {
+// A container's address on its app network, read from the node's inner
+// dockerd (each node is DinD; app containers live inside it). Polls: during
+// a recreate there is a window where the container is absent or
+// created-but-unstarted, and an unset address renders as "invalid IP"
+// (netip zero value), not "".
+async function containerIp(client, containerName, { timeout = 30000 } = {}) {
   const deadline = Date.now() + timeout;
   for (;;) {
     // eslint-disable-next-line no-await-in-loop
     const r = await execInContainer(
       client.container,
-      `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${agentContainer}`,
+      `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${containerName}`,
     );
     const ip = r.output.trim();
     if (r.exitCode === 0 && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) return ip;
-    if (Date.now() > deadline) throw new Error(`agent has no IP within ${timeout}ms: ${r.output}`);
+    if (Date.now() > deadline) throw new Error(`${containerName} has no IP within ${timeout}ms: ${r.output}`);
     // eslint-disable-next-line no-await-in-loop
     await new Promise((resolve) => { setTimeout(resolve, 500); });
   }
 }
+
+const agentIp = (client, opts) => containerIp(client, agentContainer, opts);
 
 const forApp = (identities, appName) => identities.filter((a) => a.identity.app_name === appName);
 
@@ -139,21 +146,23 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
     await env?.teardown();
   });
 
-  it('announces every container of the app with the resolved otlp endpoint', async function () {
+  it('announces the send set at the resolved endpoint — the collector itself stays out', async function () {
     this.timeout(120000);
     const ip = await agentIp(client);
     const endpoint = `http://${ip}:${AGENT_PORT}`;
 
-    // Both components — the agent is itself part of the app and gets telemetry
-    // too — announced with the same resolved endpoint.
     await waitForTelemetryEvent(control, (e) => {
       const ids = forApp(announcedIdentities([e]), APP);
       return ids.some((a) => a.identity.tags?.component === 'web' && a.identity.sink?.endpoint === endpoint);
     }, { timeout: 90000 });
-    await waitForTelemetryEvent(control, (e) => {
-      const ids = forApp(announcedIdentities([e]), APP);
-      return ids.some((a) => a.identity.tags?.component === AGENT && a.identity.sink?.endpoint === endpoint);
-    }, { timeout: 30000 });
+
+    // The default send set excludes the same-app collector: a collector
+    // ingesting its own log stream feedback-amplifies. Settle past the
+    // create/start announce window before pinning the absence.
+    await new Promise((resolve) => { setTimeout(resolve, 3000); });
+    const agents = forApp(announcedIdentities(await control.getEvents()), APP)
+      .filter((a) => a.identity.tags?.component === AGENT);
+    expect(agents, 'the same-app collector must never announce by default').to.deep.equal([]);
   });
 
   it('puts only {provider, endpoint} on the wire — never the declared component/port shape', async () => {
@@ -183,37 +192,32 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
     this.timeout(240000);
     await control.reset();
 
-    // Kill the agent out from under FluxOS: the reconciler recreates it and the
-    // new container is announced with a resolved endpoint. The IP allocator
-    // hands the lowest free address back, so a solo recreate reuses the same
-    // address — the endpoint must come through unchanged, and no resync fires
-    // (rotation on an actually-changed endpoint is unit-covered on both sides;
-    // no deterministic recreate stimulus can change the address here).
+    // Kill the agent out from under FluxOS: the reconciler recreates it. The
+    // IP allocator hands the lowest free address back, so a solo recreate
+    // reuses the same address — the endpoint must come through unchanged
+    // (rotation on an actually-changed endpoint is unit-covered on both
+    // sides; no deterministic recreate stimulus can change the address
+    // here). The collector is outside the send set, so its recreate emits
+    // no announce of its own — docker is the recreate signal.
     const r = await execInContainer(client.container, `docker rm -f ${agentContainer}`);
     expect(r.exitCode, `docker rm -f: ${r.output}`).to.equal(0);
 
-    await waitForTelemetryEvent(control, (e) => {
-      const ids = forApp(announcedIdentities([e]), APP);
-      return ids.some((a) => a.identity.tags?.component === AGENT
-        && /^http:\/\/\d+\.\d+\.\d+\.\d+:4318$/.test(a.identity.sink?.endpoint || ''));
-    }, { timeout: 180000 });
-
-    const ip = await agentIp(client);
+    const ip = await agentIp(client, { timeout: 180000 });
     const endpoint = `http://${ip}:${AGENT_PORT}`;
-    const agentAnnounces = forApp(announcedIdentities(await control.getEvents()), APP)
-      .filter((a) => a.identity.tags?.component === AGENT);
-    expect(agentAnnounces.at(-1).identity.sink?.endpoint).to.equal(endpoint);
 
     // A reconnect sync rebuilds the snapshot from the live container list, so
-    // this pins the post-recreate state: every component of the app routes at
-    // the recreated agent's address.
+    // this pins the post-recreate state: the send set routes at the recreated
+    // agent's address, and the collector still announces nothing.
     const { conn } = await control.health();
     await control.disconnect();
     await waitForTelemetryEvent(control, (e) => e.op === 'sync'
       && e.conn > conn
-      && ['web', AGENT].every((comp) => (e.containers || []).some((c) => c.identity.app_name === APP
-        && c.identity.tags?.component === comp
-        && c.identity.sink?.endpoint === endpoint)), { timeout: 45000 });
+      && (e.containers || []).some((c) => c.identity.app_name === APP
+        && c.identity.tags?.component === 'web'
+        && c.identity.sink?.endpoint === endpoint), { timeout: 45000 });
+    const agents = forApp(announcedIdentities(await control.getEvents()), APP)
+      .filter((a) => a.identity.tags?.component === AGENT);
+    expect(agents, 'the recreated collector must stay out of the send set').to.deep.equal([]);
   });
 
   it('announces nothing for an app without telemetry (the scoping gate)', async function () {
@@ -229,22 +233,28 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
     expect(ids, 'a sinkless app must never reach the identity socket').to.deep.equal([]);
   });
 
-  it('routes every container at the new port after a spec update changes it', async function () {
+  it('routes the updated send set at the new port after a spec update', async function () {
     this.timeout(300000);
     await control.reset();
 
-    // Change nothing but the telemetry port. Update adoption soft-redeploys
-    // the app (containers are recreated on any spec change), so this pins the
+    // The update changes the telemetry port AND sets an explicit components
+    // list that includes the collector — the customer's deliberate override
+    // of the default exclusion. Update adoption soft-redeploys the app
+    // (containers are recreated on any spec change), so this pins the
     // pipeline end to end: update door → respec → sink re-seed → fresh
-    // resolution → announces carrying the new port, with the stale cached
-    // endpoint replaced. The isolated live-rotation path (sink change with no
-    // container lifecycle event) has no deterministic harness stimulus and is
-    // unit-covered on both sides.
+    // resolution → BOTH components announced at the new port, stale cached
+    // endpoint replaced. The isolated live-rotation path (sink change with
+    // no container lifecycle event) has no deterministic harness stimulus
+    // and is unit-covered on both sides.
     const res = await updateEncryptedV9App(env.clients[0].url, {
       name: APP,
       components,
       instances: 3,
-      specOverrides: { telemetry: { provider: 'otlp', component: AGENT, port: UPDATED_PORT } },
+      specOverrides: {
+        telemetry: {
+          provider: 'otlp', component: AGENT, components: ['web', AGENT], port: UPDATED_PORT,
+        },
+      },
     });
     expect(res.status, JSON.stringify(res)).to.equal('success');
     await queueAppTx(res.data);
@@ -284,6 +294,114 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
     }
     for (const a of ids) {
       expect(Object.keys(a.identity.sink).sort()).to.deep.equal(['endpoint', 'provider']);
+    }
+  });
+
+  it('routes a consumer at a shareWith-linked collector where they co-reside — and stays silent elsewhere', async function () {
+    this.timeout(480000);
+
+    // Two apps through the real door: a collector app with no telemetry of
+    // its own, and a consumer whose sink routes cross-app.
+    await pushTestApp(COLLECTOR_APP);
+    const collectorRes = await registerEncryptedV9App(env.clients[0].url, {
+      name: COLLECTOR_APP,
+      components: {
+        collector: {
+          name: 'collector',
+          description: 'shared log collector',
+          image: `${REGISTRY_REPO_HOST}/${COLLECTOR_APP}:v1`,
+          cpu: 0.2,
+          memory: 200,
+          rootFsGb: 2,
+          persistentStorage: { sizeGb: 1, mounts: {} },
+        },
+      },
+      instances: 3,
+    });
+    expect(collectorRes.status, JSON.stringify(collectorRes)).to.equal('success');
+    await queueAppTx(collectorRes.data);
+    await advanceBlocks(3);
+    await Promise.any(env.clients.map((c) => waitForAppInstalled(c, COLLECTOR_APP, 240000)));
+
+    await pushTestApp(SHIPPER);
+    const shipperRes = await registerEncryptedV9App(env.clients[0].url, {
+      name: SHIPPER,
+      components: {
+        sender: {
+          name: 'sender',
+          description: 'workload shipping to the linked collector',
+          image: `${REGISTRY_REPO_HOST}/${SHIPPER}:v1`,
+          cpu: 0.2,
+          memory: 200,
+          rootFsGb: 2,
+          persistentStorage: { sizeGb: 1, mounts: {} },
+          ports: { http: { containerPort: 80, hostPort: 31352 } },
+        },
+      },
+      instances: 3,
+      specOverrides: {
+        network: { shareWith: [COLLECTOR_APP] },
+        telemetry: { provider: 'otlp', app: COLLECTOR_APP, component: 'collector' },
+      },
+    });
+    expect(shipperRes.status, JSON.stringify(shipperRes)).to.equal('success');
+    await queueAppTx(shipperRes.data);
+    await advanceBlocks(3);
+    await Promise.any(env.clients.map((c) => waitForAppInstalled(c, SHIPPER, 300000)));
+
+    // Loose placement spreads 3 collector + 3 sender instances over 5 nodes:
+    // co-residency SOMEWHERE is pigeonhole-guaranteed; everywhere is not —
+    // manageCollectorLifecycle is off (the console owns collector lifecycle;
+    // a dependency is "ready" once installed anywhere). Drive blocks until
+    // both apps reach their instance counts, then hold each node to its own
+    // contract: a co-resident sender routes at the local collector, a sender
+    // without one stays off the wire (the loud-warn unresolved state).
+    const present = async (client, name) => {
+      const r = await execInContainer(client.container, `docker ps --format '{{.Names}}' --filter name=${name}`);
+      return r.exitCode === 0 && r.output.includes(name);
+    };
+    let placement = [];
+    for (let round = 0; round < 40; round += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const { currentHeight } = await advanceBlock();
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.all(env.clients.map((c) => c.waitForEvent(
+        'block:processed', (d) => d.height >= currentHeight, 60000,
+      )));
+      // eslint-disable-next-line no-await-in-loop
+      placement = await Promise.all(env.clients.map(async (c) => ({
+        sender: await present(c, `fluxsender_${SHIPPER}`),
+        collector: await present(c, `fluxcollector_${COLLECTOR_APP}`),
+      })));
+      if (placement.filter((p) => p.sender).length >= 3
+        && placement.filter((p) => p.collector).length >= 3) break;
+    }
+    const overlap = placement.flatMap((p, i) => (p.sender && p.collector ? [i] : []));
+    const senderOnly = placement.flatMap((p, i) => (p.sender && !p.collector ? [i] : []));
+    expect(overlap.length, `no co-resident node: ${JSON.stringify(placement)}`).to.be.greaterThan(0);
+
+    for (const i of overlap) {
+      // eslint-disable-next-line no-await-in-loop
+      const ip = await containerIp(env.clients[i], `fluxcollector_${COLLECTOR_APP}`);
+      const endpoint = `http://${ip}:${AGENT_PORT}`;
+      // eslint-disable-next-line no-await-in-loop
+      await waitForTelemetryEvent(telemetrydControl(i + 1), (e) => {
+        const ids = forApp(announcedIdentities([e]), SHIPPER);
+        return ids.some((a) => a.identity.tags?.component === 'sender' && a.identity.sink?.endpoint === endpoint);
+      }, { timeout: 90000 });
+    }
+
+    // Senders with no local collector stay off the wire, and the collector
+    // app itself ships nothing anywhere (it declares no telemetry).
+    for (const [i] of env.clients.entries()) {
+      // eslint-disable-next-line no-await-in-loop
+      const events = await telemetrydControl(i + 1).getEvents();
+      expect(forApp(announcedIdentities(events), COLLECTOR_APP),
+        'a sinkless collector app must never announce').to.deep.equal([]);
+      if (senderOnly.includes(i)) {
+        expect(forApp(announcedIdentities(events), SHIPPER),
+          `node ${i} has no local collector — its sender must stay unannounced`).to.deep.equal([]);
+      }
     }
   });
 });
