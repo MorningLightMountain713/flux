@@ -248,7 +248,7 @@ describe('daemonHealthMonitor tests', () => {
       expect(logStub.error.calledWith('Failed to remove app2: Removal failed')).to.be.true;
     });
 
-    it('should add delays between app removals', async () => {
+    it('removes without self-pacing - teardowns are backgrounded and lock-serialized', async () => {
       clock = sinon.useFakeTimers();
 
       const mockApps = [
@@ -264,12 +264,16 @@ describe('daemonHealthMonitor tests', () => {
       // Advance time by 2 hours
       clock.tick(2 * 60 * 60 * 1000);
 
-      // Second call - should trigger app removal with delays
+      // Second call - triggers the wipe
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
-      // Should have 2 delays (one after each app removal)
-      expect(serviceHelperStub.delay.callCount).to.equal(2);
-      expect(serviceHelperStub.delay.firstCall.args[0]).to.equal(3 * 60 * 1000); // 3 minutes
+      expect(serviceHelperStub.delay.called).to.be.false;
+      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
+      sinon.assert.calledWithMatch(
+        appUninstallerStub.uninstallApplication,
+        'app1',
+        sinon.match({ forceKill: true, skipGuard: true, broadcastRemoval: true, background: true }),
+      );
     });
 
     it('should handle errors during health check gracefully', async () => {

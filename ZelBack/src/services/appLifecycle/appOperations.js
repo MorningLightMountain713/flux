@@ -1747,89 +1747,6 @@ async function shutdownPlanResync() {
   }
 }
 
-/**
- * Force cleanup of applications that are not in the installed apps list
- * @returns {Promise<void>}
- */
-async function forceAppRemovals() {
-  try {
-    log.info('Executing forceAppRemovals.');
-
-    // Skip the orphan sweep while ANY operation is in flight (node-wide): it
-    // force-removes apps, so it must never race an install/remove/redeploy/
-    // reconcile/backup/restore on any app.
-    if (operationRegistry.anyHeld()) {
-      log.info('Skipping forceAppRemovals: an operation is in progress');
-      return;
-    }
-
-    // Get current node's IP for checking app locations
-    const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-    if (!localSocketAddr) {
-      log.warn('Unable to get node IP, skipping forceAppRemovals');
-      return;
-    }
-
-    const dockerAppsReported = await appQueryService.listAllApps();
-    const dockerApps = dockerAppsReported.data;
-    const installedAppsRes = await appQueryService.installedApps();
-    const appsInstalled = installedAppsRes.data;
-    const dockerAppsNames = dockerApps.map((app) => app.Names[0].slice(5));
-    const dockerAppsTrueNames = [];
-    dockerAppsNames.forEach((appName) => {
-      const name = appName.split('_')[1] || appName;
-      dockerAppsTrueNames.push(name);
-    });
-
-    // array of unique main app names
-    let dockerAppsTrueNameB = [...new Set(dockerAppsTrueNames)];
-    dockerAppsTrueNameB = dockerAppsTrueNameB.filter((appName) => appName !== 'watchtower');
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const dApp of dockerAppsTrueNameB) {
-      // check if app is in installedApps
-      const appInstalledExists = appsInstalled.find((app) => app.name === dApp);
-      if (!appInstalledExists) {
-        let shouldBroadcast = false;
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          const location = await appsRepository.getAppLocation(dApp, localSocketAddr);
-          if (location) {
-            shouldBroadcast = true;
-            log.info(`${dApp} found in locations for this IP (${localSocketAddr}), will broadcast removal`);
-          } else {
-            log.info(`${dApp} not found in locations for this IP (${localSocketAddr}), skipping broadcast`);
-          }
-        } catch (locationError) {
-          log.error(`Error checking app location for ${dApp}: ${locationError.message}`);
-        }
-
-        // eslint-disable-next-line no-await-in-loop
-        const appExists = await appsRepository.existsGlobalApp(dApp);
-        if (appExists) {
-          // it is global app
-          // do removal
-          log.warn(`${dApp} does not exist in installed app. Forcing removal.`);
-          log.warn(`REMOVAL REASON: Orphan app cleanup - ${dApp} running in Docker but not in installed apps database (forceAppRemovals)`);
-          // eslint-disable-next-line no-await-in-loop
-          await appUninstaller.uninstallApplication(dApp, { forceKill: true, skipGuard: true, broadcastRemoval: shouldBroadcast }).catch((error) => log.error(error)); // remove entire app, only broadcast if in locations
-          // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(3 * 60 * 1000); // 3 mins
-        } else {
-          log.warn(`${dApp} does not exist in installed apps and global application specifications are missing. Forcing removal.`);
-          log.warn(`REMOVAL REASON: Orphan app cleanup - ${dApp} running in Docker but missing from both installed apps DB and global specs (forceAppRemovals)`);
-          // eslint-disable-next-line no-await-in-loop
-          await appUninstaller.uninstallApplication(dApp, { forceKill: true, skipGuard: true, broadcastRemoval: shouldBroadcast }).catch((error) => log.error(error)); // remove entire app, only broadcast if in locations
-          // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(3 * 60 * 1000); // 3 mins
-        }
-      }
-    }
-  } catch (error) {
-    log.error(error);
-  }
-}
-
 async function coordinateActiveStandbyApps() {
   // Hoisted so the finally releases ONLY a lease this cycle acquired.
   let coordinateToken = null;
@@ -2307,7 +2224,6 @@ module.exports = {
   testAppMount,
   reconcileApp,
   shutdownPlanResync,
-  forceAppRemovals,
   coordinateActiveStandbyApps,
   getPeerAppsInstallingErrorMessages,
   startApplication,

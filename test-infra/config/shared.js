@@ -243,7 +243,9 @@ module.exports = {
     complianceRemovalSpacingMs: 2000,
     complianceRetryBaseMs: 2000,
     complianceRetryMaxMs: 20000,
-    forceRemovalIntervalMs: 120000,
+    imageComplianceIntervalMs: 60000,
+    orphanSweepIntervalMs: 120000,
+    dockerDebrisIntervalMs: 21600000,
     installCollisionWaitMs: 5000,
     // A peer answers only once its UDP probe of a silent port has reached its deadline
     // (UDP_PROBE_DEADLINE_MS, 3 s, fluxNetworkHelper.js), so the wait for that peer has to

@@ -71,31 +71,6 @@ const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Je
 const legacyPinnedOctets = appsThatMightBeUsingOldGatewayIpAssignment.map((name) => name.charCodeAt(name.length - 1));
 
 /**
- * Formerly the pre-install docker prune. Now a no-op - see the body for why
- * neither half of it survived. Kept (rather than deleted with its call site)
- * because that is a separate change; F13 records the decision.
- * @param {object} onStatus - Status callback for streaming
- * @returns {Promise<void>}
- */
-async function performDockerCleanup(onStatus) {
-  // Nothing is pruned here any more, for two independent reasons that arrived
-  // from opposite directions and both hold:
-  //
-  // Containers, networks and volumes: development deleted those prune primitives
-  // (9d30697bd). Docker's "unused" is a runtime predicate - nothing attached
-  // right now - which is equally true of a healthy app whose container is
-  // momentarily down, of a container FluxOS runs for itself, and of anything the
-  // node operator left stopped on their own machine. The guard in front of this
-  // call only ever knew about installed app components.
-  //
-  // Images: reclamation belongs to imageReaper.pruneUnusedImages (boot /
-  // post-update / daily), which is reference-gated and honours enterprise
-  // image-cache pins. It subsumes the old dangling prune - an untagged image
-  // still falls straight through to removal - without destroying a peer-
-  // delivered image that arrived addressed by id and therefore carries no tag.
-}
-
-/**
  * Ensures the per-app docker network (fluxDockerNetwork_<appName>) exists,
  * creating it with a free /24 (172.23.<octet>.0/24) if absent. Safe to call on
  * every install and from the reconciler's heal path, where a pruned network
@@ -346,27 +321,6 @@ async function installApplication(instantiated, options = {}) {
       const reason = `Image blocklist unreachable - cannot verify ${appName} for installation, will retry`;
       if (onStatus) onStatus(messageHelper.createErrorMessage(reason));
       return { status: InstallStatus.DEFERRED, reason };
-    }
-
-    // eslint-disable-next-line global-require
-    const appQueryService = require('../appQuery/appQueryService');
-    const deployments = await deploymentProvider.listInstalledDeployments();
-    const runningAppsRes = await appQueryService.listRunningApps();
-    if (runningAppsRes.status !== 'success') {
-      throw new Error('Unable to check running Apps');
-    }
-    const runningApps = runningAppsRes.data;
-    const installedAppComponentNames = [];
-    deployments.forEach((deployment) => {
-      deployment.componentEntries().forEach(([, comp]) => {
-        installedAppComponentNames.push(comp.identifier);
-      });
-    });
-    const runningAppsNames = runningApps.map((app) => app.Names[0].slice(5));
-    const runningSet = new Set(runningAppsNames);
-    const stoppedApps = installedAppComponentNames.filter((installedApp) => !runningSet.has(installedApp));
-    if (stoppedApps.length === 0 && !operationRegistry.isHeld(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY)) {
-      await performDockerCleanup(onStatus);
     }
 
     // Verify every app this app shares a network with is installed locally and

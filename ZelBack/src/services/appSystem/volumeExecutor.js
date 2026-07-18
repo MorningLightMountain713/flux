@@ -1082,9 +1082,9 @@ function stopImagePrefetch() {
  * the whole reason this check is per-operation. The reaper runs at boot, after
  * every image update and daily, and deliberately reclaims a cold TAGGED image
  * once no container holds it and no enterprise cache pin protects it - and
- * between file operations nothing holds this one. (`performDockerCleanup`, which
- * used to prune only dangling images before every install, no longer prunes
- * anything.) So the image is not guaranteed to persist between operations; what
+ * between file operations nothing holds this one. (The pre-install prune that
+ * used to run instead is gone entirely.) So the image is not guaranteed to
+ * persist between operations; what
  * makes that survivable is the peer route below, which is what a node that
  * cannot reach the registry falls back to.
  *

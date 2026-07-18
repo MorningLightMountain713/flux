@@ -1,4 +1,3 @@
-const serviceHelper = require('../serviceHelper');
 const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
@@ -11,7 +10,6 @@ let allAppsRemoved = false;
 
 // Thresholds
 const RUNTIME_THRESHOLD = 2 * 60 * 60 * 1000;  // 2 hours
-const REMOVAL_DELAY = 3 * 60 * 1000;  // 3 minutes between app removals
 
 /**
  * Removes all installed applications due to daemon failure
@@ -30,15 +28,15 @@ async function removeAllApps(reason) {
 
     log.warn(`Removing ${installedApps.length} applications due to daemon failure`);
 
-    // Remove each app with delays between removals (matches forceAppRemovals pattern)
+    // Backgrounded removals: the host-mutation lock serializes the destructive
+    // teardowns, so the wipe needs no self-pacing between apps.
     for (const app of installedApps) {
       log.warn(`REMOVAL REASON: Daemon failure - removing ${app.name} (${reason})`);
       try {
         // we probably won't have peers - but broadcast anyway
-        await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true, broadcastRemoval: true });
-
-        // 3-minute delay between removals to avoid system overload
-        await serviceHelper.delay(REMOVAL_DELAY);
+        await appUninstaller.uninstallApplication(app.name, {
+          forceKill: true, skipGuard: true, broadcastRemoval: true, background: true,
+        });
       } catch (error) {
         log.error(`Failed to remove ${app.name}: ${error.message}`);
         // Continue with next app even if one fails

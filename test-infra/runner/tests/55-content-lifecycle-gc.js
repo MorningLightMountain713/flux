@@ -20,8 +20,8 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 //                 v1 slot blob (the blob-set complement of the manifest register).
 //   - latest-wins → a higher version (v3) supersedes; a stale version (v2) is refused
 //                 without advancing the register.
-//   - reaper    → once the app leaves globalappsspecifications, the periodic sweep in
-//                 the block loop (after expireGlobalApplications) drops the confirmed
+//   - reaper    → once the app leaves globalappsspecifications, the janitor's
+//                 registry-expiry sweep on the block loop drops the confirmed
 //                 manifest row.
 // Asserts on the SSE event bus + the appcontentmanifests DB row + the FluxDrive stub
 // state (reconciles, tombstoned blobs), never log scraping. Complements suite 53
@@ -240,7 +240,7 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
 
     const afterId = node.getLastEventId();
 
-    // The reaper runs after expireGlobalApplications on the synced block loop, every
+    // The reaper runs inside the janitor's registry-expiry sweep on the synced block loop, every
     // 2*speedMultiplier blocks (speedMultiplier=4 above the PON fork → every 8 blocks)
     // — but ONLY on a block processed AT the tip (confirmations < 2). With the ticker
     // mining +1 every 5s the explorer (polling ~10s) processes two blocks per cycle:
