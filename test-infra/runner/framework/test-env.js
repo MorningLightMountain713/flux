@@ -5,8 +5,10 @@ process.env.TESTCONTAINERS_HOST_OVERRIDE ??= '127.0.0.1';
 process.env.TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT ??= '5s';
 
 import { GenericContainer, Wait, getContainerRuntimeClient } from 'testcontainers';
-import { readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+import {
+  readFileSync, mkdirSync, writeFileSync, rmSync, existsSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
@@ -711,15 +713,18 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
       { source: join(fixturesDir, 'registry-tls', 'ca.pem'), target: '/usr/local/share/ca-certificates/test-registry.crt', mode: 'ro' },
       { source: bootIdDir, target: '/tmp/flux-boot-config' },
     ];
-    // Real flux-telemetryd (systemd mode only): the daemon binary from the
-    // runner host's vendored cargo build plus its REAL hardened unit, both
+    // Real flux-telemetryd (systemd mode only): the pinned daemon build from
+    // test-infra/flux-telemetryd/dist (binary + its REAL hardened unit),
     // bind-mounted; the entrypoint installs them and FluxOS starts the unit
-    // (production flow). Paths overridable for a non-default checkout.
+    // (production flow). Fail fast on a missing/stale dist rather than
+    // letting a skewed daemon produce runtime mysteries.
     if (telemetrydReal) {
-      const distBinary = process.env.TELEMETRYD_BINARY
-        ?? join(homedir(), 'flux-e2e', 'flux-telemetryd', 'target', 'release', 'flux-telemetryd');
-      const distUnit = process.env.TELEMETRYD_UNIT
-        ?? join(homedir(), 'flux-e2e', 'flux-telemetryd', 'packaging', 'systemd', 'flux-telemetryd.service');
+      const distDir = join(__dirname, '..', '..', 'flux-telemetryd', 'dist');
+      const distBinary = process.env.TELEMETRYD_BINARY ?? join(distDir, 'flux-telemetryd');
+      const distUnit = process.env.TELEMETRYD_UNIT ?? join(distDir, 'flux-telemetryd.service');
+      if (!existsSync(distBinary) || !existsSync(distUnit)) {
+        throw new Error(`telemetrydReal: ${distBinary} missing — run: bash test-infra/flux-telemetryd/build.sh`);
+      }
       bindMounts.push(
         { source: distBinary, target: '/opt/telemetryd-dist/flux-telemetryd', mode: 'ro' },
         { source: distUnit, target: '/opt/telemetryd-dist/flux-telemetryd.service', mode: 'ro' },

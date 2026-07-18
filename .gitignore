@@ -383,6 +383,8 @@ CloudUI/
 test-infra/test-app/test-app
 # compiled OTLP receiver fixture binary (built via test-infra/otlp-receiver/build.sh)
 test-infra/otlp-receiver/otlp-receiver
+# flux-telemetryd built for the harness (test-infra/flux-telemetryd/build.sh; pin declares the commit)
+test-infra/flux-telemetryd/dist/
 
 # per-node logs written by the integration harness on test failure
 test-infra/runner/test-logs/
