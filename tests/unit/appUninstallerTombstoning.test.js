@@ -59,12 +59,17 @@ describe('appUninstaller tombstoning teardown', () => {
         getTeardown: sinon.stub().resolves(null),
         bumpAttempts: sinon.stub().resolves(),
       },
-      deploymentProvider: { getInstalledDeployment: sinon.stub().resolves(makeDeployment(['web'])) },
+      deploymentProvider: {
+        getInstalledDeployment: sinon.stub().resolves(makeDeployment(['web'])),
+        buildDeployment: sinon.stub().resolves(makeDeployment(['web'])),
+        localIdentities: sinon.stub().resolves([null]),
+      },
       appsRepository: {
         getInstalledApp: sinon.stub().resolves({ name: 'app', owner: 'owner1' }),
         getGlobalAppInfo: sinon.stub().resolves(null),
         getAppMessage: sinon.stub().resolves(null),
         existsInstalledApp: sinon.stub().resolves(false),
+        removeInstalledApp: sinon.stub().resolves(),
       },
       dbHelper: {
         databaseConnection: () => ({ db: () => ({}) }),
@@ -249,9 +254,9 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(res.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
       expect(stubs.pendingTeardownStore.writeTeardown.calledOnce, 'doc written').to.be.true;
       expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', true), 'component condemned').to.be.true;
-      expect(stubs.dbHelper.findOneAndDeleteInDatabase.calledOnce, 'local row deleted').to.be.true;
+      expect(stubs.appsRepository.removeInstalledApp.calledOnce, 'local row deleted').to.be.true;
       // ORDER (load-bearing): durable doc persisted BEFORE the row is deleted
-      expect(stubs.pendingTeardownStore.writeTeardown.calledBefore(stubs.dbHelper.findOneAndDeleteInDatabase)).to.be.true;
+      expect(stubs.pendingTeardownStore.writeTeardown.calledBefore(stubs.appsRepository.removeInstalledApp)).to.be.true;
       // foreground (background:false default) actually runs the destructive teardown
       expect(stubs.dockerService.appDockerRemove.called).to.be.true;
       // the prelude aborts any in-flight install of the same app (cancel-vs-install)
