@@ -102,29 +102,7 @@ const dosState = {
 const portsNotWorking = new Set();
 const appsStorageViolations = [];
 
-/**
- * createIndex that tolerates a pre-existing index with conflicting options
- * (IndexOptionsConflict / IndexKeySpecsConflict) by finding the conflicting
- * index via listIndexes, dropping it by its actual name, and recreating.
- * Every other error bubbles up.
- */
-async function ensureIndex(collection, spec, options = {}) {
-  try {
-    await collection.createIndex(spec, options);
-  } catch (err) {
-    const conflict = err && (err.codeName === 'IndexOptionsConflict' || err.codeName === 'IndexKeySpecsConflict');
-    if (!conflict) throw err;
-    const specKeys = JSON.stringify(spec);
-    const indexes = await collection.listIndexes().toArray();
-    const match = indexes.find((idx) => JSON.stringify(idx.key) === specKeys);
-    const dropName = match?.name;
-    if (dropName) {
-      log.warn(`ensureIndex - conflicting index '${dropName}' on ${collection.collectionName} (key: ${specKeys}), dropping and recreating`);
-      await collection.dropIndex(dropName);
-    }
-    await collection.createIndex(spec, options);
-  }
-}
+const { ensureIndex } = dbHelper;
 
 /**
  * To start FluxOS. A series of checks are performed on port and UPnP (Universal Plug and Play) support and mapping. Database connections are established. The other relevant functions required to start FluxOS services are called.
@@ -265,16 +243,7 @@ async function startFluxFunctions() {
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appStateEvents), { broadcastedAt: 1 });
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appStateEvents), { createdAt: 1 });
     log.info('App state events collection prepared');
-    await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingBroadcasts).dropIndex('broadcastedAt_1').catch(() => {});
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingBroadcasts), { expireAt: 1 }, { expireAfterSeconds: 0 });
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingBroadcasts), { broadcastedAt: 1 });
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingBroadcasts), { 'data.name': 1, 'data.ip': 1 }, { unique: true });
-    log.info('Signed appinstalling broadcasts collection prepared');
-    await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingLocations).dropIndex('broadcastedAt_1').catch(() => {});
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingLocations), { expireAt: 1 }, { expireAfterSeconds: 0 });
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingLocations), { name: 1 }, { name: 'query for getting flux app install location based on specs name' });
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingLocations), { name: 1, ip: 1 }, { name: 'query for getting flux app install location based on specs name and node ip' });
-    log.info('Flux Apps installing locations prepared');
+    await registryManager.prepareInstallingClaimsCollections();
     await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations).dropIndex('cachedAt_1').catch(() => {});
     await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations).dropIndex('broadcastedAt_1').catch(() => {});
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations), { expireAt: 1 }, { expireAfterSeconds: 0 });

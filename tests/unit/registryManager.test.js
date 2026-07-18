@@ -181,6 +181,27 @@ describe('registryManager tests', () => {
 
       expect(result).to.be.an('array');
     });
+
+    it('carries announcedAt and replica through the read (the election key and seat identity)', async () => {
+      const collection = config.database.appsglobal.collections.appsInstallingLocations;
+      const announcedAt = new Date(Date.now() - 60 * 1000);
+      await dbHelper.insertOneToDatabase(database, collection, {
+        name: 'ClaimedApp',
+        ip: '192.168.1.3:16127',
+        replica: 's1',
+        announcedAt,
+        broadcastedAt: new Date(),
+        expireAt: new Date(Date.now() + 300000),
+      });
+
+      const result = await registryManager.appInstallingLocation('ClaimedApp');
+
+      // Elections rank on announcedAt ?? broadcastedAt; broadcastedAt moves on
+      // renewals, so stripping announcedAt here would shift a renewing node's
+      // election position.
+      expect(result[0].announcedAt).to.deep.equal(announcedAt);
+      expect(result[0].replica).to.equal('s1');
+    });
   });
 
   describe('storeAppInstallingMessage tests', () => {
@@ -289,6 +310,108 @@ describe('registryManager tests', () => {
       const result = await registryManager.storeAppInstallingMessage(validMessage);
 
       expect(result).to.be.false;
+    });
+
+    it('keys one claim row per replica: co-located claims coexist under one (name, ip)', async () => {
+      const broadcastedAt = Date.now();
+      const base = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'ColocatedApp',
+        ip: '192.168.1.1:16127',
+        announcedAt: broadcastedAt,
+        broadcastedAt,
+      };
+
+      await registryManager.storeAppInstallingMessage({ ...base, replica: 's1' });
+      const result = await registryManager.storeAppInstallingMessage({ ...base, replica: 's2' });
+
+      expect(result).to.be.true;
+      const collection = config.database.appsglobal.collections.appsInstallingLocations;
+      const rows = await database.collection(collection).find({ name: 'ColocatedApp' }).toArray();
+      expect(rows).to.have.length(2);
+      expect(rows.map((r) => r.replica).sort()).to.deep.equal(['s1', 's2']);
+    });
+
+    it('rejects a non-string replica (local-writer strictness catches emission bugs)', async () => {
+      const badReplica = {
+        ...validMessage,
+        version: 2,
+        name: 'BadReplicaApp',
+        announcedAt: Date.now(),
+        broadcastedAt: Date.now(),
+        replica: 123,
+      };
+
+      try {
+        await registryManager.storeAppInstallingMessage(badReplica);
+        expect.fail('Should have thrown an error');
+      } catch (error) {
+        expect(error.message).to.include('replica must be a string');
+      }
+    });
+  });
+
+  describe('removeAppInstallingMessage tests', () => {
+    it('retracts exactly the named identity; siblings and the loose row survive', async () => {
+      const broadcastedAt = Date.now();
+      const base = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'RetractApp',
+        ip: '192.168.1.1:16127',
+        announcedAt: broadcastedAt,
+        broadcastedAt,
+      };
+      await registryManager.storeAppInstallingMessage({ ...base, replica: 's1' });
+      await registryManager.storeAppInstallingMessage({ ...base, replica: 's2' });
+
+      await registryManager.removeAppInstallingMessage('RetractApp', '192.168.1.1:16127', 's1');
+
+      const collection = config.database.appsglobal.collections.appsInstallingLocations;
+      const rows = await database.collection(collection).find({ name: 'RetractApp' }).toArray();
+      expect(rows.map((r) => r.replica)).to.deep.equal(['s2']);
+    });
+
+    it('prepareInstallingClaimsCollections: archived announces are unique per identity, not per (name, ip)', async () => {
+      const collection = config.database.appsglobal.collections.appsInstallingBroadcasts;
+      try {
+        await database.collection(collection).drop();
+      } catch (err) {
+        // collection doesn't exist
+      }
+      await registryManager.prepareInstallingClaimsCollections();
+
+      const doc = (replica) => ({
+        data: {
+          name: 'ColoApp', ip: '192.168.1.1:16127', replica, broadcastedAt: Date.now(),
+        },
+        broadcastedAt: new Date(),
+        expireAt: new Date(Date.now() + 300000),
+      });
+      await database.collection(collection).insertOne(doc('s1'));
+      // The co-located sibling's announce must coexist under the same (name, ip).
+      await database.collection(collection).insertOne(doc('s2'));
+
+      let duplicateError = null;
+      await database.collection(collection).insertOne(doc('s1')).catch((err) => { duplicateError = err; });
+      expect(duplicateError, 'same identity must still be unique').to.exist;
+      expect(duplicateError.code).to.equal(11000);
+    });
+
+    it('a null retract matches a legacy row stored without the replica field', async () => {
+      const collection = config.database.appsglobal.collections.appsInstallingLocations;
+      await dbHelper.insertOneToDatabase(database, collection, {
+        name: 'LegacyRowApp',
+        ip: '192.168.1.1:16127',
+        broadcastedAt: new Date(),
+        expireAt: new Date(Date.now() + 300000),
+      });
+
+      await registryManager.removeAppInstallingMessage('LegacyRowApp', '192.168.1.1:16127');
+
+      const rows = await database.collection(collection).find({ name: 'LegacyRowApp' }).toArray();
+      expect(rows).to.have.length(0);
     });
   });
 

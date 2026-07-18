@@ -14,12 +14,12 @@ const {
   globalAppsTempMessages,
   globalAppsLocations,
   globalAppsInstallingLocations,
+  globalAppsInstallingBroadcasts: appsInstallingBroadcasts,
   globalAppsInstallingErrorsLocations,
   globalAppsInstallingErrorsBroadcasts,
   globalAppStateEvents,
   appsHashesCollection,
 } = require('../utils/appConstants');
-const appsInstallingBroadcasts = config.database.appsglobal.collections.appsInstallingBroadcasts;
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 
 const {
@@ -347,15 +347,21 @@ async function storeAppRunningMessage(message) {
   }
 
   for (const app of appsMessages) {
-    // A replica-tagged entry releases exactly its own claim; untagged releases
-    // every claim for the (name, ip) - the v1 whole-app semantics.
-    const queryFind = typeof app.replica === 'string'
+    // A replica-tagged entry releases exactly its own claim (location row AND
+    // archived announce - a sibling still mid-install must keep both, or message
+    // sync would strip its seat); untagged releases every claim for the
+    // (name, ip) - the v1 whole-app semantics.
+    const tagged = typeof app.replica === 'string';
+    const queryFind = tagged
       ? { name: app.name, ip: message.ip, replica: app.replica }
       : { name: app.name, ip: message.ip };
+    const broadcastQuery = tagged
+      ? { 'data.name': app.name, 'data.ip': message.ip, 'data.replica': app.replica }
+      : { 'data.name': app.name, 'data.ip': message.ip };
     // eslint-disable-next-line no-await-in-loop
     await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, queryFind);
     // eslint-disable-next-line no-await-in-loop
-    await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, { 'data.name': app.name, 'data.ip': message.ip });
+    await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, broadcastQuery);
   }
 
   return { stored: anyStored, rebroadcast: anyStored };
@@ -376,8 +382,11 @@ async function storeAppInstallingMessage(message) {
   * v2 additions:
   * @param announcedAt number - immutable first-announce time; broadcastedAt moves on
   *   renewals, so elections must order contenders by announcedAt
-  * @param cleared boolean (optional) - retract the (name, ip) claim with no verdict on
-  *   the app, unlike fluxappinstallingerror which also feeds peers' error counting
+  * @param replica string (optional) - the claimed identity for named placement; rows
+  *   key on (name, ip, replica ?? null), one seat per replica
+  * @param cleared boolean (optional) - retract the claim with no verdict on the app,
+  *   unlike fluxappinstallingerror which also feeds peers' error counting; tagged
+  *   clears release exactly their replica's seat, untagged release every (name, ip) row
   */
   if (!message || typeof message !== 'object' || typeof message.type !== 'string' || typeof message.version !== 'number'
     || typeof message.broadcastedAt !== 'number' || typeof message.ip !== 'string' || typeof message.name !== 'string') {
@@ -402,26 +411,39 @@ async function storeAppInstallingMessage(message) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
 
-  const queryFind = { name: message.name, ip: message.ip };
-  const projection = { _id: 0 };
-  const result = await dbHelper.findOneInDatabase(database, globalAppsInstallingLocations, queryFind, projection);
+  // Peer input: normalize the identity tag tolerantly (a malformed tag degrades to
+  // the untagged row) - the local writer's store (registryManager) is the strict one.
+  const replica = message.version === 2 && typeof message.replica === 'string' ? message.replica : null;
 
   if (cleared) {
+    // A replica-tagged clear releases exactly its own claim; untagged releases
+    // every (name, ip) claim - the v1/loose whole-app semantics.
+    const clearQuery = replica !== null
+      ? { name: message.name, ip: message.ip, replica }
+      : { name: message.name, ip: message.ip };
     // A strictly-newer announce supersedes a late-arriving clear from an older
     // attempt; on an equal timestamp the clear wins - the emitter sequences the
     // clear after its own announce, so same-millisecond means announce-then-clear.
-    if (result && result.broadcastedAt && result.broadcastedAt > new Date(message.broadcastedAt)) {
+    const rows = await dbHelper.findInDatabase(database, globalAppsInstallingLocations, clearQuery, { projection: { _id: 0, broadcastedAt: 1 } });
+    const clearedAt = new Date(message.broadcastedAt);
+    if (rows.some((row) => row.broadcastedAt && row.broadcastedAt > clearedAt)) {
       return false;
     }
-    // Delete the archived broadcast too so message sync cannot resurrect the claim.
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, queryFind);
-    await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, { 'data.name': message.name, 'data.ip': message.ip });
+    // Delete the archived broadcast(s) too so message sync cannot resurrect the claim.
+    const broadcastQuery = replica !== null
+      ? { 'data.name': message.name, 'data.ip': message.ip, 'data.replica': replica }
+      : { 'data.name': message.name, 'data.ip': message.ip };
+    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, clearQuery);
+    await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, broadcastQuery);
     return true;
   }
 
   const newAppInstallingMessage = {
     name: message.name,
     ip: message.ip,
+    // One claim row per identity: a replica name for named placement, null
+    // (loose / v1 senders) - null also matches legacy rows without the field.
+    replica,
     broadcastedAt: new Date(message.broadcastedAt),
     expireAt: new Date(message.broadcastedAt + INSTALLING_EXPIRY_MS),
   };
@@ -429,12 +451,15 @@ async function storeAppInstallingMessage(message) {
     newAppInstallingMessage.announcedAt = new Date(message.announcedAt);
   }
 
+  const queryFind = { name: message.name, ip: message.ip, replica };
+  const projection = { _id: 0 };
+  const result = await dbHelper.findOneInDatabase(database, globalAppsInstallingLocations, queryFind, projection);
   // we already have the exact same data (or newer - e.g. a renewal already landed)
   if (result && result.broadcastedAt && result.broadcastedAt >= newAppInstallingMessage.broadcastedAt) {
     return false;
   }
 
-  const queryUpdate = { name: newAppInstallingMessage.name, ip: newAppInstallingMessage.ip };
+  const queryUpdate = queryFind;
   const update = { $set: newAppInstallingMessage };
   const options = {
     upsert: true,
@@ -858,7 +883,9 @@ function storeSignedAppInstallingBroadcast(signedBroadcast) {
   };
   return dbHelper.updateOneInDatabase(
     database, appsInstallingBroadcasts,
-    { 'data.name': data.name, 'data.ip': data.ip },
+    // One archived announce per claim identity; null matches legacy docs
+    // archived without the field.
+    { 'data.name': data.name, 'data.ip': data.ip, 'data.replica': data.replica ?? null },
     { $set: doc },
     { upsert: true },
   ).catch((err) => log.error(`storeSignedAppInstallingBroadcast: ${err.message}`));
@@ -878,9 +905,13 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
     const validTill = data.broadcastedAt + INSTALLING_EXPIRY_MS;
     if (validTill < Date.now()) continue;
 
+    // The claim identity: one archived announce and one location row per replica;
+    // null (loose / v1) matches legacy docs stored without the field.
+    const replica = typeof data.replica === 'string' ? data.replica : null;
+
     signedOps.push({
       updateOne: {
-        filter: { 'data.name': data.name, 'data.ip': data.ip },
+        filter: { 'data.name': data.name, 'data.ip': data.ip, 'data.replica': replica },
         update: {
           $set: {
             version: broadcast.version,
@@ -903,6 +934,7 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
     const locationSet = {
       name: data.name,
       ip: data.ip,
+      replica,
       broadcastedAt: { $cond: [isNewer, incomingDate, '$broadcastedAt'] },
       expireAt: { $cond: [isNewer, incomingExpiry, '$expireAt'] },
     };
@@ -911,7 +943,7 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
     }
     locationOps.push({
       updateOne: {
-        filter: { name: data.name, ip: data.ip },
+        filter: { name: data.name, ip: data.ip, replica },
         update: [{ $set: locationSet }],
         upsert: true,
       },

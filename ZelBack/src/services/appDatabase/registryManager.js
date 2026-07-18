@@ -21,6 +21,7 @@ const {
   globalAppsLocations,
   globalAppStateEvents,
   globalAppsInstallingLocations,
+  globalAppsInstallingBroadcasts,
   globalAppsInstallingErrorsLocations,
   globalAppsInstallingErrorsBroadcasts,
   appsHashesCollection,
@@ -155,6 +156,11 @@ async function appInstallingLocation(appname) {
       _id: 0,
       name: 1,
       ip: 1,
+      replica: 1,
+      // The election key: contenders rank on announcedAt ?? broadcastedAt, and
+      // broadcastedAt moves on every claim renewal - without announcedAt in this
+      // read, a renewing node's election position would silently shift.
+      announcedAt: 1,
       broadcastedAt: 1,
       expireAt: 1,
     },
@@ -264,6 +270,12 @@ async function storeAppInstallingMessage(message) {
     throw new Error('Invalid Flux App Installing message for storing announcedAt required for version 2');
   }
 
+  // Local-writer strictness (this is the node's OWN claim): a malformed replica tag
+  // is an emission bug, not something to tolerantly normalize away like peer input.
+  if (message.replica !== undefined && typeof message.replica !== 'string') {
+    throw new Error('Invalid Flux App Installing message for storing replica must be a string when present');
+  }
+
   // Same row lifetime peers grant the broadcast copy: the node must not forget its
   // own claim before the fleet does.
   const validTill = message.broadcastedAt + INSTALLING_EXPIRY_MS;
@@ -279,6 +291,9 @@ async function storeAppInstallingMessage(message) {
   const newAppInstallingMessage = {
     name: message.name,
     ip: message.ip,
+    // One claim row per identity: a replica name for named placement, null for
+    // loose - null also matches legacy rows stored without the field.
+    replica: message.replica ?? null,
     broadcastedAt: new Date(message.broadcastedAt),
     expireAt: new Date(validTill),
   };
@@ -287,7 +302,7 @@ async function storeAppInstallingMessage(message) {
   }
 
   // indexes over name, hash, ip. Then name + ip and name + ip + broadcastedAt.
-  const queryFind = { name: newAppInstallingMessage.name, ip: newAppInstallingMessage.ip };
+  const queryFind = { name: newAppInstallingMessage.name, ip: newAppInstallingMessage.ip, replica: newAppInstallingMessage.replica };
   const projection = { _id: 0 };
   // we already have the exact same data
   const result = await dbHelper.findOneInDatabase(database, globalAppsInstallingLocations, queryFind, projection);
@@ -296,7 +311,7 @@ async function storeAppInstallingMessage(message) {
     return false;
   }
 
-  const queryUpdate = { name: newAppInstallingMessage.name, ip: newAppInstallingMessage.ip };
+  const queryUpdate = queryFind;
   const update = { $set: newAppInstallingMessage };
   const options = {
     upsert: true,
@@ -308,20 +323,53 @@ async function storeAppInstallingMessage(message) {
 }
 
 /**
- * Retract this node's own fluxappinstalling record for an app (delete by the same
- * name+ip key storeAppInstallingMessage upserts on). Used when a spawn attempt
- * that stored the record does not go on to install (deferred, failed, or an early
- * bail): a lingering record would make the next spawn cycle read its own stale
- * "installing" state and self-lock the app. Idempotent - a no-op when absent.
+ * Retract this node's own fluxappinstalling record for one identity of an app
+ * (delete by the same name+ip+replica key storeAppInstallingMessage upserts on).
+ * Used when a spawn attempt that stored the record does not go on to install
+ * (deferred, failed, or an early bail): a lingering record would make the next
+ * spawn cycle read its own stale "installing" state and self-lock the app.
+ * Idempotent - a no-op when absent.
  *
  * @param {string} name - app name
  * @param {string} ip - this node's socket address
+ * @param {string|null} [replica] - the identity to retract; null (loose) also
+ *   matches legacy rows stored without the field
  * @returns {Promise<void>}
  */
-async function removeAppInstallingMessage(name, ip) {
+async function removeAppInstallingMessage(name, ip, replica = null) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
-  await dbHelper.findOneAndDeleteInDatabase(database, globalAppsInstallingLocations, { name, ip }, {});
+  await dbHelper.findOneAndDeleteInDatabase(database, globalAppsInstallingLocations, { name, ip, replica }, {});
+}
+
+/**
+ * Ensure the installing-claims collections (location rows + archived signed
+ * broadcasts) carry their indexes: TTL on expireAt, the query indexes, and the
+ * per-identity uniqueness of archived announces. Owned here with the rest of
+ * the claims row logic; serviceManager calls this during db preparation.
+ * @returns {Promise<void>}
+ */
+async function prepareInstallingClaimsCollections() {
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.database.appsglobal.database);
+
+  const broadcasts = database.collection(globalAppsInstallingBroadcasts);
+  // TTL migrated from broadcastedAt to the per-document expireAt.
+  await broadcasts.dropIndex('broadcastedAt_1').catch(() => {});
+  await dbHelper.ensureIndex(broadcasts, { expireAt: 1 }, { expireAfterSeconds: 0 });
+  await dbHelper.ensureIndex(broadcasts, { broadcastedAt: 1 });
+  // One archived announce per claim identity: a co-located node holds one doc
+  // per replica under the same (name, ip); the two-field unique index would
+  // reject the sibling's announce.
+  await broadcasts.dropIndex('data.name_1_data.ip_1').catch(() => {});
+  await dbHelper.ensureIndex(broadcasts, { 'data.name': 1, 'data.ip': 1, 'data.replica': 1 }, { unique: true });
+
+  const locations = database.collection(globalAppsInstallingLocations);
+  await locations.dropIndex('broadcastedAt_1').catch(() => {});
+  await dbHelper.ensureIndex(locations, { expireAt: 1 }, { expireAfterSeconds: 0 });
+  await dbHelper.ensureIndex(locations, { name: 1 }, { name: 'query for getting flux app install location based on specs name' });
+  await dbHelper.ensureIndex(locations, { name: 1, ip: 1 }, { name: 'query for getting flux app install location based on specs name and node ip' });
+  log.info('Installing-claims collections prepared');
 }
 
 /**
@@ -1410,6 +1458,7 @@ module.exports = {
   appInstallingErrorsLocation,
   storeAppInstallingMessage,
   removeAppInstallingMessage,
+  prepareInstallingClaimsCollections,
   getAppsLocations,
   getAppsLocation,
   getAppInstallingLocation,

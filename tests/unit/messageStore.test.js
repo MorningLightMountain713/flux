@@ -525,6 +525,33 @@ describe('messageStore tests', () => {
       expect(dbHelperStub.removeDocumentsFromCollection.callCount).to.equal(4);
     });
 
+    it('a replica-tagged running entry releases only its own claim row and archived announce', async () => {
+      const message = {
+        type: 'fluxapprunning',
+        version: 2,
+        apps: [{ name: 'app1', hash: 'hash1', replica: 's1' }],
+        broadcastedAt: Date.now(),
+        ip: '192.168.1.1',
+      };
+
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.updateOneInDatabase.resolves({ modifiedCount: 0, upsertedCount: 1 });
+      dbHelperStub.removeDocumentsFromCollection.resolves();
+
+      const result = await messageStore.storeAppRunningMessage(message);
+
+      expect(result).to.deep.equal({ stored: true, rebroadcast: true });
+      // The sibling replica's claim (location row AND archived announce) must survive
+      // s1 starting to run, or message sync would strip its seat mid-install.
+      expect(dbHelperStub.removeDocumentsFromCollection.firstCall.args[2]).to.deep.equal({
+        name: 'app1', ip: '192.168.1.1', replica: 's1',
+      });
+      expect(dbHelperStub.removeDocumentsFromCollection.secondCall.args[2]).to.deep.equal({
+        'data.name': 'app1', 'data.ip': '192.168.1.1', 'data.replica': 's1',
+      });
+    });
+
     it('should handle version 2 message with empty apps array', async () => {
       const message = {
         type: 'fluxapprunning',
@@ -633,6 +660,54 @@ describe('messageStore tests', () => {
       expect(setDoc.expireAt).to.deep.equal(new Date(broadcastedAt + 15 * 60 * 1000));
     });
 
+    it('keys the claim row by replica: a tagged claim upserts (name, ip, replica)', async () => {
+      const broadcastedAt = Date.now();
+      const message = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'testapp',
+        replica: 's1',
+        announcedAt: broadcastedAt,
+        broadcastedAt,
+        ip: '192.168.1.1',
+      };
+
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.updateOneInDatabase.resolves();
+
+      const result = await messageStore.storeAppInstallingMessage(message);
+
+      expect(result).to.be.true;
+      expect(dbHelperStub.findOneInDatabase.firstCall.args[2]).to.deep.equal({ name: 'testapp', ip: '192.168.1.1', replica: 's1' });
+      expect(dbHelperStub.updateOneInDatabase.firstCall.args[2]).to.deep.equal({ name: 'testapp', ip: '192.168.1.1', replica: 's1' });
+      expect(dbHelperStub.updateOneInDatabase.firstCall.args[3].$set.replica).to.equal('s1');
+    });
+
+    it('an untagged claim keys replica null (matches legacy rows without the field)', async () => {
+      const broadcastedAt = Date.now();
+      const message = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'testapp',
+        announcedAt: broadcastedAt,
+        broadcastedAt,
+        ip: '192.168.1.1',
+      };
+
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.updateOneInDatabase.resolves();
+
+      const result = await messageStore.storeAppInstallingMessage(message);
+
+      expect(result).to.be.true;
+      expect(dbHelperStub.updateOneInDatabase.firstCall.args[2]).to.deep.equal({ name: 'testapp', ip: '192.168.1.1', replica: null });
+      expect(dbHelperStub.updateOneInDatabase.firstCall.args[3].$set.replica).to.equal(null);
+    });
+
     it('should refresh the row on a renewal (newer broadcastedAt, same announcedAt)', async () => {
       const announcedAt = Date.now() - 10 * 60 * 1000;
       const broadcastedAt = Date.now();
@@ -696,9 +771,7 @@ describe('messageStore tests', () => {
 
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneInDatabase.resolves({
-        name: 'testapp', ip: '192.168.1.1', broadcastedAt: new Date(broadcastedAt - 60 * 1000),
-      });
+      dbHelperStub.findInDatabase.resolves([{ broadcastedAt: new Date(broadcastedAt - 60 * 1000) }]);
       dbHelperStub.removeDocumentsFromCollection.resolves();
 
       const result = await messageStore.storeAppInstallingMessage(message);
@@ -707,8 +780,33 @@ describe('messageStore tests', () => {
       expect(dbHelperStub.updateOneInDatabase.called).to.be.false;
       expect(dbHelperStub.removeDocumentsFromCollection.calledTwice).to.be.true;
       expect(dbHelperStub.removeDocumentsFromCollection.firstCall.args[1]).to.equal('appsInstallingLocations');
+      // An untagged clear releases EVERY (name, ip) row - the v1/loose whole-app semantics.
       expect(dbHelperStub.removeDocumentsFromCollection.firstCall.args[2]).to.deep.equal({ name: 'testapp', ip: '192.168.1.1' });
       expect(dbHelperStub.removeDocumentsFromCollection.secondCall.args[2]).to.deep.equal({ 'data.name': 'testapp', 'data.ip': '192.168.1.1' });
+    });
+
+    it('a tagged clear releases exactly its replica row and archived announce', async () => {
+      const broadcastedAt = Date.now();
+      const message = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'testapp',
+        replica: 's1',
+        cleared: true,
+        broadcastedAt,
+        ip: '192.168.1.1',
+      };
+
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findInDatabase.resolves([]);
+      dbHelperStub.removeDocumentsFromCollection.resolves();
+
+      const result = await messageStore.storeAppInstallingMessage(message);
+
+      expect(result).to.be.true;
+      expect(dbHelperStub.removeDocumentsFromCollection.firstCall.args[2]).to.deep.equal({ name: 'testapp', ip: '192.168.1.1', replica: 's1' });
+      expect(dbHelperStub.removeDocumentsFromCollection.secondCall.args[2]).to.deep.equal({ 'data.name': 'testapp', 'data.ip': '192.168.1.1', 'data.replica': 's1' });
     });
 
     it('should ignore a stale cleared that arrives after a newer announce', async () => {
@@ -724,9 +822,7 @@ describe('messageStore tests', () => {
 
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneInDatabase.resolves({
-        name: 'testapp', ip: '192.168.1.1', broadcastedAt: new Date(broadcastedAt + 30 * 1000),
-      });
+      dbHelperStub.findInDatabase.resolves([{ broadcastedAt: new Date(broadcastedAt + 30 * 1000) }]);
 
       const result = await messageStore.storeAppInstallingMessage(message);
 
@@ -746,7 +842,7 @@ describe('messageStore tests', () => {
 
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.findInDatabase.resolves([]);
       dbHelperStub.removeDocumentsFromCollection.resolves();
 
       const result = await messageStore.storeAppInstallingMessage(message);
@@ -771,6 +867,27 @@ describe('messageStore tests', () => {
       });
 
       expect(dbHelperStub.updateOneInDatabase.calledOnce).to.be.true;
+      expect(dbHelperStub.updateOneInDatabase.firstCall.args[2]).to.deep.equal({
+        'data.name': 'testapp', 'data.ip': '192.168.1.1', 'data.replica': null,
+      });
+    });
+
+    it('archives one announce per claim identity (data.replica in the key)', async () => {
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.updateOneInDatabase.resolves();
+
+      await messageStore.storeSignedAppInstallingBroadcast({
+        version: 1,
+        timestamp: Date.now(),
+        pubKey: 'pub',
+        signature: 'sig',
+        data: { name: 'testapp', ip: '192.168.1.1', replica: 's2', broadcastedAt: Date.now() },
+      });
+
+      expect(dbHelperStub.updateOneInDatabase.firstCall.args[2]).to.deep.equal({
+        'data.name': 'testapp', 'data.ip': '192.168.1.1', 'data.replica': 's2',
+      });
     });
 
     it('should not archive a cleared broadcast', async () => {
@@ -783,6 +900,41 @@ describe('messageStore tests', () => {
       });
 
       expect(dbHelperStub.updateOneInDatabase.called).to.be.false;
+    });
+  });
+
+  describe('storeBatchAppInstallingMessages', () => {
+    it('hash-sync intake keys archive and location rows per claim identity', async () => {
+      const broadcastedAt = Date.now();
+      const bulkWriteStub = sinon.stub().resolves();
+      const mockDatabase = { collection: sinon.stub().returns({ bulkWrite: bulkWriteStub }) };
+      const mockDb = { db: sinon.stub().returns(mockDatabase) };
+      dbHelperStub.databaseConnection.returns(mockDb);
+
+      const result = await messageStore.storeBatchAppInstallingMessages([{
+        version: 1,
+        timestamp: broadcastedAt,
+        pubKey: 'pub',
+        signature: 'sig',
+        receivedAt: broadcastedAt,
+        data: {
+          name: 'testapp', ip: '192.168.1.1', replica: 's1', announcedAt: broadcastedAt, broadcastedAt,
+        },
+      }]);
+
+      expect(result).to.deep.equal({ stored: 1 });
+      const signedOps = bulkWriteStub.firstCall.args[0];
+      expect(signedOps[0].updateOne.filter).to.deep.equal({
+        'data.name': 'testapp', 'data.ip': '192.168.1.1', 'data.replica': 's1',
+      });
+      const locationOps = bulkWriteStub.secondCall.args[0];
+      expect(locationOps[0].updateOne.filter).to.deep.equal({
+        name: 'testapp', ip: '192.168.1.1', replica: 's1',
+      });
+      expect(locationOps[0].updateOne.update[0].$set.replica).to.equal('s1');
+      // Elections rank on announcedAt; a sync intake that dropped it would
+      // silently reorder contenders on freshly synced nodes.
+      expect(locationOps[0].updateOne.update[0].$set.announcedAt).to.exist;
     });
   });
 
