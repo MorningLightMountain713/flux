@@ -198,51 +198,63 @@ async function redeployComponent(appName, componentName, options = {}) {
   const redeployToken = operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
 
   try {
-    const deployment = await deploymentProvider.getInstalledDeployment(appName);
-    if (!deployment) {
+    const deployments = await deploymentProvider.getInstalledDeployments(appName);
+    if (deployments.length === 0) {
       throw new Error(`Application ${appName} not found`);
     }
 
-    const deployComp = deployment.getComponent(componentName);
-    if (!deployComp) {
+    // A bare component name targets the component in EVERY local identity; a
+    // co-located pair rolls one identity's copy at a time (sibling keeps serving).
+    const targets = deployments
+      .map((deployment) => deployment.getComponent(componentName))
+      .filter(Boolean);
+    if (targets.length === 0) {
       throw new Error(`Component ${componentName} not found in application ${appName}`);
     }
 
     // Pre-flight: prove the image is pullable BEFORE tearing down the running version,
     // so a broken redeploy (bad ref/tag/arch/size/non-whitelisted) aborts here with the
     // old version still running (the throw lands in the catch, which only releases +
-    // hands off — nothing was torn down). Manifest check only, no pull, no disk cost.
-    await componentProvisioner.verifyComponentImage(deployComp);
+    // hands off — nothing was torn down). Images are identical across replicas.
+    // Manifest check only, no pull, no disk cost.
+    await componentProvisioner.verifyComponentImage(targets[0]);
 
-    if (createVolumes) {
-      log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployComponent)`);
+    for (const deployComp of targets) {
+      if (createVolumes) {
+        log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployComponent)`);
+      }
+      // Same-spec redeploy: the port set is identical, so leave the app's ufw/UPnP rules
+      // in place across the teardown+reinstall (no firewall flap, no ~1s/port UPnP re-map).
+      // eslint-disable-next-line no-await-in-loop
+      await appUninstaller.uninstallComponent(deployComp, {
+        removeVolumes: createVolumes,
+        skipPorts: true,
+        onStatus,
+      });
+
+      status(`Component ${deployComp.identifier} removed. Awaiting installation...`);
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+
+      // eslint-disable-next-line no-await-in-loop
+      const instantiated = await appsRepository.getInstalledApp(appName);
+      // eslint-disable-next-line no-await-in-loop
+      const freshDeployment = await deploymentProvider.buildDeployment(instantiated, { replica: deployComp.replica ?? null });
+      // eslint-disable-next-line no-await-in-loop
+      await hwRequirements.checkNodeResources(freshDeployment);
+
+      status(`Installing ${deployComp.identifier}...`);
+      // eslint-disable-next-line no-await-in-loop
+      await componentProvisioner.installComponent(deployComp, {
+        createVolumes,
+        skipPorts: true,
+        specVersion: instantiated.version,
+        owner: instantiated.owner,
+        requiresEncryption: shutdownPlan.appRequiresDaemonShutdown(freshDeployment),
+      });
+
+      status(`Component ${deployComp.identifier} ${label} complete`);
     }
-    // Same-spec redeploy: the port set is identical, so leave the app's ufw/UPnP rules
-    // in place across the teardown+reinstall (no firewall flap, no ~1s/port UPnP re-map).
-    await appUninstaller.uninstallComponent(deployComp, {
-      removeVolumes: createVolumes,
-      skipPorts: true,
-      onStatus,
-    });
-
-    status(`Component ${deployComp.identifier} removed. Awaiting installation...`);
-    await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-
-    const instantiated = await appsRepository.getInstalledApp(appName);
-    const freshDeployment = await deploymentProvider.buildDeployment(instantiated);
-    await hwRequirements.checkNodeResources(freshDeployment);
-
-
-    status(`Installing ${deployComp.identifier}...`);
-    await componentProvisioner.installComponent(deployComp, {
-      createVolumes,
-      skipPorts: true,
-      specVersion: instantiated.version,
-      owner: instantiated.owner,
-      requiresEncryption: shutdownPlan.appRequiresDaemonShutdown(freshDeployment),
-    });
-
-    status(`Component ${deployComp.identifier} ${label} complete`);
     operationRegistry.release(appName, redeployToken);
     appReconciler.enqueue(appName);
   } catch (error) {
@@ -288,8 +300,8 @@ async function redeployApplication(appName, options = {}) {
   const redeployToken = operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
 
   try {
-    const deployment = await deploymentProvider.getInstalledDeployment(appName);
-    if (!deployment) {
+    const deployments = await deploymentProvider.getInstalledDeployments(appName);
+    if (deployments.length === 0) {
       throw new Error(`Application ${appName} not found`);
     }
 
@@ -297,8 +309,10 @@ async function redeployApplication(appName, options = {}) {
 
     // Pre-flight: prove every component's image is pullable BEFORE tearing anything
     // down, so a broken redeploy aborts with the old version still running (see
-    // redeployComponent). Manifest check only — no pull, no transient disk cost.
-    for (const [, deployComp] of deployment.componentEntries()) {
+    // redeployComponent). Images are spec-level and identical across replicas, so
+    // one identity's view covers them all. Manifest check only — no pull, no
+    // transient disk cost.
+    for (const [, deployComp] of deployments[0].componentEntries()) {
       // eslint-disable-next-line no-await-in-loop
       await componentProvisioner.verifyComponentImage(deployComp);
     }
@@ -314,72 +328,84 @@ async function redeployApplication(appName, options = {}) {
     }
     await appNetworkLinker.checkAppNetworkRequirements(preTeardownSpec);
 
-    // Same-spec redeploy: every component's port set is unchanged, so leave the app's
-    // ufw/UPnP rules in place across the teardown+reinstall (no firewall flap, no UPnP
-    // re-map churn). skipPorts on both the teardown and the reinstall below.
-    for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
-      if (createVolumes) {
-        log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployApplication)`);
+    // Roll ONE identity at a time: tear down and rebuild its components while a
+    // co-located sibling keeps serving — the whole-app redeploy is a rolling
+    // rebuild, never a simultaneous outage of every replica.
+    for (const deployment of deployments) {
+      const unitLabel = deployment.replica != null ? `Replica ${deployment.replica} of ${appName}` : `Application ${appName}`;
+      // Same-spec redeploy: every component's port set is unchanged, so leave the app's
+      // ufw/UPnP rules in place across the teardown+reinstall (no firewall flap, no UPnP
+      // re-map churn). skipPorts on both the teardown and the reinstall below.
+      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
+        if (createVolumes) {
+          log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployApplication)`);
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await appUninstaller.uninstallComponent(deployComp, {
+          removeVolumes: createVolumes,
+          skipPorts: true,
+          onStatus,
+        });
+        // eslint-disable-next-line no-await-in-loop
+        await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+      }
+
+      status(`${unitLabel} removed. Awaiting installation...`);
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(config.fluxapps.redeploy.delay * 1000);
+
+      // eslint-disable-next-line no-await-in-loop
+      const instantiated = await appsRepository.getInstalledApp(appName);
+      if (!instantiated) {
+        throw new Error(`Application ${appName} not found in database after removal`);
       }
       // eslint-disable-next-line no-await-in-loop
-      await appUninstaller.uninstallComponent(deployComp, {
-        removeVolumes: createVolumes,
-        skipPorts: true,
-        onStatus,
-      });
+      const freshDeployment = await deploymentProvider.buildDeployment(instantiated, { replica: deployment.replica ?? null });
+      if (!freshDeployment) {
+        throw new Error(`Application ${appName} deployment not found after requirement check`);
+      }
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-    }
+      await hwRequirements.checkNodeResources(freshDeployment);
 
-    status(`Application ${appName} removed. Awaiting installation...`);
-    await serviceHelper.delay(config.fluxapps.redeploy.delay * 1000);
+      // Re-seed telemetry routing before recreating containers, in case the
+      // redeploy carries a rotated sink (or dropped telemetry entirely).
+      telemetrySinkCache.setSink(appName, telemetrySinkCache.extractSink(freshDeployment));
 
-    const instantiated = await appsRepository.getInstalledApp(appName);
-    if (!instantiated) {
-      throw new Error(`Application ${appName} not found in database after removal`);
-    }
-    const freshDeployment = await deploymentProvider.buildDeployment(instantiated);
-    if (!freshDeployment) {
-      throw new Error(`Application ${appName} deployment not found after requirement check`);
-    }
-    await hwRequirements.checkNodeResources(freshDeployment);
-
-    // Re-seed telemetry routing before recreating containers, in case the
-    // redeploy carries a rotated sink (or dropped telemetry entirely).
-    telemetrySinkCache.setSink(appName, telemetrySinkCache.extractSink(freshDeployment));
-
-    // Re-verify shared-network links before recreating containers.
-    await appNetworkLinker.checkAppNetworkRequirements(instantiated);
-
-    const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
-    for (const [, deployComp] of freshDeployment.componentEntries()) {
-      status(`Installing ${deployComp.identifier}...`);
+      // Re-verify shared-network links before recreating containers.
       // eslint-disable-next-line no-await-in-loop
-      await componentProvisioner.installComponent(deployComp, {
-        createVolumes,
-        skipPorts: true,
-        specVersion: instantiated.version,
-        owner: instantiated.owner,
-        requiresEncryption,
-      });
-      // Re-attach the recreated container to every linked app's network.
-      // eslint-disable-next-line no-await-in-loop
-      await appNetworkLinker.connectComponentToLinkedApps(deployComp.identifier, instantiated);
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
-    }
+      await appNetworkLinker.checkAppNetworkRequirements(instantiated);
 
-    // Refresh the shutdown plan for graceful apps only (a redeploy re-derives the
-    // same spec, so the predicate is stable across it). Guarded — the handoff must
-    // never break a redeploy. Per-container labels were already restamped at
-    // docker-create.
-    if (shutdownPlan.appRequiresDaemonShutdown(freshDeployment)) {
-      try {
-        await fluxShutdowndClient.upsertAppPlanBestEffort(
-          shutdownPlan.buildShutdownPlan(instantiated, freshDeployment),
-        );
-      } catch (error) {
-        log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
+      const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
+      for (const [, deployComp] of freshDeployment.componentEntries()) {
+        status(`Installing ${deployComp.identifier}...`);
+        // eslint-disable-next-line no-await-in-loop
+        await componentProvisioner.installComponent(deployComp, {
+          createVolumes,
+          skipPorts: true,
+          specVersion: instantiated.version,
+          owner: instantiated.owner,
+          requiresEncryption,
+        });
+        // Re-attach the recreated container to every linked app's network.
+        // eslint-disable-next-line no-await-in-loop
+        await appNetworkLinker.connectComponentToLinkedApps(deployComp.identifier, instantiated);
+        // eslint-disable-next-line no-await-in-loop
+        await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+      }
+
+      // Refresh this identity's shutdown plan for graceful apps only (a redeploy
+      // re-derives the same spec, so the predicate is stable across it). Guarded —
+      // the handoff must never break a redeploy. Per-container labels were already
+      // restamped at docker-create.
+      if (shutdownPlan.appRequiresDaemonShutdown(freshDeployment)) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await fluxShutdowndClient.upsertAppPlanBestEffort(
+            shutdownPlan.buildShutdownPlan(instantiated, freshDeployment),
+          );
+        } catch (error) {
+          log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
+        }
       }
     }
 
@@ -653,8 +679,10 @@ async function componentIdentifiersFor(appname) {
   if (!instantiated) {
     throw new Error('Application not found');
   }
-  const deployment = await deploymentProvider.buildDeployment(instantiated);
-  return deployment.componentEntries().map(([, deployComp]) => deployComp.identifier);
+  // Every local identity's components: an app-wide stop/start (backup, restore)
+  // must cover a co-located pair's containers, not one arbitrary replica's.
+  const deployments = await deploymentProvider.buildDeployments(instantiated);
+  return deployments.flatMap((deployment) => deployment.componentEntries().map(([, deployComp]) => deployComp.identifier));
 }
 
 /**
@@ -1546,7 +1574,9 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   await appsRepository.upsertInstalledApp(appName, wireSpec);
   log.info(`Database updated for ${appName}`);
 
-  const freshDeployment = await deploymentProvider.buildDeployment(registrySpec);
+  // Rebuild THIS identity's fresh view - handing a co-located sibling's view to
+  // the reinstalls below would apply its ports/env to the wrong containers.
+  const freshDeployment = await deploymentProvider.buildDeployment(registrySpec, { replica: newDeployment.replica ?? null });
   await hwRequirements.checkNodeResources(freshDeployment);
 
   // Re-seed telemetry routing from the updated spec. A sink change (key
@@ -1624,9 +1654,9 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
 }
 
 async function reconcileApp(installed, registrySpec) {
-  const oldDeployment = await deploymentProvider.getInstalledDeployment(installed.name);
-  const newDeployment = await deploymentProvider.buildDeployment(registrySpec);
-  if (!oldDeployment || !newDeployment) return;
+  const oldDeployments = await deploymentProvider.getInstalledDeployments(installed.name);
+  const newDeployments = await deploymentProvider.buildDeployments(registrySpec);
+  if (oldDeployments.length === 0 || newDeployments.length === 0) return;
 
   if (operationRegistry.isHeld(installed.name)) {
     log.warn(`Skipping ${installed.name} — an operation is in progress for it`);
@@ -1638,7 +1668,19 @@ async function reconcileApp(installed, registrySpec) {
   const reconcileToken = operationRegistry.acquire(installed.name, 'reconcile', 'appOperations', `reconcile ${installed.name}`);
   try {
     log.info(`Application ${installed.name} version is obsolete, reconciling...`);
-    await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec);
+    // One identity at a time under the one app lease, each diffed against its
+    // OWN old and new views (a co-located sibling's ports/env never leak in;
+    // an identity the update leaves untouched diffs as unchanged and no-ops).
+    // Only identities present in BOTH views reconcile here: a de-targeted
+    // replica's removal belongs to the spec reconciler's named rung, and a
+    // newly assigned one's install to the spawner.
+    const newByReplica = new Map(newDeployments.map((deployment) => [deployment.replica ?? null, deployment]));
+    for (const oldDeployment of oldDeployments) {
+      const newDeployment = newByReplica.get(oldDeployment.replica ?? null);
+      if (!newDeployment) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec);
+    }
     log.info(`Application ${installed.name} reconciliation complete`);
   } catch (error) {
     log.error(error);

@@ -21,7 +21,7 @@ async function specWithPlacement(placementBlob) {
 }
 
 describe('deploymentProvider tests', () => {
-  describe('resolveLocalReplica', () => {
+  describe('resolveLocalReplicas', () => {
     let ipStub;
     let collateralStub;
 
@@ -38,46 +38,40 @@ describe('deploymentProvider tests', () => {
 
     it('resolves null for untargeted placement without touching node identity', async () => {
       const spec = await specWithPlacement({});
-      expect(await deploymentProvider.resolveLocalReplica(spec)).to.equal(null);
+      expect(await deploymentProvider.resolveLocalReplicas(spec)).to.equal(null);
       sinon.assert.notCalled(ipStub);
       sinon.assert.notCalled(collateralStub);
     });
 
     it('resolves null for loose (candidate) placement', async () => {
       const spec = await specWithPlacement({ targetIps: { '44.55.66.77': null } });
-      expect(await deploymentProvider.resolveLocalReplica(spec)).to.equal(null);
+      expect(await deploymentProvider.resolveLocalReplicas(spec)).to.equal(null);
     });
 
     it('resolves the replica pinned to this node by IP (socket-address match)', async () => {
       const spec = await specWithPlacement({
         targetIps: { '44.55.66.77': ['s1'], '9.9.9.9': ['s2'] },
       });
-      expect(await deploymentProvider.resolveLocalReplica(spec)).to.equal('s1');
+      expect(await deploymentProvider.resolveLocalReplicas(spec)).to.deep.equal(['s1']);
     });
 
     it('resolves the replica pinned to this node by collateral outpoint', async () => {
       const spec = await specWithPlacement({
         targetOutpoints: { [`${OUTPOINT_TXID}:0`]: ['s3'] },
       });
-      expect(await deploymentProvider.resolveLocalReplica(spec)).to.equal('s3');
+      expect(await deploymentProvider.resolveLocalReplicas(spec)).to.deep.equal(['s3']);
     });
 
-    it('the singular shim fails loud on a co-located set; the plural resolver returns it', async () => {
+    it('unions both node-identity forms into the co-located set', async () => {
       const spec = await specWithPlacement({
         targetIps: { '44.55.66.77': ['s1'] },
         targetOutpoints: { [`${OUTPOINT_TXID}:0`]: ['s2'] },
       });
-      // A caller with no replica identity of its own must never receive an
-      // arbitrary one - each site lifts the refusal by becoming replica-aware
-      // (passing {replica} or iterating buildDeployments).
-      await expect(deploymentProvider.resolveLocalReplica(spec))
-        .to.eventually.be.rejectedWith(/not replica-aware yet/);
       expect(await deploymentProvider.resolveLocalReplicas(spec)).to.have.members(['s1', 's2']);
     });
 
-    it('resolves null when named placement does not target this node', async () => {
+    it('resolves the empty set when named placement does not target this node', async () => {
       const spec = await specWithPlacement({ targetIps: { '9.9.9.9': ['s1'] } });
-      expect(await deploymentProvider.resolveLocalReplica(spec)).to.equal(null);
       expect(await deploymentProvider.resolveLocalReplicas(spec)).to.deep.equal([]);
     });
 
@@ -86,6 +80,17 @@ describe('deploymentProvider tests', () => {
       expect(await deploymentProvider.resolveLocalReplicas(loose)).to.equal(null);
       const named = await specWithPlacement({ targetIps: { '44.55.66.77': ['s1', 's2'] } });
       expect(await deploymentProvider.resolveLocalReplicas(named)).to.deep.equal(['s1', 's2']);
+    });
+  });
+
+  describe('buildDeployment identity contract', () => {
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('refuses an omitted replica - a caller that cannot name its identity must not receive an arbitrary one', async () => {
+      await expect(deploymentProvider.buildDeployment({ name: 'myapp' }))
+        .to.eventually.be.rejectedWith(/requires an explicit replica/);
     });
   });
 });

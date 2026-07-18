@@ -35,35 +35,20 @@ async function resolveLocalReplicas(spec) {
 }
 
 /**
- * Single-replica compatibility shim over resolveLocalReplicas. Callers that
- * hold no replica identity of their own resolve through this and therefore
- * still fail loud on a co-located set - the refusal lifts per call site as
- * each becomes replica-aware (passes {replica} or iterates toDeployments).
- *
- * @param {object} spec
- * @returns {Promise<string|null>}
- */
-async function resolveLocalReplica(spec) {
-  const names = await resolveLocalReplicas(spec);
-  if (names === null || names.length === 0) return null;
-  if (names.length > 1) {
-    throw new Error(`${spec.name} names ${names.length} replicas for this node (${names.join(', ')}) - this caller is not replica-aware yet`);
-  }
-  return names[0];
-}
-
-/**
  * Build the deployment view for one identity of an app on this node.
  *
  * @param {object} instantiated - InstantiatedSpec
- * @param {object} [opts]
- * @param {string|null} [opts.replica] - the identity to build: a replica name
- *   (named placement) or null (loose). OMITTED means auto-resolve, which
- *   throws on a co-located set - a caller that cannot know which replica it
+ * @param {object} opts
+ * @param {string|null} opts.replica - the identity to build: a replica name
+ *   (named placement) or null (loose). REQUIRED - a caller that means every
+ *   identity iterates buildDeployments; one that cannot say which identity it
  *   means must not receive an arbitrary one.
  * @returns {Promise<object>} DeploymentSpec
  */
 async function toDeployment(instantiated, opts = {}) {
+  if (!('replica' in opts)) {
+    throw new Error(`buildDeployment for ${instantiated.name} requires an explicit replica (null for loose); a caller that means every identity uses buildDeployments`);
+  }
   const resolved = await resolveInstantiatedSpec(instantiated);
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
 
@@ -71,10 +56,8 @@ async function toDeployment(instantiated, opts = {}) {
   // from the real spec instance it wraps (its guard rejects a still-sealed spec).
   const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
 
-  const replica = 'replica' in opts ? opts.replica : await resolveLocalReplica(runtimeSpec);
-
   const { DeploymentSpec } = await getSpecBackend();
-  return DeploymentSpec.fromSpec(runtimeSpec, appsFolder, { replica });
+  return DeploymentSpec.fromSpec(runtimeSpec, appsFolder, { replica: opts.replica });
 }
 
 /**
@@ -91,8 +74,12 @@ async function resolveDeploymentIdentity(instantiated) {
   const resolved = await resolveInstantiatedSpec(instantiated);
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
   const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
-  const replica = await resolveLocalReplica(runtimeSpec);
-  return replica;
+  const names = await resolveLocalReplicas(runtimeSpec);
+  if (names === null || names.length === 0) return null;
+  if (names.length > 1) {
+    throw new Error(`${instantiated.name} names ${names.length} replicas for this node (${names.join(', ')}) - a single-identity operation must say which replica it means`);
+  }
+  return names[0];
 }
 
 /**
@@ -247,7 +234,6 @@ module.exports = {
   getInstalledDeployment,
   getInstalledDeployments,
   resolveLinkedAppNames,
-  resolveLocalReplica,
   resolveLocalReplicas,
   resolveDeploymentIdentity,
   assignedIdentities,

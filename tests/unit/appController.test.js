@@ -10,24 +10,11 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const appController = require('../../ZelBack/src/services/appManagement/appController');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
-const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const { deserializeSpec } = require('../../ZelBack/src/services/utils/specCutover');
 
-function mockInstantiatedSpec(spec) {
-  if (!spec) return null;
-  return {
-    spec,
-    name: spec.name,
-    version: spec.version || 4,
-    hash: 'testhash',
-    height: 1000,
-    isEncrypted: () => false,
-    serialize: () => ({ ...spec }),
-  };
-}
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const { requireMongo } = require('./dbTestHelper');
 
@@ -125,6 +112,14 @@ describe('appController tests', () => {
     // eslint-disable-next-line global-require
     const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
     verificationHelperStub = sinon.stub(verificationHelper, 'verifyPrivilege');
+
+    // Delegates at call time so per-test stubs of buildDeployment flow through
+    // the plural entry the handlers use; replica-scoped tests restore this and
+    // stub buildDeployments directly.
+    sinon.stub(deploymentProvider, 'buildDeployments').callsFake(async (instantiated) => {
+      const deployment = await deploymentProvider.buildDeployment(instantiated, { replica: null });
+      return deployment ? [deployment] : [];
+    });
   });
 
   afterEach(() => {
@@ -379,6 +374,60 @@ describe('appController tests', () => {
       sinon.assert.calledWithExactly(requestRestart, 'Component1_ComposedApp');
       sinon.assert.calledWithExactly(requestRestart, 'Component2_ComposedApp');
       sinon.assert.calledTwice(enqueue);
+    });
+
+    it('a whole-app restart of a co-located app covers every local identity', async () => {
+      verificationHelperStub.resolves(true);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ColoApp' });
+      deploymentProvider.buildDeployments.restore();
+      sinon.stub(deploymentProvider, 'buildDeployments').resolves([
+        { ...stubDeployment([{ name: 'web', identifier: 'web_ColoApp_s1' }]), replica: 's1' },
+        { ...stubDeployment([{ name: 'web', identifier: 'web_ColoApp_s2' }]), replica: 's2' },
+      ]);
+
+      const req = { params: { appname: 'ColoApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
+      await appController.appRestart(req, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+      sinon.assert.calledWithExactly(requestRestart, 'web_ColoApp_s1');
+      sinon.assert.calledWithExactly(requestRestart, 'web_ColoApp_s2');
+    });
+
+    it('a replica-scoped restart (?replica=) targets exactly that identity, sibling untouched', async () => {
+      verificationHelperStub.resolves(true);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ColoApp' });
+      deploymentProvider.buildDeployments.restore();
+      sinon.stub(deploymentProvider, 'buildDeployments').resolves([
+        { ...stubDeployment([{ name: 'web', identifier: 'web_ColoApp_s1' }]), replica: 's1' },
+        { ...stubDeployment([{ name: 'web', identifier: 'web_ColoApp_s2' }]), replica: 's2' },
+      ]);
+
+      const req = { params: { appname: 'ColoApp' }, query: { replica: 's2' } };
+      const res = { json: sinon.fake((param) => param) };
+      await appController.appRestart(req, res);
+
+      const result = res.json.firstCall.args[0];
+      expect(result.status).to.equal('success');
+      expect(result.data).to.include('Replica s2');
+      sinon.assert.calledOnceWithExactly(requestRestart, 'web_ColoApp_s2');
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'web_ColoApp_s2', false);
+    });
+
+    it('a replica-scoped restart of an absent replica errors instead of touching anything', async () => {
+      verificationHelperStub.resolves(true);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ColoApp' });
+      deploymentProvider.buildDeployments.restore();
+      sinon.stub(deploymentProvider, 'buildDeployments').resolves([
+        { ...stubDeployment([{ name: 'web', identifier: 'web_ColoApp_s1' }]), replica: 's1' },
+      ]);
+
+      const req = { params: { appname: 'ColoApp' }, query: { replica: 's9' } };
+      const res = { json: sinon.fake((param) => param) };
+      await appController.appRestart(req, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+      sinon.assert.notCalled(requestRestart);
     });
 
     it('should return unauthorized if user not authorized', async () => {

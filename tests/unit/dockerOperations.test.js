@@ -140,7 +140,19 @@ describe('appOperations application lifecycle tests', () => {
       '../upnpService': {},
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appQuery/appQueryService': { listRunningContainers: sinon.stub().resolves([]), listAllApps: sinon.stub().resolves([]), installedApps: sinon.stub().resolves({ data: [] }) },
-      '../appRuntime/deploymentProvider': { getInstalledDeployment: sinon.stub().resolves(null), buildDeployment: buildDeploymentStub },
+      '../appRuntime/deploymentProvider': {
+        getInstalledDeployment: sinon.stub().resolves(null),
+        buildDeployment: buildDeploymentStub,
+        // Delegates at call time so per-test overrides of buildDeployment flow
+        // through the plural entry the enumeration uses.
+        get buildDeployments() {
+          const single = this.buildDeployment;
+          return async (inst) => {
+            const deployment = await single(inst);
+            return deployment ? [deployment] : [];
+          };
+        },
+      },
       './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
       './componentProvisioner': { installComponent: sinon.stub().resolves() },
       '../utils/globalState': {},

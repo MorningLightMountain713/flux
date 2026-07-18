@@ -28,10 +28,12 @@ async function getInstalledAppIds() {
 
   // eslint-disable-next-line no-restricted-syntax
   for (const instantiated of installed) {
-    let deployment;
+    let deployments;
     try {
+      // Every local identity's view: a co-located pair owns one mount set per
+      // replica, and missing one would reap a live sibling's mounts.
       // eslint-disable-next-line no-await-in-loop
-      deployment = await deploymentProvider.buildDeployment(instantiated);
+      deployments = await deploymentProvider.buildDeployments(instantiated);
     } catch (error) {
       // An encrypted app's components live in a sealed blob and cannot be enumerated
       // when decryption is unavailable; derive its component ids from the FLUXFSVOL
@@ -48,8 +50,11 @@ async function getInstalledAppIds() {
       continue;
     }
     // eslint-disable-next-line no-restricted-syntax
-    for (const [, deployComp] of deployment.componentEntries()) {
-      installedAppIds.add(dockerService.getAppIdentifier(deployComp.identifier));
+    for (const deployment of deployments) {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const [, deployComp] of deployment.componentEntries()) {
+        installedAppIds.add(dockerService.getAppIdentifier(deployComp.identifier));
+      }
     }
   }
 
