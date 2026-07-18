@@ -68,6 +68,39 @@ describe('telemetrySinkCache tests', () => {
       const deployment = { telemetry: { provider: 'otlp', component: 'otelagent', port: 4318 } };
       expect(cache.extractSink(deployment)).to.not.have.property('apiKey');
     });
+
+    it('carries app and components through when the spec routes cross-app / per-component', () => {
+      const deployment = {
+        telemetry: {
+          provider: 'otlp', app: 'logstack', component: 'collector', components: ['web', 'worker'], port: 4318,
+        },
+      };
+      expect(cache.extractSink(deployment)).to.deep.equal({
+        provider: 'otlp', app: 'logstack', component: 'collector', components: ['web', 'worker'], port: 4318,
+      });
+    });
+
+    it('omits app and components when the spec has neither — absence is the meaning', () => {
+      const sink = cache.extractSink({ telemetry: { provider: 'otlp', component: 'otelagent' } });
+      expect(sink).to.not.have.property('app');
+      expect(sink).to.not.have.property('components');
+    });
+
+    it('copies the components array rather than aliasing the deployment view', () => {
+      const telemetry = { provider: 'otlp', component: 'collector', components: ['web'] };
+      const sink = cache.extractSink({ telemetry });
+      telemetry.components.push('mutated');
+      expect(sink.components).to.deep.equal(['web']);
+    });
+  });
+
+  describe('entries', () => {
+    it('iterates every cached [appKey, sink] pair for the reverse collector lookup', () => {
+      cache.setSink('AppOne', { provider: 'otlp', component: 'collector', port: 4318 });
+      cache.setSink('apptwo', { provider: 'datadog', apiKey: 'k1' });
+      const all = [...cache.entries()];
+      expect(all.map(([k]) => k).sort()).to.deep.equal(['appone', 'apptwo']);
+    });
   });
 
   describe('set/get/delete (otlp)', () => {

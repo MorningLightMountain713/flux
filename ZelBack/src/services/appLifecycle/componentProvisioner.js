@@ -201,7 +201,7 @@ async function openHostPorts(ports, appName, status = null) {
 /**
  * Install a single app component (pull image, create volume, create + start container).
  * @param {object} component - DeploymentComponent to install
- * @param {object} options - { owner, onStatus, test, createVolumes, skipPorts, burstEligible, restartPolicy, extraEnv, syslogTarget, crossAppLogCollector }
+ * @param {object} options - { owner, onStatus, test, createVolumes, skipPorts, burstEligible, restartPolicy, extraEnv }
  * @returns {Promise<void>}
  */
 async function installComponent(component, options = {}) {
@@ -217,8 +217,6 @@ async function installComponent(component, options = {}) {
   const burstEligible = options.burstEligible || false;
   const restartPolicy = options.restartPolicy || null;
   const extraEnv = options.extraEnv || [];
-  const syslogTarget = options.syslogTarget || null;
-  const crossAppLogCollector = options.crossAppLogCollector || null;
   const abortSignal = options.abortSignal || null;
   // Recreate-only: when the registry cannot be REACHED (transient-class failure)
   // and the image is already on disk, create from the local copy instead of
@@ -311,8 +309,6 @@ async function installComponent(component, options = {}) {
     burstEligible,
     restartPolicy,
     extraEnv,
-    syslogTarget,
-    crossAppLogCollector,
     owner,
     requiresEncryption,
     measuredImageSizeBytes,
