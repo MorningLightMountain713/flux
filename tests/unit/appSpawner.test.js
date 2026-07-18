@@ -267,6 +267,11 @@ describe('appSpawner tests', () => {
       '../utils/cacheManager': {
         FluxCacheManager: { oneHour: 3600000 },
       },
+      '../appRuntime/deploymentProvider': {
+        // [null] = loose placement (the single untagged claim); named tests
+        // override with the replica names this node is assigned.
+        assignedIdentities: opts.assignedIdentitiesStub ?? sinon.stub().resolves([null]),
+      },
       '../utils/fluxEventBus': {
         publish: sinon.stub(),
       },
@@ -1155,6 +1160,46 @@ describe('appSpawner tests', () => {
       expect(v2Call.args[1]).to.deep.equal({ requireCapability: 'appInstallingClaims' });
     });
 
+    it('a named app announces one tagged v2 claim per assigned replica and no v1', async () => {
+      const broadcastAllStub = sinon.stub().resolves();
+      buildModule({
+        candidates: [makeCandidate()],
+        broadcastAllStub,
+        assignedIdentitiesStub: sinon.stub().resolves(['s1', 's2']),
+      });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      const calls = broadcastAllStub.getCalls();
+      // An untagged v1 row beside the per-replica claim rows would over-count this
+      // node's seats, and no pre-claims node can parse a named app anyway.
+      expect(calls.find((c) => c.args[0].version === 1), 'named placement must not announce v1').to.equal(undefined);
+      const claims = calls.filter((c) => c.args[0].version === 2 && !c.args[0].cleared);
+      expect(claims.map((c) => c.args[0].replica).sort()).to.deep.equal(['s1', 's2']);
+      claims.forEach((c) => expect(c.args[1]).to.deep.equal({ requireCapability: 'appInstallingClaims' }));
+      // One attempt, one announce time: both seats enter elections at the same rank.
+      expect(new Set(claims.map((c) => c.args[0].announcedAt)).size).to.equal(1);
+      const storedReplicas = registryManagerStub.storeAppInstallingMessage.getCalls().map((c) => c.args[0].replica);
+      expect(storedReplicas.sort()).to.deep.equal(['s1', 's2']);
+    });
+
+    it('a failed named install retracts and clears every replica claim', async () => {
+      const broadcastAllStub = sinon.stub().resolves();
+      buildModule({
+        candidates: [makeCandidate()],
+        broadcastAllStub,
+        installStub: sinon.stub().resolves({ status: InstallStatus.FAILED, reason: 'boom' }),
+        assignedIdentitiesStub: sinon.stub().resolves(['s1', 's2']),
+      });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      const removed = registryManagerStub.removeAppInstallingMessage.getCalls().map((c) => c.args[2]);
+      expect(removed.sort()).to.deep.equal(['s1', 's2']);
+      const clears = broadcastAllStub.getCalls().filter((c) => c.args[0].cleared === true).map((c) => c.args[0].replica);
+      expect(clears.sort()).to.deep.equal(['s1', 's2']);
+    });
+
     it('broadcasts a neutral cleared claim when the install fails', async () => {
       const broadcastAllStub = sinon.stub().resolves();
       buildModule({
@@ -1184,7 +1229,11 @@ describe('appSpawner tests', () => {
     it('first pass of a pinned-contended app leaves the claim standing for the parked election', async () => {
       const broadcastAllStub = sinon.stub().resolves();
       const candidate = makeCandidate({ name: 'conApp', hash: 'con1', required: 1, placement: contendedPlacement() });
-      buildModule({ candidates: [candidate], broadcastAllStub });
+      buildModule({
+        candidates: [candidate],
+        broadcastAllStub,
+        assignedIdentitiesStub: sinon.stub().resolves(['s1']),
+      });
 
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
@@ -1194,6 +1243,9 @@ describe('appSpawner tests', () => {
       expect(broadcastAllStub.getCalls().find((c) => c.args[0].cleared === true)).to.equal(undefined);
       const queued = globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conApp');
       expect(queued.announcedAt, 'the deferred entry must carry the announce time').to.be.a('number');
+      // The second pass retracts what the first pass claimed - the identities ride
+      // the entry so a spec change between park and pop cannot orphan a row.
+      expect(queued.replicas).to.deep.equal(['s1']);
     });
 
     it('second pass failure retracts the re-adopted claim and broadcasts the clear', async () => {
@@ -1207,7 +1259,7 @@ describe('appSpawner tests', () => {
         broadcastAllStub,
         globalStateOverrides: {
           appsToBeCheckedLater: [{
-            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: Date.now() - 60000,
+            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: Date.now() - 60000, replicas: ['s1'],
           }],
         },
       });
@@ -1215,8 +1267,10 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
       sinon.assert.called(registryManagerStub.removeAppInstallingMessage);
+      expect(registryManagerStub.removeAppInstallingMessage.firstCall.args[2]).to.equal('s1');
       const clearedCall = broadcastAllStub.getCalls().find((c) => c.args[0].cleared === true);
       expect(clearedCall, 'the second pass owns the claim again, so its failure must clear it').to.exist;
+      expect(clearedCall.args[0].replica).to.equal('s1');
     });
 
     it('election ranks by announcedAt when present: a renewed claim (late broadcastedAt) still wins by announce order', async () => {

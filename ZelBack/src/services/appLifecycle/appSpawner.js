@@ -23,6 +23,7 @@ const { appsFolder, INSTALLING_RENEWAL_MS } = require('../utils/appConstants');
 const globalState = require('../utils/globalState');
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const { FluxCacheManager } = require('../utils/cacheManager');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appInstaller = require('./appInstaller');
 const specReconciler = require('./specReconciler');
 const appNetworkLinker = require('./appNetworkLinker');
@@ -174,21 +175,26 @@ async function spawnLoop() {
  * @param {string} name - app name
  * @param {string} ip - this node's socket address
  * @param {number} announcedAt - the claim's original announce timestamp (ms)
+ * @param {Array<string|null>} replicas - the identities whose claims to renew:
+ *   replica names for named placement, [null] for the single loose claim
  * @returns {NodeJS.Timeout} interval handle; caller must clearInterval it
  */
-function startInstallingRenewal(name, ip, announcedAt) {
+function startInstallingRenewal(name, ip, announcedAt, replicas) {
   const timer = setInterval(() => {
-    const renewal = {
-      type: 'fluxappinstalling',
-      version: 2,
-      name,
-      ip,
-      announcedAt,
-      broadcastedAt: Date.now(),
-    };
-    registryManager.storeAppInstallingMessage(renewal)
-      .then(() => fluxCommunicationMessagesSender.broadcastMessageToAll(renewal, { requireCapability: 'appInstallingClaims' }))
-      .catch((e) => log.error(`installing renewal for ${name} failed: ${e.message}`));
+    for (const replica of replicas) {
+      const renewal = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name,
+        ip,
+        ...(replica != null ? { replica } : {}),
+        announcedAt,
+        broadcastedAt: Date.now(),
+      };
+      registryManager.storeAppInstallingMessage(renewal)
+        .then(() => fluxCommunicationMessagesSender.broadcastMessageToAll(renewal, { requireCapability: 'appInstallingClaims' }))
+        .catch((e) => log.error(`installing renewal for ${name} failed: ${e.message}`));
+    }
   }, INSTALLING_RENEWAL_MS);
   timer.unref();
   return timer;
@@ -202,14 +208,17 @@ function startInstallingRenewal(name, ip, announcedAt) {
  * count an app failure. v1 peers reject the message and fall back to the TTL.
  * @param {string} name - app name
  * @param {string} ip - this node's socket address
+ * @param {string|null} [replica] - release exactly this identity's seat; null
+ *   (loose) emits the untagged clear, which releases every (name, ip) row
  * @returns {Promise<void>}
  */
-async function broadcastInstallingCleared(name, ip) {
+async function broadcastInstallingCleared(name, ip, replica = null) {
   const message = {
     type: 'fluxappinstalling',
     version: 2,
     name,
     ip,
+    ...(replica != null ? { replica } : {}),
     cleared: true,
     broadcastedAt: Date.now(),
   };
@@ -240,7 +249,9 @@ async function trySpawningGlobalApplication() {
   // lockout) or leave a stale installing record that self-locks the next cycle.
   let throttleIntended = false;
   let installSucceeded = false;
-  let installingRecordKey = null; // { name, ip } once the installing record is stored
+  // { name, ip, replicas } once the installing record(s) are stored: one claim row
+  // per assigned identity - replica names for named placement, [null] for loose.
+  let installingRecordKey = null;
   // A pinned-contended first pass parks its attempt on appsToBeCheckedLater with the
   // claim deliberately left standing (the claim IS the election entry); the finally
   // must not retract or clear it. The second pass re-adopts the claim and drops this.
@@ -338,9 +349,11 @@ async function trySpawningGlobalApplication() {
     // elapsed off-loop: it already broadcast its installing message on the first pass, so it skips
     // the broadcast + collision wait and goes straight to the over-instance election + install.
     let collisionWindowElapsed = false;
-    // The first pass's announce timestamp, carried through the deferred entry so the
-    // second pass can renew the claim under its original election ordering.
+    // The first pass's announce timestamp and claimed identities, carried through
+    // the deferred entry so the second pass renews and retracts the claims that
+    // actually exist, under their original election ordering.
     let deferredAnnouncedAt = null;
+    let deferredReplicas = null;
     const collateral = await generalService.obtainNodeCollateralInformation();
     const nodeOutpoint = `${collateral.txhash}:${collateral.txindex}`;
     const nodeOperator = fluxNetworkHelper.getFluxNodePublicKey();
@@ -359,15 +372,16 @@ async function trySpawningGlobalApplication() {
       minInstances = appsToBeCheckedLater[appIndex].required;
       collisionWindowElapsed = appsToBeCheckedLater[appIndex].collisionDeferred === true;
       deferredAnnouncedAt = appsToBeCheckedLater[appIndex].announcedAt ?? null;
+      deferredReplicas = appsToBeCheckedLater[appIndex].replicas ?? null;
       appsToBeCheckedLater.splice(appIndex, 1);
       appFromAppsToBeCheckedLater = true;
       appsCountAvailableToInstallOnMyNode = Math.max(0, appsCountAvailableToInstallOnMyNode - 1);
-      // A collision entry owns a standing claim (announced on its first pass). Adopt
-      // it at pop time, not after the announce block: from here on, EVERY exit that
-      // does not install must retract + clear it via the finally, including throws -
+      // A collision entry owns standing claims (announced on its first pass). Adopt
+      // them at pop time, not after the announce block: from here on, EVERY exit that
+      // does not install must retract + clear them via the finally, including throws -
       // the entry is already spliced, so a leak here would stand until the TTL.
       if (collisionWindowElapsed) {
-        installingRecordKey = { name: appToRun, ip: localSocketAddr };
+        installingRecordKey = { name: appToRun, ip: localSocketAddr, replicas: deferredReplicas ?? [null] };
       }
     } else if (appSyncthingIndex >= 0) {
       appToRun = appsSyncthingToBeCheckedLater[appSyncthingIndex].appName;
@@ -859,6 +873,18 @@ async function trySpawningGlobalApplication() {
     // keeps the legacy inline election.
     const soleRequiredInstaller = isSoleRequiredInstaller(specPlacement, minInstances);
     const pinnedContended = isPinnedContended(specPlacement, minInstances);
+    // The identities this node announces seats for: one claim per assigned replica
+    // (named placement), or the single untagged claim (loose). Resolved through the
+    // same provider helper the install fan-out uses, so announce/renew/clear and
+    // installAssignedReplicas agree on the set by construction.
+    const assignedReplicas = await deploymentProvider.assignedIdentities(instantiated);
+    if (assignedReplicas.length === 0) {
+      // Named placement that no longer targets this node - reachable when a parked
+      // deferred entry outlives a spec change (fresh passes are placement-filtered).
+      log.info(`trySpawningGlobalApplication - ${appToRun} names no replicas for this node; nothing to install`);
+      return shortDelayTime;
+    }
+    const looseIdentity = assignedReplicas.length === 1 && assignedReplicas[0] === null;
     // lets broadcast to the network the app is going to be installed on this node, so we don't get lot's of intances installed when it's not needed
     let broadcastedAt = Date.now();
     const announcedAt = broadcastedAt;
@@ -869,21 +895,38 @@ async function trySpawningGlobalApplication() {
       ip: localSocketAddr,
       broadcastedAt,
     };
-    // The renewable v2 claim, for appInstallingClaims-capable peers: announcedAt is the
-    // immutable election key (renewals move only broadcastedAt), and the +1 makes it
-    // strictly newer so a store that receives both versions converges on the
-    // announcedAt-bearing row regardless of arrival order.
-    const installingClaim = {
+    // The renewable v2 claims, for appInstallingClaims-capable peers: announcedAt is
+    // the immutable election key (renewals move only broadcastedAt), and the +1 makes
+    // a claim strictly newer than the v1 announce so a store that receives both
+    // versions converges on the announcedAt-bearing row regardless of arrival order
+    // (only the loose claim has a v1 sibling; the offset is kept uniform).
+    const installingClaims = assignedReplicas.map((replica) => ({
       type: 'fluxappinstalling',
       version: 2,
       name: instantiated.name,
       ip: localSocketAddr,
+      ...(replica != null ? { replica } : {}),
       announcedAt,
       broadcastedAt: broadcastedAt + 1,
+    }));
+    const storeOwnClaims = async () => {
+      for (const claim of installingClaims) {
+        // eslint-disable-next-line no-await-in-loop
+        await registryManager.storeAppInstallingMessage(claim);
+      }
     };
     const broadcastAnnounce = async () => {
-      await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
-      await fluxCommunicationMessagesSender.broadcastMessageToAll(installingClaim, { requireCapability: 'appInstallingClaims' });
+      // The v1 announce is loose-only: named seats are assigned by the spec (no node
+      // races them) and no pre-claims node can parse a named app - while an untagged
+      // v1 row beside the per-replica claim rows would over-count this node's seats
+      // on capable peers.
+      if (looseIdentity) {
+        await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
+      }
+      for (const claim of installingClaims) {
+        // eslint-disable-next-line no-await-in-loop
+        await fluxCommunicationMessagesSender.broadcastMessageToAll(claim, { requireCapability: 'appInstallingClaims' });
+      }
     };
 
     if (soleRequiredInstaller) {
@@ -892,9 +935,9 @@ async function trySpawningGlobalApplication() {
       // the ~500ms broadcast relay so the install starts sooner. Safe against reordering: the peer-side
       // installing store applies only a strictly-newer broadcastedAt, so a late/duplicate can never
       // clobber a newer state - the appremoved model.
-      await registryManager.storeAppInstallingMessage(installingClaim);
-      installingRecordKey = { name: instantiated.name, ip: localSocketAddr };
-      renewalTimer = startInstallingRenewal(instantiated.name, localSocketAddr, announcedAt);
+      await storeOwnClaims();
+      installingRecordKey = { name: instantiated.name, ip: localSocketAddr, replicas: assignedReplicas };
+      renewalTimer = startInstallingRenewal(instantiated.name, localSocketAddr, announcedAt, assignedReplicas);
       broadcastAnnounce()
         .catch((e) => log.error(`installing broadcast for ${appToRun} failed: ${e.message}`));
     } else if (pinnedContended && !collisionWindowElapsed) {
@@ -905,10 +948,11 @@ async function trySpawningGlobalApplication() {
       // head-of-line-blocks every contention-free app queued behind it (e.g. a sole-installer app
       // pinned only to this node, which has nothing to wait for). It comes back off the queue once
       // the window has elapsed and proceeds straight to the over-instance election + install below.
-      // The claim stays standing across the park (collisionClaimHeld keeps the finally off it):
-      // it IS this node's election entry, and elections order on the immutable announcedAt.
-      await registryManager.storeAppInstallingMessage(installingClaim);
-      installingRecordKey = { name: instantiated.name, ip: localSocketAddr };
+      // The claims stay standing across the park (collisionClaimHeld keeps the finally off
+      // them): they ARE this node's election entries, and elections order on the immutable
+      // announcedAt.
+      await storeOwnClaims();
+      installingRecordKey = { name: instantiated.name, ip: localSocketAddr, replicas: assignedReplicas };
       await broadcastAnnounce();
       appsToBeCheckedLater.push({
         appName: appToRun,
@@ -917,6 +961,7 @@ async function trySpawningGlobalApplication() {
         timeToCheck: Date.now() + collisionWaitMs,
         collisionDeferred: true,
         announcedAt,
+        replicas: assignedReplicas,
       });
       collisionClaimHeld = true;
       log.info(`trySpawningGlobalApplication - ${appToRun} has multi-node install contention; deferring its ${collisionWaitMs}ms collision window off the spawn loop so contention-free apps queued behind it are not blocked`);
@@ -924,19 +969,20 @@ async function trySpawningGlobalApplication() {
     } else if (!collisionWindowElapsed) {
       // Non-pinned app (open contention - any node may install): keep the legacy inline election.
       // Store + broadcast, then wait inline for peers' broadcasts to propagate.
-      await registryManager.storeAppInstallingMessage(installingClaim);
-      installingRecordKey = { name: instantiated.name, ip: localSocketAddr };
-      renewalTimer = startInstallingRenewal(instantiated.name, localSocketAddr, announcedAt);
+      await storeOwnClaims();
+      installingRecordKey = { name: instantiated.name, ip: localSocketAddr, replicas: assignedReplicas };
+      renewalTimer = startInstallingRenewal(instantiated.name, localSocketAddr, announcedAt, assignedReplicas);
       await broadcastAnnounce();
       await serviceHelper.delay(collisionWaitMs); // give it 1.5m so messages are propagated on the network
     }
     if (collisionWindowElapsed) {
       // A pinned-contended app back from the deferred queue: the first pass stored +
-      // broadcast the claim, so skip the announce and re-adopt it instead - the failure
-      // paths below must retract it, and a long install must renew it under its original
-      // announce time so the election ordering never moves.
-      installingRecordKey = { name: instantiated.name, ip: localSocketAddr };
-      renewalTimer = startInstallingRenewal(instantiated.name, localSocketAddr, deferredAnnouncedAt ?? announcedAt);
+      // broadcast the claims, so skip the announce and re-adopt them instead - the failure
+      // paths below must retract them, and a long install must renew them under their
+      // original announce time so the election ordering never moves. The identities are
+      // the first pass's (what actually exists as rows), not a re-resolve.
+      installingRecordKey = { name: instantiated.name, ip: localSocketAddr, replicas: deferredReplicas ?? assignedReplicas };
+      renewalTimer = startInstallingRenewal(instantiated.name, localSocketAddr, deferredAnnouncedAt ?? announcedAt, installingRecordKey.replicas);
     }
 
     // double check if app is installed in more of the instances requested
@@ -1048,13 +1094,17 @@ async function trySpawningGlobalApplication() {
       globalState.trySpawningGlobalAppCache.delete(appHash);
     }
     if (installingRecordKey && !installSucceeded && !collisionClaimHeld) {
-      await registryManager.removeAppInstallingMessage(installingRecordKey.name, installingRecordKey.ip)
-        .catch((e) => log.error(`trySpawningGlobalApplication - removeAppInstallingMessage for ${installingRecordKey.name} failed: ${e.message}`));
-      // Release the seat fleet-wide too. This says nothing about the app - genuine
-      // failures separately broadcast fluxappinstallingerror, which peers count
-      // against the hash; for those this clear is a harmless no-op delete.
-      await broadcastInstallingCleared(installingRecordKey.name, installingRecordKey.ip)
-        .catch((e) => log.error(`trySpawningGlobalApplication - installing clear broadcast for ${installingRecordKey.name} failed: ${e.message}`));
+      for (const replica of installingRecordKey.replicas) {
+        // eslint-disable-next-line no-await-in-loop
+        await registryManager.removeAppInstallingMessage(installingRecordKey.name, installingRecordKey.ip, replica)
+          .catch((e) => log.error(`trySpawningGlobalApplication - removeAppInstallingMessage for ${installingRecordKey.name} failed: ${e.message}`));
+        // Release the seat fleet-wide too. This says nothing about the app - genuine
+        // failures separately broadcast fluxappinstallingerror, which peers count
+        // against the hash; for those this clear is a harmless no-op delete.
+        // eslint-disable-next-line no-await-in-loop
+        await broadcastInstallingCleared(installingRecordKey.name, installingRecordKey.ip, replica)
+          .catch((e) => log.error(`trySpawningGlobalApplication - installing clear broadcast for ${installingRecordKey.name} failed: ${e.message}`));
+      }
     }
   }
 }
