@@ -39,9 +39,12 @@ fi
 git -C "$src" fetch origin
 git -C "$src" checkout -q "$pin"
 
+# safe.directory: the builder runs as root against a host-owned clone, and
+# git's dubious-ownership check would otherwise fail build.rs's rev-parse
+# silently — stamping "git unknown" into --version (which the suite pins).
 docker run --rm -v "$src:/src" -w /src \
   -v flux-e2e-cargo-cache:/usr/local/cargo/registry \
-  rust:1-bookworm cargo build --release
+  rust:1-bookworm sh -c 'git config --global --add safe.directory /src && cargo build --release'
 
 mkdir -p "$dist"
 cp "$src/target/release/flux-telemetryd" "$dist/flux-telemetryd"
