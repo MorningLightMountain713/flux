@@ -1,138 +1,103 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('config');
+const pino = require('pino');
 
-const levels = {
-  off: -1,
-  error: 0,
-  warn: 1,
-  info: 2,
-  debug: 3,
-};
+// One sink: pino emitting NDJSON. Where systemd runs us it connects stdout
+// to the journal and sets JOURNAL_STREAM — journald then owns storage,
+// rotation, and querying (journalctl -u fluxos). Everywhere else (legacy
+// nodes, dev, tests, the harness containers) a single size-rolled file
+// beside the checkout keeps logs readable without a supervisor capturing
+// stdout, and `logConsole: true` additionally mirrors NDJSON to stdout
+// (the harness log collectors read container stdout; humans pipe through
+// `pino-pretty`). The admin log endpoints read whichever sink is active —
+// see sinkInfo().
+const underJournald = Boolean(process.env.JOURNAL_STREAM);
+const LEGACY_LOG_PATH = path.join(__dirname, '../../../fluxos.log');
 
-// ArcaneOS captures logs via journald and sets FLUX_LOG_TO_CONSOLE=0 to suppress
-// console mirroring; legacy nodes (var unset) log to the console.
-const logToConsole = process.env.FLUX_LOG_TO_CONSOLE !== '0';
-const forceConsole = Boolean(config.logConsole);
+const level = config.logLevel || 'info';
 
-const logLevel = config && config.logLevel ? config.logLevel : levels.debug;
+function buildLogger() {
+  const options = {
+    level,
+    base: undefined,
+    timestamp: pino.stdTimeFunctions.isoTime,
+    serializers: { err: pino.stdSerializers.err },
+  };
 
-const homeDirPath = path.join(__dirname, '../../../');
-
-const fileSizeCache = {};
-
-function getFilesizeInBytes(filename) {
-  if (filename && fileSizeCache[filename]) {
-    return fileSizeCache[filename];
+  if (underJournald) {
+    return pino(options, pino.destination(1));
   }
 
-  try {
-    const stats = fs.statSync(filename);
-    const fileSizeInBytes = stats.size;
+  const targets = [{
+    target: 'pino-roll',
+    options: {
+      file: LEGACY_LOG_PATH, size: '25m', limit: { count: 1 }, mkdir: true,
+    },
+    level,
+  }];
+  if (config.logConsole) {
+    targets.push({ target: 'pino/file', options: { destination: 1 }, level });
+  }
+  return pino(options, pino.transport({ targets }));
+}
 
-    fileSizeCache[filename] = fileSizeInBytes;
+const root = buildLogger();
 
-    return fileSizeInBytes;
-  } catch (e) {
-    console.log(e);
-    return 0;
+// The pre-pino API took one free-form argument: a string, an Error, or any
+// object. Preserve that contract — strings pass through, Errors ride the
+// err serializer (stack preserved, message as msg), anything else becomes
+// structured fields on the line.
+function dispatch(logger, lvl, args) {
+  if (args instanceof Error) {
+    logger[lvl]({ err: args }, args.message);
+  } else if (typeof args === 'string') {
+    logger[lvl](args);
+  } else if (args && typeof args === 'object') {
+    logger[lvl](args);
+  } else {
+    logger[lvl](String(args));
   }
 }
 
-function ensureString(parameter) {
-  return typeof parameter === 'string' ? parameter : JSON.stringify(parameter);
+function facade(logger) {
+  return {
+    error: (args) => dispatch(logger, 'error', args),
+    warn: (args) => dispatch(logger, 'warn', args),
+    info: (args) => dispatch(logger, 'info', args),
+    debug: (args) => dispatch(logger, 'debug', args),
+    // Subsystems adopt bindings incrementally: log.child({ mod: 'appSpawner' }).
+    child: (bindings) => facade(logger.child(bindings || {})),
+  };
 }
 
-function writeToFile(filepath, args) {
-  // this function was raising if args are undefined, i.e. no message propery
-  if (!args) return;
-
-  const size = getFilesizeInBytes(filepath);
-  let flag = 'a+';
-  if (size > 25 * 1024 * 1024) {
-    // 25MB
-    flag = 'w'; // rewrite file
-    fileSizeCache[filepath] = 0;
+/**
+ * The rolling file pino-roll is currently writing (it numbers its files:
+ * fluxos.1.log, fluxos.2.log, …). Null under journald or before the first
+ * line is written.
+ * @returns {string|null}
+ */
+function currentLogFile() {
+  if (underJournald) return null;
+  const dir = path.dirname(LEGACY_LOG_PATH);
+  let newest = null;
+  let newestN = -1;
+  for (const name of fs.readdirSync(dir)) {
+    const m = /^fluxos\.(\d+)\.log$/.exec(name);
+    if (m && Number(m[1]) > newestN) {
+      newestN = Number(m[1]);
+      newest = path.join(dir, name);
+    }
   }
-  const stream = fs.createWriteStream(filepath, { flags: flag });
-
-  const content = ensureString(args.message || args);
-
-  fileSizeCache[filepath] += Buffer.byteLength(content);
-
-  stream.write(`${new Date().toISOString()}          ${content}\n`);
-
-  if (args.stack && typeof args.stack === 'string') {
-    fileSizeCache[filepath] += Buffer.byteLength(args.stack);
-    stream.write(`${args.stack}\n`);
-  }
-
-  stream.end();
-}
-
-function debug(args) {
-  if (logLevel < levels.debug) {
-    return;
-  }
-  try {
-    if (logToConsole || forceConsole) console.log(args);
-    // write to file
-    const filepath = `${homeDirPath}debug.log`;
-    writeToFile(filepath, args);
-  } catch (err) {
-    console.error('This should not have happened');
-    console.error(err);
-  }
-}
-
-function error(args) {
-  if (logLevel < levels.error) {
-    return;
-  }
-  try {
-    // write to file
-    const filepath = `${homeDirPath}error.log`;
-    writeToFile(filepath, args);
-    debug(args);
-  } catch (err) {
-    console.error('This should not have happened');
-    console.error(err);
-  }
-}
-
-function warn(args) {
-  if (logLevel < levels.warn) {
-    return;
-  }
-  try {
-    // write to file
-    const filepath = `${homeDirPath}warn.log`;
-    writeToFile(filepath, args);
-    debug(args);
-  } catch (err) {
-    console.error('This should not have happened');
-    console.error(err);
-  }
-}
-
-function info(args) {
-  if (logLevel < levels.info) {
-    return;
-  }
-  try {
-    // write to file
-    const filepath = `${homeDirPath}info.log`;
-    writeToFile(filepath, args);
-    debug(args);
-  } catch (err) {
-    console.error('This should not have happened');
-    console.error(err);
-  }
+  return newest;
 }
 
 module.exports = {
-  error,
-  warn,
-  info,
-  debug,
+  ...facade(root),
+  /**
+   * Which sink this process logs to, for the admin log endpoints: journald
+   * (query via journalctl) or the newest legacy rolling file.
+   * @returns {{journald: boolean, file: string|null}}
+   */
+  sinkInfo: () => ({ journald: underJournald, file: currentLogFile() }),
 };

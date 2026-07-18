@@ -238,8 +238,7 @@ RUN mkdir -p /flux/CloudUI \
     && echo '<!doctype html><title>CloudUI harness placeholder</title>' > /flux/CloudUI/index.html \
     && echo 'harness-prebaked' > /flux/CloudUI/version
 
-RUN touch /flux/debug.log /flux/error.log /flux/info.log /flux/warn.log \
-    && chown fluxuser:fluxuser /flux /flux/debug.log /flux/error.log /flux/info.log /flux/warn.log \
+RUN chown fluxuser:fluxuser /flux \
     && ln -s /flux /root/zelflux
 
 # The numeric id tables an Arcane image carries, where it carries them, from the
