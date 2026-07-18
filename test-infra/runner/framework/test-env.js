@@ -6,7 +6,7 @@ process.env.TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT ??= '5s';
 
 import { GenericContainer, Wait, getContainerRuntimeClient } from 'testcontainers';
 import { readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
@@ -756,6 +756,9 @@ export async function createTestEnv({
   // logs through the journal (JOURNAL_STREAM set) instead of a rolling file.
   // Env-level and uniform across the fleet.
   systemdMode = false,
+  // Real flux-telemetryd (systemd mode only): the vendored cargo build and its
+  // production hardened unit, bind-mounted from the runner host.
+  telemetrydReal = false,
 } = {}) {
   if (syncthing !== 'stub' && syncthing !== 'binary') {
     throw new Error(`createTestEnv: syncthing must be 'stub' or 'binary', got '${syncthing}'`);
@@ -1004,7 +1007,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1033,7 +1036,7 @@ function mergeConfigs(base, override) {
   return result;
 }
 
-async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, arcane = false, shutdowndMock = false, telemetrydMock = false, systemdMode = false) {
+async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, arcane = false, shutdowndMock = false, telemetrydMock = false, systemdMode = false, telemetrydReal = false) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -1311,6 +1314,20 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       { source: join(fixturesDir, 'registry-tls', 'ca.pem'), target: '/usr/local/share/ca-certificates/test-registry.crt', mode: 'ro' },
       { source: bootIdDir, target: '/tmp/flux-boot-config' },
     ];
+    // Real flux-telemetryd (systemd mode only): the daemon binary from the
+    // runner host's vendored cargo build plus its REAL hardened unit, both
+    // bind-mounted; the entrypoint installs them and FluxOS starts the unit
+    // (production flow). Paths overridable for a non-default checkout.
+    if (telemetrydReal) {
+      const distBinary = process.env.TELEMETRYD_BINARY
+        ?? join(homedir(), 'flux-e2e', 'flux-telemetryd', 'target', 'release', 'flux-telemetryd');
+      const distUnit = process.env.TELEMETRYD_UNIT
+        ?? join(homedir(), 'flux-e2e', 'flux-telemetryd', 'packaging', 'systemd', 'flux-telemetryd.service');
+      bindMounts.push(
+        { source: distBinary, target: '/opt/telemetryd-dist/flux-telemetryd', mode: 'ro' },
+        { source: distUnit, target: '/opt/telemetryd-dist/flux-telemetryd.service', mode: 'ro' },
+      );
+    }
     const isLegacy = legacyNodes.includes(i);
     const nodeEnv = {
       NODE_CONFIG_DIR: `/flux/test-infra/config/node-${num}`,
@@ -1386,6 +1403,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
     // the shutdownd/telemetryd mocks) do not exist under systemd; suites
     // using them must stay in the default mode.
     if (systemdMode) nodeEnv.FLUX_SYSTEMD_MODE = 'true';
+    if (telemetrydReal) nodeEnv.FLUX_TELEMETRYD_REAL = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files carry the default 198.18 addresses; this is written into the node's

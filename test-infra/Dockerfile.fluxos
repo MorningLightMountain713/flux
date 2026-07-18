@@ -46,6 +46,8 @@ RUN set -eu; \
     iptables \
     e2fsprogs \
     systemd \
+    xfsprogs \
+    acl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN install -m 0755 -d /etc/apt/keyrings \
