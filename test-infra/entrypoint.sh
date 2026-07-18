@@ -35,19 +35,12 @@ if [ "$FLUX_DISCOVERY_AUTOSTART" = "true" ]; then
 fi
 
 # Syncthing listens on apiport+2 in production. The availability checker
-# tests this port. Forward it to the syncthing stub's API port.
+# tests this port. Forward it to the syncthing stub's API port. In systemd
+# mode the forward runs as a unit instead (syncthing-forward.service), so
+# systemd supervises it like everything else.
 SYNCTHING_LISTEN_PORT=$((${FLUX_API_PORT:-16127} + 2))
-if [ -n "$FLUX_SYNCTHING_HOST" ]; then
+if [ -n "$FLUX_SYNCTHING_HOST" ] && [ "$FLUX_SYSTEMD_MODE" != "true" ]; then
   socat TCP-LISTEN:${SYNCTHING_LISTEN_PORT},fork,reuseaddr TCP:${FLUX_SYNCTHING_HOST}:${FLUX_SYNCTHING_PORT:-8384} &
-fi
-
-# cgroup v2: move existing processes to an init sub-cgroup so dockerd
-# can enable subtree controllers (same approach as official docker:dind)
-if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
-  mkdir -p /sys/fs/cgroup/init
-  xargs -rn1 < /sys/fs/cgroup/cgroup.procs > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || :
-  sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers \
-      > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || :
 fi
 
 # Trust test registry CA for dockerd (Node.js uses NODE_EXTRA_CA_CERTS directly).
@@ -56,6 +49,65 @@ fi
 if [ -f /usr/local/share/ca-certificates/test-registry.crt ]; then
   mkdir -p "/etc/docker/certs.d/fluxregistry.test:5000"
   cp /usr/local/share/ca-certificates/test-registry.crt "/etc/docker/certs.d/fluxregistry.test:5000/ca.crt"
+fi
+
+# Write boot_id for test harness control.
+# FLUX_BOOT_ID is set per-container by the test harness.
+# The harness seeds a heartbeat with matching or different value to
+# control machineRebooted detection in readBootContext().
+if [ -n "$FLUX_BOOT_ID" ]; then
+  echo "$FLUX_BOOT_ID" > /tmp/flux-boot-id
+fi
+
+# ── systemd mode (opt-in; the journald-logging suite) ─────────────────────
+# The node runs a real systemd as PID 1: dockerd and fluxos become units,
+# fluxos's stdout is journal-connected (systemd sets JOURNAL_STREAM, the
+# structural trigger lib/log.js keys on), and journalctl serves the admin
+# log endpoints — the Arcane sink mode, which the default watchdog path
+# cannot produce. Everything below this block is the legacy path and is
+# unreachable in this mode; the fault-injection levers that live there
+# (/tmp/dockerd-paused, /tmp/fluxos.pid — pauseDockerd/restartFluxos) do
+# not exist under systemd.
+if [ "$FLUX_SYSTEMD_MODE" = "true" ]; then
+  # Container env does not cross into systemd services (the manager
+  # environment arrives empty — validated on cindy), so dump it for the
+  # units' EnvironmentFile. node writes C-style-quoted values, which keeps
+  # NODE_CONFIG's embedded JSON quoting intact.
+  node -e '
+    const fs = require("fs");
+    const skip = new Set(["PATH", "HOSTNAME", "HOME", "PWD", "OLDPWD", "SHLVL", "TERM", "SHELL", "_", "DEBIAN_FRONTEND", "LS_COLORS"]);
+    const lines = Object.entries(process.env)
+      .filter(([k]) => !skip.has(k))
+      .map(([k, v]) => `${k}=${JSON.stringify(v)}`);
+    fs.writeFileSync("/etc/fluxos-harness.env", lines.join("\n") + "\n");
+  '
+
+  cp /flux/test-infra/systemd/*.service /etc/systemd/system/
+  mkdir -p /etc/systemd/system/multi-user.target.wants
+  ln -sf /etc/systemd/system/dockerd.service /etc/systemd/system/multi-user.target.wants/dockerd.service
+  ln -sf /etc/systemd/system/fluxos.service /etc/systemd/system/multi-user.target.wants/fluxos.service
+  if [ -n "$FLUX_SYNCTHING_HOST" ]; then
+    ln -sf /etc/systemd/system/syncthing-forward.service /etc/systemd/system/multi-user.target.wants/syncthing-forward.service
+  fi
+
+  # Container hygiene: kernel modules cannot be loaded here (the one unit
+  # the smoke run showed failing), and a tmpfs over /tmp would shadow the
+  # harness's /tmp/flux-boot-config bind mount.
+  ln -sf /dev/null /etc/systemd/system/systemd-modules-load.service
+  ln -sf /dev/null /etc/systemd/system/tmp.mount
+
+  exec /lib/systemd/systemd
+fi
+
+# cgroup v2: move existing processes to an init sub-cgroup so dockerd
+# can enable subtree controllers (same approach as official docker:dind).
+# Legacy mode only — under systemd the manager owns the cgroup tree and
+# dockerd runs with Delegate=yes.
+if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+  mkdir -p /sys/fs/cgroup/init
+  xargs -rn1 < /sys/fs/cgroup/cgroup.procs > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || :
+  sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers \
+      > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || :
 fi
 
 # Start dockerd under a tiny watchdog so it is respawned if it exits. Production
@@ -112,14 +164,6 @@ if [ "$FLUX_TELEMETRYD_MOCK" = "true" ]; then
   mkdir -p /run/flux/telemetry
   node /flux/test-infra/telemetryd-stub/index.js &
   echo "started mock flux-telemetryd (control port ${TELEMETRYD_MOCK_CONTROL_PORT:-16198})"
-fi
-
-# Write boot_id for test harness control.
-# FLUX_BOOT_ID is set per-container by the test harness.
-# The harness seeds a heartbeat with matching or different value to
-# control machineRebooted detection in readBootContext().
-if [ -n "$FLUX_BOOT_ID" ]; then
-  echo "$FLUX_BOOT_ID" > /tmp/flux-boot-id
 fi
 
 # Run FluxOS (CMD ["node","app.js"]) under a respawn watchdog instead of exec'ing it

@@ -94,6 +94,7 @@ class StaticIpContainer extends GenericContainer {
   #staticIp;
   #networkName;
   #aliases = [];
+  #stopSignal;
 
   withStaticIp(networkName, ip, aliases = []) {
     this.#staticIp = ip;
@@ -102,10 +103,20 @@ class StaticIpContainer extends GenericContainer {
     return this;
   }
 
+  // Per-container stop signal (the image's STOPSIGNAL stays SIGTERM for the
+  // default entrypoint). systemd-mode nodes need SIGRTMIN+3: systemd as PID 1
+  // treats SIGTERM as a reexec request, so a plain docker stop would sit out
+  // the full kill timeout on every teardown.
+  withStopSignal(signal) {
+    this.#stopSignal = signal;
+    return this;
+  }
+
   async beforeContainerCreated() {
     // Tag with this run's label so run-all.sh's between-suite cleanup can scope
     // removal to its own fleet (see runLabels()).
     this.createOpts.Labels = { ...(this.createOpts.Labels || {}), ...runLabels() };
+    if (this.#stopSignal) this.createOpts.StopSignal = this.#stopSignal;
     if (this.#staticIp && this.#networkName) {
       this.createOpts.NetworkingConfig = {
         EndpointsConfig: {
@@ -409,7 +420,7 @@ export async function createTestEnv({
   configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true,
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
-  telemetrydMock = false,
+  telemetrydMock = false, systemdMode = false,
 } = {}) {
   // The boot-lock queue wait must not count against the suite's hook budget.
   // Mocha enforces a hook's timeout twice: the watchdog timer (which would fire
@@ -439,7 +450,7 @@ export async function createTestEnv({
   activeEnvs.add(env);
 
   try {
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -482,7 +493,7 @@ function mergeConfigs(base, override) {
   return result;
 }
 
-async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock) {
+async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -734,6 +745,14 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     // /run/flux/telemetry runtime dir the identity server's Arcane write-probe
     // demands.
     if (telemetrydMock && !isLegacy) nodeEnv.FLUX_TELEMETRYD_MOCK = 'true';
+    // systemd mode (the journald-logging suite): the entrypoint execs a real
+    // systemd as PID 1 — dockerd and fluxos run as units, fluxos's stdout is
+    // journal-connected (JOURNAL_STREAM set, the Arcane sink mode) and
+    // journalctl serves the admin log endpoints. Env-level and uniform across
+    // the fleet. The default-entrypoint levers (restartFluxos, pauseDockerd,
+    // the shutdownd/telemetryd mocks) do not exist under systemd; suites
+    // using them must stay in the default mode.
+    if (systemdMode) nodeEnv.FLUX_SYSTEMD_MODE = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files (shared.js / node-NN) carry the default 198.18 addresses; NODE_CONFIG
@@ -771,6 +790,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
       .withLogConsumer(logCollector)
       .withEnvironment(nodeEnv)
       .withWaitStrategy(nodeReadyWaitStrategy(nodeIp).withStartupTimeout(120000));
+    if (systemdMode) builder.withStopSignal('SIGRTMIN+3');
 
     nodeConfigs.push({ index: i, builder, ip: nodeIp, num: i + 1, logCollector, bootIdDir });
   }
