@@ -12,7 +12,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 
-const globalCmdDelayMs = config.fluxapps.globalCmdDelayMs;
+const { globalCmdDelayMs } = config.fluxapps;
 
 /**
  * Get application locations from the global database
@@ -35,10 +35,15 @@ async function appLocation(appname) {
  * @param {boolean} [bypassMyIp] - Whether to bypass own IP
  * @returns {Promise<void>}
  */
-async function executeAppGlobalCommand(appname, command, zelidauth, paramA, bypassMyIp) {
+async function executeAppGlobalCommand(appname, command, zelidauth, paramA, bypassMyIp, replica = null) {
   try {
     // get a list of the specific app locations
-    const locations = await appLocation(appname);
+    let locations = await appLocation(appname);
+    // A replica-scoped command goes only to the node(s) that run that identity
+    // (location rows carry the replica).
+    if (replica != null) {
+      locations = locations.filter((appInstance) => appInstance.replica === replica);
+    }
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     const localIp = extractIp(localSocketAddr);
     const localPort = extractPort(localSocketAddr);
@@ -58,6 +63,9 @@ async function executeAppGlobalCommand(appname, command, zelidauth, paramA, bypa
       let url = `http://${instanceIp}:${instancePort}/apps/${command}/${appname}`;
       if (paramA) {
         url += `/${paramA}`;
+      }
+      if (replica != null) {
+        url += `?replica=${encodeURIComponent(replica)}`;
       }
       axios.get(url, axiosConfig)
         .then((response) => {
@@ -91,13 +99,13 @@ async function executeAppGlobalCommand(appname, command, zelidauth, paramA, bypa
  * start of a non-elected activeStandby component is correctly held, not force-started.
  *
  * @param {string} appname app or component identifier
- * @param {object|null} deployment DeploymentSpec (null for a component command)
+ * @param {object[]|null} deployments DeploymentSpec per targeted identity (null for a component command)
  * @param {(id: string) => Promise<void>} recordIntent records the durable intent for one component
  * @returns {Promise<void>}
  */
-async function driveOperatorCommand(appname, deployment, recordIntent) {
-  const ids = (!appname.includes('_') && deployment)
-    ? deployment.componentEntries().map(([, c]) => c.identifier)
+async function driveOperatorCommand(appname, deployments, recordIntent) {
+  const ids = (!appname.includes('_') && deployments)
+    ? deployments.flatMap((deployment) => deployment.componentEntries().map(([, c]) => c.identifier))
     : [appname];
   // eslint-disable-next-line no-restricted-syntax
   for (const id of ids) {
@@ -105,6 +113,29 @@ async function driveOperatorCommand(appname, deployment, recordIntent) {
     await recordIntent(id);
     reconcilerQueue.enqueue(id);
   }
+}
+
+/**
+ * The deployments a whole-app operator command targets on this node: every local
+ * deployment, or exactly the named identity's when the command is replica-scoped
+ * (?replica=). Throws when the app — or the named replica — is not deployed here.
+ * @param {string} mainAppName
+ * @param {string|null} replica
+ * @returns {Promise<{instantiated: object, deployments: object[]}>}
+ */
+async function resolveCommandDeployments(mainAppName, replica) {
+  const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+  if (!instantiated) {
+    throw new Error('Application not found');
+  }
+  let deployments = await deploymentProvider.buildDeployments(instantiated);
+  if (replica != null) {
+    deployments = deployments.filter((deployment) => deployment.replica === replica);
+    if (deployments.length === 0) {
+      throw new Error(`Replica ${replica} of ${instantiated.name} is not deployed on this node`);
+    }
+  }
+  return { instantiated, deployments };
 }
 
 async function appStart(req, res) {
@@ -131,29 +162,30 @@ async function appStart(req, res) {
       return res ? res.json(errMessage) : errMessage;
     }
 
+    const replica = req.query.replica || null;
+
     if (global) {
-      executeAppGlobalCommand(appname, 'appstart', req.headers.zelidauth); // do not wait
+      executeAppGlobalCommand(appname, 'appstart', req.headers.zelidauth, undefined, undefined, replica); // do not wait
       const appResponse = messageHelper.createSuccessMessage(`${appname} queried for global start`);
       return res ? res.json(appResponse) : appResponse;
     }
 
     const isComponent = appname.includes('_');
-    let deployment = null;
+    let deployments = null;
     let appRes;
     if (isComponent) {
       appRes = `Component ${appname} started`;
     } else {
-      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-      if (!instantiated) {
-        throw new Error('Application not found');
-      }
-      deployment = await deploymentProvider.buildDeployment(instantiated);
-      appRes = `Application ${instantiated.name} started`;
+      const resolved = await resolveCommandDeployments(mainAppName, replica);
+      ({ deployments } = resolved);
+      appRes = replica != null
+        ? `Replica ${replica} of ${resolved.instantiated.name} started`
+        : `Application ${resolved.instantiated.name} started`;
     }
     // clear the operator stop lock; the reconciler then (re)starts each component,
     // honouring its own election/dependency gates (a non-elected activeStandby
     // component is held at awaitingController, never force-started).
-    await driveOperatorCommand(appname, deployment, (id) => appsRuntimeState.setOperatorStopped(id, false));
+    await driveOperatorCommand(appname, deployments, (id) => appsRuntimeState.setOperatorStopped(id, false));
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
@@ -198,28 +230,29 @@ async function appStop(req, res) {
       return res ? res.json(errMessage) : errMessage;
     }
 
+    const replica = req.query.replica || null;
+
     if (global) {
-      executeAppGlobalCommand(appname, 'appstop', req.headers.zelidauth); // do not wait
+      executeAppGlobalCommand(appname, 'appstop', req.headers.zelidauth, undefined, undefined, replica); // do not wait
       const appResponse = messageHelper.createSuccessMessage(`${appname} queried for global stop`);
       return res ? res.json(appResponse) : appResponse;
     }
 
     const isComponent = appname.includes('_'); // it is a component stop
-    let deployment = null;
+    let deployments = null;
     let appRes;
     if (isComponent) {
       appRes = `Component ${appname} stopped`;
     } else {
-      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-      if (!instantiated) {
-        throw new Error('Application not found');
-      }
-      deployment = await deploymentProvider.buildDeployment(instantiated);
-      appRes = `Application ${instantiated.name} stopped`;
+      const resolved = await resolveCommandDeployments(mainAppName, replica);
+      ({ deployments } = resolved);
+      appRes = replica != null
+        ? `Replica ${replica} of ${resolved.instantiated.name} stopped`
+        : `Application ${resolved.instantiated.name} stopped`;
     }
     // operator stop persists (the reconciler will not restart a stopped app); the
     // reconciler does the actual stop + stops monitoring on its stop branch.
-    await driveOperatorCommand(appname, deployment, (id) => appsRuntimeState.setOperatorStopped(id, true));
+    await driveOperatorCommand(appname, deployments, (id) => appsRuntimeState.setOperatorStopped(id, true));
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
@@ -264,29 +297,30 @@ async function appRestart(req, res) {
       return res ? res.json(errMessage) : errMessage;
     }
 
+    const replica = req.query.replica || null;
+
     if (global) {
-      executeAppGlobalCommand(appname, 'apprestart', req.headers.zelidauth); // do not wait
+      executeAppGlobalCommand(appname, 'apprestart', req.headers.zelidauth, undefined, undefined, replica); // do not wait
       const appResponse = messageHelper.createSuccessMessage(`${appname} queried for global restart`);
       return res ? res.json(appResponse) : appResponse;
     }
 
     const isComponent = appname.includes('_');
-    let deployment = null;
+    let deployments = null;
     let appRes;
     if (isComponent) {
       appRes = `Component ${appname} restarted`;
     } else {
-      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-      if (!instantiated) {
-        throw new Error('Application not found');
-      }
-      deployment = await deploymentProvider.buildDeployment(instantiated);
-      appRes = `Application ${instantiated.name} restarted`;
+      const resolved = await resolveCommandDeployments(mainAppName, replica);
+      ({ deployments } = resolved);
+      appRes = replica != null
+        ? `Replica ${replica} of ${resolved.instantiated.name} restarted`
+        : `Application ${resolved.instantiated.name} restarted`;
     }
     // user-initiated restart = "make it run now": clear the operator stop lock AND
     // bump the durable restart generation, so the reconciler restarts a running
     // container (or starts a stopped one) and honours its election/dependency gates.
-    await driveOperatorCommand(appname, deployment, async (id) => {
+    await driveOperatorCommand(appname, deployments, async (id) => {
       await appsRuntimeState.setOperatorStopped(id, false);
       await appsRuntimeState.requestRestart(id);
     });
@@ -331,23 +365,23 @@ async function appKill(req, res) {
       return res ? res.json(errMessage) : errMessage;
     }
 
+    const replica = req.query.replica || null;
     const isComponent = appname.includes('_');
-    let deployment = null;
+    let deployments = null;
     let appRes;
     if (isComponent) {
       appRes = `Component ${appname} killed`;
     } else {
-      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-      if (!instantiated) {
-        throw new Error('Application not found');
-      }
-      deployment = await deploymentProvider.buildDeployment(instantiated);
-      appRes = `Application ${instantiated.name} killed`;
+      const resolved = await resolveCommandDeployments(mainAppName, replica);
+      ({ deployments } = resolved);
+      appRes = replica != null
+        ? `Replica ${replica} of ${resolved.instantiated.name} killed`
+        : `Application ${resolved.instantiated.name} killed`;
     }
     // operator kill = force-stop now: durable operatorStopped carrying the force
     // mode (so a crash never downgrades it to the app's graceful window); the
     // reconciler's desired-stopped branch honours force with appDockerKill.
-    await driveOperatorCommand(appname, deployment, (id) => appsRuntimeState.setOperatorStopped(id, true, { force: true }));
+    await driveOperatorCommand(appname, deployments, (id) => appsRuntimeState.setOperatorStopped(id, true, { force: true }));
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
@@ -392,8 +426,10 @@ async function appPause(req, res) {
       return res ? res.json(errMessage) : errMessage;
     }
 
+    const replica = req.query.replica || null;
+
     if (global) {
-      executeAppGlobalCommand(appname, 'apppause', req.headers.zelidauth); // do not wait
+      executeAppGlobalCommand(appname, 'apppause', req.headers.zelidauth, undefined, undefined, replica); // do not wait
       const appResponse = messageHelper.createSuccessMessage(`${appname} queried for global pause`);
       return res ? res.json(appResponse) : appResponse;
     }
@@ -404,16 +440,16 @@ async function appPause(req, res) {
     if (isComponent) {
       appRes = await dockerService.appDockerPause(appname);
     } else {
-      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-      if (!instantiated) {
-        throw new Error('Application not found');
+      const resolved = await resolveCommandDeployments(mainAppName, replica);
+      for (const deployment of resolved.deployments) {
+        for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
+          // eslint-disable-next-line no-await-in-loop
+          await dockerService.appDockerPause(deployComp.identifier);
+        }
       }
-      const deployment = await deploymentProvider.buildDeployment(instantiated);
-      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
-        // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerPause(deployComp.identifier);
-      }
-      appRes = `Application ${instantiated.name} paused`;
+      appRes = replica != null
+        ? `Replica ${replica} of ${resolved.instantiated.name} paused`
+        : `Application ${resolved.instantiated.name} paused`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -459,8 +495,10 @@ async function appUnpause(req, res) {
       return res ? res.json(errMessage) : errMessage;
     }
 
+    const replica = req.query.replica || null;
+
     if (global) {
-      executeAppGlobalCommand(appname, 'appunpause', req.headers.zelidauth); // do not wait
+      executeAppGlobalCommand(appname, 'appunpause', req.headers.zelidauth, undefined, undefined, replica); // do not wait
       const appResponse = messageHelper.createSuccessMessage(`${appname} queried for global unpase`);
       return res ? res.json(appResponse) : appResponse;
     }
@@ -471,16 +509,16 @@ async function appUnpause(req, res) {
     if (isComponent) {
       appRes = await dockerService.appDockerUnpause(appname);
     } else {
-      const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-      if (!instantiated) {
-        throw new Error('Application not found');
+      const resolved = await resolveCommandDeployments(mainAppName, replica);
+      for (const deployment of resolved.deployments) {
+        for (const [, deployComp] of deployment.componentEntries()) {
+          // eslint-disable-next-line no-await-in-loop
+          await dockerService.appDockerUnpause(deployComp.identifier);
+        }
       }
-      const deployment = await deploymentProvider.buildDeployment(instantiated);
-      for (const [, deployComp] of deployment.componentEntries()) {
-        // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerUnpause(deployComp.identifier);
-      }
-      appRes = `Application ${instantiated.name} unpaused`;
+      appRes = replica != null
+        ? `Replica ${replica} of ${resolved.instantiated.name} unpaused`
+        : `Application ${resolved.instantiated.name} unpaused`;
     }
 
     const appResponse = messageHelper.createDataMessage(appRes);
@@ -507,15 +545,12 @@ async function appUnpause(req, res) {
  * @returns {Promise<void>}
  */
 async function requestAppRestart(appname) {
-  let deployment = null;
+  let deployments = null;
   if (!appname.includes('_')) {
-    const instantiated = await appsRepository.getGlobalAppInfo(appname);
-    if (!instantiated) {
-      throw new Error('Application not found');
-    }
-    deployment = await deploymentProvider.buildDeployment(instantiated);
+    const resolved = await resolveCommandDeployments(appname, null);
+    ({ deployments } = resolved);
   }
-  await driveOperatorCommand(appname, deployment, (id) => appsRuntimeState.requestRestart(id));
+  await driveOperatorCommand(appname, deployments, (id) => appsRuntimeState.requestRestart(id));
 }
 
 /**
