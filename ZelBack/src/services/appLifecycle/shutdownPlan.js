@@ -81,6 +81,9 @@ function componentIdentityLabels(deployComp, owner) {
     'runonflux.component': deployComp.name,
   };
   if (owner) labels['runonflux.owner'] = owner;
+  // Labels are the identity authority (the container name is display only);
+  // a named replica's containers carry which replica they are.
+  if (deployComp.replica != null) labels['runonflux.replica'] = deployComp.replica;
   return labels;
 }
 
