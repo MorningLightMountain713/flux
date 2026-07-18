@@ -827,8 +827,10 @@ describe('messageStore tests', () => {
       const result = await messageStore.storeAppRemovedMessage(message);
 
       expect(result).to.be.true;
-      expect(dbHelperStub.findOneAndDeleteInDatabase.calledOnce).to.be.true;
-      expect(dbHelperStub.findOneAndDeleteInDatabase.firstCall.args[2]).to.deep.equal({
+      // An untagged removal clears EVERY row the node held for the app (a
+      // co-located pair has one row per replica).
+      expect(dbHelperStub.removeDocumentsFromCollection.calledOnce).to.be.true;
+      expect(dbHelperStub.removeDocumentsFromCollection.firstCall.args[2]).to.deep.equal({
         ip: '192.168.1.1', name: 'testapp',
       });
     });

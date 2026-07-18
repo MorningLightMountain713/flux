@@ -360,6 +360,9 @@ async function storeAppRunningMessage(message) {
       name: app.name,
       hash: app.hash,
       ip,
+      // One row per identity: a co-located node reports one entry per replica.
+      // null (loose / old senders) matches rows without the field.
+      replica: typeof app.replica === 'string' ? app.replica : null,
       broadcastedAt: incomingDate,
       expireAt,
       osUptime: message.osUptime,
@@ -377,7 +380,7 @@ async function storeAppRunningMessage(message) {
     // eslint-disable-next-line no-await-in-loop
     const result = await dbHelper.updateOneInDatabase(
       database, globalAppsLocations,
-      { name: app.name, ip },
+      { name: app.name, ip, replica: incoming.replica },
       [{ $set: conditionalSet }],
       { upsert: true },
     );
@@ -404,7 +407,11 @@ async function storeAppRunningMessage(message) {
   }
 
   for (const app of appsMessages) {
-    const queryFind = { name: app.name, ip: message.ip };
+    // A replica-tagged entry releases exactly its own claim; untagged releases
+    // every claim for the (name, ip) - the v1 whole-app semantics.
+    const queryFind = typeof app.replica === 'string'
+      ? { name: app.name, ip: message.ip, replica: app.replica }
+      : { name: app.name, ip: message.ip };
     // eslint-disable-next-line no-await-in-loop
     await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, queryFind);
     // eslint-disable-next-line no-await-in-loop
@@ -595,7 +602,7 @@ async function storeAppRemovedMessage(message) {
     return false;
   }
 
-  await removeLocationForAppRemoved(message.ip, message.appName, message.broadcastedAt);
+  await removeLocationForAppRemoved(message.ip, message.appName, message.broadcastedAt, message.replica);
 
   // all stored, rebroadcast
   return true;
@@ -636,21 +643,23 @@ async function expireLocationsForSigterm(signedAt, broadcastedAt) {
  * node's removal of that app. It applies where its node is now, which differs
  * from where it was signed when the node has moved since.
  *
+ * A replica-tagged removal (one co-located identity scaled away) clears only its
+ * own row; an untagged removal clears every row the node held for the app, which
+ * for a co-located pair is all of its replica rows.
+ *
  * @param {string} signedAt - The node's socket address when it signed it
  * @param {string} appName - The removed app
  * @param {number} broadcastedAt - The removal's broadcast time, ms
+ * @param {string} [replica] - The removed identity, for a co-located node
  * @returns {Promise<void>}
  */
-async function removeLocationForAppRemoved(signedAt, appName, broadcastedAt) {
+async function removeLocationForAppRemoved(signedAt, appName, broadcastedAt, replica) {
   const [ip] = await registryManager.currentAddressesOf([{ ip: signedAt, at: broadcastedAt }]);
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
-  await dbHelper.findOneAndDeleteInDatabase(
-    database,
-    globalAppsLocations,
-    { ip, name: appName, broadcastedAt: { $lte: new Date(broadcastedAt) } },
-    {},
-  );
+  const query = { ip, name: appName, broadcastedAt: { $lte: new Date(broadcastedAt) } };
+  if (typeof replica === 'string') query.replica = replica;
+  await dbHelper.removeDocumentsFromCollection(database, globalAppsLocations, query);
 }
 
 /**

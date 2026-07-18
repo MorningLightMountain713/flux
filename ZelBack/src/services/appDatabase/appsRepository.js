@@ -555,9 +555,13 @@ const locationProjection = {
   },
 };
 
-async function getAppLocation(appName, ip) {
+async function getAppLocation(appName, ip, replica) {
+  const query = { name: appName, ip };
+  // null matches loose/legacy rows (field absent); omitted matches any row
+  // for the (name, ip) - the legacy single-row read.
+  if (replica !== undefined) query.replica = replica;
   return dbHelper.findOneInDatabase(
-    globalDb(), globalAppsLocations, { name: appName, ip }, locationProjection,
+    globalDb(), globalAppsLocations, query, locationProjection,
   );
 }
 
