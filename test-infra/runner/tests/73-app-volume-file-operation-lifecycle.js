@@ -140,8 +140,8 @@ describe('app volume file operations - lifecycle', function () {
       // It was written down once that this prune DELETES the pinned image - no
       // tag, therefore dangling. It does not. An image pulled by digest keeps
       // its repository name and carries <none> only as its TAG, so it never
-      // matches the dangling filter that performDockerCleanup's pruneImages
-      // uses. Pinned here because the belief is the kind that gets a working
+      // matches the dangling filter a prune uses. Pinned here because the
+      // belief is the kind that gets a working
       // fetch deleted as redundant, and because the opposite is written in a
       // handover someone will read.
       await inNode('docker image prune -f >/dev/null 2>&1 || true');

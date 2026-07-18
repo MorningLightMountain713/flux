@@ -22,7 +22,6 @@ let appsMonitored = {};
 
 // Additional state variables for trySpawningGlobalApplication
 let fluxNodeWasNotConfirmedOnLastCheck = false;
-let firstExecutionAfterItsSynced = true;
 let fluxNodeWasAlreadyConfirmed = false;
 let spawnerPaused = false;
 
@@ -261,9 +260,6 @@ module.exports = {
   // Additional state getters/setters
   get fluxNodeWasNotConfirmedOnLastCheck() { return fluxNodeWasNotConfirmedOnLastCheck; },
   set fluxNodeWasNotConfirmedOnLastCheck(value) { fluxNodeWasNotConfirmedOnLastCheck = value; },
-
-  get firstExecutionAfterItsSynced() { return firstExecutionAfterItsSynced; },
-  set firstExecutionAfterItsSynced(value) { firstExecutionAfterItsSynced = value; },
 
   get fluxNodeWasAlreadyConfirmed() { return fluxNodeWasAlreadyConfirmed; },
   set fluxNodeWasAlreadyConfirmed(value) { fluxNodeWasAlreadyConfirmed = value; },

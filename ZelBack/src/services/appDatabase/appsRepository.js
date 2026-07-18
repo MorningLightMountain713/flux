@@ -9,6 +9,7 @@ const {
   globalAppsMessages,
   globalAppsTempMessages,
   globalAppsInstallingErrorsLocations,
+  globalAppsInstallingErrorsBroadcasts,
   globalAppsInstallingLocations,
   globalAppsLocations,
   appsHashesCollection,
@@ -221,6 +222,18 @@ async function upsertGlobalAppInfo(specDoc, { upsert = true } = {}) {
 async function removeGlobalAppInfo(name) {
   return dbHelper.removeDocumentsFromCollection(
     globalDb(), globalAppsInformation, { name: nameRegex(name) },
+  );
+}
+
+// Both the location rows and the archived broadcasts: leaving the broadcasts
+// would let message sync redistribute error records for an app that no longer
+// exists in the registry.
+async function removeAppInstallingErrorRecords(name) {
+  await dbHelper.removeDocumentsFromCollection(
+    globalDb(), globalAppsInstallingErrorsLocations, { name },
+  );
+  await dbHelper.removeDocumentsFromCollection(
+    globalDb(), globalAppsInstallingErrorsBroadcasts, { 'data.name': name },
   );
 }
 
@@ -735,6 +748,7 @@ module.exports = {
   listGlobalAppNodes,
   upsertGlobalAppInfo,
   removeGlobalAppInfo,
+  removeAppInstallingErrorRecords,
   // installed apps
   getInstalledApp,
   countInstalledApps,
