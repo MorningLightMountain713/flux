@@ -315,7 +315,15 @@ async function trySpawningGlobalApplication() {
     log.info('trySpawningGlobalApplication - Checking for apps that are missing instances on the network.');
     let globalAppNamesLocation = await appsRepository.findUnderProvisionedApps(currentHeight, nowSeconds);
     const numberOfGlobalApps = globalAppNamesLocation.length;
-    if (!numberOfGlobalApps) {
+    // A due deferred entry must be processed even when nothing is missing instances:
+    // a parked contender's app can reach target while it waits, and only its second
+    // pass (the over-instance election below) retracts + clears its standing claim.
+    // Bailing here would strand that claim until the TTL - a phantom seat that
+    // suppresses a legitimate respawn if a winner dies inside the window.
+    const { appsToBeCheckedLater, appsSyncthingToBeCheckedLater } = globalState;
+    const appIndex = appsToBeCheckedLater.findIndex((app) => app.timeToCheck <= Date.now());
+    const appSyncthingIndex = appsSyncthingToBeCheckedLater.findIndex((app) => app.timeToCheck <= Date.now());
+    if (!numberOfGlobalApps && appIndex < 0 && appSyncthingIndex < 0) {
       log.info('trySpawningGlobalApplication - No installable application found');
       return delayTime;
     }
@@ -333,8 +341,6 @@ async function trySpawningGlobalApplication() {
     // The first pass's announce timestamp, carried through the deferred entry so the
     // second pass can renew the claim under its original election ordering.
     let deferredAnnouncedAt = null;
-    const { appsToBeCheckedLater, appsSyncthingToBeCheckedLater } = globalState;
-
     const collateral = await generalService.obtainNodeCollateralInformation();
     const nodeOutpoint = `${collateral.txhash}:${collateral.txindex}`;
     const nodeOperator = fluxNetworkHelper.getFluxNodePublicKey();
@@ -344,8 +350,6 @@ async function trySpawningGlobalApplication() {
       operator: typeof nodeOperator === 'string' ? nodeOperator : undefined,
       ipMatcher: socketAddressesMatch,
     };
-    const appIndex = appsToBeCheckedLater.findIndex((app) => app.timeToCheck <= Date.now());
-    const appSyncthingIndex = appsSyncthingToBeCheckedLater.findIndex((app) => app.timeToCheck <= Date.now());
     let runningAppList = [];
     let installingAppList = [];
 
@@ -358,6 +362,13 @@ async function trySpawningGlobalApplication() {
       appsToBeCheckedLater.splice(appIndex, 1);
       appFromAppsToBeCheckedLater = true;
       appsCountAvailableToInstallOnMyNode = Math.max(0, appsCountAvailableToInstallOnMyNode - 1);
+      // A collision entry owns a standing claim (announced on its first pass). Adopt
+      // it at pop time, not after the announce block: from here on, EVERY exit that
+      // does not install must retract + clear it via the finally, including throws -
+      // the entry is already spliced, so a leak here would stand until the TTL.
+      if (collisionWindowElapsed) {
+        installingRecordKey = { name: appToRun, ip: localSocketAddr };
+      }
     } else if (appSyncthingIndex >= 0) {
       appToRun = appsSyncthingToBeCheckedLater[appSyncthingIndex].appName;
       appHash = appsSyncthingToBeCheckedLater[appSyncthingIndex].hash;
