@@ -171,12 +171,17 @@ function broadcast(obj) {
   for (const socket of sockets) writeMessage(socket, obj);
 }
 
-function notifyStarted(containerId, identity) {
-  broadcast({ op: 'started', container_id: containerId, identity });
+// The wire ops are ensure-verbs naming the daemon's obligation, not lifecycle
+// edges: `track` upserts one container's identity (safe to repeat; a changed
+// sink IS the rotation signal), `untrack` drops it (unknown id is a no-op),
+// and `sync` asserts the authoritative full set (the daemon untracks
+// anything absent from it).
+function broadcastTrack(containerId, identity) {
+  broadcast({ op: 'track', container_id: containerId, identity });
 }
 
-function notifyStopped(containerId) {
-  broadcast({ op: 'stopped', container_id: containerId });
+function broadcastUntrack(containerId) {
+  broadcast({ op: 'untrack', container_id: containerId });
 }
 
 /** Send a daemon a full snapshot of every running telemetry-app container. */
@@ -278,7 +283,7 @@ async function announce(idOrName, { identifierType = 'name' } = {}) {
   if (!identity) return;
 
   await setContainerAcls(inspect.Id);
-  notifyStarted(inspect.Id, identity);
+  broadcastTrack(inspect.Id, identity);
 }
 
 /**
@@ -304,7 +309,7 @@ async function handleDockerEvent(event) {
     await announce(containerId, { identifierType: 'id' });
   } else {
     // die / destroy — the daemon untracks; an unknown id is a harmless no-op.
-    notifyStopped(containerId);
+    broadcastUntrack(containerId);
   }
 }
 
@@ -521,8 +526,8 @@ module.exports = {
   resolveIdentity,
   sendSync,
   handleRequest,
-  notifyStarted,
-  notifyStopped,
+  broadcastTrack,
+  broadcastUntrack,
   onComponentCreated,
   resyncAll,
   SOCKET_PATH,

@@ -1,6 +1,6 @@
 // Drives the mock flux-telemetryd (test-infra/telemetryd-stub) that runs inside a
 // node's container for the telemetry suites. The mock is the CLIENT of FluxOS's
-// identity socket — it records every pushed sync/started/stopped message — and
+// identity socket — it records every pushed sync/track/untrack message — and
 // exposes an HTTP control port (default 16198) on the node's own IP, so the test
 // can read the received events, reset the log between scenarios, and force a
 // disconnect (the server replays a full sync on reconnect). `nodeNum` is the
@@ -56,12 +56,12 @@ export async function waitForTelemetryEvent(control, predicate, { timeout = 3000
 }
 
 // Every identity a telemetry-app container is announced with, flattened across
-// sync (batched containers) and started (single container) events — the
+// sync (batched containers) and track (single container) events — the
 // daemon-side view of "what would I be tracking, with which sink".
 export function announcedIdentities(events) {
   const out = [];
   for (const e of events) {
-    if (e.op === 'started' && e.identity) out.push({ conn: e.conn, seq: e.seq, container_id: e.container_id, identity: e.identity });
+    if (e.op === 'track' && e.identity) out.push({ conn: e.conn, seq: e.seq, container_id: e.container_id, identity: e.identity });
     if (e.op === 'sync') {
       for (const c of e.containers || []) out.push({ conn: e.conn, seq: e.seq, container_id: c.container_id, identity: c.identity });
     }
