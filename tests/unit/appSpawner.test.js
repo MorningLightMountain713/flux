@@ -58,7 +58,6 @@ describe('appSpawner tests', () => {
       dbReady: true,
       fluxNodeWasNotConfirmedOnLastCheck: false,
       fluxNodeWasAlreadyConfirmed: true,
-      firstExecutionAfterItsSynced: false,
       spawnerPaused: false,
       spawnErrorsLongerAppCache: new Map(),
       trySpawningGlobalAppCache: new Map(),
@@ -283,10 +282,6 @@ describe('appSpawner tests', () => {
         checkAppNetworkRequirements: opts.checkAppNetworkRequirements ?? sinon.stub().resolves(true),
         isPureFollower: opts.isPureFollower ?? sinon.stub().returns(false),
         getRequiredDependencyNamesForNode: opts.getRequiredDependencyNamesForNode ?? sinon.stub().resolves(new Set()),
-      },
-      './appUninstaller': {
-        uninstallApplication: sinon.stub().resolves(),
-        expireGlobalApplications: sinon.stub().resolves(),
       },
       './pendingTeardownStore': {
         teardownOwedFor: opts.teardownOwedFor ?? sinon.stub().resolves(false),

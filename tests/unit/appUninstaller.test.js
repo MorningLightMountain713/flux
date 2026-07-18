@@ -337,56 +337,6 @@ describe('appUninstaller tests', () => {
     });
   });
 
-  describe('expireGlobalApplications (authoritative-global expiry decision)', () => {
-    // listInstalledApps/listGlobalAppInfo return hydrated specs exposing .name,
-    // .height and .isExpired(nowSeconds, explorerHeight) - we control all three so the
-    // decision is exercised in isolation. Selection is observed via the
-    // "Application <name> is expired, removing" warn emitted BEFORE uninstallApplication.
-    const spec = (name, height, expired) => ({ name, height, isExpired: () => expired });
-    const wasSelected = (name) => logStub.warn.getCalls()
-      .some((c) => c.args[0] === `Application ${name} is expired, removing`);
-
-    beforeEach(() => {
-      dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns({}) });
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 1000000 });
-    });
-
-    it('does NOT remove a renewed app whose authoritative GLOBAL spec is unexpired (stale local row)', async () => {
-      // The local install row carries a stale shorter expire (says expired); the
-      // authoritative global spec is renewed (says alive). Must trust global.
-      appsRepositoryStub.listInstalledApps.resolves([spec('renewed', 100, true)]);
-      appsRepositoryStub.listGlobalAppInfo.callsFake(({ filter } = {}) => (
-        filter && filter.name && filter.name.$in
-          ? Promise.resolve([spec('renewed', 100, false)]) // authoritative: not expired
-          : Promise.resolve([]) // height-filtered candidates exclude the renewed app
-      ));
-      await appUninstaller.expireGlobalApplications();
-      expect(wasSelected('renewed')).to.equal(false);
-    });
-
-    it('does NOT remove a forever app (height===0) - checked before !height', async () => {
-      appsRepositoryStub.listInstalledApps.resolves([spec('forever', 0, false)]);
-      appsRepositoryStub.listGlobalAppInfo.resolves([]); // no global row -> local fallback (height 0)
-      await appUninstaller.expireGlobalApplications();
-      expect(wasSelected('forever')).to.equal(false);
-    });
-
-    it('removes an app the authoritative global confirms expired', async () => {
-      const expiredSpec = spec('expiredapp', 50, true);
-      appsRepositoryStub.listInstalledApps.resolves([expiredSpec]);
-      appsRepositoryStub.listGlobalAppInfo.resolves([expiredSpec]); // candidates + $in both expired
-      await appUninstaller.expireGlobalApplications();
-      expect(wasSelected('expiredapp')).to.equal(true);
-    });
-
-    it('falls back to the local row when the app has no global registration', async () => {
-      appsRepositoryStub.listInstalledApps.resolves([spec('manual', 100, true)]);
-      appsRepositoryStub.listGlobalAppInfo.resolves([]); // absent from global -> evaluate off local
-      await appUninstaller.expireGlobalApplications();
-      expect(wasSelected('manual')).to.equal(true);
-    });
-  });
-
   describe('runTeardown stop routing through flux-shutdownd', () => {
     const doc = () => ({
       key: 'myapp',

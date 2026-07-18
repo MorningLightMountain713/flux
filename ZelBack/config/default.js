@@ -372,7 +372,8 @@ module.exports = {
     imageReaperIntervalMs: 86400000, // cold-unused-image reaper cadence (daily; runs on ALL nodes, not gated on imageCacheEnabled)
     adoptionStaggerStepMs: 60000, // named-replica rolling-update step (floors at the app's graceful-shutdown budget)
     adoptionStaggerWindowMs: 300000, // loose-instance adoption spread window (bounds the fleet-wide restart stagger)
-    forceRemovalIntervalMs: 7200000,
+    orphanSweepIntervalMs: 7200000, // docker-orphan janitor cadence (containers with no installed-app row)
+    dockerDebrisIntervalMs: 21600000, // docker prune cadence (stopped containers/unused networks/volumes; guarded)
     installCollisionWaitMs: 90000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
     portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct prefix, excluding our own

@@ -26,7 +26,6 @@ const { FluxCacheManager } = require('../utils/cacheManager');
 const appInstaller = require('./appInstaller');
 const specReconciler = require('./specReconciler');
 const appNetworkLinker = require('./appNetworkLinker');
-const appUninstaller = require('./appUninstaller');
 const pendingTeardownStore = require('./pendingTeardownStore');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -274,12 +273,6 @@ async function trySpawningGlobalApplication() {
       fluxEventBus.publish('spawner:blocked', { reason: 'not_confirmed' });
       globalState.fluxNodeWasNotConfirmedOnLastCheck = true;
       return installDelay;
-    }
-
-    if (globalState.firstExecutionAfterItsSynced === true) {
-      log.info('Explorer Synced, checking for expired apps');
-      await appUninstaller.expireGlobalApplications();
-      globalState.firstExecutionAfterItsSynced = false;
     }
 
     if (globalState.fluxNodeWasAlreadyConfirmed && globalState.fluxNodeWasNotConfirmedOnLastCheck) {

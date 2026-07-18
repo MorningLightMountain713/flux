@@ -4,7 +4,7 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
-const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
+const appJanitor = require('../../ZelBack/src/services/appLifecycle/appJanitor');
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
 const daemonServiceTransactionRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceTransactionRpcs');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
@@ -745,7 +745,7 @@ describe('explorerService tests', () => {
     let dbStubUpdate;
     let dbStubCollectionStats;
     let logInfoSpy;
-    let expireGlobalApplicationsStub;
+    let sweepRegistryExpiryStub;
     let reconcileInstalledAppsStub;
     let restorePortsSupportStub;
     let daemonServiceBlockchainRpcsStub;
@@ -756,7 +756,7 @@ describe('explorerService tests', () => {
       sinon.stub(dbHelper, 'insertManyToDatabase');
       dbStubUpdate = sinon.stub(dbHelper, 'updateOneInDatabase');
       dbStubCollectionStats = sinon.stub(dbHelper, 'collectionStats');
-      expireGlobalApplicationsStub = sinon.stub(appUninstaller, 'expireGlobalApplications');
+      sweepRegistryExpiryStub = sinon.stub(appJanitor, 'sweepRegistryExpiry');
       reconcileInstalledAppsStub = sinon.stub(specReconciler, 'requestFullConvergence');
       restorePortsSupportStub = sinon.stub(portManager, 'restorePortsSupport');
       await dbHelper.initiateDB();
@@ -791,7 +791,7 @@ describe('explorerService tests', () => {
       const blockHeight = 695000;
       const isInsightExplorer = true;
       dbStubUpdate.returns(true);
-      expireGlobalApplicationsStub.returns(true);
+      sweepRegistryExpiryStub.returns(true);
       // prevent infinite func loop while testing
       explorerService.setBlockProccessingCanContinue(false);
       dbStubCollectionStats.returns({
@@ -837,7 +837,7 @@ describe('explorerService tests', () => {
 
       await explorerService.processBlock(blockHeight, isInsightExplorer);
 
-      sinon.assert.calledOnce(expireGlobalApplicationsStub);
+      sinon.assert.calledOnce(sweepRegistryExpiryStub);
       sinon.assert.notCalled(restorePortsSupportStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
@@ -900,7 +900,7 @@ describe('explorerService tests', () => {
 
       await explorerService.processBlock(blockHeight, isInsightExplorer);
 
-      sinon.assert.notCalled(expireGlobalApplicationsStub);
+      sinon.assert.notCalled(sweepRegistryExpiryStub);
       sinon.assert.notCalled(restorePortsSupportStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
@@ -962,7 +962,7 @@ describe('explorerService tests', () => {
 
       await explorerService.processBlock(blockHeight, isInsightExplorer);
 
-      sinon.assert.notCalled(expireGlobalApplicationsStub);
+      sinon.assert.notCalled(sweepRegistryExpiryStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
         sinon.match.object,
@@ -1714,7 +1714,7 @@ describe('explorerService tests', () => {
         count: 15,
         avgObjSize: 1111,
       });
-      sinon.stub(appUninstaller, 'expireGlobalApplications').returns(true);
+      sinon.stub(appJanitor, 'sweepRegistryExpiry').returns(true);
       sinon.stub(specReconciler, 'requestFullConvergence').resolves();
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').returns({
         status: 'success',

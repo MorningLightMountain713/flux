@@ -325,7 +325,8 @@ module.exports = {
     imageReaperIntervalMs: 86400000,
     adoptionStaggerStepMs: 60000,
     adoptionStaggerWindowMs: 300000,
-    forceRemovalIntervalMs: 7200000,
+    orphanSweepIntervalMs: 7200000,
+    dockerDebrisIntervalMs: 21600000,
     installCollisionWaitMs: 90000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
     portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct prefix, excluding our own

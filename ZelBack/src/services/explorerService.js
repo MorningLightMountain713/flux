@@ -16,8 +16,7 @@ const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const chainUtilities = require('./utils/chainUtilities');
 const messageVerifier = require('./appMessaging/messageVerifier');
 const registryManager = require('./appDatabase/registryManager');
-const appsRepository = require('./appDatabase/appsRepository');
-const appUninstaller = require('./appLifecycle/appUninstaller');
+const appJanitor = require('./appLifecycle/appJanitor');
 const specReconciler = require('./appLifecycle/specReconciler');
 const benchmarkService = require('./benchmarkService');
 const fluxNetworkhelper = require('./fluxNetworkHelper');
@@ -818,16 +817,11 @@ async function processBlock(blockHeight, isInsightExplorer) {
         // cannot stampede anything.
         await specReconciler.requestFullConvergence({ reason: 'block' });
         if (blockHeight % (2 * speedMultiplier) === 0) {
-          await appUninstaller.expireGlobalApplications();
-          // Converge the content-manifest register to the live-app set on the same
-          // cadence: an expired/removed app's manifest is permanent and otherwise leaks
-          // (served over sync forever). Best-effort — a reap failure never stalls the block loop.
-          try {
-            const { reaped } = await appsRepository.reapOrphanedContentManifests();
-            if (reaped > 0) log.info(`Reaped ${reaped} content manifest(s) for removed apps`);
-          } catch (error) {
-            log.error(`Content-manifest reap failed: ${error.message ?? error}`);
-          }
+          // Registry hygiene at tip cadence: expired global rows, their error
+          // records, and orphaned content manifests. The sweep never throws,
+          // so it cannot stall the block loop; removing an expired LOCAL
+          // install is the reconciler's job (the convergence call above).
+          await appJanitor.sweepRegistryExpiry();
         }
         if (blockDataVerbose.height % (config.fluxapps.reconstructAppMessagesHashPeriod * speedMultiplier) === 0) {
           try {
@@ -872,7 +866,7 @@ async function processBlock(blockHeight, isInsightExplorer) {
       fluxEventBus.publish('block:processed', { height: scannedHeight });
     } else if (blockDataVerbose.height % 500 === 0) {
       log.info(`Processing Explorer Number of Transactions: ${appsTransactions.length}.`);
-      await appUninstaller.expireGlobalApplications(); // in case node was shutdown for a while and it is started
+      await appJanitor.sweepRegistryExpiry(); // in case node was shutdown for a while and it is started
       await insertTransactions(appsTransactions, database);
       await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
       fluxEventBus.publish('block:processed', { height: scannedHeight });

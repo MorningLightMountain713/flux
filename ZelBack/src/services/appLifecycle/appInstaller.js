@@ -68,32 +68,6 @@ function setOnInstallComplete(callback) {
 const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated', 'isokosse', 'ChainBraryDApp', 'health', 'ethercalc'];
 
 /**
- * Perform Docker cleanup (prune containers, networks, volumes, images)
- * @param {object} res - Response object for streaming
- * @returns {Promise<void>}
- */
-async function performDockerCleanup(onStatus) {
-  log.info('Clearing up unused docker containers...');
-  if (onStatus) onStatus({ status: 'Clearing up unused docker containers...' });
-  await dockerService.pruneContainers();
-  if (onStatus) onStatus({ status: 'Docker containers cleaned.' });
-
-  log.info('Clearing up unused docker networks...');
-  if (onStatus) onStatus({ status: 'Clearing up unused docker networks...' });
-  await dockerService.pruneNetworks();
-  if (onStatus) onStatus({ status: 'Docker networks cleaned.' });
-
-  log.info('Clearing up unused docker volumes...');
-  if (onStatus) onStatus({ status: 'Clearing up unused docker volumes...' });
-  await dockerService.pruneVolumes();
-  if (onStatus) onStatus({ status: 'Docker volumes cleaned.' });
-
-  // Images are deliberately not touched here: reclamation belongs to the
-  // imageReaper (boot / post-update / daily), which is reference-gated and
-  // respects enterprise image-cache pins.
-}
-
-/**
  * Store + broadcast a fluxappinstallingerror so peers learn this app failed to
  * install here — it feeds their spawn decisions and error counting, and is what
  * makes one node's discovery of a broken app network-wide knowledge. Both the
@@ -246,27 +220,6 @@ async function installApplication(instantiated, options = {}) {
       const reason = `Image blocklist unreachable - cannot verify ${appName} for installation, will retry`;
       if (onStatus) onStatus(messageHelper.createErrorMessage(reason));
       return { status: InstallStatus.DEFERRED, reason };
-    }
-
-    // eslint-disable-next-line global-require
-    const appQueryService = require('../appQuery/appQueryService');
-    const deployments = await deploymentProvider.listInstalledDeployments();
-    const runningAppsRes = await appQueryService.listRunningApps();
-    if (runningAppsRes.status !== 'success') {
-      throw new Error('Unable to check running Apps');
-    }
-    const runningApps = runningAppsRes.data;
-    const installedAppComponentNames = [];
-    deployments.forEach((deployment) => {
-      deployment.componentEntries().forEach(([, comp]) => {
-        installedAppComponentNames.push(comp.identifier);
-      });
-    });
-    const runningAppsNames = runningApps.map((app) => app.Names[0].slice(5));
-    const runningSet = new Set(runningAppsNames);
-    const stoppedApps = installedAppComponentNames.filter((installedApp) => !runningSet.has(installedApp));
-    if (stoppedApps.length === 0 && !operationRegistry.isHeld(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY)) {
-      await performDockerCleanup(onStatus);
     }
 
     // Verify every app this app shares a network with is installed locally and
