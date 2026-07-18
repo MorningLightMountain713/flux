@@ -5,6 +5,7 @@ const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const dockerService = require('../dockerService');
 const generalService = require('../generalService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const globalState = require('../utils/globalState');
@@ -65,10 +66,13 @@ function staggerConfig() {
 async function adoptionDelayMs(registrySpec, localSocketAddr) {
   const { stepMs, windowMs } = staggerConfig();
   if (registrySpec.placement.mode() === 'named') {
-    const replica = await deploymentProvider.resolveLocalReplica(registrySpec);
-    if (replica === null) return 0;
+    const assigned = await deploymentProvider.resolveLocalReplicas(registrySpec);
+    if (assigned.length === 0) return 0;
     const names = [...registrySpec.placement.replicaNames()].sort();
-    const ordinal = Math.max(0, names.indexOf(replica));
+    // A co-located node rolls once, at its earliest replica's slot: the local
+    // adoption redeploys all its identities together, and the earliest ordinal
+    // keeps the fleet-wide roll order intact.
+    const ordinal = Math.max(0, Math.min(...assigned.map((replica) => names.indexOf(replica))));
     // Floor the step at the app's graceful-shutdown budget (+15s start margin)
     // so the rolling window never overlaps two replicas down at once. The
     // deployment build is acceptable here: an adoption is about to rebuild it
@@ -158,11 +162,32 @@ async function convergeApp(installed, registrySpec, ctx) {
     // identity drifted out of the maps. The count-based eviction below must
     // not run for named mode: it sheds by instance rank, which during a
     // scale-down or mode switch can be a still-targeted replica.
-    const replica = await deploymentProvider.resolveLocalReplica(registrySpec);
-    if (replica === null) {
+    const assigned = await deploymentProvider.resolveLocalReplicas(registrySpec);
+    if (assigned.length === 0) {
       log.warn(`REMOVAL REASON: Named placement does not target this node - ${installed.name}`);
       await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
       return 'removed';
+    }
+    // Per-identity diff: shed exactly the identities this node holds but the
+    // spec no longer assigns it - a de-targeted replica, or a pre-qualification
+    // (unlabeled) install that must requalify - while its siblings run on
+    // untouched. Missing assigned replicas install via the spawner's
+    // named-pin wake, not here.
+    const present = await dockerService.getAppContainerObjects(installed.name).catch(() => []);
+    const presentIdentities = [...new Set(present.map((c) => (c.Labels && c.Labels['runonflux.replica']) || null))];
+    const stale = presentIdentities.filter((identity) => (identity === null ? true : !assigned.includes(identity)));
+    if (present.length > 0 && stale.length > 0) {
+      let removedOne = false;
+      // eslint-disable-next-line no-restricted-syntax
+      for (const identity of stale) {
+        log.warn(`REMOVAL REASON: ${identity === null
+          ? `Pre-qualification install requalifying - ${installed.name}`
+          : `Named placement no longer assigns replica ${identity} to this node - ${installed.name}`}`);
+        // eslint-disable-next-line no-await-in-loop
+        const result = await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true, replica: identity });
+        removedOne = removedOne || result.status === appUninstaller.UninstallStatus.REMOVED;
+      }
+      if (removedOne) return 'removed';
     }
   } else if (ctx.localSocketAddr) {
     // Loose placement sheds surplus by instance rank (oldest instances keep
