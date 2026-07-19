@@ -48,6 +48,7 @@ RUN set -eu; \
     systemd \
     xfsprogs \
     acl \
+    dbus \
     && rm -rf /var/lib/apt/lists/*
 
 RUN install -m 0755 -d /etc/apt/keyrings \
