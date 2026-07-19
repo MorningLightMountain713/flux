@@ -4,9 +4,7 @@ const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const appInspector = require('../appManagement/appInspector');
 const log = require('../../lib/log');
-const { resolveSpec } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
-const { appsFolder } = require('../utils/appConstants');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 
 /**
  * Start monitoring multiple applications
@@ -26,16 +24,18 @@ async function startMonitoringOfApps(appSpecsToMonitor, appsMonitored, installed
       apps = installedAppsRes.data;
     }
 
-    const { DeploymentSpec } = await getSpecBackend();
     for (const app of apps) {
-      // resolveSpec decrypts enterprise apps — DeploymentSpec.fromSpec needs the
-      // cleartext components. deserializeSpec alone yields an EncryptedSpecV8.
+      // One deployment per identity installed here — monitoring keys on the
+      // container's identifier, and a co-located node runs one container per
+      // replica. A replica-less view yields unqualified identifiers that match
+      // no container, so neither sibling would be monitored. The provider
+      // resolves encrypted specs on the way through.
       // eslint-disable-next-line no-await-in-loop
-      const spec = await resolveSpec(app);
-      if (!spec) continue;
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
-      for (const [, deployComp] of deployment.componentEntries()) {
-        appInspector.startAppMonitoring(deployComp.identifier, appsMonitored);
+      const deployments = await deploymentProvider.getInstalledDeployments(app.name);
+      for (const deployment of deployments) {
+        for (const [, deployComp] of deployment.componentEntries()) {
+          appInspector.startAppMonitoring(deployComp.identifier, appsMonitored);
+        }
       }
     }
   } catch (error) {
@@ -63,16 +63,15 @@ async function stopMonitoringOfApps(appSpecsToMonitor, deleteData = false, appsM
       apps = installedAppsRes.data;
     }
 
-    const { DeploymentSpec } = await getSpecBackend();
     for (const app of apps) {
-      // resolveSpec decrypts enterprise apps — DeploymentSpec.fromSpec needs the
-      // cleartext components. deserializeSpec alone yields an EncryptedSpecV8.
+      // Per identity, for the same reason as the start side: an unqualified
+      // identifier stops nothing, because nothing was ever monitored under it.
       // eslint-disable-next-line no-await-in-loop
-      const spec = await resolveSpec(app);
-      if (!spec) continue;
-      const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
-      for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
-        appInspector.stopAppMonitoring(deployComp.identifier, deleteData, appsMonitored);
+      const deployments = await deploymentProvider.getInstalledDeployments(app.name);
+      for (const deployment of deployments) {
+        for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
+          appInspector.stopAppMonitoring(deployComp.identifier, deleteData, appsMonitored);
+        }
       }
     }
   } catch (error) {

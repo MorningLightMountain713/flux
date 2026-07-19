@@ -38,7 +38,9 @@ async function appPricePerMonth(spec, height, suppliedPrices) {
   const appPrices = suppliedPrices || await getChainParamsPriceUpdates();
   const priceSpecifications = appPrices.filter((i) => i.height < height).at(-1);
 
-  const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+  // Declared view deliberately: price is a property of the submitted spec that
+  // every node must agree on, never one node's replica view.
+  const deployment = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null });
   const { cpu, memory, storage } = deployment.totalResources();
   const premPortCount = deployment.allHostPorts()
     .filter((p) => classifyPort(p) === PORT_TIER.PREMIUM).length;
@@ -63,7 +65,7 @@ async function appPricePerMonth(spec, height, suppliedPrices) {
 
   // v4+: scope fee (nodes/enterprise), staticip fee, per-3-instances pricing
   let totalPrice = cpuPrice + ramPrice + hddPrice + portPrice;
-  const nodes = spec.nodes;
+  const { nodes } = spec;
   if ((nodes && nodes.length) || spec.enterprise) totalPrice += priceSpecifications.scope;
   if (spec.staticip) totalPrice += priceSpecifications.staticip;
 
