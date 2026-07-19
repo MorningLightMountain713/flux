@@ -36,13 +36,29 @@ export async function listAppContainers(container, { all = false } = {}) {
     .filter((c) => c.name);
 }
 
-export async function isAppContainerRunning(container, appName) {
-  const containers = await listAppContainers(container);
-  return containers.some((c) => c.name.includes(appName) && c.status?.startsWith('Up'));
+// A container name encodes its identity as flux<comp>_<app>[_<replica>]. A bare
+// app name matches every identity of that app; naming a replica narrows to
+// exactly one, which is what co-located siblings need — they share the app
+// segment and differ only in the trailing one.
+function matchesAppIdentity(name, appName, replica) {
+  if (!name.includes(appName)) return false;
+  return replica == null || name.endsWith(`_${appName}_${replica}`);
 }
 
-export async function killAppContainer(container, appName, componentName) {
-  const name = `flux${componentName ?? appName}_${appName}`;
+export async function isAppContainerRunning(container, appName, { replica = null } = {}) {
+  const containers = await listAppContainers(container);
+  return containers.some((c) => matchesAppIdentity(c.name, appName, replica) && c.status?.startsWith('Up'));
+}
+
+// Every container belonging to the app on this node, across identities — the
+// co-located count, which a single-container lookup cannot express.
+export async function appContainersFor(container, appName, { all = false } = {}) {
+  const containers = await listAppContainers(container, { all });
+  return containers.filter((c) => matchesAppIdentity(c.name, appName, null));
+}
+
+export async function killAppContainer(container, appName, componentName, replica = null) {
+  const name = appContainerName(appName, componentName, replica);
   return execInContainer(container, `docker rm -f ${name}`);
 }
 
@@ -54,13 +70,14 @@ export async function removeAppImage(container, imageRef) {
   return execInContainer(container, `docker rmi -f ${imageRef}`);
 }
 
-export async function getAppContainerStatus(container, appName, { all = false } = {}) {
+export async function getAppContainerStatus(container, appName, { all = false, replica = null } = {}) {
   const containers = await listAppContainers(container, { all });
-  return containers.find((c) => c.name.includes(appName)) ?? null;
+  return containers.find((c) => matchesAppIdentity(c.name, appName, replica)) ?? null;
 }
 
-function appContainerName(appName, componentName) {
-  return `flux${componentName ?? appName}_${appName}`;
+function appContainerName(appName, componentName, replica = null) {
+  const base = `flux${componentName ?? appName}_${appName}`;
+  return replica != null ? `${base}_${replica}` : base;
 }
 
 // graceful stop -> the container exits 0 and stays present (not removed). Use to

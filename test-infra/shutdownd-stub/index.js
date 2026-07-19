@@ -45,25 +45,34 @@ const RPC_INVALID_PARAMS = -32602;
 //   hang       -> never reply; register as draining so force_app_stop can resolve it
 const STOP_END_STATES = { complete: 'complete', deadline: 'deadline', superseded: 'superseded' };
 
-const plans = new Map(); // `${owner}:${app}` -> plan
-const callLog = []; // { method, owner, app, reason, force, deadline, ts, seq }
-const draining = new Map(); // `${owner}:${app}` -> { socket, id } for a hung begin_app_stop
+const plans = new Map(); // `${owner}:${app}[:${replica}]` -> plan
+const callLog = []; // { method, owner, app, replica, reason, force, deadline, ts, seq }
+const draining = new Map(); // plan key -> { socket, id } for a hung begin_app_stop
 const behavior = { default: 'complete', perApp: new Map() };
 let seq = 0;
 let refused = false;
 let socketServer = null;
 
-const planKey = (owner, app) => `${owner}:${app}`;
+// A plan/stop addresses ONE deployed identity. A named replica appends its name;
+// loose placement (null) keeps the bare whole-app key. `:` cannot appear in an
+// owner, app, or replica name, so the key is unambiguous.
+const planKey = (owner, app, replica) => (replica == null ? `${owner}:${app}` : `${owner}:${app}:${replica}`);
 const modeFor = (app) => behavior.perApp.get(app) || behavior.default;
 const logCall = (entry) => { callLog.push({ ...entry, ts: Date.now(), seq: seq += 1 }); };
 
-// Stop every container the install path labelled for this app on the inner dockerd.
-// componentIdentityLabels stamps runonflux.app on EVERY flux container (graceful or
-// not), so this selector covers plain and graceful apps. Best-effort: a missing
-// docker CLI (e.g. local protocol tests) or already-stopped container is not fatal.
-function dockerStopByApp(app) {
+// Stop the app's containers on the inner dockerd. componentIdentityLabels stamps
+// runonflux.app on EVERY flux container (graceful or not), so this selector covers
+// plain and graceful apps. A replica name narrows the set to that identity's
+// containers via runonflux.replica — co-located siblings share the app label, so
+// stopping by app alone would take the sibling down with it. A null replica means
+// the whole app, which is what every whole-app path (expiry, cancel, node drain)
+// wants. Best-effort: a missing docker CLI (e.g. local protocol tests) or an
+// already-stopped container is not fatal.
+function dockerStopApp(app, replica) {
   return new Promise((resolve) => {
-    execFile('docker', ['ps', '-q', '--filter', `label=runonflux.app=${app}`], (err, stdout) => {
+    const filters = ['--filter', `label=runonflux.app=${app}`];
+    if (replica != null) filters.push('--filter', `label=runonflux.replica=${replica}`);
+    execFile('docker', ['ps', '-q', ...filters], (err, stdout) => {
       if (err) { resolve(0); return; }
       const ids = stdout.split('\n').map((s) => s.trim()).filter(Boolean);
       if (ids.length === 0) { resolve(0); return; }
@@ -90,10 +99,10 @@ function replyError(socket, id, code, message) {
 
 async function handleBeginAppStop(socket, id, params) {
   const {
-    owner_flux_id: owner, app_name: app, reason, force, deadline,
+    owner_flux_id: owner, app_name: app, replica = null, reason, force, deadline,
   } = params || {};
   logCall({
-    method: 'begin_app_stop', owner, app, reason, force: Boolean(force), deadline,
+    method: 'begin_app_stop', owner, app, replica, reason, force: Boolean(force), deadline,
   });
   if (!owner || !app) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: missing owner/app'); return; }
   if (!VALID_REASONS.has(reason)) { replyError(socket, id, RPC_INVALID_PARAMS, `invalid reason: ${reason}`); return; }
@@ -101,7 +110,7 @@ async function handleBeginAppStop(socket, id, params) {
   // A forceful stop (operator force teardown) is a zero-budget kill: always stop and
   // report complete, regardless of the configured drain behaviour.
   if (force) {
-    await dockerStopByApp(app);
+    await dockerStopApp(app, replica);
     reply(socket, id, { end_state: 'complete' });
     return;
   }
@@ -110,28 +119,30 @@ async function handleBeginAppStop(socket, id, params) {
   if (mode === 'reject') { replyError(socket, id, RPC_NODE_PIPELINE_ACTIVE, 'node-pipeline-active'); return; }
   if (mode === 'hang') {
     // Genuine in-flight drain: hold the reply open so an operator force-remove can
-    // preempt it via force_app_stop (which resolves this same connection).
-    draining.set(planKey(owner, app), { socket, id });
+    // preempt it via force_app_stop (which resolves this same connection). Keyed per
+    // identity, so a force aimed at one replica cannot resolve its sibling's run.
+    draining.set(planKey(owner, app, replica), { socket, id });
     return;
   }
   const endState = STOP_END_STATES[mode] || 'complete';
-  await dockerStopByApp(app);
+  await dockerStopApp(app, replica);
   reply(socket, id, { end_state: endState });
 }
 
 async function handleForceAppStop(socket, id, params) {
-  const { owner_flux_id: owner, app_name: app } = params || {};
-  logCall({ method: 'force_app_stop', owner, app });
+  const { owner_flux_id: owner, app_name: app, replica = null } = params || {};
+  logCall({ method: 'force_app_stop', owner, app, replica });
   if (!owner || !app) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: missing owner/app'); return; }
 
-  const pending = draining.get(planKey(owner, app));
+  const key = planKey(owner, app, replica);
+  const pending = draining.get(key);
   if (!pending) { reply(socket, id, { end_state: 'no_run' }); return; }
 
   // Escalate the in-flight drain: force-stop the containers, then resolve BOTH the
   // hung begin_app_stop connection and this force_app_stop with 'forced' — mirroring
   // the daemon's shared done-watch where both awaiters see the same end-state.
-  await dockerStopByApp(app);
-  draining.delete(planKey(owner, app));
+  await dockerStopApp(app, replica);
+  draining.delete(key);
   reply(pending.socket, pending.id, { end_state: 'forced' });
   reply(socket, id, { end_state: 'forced' });
 }
@@ -149,25 +160,31 @@ function dispatch(socket, line) {
     case 'upsert_app_plan': {
       const plan = params && params.plan;
       if (!plan || !plan.app_name || !plan.owner_flux_id) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: bad plan'); break; }
-      const k = planKey(plan.owner_flux_id, plan.app_name);
+      const replica = plan.replica == null ? null : plan.replica;
+      const k = planKey(plan.owner_flux_id, plan.app_name, replica);
       const replaced = plans.has(k);
       plans.set(k, plan);
-      logCall({ method, owner: plan.owner_flux_id, app: plan.app_name });
+      logCall({ method, owner: plan.owner_flux_id, app: plan.app_name, replica });
       reply(socket, id, { ok: true, replaced_existing: replaced });
       break;
     }
     case 'delete_app_plan': {
-      const { app_name: app, owner_flux_id: owner } = params || {};
-      const k = planKey(owner, app);
+      const { app_name: app, owner_flux_id: owner, replica = null } = params || {};
+      const k = planKey(owner, app, replica);
       const existed = plans.delete(k);
-      logCall({ method, owner, app });
+      logCall({ method, owner, app, replica });
       reply(socket, id, { ok: true, existed });
       break;
     }
     case 'list_app_plans': {
-      // The real daemon returns a bare array of summaries (not wrapped).
+      // The real daemon returns a bare array of summaries (not wrapped). `replica`
+      // is required-and-nullable on the summary: the resync side reconciles per
+      // identity and cannot tell siblings apart without it.
       const summaries = [...plans.values()].map((p) => ({
-        app_name: p.app_name, owner_flux_id: p.owner_flux_id, spec_hash: p.spec_hash,
+        app_name: p.app_name,
+        owner_flux_id: p.owner_flux_id,
+        replica: p.replica == null ? null : p.replica,
+        spec_hash: p.spec_hash,
       }));
       reply(socket, id, summaries);
       break;
