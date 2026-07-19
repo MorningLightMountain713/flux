@@ -66,6 +66,9 @@ describe('replica co-location: two named replicas of one app on one node, separa
         cpu: 0.5,
         memory: 300,
         rootFsGb: 2,
+        // Unsynced: co-located replicas reject synced persistent storage, and
+        // each identity gets its own volume anyway.
+        persistentStorage: { sizeGb: 10, mounts: { '/data': { source: 'data', destination: '/data' } } },
         ports: { game: { containerPort: 8080, hostPort } },
         env: { ADVERTISE: '${FLUX_PORT_game}' },
         ...(replicaOverrides ? { replicaOverrides } : {}),
