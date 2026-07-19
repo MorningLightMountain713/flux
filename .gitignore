@@ -385,6 +385,8 @@ test-infra/test-app/test-app
 test-infra/otlp-receiver/otlp-receiver
 # flux-telemetryd built for the harness (test-infra/flux-telemetryd/build.sh; pin declares the commit)
 test-infra/flux-telemetryd/dist/
+# flux-shutdownd built for the harness (test-infra/flux-shutdownd/build.sh; pin declares the commit)
+test-infra/flux-shutdownd/dist/
 
 # per-node logs written by the integration harness on test failure
 test-infra/runner/test-logs/

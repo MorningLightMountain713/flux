@@ -424,6 +424,7 @@ export async function createTestEnv({
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
   telemetrydMock = false, systemdMode = false, telemetrydReal = false,
+  shutdowndReal = false,
 } = {}) {
   // Before the boot lock, the network, or a single container: a flux-spec
   // vendor lagging the branch surfaces as a product mystery minutes later,
@@ -457,7 +458,7 @@ export async function createTestEnv({
   activeEnvs.add(env);
 
   try {
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -500,7 +501,11 @@ function mergeConfigs(base, override) {
   return result;
 }
 
-async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal) {
+async function _buildEnv(
+  env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides,
+  nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures,
+  bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal,
+) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -735,6 +740,35 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
         { source: distUnit, target: '/opt/telemetryd-dist/flux-telemetryd.service', mode: 'ro' },
       );
     }
+    // Real flux-shutdownd: the pinned build from test-infra/flux-shutdownd/dist
+    // replaces the mock in-container. It runs under the default entrypoint
+    // rather than as a systemd unit — its paths are env-configurable and its
+    // readiness notify is best-effort — but it must live in the node container,
+    // since each node is DinD and the app containers it drains are inside.
+    // A dist that does not match the pin fails here, not as a runtime mystery.
+    if (shutdowndReal) {
+      const distDir = join(__dirname, '..', '..', 'flux-shutdownd', 'dist');
+      const distBinary = process.env.SHUTDOWND_BINARY ?? join(distDir, 'flux-shutdownd');
+      const distCtl = process.env.SHUTDOWNCTL_BINARY ?? join(distDir, 'shutdownctl');
+      const distDbus = join(distDir, 'io.runonflux.Shutdownd.conf');
+      const buildCmd = 'run: bash test-infra/flux-shutdownd/build.sh';
+      if (!existsSync(distBinary) || !existsSync(distCtl) || !existsSync(distDbus)) {
+        throw new Error(`shutdowndReal: ${distDir} incomplete — ${buildCmd}`);
+      }
+      const pinPath = join(__dirname, '..', '..', 'flux-shutdownd', 'pin');
+      const pin = readFileSync(pinPath, 'utf-8').trim();
+      const builtRef = existsSync(join(distDir, '.built-ref'))
+        ? readFileSync(join(distDir, '.built-ref'), 'utf-8').trim()
+        : '(none)';
+      if (builtRef !== pin) {
+        throw new Error(`shutdowndReal: dist built from ${builtRef}, pin is ${pin} — ${buildCmd}`);
+      }
+      bindMounts.push(
+        { source: distBinary, target: '/opt/shutdownd-dist/flux-shutdownd', mode: 'ro' },
+        { source: distCtl, target: '/opt/shutdownd-dist/shutdownctl', mode: 'ro' },
+        { source: distDbus, target: '/opt/shutdownd-dist/io.runonflux.Shutdownd.conf', mode: 'ro' },
+      );
+    }
     const isLegacy = legacyNodes.includes(i);
     const nodeEnv = {
       NODE_CONFIG_DIR: `/flux/test-infra/config/node-${num}`,
@@ -762,7 +796,10 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     // would degrade through the unreachable fallback instead of draining). The
     // mock runs in-container and its begin_app_stop performs the actual docker
     // stop, mirroring the daemon's production role.
-    if (shutdowndMock && !isLegacy) nodeEnv.FLUX_SHUTDOWND_MOCK = 'true';
+    // The real daemon takes the mock's place rather than joining it: both bind
+    // the same socket, so running the pair would race for it.
+    if (shutdowndMock && !shutdowndReal && !isLegacy) nodeEnv.FLUX_SHUTDOWND_MOCK = 'true';
+    if (shutdowndReal && !isLegacy) nodeEnv.FLUX_SHUTDOWND_REAL = 'true';
     // The mock flux-telemetryd is the CLIENT of FluxOS's identity socket (the
     // inverse of shutdownd's direction). Opt-in: only the telemetry suites pay
     // for the identity server + stub; the entrypoint also creates the
