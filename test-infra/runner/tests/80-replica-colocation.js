@@ -12,6 +12,7 @@ import {
 import { shutdowndControl, waitForShutdowndCall } from '../framework/shutdownd-control.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { authenticate } from '../auth.js';
+import { appOwnerKey } from '../framework/keys.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 
 // Two named replicas of one app on ONE node. Everything here turns on the
@@ -73,6 +74,9 @@ describe('replica co-location: two named replicas of one app on one node, separa
         persistentStorage: { sizeGb: 10, mounts: { '/data': { source: 'data', destination: '/data' } } },
         ports: { game: { containerPort: 8080, hostPort } },
         env: { ADVERTISE: '${FLUX_PORT_game}' },
+        // Only apps with graceful shutdown configured get a daemon plan, so
+        // this is what puts the per-identity plans under test at all.
+        shutdown: { gracefulTimeout: 5 },
         ...(replicaOverrides ? { replicaOverrides } : {}),
       },
     };
@@ -263,11 +267,14 @@ describe('replica co-location: two named replicas of one app on one node, separa
     expect(await replicaHostPorts(appName, 's2')).to.deep.equal([36011]);
   });
 
-  it('keys the installed and location rows per identity, on the host and across the fleet', async function () {
+  it('keeps one installed spec row while the fleet sees a location row per identity', async function () {
     this.timeout(120000);
-    // Two installed rows on the host — one per deployed identity.
+    // The installed row holds the app SPEC, and the node derives one deployment
+    // per assigned identity from its placement — so a co-located pair is one row
+    // here, not two. What must never happen is the pair collapsing further out:
+    // presence is keyed per identity, or peers under-count the node's replicas.
     const localRows = await dbClient(host.num).getLocalApps(appName);
-    expect(localRows.map((r) => r.replica).sort()).to.deep.equal(['s1', 's2']);
+    expect(localRows.length, 'one installed spec row per app').to.equal(1);
 
     // Peers see two location rows for the SAME (name, ip): the pair is
     // distinguishable only by replica, so a row keyed (name, ip) alone would
@@ -358,7 +365,7 @@ describe('replica co-location: two named replicas of one app on one node, separa
 
     // Identity rides a structured query param: a two-segment name like app_s1
     // would misparse as the component_app form the route already accepts.
-    const auth = await authenticate(host.url);
+    const auth = await authenticate(host.url, appOwnerKey());
     const res = await host.getAuthed(`/apps/apprestart/${appName}?replica=s1`, auth.zelidauth);
     expect(res.status, `apprestart ?replica=s1: ${JSON.stringify(res.data)}`).to.equal('success');
 
@@ -421,10 +428,11 @@ describe('replica co-location: two named replicas of one app on one node, separa
       { rounds: 60, label: `${appName} converged to s1 alone` },
     );
 
-    // s1 kept serving throughout, and only s2's rows and plan were reaped.
+    // s1 kept serving throughout, and only s2's plan was reaped. The app itself
+    // is still installed here — losing a sibling must not uninstall the app.
     expect(await replicaStartedAt(appName, 's1'), 'the surviving replica must not restart on a sibling removal').to.equal(s1Before);
     const localRows = await dbClient(host.num).getLocalApps(appName);
-    expect(localRows.map((r) => r.replica)).to.deep.equal(['s1']);
+    expect(localRows.length, 'the app stays installed after a sibling leaves').to.equal(1);
 
     await waitFor(
       async () => {
