@@ -71,6 +71,13 @@ describe('appReconciler tests', () => {
           const single = this.buildDeployment;
           return async (inst) => [await single(inst)];
         },
+        // Every assigned identity is installed in these fixtures, so the runtime
+        // view delegates to the assigned one. Suites covering an assigned-but-
+        // never-installed identity stub this directly.
+        get installedDeployments() {
+          const single = this.buildDeployment;
+          return async (inst) => [await single(inst)];
+        },
       },
       appVolumeService: { ensureMountSourcesExist: sinon.stub().resolves() },
       volumeService: {
