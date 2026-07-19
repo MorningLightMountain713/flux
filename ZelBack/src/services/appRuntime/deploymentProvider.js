@@ -146,6 +146,27 @@ async function toDeployments(instantiated) {
   return deployments;
 }
 
+/**
+ * Every deployment view an app is ACTUALLY INSTALLED with on this node — the
+ * runtime counterpart to toDeployments' assigned view.
+ *
+ * A replica the spec assigns but that was never installed here has no volume
+ * and no container, so anything that ACTUATES must drive this list. Driving the
+ * assigned list instead makes a never-installed replica indistinguishable from
+ * a vanished container: the actuator tries to start it, finds no volume, and
+ * either defers forever or escalates to recreate — on an app that was never
+ * provisioned here. Provisioning is the install path's job; a replica must be
+ * installed before anything may start it.
+ *
+ * @param {object} instantiated - InstantiatedSpec
+ * @returns {Promise<object[]>} DeploymentSpec[]
+ */
+async function installedDeployments(instantiated) {
+  const installed = new Set(await appsRepository.listInstalledIdentities(instantiated.name));
+  const deployments = await toDeployments(instantiated);
+  return deployments.filter((d) => installed.has(d.replica ?? null));
+}
+
 async function listInstalledDeployments() {
   const installed = await appsRepository.listInstalledApps();
   const deployments = [];
@@ -182,8 +203,9 @@ async function getInstalledDeployment(name) {
 }
 
 /**
- * Every deployment view of an installed app on this node (one per assigned
- * replica; one for loose).
+ * Every deployment view of an installed app on this node — one per INSTALLED
+ * identity, so a replica the spec assigns but that was never provisioned here
+ * is absent rather than presented as runnable.
  *
  * @param {string} name
  * @returns {Promise<object[]>}
@@ -192,7 +214,7 @@ async function getInstalledDeployments(name) {
   const inst = await appsRepository.getInstalledApp(name);
   if (!inst) return [];
   try {
-    const deployments = await toDeployments(inst);
+    const deployments = await installedDeployments(inst);
     return deployments;
   } catch (err) {
     log.error(`deploymentProvider: failed to build deployments for ${name}: ${err.message}`);
@@ -240,4 +262,5 @@ module.exports = {
   localIdentities,
   buildDeployment: toDeployment,
   buildDeployments: toDeployments,
+  installedDeployments,
 };

@@ -311,10 +311,13 @@ async function getLocalComponentSpec(identifier) {
       // A qualified identifier names its exact identity - build that view.
       deployments = [await deploymentProvider.buildDeployment(inst, { replica })];
     } else {
-      // Unqualified: every local identity - loose yields the one unqualified
-      // view; named yields each assigned replica (the app-level expand path
-      // below needs all of them on a co-located node).
-      deployments = await deploymentProvider.buildDeployments(inst);
+      // Unqualified: every INSTALLED identity - loose yields the one unqualified
+      // view; named yields each replica actually provisioned here. Assigned-but-
+      // never-installed replicas are deliberately absent: actuating one would
+      // hunt for a volume that was never created, which reads identically to a
+      // vanished container and escalates to recreate. Installing it is the
+      // spawner's job, not this loop's.
+      deployments = await deploymentProvider.installedDeployments(inst);
       if (deployments.length === 0) {
         // Named placement that no longer targets this node: build the
         // unqualified view so a lingering container still resolves its spec -

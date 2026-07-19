@@ -63,6 +63,7 @@ const nodeConfirmationService = require('./nodeConfirmationService');
 const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
+const appsRepository = require('./appDatabase/appsRepository');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
 const imageUpdateService = require('./imageUpdateService');
@@ -206,6 +207,10 @@ async function startFluxFunctions() {
     // cachedImages (localzelapps): unique index on (fluxId, repotag) so a re-submit
     // can't fork an owner's pin record, plus a repotag lookup for the retention gate
     await imageCacheStore.prepareCollection();
+    // zelappsinformation (localzelapps): one row per deployed identity, unique on
+    // (name, replica). The collection carried no index at all, so one-row-per-app
+    // rested on a racy exists-then-insert; co-located replicas need the key anyway.
+    await appsRepository.prepareInstalledAppsCollection();
     // Replay any owed teardowns that survived a crash: re-condemn their components
     // (synchronously, before the reconciler starts) then drain them in the background,
     // so an interrupted removal always completes and a being-torn-down app is never

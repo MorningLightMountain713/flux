@@ -51,6 +51,16 @@ describe('hardwareValidationService tests', () => {
 
     deploymentProviderStub = {
       getInstalledDeployment: sinon.stub().resolves(null),
+      // Validation sums every installed identity. These fixtures are
+      // single-identity, so the plural delegates at call time to whatever the
+      // singular stub was set to; co-located cases stub this directly.
+      get getInstalledDeployments() {
+        const single = this.getInstalledDeployment;
+        return async (name) => {
+          const deployment = await single(name);
+          return deployment ? [deployment] : [];
+        };
+      },
     };
 
     hardwareValidationService = proxyquire('../../ZelBack/src/services/appLifecycle/hardwareValidationService', {

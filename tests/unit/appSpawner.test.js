@@ -197,6 +197,9 @@ describe('appSpawner tests', () => {
         findUnderProvisionedApps: findUnderProvisionedStub,
         getGlobalAppInfo: opts.globalAppInfoStub ?? sinon.stub().resolves(null),
         existsInstalledApp: sinon.stub().resolves(false),
+        // Identities already installed here; empty means the spawn gate still
+        // owes every assigned identity, which is the default fixture state.
+        listInstalledIdentities: opts.installedIdentities ?? sinon.stub().resolves([]),
         listInstalledApps: opts.installedApps ?? sinon.stub().resolves([]),
       },
       '../utils/specLibs': {

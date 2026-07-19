@@ -397,6 +397,45 @@ async function reapOrphanedContentManifests() {
 }
 
 // ── Installed Apps (localAppsInformation) ──────────────────────────
+//
+// A row is one DEPLOYED IDENTITY: keyed `(name, replica)`, with `replica: null`
+// for loose placement. A co-located pair therefore holds two rows for one app.
+// `replica` rides as a sidecar beside the serialized spec — the spec
+// deserializer ignores it and never re-emits it, so the canonical spec form is
+// untouched.
+//
+// The functions below come in two flavours, and callers must pick deliberately:
+//   - APP-level (`...InstalledApp(s)`) answer "this app, on this node" and
+//     aggregate over identities. Most readers want these.
+//   - IDENTITY-level (`...InstalledIdentity/Identities`) answer "this replica,
+//     on this node" — the question a spawner asks before provisioning and a
+//     reconciler asks before actuating. Nothing may start a replica that has
+//     no row here.
+//
+// A query for `{ replica: null }` also matches rows written before the field
+// existed, so legacy loose installs read back unchanged.
+
+const replicaKey = (replica) => (replica == null ? null : replica);
+
+/**
+ * Index prep, owned by this module rather than the boot block: the rows are
+ * this module's. Unique on `(name, replica)` — before it, one-row-per-app was
+ * enforced only by a racy exists-then-insert, so a concurrent install could
+ * duplicate a row silently. Note name matching at the query layer stays
+ * case-insensitive (nameRegex), which a plain index cannot express; the
+ * constraint here is exact-case, which is strictly more than existed before.
+ */
+async function prepareInstalledAppsCollection() {
+  const collection = localDb().collection(localAppsInformation);
+  // Rows written before the identity field carry no `replica`. Every one of
+  // them is a loose install — named placement arrives with v9, which is
+  // unreleased — so they backfill to null, which is exactly what a loose row
+  // stores. Runs before the unique index so the index is built over a complete
+  // key.
+  await collection.updateMany({ replica: { $exists: false } }, { $set: { replica: null } });
+  await dbHelper.ensureIndex(collection, { name: 1, replica: 1 }, { unique: true, name: 'installed app identity' });
+  await dbHelper.ensureIndex(collection, { name: 1 }, { name: 'installed apps by name' });
+}
 
 async function getInstalledApp(name) {
   const doc = await dbHelper.findOneInDatabase(
@@ -407,8 +446,66 @@ async function getInstalledApp(name) {
   return hydrate(doc);
 }
 
+/**
+ * One identity's installed row, or null. This is the provisioning question:
+ * a null answer means this replica is NOT installed here, however many
+ * siblings are.
+ * @param {string} name
+ * @param {string|null} replica
+ */
+async function getInstalledIdentity(name, replica) {
+  const doc = await dbHelper.findOneInDatabase(
+    localDb(), localAppsInformation,
+    { name: nameRegex(name), replica: replicaKey(replica) },
+    { projection: { _id: 0 } },
+  );
+  return hydrate(doc);
+}
+
+/**
+ * Whether THIS identity is installed here.
+ * @param {string} name
+ * @param {string|null} replica
+ */
+async function existsInstalledIdentity(name, replica) {
+  const doc = await dbHelper.findOneInDatabase(
+    localDb(), localAppsInformation,
+    { name: nameRegex(name), replica: replicaKey(replica) },
+    { projection: { _id: 0, name: 1 } },
+  );
+  return !!doc;
+}
+
+/**
+ * The replica names this node has installed for an app, `null` entries for
+ * loose. The actual-state counterpart to the spec's assigned identities.
+ * @param {string} name
+ * @returns {Promise<Array<string|null>>}
+ */
+async function listInstalledIdentities(name) {
+  const docs = await dbHelper.findInDatabase(
+    localDb(), localAppsInformation,
+    { name: nameRegex(name) },
+    { projection: { _id: 0, replica: 1 } },
+  );
+  return docs.map((d) => d.replica ?? null);
+}
+
+/**
+ * How many distinct APPS are installed here. Counts apps, not identities, so a
+ * co-located pair is one app — this feeds capacity and usage reporting, whose
+ * unit has always been the app.
+ */
 async function countInstalledApps() {
-  return dbHelper.countInDatabase(localDb(), localAppsInformation, {});
+  const names = await localDb().collection(localAppsInformation).distinct('name', {});
+  return names.length;
+}
+
+/** How many identities of an app are installed here. */
+async function countInstalledIdentities(name) {
+  return dbHelper.countInDatabase(
+    localDb(), localAppsInformation, { name: nameRegex(name) },
+  );
 }
 
 async function existsInstalledApp(name) {
@@ -420,12 +517,23 @@ async function existsInstalledApp(name) {
   return !!doc;
 }
 
+/**
+ * The apps installed here, ONE entry per app. Co-located identities share a
+ * spec, so the extra rows would otherwise surface as duplicate apps to every
+ * caller that means "the apps I host" — including presence broadcasts and the
+ * capacity gate. Callers needing per-identity views go through the deployment
+ * layer, which fans an app's spec out across its identities.
+ */
 async function listInstalledApps({ filter = {} } = {}) {
   const docs = await dbHelper.findInDatabase(
     localDb(), localAppsInformation, filter, { projection: { _id: 0 } },
   );
   const specs = [];
+  const seen = new Set();
   for (const doc of docs) {
+    const key = String(doc.name).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
     // eslint-disable-next-line no-await-in-loop
     const spec = await hydrate(doc);
     if (spec) specs.push(spec);
@@ -433,24 +541,80 @@ async function listInstalledApps({ filter = {} } = {}) {
   return specs;
 }
 
+/**
+ * Remove EVERY identity's row for an app — the whole app leaves this node.
+ * A single replica's departure uses removeInstalledIdentity instead.
+ */
 async function removeInstalledApp(name) {
+  return dbHelper.removeDocumentsFromCollection(
+    localDb(), localAppsInformation, { name: nameRegex(name) },
+  );
+}
+
+/**
+ * Remove one identity's row, leaving co-located siblings installed.
+ * @param {string} name
+ * @param {string|null} replica
+ */
+async function removeInstalledIdentity(name, replica) {
   return dbHelper.findOneAndDeleteInDatabase(
-    localDb(), localAppsInformation, { name: nameRegex(name) }, {},
+    localDb(), localAppsInformation,
+    { name: nameRegex(name), replica: replicaKey(replica) }, {},
   );
 }
 
-async function insertInstalledApp(specDoc) {
+/**
+ * Write one identity's row. The identity rides beside the serialized spec;
+ * the spec deserializer ignores the field, so the stored spec form is
+ * unchanged from a loose install's.
+ * @param {string|null} replica
+ */
+async function insertInstalledApp(specDoc, replica = null) {
   return dbHelper.insertOneToDatabase(
-    localDb(), localAppsInformation, specDoc,
+    localDb(), localAppsInformation, { ...specDoc, replica: replicaKey(replica) },
   );
 }
 
+/**
+ * Refresh the stored spec for EVERY identity of an app, preserving each row's
+ * identity — a spec update applies to every replica this node runs, and one
+ * replica's update must not erase a sibling's row. Inserts a loose row when the
+ * app is not installed at all.
+ */
 async function upsertInstalledApp(name, specDoc) {
   if (!name) throw new Error('appsRepository.upsertInstalledApp: name required');
   if (!specDoc) throw new Error('appsRepository.upsertInstalledApp: specDoc required');
+  const identities = await listInstalledIdentities(name);
+  if (identities.length === 0) {
+    return insertInstalledApp(specDoc, null);
+  }
+  const results = [];
+  for (const identity of identities) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await dbHelper.replaceOneInDatabase(
+      localDb(), localAppsInformation,
+      { name: nameRegex(name), replica: replicaKey(identity) },
+      { ...specDoc, replica: replicaKey(identity) },
+      { upsert: true },
+    );
+    results.push(result);
+  }
+  return results[0];
+}
+
+/**
+ * Write one identity's row, creating or replacing exactly that row.
+ * @param {string} name
+ * @param {string|null} replica
+ */
+async function upsertInstalledIdentity(name, replica, specDoc) {
+  if (!name) throw new Error('appsRepository.upsertInstalledIdentity: name required');
+  if (!specDoc) throw new Error('appsRepository.upsertInstalledIdentity: specDoc required');
   return dbHelper.replaceOneInDatabase(
     localDb(), localAppsInformation,
-    { name: nameRegex(name) }, specDoc, { upsert: true },
+    { name: nameRegex(name), replica: replicaKey(replica) },
+    { ...specDoc, replica: replicaKey(replica) },
+    { upsert: true },
   );
 }
 
@@ -754,6 +918,7 @@ module.exports = {
   removeGlobalAppInfo,
   removeAppInstallingErrorRecords,
   // installed apps
+  prepareInstalledAppsCollection,
   getInstalledApp,
   countInstalledApps,
   existsInstalledApp,
@@ -761,6 +926,12 @@ module.exports = {
   removeInstalledApp,
   insertInstalledApp,
   upsertInstalledApp,
+  getInstalledIdentity,
+  existsInstalledIdentity,
+  listInstalledIdentities,
+  countInstalledIdentities,
+  removeInstalledIdentity,
+  upsertInstalledIdentity,
   // messages
   getAppMessage,
   getPermanentMessage,

@@ -553,7 +553,13 @@ async function trySpawningGlobalApplication() {
       throw new Error(`trySpawningGlobalApplication - Specifications for application ${appToRun} were not found!`);
     }
 
-    if (await appsRepository.existsInstalledApp(instantiated.name)) {
+    // Asked per identity, not per app: a node already running one replica can be
+    // assigned another, and an app-level "already installed" would refuse that
+    // second seat forever — leaving the reconciler to see an identity the spec
+    // assigns but nothing ever provisioned.
+    const assigned = await deploymentProvider.assignedIdentities(instantiated);
+    const installed = new Set(await appsRepository.listInstalledIdentities(instantiated.name));
+    if (assigned.every((identity) => installed.has(identity ?? null))) {
       log.info(`trySpawningGlobalApplication - Application ${instantiated.name} is already installed`);
       return shortDelayTime;
     }
