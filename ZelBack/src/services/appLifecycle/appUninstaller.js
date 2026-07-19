@@ -100,6 +100,12 @@ async function unmountVolume(appId, options = {}) {
     if (onStatus) onStatus(msg);
   };
 
+  // Nothing mounted, nothing to unmount: a stateless component never had a
+  // volume, and a teardown can re-run after an earlier unmount succeeded.
+  // Probing /proc/self/mountinfo is cheaper than forking umount and avoids
+  // reporting a routine no-op as an error on every stateless uninstall.
+  if (!await volumeService.isPathMounted(appsFolder + appId)) return;
+
   status(`Unmounting volume of ${entityName}...`);
   const result = await serviceHelper.runCommand('umount', { params: [appsFolder + appId], runAsRoot: true, logError: false });
   if (result.error) {
