@@ -7,7 +7,9 @@ import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/conte
 import { pushImage } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlock, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor } from '../framework/wait.js';
-import { getAppContainerStatus, isAppContainerRunning, execInContainer } from '../framework/container.js';
+import {
+  getAppContainerStatus, isAppContainerRunning, execInContainer, appContainersFor,
+} from '../framework/container.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 
@@ -16,7 +18,8 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 // overrides, the FLUX_* platform env (injected + ${FLUX_PORT_x} templated),
 // declarative install/removal (a named replica installs on exactly its node; a
 // de-named replica is removed from exactly its node), loose->named mode switches,
-// the Phase-1 co-location refusal, and the API-level validation rejects.
+// co-location of several replicas on one node, and the API-level validation
+// rejects.
 // Assertions ride the SSE event bus + per-node DB rows + docker inspect — never
 // log scraping.
 //
@@ -214,8 +217,8 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
       instances: 2,
       components: webComponents(nameLoose, { hostPort: 35030 }),
     });
-    // The dingo shape: three replicas on ONE node with distinct effective ports.
-    // Spec-valid — the refusal is the Phase-1 runtime's, not the schema's.
+    // Three replicas on ONE node with distinct effective ports: legal precisely
+    // because the per-node effective hostPorts stay pairwise distinct.
     const colocHash = await registerApp(nameColoc, {
       placement: { targetIps: { [nodeIp(5)]: ['d1', 'd2', 'd3'] } },
       components: webComponents(nameColoc, {
@@ -331,13 +334,23 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     expect(installedEventIndexes(nameLoose).every((i) => [0, 1, 4].includes(i)), 'non-candidates never install a targeted app').to.equal(true);
   });
 
-  it('refuses co-located replicas loudly: the targeted node fails the install, nothing runs anywhere', async function () {
+  it('co-locates several replicas on one targeted node, and nowhere else', async function () {
     this.timeout(300000);
-    // Node 5 (index 4) is targeted with three names: resolution fails loud in the
-    // installer and the spawner caches the failure.
-    await env.clients[4].waitForEvent('spawner:installFailed', (d) => d.appName === nameColoc, 240000);
-    expect(installedEventIndexes(nameColoc), 'no node installs a co-located set in Phase 1').to.deep.equal([]);
-    expect(await runningIndexes(nameColoc)).to.deep.equal([]);
+    // Node 5 (index 4) is targeted with three names, so it deploys three
+    // identities — one container each, qualified by replica name. The depth
+    // (per-identity rows, claims, plans, addressing) belongs to the co-location
+    // suite; here it only has to land on the targeted node alone.
+    await env.clients[4].waitForEvent('app:installed', (d) => d.name === nameColoc, 240000);
+    await waitFor(
+      async () => (await appContainersFor(env.clients[4].container, nameColoc)).length === 3,
+      { timeout: 120000, interval: 3000, label: `${nameColoc} three co-located containers on node 5` },
+    );
+    const names = (await appContainersFor(env.clients[4].container, nameColoc))
+      .map((c) => c.name).sort();
+    expect(names).to.deep.equal([
+      `fluxweb_${nameColoc}_d1`, `fluxweb_${nameColoc}_d2`, `fluxweb_${nameColoc}_d3`,
+    ]);
+    expect(await runningIndexes(nameColoc), 'a named set installs only on its targeted node').to.deep.equal([4]);
   });
 
   it('scales up by map edit: the new replica installs, the running replica is untouched', async function () {
