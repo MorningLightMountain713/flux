@@ -107,6 +107,8 @@ describe('appUninstaller tests', () => {
       getGlobalAppInfo: sinon.stub().resolves(null),
       getAppMessage: sinon.stub().resolves(null),
       removeInstalledApp: sinon.stub().resolves(),
+      removeInstalledIdentity: sinon.stub().resolves(),
+      countInstalledIdentities: sinon.stub().resolves(0),
       listInstalledApps: sinon.stub().resolves([]),
       listGlobalAppInfo: sinon.stub().resolves([]),
       removeGlobalAppInfo: sinon.stub().resolves(),

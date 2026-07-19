@@ -85,6 +85,7 @@ const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const appPlacements = require('./appManagement/appPlacements');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
+const appsRepository = require('./appDatabase/appsRepository');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
 const imageUpdateService = require('./imageUpdateService');
@@ -185,6 +186,9 @@ async function prepareDatabaseSchema() {
   // cachedImages (localzelapps): unique index on (fluxId, repotag) so a re-submit
   // can't fork an owner's pin record, plus a repotag lookup for the retention gate
   await imageCacheStore.prepareCollection();
+  // zelappsinformation (localzelapps): one row per deployed identity, unique on
+  // (name, replica), which co-located replicas need.
+  await appsRepository.prepareInstalledAppsCollection();
   // appPlacements (localzelapps): one record per app
   await appPlacements.prepareCollection();
   // The explorer's collections: their indexes are the explorer's to declare.

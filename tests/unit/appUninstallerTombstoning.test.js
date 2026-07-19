@@ -69,6 +69,11 @@ describe('appUninstaller tombstoning teardown', () => {
         getGlobalAppInfo: sinon.stub().resolves(null),
         getAppMessage: sinon.stub().resolves(null),
         existsInstalledApp: sinon.stub().resolves(false),
+        // Rows are identity-keyed: the removal drops THIS identity's row, then
+        // the remaining count decides whether the app has left the node.
+        existsInstalledIdentity: sinon.stub().resolves(false),
+        removeInstalledIdentity: sinon.stub().resolves(),
+        countInstalledIdentities: sinon.stub().resolves(0),
         removeInstalledApp: sinon.stub().resolves(),
       },
       dbHelper: {
@@ -306,7 +311,7 @@ describe('appUninstaller tombstoning teardown', () => {
 
     it('re-condemns owed components then hands them to the reconciler to converge (not a one-shot boot drive)', async () => {
       stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc]);
-      stubs.appsRepository.existsInstalledApp.resolves(false);
+      stubs.appsRepository.existsInstalledIdentity.resolves(false);
       await appUninstaller.recoverOwedTeardowns();
       expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', true)).to.be.true;
       // Boot recovery no longer drives the teardown directly (a partial would be abandoned
@@ -318,7 +323,7 @@ describe('appUninstaller tombstoning teardown', () => {
 
     it('un-condemns + drops the record without teardown when the app is re-installed (row is back)', async () => {
       stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc]);
-      stubs.appsRepository.existsInstalledApp.resolves(true); // re-installed
+      stubs.appsRepository.existsInstalledIdentity.resolves(true); // re-installed
       await appUninstaller.recoverOwedTeardowns();
       expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', false), 'un-condemned').to.be.true;
       expect(stubs.pendingTeardownStore.clearTeardown.calledOnceWith('app')).to.be.true;
@@ -328,7 +333,7 @@ describe('appUninstaller tombstoning teardown', () => {
 
     it('defers (no teardown, keeps the record) when the install-row read fails transiently', async () => {
       stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc]);
-      stubs.appsRepository.existsInstalledApp.rejects(new Error('db blip'));
+      stubs.appsRepository.existsInstalledIdentity.rejects(new Error('db blip'));
       await appUninstaller.recoverOwedTeardowns();
       expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', true), 'must not condemn on a guess').to.be.false;
       expect(stubs.pendingTeardownStore.clearTeardown.called, 'record kept for next boot').to.be.false;

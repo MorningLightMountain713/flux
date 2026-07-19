@@ -841,18 +841,15 @@ async function uninstallApplication(appName, options = {}) {
     // Tell the network it's gone NOW — fire-and-forget, never blocking the prelude on a
     // broadcast — and drop it from the local running-apps cache.
     // A sibling replica keeps the app alive on this node: its containers still
-    // run, so the install row and the running-name cache must survive - only
-    // the last identity's removal deletes them. (An old peer receiving the
-    // replica-tagged appremoved clears its whole collapsed row; the sibling's
-    // next presence broadcast recreates it within a cycle.)
-    let lastReplica = true;
-    if (replica != null) {
-      const remaining = await dockerService.getAppContainerObjects(appName).catch(() => []);
-      lastReplica = !remaining.some((c) => {
-        const r = (c.Labels && c.Labels['runonflux.replica']) || null;
-        return r != null && r !== replica;
-      });
-    }
+    // run, so the running-name cache must survive - only the last identity's
+    // removal clears it. (An old peer receiving the replica-tagged appremoved
+    // clears its whole collapsed row; the sibling's next presence broadcast
+    // recreates it within a cycle.)
+    // This identity's row goes first, so what remains IS the sibling set — read
+    // from the store rather than probed from docker, where an unreachable
+    // daemon would read as "no siblings" and delete a running sibling's row.
+    await appsRepository.removeInstalledIdentity(appName, replica ?? null);
+    const lastReplica = await appsRepository.countInstalledIdentities(appName) === 0;
     if (broadcastRemoval) {
       const ip = await fluxNetworkHelper.getLocalSocketAddress();
       if (ip) {
@@ -872,7 +869,9 @@ async function uninstallApplication(appName, options = {}) {
       }
     }
     if (lastReplica) {
-      // Delete the local install row so every reader sees the app as gone with zero filtering.
+      // Belt-and-braces: this identity's row is already gone, so this clears any
+      // row a partially-failed earlier removal left behind, and every reader
+      // sees the app as gone with zero filtering.
       await appsRepository.removeInstalledApp(appName);
       // The app is gone for good: nothing reconciles an app with no row, so its
       // removal records have no reader left. Only this full-uninstall path clears
@@ -1243,7 +1242,9 @@ async function recoverOwedTeardowns() {
     let rowReadFailed = false;
     try {
       // eslint-disable-next-line no-await-in-loop
-      rowExists = await appsRepository.existsInstalledApp(doc.name);
+      // Per identity: an owed teardown names one replica, and a co-located
+      // sibling being installed says nothing about whether THIS one came back.
+      rowExists = await appsRepository.existsInstalledIdentity(doc.name, doc.replica ?? null);
     } catch (err) {
       rowReadFailed = true;
       log.warn(`Boot recovery: install-row read for ${doc.name} failed, deferring its teardown: ${err.message}`);
