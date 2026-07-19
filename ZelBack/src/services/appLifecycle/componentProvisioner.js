@@ -278,7 +278,7 @@ async function installComponent(component, options = {}) {
     await appVolumeService.createAppVolume(component, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null, test);
 
     status(`Verifying volume mount for ${id}...`);
-    await volumeService.verifyAppVolumeMount(appName, id !== appName, component.name);
+    await volumeService.verifyAppVolumeMount(id);
     status(`Volume mount verified for ${id}`);
   }
 

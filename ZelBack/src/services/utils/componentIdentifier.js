@@ -33,4 +33,25 @@ function replicaFromIdentifier(identifier) {
   return specLibs.getSpecBackendSync().DeploymentSpec.replicaFromIdentifier(identifier);
 }
 
-module.exports = { appNameFromIdentifier, componentNameFromIdentifier, replicaFromIdentifier };
+/**
+ * Encode a container identifier from its parts. Prefer a deployment
+ * component's own `identifier` wherever one is in scope; reach for this only
+ * when the caller genuinely holds names. Assembling `${component}_${app}` by
+ * hand drops the replica segment, addressing either nothing or a co-located
+ * sibling.
+ * @param {string} componentName
+ * @param {string} appName
+ * @param {string|null} [replica] bound replica name; null for loose placement
+ * @returns {string}
+ */
+function containerIdentifierFor(componentName, appName, replica = null) {
+  return specLibs.getSpecBackendSync()
+    .DeploymentSpec.containerIdentifierFor(componentName, appName, replica);
+}
+
+module.exports = {
+  appNameFromIdentifier,
+  componentNameFromIdentifier,
+  replicaFromIdentifier,
+  containerIdentifierFor,
+};
