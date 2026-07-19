@@ -25,7 +25,18 @@ function emitStatus(res, status) {
 async function createAppVolume(deployComp, res, test = false) {
   const { identifier } = deployComp;
   const appId = dockerService.getAppIdentifier(identifier);
-  const effectiveHdd = test ? 2 : deployComp.storage;
+  // Harness nodes cap volumes at 2G to keep suites fast — but a stateless
+  // component must stay stateless there too, or no suite could ever exercise
+  // the no-volume path.
+  const effectiveHdd = test && !deployComp.isStateless ? 2 : deployComp.storage;
+
+  // Defensive: the provisioner already skips stateless components. Returning
+  // here rather than allocating means a future caller cannot accidentally
+  // fallocate a 0G file and hand mke2fs an empty image.
+  if (deployComp.isStateless) {
+    emitStatus(res, { status: 'Stateless component — no volume required' });
+    return;
+  }
 
   emitStatus(res, { status: 'Searching available space...' });
 
