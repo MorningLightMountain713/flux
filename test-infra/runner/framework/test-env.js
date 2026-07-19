@@ -39,6 +39,7 @@ import policySigning from '../../external-http-stub/policy-signing.js';
 import chainStart from './chain-start.cjs';
 import { assertCoupledRatios, loadSharedConfig } from './coupled-knobs.js';
 import { startSyncedDataKeeper } from './synced-data-keeper.js';
+import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
 
 // How long after a re-attach the collector goes on treating an exact repeat as docker
 // replaying a line it already has. Docker's `since` is whole-second, so the replay is over
@@ -218,8 +219,6 @@ const runLabels = () => (RUN_LABEL ? { 'flux-e2e-run': RUN_LABEL } : {});
 const IMAGE_TAG = process.env.FLUX_E2E_TAG || 'latest';
 
 const image = (name) => `${name}:${IMAGE_TAG}`;
-
-const NODE_IMAGE = 'flux-e2e-fluxos-01';
 
 // The node image a node boots: the run's tag, or the tag a suite names for that
 // node, so a fleet can mix commits. An image under another tag is built from
@@ -784,7 +783,7 @@ function makeEnvShell(networkName) {
           try {
             helperRuns += 1;
             const helper = await cleanupClient.container.dockerode.createContainer({
-              Image: image('flux-e2e-fluxos-01'),
+              Image: image(NODE_IMAGE),
               Entrypoint: ['bash', '-c', 'chattr -R -i /v/flux-apps 2>/dev/null; true'],
               HostConfig: { Binds: [`${volName}:/v`], CapAdd: ['LINUX_IMMUTABLE'] },
             });
@@ -1013,6 +1012,10 @@ export async function createTestEnv({
   // production hardened unit, bind-mounted from the runner host.
   telemetrydReal = false,
 } = {}) {
+  // Before the boot lock, the network, or a single container: a flux-spec
+  // vendor lagging the branch surfaces as a product mystery minutes later,
+  // and only in suites that install something.
+  assertFluxSpecVendorCurrent();
   if (syncthing !== 'stub' && syncthing !== 'binary') {
     throw new Error(`createTestEnv: syncthing must be 'stub' or 'binary', got '${syncthing}'`);
   }
