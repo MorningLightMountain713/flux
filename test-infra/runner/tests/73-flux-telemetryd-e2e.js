@@ -4,8 +4,8 @@ import {
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { registerEncryptedV9App } from '../framework/content-helper.js';
-import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
+import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/content-helper.js';
+import { queueAppTx, advanceBlock, advanceBlocks } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitFor } from '../framework/wait.js';
 import { pushTestApp, pushOtlpReceiver } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
@@ -13,6 +13,9 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execInContainer } from '../framework/container.js';
+import {
+  stopFluxos, startFluxos, unitState, journalGrep, journalCount,
+} from '../framework/systemd-control.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 
@@ -37,14 +40,26 @@ import { appOwnerKey } from '../framework/keys.js';
 //     OTLP/HTTP post with substring-match verdicts, so metrics and shipped
 //     log lines are asserted at the far end of the real pipe.
 //
-// Deliberate scope cuts (documented follow-ups, not gaps): endpoint
-// rotation and ghost-prune-across-socket-outage stay with the daemon's
-// unit tests and suite 69's sync pins; post-uninstall traffic silence is
-// unobservable here because uninstalling the app removes the receiver too.
+// Deliberate scope cut (documented follow-up, not a gap): post-uninstall
+// traffic silence is unobservable here because uninstalling the app removes
+// the receiver with it.
 const NODES = 5;
 const APP = 'otlprealapp';
 const RECV_REPO = `${APP}recv`;
 const WEB_PORT = 31360;
+// The second telemetry app: the daemon's lifecycle is owned per-NODE, not
+// per-app, so its stop must wait for the LAST telemetry app to leave.
+const APP2 = 'otlpreallast';
+const RECV2_REPO = `${APP2}recv`;
+const WEB2_PORT = 31362;
+const DAEMON_UNIT = 'flux-telemetryd';
+// apply_snapshot's reconcile line (collector.rs). Distinct from a plain
+// "untracking container", which it ALSO emits right after — grepping the
+// short form counts both, so the ghost path must match the full string.
+const PRUNE_LINE = 'untracking container absent from sync';
+// Rotation stimulus: a spec update moves BOTH the telemetry endpoint port and
+// the receiver's listen port, so the far end really is somewhere new.
+const UPDATED_PORT = 4319;
 // test-app logs this exact line on SIGUSR1 and keeps running — the shipped
 // log payload the receiver looks for (MARK1).
 const LOG_MARKER = 'RELOAD SIGUSR1';
@@ -52,39 +67,44 @@ const LOG_MARKER = 'RELOAD SIGUSR1';
 const webContainer = `fluxweb_${APP}`;
 const collectorContainer = `fluxcollector_${APP}`;
 
-const components = {
+const buildComponents = ({
+  appRepo, recvRepo, webPort, receiverPort = 4318,
+}) => ({
   web: {
     name: 'web',
     description: 'workload component (test-app; SIGUSR1 provokes a log line)',
-    image: `${REGISTRY_REPO_HOST}/${APP}:v1`,
+    image: `${REGISTRY_REPO_HOST}/${appRepo}:v1`,
     cpu: 0.2,
     memory: 200,
     rootFsGb: 2,
     persistentStorage: { sizeGb: 1, mounts: {} },
-    ports: { http: { containerPort: 80, hostPort: WEB_PORT } },
+    ports: { http: { containerPort: 80, hostPort: webPort } },
   },
   // Portless on purpose, like suite 69's agent: reachable only node-locally
   // on the app network — the deployment model the telemetry block points at.
   collector: {
     name: 'collector',
     description: 'customer OTLP collector (receiver fixture)',
-    image: `${REGISTRY_REPO_HOST}/${RECV_REPO}:v1`,
+    image: `${REGISTRY_REPO_HOST}/${recvRepo}:v1`,
     cpu: 0.2,
     memory: 200,
     rootFsGb: 2,
     persistentStorage: { sizeGb: 1, mounts: {} },
-    env: { RECEIVER_PORT: '4318', MARK1: LOG_MARKER, MARK2: APP },
+    env: { RECEIVER_PORT: String(receiverPort), MARK1: LOG_MARKER, MARK2: appRepo },
   },
-};
+});
+
+const components = buildComponents({ appRepo: APP, recvRepo: RECV_REPO, webPort: WEB_PORT });
 
 describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-shaped node', function () {
   let env;
   let client;
 
   const X = (cmd) => execInContainer(client.container, cmd);
-  const countIn = async (cmd) => Number((await X(`${cmd} | grep -c . || true`)).stdout.trim() || '0');
-  const daemonJournal = (pattern) => X(`journalctl -u flux-telemetryd -o cat --no-pager | grep -F '${pattern}' | tail -5`);
-  const receiverLogGrep = (pattern) => X(`docker logs ${collectorContainer} 2>&1 | grep -E '${pattern}' | tail -5`);
+  const daemonJournal = (pattern, opts) => journalGrep(client.container, DAEMON_UNIT, pattern, opts);
+  const daemonJournalCount = (pattern) => journalCount(client.container, DAEMON_UNIT, pattern);
+  const receiverLogGrep = (pattern, name = collectorContainer) => X(`docker logs ${name} 2>&1 | grep -E '${pattern}' | tail -5`);
+  const containerId = async (name) => (await X(`docker inspect -f '{{.Id}}' ${name}`)).stdout.trim();
 
   before(async function () {
     this.timeout(900000);
@@ -96,7 +116,15 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       telemetrydReal: true,
       shutdowndMock: false,
       // Registration-door shape for a 5-node mesh (suite 52/69 sizing note).
-      configOverrides: { fluxapps: { minOutgoing: 2 } },
+      // The stagger overrides are required because this suite drives a spec
+      // update: adoption otherwise paces at production 60s/300s.
+      configOverrides: {
+        fluxapps: {
+          minOutgoing: 2,
+          adoptionStaggerStepMs: 15000,
+          adoptionStaggerWindowMs: 15000,
+        },
+      },
     });
     await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
 
@@ -161,14 +189,14 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     await waitFor(async () => {
       const sync = await daemonJournal('received container sync');
       const track = await daemonJournal('tracking container');
-      return sync.stdout.trim() !== '' && track.stdout.includes(APP);
+      return sync.trim() !== '' && track.includes(APP);
     }, { timeout: 60000, interval: 2000, label: 'daemon synced and tracking the app' });
 
     // The send-set gate holds with real ends too: web is tracked, the
     // same-app collector is not.
-    const tracked = (await X('journalctl -u flux-telemetryd -o cat --no-pager | grep -F "tracking container"')).stdout;
-    const webId = (await X(`docker inspect -f '{{.Id}}' ${webContainer}`)).stdout.trim();
-    const collectorId = (await X(`docker inspect -f '{{.Id}}' ${collectorContainer}`)).stdout.trim();
+    const tracked = await daemonJournal('tracking container', { lines: 200 });
+    const webId = await containerId(webContainer);
+    const collectorId = await containerId(collectorContainer);
     expect(tracked, 'web must be tracked').to.include(webId);
     expect(tracked, 'the same-app collector must stay out of the send set').to.not.include(collectorId);
   });
@@ -199,24 +227,126 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     }, { timeout: 90000, interval: 3000, label: 'the provoked log line arriving at the collector' });
   });
 
-  it('untracks on removal, then FluxOS stops the daemon with the last telemetry app', async function () {
-    this.timeout(180000);
-    const untracksBefore = await countIn('journalctl -u flux-telemetryd -o cat --no-pager | grep -F "untracking container"');
+  it('prunes a container that died during a FluxOS outage, on the reconnect sync', async function () {
+    this.timeout(300000);
+    // The ghost: a tracked container that dies while the identity socket is
+    // down. Its untrack has no other delivery — the reconnect sync is the
+    // only exit from the tracked set (the authoritative-sync fix the daemon
+    // pin carries). The outage must be on the FLUXOS side: the daemon holds
+    // its tracked set in memory, so restarting the daemon instead would just
+    // start it empty and prove nothing.
+    const ghostId = await containerId(webContainer);
+    expect(await daemonJournal('tracking container', { lines: 200 }),
+      'the container must be tracked before it becomes a ghost').to.include(ghostId);
+    const prunesBefore = await daemonJournalCount(PRUNE_LINE);
+
+    // dockerd and the app containers keep running across this; only FluxOS
+    // goes away, dropping the daemon's connection while it stays up.
+    await stopFluxos(client.container);
+    expect((await unitState(client.container, DAEMON_UNIT)),
+      'the daemon must outlive the FluxOS outage').to.equal('active');
+    const rm = await X(`docker rm -f ${webContainer}`);
+    expect(rm.exitCode, rm.output).to.equal(0);
+    await startFluxos(client.container);
+
+    // FluxOS sends the full set on every connect; the daemon reconnects on a
+    // 5s retry. Whatever FluxOS has reinstalled by then, the ghost's id is
+    // absent from that set and must be reconciled away.
+    await waitFor(async () => (await daemonJournal(PRUNE_LINE, { lines: 50 })).includes(ghostId),
+      { timeout: 180000, interval: 3000, label: 'daemon pruned the ghost on the reconnect sync' });
+    expect(await daemonJournalCount(PRUNE_LINE),
+      'the prune is new, not a pre-existing line').to.be.greaterThan(prunesBefore);
+  });
+
+  it('re-routes the real pipe at a new endpoint after a port-changing update', async function () {
+    this.timeout(600000);
+    // Rotation with both real ends: the update moves the telemetry port AND
+    // the receiver's listen port, so a stale endpoint cannot pass by
+    // accident — traffic only reappears if the daemon was re-announced at
+    // the new address. (Solo recreate cannot serve as the stimulus: the
+    // lowest-free-IP allocator hands a recreated container its address back.)
+    const updated = buildComponents({
+      appRepo: APP, recvRepo: RECV_REPO, webPort: WEB_PORT, receiverPort: UPDATED_PORT,
+    });
+    const res = await updateEncryptedV9App(env.clients[0].url, {
+      name: APP,
+      components: updated,
+      instances: 3,
+      specOverrides: {
+        telemetry: { provider: 'otlp', component: 'collector', port: UPDATED_PORT },
+      },
+    });
+    expect(res.status, JSON.stringify(res)).to.equal('success');
+    await queueAppTx(res.data);
+    await advanceBlocks(3);
+
+    // Update convergence runs at blocks processed at the tip (suite 68's
+    // sizing note): advance one block per round and let every node catch up.
+    // Adoption redeploys the components, so the receiver is a NEW container
+    // with an empty log — any OTLP-RECV line in it is post-update traffic.
+    let converged = false;
+    for (let round = 0; round < 40 && !converged; round += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const { currentHeight } = await advanceBlock();
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.all(env.clients.map((c) => c.waitForEvent(
+        'block:processed', (d) => d.height >= currentHeight, 60000,
+      )));
+      // eslint-disable-next-line no-await-in-loop
+      const env0 = await X(`docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' ${collectorContainer} 2>/dev/null || true`);
+      converged = env0.stdout.includes(`RECEIVER_PORT=${UPDATED_PORT}`);
+    }
+    expect(converged, 'the collector was redeployed listening on the updated port').to.equal(true);
+
+    await waitFor(async () => (await receiverLogGrep('OTLP-RECV path=/v1/metrics')).stdout.trim() !== '',
+      { timeout: 180000, interval: 3000, label: 'metrics arriving at the rotated endpoint' });
+
+    // And the log pipe follows the rotation too, not just metrics.
+    const kill = await X(`docker kill --signal=SIGUSR1 ${webContainer}`);
+    expect(kill.exitCode, kill.output).to.equal(0);
+    await waitFor(async () => (await receiverLogGrep('OTLP-RECV path=/v1/logs .*mark1=1')).stdout.trim() !== '',
+      { timeout: 120000, interval: 3000, label: 'shipped log line arriving at the rotated endpoint' });
+  });
+
+  it('keeps the daemon running until the LAST telemetry app leaves', async function () {
+    this.timeout(900000);
+    // Daemon lifecycle is per-NODE while telemetry is declared per-APP, so
+    // the stop belongs to the last app on the node, not the first removal.
+    // instances = NODES so the second app is guaranteed to land here: a
+    // partial spread might miss this node entirely and prove nothing.
+    await pushTestApp(APP2);
+    await pushOtlpReceiver(RECV2_REPO);
+    const res = await registerEncryptedV9App(env.clients[0].url, {
+      name: APP2,
+      components: buildComponents({ appRepo: APP2, recvRepo: RECV2_REPO, webPort: WEB2_PORT }),
+      instances: NODES,
+      specOverrides: { telemetry: { provider: 'otlp', component: 'collector' } },
+    });
+    expect(res.status, JSON.stringify(res)).to.equal('success');
+    await queueAppTx(res.data);
+    await advanceBlocks(3);
+    await waitForAppInstalled(client, APP2, 300000);
 
     const { zelidauth } = await authenticate(client.url, appOwnerKey());
+    const untracksBefore = await daemonJournalCount('untracking container');
+
     await client.removeApp(APP, { zelidauth });
+    await waitFor(async () => (await daemonJournalCount('untracking container')) > untracksBefore,
+      { timeout: 120000, interval: 3000, label: 'daemon untracked the removed app' });
 
-    await waitFor(async () => {
-      const untracks = await countIn('journalctl -u flux-telemetryd -o cat --no-pager | grep -F "untracking container"');
-      return untracks > untracksBefore;
-    }, { timeout: 120000, interval: 3000, label: 'daemon untracked the removed containers' });
+    // The contract this scenario exists for: one telemetry app left, so the
+    // daemon stays up and its config survives.
+    expect(await unitState(client.container, DAEMON_UNIT),
+      'daemon must survive while another telemetry app remains').to.equal('active');
+    const stillConfigured = await X('test -f /run/flux/telemetry/config.toml');
+    expect(stillConfigured.exitCode, 'config.toml must survive the non-final removal').to.equal(0);
 
-    // Lifecycle ownership closes the loop: appUninstaller stops the unit and
-    // removes config.toml once no telemetry apps remain — a clean stop, not
-    // a crash ('inactive', never 'failed').
-    await waitFor(async () => (await X('systemctl is-active flux-telemetryd')).stdout.trim() === 'inactive',
-      { timeout: 60000, interval: 2000, label: 'FluxOS stopped the daemon after the last telemetry app' });
-    const failed = await X('systemctl is-failed flux-telemetryd');
+    // Now the last one: appUninstaller stops the unit and removes config.toml
+    // — a clean stop, not a crash ('inactive', never 'failed').
+    await client.removeApp(APP2, { zelidauth });
+    await waitFor(async () => (await unitState(client.container, DAEMON_UNIT)) === 'inactive',
+      { timeout: 120000, interval: 2000, label: 'FluxOS stopped the daemon after the last telemetry app' });
+    const failed = await X(`systemctl is-failed ${DAEMON_UNIT}`);
     expect(failed.stdout.trim(), 'unit must not be in a failed state').to.not.equal('failed');
     const cfg = await X('test -f /run/flux/telemetry/config.toml');
     expect(cfg.exitCode, 'config.toml removed with the daemon').to.not.equal(0);
