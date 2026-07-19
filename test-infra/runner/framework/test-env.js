@@ -906,6 +906,21 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     .filter((c) => c && !rpcFailSet.has(c.ip))
     .map((c) => c.waitForEvent('daemon:polled', () => true, 90000)));
 
+  // In systemd mode the container's stdout is systemd's console and FluxOS's
+  // own stream is journal-connected — that connection is the mechanism under
+  // test (it sets JOURNAL_STREAM, which selects the journald sink), so the log
+  // collectors legitimately receive nothing from FluxOS. Answering "no match"
+  // would leave every assertion built on these silently unfalsifiable, so
+  // refuse and name the replacement.
+  const assertCollectorSeesFluxos = (fn) => {
+    if (!systemdMode) return;
+    throw new Error(
+      `${fn}() cannot see FluxOS logs in systemd mode: its stdout is journal-connected, `
+      + 'not the container stream. Read the journal instead — journalGrep(container, '
+      + "'fluxos', pattern, { processOnly: true }) from framework/systemd-control.js",
+    );
+  };
+
   // Post-boot methods join the shell here (they close over _buildEnv locals like
   // deferredBuilders/fluxNodes); identity, registries and teardown live on the
   // shell itself so they exist from boot start.
@@ -986,14 +1001,17 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     },
 
     nodeHasLog(index, pattern) {
+      assertCollectorSeesFluxos('nodeHasLog');
       return fluxNodes[index].logCollector.hasLine(pattern);
     },
 
     nodeLogCount(index, pattern) {
+      assertCollectorSeesFluxos('nodeLogCount');
       return fluxNodes[index].logCollector.countPattern(pattern);
     },
 
     nodeLogLines(index) {
+      assertCollectorSeesFluxos('nodeLogLines');
       return fluxNodes[index].logCollector.getLines();
     },
   });
