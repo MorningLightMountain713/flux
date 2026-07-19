@@ -182,6 +182,7 @@ describe('appInstaller tests', () => {
       '../appDatabase/appsRepository': {
         getGlobalAppInfo: sinon.stub().resolves(null),
         existsInstalledApp: sinon.stub().resolves(false),
+        existsInstalledIdentity: sinon.stub().resolves(false),
         getTempMessageByName: sinon.stub().resolves(null),
       },
       '../appRuntime/deploymentProvider': {
@@ -464,9 +465,14 @@ describe('appInstaller tests', () => {
           getGlobalAppInfo: sinon.stub().resolves(null),
           // exists is false before insert (no stale entry) and true after (insert validated).
           existsInstalledApp: (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
+          // Identity-keyed rows: absent before the insert, present for the
+          // post-insert validation read.
+          existsInstalledIdentity: (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
           insertInstalledApp: sinon.stub().resolves({ insertedId: 'id1' }),
           removeInstalledApp: sinon.stub().resolves(),
+          removeInstalledIdentity: sinon.stub().resolves(),
           getInstalledApp: sinon.stub().resolves({ name: 'newapp' }),
+          getInstalledIdentity: sinon.stub().resolves({ name: 'newapp' }),
           getTempMessageByName: sinon.stub().resolves(null),
         },
         '../appRuntime/deploymentProvider': {

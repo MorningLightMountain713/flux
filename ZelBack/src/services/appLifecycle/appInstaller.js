@@ -274,21 +274,12 @@ async function installApplication(instantiated, options = {}) {
 
     log.info('Checking database...');
     if (onStatus) onStatus({ status: 'Checking database...' });
-    if (await appsRepository.existsInstalledApp(appName)) {
-      if (replica == null) {
-        log.error(`Flux App ${appName} already installed`);
-        return { status: InstallStatus.SKIPPED, reason: `Flux App ${appName} already installed` };
-      }
-      // The row is per APP; a sibling replica's install wrote it. This replica
-      // is installed iff its own containers exist (labels are the identity
-      // authority; the name suffix covers pre-label containers).
-      const appContainers = await dockerService.getAppContainerObjects(appName);
-      const replicaPresent = appContainers.some((c) => (c.Labels && c.Labels['runonflux.replica']) === replica
-        || (c.Names || []).some((n) => n.endsWith(`_${replica}`)));
-      if (replicaPresent) {
-        log.error(`Flux App ${appName} replica ${replica} already installed`);
-        return { status: InstallStatus.SKIPPED, reason: `Flux App ${appName} replica ${replica} already installed` };
-      }
+    // Installed state is keyed per identity, so this asks about THIS replica and
+    // a co-located sibling's row never masks it.
+    if (await appsRepository.existsInstalledIdentity(appName, replica ?? null)) {
+      const subject = replica == null ? `Flux App ${appName}` : `Flux App ${appName} replica ${replica}`;
+      log.error(`${subject} already installed`);
+      return { status: InstallStatus.SKIPPED, reason: `${subject} already installed` };
     }
 
     // Install-side interlock (cancel-vs-install): refuse to adopt a name while a teardown
@@ -388,24 +379,18 @@ async function installApplication(instantiated, options = {}) {
 
     const dbSpecs = instantiated.serialize();
 
-    if (await appsRepository.existsInstalledApp(appName)) {
-      if (replica != null) {
-        // The row is per APP and a sibling replica owns it; refresh the spec
-        // content in place - never remove it out from under the sibling.
-        log.info(`Database entry for ${appName} already present (sibling replica); upserting spec`);
-        await appsRepository.upsertInstalledApp(appName, dbSpecs);
-      } else {
-        log.warn(`Found existing database entry for ${appName} during registration. Cleaning up stale entry.`);
-        await appsRepository.removeInstalledApp(appName);
-        log.info(`Stale database entry for ${appName} removed. Proceeding with fresh insert.`);
-      }
+    // This identity's row. A stale row for the SAME identity is replaced (the
+    // old registration-cleanup case); a co-located sibling's row is a different
+    // key entirely and is never touched.
+    if (await appsRepository.existsInstalledIdentity(appName, replica ?? null)) {
+      log.warn(`Found existing database entry for ${appName} during registration. Cleaning up stale entry.`);
+      await appsRepository.removeInstalledIdentity(appName, replica ?? null);
+      log.info(`Stale database entry for ${appName} removed. Proceeding with fresh insert.`);
     }
 
-    if (!await appsRepository.existsInstalledApp(appName)) {
-      const insertResult = await appsRepository.insertInstalledApp(dbSpecs);
-      if (!insertResult) {
-        throw new Error(`CRITICAL: Failed to create database entry for ${appName}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
-      }
+    const insertResult = await appsRepository.insertInstalledApp(dbSpecs, replica ?? null);
+    if (!insertResult) {
+      throw new Error(`CRITICAL: Failed to create database entry for ${appName}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
     }
     log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
     // Now counted by appsResources (it is in the DB); drop the pending reservation
@@ -413,12 +398,12 @@ async function installApplication(instantiated, options = {}) {
     admissionControl.release(appName);
 
     try {
-      if (!await appsRepository.existsInstalledApp(appName)) {
+      if (!await appsRepository.existsInstalledIdentity(appName, replica ?? null)) {
         throw new Error(`Database entry validation failed for ${appName}. Entry was inserted but disappeared before Docker container creation. Possible race condition or database corruption detected.`);
       }
       log.info(`Database entry validated for ${appName} before Docker container creation`);
 
-      const freshInst = await appsRepository.getInstalledApp(appName);
+      const freshInst = await appsRepository.getInstalledIdentity(appName, replica ?? null);
       if (!freshInst) throw new Error(`Failed to read back installed spec for ${appName}`);
       const deployment = await deploymentProvider.buildDeployment(freshInst, { replica });
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);

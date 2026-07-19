@@ -111,21 +111,25 @@ async function validateAppsCumulatively(installedApps) {
     // Process each app in order (oldest to newest)
     for (const app of sortedApps) {
       try {
+        // Every identity installed here, not just the first: co-located
+        // replicas each hold their own containers and volumes, so one
+        // identity's totals report a fraction of what the app consumes here.
         // eslint-disable-next-line no-await-in-loop
-        const deployment = await deploymentProvider.getInstalledDeployment(app.name);
+        const deployments = await deploymentProvider.getInstalledDeployments(app.name);
 
-        if (!deployment) {
+        if (!deployments.length) {
           log.warn(`hardwareValidationService - No deployment found for ${app.name}, skipping`);
           continue;
         }
 
-        const { cpu, memory } = deployment.totalResources();
+        const cpu = deployments.reduce((sum, d) => sum + d.totalResources().cpu, 0);
+        const memory = deployments.reduce((sum, d) => sum + d.totalResources().memory, 0);
         const appCpu = cpu * 10;
         const appRam = memory;
         // Full host-disk footprint (storage + rootFsGb + swapGb across components).
         // Also fixes a prior inconsistency here: the overhead was added once per app, not
         // per component — reservableHostDiskGb() sums per component like the other sites.
-        const appHdd = deployment.reservableHostDiskGb();
+        const appHdd = deployments.reduce((sum, d) => sum + d.reservableHostDiskGb(), 0);
 
         // Check if this app individually exceeds node capacity
         if (appCpu > useableCpuOnNode) {
