@@ -743,7 +743,17 @@ async function trySpawningGlobalApplication() {
       }
     }
     const { DeploymentSpec } = await getSpecBackend();
-    const deployment = DeploymentSpec.fromSpec(spec, appsFolder);
+    // Check what this pass will actually install. A replica-less view carries the
+    // component's base ports, which on a co-located node belong to a sibling that
+    // is already running — the port checks below would then refuse the very
+    // install they are gating, because the port is held by the app itself.
+    // Identities already installed are excluded for the same reason.
+    const identitiesToInstall = assigned.filter((identity) => !installed.has(identity ?? null));
+    const deployments = (identitiesToInstall.length ? identitiesToInstall : [null])
+      .map((replica) => DeploymentSpec.fromSpec(spec, appsFolder, { replica }));
+    // Images are spec-level — identical across identities — so any view answers
+    // for vetting and the blocklist.
+    const deployment = deployments[0];
 
     // A synced app runs on this node asking its partners who holds what. A node
     // whose calls to other nodes are redirected cannot ask: it reads every
@@ -759,7 +769,7 @@ async function trySpawningGlobalApplication() {
       return shortDelayTime;
     }
     const appSpecifications = spec.serialize();
-    const appPorts = deployment.allHostPorts();
+    const appPorts = [...new Set(deployments.flatMap((d) => d.allHostPorts()))];
 
     // verify app compliance
     const blockResult = await imageManager.isImageBlocked(instantiated.name, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
@@ -790,9 +800,16 @@ async function trySpawningGlobalApplication() {
     }
 
     // verify requirements
-    await hwRequirements.checkNodeResources(deployment);
-    if (isEnterpriseNode) {
-      await hwRequirements.checkCpuBurstHeadroom(deployment);
+    // Per identity: each replica reserves its own resources, and the sequential
+    // installs below re-check with the running reservation applied.
+    // eslint-disable-next-line no-restricted-syntax
+    for (const identityDeployment of deployments) {
+      // eslint-disable-next-line no-await-in-loop
+      await hwRequirements.checkNodeResources(identityDeployment);
+      if (isEnterpriseNode) {
+        // eslint-disable-next-line no-await-in-loop
+        await hwRequirements.checkCpuBurstHeadroom(identityDeployment);
+      }
     }
 
     // ensure ports unused
@@ -800,7 +817,11 @@ async function trySpawningGlobalApplication() {
     const appsRunningAtOurIp = await registryManager.getRunningAppIpList(localIp);
     const runningAppsNames = appsRunningAtOurIp.map((app) => app.name);
 
-    await portManager.ensureApplicationPortsNotUsed(deployment, runningAppsNames);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const identityDeployment of deployments) {
+      // eslint-disable-next-line no-await-in-loop
+      await portManager.ensureApplicationPortsNotUsed(identityDeployment, runningAppsNames);
+    }
 
     // The check above reads a sibling's ports from the specifications the
     // network broadcasts, so it sees only what has been reported as RUNNING. A
