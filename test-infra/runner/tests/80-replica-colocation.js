@@ -267,14 +267,14 @@ describe('replica co-location: two named replicas of one app on one node, separa
     expect(await replicaHostPorts(appName, 's2')).to.deep.equal([36011]);
   });
 
-  it('keeps one installed spec row while the fleet sees a location row per identity', async function () {
+  it('keys the installed and location rows per identity, on the host and across the fleet', async function () {
     this.timeout(120000);
-    // The installed row holds the app SPEC, and the node derives one deployment
-    // per assigned identity from its placement — so a co-located pair is one row
-    // here, not two. What must never happen is the pair collapsing further out:
-    // presence is keyed per identity, or peers under-count the node's replicas.
+    // Installed state is per deployed identity: a replica must be installed
+    // before anything may start it, and a single app-keyed row cannot answer
+    // "is this replica installed here" — the question the spawner asks before
+    // provisioning and the reconciler asks before actuating.
     const localRows = await dbClient(host.num).getLocalApps(appName);
-    expect(localRows.length, 'one installed spec row per app').to.equal(1);
+    expect(localRows.map((r) => r.replica).sort()).to.deep.equal(['s1', 's2']);
 
     // Peers see two location rows for the SAME (name, ip): the pair is
     // distinguishable only by replica, so a row keyed (name, ip) alone would
@@ -428,11 +428,10 @@ describe('replica co-location: two named replicas of one app on one node, separa
       { rounds: 60, label: `${appName} converged to s1 alone` },
     );
 
-    // s1 kept serving throughout, and only s2's plan was reaped. The app itself
-    // is still installed here — losing a sibling must not uninstall the app.
+    // s1 kept serving throughout, and only s2's rows and plan were reaped.
     expect(await replicaStartedAt(appName, 's1'), 'the surviving replica must not restart on a sibling removal').to.equal(s1Before);
     const localRows = await dbClient(host.num).getLocalApps(appName);
-    expect(localRows.length, 'the app stays installed after a sibling leaves').to.equal(1);
+    expect(localRows.map((r) => r.replica)).to.deep.equal(['s1']);
 
     await waitFor(
       async () => {
