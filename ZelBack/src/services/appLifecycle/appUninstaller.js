@@ -1144,7 +1144,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   if (!telemetrySinkCache.hasAnyTelemetryApps()) {
     await telemetryConfigService.remove().catch((e) => log.warn(`telemetry config remove: ${e.message}`));
   }
-  if (owner) await fluxShutdowndClient.deleteAppPlanBestEffort(name, owner);
+  // Scoped to the identity this teardown owns: plans key owner:app[:replica],
+  // so an untagged delete would look for a loose plan this app never had and
+  // leave the departing replica's plan orphaned on the daemon.
+  if (owner) await fluxShutdowndClient.deleteAppPlanBestEffort(name, owner, replica);
   // Drop the app's content-artifact store (the peer-served declared blobs). A
   // re-driven teardown just re-runs the no-op; a re-install refills it as
   // provisioning resolves the blobs.
