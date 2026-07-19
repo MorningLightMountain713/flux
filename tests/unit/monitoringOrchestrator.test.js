@@ -1,12 +1,10 @@
-const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
 describe('monitoringOrchestrator tests', () => {
   let monitoringOrchestrator;
   let appInspectorStub;
-  let resolveSpecStub;
-  let getSpecBackendStub;
+  let getInstalledDeploymentsStub;
   let logStub;
 
   beforeEach(() => {
@@ -15,8 +13,7 @@ describe('monitoringOrchestrator tests', () => {
       stopAppMonitoring: sinon.stub(),
     };
 
-    resolveSpecStub = sinon.stub();
-    getSpecBackendStub = sinon.stub();
+    getInstalledDeploymentsStub = sinon.stub().resolves([]);
 
     logStub = {
       info: sinon.stub(),
@@ -33,8 +30,7 @@ describe('monitoringOrchestrator tests', () => {
       '../serviceHelper': { ensureString: sinon.stub().returnsArg(0) },
       '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
       '../appManagement/appInspector': appInspectorStub,
-      '../utils/specCutover': { resolveSpec: resolveSpecStub },
-      '../utils/specLibs': { getSpecBackend: getSpecBackendStub },
+      '../appRuntime/deploymentProvider': { getInstalledDeployments: getInstalledDeploymentsStub },
       '../../lib/log': logStub,
     });
   });
@@ -60,15 +56,10 @@ describe('monitoringOrchestrator tests', () => {
         { name: 'App3' },
       ];
 
-      resolveSpecStub.resolves({});
-      getSpecBackendStub.resolves({
-        DeploymentSpec: {
-          fromSpec: sinon.stub()
-            .onFirstCall().returns(mockDeployment(['App1']))
-            .onSecondCall().returns(mockDeployment(['App2']))
-            .onThirdCall().returns(mockDeployment(['App3'])),
-        },
-      });
+      getInstalledDeploymentsStub
+        .onFirstCall().resolves([mockDeployment(['App1'])])
+        .onSecondCall().resolves([mockDeployment(['App2'])])
+        .onThirdCall().resolves([mockDeployment(['App3'])]);
 
       const appsMonitored = {};
       await monitoringOrchestrator.startMonitoringOfApps(apps, appsMonitored, null);
@@ -82,12 +73,7 @@ describe('monitoringOrchestrator tests', () => {
     it('should start monitoring for multi-component apps', async () => {
       const apps = [{ name: 'ComposedApp' }];
 
-      resolveSpecStub.resolves({});
-      getSpecBackendStub.resolves({
-        DeploymentSpec: {
-          fromSpec: sinon.stub().returns(mockDeployment(['Component1_ComposedApp', 'Component2_ComposedApp'])),
-        },
-      });
+      getInstalledDeploymentsStub.resolves([mockDeployment(['Component1_ComposedApp', 'Component2_ComposedApp'])]);
 
       const appsMonitored = {};
       await monitoringOrchestrator.startMonitoringOfApps(apps, appsMonitored, null);
@@ -101,10 +87,7 @@ describe('monitoringOrchestrator tests', () => {
       const apps = [{ name: 'App1' }];
       const installedAppsFn = sinon.stub().resolves({ status: 'success', data: apps });
 
-      resolveSpecStub.resolves({});
-      getSpecBackendStub.resolves({
-        DeploymentSpec: { fromSpec: sinon.stub().returns(mockDeployment(['App1'])) },
-      });
+      getInstalledDeploymentsStub.resolves([mockDeployment(['App1'])]);
 
       const appsMonitored = {};
       await monitoringOrchestrator.startMonitoringOfApps(null, appsMonitored, installedAppsFn);
@@ -119,12 +102,9 @@ describe('monitoringOrchestrator tests', () => {
         { name: 'BadApp' },
       ];
 
-      resolveSpecStub
-        .onFirstCall().resolves({})
-        .onSecondCall().resolves(null);
-      getSpecBackendStub.resolves({
-        DeploymentSpec: { fromSpec: sinon.stub().returns(mockDeployment(['GoodApp'])) },
-      });
+      getInstalledDeploymentsStub
+        .onFirstCall().resolves([mockDeployment(['GoodApp'])])
+        .onSecondCall().resolves([]);
 
       const appsMonitored = {};
       await monitoringOrchestrator.startMonitoringOfApps(apps, appsMonitored, null);
@@ -134,7 +114,7 @@ describe('monitoringOrchestrator tests', () => {
     });
 
     it('should handle errors gracefully', async () => {
-      resolveSpecStub.rejects(new Error('deserialization failed'));
+      getInstalledDeploymentsStub.rejects(new Error('deployment resolution failed'));
 
       await monitoringOrchestrator.startMonitoringOfApps([{ name: 'App1' }], {}, null);
 
@@ -147,10 +127,7 @@ describe('monitoringOrchestrator tests', () => {
     it('should stop monitoring for single-component apps', async () => {
       const apps = [{ name: 'App1' }];
 
-      resolveSpecStub.resolves({});
-      getSpecBackendStub.resolves({
-        DeploymentSpec: { fromSpec: sinon.stub().returns(mockDeployment(['App1'])) },
-      });
+      getInstalledDeploymentsStub.resolves([mockDeployment(['App1'])]);
 
       const appsMonitored = {};
       await monitoringOrchestrator.stopMonitoringOfApps(apps, false, appsMonitored, null);
@@ -162,12 +139,7 @@ describe('monitoringOrchestrator tests', () => {
     it('should stop monitoring for multi-component apps', async () => {
       const apps = [{ name: 'ComposedApp' }];
 
-      resolveSpecStub.resolves({});
-      getSpecBackendStub.resolves({
-        DeploymentSpec: {
-          fromSpec: sinon.stub().returns(mockDeployment(['Component1_ComposedApp', 'Component2_ComposedApp'])),
-        },
-      });
+      getInstalledDeploymentsStub.resolves([mockDeployment(['Component1_ComposedApp', 'Component2_ComposedApp'])]);
 
       const appsMonitored = {};
       await monitoringOrchestrator.stopMonitoringOfApps(apps, true, appsMonitored, null);
@@ -181,10 +153,7 @@ describe('monitoringOrchestrator tests', () => {
       const apps = [{ name: 'App1' }];
       const installedAppsFn = sinon.stub().resolves({ status: 'success', data: apps });
 
-      resolveSpecStub.resolves({});
-      getSpecBackendStub.resolves({
-        DeploymentSpec: { fromSpec: sinon.stub().returns(mockDeployment(['App1'])) },
-      });
+      getInstalledDeploymentsStub.resolves([mockDeployment(['App1'])]);
 
       const appsMonitored = {};
       await monitoringOrchestrator.stopMonitoringOfApps(null, false, appsMonitored, installedAppsFn);
