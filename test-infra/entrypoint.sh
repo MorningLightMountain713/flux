@@ -212,6 +212,26 @@ if [ "$FLUX_SHUTDOWND_MOCK" = "true" ]; then
   echo "started mock flux-shutdownd (control port ${SHUTDOWND_MOCK_CONTROL_PORT:-16199})"
 fi
 
+# The REAL flux-shutdownd, in the mock's place. It runs under this entrypoint
+# rather than as a systemd unit because its socket/data paths are
+# env-configurable and its readiness notify is best-effort; it runs in THIS
+# container because the app containers it drains live in this node's inner
+# dockerd. The daemon serves the io.runonflux.Shutdownd dbus interface and
+# treats failure to own that name as fatal, so a system bus and the policy
+# granting the name must exist before it starts.
+if [ "$FLUX_SHUTDOWND_REAL" = "true" ]; then
+  mkdir -p /run/flux-shutdownd /var/lib/flux-shutdownd /run/dbus
+  cp /opt/shutdownd-dist/io.runonflux.Shutdownd.conf /usr/share/dbus-1/system.d/
+  dbus-daemon --system --fork
+  install -m 0755 /opt/shutdownd-dist/flux-shutdownd /usr/local/bin/flux-shutdownd
+  install -m 0755 /opt/shutdownd-dist/shutdownctl /usr/local/bin/shutdownctl
+  # Runs as root, unlike the packaged unit's dedicated user with supplementary
+  # docker access: provisioning that user buys privilege separation, which is
+  # not what this suite exercises, and the mock it replaces ran as root too.
+  flux-shutdownd &
+  echo "started real flux-shutdownd"
+fi
+
 # Optional mock flux-telemetryd for the telemetry suites. The real daemon is a
 # host-side client of FluxOS's identity socket; the mock plays that client role
 # in-container. The runtime dir must exist BEFORE fluxos boots — FluxOS's
