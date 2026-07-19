@@ -761,15 +761,14 @@ async function clearNetworkHealState(identifier) {
  * container into a permanently gone one. Returns null when it is safe to proceed,
  * or a reason string.
  */
-async function networkHealBlocker(identifier, spec) {
+async function networkHealBlocker(identifier) {
   // The recreate refuses to create/reformat a volume (allowVolumeCreation: false),
   // so an unverifiable volume means it would fail AFTER we destroyed the container.
   // Check the same thing the recreate checks, before committing. (Recreatability of
   // the spec itself is already proven: spec.deployment was built from the installed
   // app by getLocalComponentSpec, the same domain object the recreate installs from.)
-  const mainAppName = appNameFromIdentifier(identifier);
   const volumeMounted = await volumeService
-    .verifyAppVolumeMount(mainAppName, true, spec.comp.name)
+    .verifyAppVolumeMount(identifier)
     .catch(() => false);
   if (!volumeMounted) {
     return 'its data volume cannot be verified as mounted, so the recreate would fail';
@@ -785,7 +784,7 @@ async function networkHealBlocker(identifier, spec) {
  * existing container name; `docker network connect` on a live container does not
  * restore published host ports, so only a recreate fully heals it.
  */
-async function healDetachedNetwork(identifier, mainAppName, spec) {
+async function healDetachedNetwork(identifier, mainAppName) {
   // Confirm in-pass: a detached read can be transient (dockerd mid-restart, the
   // brief window before an endpoint gets its IP). Settle, then look again, and
   // only destroy on a state that survived the gap.
@@ -857,7 +856,7 @@ async function healDetachedNetwork(identifier, mainAppName, spec) {
 
   // Never destroy what we cannot rebuild: every precondition of the recreate must
   // hold BEFORE the remove, or the heal turns a half-alive container into a gone one.
-  const blocker = await networkHealBlocker(identifier, spec);
+  const blocker = await networkHealBlocker(identifier);
   if (blocker) {
     log.error(`appReconciler - ${identifier} runs detached but must NOT be recreated: ${blocker}; leaving the container in place (app NOT touched)`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'networkHealBlocked', reason: blocker });
@@ -1192,7 +1191,7 @@ async function reconcile(rawIdentifier) {
     // fixed by the heal (no restart repairs a stale endpoint, and converging
     // secondary memberships on a container about to be recreated is churn).
     if (dockerService.isContainerDetachedFromNetwork(actual.attachment)) {
-      await healDetachedNetwork(identifier, mainAppName, spec);
+      await healDetachedNetwork(identifier, mainAppName);
       return;
     }
     // Steady state is where membership drift surfaces (a recreated linked app,
