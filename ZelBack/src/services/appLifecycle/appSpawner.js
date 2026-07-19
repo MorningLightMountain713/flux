@@ -568,7 +568,8 @@ async function trySpawningGlobalApplication() {
     // "already here" means every identity this node is assigned is accounted
     // for, not merely that one of them is.
     const assigned = await deploymentProvider.assignedIdentities(instantiated);
-    const coveredHere = (documents) => {
+    // Only rows on this node's own IP count toward its identities.
+    const everyAssignedIdentityPresentIn = (documents) => {
       const present = new Set(documents
         .filter((document) => document.ip.includes(adjustedIP))
         .map((document) => document.replica ?? null));
@@ -576,11 +577,11 @@ async function trySpawningGlobalApplication() {
     };
 
     // check if app not running on this device
-    if (coveredHere(runningAppList)) {
+    if (everyAssignedIdentityPresentIn(runningAppList)) {
       log.info(`trySpawningGlobalApplication - Application ${appToRun} is reported as already running on this Flux IP`);
       return delayTime;
     }
-    if (coveredHere(installingAppList)) {
+    if (everyAssignedIdentityPresentIn(installingAppList)) {
       log.info(`trySpawningGlobalApplication - Application ${appToRun} is reported as already being installed on this Flux IP`);
       return delayTime;
     }
