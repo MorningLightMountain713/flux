@@ -401,10 +401,27 @@ async function trySpawningGlobalApplication() {
           region: nodeGeo.regionName,
         } : undefined,
       };
-      globalAppNamesLocation = globalAppNamesLocation.filter((c) => !installedApps.find((a) => a.name === c.instantiated.name)
+      // Being installed here does not mean this node owes nothing: a node
+      // already running one replica can be assigned another, and dropping the
+      // candidate by app name would refuse that seat forever — the spec would
+      // keep naming an identity nothing ever provisions. Resolve identities only
+      // for candidates that ARE installed; the rest never needed the question.
+      const installedNames = new Set(installedApps.map((a) => a.name));
+      const owesAnIdentity = new Map();
+      for (const candidate of globalAppNamesLocation) {
+        const { instantiated } = candidate;
+        if (!installedNames.has(instantiated.name)) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const assigned = await deploymentProvider.assignedIdentities(instantiated);
+        // eslint-disable-next-line no-await-in-loop
+        const installed = new Set(await appsRepository.listInstalledIdentities(instantiated.name));
+        owesAnIdentity.set(instantiated.name, !assigned.every((identity) => installed.has(identity ?? null)));
+      }
+      globalAppNamesLocation = globalAppNamesLocation.filter((c) => (
+        (!installedNames.has(c.instantiated.name) || owesAnIdentity.get(c.instantiated.name))
         && !globalState.spawnErrorsLongerAppCache.has(c.instantiated.hash)
         && !globalState.trySpawningGlobalAppCache.has(c.instantiated.hash)
-        && !appsToBeCheckedLater.some((appAux) => appAux.appName === c.instantiated.name));
+        && !appsToBeCheckedLater.some((appAux) => appAux.appName === c.instantiated.name)));
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.matches(nodeInfo));
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
         const { owner } = c.instantiated;
