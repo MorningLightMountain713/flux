@@ -33,10 +33,12 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 //   - operations address one identity: kill, restart, de-target and drain each
 //     hit exactly their target while the sibling keeps serving.
 //
-// nodes:4 with minOutgoing lowered to 2 (a small mesh reaches ~2 outbound/node);
-// arcane:true so nodes accept encrypted v9 apps and the shutdown daemon is in
-// play. Node 2 (index 1) is the co-location host throughout; nodes 1/3/4 are
-// observers whose DBs see the identities purely via gossip. The ticker stays off:
+// nodes:5 with minOutgoing lowered to 2 (a 5-node full mesh only reaches ~2
+// outbound/node); registration also demands minIncoming peers, which a smaller
+// fleet does not reliably give the registering node. arcane:true so nodes accept
+// encrypted v9 apps and the shutdown daemon is in play. Node 2 (index 1) is the
+// co-location host throughout; the rest are observers whose DBs see the
+// identities purely via gossip. The ticker stays off:
 // update convergence rides the block-height reconcile sweep, so update tests
 // advance blocks in explicit rounds.
 //
@@ -167,7 +169,7 @@ describe('replica co-location: two named replicas of one app on one node, separa
   before(async function () {
     this.timeout(600000);
     env = await createTestEnv({
-      hookCtx: this, nodes: 4, tickerAutostart: false, arcane: true, shutdowndMock: true,
+      hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true, shutdowndMock: true,
       configOverrides: {
         fluxapps: {
           minOutgoing: 2,
