@@ -36,6 +36,7 @@ import { fluxTeamKey, nodeKey } from './keys.js';
 import policySigning from '../../external-http-stub/policy-signing.js';
 import chainStart from './chain-start.cjs';
 import { assertCoupledRatios, loadSharedConfig } from './coupled-knobs.js';
+import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
 
 // How long after a re-attach the collector goes on treating an exact repeat as docker
 // replaying a line it already has. Docker's `since` is whole-second, so the replay is over
@@ -578,7 +579,7 @@ function makeEnvShell(networkName) {
           try {
             helperRuns += 1;
             const helper = await cleanupClient.container.dockerode.createContainer({
-              Image: image('flux-e2e-fluxos-01'),
+              Image: image(NODE_IMAGE),
               Entrypoint: ['bash', '-c', 'chattr -R -i /v/flux-apps 2>/dev/null; true'],
               HostConfig: { Binds: [`${volName}:/v`], CapAdd: ['LINUX_IMMUTABLE'] },
             });
@@ -762,6 +763,10 @@ export async function createTestEnv({
   // production hardened unit, bind-mounted from the runner host.
   telemetrydReal = false,
 } = {}) {
+  // Before the boot lock, the network, or a single container: a flux-spec
+  // vendor lagging the branch surfaces as a product mystery minutes later,
+  // and only in suites that install something.
+  assertFluxSpecVendorCurrent();
   if (syncthing !== 'stub' && syncthing !== 'binary') {
     throw new Error(`createTestEnv: syncthing must be 'stub' or 'binary', got '${syncthing}'`);
   }
@@ -1517,7 +1522,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
     // machine: under a contended 10-node fleet boot, Wait.forHealthCheck() tears
     // the fleet down on a transient "unhealthy" even when FluxOS is up. See
     // http-wait-strategy.js for the full rationale.
-    const builder = new StaticIpContainer(image('flux-e2e-fluxos-01'))
+    const builder = new StaticIpContainer(image(NODE_IMAGE))
       .withPrivilegedMode()
       .withStaticIp(networkName, nodeIp)
       // Nodes resolve through the stub, which answers fleet names by relaying to
