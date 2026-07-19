@@ -167,6 +167,18 @@ describe('componentProvisioner tests', () => {
       expect(appDockerStartStub.called, 'but never started by the installer').to.be.false;
     });
 
+    it('builds no volume for a stateless component, even on a hard install', async () => {
+      // persistentStorage.sizeGb 0: there is nothing to fallocate or format,
+      // and verifyAppVolumeMount would fail on a mountpoint deliberately never
+      // created — so the whole block is skipped rather than made tolerant.
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(
+        makeComponent('sync', { isStateless: true }),
+        { owner: 'owner1', createVolumes: true },
+      );
+      expect(createAppVolumeStub.called, 'no volume for a stateless component').to.be.false;
+    });
+
     it('starts inline on a test install (synchronous, fail-fast, no handoff)', async () => {
       const provisioner = loadProvisioner();
       await provisioner.installComponent(makeComponent(null), { test: true });
