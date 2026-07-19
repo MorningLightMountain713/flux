@@ -765,6 +765,14 @@ async function clearNetworkHealState(identifier) {
  * or a reason string.
  */
 async function networkHealBlocker(identifier) {
+  // A stateless component (persistentStorage.sizeGb 0) has no volume at all, so
+  // "cannot verify a mount" is its permanent normal state — blocking on it would
+  // make such a container unhealable forever. Resolve the same domain object the
+  // recreate installs from and ask it. A spec that cannot be read is left to the
+  // volume check below, which fails closed.
+  const spec = await getLocalComponentSpec(identifier).catch(() => null);
+  if (spec && spec.comp && spec.comp.isStateless) return null;
+
   // The recreate refuses to create/reformat a volume (allowVolumeCreation: false),
   // so an unverifiable volume means it would fail AFTER we destroyed the container.
   // Check the same thing the recreate checks, before committing. (Recreatability of
@@ -1022,7 +1030,14 @@ async function reconcile(rawIdentifier) {
   // mountpoint writes to the host filesystem instead of the volume. It matters
   // even while the container stays stopped - a g:/r: component's syncthing
   // folder lives on it. An app whose volume cannot be mounted stays inert.
-  const volumeMount = await volumeService.ensureAppVolumeMounted(identifier);
+  // A stateless component (persistentStorage.sizeGb 0) has no volume and no app
+  // dir, so there is nothing to mount and nothing an actuation could write to
+  // the bare host path — the hazard this gate exists for cannot arise. Without
+  // the exemption its volume reads as permanently missing: all actuation defers
+  // forever AND every pass records a volume_missing tampering event.
+  const volumeMount = spec.comp.isStateless
+    ? { mounted: true, alreadyMounted: true }
+    : await volumeService.ensureAppVolumeMounted(identifier);
   if (!volumeMount.mounted) {
     // A stop takes nothing from the app dir, and deferring it would leave the
     // container running over a missing volume with the mount-safety hold

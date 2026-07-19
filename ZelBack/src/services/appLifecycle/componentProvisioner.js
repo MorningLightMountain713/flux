@@ -274,7 +274,10 @@ async function installComponent(component, options = {}) {
   // no-op) must not let us build a volume the cancel's teardown is about to rm -rf.
   if (!test) await throwIfCancelledMidInstall(component);
 
-  if (createVolumes) {
+  // A stateless component (persistentStorage.sizeGb 0) has no volume to build,
+  // so there is also nothing to verify a mount for — verifyAppVolumeMount would
+  // fail on the mountpoint that was deliberately never created.
+  if (createVolumes && !component.isStateless) {
     await appVolumeService.createAppVolume(component, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null, test);
 
     status(`Verifying volume mount for ${id}...`);

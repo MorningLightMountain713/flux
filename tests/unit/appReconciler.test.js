@@ -35,6 +35,8 @@ describe('appReconciler tests', () => {
         requiresSyncBeforeStart: () => isR,
         hasSyncthing: () => isSync,
         restartPolicy: c.restartPolicy ?? 'always',
+        // persistentStorage.sizeGb 0 — no volume is ever created for it
+        isStateless: c.isStateless === true,
         hasDependencies: () => !!c.dependsOn && Object.keys(c.dependsOn).length > 0,
         dependencyEntries: () => (c.dependsOn ? Object.entries(c.dependsOn).map(([n, v]) => [n, v.condition]) : []),
       };
@@ -910,6 +912,28 @@ describe('appReconciler tests', () => {
       } finally {
         appReconciler.clearControllerDesired('www_App');
       }
+    });
+
+    it('never consults the volume for a stateless component, and starts it', async () => {
+      // sizeGb 0 means no volume was ever created, so the mount gate would fail
+      // closed forever: the component would never start and every pass would
+      // report a tampering event. It has no app dir to write through either, so
+      // the hazard the gate exists for cannot arise.
+      localSpec.compose[0].isStateless = true;
+      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.volumeService.ensureAppVolumeMounted.called, 'must not probe a volume that cannot exist').to.be.false;
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+    });
+
+    it('records no volume tampering event for a stateless component', async () => {
+      localSpec.compose[0].isStateless = true;
+      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_App');
+      const volumeEvents = stubs.appTamperingDetectionService.recordEvent.getCalls()
+        .filter((c) => c.args[1] === 'volume_missing');
+      expect(volumeEvents, 'a component with no volume is not a tampered one').to.have.lengthOf(0);
     });
 
     it('mounts an unmounted volume and proceeds with the start', async () => {

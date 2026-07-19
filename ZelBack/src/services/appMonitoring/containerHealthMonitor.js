@@ -77,7 +77,10 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
         await syncthingMonitorHelpers.requestFolderScan(deployComp.identifier);
       }
     }
-    if (!volumeMounted && !allowVolumeCreation) {
+    // A stateless component has no volume by design, so "not mounted" is its
+    // correct steady state rather than a reason to refuse the recreate — the
+    // guard exists to avoid silently reformatting data, and there is none.
+    if (!volumeMounted && !deployComp.isStateless && !allowVolumeCreation) {
       throw new Error(`Cannot recreate ${componentIdentifier} without creating (reformatting) its data volume: the volume for ${mainAppName} could not be verified as mounted`);
     }
     await componentProvisioner.installComponent(deployComp, {
