@@ -553,15 +553,6 @@ async function trySpawningGlobalApplication() {
     runningAppList = await registryManager.appLocation(appToRun);
 
     const adjustedIP = extractIp(localSocketAddr); // just IP address
-    // check if app not running on this device
-    if (runningAppList.find((document) => document.ip.includes(adjustedIP))) {
-      log.info(`trySpawningGlobalApplication - Application ${appToRun} is reported as already running on this Flux IP`);
-      return delayTime;
-    }
-    if (installingAppList.find((document) => document.ip.includes(adjustedIP))) {
-      log.info(`trySpawningGlobalApplication - Application ${appToRun} is reported as already being installed on this Flux IP`);
-      return delayTime;
-    }
 
     const instantiated = selectedCandidate
       ? selectedCandidate.instantiated
@@ -570,11 +561,30 @@ async function trySpawningGlobalApplication() {
       throw new Error(`trySpawningGlobalApplication - Specifications for application ${appToRun} were not found!`);
     }
 
-    // Asked per identity, not per app: a node already running one replica can be
-    // assigned another, and an app-level "already installed" would refuse that
-    // second seat forever — leaving the reconciler to see an identity the spec
-    // assigns but nothing ever provisioned.
+    // Every gate below asks per identity rather than per app. A node already
+    // running one replica can be assigned another, and an app-level "it's
+    // already here" refuses that second seat forever — the spec keeps naming an
+    // identity nothing ever provisions. Presence rows carry their replica, so
+    // "already here" means every identity this node is assigned is accounted
+    // for, not merely that one of them is.
     const assigned = await deploymentProvider.assignedIdentities(instantiated);
+    const coveredHere = (documents) => {
+      const present = new Set(documents
+        .filter((document) => document.ip.includes(adjustedIP))
+        .map((document) => document.replica ?? null));
+      return assigned.every((identity) => present.has(identity ?? null));
+    };
+
+    // check if app not running on this device
+    if (coveredHere(runningAppList)) {
+      log.info(`trySpawningGlobalApplication - Application ${appToRun} is reported as already running on this Flux IP`);
+      return delayTime;
+    }
+    if (coveredHere(installingAppList)) {
+      log.info(`trySpawningGlobalApplication - Application ${appToRun} is reported as already being installed on this Flux IP`);
+      return delayTime;
+    }
+
     const installed = new Set(await appsRepository.listInstalledIdentities(instantiated.name));
     if (assigned.every((identity) => installed.has(identity ?? null))) {
       log.info(`trySpawningGlobalApplication - Application ${instantiated.name} is already installed`);
