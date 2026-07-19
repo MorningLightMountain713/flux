@@ -39,8 +39,13 @@ async function hydrate(doc) {
   await getSpec();
   const { InstantiatedSpec } = await getSpecBackend();
 
+  // `replica` is this collection's own key field, not part of the spec's wire
+  // form. The encrypted deserializers reject unknown fields outright, so the
+  // storage key is stripped here rather than leaking into the spec layer.
+  const { replica, ...specDoc } = doc;
+
   try {
-    return InstantiatedSpec.deserialize(doc);
+    return InstantiatedSpec.deserialize(specDoc);
   } catch (err) {
     log.warn(`appsRepository.hydrate: ${err.message} (name=${doc.name}, version=${doc.version})`);
     return null;
