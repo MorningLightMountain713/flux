@@ -31,11 +31,16 @@ describe('containerHealthMonitor tests', () => {
 
   beforeEach(() => {
     instantiated = { name: 'testapp', owner: '1OwnerAddress' };
-    webComp = { name: 'web' };
-    dbComp = { name: 'db' };
+    // Components carry the identifiers the deployment layer minted, since the
+    // monitor now resolves an identifier by exact match rather than by parsing.
+    webComp = { name: 'web', identifier: 'web_testapp' };
+    dbComp = { name: 'db', identifier: 'db_testapp' };
     fakeDeployment = {
       getComponent: sinon.stub().callsFake((name) => ({ web: webComp, db: dbComp }[name])),
       componentEntries: sinon.stub().returns([['web', webComp], ['db', dbComp]]),
+      componentForIdentifier: sinon.stub().callsFake(
+        (id) => [webComp, dbComp].find((c) => c.identifier === id),
+      ),
     };
 
     appsRepositoryStub = { getInstalledApp: sinon.stub().resolves(instantiated) };
@@ -44,6 +49,15 @@ describe('containerHealthMonitor tests', () => {
       // Delegates at call time so per-test overrides of buildDeployment flow
       // through the plural (whole-app) entry the monitor uses.
       get buildDeployments() {
+        const single = this.buildDeployment;
+        return async (inst) => {
+          const deployment = await single(inst);
+          return deployment ? [deployment] : [];
+        };
+      },
+      // The monitor drives the INSTALLED view; these fixtures have everything
+      // assigned installed, so it delegates to the same single deployment.
+      get installedDeployments() {
         const single = this.buildDeployment;
         return async (inst) => {
           const deployment = await single(inst);
@@ -159,7 +173,9 @@ describe('containerHealthMonitor tests', () => {
         await containerHealthMonitor.recreateMissingContainers('ghost_testapp');
       } catch (e) { err = e; }
       expect(err).to.be.an('error');
-      expect(err.message).to.include('Component ghost not found');
+      // Reports the identifier it was asked for, not a component name carved
+      // back out of it — the resolution is an exact match, not a parse.
+      expect(err.message).to.include('Component ghost_testapp not found');
       expect(componentProvisionerStub.installComponent.called).to.be.false;
     });
 
