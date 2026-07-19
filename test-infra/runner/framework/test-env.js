@@ -1675,6 +1675,20 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
   // Nodes this fixture has cut off from the fleet. They reach nobody and nobody reaches
   // them, so they peer with nobody and obtain no policy - by the fixture's own doing.
   const heldOut = new Set();
+  // In systemd mode the container's stdout is systemd's console and FluxOS's
+  // own stream is journal-connected — that connection is the mechanism under
+  // test (it sets JOURNAL_STREAM, which selects the journald sink), so the log
+  // collectors legitimately receive nothing from FluxOS. Answering "no match"
+  // would leave every assertion built on these silently unfalsifiable, so
+  // refuse and name the replacement.
+  const assertCollectorSeesFluxos = (fn) => {
+    if (!systemdMode) return;
+    throw new Error(
+      `${fn}() cannot see FluxOS logs in systemd mode: its stdout is journal-connected, `
+      + 'not the container stream. Read the journal instead — journalGrep(container, '
+      + "'fluxos', pattern, { processOnly: true }) from framework/systemd-control.js",
+    );
+  };
 
   // Post-boot methods join the shell here (they close over _buildEnv locals like
   // deferredBuilders/fluxNodes); identity, registries and teardown live on the
@@ -2001,14 +2015,17 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
     },
 
     nodeHasLog(index, pattern) {
+      assertCollectorSeesFluxos('nodeHasLog');
       return fluxNodes[index].logCollector.hasLine(pattern);
     },
 
     nodeLogCount(index, pattern) {
+      assertCollectorSeesFluxos('nodeLogCount');
       return fluxNodes[index].logCollector.countPattern(pattern);
     },
 
     nodeLogLines(index) {
+      assertCollectorSeesFluxos('nodeLogLines');
       return fluxNodes[index].logCollector.getLines();
     },
   });
