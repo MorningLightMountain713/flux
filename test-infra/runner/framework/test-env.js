@@ -24,6 +24,7 @@ import { defaultGroupGrantDoc } from './policy-helper.js';
 import { MongoClient } from 'mongodb';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey, nodeKey } from './keys.js';
+import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
 
 function createLogCollector() {
   // Each entry is { t, line }: t is the capture wall-clock (ISO), line is the raw
@@ -268,7 +269,7 @@ function makeEnvShell(networkName) {
           // throwaway container and retry, so even a wedged fleet cleans up.
           try {
             const helper = await cleanupClient.container.dockerode.createContainer({
-              Image: 'flux-e2e-fluxos-01',
+              Image: NODE_IMAGE,
               Entrypoint: ['bash', '-c', 'chattr -R -i /v/flux-apps 2>/dev/null; true'],
               HostConfig: { Binds: [`${volName}:/v`], CapAdd: ['LINUX_IMMUTABLE'] },
             });
@@ -424,6 +425,10 @@ export async function createTestEnv({
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
   telemetrydMock = false, systemdMode = false, telemetrydReal = false,
 } = {}) {
+  // Before the boot lock, the network, or a single container: a flux-spec
+  // vendor lagging the branch surfaces as a product mystery minutes later,
+  // and only in suites that install something.
+  assertFluxSpecVendorCurrent();
   // The boot-lock queue wait must not count against the suite's hook budget.
   // Mocha enforces a hook's timeout twice: the watchdog timer (which would fire
   // MID-QUEUE whenever the queue alone outlasts the budget), and a completion-time
@@ -803,7 +808,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, conf
     // machine: under a contended 10-node fleet boot, Wait.forHealthCheck() tears
     // the fleet down on a transient "unhealthy" even when FluxOS is up. See
     // http-wait-strategy.js for the full rationale.
-    const builder = new StaticIpContainer('flux-e2e-fluxos-01')
+    const builder = new StaticIpContainer(NODE_IMAGE)
       .withPrivilegedMode()
       .withStaticIp(networkName, nodeIp)
       .withBindMounts(bindMounts)
