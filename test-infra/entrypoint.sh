@@ -343,6 +343,15 @@ fi
 if [ "$FLUX_SHUTDOWND_MOCK" = "true" ]; then
   ln -sf /etc/systemd/system/flux-shutdownd-mock.service /etc/systemd/system/multi-user.target.wants/flux-shutdownd-mock.service
 fi
+# The real flux-shutdownd, the pinned build bind-mounted from the runner host, in
+# the mock's place (both bind the same socket). Its dbus policy grants it
+# io.runonflux.Shutdownd on the system bus.
+if [ "$FLUX_SHUTDOWND_REAL" = "true" ]; then
+  cp /opt/shutdownd-dist/io.runonflux.Shutdownd.conf /usr/share/dbus-1/system.d/
+  install -m 0755 /opt/shutdownd-dist/flux-shutdownd /usr/local/bin/flux-shutdownd
+  install -m 0755 /opt/shutdownd-dist/shutdownctl /usr/local/bin/shutdownctl
+  ln -sf /etc/systemd/system/flux-shutdownd-real.service /etc/systemd/system/multi-user.target.wants/flux-shutdownd-real.service
+fi
 # The mock flux-telemetryd the telemetry suites drive (telemetryd-stub).
 if [ "$FLUX_TELEMETRYD_MOCK" = "true" ]; then
   ln -sf /etc/systemd/system/flux-telemetryd-mock.service /etc/systemd/system/multi-user.target.wants/flux-telemetryd-mock.service

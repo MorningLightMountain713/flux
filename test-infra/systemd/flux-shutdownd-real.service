@@ -1,0 +1,28 @@
+[Unit]
+# The real-daemon graceful-stop suites only (FLUX_SHUTDOWND_REAL, entrypoint.sh),
+# in the mock's place. It runs in the node because the app containers it drains
+# live in the node's inner dockerd. It treats failing to own its dbus name as
+# fatal, so the system bus comes first.
+Description=flux-shutdownd (harness node, pinned build)
+After=dockerd.service dbus.service
+Wants=dockerd.service dbus.service
+# Listening before FluxOS starts, which may ask it to stop an app at boot.
+Before=fluxos.service pm2-fluxuser.service
+
+[Service]
+EnvironmentFile=/etc/fluxos-harness.env
+RuntimeDirectory=flux-shutdownd
+RuntimeDirectoryPreserve=yes
+StateDirectory=flux-shutdownd
+# Runs as root, unlike the packaged unit's dedicated user with supplementary
+# docker access: that buys privilege separation, which these suites do not
+# exercise.
+ExecStart=/usr/local/bin/flux-shutdownd
+Restart=always
+RestartSec=1
+# The node's output stream, where the harness reads the unit's lines (entrypoint.sh).
+StandardOutput=append:/var/lib/flux-harness/stream
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target
