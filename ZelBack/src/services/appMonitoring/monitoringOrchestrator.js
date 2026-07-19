@@ -3,9 +3,6 @@ const messageHelper = require('../messageHelper');
 const appInspector = require('../appManagement/appInspector');
 const log = require('../../lib/log');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
-const { resolveSpec } = require('../utils/specCutover');
-const { getSpecBackend } = require('../utils/specLibs');
-const { appsFolder } = require('../utils/appConstants');
 
 // Monitoring is started by the node whenever a container comes up and feeds the CPU
 // throttling loop, so it is not a setting an operator turns on or off. The routes stay
@@ -24,16 +21,18 @@ async function startMonitoringOfApps(appSpecsToMonitor) {
     if (!Array.isArray(appSpecsToMonitor)) {
       throw new Error('appSpecsToMonitor must be an array of app specifications');
     }
-    const { DeploymentSpec } = await getSpecBackend();
     deployments = [];
     // eslint-disable-next-line no-restricted-syntax
     for (const app of appSpecsToMonitor) {
       try {
+        // One deployment per identity installed here - monitoring keys on the
+        // container's identifier, and a co-located node runs one container per
+        // replica. A replica-less view yields unqualified identifiers that match
+        // no container, so neither sibling would be monitored. The provider
+        // resolves encrypted specs on the way through, which is what the
+        // retired resolveSpec step did here.
         // eslint-disable-next-line no-await-in-loop
-        // resolveSpec decrypts enterprise apps - DeploymentSpec.fromSpec needs the
-        // cleartext components. deserializeSpec alone yields an EncryptedSpecV8.
-        const spec = await resolveSpec(app);
-        if (spec) deployments.push(DeploymentSpec.fromSpec(spec, appsFolder));
+        deployments.push(...await deploymentProvider.getInstalledDeployments(app.name));
       } catch (error) {
         log.error(`startMonitoringOfApps - could not read ${app?.name || '<unnamed app>'}: ${error.message}`);
       }

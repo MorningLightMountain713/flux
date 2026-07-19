@@ -79,7 +79,8 @@ async function legacyGetAppFluxOnChainPrice(appSpecification) {
   }
 
   const { DeploymentSpec } = await getSpecBackend();
-  const { cpu, memory, storage } = DeploymentSpec.fromSpec(spec, appsFolder).totalResources();
+  // Declared view: display pricing must match what every node computes.
+  const { cpu, memory, storage } = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null }).totalResources();
   if (cpu < 3 && memory < 6000 && storage < 150) {
     actualPriceToPay *= 0.8;
   } else if (cpu < 7 && memory < 29000 && storage < 370) {
@@ -186,7 +187,8 @@ async function legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn, c
   }
 
   const { DeploymentSpec: DS } = await getSpecBackend();
-  const { cpu, memory, storage } = DS.fromSpec(spec, appsFolder).totalResources();
+  // Declared view: display pricing must match what every node computes.
+  const { cpu, memory, storage } = DS.fromSpec(spec, appsFolder, { replica: null }).totalResources();
   const applyHWDiscount = spec.version <= 3 || spec.instances < 4;
   if (applyHWDiscount) {
     if (cpu < 3 && memory < 6000 && storage < 150) {
@@ -257,7 +259,7 @@ async function legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn, c
       if (fiatRates && fiatRates.data && fiatRates.data.zelcash && fiatRates.data.zelcash.usd) {
         fluxUSDRate = fiatRates.data.zelcash.usd;
       } else {
-        fluxUSDRate = config.fluxapps.fluxUSDRate;
+        ({ fluxUSDRate } = config.fluxapps);
       }
       myShortCache.set('fluxRates', fluxUSDRate);
     }
