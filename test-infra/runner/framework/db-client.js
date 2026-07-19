@@ -122,6 +122,15 @@ export function dbClient(nodeNum) {
       return localDb.collection('zelappsinformation').findOne({ name: appName }, { projection: { _id: 0 } });
     },
 
+    // Every installed row for the app on this node, one per deployed identity.
+    // The single-row read above cannot say WHICH sibling it returned on a
+    // co-located node, so per-identity assertions read these instead.
+    async getLocalApps(appName) {
+      const localDb = await db('appsLocal');
+      return localDb.collection('zelappsinformation')
+        .find({ name: appName }, { projection: { _id: 0 } }).toArray();
+    },
+
     async eventCounts() {
       const globalDb = await db('appsGlobal');
       const col = globalDb.collection('appstateevents');
