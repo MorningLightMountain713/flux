@@ -182,8 +182,16 @@ async function ensureAppVolumeMounted(identifier) {
   return { mounted: true, alreadyMounted: false };
 }
 
-async function verifyAppVolumeMount(appName, isComponent, componentName) {
-  const identifier = isComponent ? `${componentName}_${appName}` : appName;
+/**
+ * Verify an app's data volume is mounted at the path its identifier resolves to.
+ * Takes the DEPLOYED identifier rather than the parts to rebuild one from: a
+ * named replica's identifier carries its replica segment, and reassembling
+ * `component_app` would check a path that either belongs to nothing or belongs
+ * to a co-located sibling.
+ * @param {string} identifier deployed component identifier, or a bare app name
+ * @returns {Promise<boolean>} true when mounted; throws otherwise
+ */
+async function verifyAppVolumeMount(identifier) {
   const appId = dockerService.getAppIdentifier(identifier);
   const mountPath = `${appsFolder}${appId}`;
 

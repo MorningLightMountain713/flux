@@ -66,7 +66,7 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
     }
     let volumeMounted = false;
     try {
-      volumeMounted = await verifyAppVolumeMount(mainAppName, true, deployComp.name);
+      volumeMounted = await verifyAppVolumeMount(deployComp.identifier);
     } catch {
       // volume not mounted
     }
