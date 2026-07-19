@@ -5,7 +5,6 @@ const syncthingMonitorHelpers = require('./syncthingMonitorHelpers');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const shutdownPlan = require('../appLifecycle/shutdownPlan');
-const { replicaFromIdentifier } = require('../utils/componentIdentifier');
 const { verifyAppVolumeMount } = require('../utils/volumeService');
 
 
@@ -32,30 +31,39 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
     throw new Error(`App ${mainAppName} not found in local database`);
   }
 
-  const isComponent = componentIdentifier.includes('_');
-  const componentName = isComponent ? componentIdentifier.split('_')[0] : null;
+  // Every identity installed here. The deployment layer minted these
+  // identifiers, so it is also the authority on which one an identifier names:
+  // an exact match, never a string parse. That keeps this module off the sync
+  // spec-backend bridge, which only resolves once something else has warmed it
+  // — a dependency this entry point (health monitor, network heal) has no way
+  // to guarantee, since it is not on the reconciler's boot path.
+  const deployments = await deploymentProvider.installedDeployments(instantiated);
+  let matched = null;
+  for (const deployment of deployments) {
+    const component = deployment.componentForIdentifier(componentIdentifier);
+    if (component) {
+      matched = { deployment, component };
+      break;
+    }
+  }
+
   let components;
   let requiresEncryption;
-  if (isComponent) {
-    // The identifier carries its identity: a qualified name recreates exactly
-    // that replica's container (its own ports/env), an unqualified one the
-    // loose view.
-    const deployment = await deploymentProvider.buildDeployment(instantiated, { replica: replicaFromIdentifier(componentIdentifier) });
-    // Recompute the app-wide feature gate so a recreated container keeps its budget
-    // labels (identity labels are always stamped) — never silently downgraded.
-    requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(deployment);
-    components = [[componentName, deployment.getComponent(componentName)]];
-  } else {
-    // A bare app name recreates every local identity's containers.
-    const deployments = await deploymentProvider.buildDeployments(instantiated);
+  if (matched) {
+    // A qualified identifier recreates exactly that replica's container, with
+    // its own ports and env. Recompute the app-wide feature gate so a recreated
+    // container keeps its budget labels — never silently downgraded.
+    requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(matched.deployment);
+    components = [[matched.component.name, matched.component]];
+  } else if (componentIdentifier === mainAppName) {
+    // A bare app name recreates every installed identity's containers.
     requiresEncryption = deployments.length > 0 && shutdownPlan.appRequiresDaemonShutdown(deployments[0]);
     components = deployments.flatMap((deployment) => deployment.componentEntries());
+  } else {
+    throw new Error(`Component ${componentIdentifier} not found in app ${mainAppName}`);
   }
 
   for (const [, deployComp] of components) {
-    if (!deployComp) {
-      throw new Error(`Component ${componentName} not found in app ${mainAppName}`);
-    }
     let volumeMounted = false;
     try {
       volumeMounted = await verifyAppVolumeMount(deployComp.identifier);
