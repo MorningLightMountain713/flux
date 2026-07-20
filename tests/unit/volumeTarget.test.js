@@ -65,7 +65,7 @@ describe('volumeTarget: which volume a request addresses', () => {
       listStub.resolves([loose]);
       const target = await resolveVolumeTarget(req({ appname: 'myapp', component: 'web' }));
       expect(target).to.deep.equal({
-        appname: 'myapp', component: 'web', replica: null, mount: loose.mount,
+        appname: 'myapp', component: 'web', replica: null, mount: loose.mount, volume: loose,
       });
     });
 

@@ -958,6 +958,8 @@ describe('appOperations tests', () => {
     // eslint-disable-next-line global-require
     const IOUtils = require('../../ZelBack/src/services/IOUtils');
     // eslint-disable-next-line global-require
+    const volumeService = require('../../ZelBack/src/services/utils/volumeService');
+    // eslint-disable-next-line global-require
     const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
 
     const makeRes = () => ({ write: sinon.stub(), end: sinon.stub() });
@@ -979,7 +981,7 @@ describe('appOperations tests', () => {
         componentEntries: () => [['web', { identifier: 'web_bkapp' }]],
       });
       sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves([{ mount: '/vol' }]);
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
       sinon.stub(IOUtils, 'createTarGz').resolves({ status: false, error: 'No space left on device' });
@@ -1004,7 +1006,7 @@ describe('appOperations tests', () => {
         componentEntries: () => [['comp1', { identifier: 'comp1_bkapp' }]],
       });
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves([{ mount: '/vol' }]);
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
       sinon.stub(IOUtils, 'createTarGz').resolves({ status: false, error: 'No space left on device' });
@@ -1035,6 +1037,71 @@ describe('appOperations tests', () => {
       expect(result).to.be.false;
       expect(drive.called, 'an error before owning the operation must not touch a foreign hold').to.be.false;
       expect(operationRegistry.isHeld('bkapp'), 'the foreign lease must survive').to.be.true;
+    });
+
+    // A co-located node holds one volume per replica. These used to take [0] of
+    // the matching mounts, so a backup archived an arbitrary sibling.
+    describe('co-located identities', () => {
+      const coLocated = [
+        { replica: 's1', mount: '/vol/s1' },
+        { replica: 's2', mount: '/vol/s2' },
+      ];
+
+      function setupBackup(volumes) {
+        sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+        sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({
+          componentEntries: () => [['web', { identifier: 'web_bkapp', hasSyncthing: () => false }]],
+        });
+        sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'bkapp' });
+        sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+        sinon.stub(volumeService, 'listComponentVolumeMounts').resolves(volumes);
+        sinon.stub(IOUtils, 'checkFileExists').resolves(false);
+        sinon.stub(IOUtils, 'removeFile').resolves();
+        return sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+      }
+
+      it('archives every identity when the task names no replica', async () => {
+        const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+        const createTarGz = setupBackup(coLocated);
+
+        const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
+        const pending = appOperations.appendBackupTask(req, makeRes());
+        await clock.tickAsync(120000);
+        await pending;
+        clock.restore();
+
+        expect(createTarGz.callCount, 'one archive per replica').to.equal(2);
+        expect(createTarGz.getCall(0).args[0]).to.equal('/vol/s1/appdata');
+        expect(createTarGz.getCall(1).args[0]).to.equal('/vol/s2/appdata');
+      });
+
+      it('archives exactly the replica the task names', async () => {
+        const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+        const createTarGz = setupBackup(coLocated);
+
+        const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true, replica: 's2' }] } };
+        const pending = appOperations.appendBackupTask(req, makeRes());
+        await clock.tickAsync(120000);
+        await pending;
+        clock.restore();
+
+        expect(createTarGz.callCount).to.equal(1);
+        expect(createTarGz.getCall(0).args[0], 'the sibling must be untouched').to.equal('/vol/s2/appdata');
+      });
+
+      it('fails rather than archive a sibling when the named replica is absent', async () => {
+        const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+        const createTarGz = setupBackup(coLocated);
+
+        const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true, replica: 's9' }] } };
+        const pending = appOperations.appendBackupTask(req, makeRes());
+        await clock.tickAsync(120000);
+        const result = await pending;
+        clock.restore();
+
+        expect(result).to.be.false;
+        expect(createTarGz.called, 'no archive may be written for an identity that is not here').to.be.false;
+      });
     });
   });
 

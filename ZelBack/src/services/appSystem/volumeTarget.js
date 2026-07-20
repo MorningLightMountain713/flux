@@ -30,7 +30,9 @@ const volumeService = require('../utils/volumeService');
 /**
  * @param {object} req - express request
  * @param {{requireComponent?: boolean}} [opts]
- * @returns {Promise<{appname: string, component: string, replica: string|null, mount: string}>}
+ * @returns {Promise<{appname: string, component: string, replica: string|null,
+ *   mount: string, volume: object}>} `volume` is the resolved row, so a caller
+ *   reporting usage does not repeat the lookup to get its byte counts.
  */
 async function resolveVolumeTarget(req, { requireComponent = true } = {}) {
   const appname = req.params.appname || req.query.appname || '';
@@ -51,7 +53,7 @@ async function resolveVolumeTarget(req, { requireComponent = true } = {}) {
       throw new Error(`Application volume not found for replica ${replica} (present: ${describeReplicas(volumes)})`);
     }
     return {
-      appname, component, replica, mount: match.mount,
+      appname, component, replica, mount: match.mount, volume: match,
     };
   }
 
@@ -60,7 +62,11 @@ async function resolveVolumeTarget(req, { requireComponent = true } = {}) {
   }
 
   return {
-    appname, component, replica: volumes[0].replica, mount: volumes[0].mount,
+    appname,
+    component,
+    replica: volumes[0].replica,
+    mount: volumes[0].mount,
+    volume: volumes[0],
   };
 }
 
