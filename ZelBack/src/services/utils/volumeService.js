@@ -5,7 +5,88 @@ const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const mountParser = require('./mountParser');
 const log = require('../../lib/log');
+const { getSpecBackend } = require('./specLibs');
 const { appsFolder, appVolumesPath, legacyAppVolumesPath } = require('./appConstants');
+
+/**
+ * Every mounted app volume on this node belonging to one component, tagged with
+ * the identity that owns it.
+ *
+ * A co-located app mounts one volume per replica, so (app, component) stopped
+ * naming a single thing — the replica rides on each row instead of being lost.
+ *
+ * Each mount is identified by DECODING its identifier through flux-spec's own
+ * decoders, never by matching a rebuilt `flux<component>_<app>` pattern:
+ * reassembling that rule here is what dropped the replica segment and made a
+ * co-located pair look like one volume. The decoders are reached through the
+ * async backend, not the sync bridge — this is a request path with no reason to
+ * assume someone else has already warmed the loader.
+ *
+ * @param {string} appName
+ * @param {string} componentName - the component, or the app name for the
+ *   v1-3 flat single-component form
+ * @returns {Promise<Array<{replica: string|null, identifier: string, mount: string,
+ *   filesystem: string, sizeBytes: number, usedBytes: number,
+ *   availableBytes: number, capacity: number}>>}
+ */
+async function listComponentVolumeMounts(appName, componentName) {
+  const { DeploymentSpec } = await getSpecBackend();
+  const filesystems = await deviceHelper.listMountedFilesystems();
+
+  return filesystems.flatMap((entry) => {
+    const base = path.basename(entry.target);
+    if (!base.startsWith('flux')) return [];
+    const identifier = base.slice('flux'.length);
+
+    // The mount table carries every filesystem on the box; anything that does
+    // not decode as an app identifier simply is not one of ours.
+    let decoded;
+    try {
+      decoded = {
+        app: DeploymentSpec.appNameFromIdentifier(identifier),
+        component: DeploymentSpec.componentNameFromIdentifier(identifier),
+        replica: DeploymentSpec.replicaFromIdentifier(identifier),
+      };
+    } catch (error) {
+      return [];
+    }
+
+    if (decoded.app !== appName) return [];
+    if (decoded.component !== componentName) return [];
+
+    return [{
+      replica: decoded.replica,
+      identifier,
+      mount: entry.target,
+      filesystem: entry.source,
+      sizeBytes: entry.sizeBytes,
+      usedBytes: entry.usedBytes,
+      availableBytes: entry.availableBytes,
+      capacity: entry.usePercent / 100,
+    }];
+  });
+}
+
+/**
+ * The one mounted volume belonging to a single identity, or null.
+ *
+ * The replica is required and nullable (null for loose placement) rather than
+ * optional: every caller addresses real data, and silently picking a sibling is
+ * the failure this exists to prevent — a restore into the wrong replica
+ * overwrites live data.
+ *
+ * @param {string} appName
+ * @param {string} componentName
+ * @param {string|null} replica
+ * @returns {Promise<object|null>}
+ */
+async function volumeMountForIdentity(appName, componentName, replica) {
+  if (replica === undefined) {
+    throw new Error(`volumeMountForIdentity for ${componentName} of ${appName} requires an explicit replica (null for loose placement)`);
+  }
+  const mounts = await listComponentVolumeMounts(appName, componentName);
+  return mounts.find((mount) => mount.replica === (replica ?? null)) || null;
+}
 
 /**
  * Whether a path currently has a filesystem mounted on it. Reads
@@ -353,4 +434,6 @@ module.exports = {
   getVolumeFilePath,
   getComponentAppIdsFromVolumeFiles,
   ensureAppVolumeMounted,
+  listComponentVolumeMounts,
+  volumeMountForIdentity,
 };
