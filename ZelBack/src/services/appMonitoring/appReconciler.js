@@ -5,7 +5,6 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const dockerOperations = require('../appManagement/dockerOperations');
 const globalState = require('../utils/globalState');
-const { appNameFromIdentifier, replicaFromIdentifier } = require('../utils/componentIdentifier');
 const operationRegistry = require('../utils/operationRegistry');
 const specLibs = require('../utils/specLibs');
 const appInspector = require('../appManagement/appInspector');
@@ -29,6 +28,22 @@ const reconcilerQueue = require('./reconcilerQueue');
 // that only needs to enqueue depends on reconcilerQueue directly and never pulls this
 // engine's heavy dependency tree (the import-hub that made every producer a cycle risk).
 const { enqueue, scheduleRetry, canonical } = reconcilerQueue;
+
+// Identifier -> name decoding, from flux-spec's own rule. This used to come
+// through a sync bridge (utils/componentIdentifier -> getSpecBackendSync), which
+// throws unless something has already warmed the loader — the free-riding that
+// left containerHealthMonitor failing 12 of its 16 tests standalone. The single
+// caller that justified a sync path, the lease guard, is reachable only from
+// async callers, so the bridge is gone and this awaits like everything else.
+async function appNameFromIdentifier(identifier) {
+  const { DeploymentSpec } = await specLibs.getSpecBackend();
+  return DeploymentSpec.appNameFromIdentifier(identifier);
+}
+
+async function replicaFromIdentifier(identifier) {
+  const { DeploymentSpec } = await specLibs.getSpecBackend();
+  return DeploymentSpec.replicaFromIdentifier(identifier);
+}
 
 // The single, level-based actuator for app containers. Every trigger (docker
 // container events via containerEventBridge, stream reconnect, hourly tick, boot,
@@ -291,7 +306,7 @@ function policyAllowsRun(policy, exitCode) {
  * the reconciler never reads raw spec documents.
  */
 async function getLocalComponentSpec(identifier) {
-  const mainAppName = appNameFromIdentifier(identifier);
+  const mainAppName = await appNameFromIdentifier(identifier);
   let inst;
   try {
     inst = await appsRepository.getInstalledApp(mainAppName);
@@ -306,7 +321,7 @@ async function getLocalComponentSpec(identifier) {
 
   let deployments;
   try {
-    const replica = replicaFromIdentifier(identifier);
+    const replica = await replicaFromIdentifier(identifier);
     if (replica != null) {
       // A qualified identifier names its exact identity - build that view.
       deployments = [await deploymentProvider.buildDeployment(inst, { replica })];
@@ -506,12 +521,12 @@ const CONSTRUCTION_LEASE_TYPES = new Set(['install', 'remove', 'softRedeploy', '
  * lease is NOT blocking — those drive run-state through operationDesired and the
  * reconciler keeps actuating. Per-app, NOT a node-wide freeze.
  */
-function hasBlockingLease(identifier) {
+async function hasBlockingLease(identifier) {
   // the component's own stop/restart/kill window, keyed on the prefixed docker
   // name exactly as dockerService acquires the 'stopping' lease
   if (operationRegistry.isHeld(dockerService.getAppIdentifier(identifier))) return true;
   // a container-construction operation on the parent app, keyed on the bare app name
-  const appLease = operationRegistry.get(appNameFromIdentifier(identifier));
+  const appLease = operationRegistry.get(await appNameFromIdentifier(identifier));
   return !!appLease && CONSTRUCTION_LEASE_TYPES.has(appLease.type);
 }
 
@@ -607,7 +622,7 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
  * behavior previously in containerHealthMonitor.monitorAndRecoverApps.
  */
 async function recreateMissing(identifier) {
-  const mainAppName = appNameFromIdentifier(identifier);
+  const mainAppName = await appNameFromIdentifier(identifier);
 
   await appTamperingDetectionService.recordEvent(mainAppName, 'container_vanished', `Container ${identifier} missing, not found in Docker`);
   try {
@@ -713,7 +728,7 @@ async function recreateMissing(identifier) {
  * here: only seeing the container back proves the heal worked.
  */
 async function recreateForNetworkHeal(identifier) {
-  const mainAppName = appNameFromIdentifier(identifier);
+  const mainAppName = await appNameFromIdentifier(identifier);
   try {
     // allowVolumeCreation: false — creating a volume REFORMATS it (fallocate +
     // mke2fs). We removed a live container whose data was intact, so a recreate
@@ -891,7 +906,7 @@ async function healDetachedNetwork(identifier, mainAppName) {
   // container in the meantime, and force-removing it from under them is exactly
   // what the lease check exists to prevent. Re-check at actuation time (the same
   // re-read-before-acting discipline the controller verdict and recreateMissing use).
-  if (hasBlockingLease(identifier)) {
+  if (await hasBlockingLease(identifier)) {
     log.info(`appReconciler - ${identifier} was taken over by another operation during the heal confirmation; aborting the recreate`);
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
@@ -948,7 +963,7 @@ async function healDetachedNetwork(identifier, mainAppName) {
 
 async function reconcile(rawIdentifier) {
   const identifier = canonical(rawIdentifier);
-  if (hasBlockingLease(identifier)) {
+  if (await hasBlockingLease(identifier)) {
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
   }
@@ -971,7 +986,7 @@ async function reconcile(rawIdentifier) {
     // is fully gone. Drive the (idempotent) teardown to completion here, retrying with
     // backoff on a partial pass. This makes removal a converged desired state rather than
     // a one-shot job re-driven only at the next boot.
-    const removal = await appUninstaller.driveOwedTeardown(appNameFromIdentifier(identifier));
+    const removal = await appUninstaller.driveOwedTeardown(await appNameFromIdentifier(identifier));
     if (removal.status === 'removed') {
       silentHoldSince.delete(identifier);
       log.info(`appReconciler - ${identifier} teardown converged; component is gone`);
@@ -1713,9 +1728,9 @@ async function start() {
   if (started) return;
   started = true;
   await globalState.waitForBootContainerStateSettled();
-  // Warm the flux-spec-backend cache so the sync identifier->name helpers
-  // (componentIdentifier -> specLibs.getSpecBackendSync) resolve before any
-  // reconcile runs — hasOperationLease cannot await an ESM import.
+  // Load flux-spec-backend once at boot rather than on the first reconcile.
+  // This used to be load-bearing — the sync identifier helpers threw unless it
+  // had already run — but every caller awaits now, so it only warms the cache.
   await specLibs.getSpecBackend();
   // Provision + swapon the per-app swap pool before any app starts (no-op without
   // the new-mechanism host config). Best-effort: a failure must not wedge the boot
