@@ -44,8 +44,8 @@ async function dockerTerminalHandler(socket) {
       session.stream = null;
     }
     if (session.opened) {
-      const { zelidauth, appName, component } = session.opened;
-      trackTerminalSession(zelidauth, appName, 'close', clientIp, component);
+      const { zelidauth, terminalTarget } = session.opened;
+      trackTerminalSession(zelidauth, terminalTarget, 'close', clientIp);
       session.opened = null;
     }
   };
@@ -129,9 +129,11 @@ async function dockerTerminalHandler(socket) {
     };
 
     const mainAppName = nameOrId.split('_')[1] || nameOrId;
-    const parts = nameOrId.split('_');
-    const component = parts.length > 1 ? parts[0].replace(/^flux/, '') || null : null;
-    const analyticsAppName = parts.length > 1 ? mainAppName : mainAppName.replace(/^flux/, '');
+    // The container name IS the identity, replica segment included. Taking it
+    // apart into component and app so analytics could rebuild
+    // `${component}_${appName}` dropped that segment, reporting two co-located
+    // siblings' sessions under one target.
+    const terminalTarget = nameOrId.replace(/^flux/, '');
 
     try {
       // Authorise BEFORE touching Docker: the lookup below is a remote-controlled
@@ -173,8 +175,8 @@ async function dockerTerminalHandler(socket) {
         return;
       }
 
-      trackTerminalSession(zelidauth, analyticsAppName, 'open', clientIp, component);
-      session.opened = { zelidauth, appName: analyticsAppName, component };
+      trackTerminalSession(zelidauth, terminalTarget, 'open', clientIp);
+      session.opened = { zelidauth, terminalTarget };
 
       const cmd = {
         AttachStdout: true,
