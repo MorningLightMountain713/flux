@@ -7,7 +7,10 @@ const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
 const fs = require('fs').promises;
 const log = require('../../lib/log');
-const { sanitizePath, verifyRealPath, verifyRealPathOfExistingPath } = require('../utils/pathSecurity');
+const { formidable } = require('formidable');
+const {
+  sanitizePath, validateFilename, verifyRealPath, verifyRealPathOfExistingPath,
+} = require('../utils/pathSecurity');
 const { resolveVolumeTarget } = require('./volumeTarget');
 
 /**
@@ -323,10 +326,134 @@ async function downloadAppsFile(req, res) {
   }
 }
 
+/**
+ * To upload files into an app's volume. Only accessible by app owners and above.
+ *
+ * Lived in IOUtils until the volume work: a request handler in a utilities
+ * module, which is what forced a dependency cycle when volume resolution moved
+ * to where it belongs. It sits with the other file handlers now.
+ *
+ * @param {object} req Request.
+ * @param {object} res Response.
+ */
+async function fileUpload(req, res) {
+  try {
+    let { appname } = req.params;
+    appname = appname || req.query.appname || '';
+    if (!appname) {
+      throw new Error('appname parameter is mandatory.');
+    }
+    const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, appname);
+    if (!authorized) {
+      throw new Error('Unauthorized. Access denied.');
+    }
+    let { filename } = req.params;
+    filename = filename || req.query.filename || '';
+    let { folder } = req.params;
+    folder = folder || req.query.folder || '';
+    let { type } = req.params;
+    type = type || req.query.type || '';
+    if (!type) {
+      throw new Error('type parameter is mandatory');
+    }
+
+    const { mount } = await resolveVolumeTarget(req);
+    const filepath = type === 'backup'
+      ? path.join(mount, 'backup', 'upload')
+      // Sanitize folder path to prevent directory traversal attacks
+      : sanitizePath(folder, mount);
+    // Verify resolved path stays within the allowed base directory
+    await verifyRealPathOfExistingPath(filepath, mount);
+
+    const options = {
+      multiples: true,
+      uploadDir: `${filepath}`,
+      maxFileSize: 10 * 1024 * 1024 * 1024, // 10gb
+      hashAlgorithm: false,
+      keepExtensions: true,
+      // eslint-disable-next-line no-unused-vars
+      filename: (name, ext, part, form) => {
+        const { originalFilename } = part;
+        return originalFilename;
+      },
+    };
+    await fs.mkdir(filepath, { recursive: true });
+    // argv, not a shell string: filepath is derived from request input, and
+    // this module's other handlers already run privileged commands this way.
+    const chmodResult = await serviceHelper.runCommand('chmod', { runAsRoot: true, params: ['777', filepath] });
+    if (chmodResult.error) {
+      throw chmodResult.error;
+    }
+    const form = formidable(options);
+
+    form
+      // eslint-disable-next-line no-unused-vars
+      .on('fileBegin', (name, file) => {
+        // Validate filename to prevent path traversal via filename parameter
+        const safeFilename = filename ? validateFilename(filename) : validateFilename(name);
+        // eslint-disable-next-line no-param-reassign
+        file.filepath = `${filepath}/${safeFilename}`;
+      })
+      .on('progress', (bytesReceived, bytesExpected) => {
+        try {
+          res.write(serviceHelper.ensureString([bytesReceived, bytesExpected]));
+          if (res.flush) res.flush();
+        } catch (error) {
+          log.error(error);
+        }
+      })
+      // eslint-disable-next-line no-unused-vars
+      .on('file', (name, file) => {
+        try {
+          res.write(serviceHelper.ensureString(name));
+          if (res.flush) res.flush();
+        } catch (error) {
+          log.error(error);
+        }
+      })
+      .on('aborted', () => {
+        log.error(`fileUpload: request aborted by the user for ${appname}`);
+      })
+      .on('error', (error) => {
+        log.error(error);
+        const errorResponse = messageHelper.createErrorMessage(
+          error.message || error,
+          error.name,
+          error.code,
+        );
+        try {
+          res.write(serviceHelper.ensureString(errorResponse));
+          if (res.flush) res.flush();
+        } catch (e) {
+          log.error(e);
+        }
+      })
+      .on('end', () => {
+        try {
+          res.end();
+        } catch (error) {
+          log.error(error);
+        }
+      });
+
+    form.parse(req);
+  } catch (error) {
+    log.error(error);
+    if (res) {
+      try {
+        res.connection.destroy();
+      } catch (e) {
+        log.error(e);
+      }
+    }
+  }
+}
+
 module.exports = {
   createAppsFolder,
   renameAppsObject,
   removeAppsObject,
   downloadAppsFolder,
   downloadAppsFile,
+  fileUpload,
 };

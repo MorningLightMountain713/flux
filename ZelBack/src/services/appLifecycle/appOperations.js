@@ -38,7 +38,7 @@ const {
 const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
 const https = require('https');
-const { getSpec, assertUpdateInvariants } = require('../utils/specLibs');
+const { getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const appQueryService = require('../appQuery/appQueryService');
@@ -48,6 +48,7 @@ const appReconciler = require('../appMonitoring/appReconciler');
 const syncthingMonitorHelpers = require('../appMonitoring/syncthingMonitorHelpers');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appVolumeService = require('./appVolumeService');
+const volumeService = require('../utils/volumeService');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
 const pendingTeardownStore = require('./pendingTeardownStore');
@@ -771,6 +772,39 @@ async function promoteApplicationToPrimary(appname, appId) {
  * @param {object} req - Request object
  * @param {object} res - Response object
  */
+/**
+ * The volumes one backup/restore task item addresses.
+ *
+ * A co-located node holds one volume per replica, so a task naming only a
+ * component no longer names one thing. The task may carry `replica` to mean
+ * exactly that identity; omitting it means every identity of the component on
+ * this node, which is the same fan-out uninstall and redeploy already do — and
+ * for a loose app, or a replica alone on its node, that set is one, so nothing
+ * changes for them.
+ *
+ * Previously each of these sites took [0] of the matching mounts: a backup
+ * archived an arbitrary sibling, and a restore deleted and overwrote one.
+ *
+ * @param {string} appname
+ * @param {string} componentName
+ * @param {string|null|undefined} replica - a replica name, or null/undefined
+ *   for every identity
+ * @returns {Promise<object[]>} volume rows, each tagged with its replica
+ */
+async function taskVolumes(appname, componentName, replica) {
+  const mounts = await volumeService.listComponentVolumeMounts(appname, componentName);
+  if (!mounts.length) {
+    throw new Error(`Application volume not found for ${componentName} of ${appname}`);
+  }
+  if (replica === undefined || replica === null) return mounts;
+  const match = mounts.find((mount) => mount.replica === replica);
+  if (!match) {
+    const present = mounts.map((mount) => mount.replica ?? 'unnamed').join(', ');
+    throw new Error(`Application volume not found for replica ${replica} of ${componentName} (present: ${present})`);
+  }
+  return [match];
+}
+
 async function appendBackupTask(req, res) {
   let appname;
   let backup;
@@ -828,26 +862,33 @@ async function appendBackupTask(req, res) {
       // eslint-disable-next-line no-restricted-syntax
       for (const component of backup) {
         if (component.backup) {
+          const label = component.component.toLowerCase();
           // eslint-disable-next-line no-await-in-loop
-          const componentPath = await IOUtils.getVolumeInfo(appname, component.component, 'B', 0, 'mount');
-          const targetPath = `${componentPath[0].mount}/appdata`;
-          const tarGzPath = `${componentPath[0].mount}/backup/local/backup_${component.component.toLowerCase()}.tar.gz`;
-          // eslint-disable-next-line no-await-in-loop
-          const existStatus = await IOUtils.checkFileExists(`${componentPath[0].mount}/backup/local/backup_${component.component.toLowerCase()}.tar.gz`);
-          if (existStatus === true) {
+          const volumes = await taskVolumes(appname, component.component, component.replica);
+          // eslint-disable-next-line no-restricted-syntax
+          for (const volume of volumes) {
+            // The archive keeps its component name: the directory it lives in
+            // is already this identity's volume, so siblings cannot collide.
+            const targetPath = `${volume.mount}/appdata`;
+            const tarGzPath = `${volume.mount}/backup/local/backup_${label}.tar.gz`;
+            const forWhich = volume.replica ? `${label} (replica ${volume.replica})` : label;
             // eslint-disable-next-line no-await-in-loop
-            await sendChunk(res, `Removing exists backup archive for ${component.component.toLowerCase()}...\n`);
+            const existStatus = await IOUtils.checkFileExists(tarGzPath);
+            if (existStatus === true) {
+              // eslint-disable-next-line no-await-in-loop
+              await sendChunk(res, `Removing exists backup archive for ${forWhich}...\n`);
+              // eslint-disable-next-line no-await-in-loop
+              await IOUtils.removeFile(tarGzPath);
+            }
             // eslint-disable-next-line no-await-in-loop
-            await IOUtils.removeFile(`${componentPath[0].mount}/backup/local/backup_${component.component.toLowerCase()}.tar.gz`);
-          }
-          // eslint-disable-next-line no-await-in-loop
-          await sendChunk(res, `Creating backup archive for ${component.component.toLowerCase()}...\n`);
-          // eslint-disable-next-line no-await-in-loop
-          const tarStatus = await IOUtils.createTarGz(targetPath, tarGzPath);
-          if (tarStatus.status === false) {
+            await sendChunk(res, `Creating backup archive for ${forWhich}...\n`);
             // eslint-disable-next-line no-await-in-loop
-            await IOUtils.removeFile(`${componentPath[0].mount}/backup/local/backup_${component.component.toLowerCase()}.tar.gz`);
-            throw new Error(`Error: Failed to create backup archive for ${component.component.toLowerCase()}, ${tarStatus.error}`);
+            const tarStatus = await IOUtils.createTarGz(targetPath, tarGzPath);
+            if (tarStatus.status === false) {
+              // eslint-disable-next-line no-await-in-loop
+              await IOUtils.removeFile(tarGzPath);
+              throw new Error(`Error: Failed to create backup archive for ${forWhich}, ${tarStatus.error}`);
+            }
           }
         }
       }
@@ -957,14 +998,17 @@ async function appendRestoreTask(req, res) {
       for (const component of restore) {
         if (component.restore) {
           // eslint-disable-next-line no-await-in-loop
-          const componentVolumeInfo = await IOUtils.getVolumeInfo(appname, component.component, 'B', 0, 'mount');
-          const appDataPath = `${componentVolumeInfo[0].mount}/appdata`;
-          // eslint-disable-next-line no-await-in-loop
-          await sendChunk(res, `Removing ${component.component} component data...\n`);
-          // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(2 * 1000);
-          // eslint-disable-next-line no-await-in-loop
-          await IOUtils.removeDirectory(appDataPath, true);
+          const volumes = await taskVolumes(appname, component.component, component.replica);
+          // eslint-disable-next-line no-restricted-syntax
+          for (const volume of volumes) {
+            const forWhich = volume.replica ? `${component.component} (replica ${volume.replica})` : component.component;
+            // eslint-disable-next-line no-await-in-loop
+            await sendChunk(res, `Removing ${forWhich} component data...\n`);
+            // eslint-disable-next-line no-await-in-loop
+            await serviceHelper.delay(2 * 1000);
+            // eslint-disable-next-line no-await-in-loop
+            await IOUtils.removeDirectory(`${volume.mount}/appdata`, true);
+          }
         }
       }
 
@@ -973,15 +1017,19 @@ async function appendRestoreTask(req, res) {
         for (const restoreItem of componentItem) {
           if (restoreItem?.url !== '') {
             // eslint-disable-next-line no-await-in-loop
-            const componentPath = await IOUtils.getVolumeInfo(appname, restoreItem.component, 'B', 0, 'mount');
-            // eslint-disable-next-line no-await-in-loop
-            await IOUtils.removeDirectory(`${componentPath[0].mount}/backup/remote`, true);
-            // eslint-disable-next-line no-await-in-loop
-            await sendChunk(res, `Downloading ${restoreItem.url}...\n`);
-            // eslint-disable-next-line no-await-in-loop
-            const downloadStatus = await IOUtils.downloadFileFromUrl(restoreItem.url, `${componentPath[0].mount}/backup/remote`, restoreItem.component, true);
-            if (downloadStatus !== true) {
-              throw new Error(`Error: Failed to download ${restoreItem.url}...`);
+            const volumes = await taskVolumes(appname, restoreItem.component, restoreItem.replica);
+            // eslint-disable-next-line no-restricted-syntax
+            for (const volume of volumes) {
+              const remotePath = `${volume.mount}/backup/remote`;
+              // eslint-disable-next-line no-await-in-loop
+              await IOUtils.removeDirectory(remotePath, true);
+              // eslint-disable-next-line no-await-in-loop
+              await sendChunk(res, `Downloading ${restoreItem.url}...\n`);
+              // eslint-disable-next-line no-await-in-loop
+              const downloadStatus = await IOUtils.downloadFileFromUrl(restoreItem.url, remotePath, restoreItem.component, true);
+              if (downloadStatus !== true) {
+                throw new Error(`Error: Failed to download ${restoreItem.url}...`);
+              }
             }
           }
         }
@@ -990,36 +1038,51 @@ async function appendRestoreTask(req, res) {
       // eslint-disable-next-line no-restricted-syntax
       for (const component of restore) {
         if (component.restore) {
+          const label = component.component.toLowerCase();
           // eslint-disable-next-line no-await-in-loop
-          const componentPath = await IOUtils.getVolumeInfo(appname, component.component, 'B', 0, 'mount');
-          const targetPath = `${componentPath[0].mount}/appdata`;
-          const tarGzPath = `${componentPath[0].mount}/backup/${type}/backup_${component.component.toLowerCase()}.tar.gz`;
-          // eslint-disable-next-line no-await-in-loop
-          await sendChunk(res, `Unpacking backup archive for ${component.component.toLowerCase()}...\n`);
-          // eslint-disable-next-line no-await-in-loop
-          const tarStatus = await IOUtils.untarFile(targetPath, tarGzPath);
-          if (tarStatus.status === false) {
-            throw new Error(`Error: Failed to unpack archive file for ${component.component.toLowerCase()}, ${tarStatus.error}`);
-          } else {
+          const volumes = await taskVolumes(appname, component.component, component.replica);
+          // eslint-disable-next-line no-restricted-syntax
+          for (const volume of volumes) {
+            const targetPath = `${volume.mount}/appdata`;
+            const tarGzPath = `${volume.mount}/backup/${type}/backup_${label}.tar.gz`;
+            const forWhich = volume.replica ? `${label} (replica ${volume.replica})` : label;
             // eslint-disable-next-line no-await-in-loop
-            await sendChunk(res, `Removing backup file for ${component.component.toLowerCase()}...\n`);
+            await sendChunk(res, `Unpacking backup archive for ${forWhich}...\n`);
             // eslint-disable-next-line no-await-in-loop
-            await IOUtils.removeFile(tarGzPath);
-          }
-          const restoreComp = restoreDeployment?.componentEntries().find(([name]) => name === component.component)?.[1];
-          const syncthingAux = restoreComp?.hasSyncthing();
-          if (syncthingAux) {
-            // eslint-disable-next-line global-require
-            const identifier = `${component.component}_${appname}`;
-            const appId = dockerService.getAppIdentifier(identifier);
-            // eslint-disable-next-line global-require
-            const { receiveOnlySyncthingAppsCache } = require('../utils/appCaches');
-            const cache = {
-              restarted: true,
-              numberOfExecutionsRequired: 4,
-              numberOfExecutions: 10,
-            };
-            receiveOnlySyncthingAppsCache.set(appId, cache);
+            const tarStatus = await IOUtils.untarFile(targetPath, tarGzPath);
+            if (tarStatus.status === false) {
+              throw new Error(`Error: Failed to unpack archive file for ${forWhich}, ${tarStatus.error}`);
+            } else {
+              // eslint-disable-next-line no-await-in-loop
+              await sendChunk(res, `Removing backup file for ${forWhich}...\n`);
+              // eslint-disable-next-line no-await-in-loop
+              await IOUtils.removeFile(tarGzPath);
+            }
+            const restoreComp = restoreDeployment?.componentEntries().find(([name]) => name === component.component)?.[1];
+            const syncthingAux = restoreComp?.hasSyncthing();
+            if (syncthingAux) {
+              // Minted by the encoder with this identity's replica, never
+              // assembled by hand — that is what drops the replica segment and
+              // addresses a sibling. (Co-located replicas cannot use sync, so
+              // the replica is null here today; the encoder keeps it right if
+              // that ever changes.)
+              // eslint-disable-next-line no-await-in-loop
+              const { DeploymentSpec } = await getSpecBackend();
+              const identifier = DeploymentSpec.containerIdentifierFor(
+                component.component,
+                appname,
+                volume.replica,
+              );
+              const appId = dockerService.getAppIdentifier(identifier);
+              // eslint-disable-next-line global-require
+              const { receiveOnlySyncthingAppsCache } = require('../utils/appCaches');
+              const cache = {
+                restarted: true,
+                numberOfExecutionsRequired: 4,
+                numberOfExecutions: 10,
+              };
+              receiveOnlySyncthingAppsCache.set(appId, cache);
+            }
           }
         }
       }
