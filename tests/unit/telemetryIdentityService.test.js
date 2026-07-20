@@ -4,6 +4,7 @@ const proxyquire = require('proxyquire').noCallThru();
 
 describe('telemetryIdentityService tests', () => {
   let service;
+  let runCommandStub;
   let dockerServiceStub;
   let geolocationServiceStub;
   let sinkCacheStub;
@@ -35,13 +36,14 @@ describe('telemetryIdentityService tests', () => {
 
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
 
+    runCommandStub = sinon.stub().resolves({ error: null, stdout: '', stderr: '' });
     service = proxyquire('../../ZelBack/src/services/telemetryIdentityService', {
       'node:net': require('node:net'),
       'node:fs': require('node:fs'),
       'node:path': require('node:path'),
       '../lib/log': logStub,
       './dockerService': dockerServiceStub,
-      './serviceHelper': { runCommand: sinon.stub().resolves({ error: null, stdout: '', stderr: '' }) },
+      './serviceHelper': { runCommand: runCommandStub },
       './geolocationService': geolocationServiceStub,
       './telemetrySinkCache': sinkCacheStub,
       './telemetryConfigService': { chownGroup: sinon.stub().resolves(), ensureNode: sinon.stub().resolves() },
@@ -305,6 +307,44 @@ describe('telemetryIdentityService tests', () => {
       expect(msg.containers[0].container_id).to.equal('c1'.padEnd(64, '0'));
       expect(msg.containers[0].identity.app_name).to.equal('TelemApp');
       expect(msg.containers[0].identity.sink).to.deep.equal(datadogSink);
+    });
+
+    it('grants log access to every container it puts in the sync', async () => {
+      // The sync is an announce like any other. It used to enumerate and send
+      // without granting, so a container first seen here — daemon reconnect,
+      // boot reconcile, or a sink rotation resync — reached the daemon with an
+      // unreadable log. The daemon attached, got EACCES, and that container's
+      // logs never shipped again, silently.
+      const id = 'c1'.padEnd(64, '0');
+      dockerServiceStub.dockerListContainers.resolves([
+        { Id: id, Names: ['/fluxTelemApp'], Image: 'img:1' },
+      ]);
+      sinkCacheStub.seed('TelemApp', datadogSink);
+
+      await service.sendSync(fakeSocket());
+
+      const grantedFor = runCommandStub.getCalls()
+        .filter((c) => c.args[0] === 'setfacl')
+        .some((c) => JSON.stringify(c.args[1].params).includes(id));
+      expect(grantedFor, 'the sync must grant log access before announcing').to.equal(true);
+    });
+
+    it('omits a container whose log-access grant failed', async () => {
+      // Announcing a container the daemon cannot read is worse than omitting
+      // it: the daemon attaches, fails, and stays silent for that container's
+      // whole life. Better to ship nothing and say so.
+      dockerServiceStub.dockerListContainers.resolves([
+        { Id: 'c1'.padEnd(64, '0'), Names: ['/fluxTelemApp'], Image: 'img:1' },
+      ]);
+      sinkCacheStub.seed('TelemApp', datadogSink);
+      runCommandStub.resolves({ error: new Error('setfacl: Operation not permitted') });
+
+      const socket = fakeSocket();
+      await service.sendSync(socket);
+
+      const msg = JSON.parse(socket.written[0]);
+      expect(msg.containers, 'an ungrantable container must not be announced').to.have.length(0);
+      expect(logStub.error.calledWithMatch(/could not grant/), 'and it must be loud').to.equal(true);
     });
 
     it('emits an empty sync when no telemetry apps are running', async () => {
