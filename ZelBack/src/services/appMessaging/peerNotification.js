@@ -7,7 +7,6 @@ const messageStore = require('./messageStore');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
 const appsRepository = require('../appDatabase/appsRepository');
-const appQueryService = require('../appQuery/appQueryService');
 const dockerService = require('../dockerService');
 const appReconciler = require('../appMonitoring/appReconciler');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
@@ -212,7 +211,7 @@ async function checkAndNotifyPeersOfRunningApps() {
             name: appName,
             hash: application.hash || '',
             runningSince: runningOnMyNodeSince,
-            state: globalState.getAppLbState(appName) ?? 'active',
+            state: globalState.getAppShutdownPipelineState(appName) ?? 'active',
             ...(identity != null ? { replica: identity } : {}),
           });
         }

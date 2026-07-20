@@ -91,7 +91,7 @@ async function requestGracefulStop(identifier, reconcilerReason) {
         // a local graceful stop, rather than waiting out the whole budget.
         log.warn(`appShutdownCoordinator: ${appName} daemon stop ${res.outcome}; falling back to local`);
         localFallback.add(appName);
-        globalState.clearAppLbState(appName);
+        globalState.clearAppShutdownPipelineState(appName);
         appReconciler.enqueue(identifier);
         return;
       }
@@ -102,7 +102,7 @@ async function requestGracefulStop(identifier, reconcilerReason) {
       // to protect. Clear it and re-drive: an operator start/restart issued during
       // the drain already ran its (suppressed) reconcile, and without this the app
       // sits wedged 'stopping' for the remainder of the budget window.
-      globalState.clearAppLbState(appName);
+      globalState.clearAppShutdownPipelineState(appName);
       appReconciler.enqueue(identifier);
     })
     .catch((e) => {

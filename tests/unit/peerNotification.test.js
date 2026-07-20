@@ -101,7 +101,7 @@ describe('peerNotification tests', () => {
       },
       '../utils/globalState': {
         runningAppsCache: new Set(),
-        getAppLbState: (appName) => drainingAppsMap.get(appName) ?? null,
+        getAppShutdownPipelineState: (appName) => drainingAppsMap.get(appName) ?? null,
       },
       '../utils/fluxEventBus': {
         publish: sinon.stub(),
