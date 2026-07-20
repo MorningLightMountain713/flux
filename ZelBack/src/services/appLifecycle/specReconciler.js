@@ -154,42 +154,51 @@ async function convergeApp(installed, registrySpec, ctx) {
   }
   if (!registrySpec) return 'skipped';
 
-  if (registrySpec.placement.mode() === 'named') {
+  // The identities the spec assigns this node: the named replicas targeting it,
+  // or the single unqualified identity that loose placement always has.
+  const named = registrySpec.placement.mode() === 'named';
+  const assigned = named ? await deploymentProvider.resolveLocalReplicas(registrySpec) : [null];
+  if (named && assigned.length === 0) {
     // Named placement is declarative: the targeting maps name exactly which
     // nodes run a replica, so an installed copy on a node the current spec
     // does not name is removed — precisely the replica the owner deleted.
     // Checked regardless of hash equality, so it also heals a node whose
-    // identity drifted out of the maps. The count-based eviction below must
-    // not run for named mode: it sheds by instance rank, which during a
-    // scale-down or mode switch can be a still-targeted replica.
-    const assigned = await deploymentProvider.resolveLocalReplicas(registrySpec);
-    if (assigned.length === 0) {
-      log.warn(`REMOVAL REASON: Named placement does not target this node - ${installed.name}`);
-      await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
-      return 'removed';
+    // identity drifted out of the maps.
+    log.warn(`REMOVAL REASON: Named placement does not target this node - ${installed.name}`);
+    await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
+    return 'removed';
+  }
+
+  // Per-identity diff: shed exactly the identities this node holds but the spec
+  // no longer assigns it - a de-targeted replica, a pre-qualification
+  // (unlabeled) install that must requalify, or a qualified replica left behind
+  // when the owner switched the app back to loose - while its siblings run on
+  // untouched. Both modes are diffed: loose placement assigns the unqualified
+  // identity and only that, so every qualified container it still holds is
+  // stale by the same rule. Missing assigned identities install via the
+  // spawner, not here.
+  const present = await dockerService.getAppContainerObjects(installed.name).catch(() => []);
+  const presentIdentities = [...new Set(present.map((c) => (c.Labels && c.Labels['runonflux.replica']) || null))];
+  const stale = presentIdentities.filter((identity) => !assigned.includes(identity));
+  if (present.length > 0 && stale.length > 0) {
+    let removedOne = false;
+    // eslint-disable-next-line no-restricted-syntax
+    for (const identity of stale) {
+      let reason;
+      if (identity === null) reason = 'Pre-qualification install requalifying';
+      else if (named) reason = `Named placement no longer assigns replica ${identity} to this node`;
+      else reason = `Placement is loose - replica ${identity} must de-qualify`;
+      log.warn(`REMOVAL REASON: ${reason} - ${installed.name}`);
+      // eslint-disable-next-line no-await-in-loop
+      const result = await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true, replica: identity });
+      removedOne = removedOne || result.status === appUninstaller.UninstallStatus.REMOVED;
     }
-    // Per-identity diff: shed exactly the identities this node holds but the
-    // spec no longer assigns it - a de-targeted replica, or a pre-qualification
-    // (unlabeled) install that must requalify - while its siblings run on
-    // untouched. Missing assigned replicas install via the spawner's
-    // named-pin wake, not here.
-    const present = await dockerService.getAppContainerObjects(installed.name).catch(() => []);
-    const presentIdentities = [...new Set(present.map((c) => (c.Labels && c.Labels['runonflux.replica']) || null))];
-    const stale = presentIdentities.filter((identity) => (identity === null ? true : !assigned.includes(identity)));
-    if (present.length > 0 && stale.length > 0) {
-      let removedOne = false;
-      // eslint-disable-next-line no-restricted-syntax
-      for (const identity of stale) {
-        log.warn(`REMOVAL REASON: ${identity === null
-          ? `Pre-qualification install requalifying - ${installed.name}`
-          : `Named placement no longer assigns replica ${identity} to this node - ${installed.name}`}`);
-        // eslint-disable-next-line no-await-in-loop
-        const result = await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true, replica: identity });
-        removedOne = removedOne || result.status === appUninstaller.UninstallStatus.REMOVED;
-      }
-      if (removedOne) return 'removed';
-    }
-  } else if (ctx.localSocketAddr) {
+    if (removedOne) return 'removed';
+  }
+
+  // The count-based eviction is loose-only: it sheds by instance rank, which
+  // during a named scale-down or mode switch can be a still-targeted replica.
+  if (!named && ctx.localSocketAddr) {
     // Loose placement sheds surplus by instance rank (oldest instances keep
     // their seats). Every surplus node self-identifies in one pass, so an
     // election overshoot trims in a single cycle. Graceful: trimming surplus
