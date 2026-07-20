@@ -25,7 +25,7 @@ function load({ isArcane = true } = {}) {
   };
   const globalStateStub = {
     isArcane: sinon.stub().returns(isArcane),
-    setAppLbState: sinon.stub(),
+    setAppShutdownPipelineState: sinon.stub(),
   };
   const client = proxyquire('../../ZelBack/src/services/utils/fluxShutdowndClient', {
     'node:net': netStub,
@@ -98,15 +98,15 @@ describe('fluxShutdowndClient', () => {
       const res = await client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
       expect(res).to.deep.equal({ outcome: 'not_arcane' });
       expect(netStub.createConnection.called).to.equal(false);
-      expect(globalStateStub.setAppLbState.called).to.equal(false);
+      expect(globalStateStub.setAppShutdownPipelineState.called).to.equal(false);
     });
 
     it('seeds the stopping LB gate synchronously, before the first await', () => {
       const { client, globalStateStub } = load();
       const deadline = futureDeadline();
       client.beginAppStop('1own', 'app', 'ttl-expired', { deadline }); // not awaited
-      expect(globalStateStub.setAppLbState.calledOnce).to.equal(true);
-      const [name, state, expiresAt] = globalStateStub.setAppLbState.firstCall.args;
+      expect(globalStateStub.setAppShutdownPipelineState.calledOnce).to.equal(true);
+      const [name, state, expiresAt] = globalStateStub.setAppShutdownPipelineState.firstCall.args;
       expect(name).to.equal('app');
       expect(state).to.equal('stopping');
       expect(expiresAt).to.be.greaterThan(deadline * 1000); // deadline ms + slack
