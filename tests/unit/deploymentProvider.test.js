@@ -6,6 +6,7 @@ const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
+const dockerService = require('../../ZelBack/src/services/dockerService');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 
 chai.use(chaiAsPromised);
@@ -80,6 +81,69 @@ describe('deploymentProvider tests', () => {
       expect(await deploymentProvider.resolveLocalReplicas(loose)).to.equal(null);
       const named = await specWithPlacement({ targetIps: { '44.55.66.77': ['s1', 's2'] } });
       expect(await deploymentProvider.resolveLocalReplicas(named)).to.deep.equal(['s1', 's2']);
+    });
+  });
+
+  describe('localIdentities (what a teardown owes)', () => {
+    let dockerStub;
+
+    beforeEach(() => {
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('44.55.66.77:16127');
+      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+        txhash: OUTPOINT_TXID, txindex: 0,
+      });
+      dockerStub = sinon.stub(dockerService, 'getAppContainerObjects').resolves([]);
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    function container(replica) {
+      return { Labels: { 'runonflux.app': 'myapp', ...(replica ? { 'runonflux.replica': replica } : {}) } };
+    }
+
+    // localIdentities takes an InstantiatedSpec, not a bare spec: a cleartext
+    // one resolves to its own `spec`.
+    async function instantiatedWith(placementBlob) {
+      return { name: 'myapp', isEncrypted: false, spec: await specWithPlacement(placementBlob) };
+    }
+
+    it('loose placement owes the unqualified identity', async () => {
+      const spec = await instantiatedWith({ targetIps: { '44.55.66.77': null } });
+      dockerStub.resolves([container(null)]);
+      expect(await deploymentProvider.localIdentities(spec)).to.deep.equal([null]);
+    });
+
+    it('loose placement also owes a qualified container left from a named phase', async () => {
+      // Without this the teardown builds only the unqualified view, and the
+      // replica's container, volume and appdata dir are orphaned.
+      const spec = await instantiatedWith({ targetIps: { '44.55.66.77': null } });
+      dockerStub.resolves([container('m1')]);
+      expect(await deploymentProvider.localIdentities(spec)).to.have.members([null, 'm1']);
+    });
+
+    it('named placement owes its assigned replicas', async () => {
+      const spec = await instantiatedWith({ targetIps: { '44.55.66.77': ['s1', 's2'] } });
+      dockerStub.resolves([container('s1'), container('s2')]);
+      expect(await deploymentProvider.localIdentities(spec)).to.have.members(['s1', 's2']);
+    });
+
+    it('named placement also owes an orphan sibling the maps no longer name', async () => {
+      const spec = await instantiatedWith({ targetIps: { '44.55.66.77': ['s1'] } });
+      dockerStub.resolves([container('s1'), container('s2')]);
+      expect(await deploymentProvider.localIdentities(spec)).to.have.members(['s1', 's2']);
+    });
+
+    it('owes what is present when named placement no longer targets this node', async () => {
+      const spec = await instantiatedWith({ targetIps: { '9.9.9.9': ['s1'] } });
+      dockerStub.resolves([container('s1')]);
+      expect(await deploymentProvider.localIdentities(spec)).to.deep.equal(['s1']);
+    });
+
+    it('falls back to the unqualified identity when neither the spec nor docker has anything to say', async () => {
+      const spec = await instantiatedWith({ targetIps: { '9.9.9.9': ['s1'] } });
+      expect(await deploymentProvider.localIdentities(spec)).to.deep.equal([null]);
     });
   });
 
