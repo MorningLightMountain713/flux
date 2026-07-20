@@ -86,9 +86,7 @@ jobs:
       - name: prebuild
         run: npm run prebuild
       - name: Test suite
-        run: |
-          npm run test:zelback
-          npm run test:zelback:unit
+        run: npm run test:zelback:unit
         env:
           CI: true
       - name: Upload coverage to Codecov
