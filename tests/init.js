@@ -1,6 +1,23 @@
 const fs = require('fs');
 const path = require('path');
 
+// Real network I/O from a unit test makes its outcome depend on what else is
+// listening on the machine. Loud failure instead of a lucky ECONNREFUSED.
+const noRealNetwork = require('./noRealNetwork');
+
+// Root hooks: name the test that opened each connection, and fail the run at
+// the end if any did. Reported after the fact because these call paths all
+// swallow connection errors — see noRealNetwork.js.
+exports.mochaHooks = {
+  beforeEach() {
+    noRealNetwork.setCurrentTest(this.currentTest ? this.currentTest.fullTitle() : '(unknown)');
+  },
+  afterAll() {
+    const count = noRealNetwork.report();
+    if (count) throw new Error(`${count} real network connection(s) attempted from unit tests — see the report above`);
+  },
+};
+
 // Ensure log files exist so the log module doesn't throw ENOENT during tests
 for (const name of ['error.log', 'debug.log', 'warn.log']) {
   const p = path.join(process.cwd(), name);
