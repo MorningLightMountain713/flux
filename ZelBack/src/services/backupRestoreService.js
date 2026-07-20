@@ -9,6 +9,7 @@ const { appsFolder } = require('./utils/appConstants');
 const fs = require('fs').promises;
 const { sanitizePath, verifyRealPathOfExistingPath } = require('./utils/pathSecurity');
 const { Privilege, authOf } = require('./utils/privileges');
+const { resolveVolumeTarget } = require('./appSystem/volumeTarget');
 
 // ToDo: Fix all the string concatenation in this file and use path.join()
 
@@ -148,14 +149,14 @@ async function getVolumeDataOfComponent(req, res) {
     }
     const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname });
     if (authorized === true) {
-      const { error, mounts } = await IOUtils.getVolumeInfo(appname, component, multiplier, decimal, fields);
-      // A mount table that could not be read and a volume that is not mounted
-      // are both "no data to report" to this endpoint.
-      if (error || !mounts.length) {
-        throw new Error('No matching mount found');
-      }
-      const response = messageHelper.createDataMessage(mounts[0]);
-      return res.json(response);
+      // Reports one identity's usage. This took [0] of every matching mount, so
+      // a co-located app had an arbitrary replica's numbers reported as the
+      // app's — and the `=== null` guard never fired, since a missing volume
+      // resolved to `false` and the route answered with undefined data.
+      const { volume } = await resolveVolumeTarget(req);
+      const [dfInfoData] = IOUtils.formatVolumeInfo([volume], { multiplier, decimal, fields });
+      const response = messageHelper.createDataMessage(dfInfoData);
+      return res ? res.json(response) : response;
       // eslint-disable-next-line no-else-return
     } else {
       const errorResponse = messageHelper.errUnauthorizedMessage();
