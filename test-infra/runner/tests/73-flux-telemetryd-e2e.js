@@ -105,6 +105,14 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
   const daemonJournalCount = (pattern) => journalCount(client.container, DAEMON_UNIT, pattern);
   const receiverLogGrep = (pattern, name = collectorContainer) => X(`docker logs ${name} 2>&1 | grep -E '${pattern}' | tail -5`);
   const containerId = async (name) => (await X(`docker inspect -f '{{.Id}}' ${name}`)).stdout.trim();
+  const containerIp = async (name) => (
+    await X(`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${name}`)
+  ).stdout.trim();
+  // Counting posts, not just matching one: the outage scenario asserts on a
+  // delta, since posts from earlier scenarios are still in the log.
+  const receiverPostCount = async (pattern, name = collectorContainer) => Number(
+    (await X(`docker logs ${name} 2>&1 | grep -cE 'OTLP-RECV .*${pattern}' || true`)).stdout.trim() || 0,
+  );
 
   before(async function () {
     this.timeout(900000);
@@ -225,6 +233,53 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       const r = await receiverLogGrep('OTLP-RECV path=/v1/logs .*mark1=1');
       return r.stdout.trim() !== '';
     }, { timeout: 90000, interval: 3000, label: 'the provoked log line arriving at the collector' });
+  });
+
+  it('holds a batch across a collector outage instead of dropping it', async function () {
+    this.timeout(300000);
+    // A collector being redeployed is unreachable for tens of seconds. The
+    // daemon must hold the batch and deliver it when the receiver returns.
+    // Before the shipping queue this line was discarded on the first refusal
+    // and never arrived — measured on a dev node as 8 of 21 lines lost.
+    //
+    // The outage is made with iptables, NOT by stopping the container:
+    // FluxOS's reconciler restarts a stopped app container within about a
+    // second, so nothing is ever actually unreachable and the scenario would
+    // pass vacuously. Rejecting the traffic leaves the container healthy and
+    // the reconciler uninvolved. REJECT rather than DROP so each attempt
+    // fails fast like a refused connection instead of waiting out the
+    // daemon's HTTP timeout — with DROP this measures the timeout, not the
+    // outage.
+    const before = await receiverPostCount('mark1=1');
+    const ip = await containerIp(collectorContainer);
+    expect(ip, 'the collector must have an address to block').to.match(/^\d+\.\d+\.\d+\.\d+$/);
+    const rule = `-d ${ip} -p tcp --dport 4318 -j REJECT --reject-with tcp-reset`;
+
+    await X(`iptables -I OUTPUT 1 ${rule}`);
+    try {
+      // Provoke while the far end is refusing. The batch is now in the
+      // daemon's queue with nowhere to go.
+      const kill = await X(`docker kill --signal=SIGUSR1 ${webContainer}`);
+      expect(kill.exitCode, kill.output).to.equal(0);
+
+      // Comfortably past the point the old posture had already discarded it,
+      // and well inside the retry window so the batch is still held.
+      await new Promise((resolve) => { setTimeout(resolve, 20000); });
+      expect(await receiverPostCount('mark1=1'),
+        'nothing can land while the collector is unreachable').to.equal(before);
+    } finally {
+      // Always restore, or every scenario after this one fails for the
+      // wrong reason.
+      await X(`iptables -D OUTPUT ${rule}`);
+    }
+
+    // The held batch is what proves the fix: it was produced during the
+    // outage and still arrives.
+    await waitFor(async () => (await receiverPostCount('mark1=1')) > before, {
+      timeout: 120000,
+      interval: 3000,
+      label: 'the held batch arriving once the collector is reachable again',
+    });
   });
 
   it('prunes a container that died during a FluxOS outage, on the reconnect sync', async function () {
