@@ -12,23 +12,6 @@ async function getSpecBackend() {
   return (specBackendCache ??= await import('@runonflux/flux-spec-backend'));
 }
 
-/**
- * Synchronous accessor for the already-loaded flux-spec-backend module — for the
- * few sync consumers that cannot await an ESM import (the reconciler's
- * hasOperationLease guard, the operation registry). The module is loaded
- * asynchronously by getSpecBackend(); callers must ensure it has resolved first
- * (the reconciler preloads it at boot). Throws loudly rather than returning a
- * stale/undefined module.
- *
- * @returns {object} the @runonflux/flux-spec-backend module
- */
-function getSpecBackendSync() {
-  if (!specBackendCache) {
-    throw new Error('flux-spec-backend not loaded yet; await getSpecBackend() before getSpecBackendSync()');
-  }
-  return specBackendCache;
-}
-
 async function getSpecPolicy() {
   return (specPolicyCache ??= await import('@runonflux/flux-spec-policy'));
 }
@@ -128,7 +111,6 @@ async function assertUpdateInvariants(priorSpec, newSpec) {
 module.exports = {
   getSpec,
   getSpecBackend,
-  getSpecBackendSync,
   getSpecPolicy,
   validateSubmissionSpec,
   validateGossipSpec,
