@@ -27,7 +27,7 @@ describe('drainServer tests', () => {
 
   afterEach(() => {
     drainServer.stop();
-    TEST_APPS.forEach((app) => globalState.clearAppLbState(app));
+    TEST_APPS.forEach((app) => globalState.clearAppShutdownPipelineState(app));
     clock.restore();
     sinon.restore();
   });
@@ -50,14 +50,14 @@ describe('drainServer tests', () => {
       }, 7);
 
       expect(response).to.deep.equal({ jsonrpc: '2.0', id: 7, result: { ok: true } });
-      expect(globalState.getAppLbState('myapp')).to.equal('draining');
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal('draining');
       expect(rebroadcastStub.calledOnce).to.be.true;
     });
 
     it('marks the app stopping on stop_app', () => {
       call('stop_app', { app_name: 'myapp', deadline: futureDeadline(600) });
 
-      expect(globalState.getAppLbState('myapp')).to.equal('stopping');
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal('stopping');
       expect(rebroadcastStub.calledOnce).to.be.true;
     });
 
@@ -65,7 +65,7 @@ describe('drainServer tests', () => {
       call('drain_app', { app_name: 'myapp', deadline: futureDeadline(600) });
       call('stop_app', { app_name: 'myapp', deadline: futureDeadline(600) });
 
-      expect(globalState.getAppLbState('myapp')).to.equal('stopping');
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal('stopping');
     });
 
     it('clears the state and rebroadcasts on clear_app', () => {
@@ -75,7 +75,7 @@ describe('drainServer tests', () => {
       const response = call('clear_app', { app_name: 'myapp' });
 
       expect(response.result).to.deep.equal({ ok: true, existed: true });
-      expect(globalState.getAppLbState('myapp')).to.equal(null);
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal(null);
       expect(rebroadcastStub.calledOnce).to.be.true;
       // recovery is reconciler-driven: the clear sweeps the app back to life
       expect(enqueueAllStub.calledOnceWith('drain-cleared')).to.be.true;
@@ -100,7 +100,7 @@ describe('drainServer tests', () => {
       const response = call('nope', {});
 
       expect(response.error.code).to.equal(-32601);
-      expect(globalState.hasAppLbStates()).to.be.false;
+      expect(globalState.hasAppShutdownPipelineStates()).to.be.false;
     });
 
     it('errors on malformed JSON', () => {
@@ -115,10 +115,10 @@ describe('drainServer tests', () => {
       call('drain_app', { app_name: 'myapp', deadline: futureDeadline(600) });
 
       clock.tick((600 + 119) * 1000);
-      expect(globalState.getAppLbState('myapp')).to.equal('draining');
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal('draining');
 
       clock.tick(2 * 1000);
-      expect(globalState.getAppLbState('myapp')).to.equal(null);
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal(null);
     });
 
     it('falls back to a bounded TTL when the deadline is missing or already past', () => {
@@ -126,12 +126,12 @@ describe('drainServer tests', () => {
       call('stop_app', { app_name: 'otherapp' });
 
       clock.tick(29 * 60 * 1000);
-      expect(globalState.getAppLbState('myapp')).to.equal('draining');
-      expect(globalState.getAppLbState('otherapp')).to.equal('stopping');
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal('draining');
+      expect(globalState.getAppShutdownPipelineState('otherapp')).to.equal('stopping');
 
       clock.tick(2 * 60 * 1000);
-      expect(globalState.getAppLbState('myapp')).to.equal(null);
-      expect(globalState.getAppLbState('otherapp')).to.equal(null);
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal(null);
+      expect(globalState.getAppShutdownPipelineState('otherapp')).to.equal(null);
     });
 
     it('the sweep rebroadcasts expired apps so the network reverts to active', () => {
@@ -142,7 +142,7 @@ describe('drainServer tests', () => {
 
       // the interval sweep already fired via the fake clock; expired entry is
       // gone and the reversion was broadcast
-      expect(globalState.hasAppLbStates()).to.be.false;
+      expect(globalState.hasAppShutdownPipelineStates()).to.be.false;
       expect(rebroadcastStub.called).to.be.true;
       expect(enqueueAllStub.calledWith('drain-expired')).to.be.true;
     });
@@ -155,7 +155,7 @@ describe('drainServer tests', () => {
 
       expect(expired).to.deep.equal([]);
       expect(rebroadcastStub.called).to.be.false;
-      expect(globalState.getAppLbState('myapp')).to.equal('draining');
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal('draining');
     });
   });
 

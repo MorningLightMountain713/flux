@@ -58,13 +58,13 @@ function stopSweepTimer() {
 }
 
 function sweepExpiredStates() {
-  const expired = globalState.sweepExpiredAppLbStates();
+  const expired = globalState.sweepExpiredAppShutdownPipelineStates();
   if (expired.length) {
     log.warn(`drain state expired for ${expired.join(', ')} - shutdown pipeline did not complete, reverting to active`);
     peerNotification.checkAndNotifyPeersOfRunningApps();
     appReconciler.enqueueAll('drain-expired').catch((err) => log.error(`drain expiry reconcile failed: ${err.message}`));
   }
-  if (!globalState.hasAppLbStates()) stopSweepTimer();
+  if (!globalState.hasAppShutdownPipelineStates()) stopSweepTimer();
   return expired;
 }
 
@@ -83,7 +83,7 @@ function ensureSweepTimer() {
 function handleSetState(method, state, params) {
   const appName = params && params.app_name;
   if (!appName) throw new Error(`${method}: app_name required`);
-  globalState.setAppLbState(appName, state, expiryFromDeadline(params.deadline));
+  globalState.setAppShutdownPipelineState(appName, state, expiryFromDeadline(params.deadline));
   ensureSweepTimer();
   peerNotification.checkAndNotifyPeersOfRunningApps();
   return { ok: true };
@@ -97,8 +97,8 @@ function handleSetState(method, state, params) {
 function handleClearApp(params) {
   const appName = params && params.app_name;
   if (!appName) throw new Error('clear_app: app_name required');
-  const existed = globalState.clearAppLbState(appName);
-  if (!globalState.hasAppLbStates()) stopSweepTimer();
+  const existed = globalState.clearAppShutdownPipelineState(appName);
+  if (!globalState.hasAppShutdownPipelineStates()) stopSweepTimer();
   if (existed) {
     peerNotification.checkAndNotifyPeersOfRunningApps();
     appReconciler.enqueueAll('drain-cleared').catch((err) => log.error(`drain clear reconcile failed: ${err.message}`));

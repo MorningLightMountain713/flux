@@ -35,8 +35,8 @@ describe('appShutdownCoordinator', () => {
       },
       globalState: {
         isArcane: sinon.stub().returns(true),
-        setAppLbState: sinon.stub(),
-        clearAppLbState: sinon.stub(),
+        setAppShutdownPipelineState: sinon.stub(),
+        clearAppShutdownPipelineState: sinon.stub(),
       },
       fluxShutdowndClient: {
         SHUTDOWN_REASON,
@@ -116,7 +116,7 @@ describe('appShutdownCoordinator', () => {
     const first = await coordinator.requestGracefulStop('web_myapp', 'condemned');
     expect(first).to.equal(true);
     await flush();
-    expect(stubs.globalState.clearAppLbState.calledWith('myapp')).to.equal(true);
+    expect(stubs.globalState.clearAppShutdownPipelineState.calledWith('myapp')).to.equal(true);
     expect(stubs.appReconciler.enqueue.calledWith('web_myapp')).to.equal(true);
 
     // the re-driven pass falls back to a local stop (returns false), then re-allows the daemon
@@ -132,7 +132,7 @@ describe('appShutdownCoordinator', () => {
     // the drain is over: nothing left for the gate to protect. Without the clear,
     // reconciles stay suppressed for the rest of the budget window and a restart
     // issued during the drain leaves the app down, broadcasting 'stopping'.
-    expect(stubs.globalState.clearAppLbState.calledWith('myapp')).to.equal(true);
+    expect(stubs.globalState.clearAppShutdownPipelineState.calledWith('myapp')).to.equal(true);
     expect(stubs.appReconciler.enqueue.calledWith('web_myapp')).to.equal(true);
   });
 
@@ -141,7 +141,7 @@ describe('appShutdownCoordinator', () => {
     const res = await coordinator.requestGracefulStop('web_myapp', 'condemned');
     expect(res).to.equal(true);
     await flush();
-    expect(stubs.globalState.clearAppLbState.called).to.equal(false);
+    expect(stubs.globalState.clearAppShutdownPipelineState.called).to.equal(false);
     expect(stubs.appReconciler.enqueue.called).to.equal(false);
   });
 });

@@ -198,7 +198,7 @@ async function beginAppStop(ownerFluxId, appName, reason, { force = false, deadl
 
   // epoch ms, matching the gate's Date.now() expiry; deadline is absolute unix-seconds.
   const expiresAt = (deadline * 1000) + COMPLETION_SLACK_MS;
-  globalState.setAppLbState(appName, 'stopping', expiresAt);
+  globalState.setAppShutdownPipelineState(appName, 'stopping', expiresAt);
 
   const timeoutMs = Math.max((deadline * 1000) - Date.now(), 0) + COMPLETION_SLACK_MS;
   try {
