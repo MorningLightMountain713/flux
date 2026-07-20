@@ -3,9 +3,7 @@ const path = require('node:path');
 const dockerService = require('../dockerService');
 const deviceHelper = require('../deviceHelper');
 const serviceHelper = require('../serviceHelper');
-const mountParser = require('./mountParser');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
-const appTamperingDetectionService = require('../appTamperingDetectionService');
 const log = require('../../lib/log');
 const { getSpecBackend } = require('./specLibs');
 const {
@@ -1134,160 +1132,6 @@ async function verifyAppVolumeMount(identifier) {
 }
 
 /**
- * Creates a missing host mount path — a file or a directory — as root, mode 777,
- * the same mode volume creation gives the paths it makes: the container's user
- * is not root, and a path added to an existing volume must be as writable to it
- * as one the volume was created with. Only a path this call created is widened.
- * Uses runCommand (execFile, no shell) so paths are passed as arguments and
- * cannot be shell-interpreted. Throws if a command fails.
- * @param {string} fullPath Absolute host path to create.
- * @param {boolean} isFile True for a file mount, false for a directory.
- */
-async function createMountPath(fullPath, isFile) {
-  const create = isFile
-    ? await serviceHelper.runCommand('touch', { runAsRoot: true, params: [fullPath] })
-    : await serviceHelper.runCommand('mkdir', { runAsRoot: true, params: ['-p', fullPath] });
-  if (create.error) throw create.error;
-  const chmod = await serviceHelper.runCommand('chmod', { runAsRoot: true, params: ['777', fullPath] });
-  if (chmod.error) throw chmod.error;
-  log.info(`Created ${isFile ? 'file' : 'directory'} mount with 777 permissions: ${fullPath}`);
-}
-
-/**
- * Records an image that mounted from somewhere other than where this node
- * recorded it.
- *
- * The mount replaces the record, so the pass that mounted is the only one
- * able to report the move - every later pass has the new location in the
- * record and nothing left to compare it against.
- *
- * @param {string} appName Main app name, which the event is recorded against.
- * @param {string} identifier Component identifier whose volume was mounted.
- * @param {object} mountResult What ensureAppVolumeMounted answered.
- * @returns {Promise<void>}
- */
-async function recordImageMovedIfFound(appName, identifier, mountResult) {
-  if (!mountResult.imageMoved) return;
-  await appTamperingDetectionService.recordEvent(
-    appName,
-    'volume_image_moved',
-    `Volume image for ${identifier} was found somewhere other than where this node recorded it`,
-  );
-}
-
-/**
- * Ensures every host bind-mount path a component declares in its containerData
- * exists before its container is created or (re)started. Syncthing cleanup can
- * delete a mount source while a container is stopped, which would make the next
- * Docker start fail; recreating the directory/file here prevents that. Idempotent
- * and safe to call on every start — existing paths are left untouched.
- * @param {object} appSpecifications Component (or v<=3 app) specifications.
- * @param {string} appName Main app name.
- * @param {boolean} isComponent True if a Docker Compose component.
- * @param {object} fullAppSpecs Full app specifications (needed for component-reference mounts).
- * @returns {Promise<void>}
- */
-async function ensureMountPathsExist(appSpecifications, appName, isComponent, fullAppSpecs) {
-  const identifier = isComponent ? `${appSpecifications.name}_${appName}` : appName;
-  const appId = dockerService.getAppIdentifier(identifier);
-
-  // Structure created on the bare app dir would land on the host filesystem
-  // instead of the app's volume, so the volume must be mounted first - and it
-  // is level-based desired state, so mount it rather than merely assert.
-  const volumeMount = await ensureAppVolumeMounted(identifier);
-  if (!volumeMount.mounted) {
-    throw new Error(`Data volume for ${appId} is not mounted (${volumeMount.reason}); refusing to create mount paths on the bare directory`);
-  }
-  await recordImageMovedIfFound(appName, identifier, volumeMount);
-
-  let parsedMounts;
-  try {
-    parsedMounts = mountParser.parseContainerData(appSpecifications.containerData);
-  } catch (error) {
-    log.error(`Failed to parse containerData for ${identifier}: ${error.message}`);
-    throw error;
-  }
-
-  const requiredPaths = mountParser.getRequiredLocalPaths(parsedMounts);
-  log.info(`Ensuring ${requiredPaths.length} local path(s) exist for ${appId}`);
-
-  // Create all required directories and files (appdata and additional mounts at same level)
-  // eslint-disable-next-line no-restricted-syntax
-  for (const pathInfo of requiredPaths) {
-    const fullPath = `${appsFolder}${appId}/${pathInfo.name}`;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await fs.access(fullPath);
-      log.info(`Path already exists: ${fullPath}`);
-    } catch (error) {
-      log.warn(`Path missing, creating: ${fullPath}`);
-      // eslint-disable-next-line no-await-in-loop
-      await createMountPath(fullPath, pathInfo.isFile);
-    }
-  }
-
-  // Also ensure component reference paths exist — paths from OTHER components
-  // that this component is trying to mount.
-  const componentReferenceMounts = parsedMounts.allMounts.filter((mount) => (
-    mount.type === mountParser.MountType.COMPONENT_PRIMARY
-    || mount.type === mountParser.MountType.COMPONENT_DIRECTORY
-    || mount.type === mountParser.MountType.COMPONENT_FILE
-  ));
-
-  if (componentReferenceMounts.length === 0) return;
-
-  log.info(`Ensuring ${componentReferenceMounts.length} component reference path(s) exist for ${appId}`);
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const mount of componentReferenceMounts) {
-    try {
-      if (!fullAppSpecs) {
-        throw new Error(`Component reference mount requires full app specifications: ${mount.containerPath}`);
-      }
-
-      let componentIdentifier;
-      if (fullAppSpecs.version >= 4) {
-        if (mount.componentIndex < 0 || mount.componentIndex >= fullAppSpecs.compose.length) {
-          throw new Error(`Invalid component index: ${mount.componentIndex}`);
-        }
-        const componentName = fullAppSpecs.compose[mount.componentIndex].name;
-        componentIdentifier = `${componentName}_${appName}`;
-      } else {
-        componentIdentifier = appName;
-      }
-
-      const componentAppId = dockerService.getAppIdentifier(componentIdentifier);
-
-      // the referenced component's own volume must back anything we create there
-      // eslint-disable-next-line no-await-in-loop
-      const refVolumeMount = await ensureAppVolumeMounted(componentIdentifier);
-      if (!refVolumeMount.mounted) {
-        throw new Error(`Data volume for referenced component ${componentAppId} is not mounted (${refVolumeMount.reason})`);
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await recordImageMovedIfFound(appName, componentIdentifier, refVolumeMount);
-
-      const fullPath = mount.subdir === 'appdata'
-        ? `${appsFolder}${componentAppId}/appdata`
-        : `${appsFolder}${componentAppId}/${mount.subdir}`;
-
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        await fs.access(fullPath);
-        log.info(`Component reference path already exists: ${fullPath}`);
-      } catch (error) {
-        log.warn(`Component reference path missing, creating: ${fullPath}`);
-        // eslint-disable-next-line no-await-in-loop
-        await createMountPath(fullPath, mount.isFile);
-      }
-    } catch (error) {
-      log.error(`Failed to ensure component reference path exists: ${error.message}`);
-      throw error;
-    }
-  }
-}
-
-/**
  * Delete everything an app holds in its volume, leaving the volume itself mounted
  * @param {string} identifier - Component identifier
  * @returns {Promise<void>}
@@ -1356,7 +1200,6 @@ module.exports = {
   verifyAppVolumeMount,
   placementVolumesInGib,
   isOnReadOnlyFilesystem,
-  ensureMountPathsExist,
   isPathMounted,
   getVolumeFilePath,
   imageFsType,
