@@ -1,15 +1,21 @@
-globalThis.userconfig = require('../../config/userconfig');
-
-process.env.NODE_CONFIG_DIR = `${process.cwd()}/ZelBack/config/`;
-
+// The one end-to-end smoke test of the real API: it boots FluxServer over both
+// http and https and drives actual routes, which no other test here does (the
+// rest build throwaway express apps). Moved from the retired tests/ZelBack tier
+// so one glob covers every test.
+//
+// NODE_CONFIG_DIR is deliberately NOT set here. This file used to point it at
+// ZelBack/config, which in a whole-tier run would decide every other file's
+// config purely by load order; the tier's own globalconfig must win.
 const request = require('supertest');
-const config = require('config');
+const sinon = require('sinon');
 const chai = require('chai');
 
 const { FluxServer } = require('../../ZelBack/src/lib/fluxServer');
 const log = require('../../ZelBack/src/lib/log');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
+const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const generalService = require('../../ZelBack/src/services/generalService');
 
 const packageJson = require('../../package.json');
 
@@ -76,15 +82,23 @@ const { server: serverHttps } = fluxServerHttps;
 
 describe('loading express', () => {
   after((done) => {
+    // The old tier force-exited the process here; that would end the whole run
+    // now. Mocha's --exit handles teardown.
+    sinon.restore();
     fluxServerHttp.close(done);
-    setTimeout(() => {
-      process.exit();
-    }, 10000);
   });
   before(async () => {
     await dbHelper.initiateDB();
-    await fluxServerHttp.listen(config.server.apiport);
-    log.info(`Flux listening on port ${config.server.apiport}!`);
+    // Both routes below resolve node identity, which unstubbed is a real RPC to
+    // the benchmark daemon (/flux/version, via the analytics node-IP refresh)
+    // and to the daemon (/id/loginphrase, via the node-tier hardware check).
+    sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('127.0.0.1:16127');
+    sinon.stub(generalService, 'nodeTier').resolves('cumulus');
+    sinon.stub(generalService, 'nodeCollateral').resolves(1000);
+    // Port 0: the fixed apiport collides with the WebSocket servers the
+    // communication tests bind on the same port number.
+    await fluxServerHttp.listen(0);
+    log.info(`Flux listening on port ${fluxServerHttp.server.address().port}!`);
   });
   it('http /flux/version', (done) => {
     request(serverHttp)
