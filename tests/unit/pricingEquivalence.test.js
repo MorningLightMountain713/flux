@@ -3,9 +3,11 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const fs = require('fs');
 const path = require('path');
 const { expect } = require('chai');
+const sinon = require('sinon');
 const config = require('config');
 const { appPricePerMonth } = require('../../ZelBack/src/services/utils/appUtilities');
 const { resolveSpec } = require('../../ZelBack/src/services/utils/specCutover');
+const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 
 const FIXTURE_PATH = path.join(__dirname, 'fixtures', 'all-specs.json');
 const allSpecs = fs.existsSync(FIXTURE_PATH)
@@ -22,6 +24,17 @@ describe('pricing equivalence — BigInt comparison produces same result as floa
     }
     chainPrices = [...config.fluxapps.price];
     chainPrices.sort((a, b) => a.height - b.height);
+    // The encrypted fixtures cannot be decrypted without the node's benchmark
+    // daemon, and each attempt was a real RPC to it. They are skipped either
+    // way; this makes the failure local instead of a network round trip.
+    sinon.stub(benchmarkService, 'decryptRSAMessage').resolves({
+      status: 'error',
+      data: { message: 'benchmark unavailable in unit tests' },
+    });
+  });
+
+  after(() => {
+    sinon.restore();
   });
 
   it('has fixture data', () => {
@@ -48,7 +61,7 @@ describe('pricing equivalence — BigInt comparison produces same result as floa
         return;
       }
 
-      const height = rawSpec.height;
+      const { height } = rawSpec;
       let appPrice;
       try {
         appPrice = await appPricePerMonth(spec, height, chainPrices);

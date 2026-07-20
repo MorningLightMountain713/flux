@@ -113,6 +113,11 @@ describe('appController tests', () => {
     const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
     verificationHelperStub = sinon.stub(verificationHelper, 'verifyPrivilege');
 
+    // Every handler that fans a command across the app's instances resolves
+    // this node's address first, and unstubbed it reaches the real benchmark
+    // daemon over the network.
+    sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.3:16127');
+
     // Delegates at call time so per-test stubs of buildDeployment flow through
     // the plural entry the handlers use; replica-scoped tests restore this and
     // stub buildDeployments directly.
@@ -697,7 +702,6 @@ describe('appController tests', () => {
         { ip: '192.168.1.2:16127', name: 'TestApp' },
       ];
       sinon.stub(appsRepository, 'listLocationsByApp').resolves(locations);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.3:16127');
     });
 
     it('should execute command on all app instances', async () => {
