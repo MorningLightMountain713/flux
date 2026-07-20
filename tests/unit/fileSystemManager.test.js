@@ -10,6 +10,8 @@ describe('fileSystemManager tests', () => {
   let volumeTargetStub;
   let logStub;
   let pathSecurityStub;
+  let formidableStub;
+  let formStub;
 
   beforeEach(() => {
     // Stubs
@@ -43,6 +45,12 @@ describe('fileSystemManager tests', () => {
       warn: sinon.stub(),
     };
 
+    // The upload form is chainable and its parse is a no-op: these tests are
+    // about which volume the upload lands in, not about multipart parsing.
+    formStub = { on: sinon.stub(), parse: sinon.stub() };
+    formStub.on.returns(formStub);
+    formidableStub = { formidable: sinon.stub().returns(formStub) };
+
     pathSecurityStub = {
       sanitizePath: sinon.stub().callsFake((userPath, basePath) => {
         // Simple mock: if userPath is empty, return basePath, otherwise join them
@@ -61,6 +69,7 @@ describe('fileSystemManager tests', () => {
       '../../lib/log': logStub,
       '../utils/pathSecurity': pathSecurityStub,
       './volumeTarget': volumeTargetStub,
+      formidable: formidableStub,
     });
   });
 
@@ -505,6 +514,85 @@ describe('fileSystemManager tests', () => {
       await fileSystemManager.downloadAppsFile(req, res);
 
       expect(res.write.calledOnce).to.be.true;
+      expect(logStub.error.called).to.be.true;
+    });
+  });
+
+  // fileUpload had no coverage at all while it lived in IOUtils. It resolves a
+  // volume and then writes into it, so it is the handler where landing on the
+  // wrong replica matters most.
+  describe('fileUpload', () => {
+    let mkdirStub;
+
+    beforeEach(() => {
+      mkdirStub = sinon.stub(require('fs').promises, 'mkdir').resolves();
+    });
+
+    function uploadReq(params = {}, query = {}) {
+      return { params: { appname: 'testapp', component: 'testcomp', ...params }, query };
+    }
+
+    function uploadRes() {
+      return { write: sinon.stub(), end: sinon.stub(), connection: { destroy: sinon.stub() } };
+    }
+
+    it('uploads into the resolved volume, under the folder given', async () => {
+      const res = uploadRes();
+      verificationHelperStub.verifyPrivilege.resolves(true);
+      serviceHelperStub.runCommand.resolves({});
+
+      await fileSystemManager.fileUpload(uploadReq({ type: 'file', folder: 'sub' }), res);
+
+      sinon.assert.calledOnce(volumeTargetStub.resolveVolumeTarget);
+      sinon.assert.calledWith(mkdirStub, '/mnt/testapp/sub', { recursive: true });
+      // argv, never a shell string built from request input
+      sinon.assert.calledOnceWithExactly(serviceHelperStub.runCommand, 'chmod', {
+        runAsRoot: true,
+        params: ['777', '/mnt/testapp/sub'],
+      });
+      sinon.assert.calledOnce(formStub.parse);
+    });
+
+    it('puts a backup upload in the volume backup/upload directory', async () => {
+      const res = uploadRes();
+      verificationHelperStub.verifyPrivilege.resolves(true);
+      serviceHelperStub.runCommand.resolves({});
+
+      await fileSystemManager.fileUpload(uploadReq({ type: 'backup' }), res);
+
+      sinon.assert.calledWith(mkdirStub, '/mnt/testapp/backup/upload', { recursive: true });
+    });
+
+    it('refuses an unauthorized upload before touching the volume', async () => {
+      const res = uploadRes();
+      verificationHelperStub.verifyPrivilege.resolves(false);
+
+      await fileSystemManager.fileUpload(uploadReq({ type: 'file' }), res);
+
+      expect(volumeTargetStub.resolveVolumeTarget.called).to.be.false;
+      expect(mkdirStub.called).to.be.false;
+      expect(res.connection.destroy.calledOnce).to.be.true;
+    });
+
+    it('does not upload when the volume cannot be resolved (co-located, no replica named)', async () => {
+      const res = uploadRes();
+      verificationHelperStub.verifyPrivilege.resolves(true);
+      volumeTargetStub.resolveVolumeTarget.rejects(new Error('testapp is co-located on this node — specify which replica with ?replica='));
+
+      await fileSystemManager.fileUpload(uploadReq({ type: 'file' }), res);
+
+      expect(mkdirStub.called).to.be.false;
+      expect(serviceHelperStub.runCommand.called).to.be.false;
+      expect(logStub.error.called).to.be.true;
+    });
+
+    it('requires a type', async () => {
+      const res = uploadRes();
+      verificationHelperStub.verifyPrivilege.resolves(true);
+
+      await fileSystemManager.fileUpload(uploadReq({}), res);
+
+      expect(volumeTargetStub.resolveVolumeTarget.called).to.be.false;
       expect(logStub.error.called).to.be.true;
     });
   });

@@ -6,6 +6,7 @@ const serviceHelper = require('./serviceHelper');
 const IOUtils = require('./IOUtils');
 const fs = require('fs').promises;
 const { sanitizePath, verifyRealPath } = require('./utils/pathSecurity');
+const { resolveVolumeTarget } = require('./appSystem/volumeTarget');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 // ToDo: Fix all the string concatenation in this file and use path.join()
@@ -84,11 +85,13 @@ async function getVolumeDataOfComponent(req, res) {
     }
     const authorized = res ? await verificationHelper.verifyPrivilege('appownerabove', req, appname) : true;
     if (authorized === true) {
-      const dfInfoData = await IOUtils.getVolumeInfo(appname, component, multiplier, decimal, fields);
-      if (dfInfoData === null) {
-        throw new Error('No matching mount found');
-      }
-      const response = messageHelper.createDataMessage(dfInfoData[0]);
+      // Reports one identity's usage. This took [0] of every matching mount, so
+      // a co-located app had an arbitrary replica's numbers reported as the
+      // app's — and the `=== null` guard never fired, since a missing volume
+      // resolved to `false` and the route answered with undefined data.
+      const { volume } = await resolveVolumeTarget(req);
+      const [dfInfoData] = IOUtils.formatVolumeInfo([volume], { multiplier, decimal, fields });
+      const response = messageHelper.createDataMessage(dfInfoData);
       return res ? res.json(response) : response;
       // eslint-disable-next-line no-else-return
     } else {
