@@ -176,7 +176,7 @@ function analyticsMiddleware(req, res, next) {
     return;
   }
 
-  const zelidauth = req.headers.zelidauth;
+  const { zelidauth } = req.headers;
   if (!zelidauth) {
     next();
     return;
@@ -221,15 +221,18 @@ function analyticsMiddleware(req, res, next) {
 /**
  * Track terminal session open/close events.
  * @param {string} zelidauth - Raw zelidauth string from the socket event
- * @param {string} appName - Application name
+ * @param {string} terminalTarget - The container's identifier, as the caller
+ *   already holds it. This used to take the app and component separately and
+ *   rebuild `${component}_${appName}`, which drops the replica segment — so two
+ *   co-located siblings reported their sessions under one name. The caller has
+ *   the whole identifier; taking it apart to put it back together is what lost
+ *   the replica.
  * @param {string} action - 'open' or 'close'
  * @param {string} [ipAddress] - Client IP address
- * @param {string} [component] - Component name for multi-component apps
  */
-function trackTerminalSession(zelidauth, appName, action, ipAddress, component) {
+function trackTerminalSession(zelidauth, terminalTarget, action, ipAddress) {
   if (!analyticsUrlCached || !zelidauth) return;
 
-  const terminalTarget = component ? `${component}_${appName}` : appName;
   const event = {
     apiEndpoint: `/terminal/${action}/${terminalTarget}`,
     httpMethod: 'WS',

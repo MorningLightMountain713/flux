@@ -40,14 +40,16 @@ async function dockerTerminalHandler(socket) {
     // socket.io emits 'disconnect' exactly once - which is how an 'open' ends up
     // recorded with no matching 'close'.
     const mainAppName = nameOrId.split('_')[1] || nameOrId;
-    const parts = nameOrId.split('_');
-    const component = parts.length > 1 ? parts[0].replace(/^flux/, '') || null : null;
-    const analyticsAppName = parts.length > 1 ? mainAppName : mainAppName.replace(/^flux/, '');
+    // The container name IS the identity, replica segment included. Taking it
+    // apart into component and app so analytics could rebuild
+    // `${component}_${appName}` dropped that segment, reporting two co-located
+    // siblings' sessions under one target.
+    const terminalTarget = nameOrId.replace(/^flux/, '');
     socket.on('disconnect', () => {
       clientGone = true;
       if (execStream) execStream.destroy();
       // pairs whatever was opened, regardless of where in the flow we were
-      if (analyticsOpened) trackTerminalSession(zelidauth, analyticsAppName, 'close', clientIp, component);
+      if (analyticsOpened) trackTerminalSession(zelidauth, terminalTarget, 'close', clientIp);
     });
     try {
       const auth = {
@@ -81,7 +83,7 @@ async function dockerTerminalHandler(socket) {
       // nothing downstream can close a session opened after it.
       if (clientGone || !socket.connected) return;
 
-      trackTerminalSession(zelidauth, analyticsAppName, 'open', clientIp, component);
+      trackTerminalSession(zelidauth, terminalTarget, 'open', clientIp);
       analyticsOpened = true;
 
       const cmd = {
