@@ -56,8 +56,8 @@ describe('specReconciler tests', () => {
     sinon.stub(appsRepository, 'listInstalledApps').resolves(installed);
     sinon.stub(appsRepository, 'listGlobalAppInfo').resolves(globalRows);
     sinon.stub(registryManager, 'getScannedHeight').resolves(1000000);
-    // The named-mode per-identity diff enumerates this app's containers; no
-    // real docker in unit tests (and none of these fixtures have containers).
+    // The per-identity diff enumerates this app's containers; no real docker in
+    // unit tests (and none of these fixtures have containers).
     sinon.stub(dockerService, 'getAppContainerObjects').resolves([]);
     appLocationStub = sinon.stub(registryManager, 'appLocation').resolves([]);
     uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves({ status: appUninstaller.UninstallStatus.REMOVED });
@@ -177,6 +177,38 @@ describe('specReconciler tests', () => {
       });
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.called, 'assigned identities with no local containers must not remove anything').to.equal(false);
+    });
+  });
+
+  describe('loose placement de-qualifies', () => {
+    const looseBlob = { targetIps: { '44.55.66.77': null, '9.9.9.9': null } };
+
+    it('sheds a qualified replica left behind when placement switched back to loose', async () => {
+      setup({
+        installed: [await specWith(looseBlob)],
+        globalRows: [await specWith(looseBlob)],
+      });
+      // The node still runs the container from the app's named phase. Loose
+      // placement is never qualified, so that identity cannot stay: without the
+      // shed the installed row keeps its replica key and the reconciler starts
+      // the stale identity forever.
+      dockerService.getAppContainerObjects.resolves([
+        { Names: ['/fluxweb_myapp_m1'], Labels: { 'runonflux.app': 'myapp', 'runonflux.replica': 'm1' } },
+      ]);
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true, replica: 'm1' }))).to.equal(true);
+    });
+
+    it('leaves a loose instance alone: the unqualified identity is the one loose assigns', async () => {
+      setup({
+        installed: [await specWith(looseBlob)],
+        globalRows: [await specWith(looseBlob)],
+      });
+      dockerService.getAppContainerObjects.resolves([
+        { Names: ['/fluxweb_myapp'], Labels: { 'runonflux.app': 'myapp' } },
+      ]);
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.called).to.equal(false);
     });
   });
 
