@@ -100,11 +100,14 @@ async function assignedIdentities(instantiated) {
 }
 
 /**
- * Every identity this node OWES management for. Assigned replicas when named
- * placement targets this node; when it no longer does, the identities actually
- * present on this node's labeled containers (a de-targeted teardown must match
- * what exists, not what the spec now says); [null] for loose placement or when
- * nothing is present.
+ * Every identity this node OWES management for: the ones the spec assigns it
+ * (the named replicas targeting it, or loose placement's single unqualified
+ * identity) UNION the ones actually present on its labeled containers. A
+ * teardown must match what exists, not only what the spec now says — the
+ * identities the two disagree about are exactly the ones that would otherwise
+ * be orphaned: a replica the maps stopped naming, and a qualified container
+ * left behind when the app switched back to loose. Falls back to [null] when
+ * neither has anything to say, so a caller always gets one descriptor.
  *
  * @param {object} instantiated - InstantiatedSpec
  * @returns {Promise<Array<string|null>>}
@@ -115,12 +118,13 @@ async function localIdentities(instantiated) {
   const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
 
   const assigned = await resolveLocalReplicas(runtimeSpec);
-  if (assigned === null) return [null];
-  if (assigned.length > 0) return assigned;
+  const assignedIdentities = assigned === null ? [null] : assigned;
 
   const present = await dockerService.getAppContainerObjects(instantiated.name).catch(() => []);
-  const replicasPresent = [...new Set(present.map((c) => (c.Labels && c.Labels['runonflux.replica']) || null))];
-  return replicasPresent.length > 0 ? replicasPresent : [null];
+  const replicasPresent = present.map((c) => (c.Labels && c.Labels['runonflux.replica']) || null);
+
+  const owed = [...new Set([...assignedIdentities, ...replicasPresent])];
+  return owed.length > 0 ? owed : [null];
 }
 
 /**
