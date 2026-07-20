@@ -1176,6 +1176,13 @@ describe('fluxCommunication tests', () => {
 
     beforeEach(() => {
       peerManager.reset();
+      // A queued connection resolves this node's address first, which
+      // unstubbed is a real RPC to the benchmark daemon.
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('44.192.51.11:16127');
+      // addPeer answers, then opens the socket from a setImmediate. It gates on
+      // `has`, so marking peers pending leaves the response under test intact
+      // while stopping the fixture IP from actually being dialled.
+      sinon.stub(peerManager, 'isPending').returns(true);
     });
 
     afterEach(() => {
@@ -1414,9 +1421,13 @@ describe('fluxCommunication tests', () => {
         return Promise.resolve(address);
       });
 
-      // Stub initiateAndHandleConnection to prevent actual connections
-      // eslint-disable-next-line no-unused-vars
-      const initiateStub = sinon.stub(fluxCommunication, 'initiateAndHandleConnection').resolves();
+      // Prevent actual connections. Stubbing the module's own export does NOT
+      // work here: fluxDiscovery calls initiateAndHandleConnection through its
+      // local binding, so the stub is bypassed and the fixture IPs above were
+      // being dialled for real. Marking every peer pending returns the function
+      // before it opens a socket; every log this test asserts on is emitted by
+      // fluxDiscovery beforehand.
+      sinon.stub(peerManager, 'isPending').returns(true);
 
       const infoSpy = sinon.spy(log, 'info');
 
@@ -1458,7 +1469,6 @@ describe('fluxCommunication tests', () => {
 
   describe('handleNodeSigtermMessage tests', () => {
     let relaySpy;
-    let dbHelperStub;
     let findInDatabaseStub;
     let updateInDatabaseStub;
     let logInfoSpy;
@@ -1478,7 +1488,7 @@ describe('fluxCommunication tests', () => {
           collection: sinon.stub(),
         }),
       };
-      dbHelperStub = sinon.stub(dbHelper, 'databaseConnection').returns(mockDb);
+      sinon.stub(dbHelper, 'databaseConnection').returns(mockDb);
       findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase');
       updateInDatabaseStub = sinon.stub(dbHelper, 'updateInDatabase').resolves();
       sinon.stub(messageStore, 'storeAppStateEvent');
