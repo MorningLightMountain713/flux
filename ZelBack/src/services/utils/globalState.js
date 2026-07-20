@@ -45,13 +45,18 @@ const installingApps = new Map();
 
 // Apps this node is draining/stopping for graceful shutdown — appName ->
 // { state: 'draining'|'stopping', expiresAt: epoch ms }. Written by the
-// flux-shutdownd drain socket; read when stamping the LB lifecycle state onto
-// fluxapprunning entries and by container recovery (a draining/stopping app's
-// containers are being taken down deliberately — don't restart them). Entries
-// carry an expiry derived from the pipeline deadline so a failed shutdown
-// can't wedge the node in a draining state.
-const appLbStates = new Map();
-
+// flux-shutdownd drain socket.
+//
+// TWO consumers, which is why this is not named for the load balancer: it is
+// stamped onto fluxapprunning entries (so FDM pulls the backend), AND the
+// reconciler stands down entirely while it is set — a draining app's
+// containers must keep serving, a stopped one must not be restarted into the
+// daemon's signal stage. The second is local actuation control, and calling
+// this "LB state" hid that.
+//
+// Entries carry an expiry derived from the pipeline deadline so a failed
+// shutdown can't wedge the node in a draining state.
+const appShutdownPipelineStates = new Map();
 
 // Cache references - these will be initialized from cacheManager
 let spawnErrorsLongerAppCache = null;
@@ -147,56 +152,56 @@ module.exports = {
   },
 
   /**
-   * Record an app's load-balancer lifecycle state with an expiry.
+   * Record an app's shutdown-pipeline state with an expiry.
    * @param {string} appName
    * @param {'draining'|'stopping'} state
    * @param {number} expiresAt epoch ms after which the entry no longer applies
    */
-  setAppLbState(appName, state, expiresAt) {
-    appLbStates.set(appName, { state, expiresAt });
+  setAppShutdownPipelineState(appName, state, expiresAt) {
+    appShutdownPipelineStates.set(appName, { state, expiresAt });
   },
 
   /**
-   * The app's current LB lifecycle state, or null when none/expired.
+   * The app's current shutdown-pipeline state, or null when none/expired.
    * Expired entries are removed on read.
    * @param {string} appName
    * @returns {'draining'|'stopping'|null}
    */
-  getAppLbState(appName) {
-    const entry = appLbStates.get(appName);
+  getAppShutdownPipelineState(appName) {
+    const entry = appShutdownPipelineStates.get(appName);
     if (!entry) return null;
     if (entry.expiresAt <= Date.now()) {
-      appLbStates.delete(appName);
+      appShutdownPipelineStates.delete(appName);
       return null;
     }
     return entry.state;
   },
 
   /**
-   * Remove an app's LB state (drain cancelled / pipeline aborted).
+   * Remove an app's shutdown-pipeline state (drain cancelled / aborted).
    * @param {string} appName
    * @returns {boolean} whether an entry existed
    */
-  clearAppLbState(appName) {
-    return appLbStates.delete(appName);
+  clearAppShutdownPipelineState(appName) {
+    return appShutdownPipelineStates.delete(appName);
   },
 
   /**
-   * Drop every expired LB state entry.
+   * Drop every expired shutdown-pipeline state entry.
    * @returns {string[]} the app names whose entries expired
    */
-  sweepExpiredAppLbStates() {
+  sweepExpiredAppShutdownPipelineStates() {
     const now = Date.now();
     const expired = [];
-    appLbStates.forEach((entry, appName) => {
+    appShutdownPipelineStates.forEach((entry, appName) => {
       if (entry.expiresAt <= now) expired.push(appName);
     });
-    expired.forEach((appName) => appLbStates.delete(appName));
+    expired.forEach((appName) => appShutdownPipelineStates.delete(appName));
     return expired;
   },
 
-  hasAppLbStates() {
-    return appLbStates.size > 0;
+  hasAppShutdownPipelineStates() {
+    return appShutdownPipelineStates.size > 0;
   },
 
   get spawnErrorsLongerAppCache() { return spawnErrorsLongerAppCache; },

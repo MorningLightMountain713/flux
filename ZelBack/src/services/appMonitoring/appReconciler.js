@@ -575,7 +575,7 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
   // state holds — it self-expires at deadline+slack, and clear/expiry enqueue a
   // reconcile, so recovery resumes the moment the pipeline ends.
   const { appName } = spec.comp;
-  if (globalState.getAppLbState(appName)) return { desired: null, reason: 'shutdownPipeline' };
+  if (globalState.getAppShutdownPipelineState(appName)) return { desired: null, reason: 'shutdownPipeline' };
   // Only decider-owned components hold for a controller opinion: activeStandby
   // (the election decides which instance runs) and sync-before-start (the sync
   // readiness decider starts it once its data is complete). Plain-sync

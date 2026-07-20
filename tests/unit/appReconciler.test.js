@@ -114,7 +114,7 @@ describe('appReconciler tests', () => {
         appsMonitored: {},
         bootContainerStateSettled: true,
         waitForBootContainerStateSettled: () => Promise.resolve(),
-        getAppLbState: sinon.stub().returns(null),
+        getAppShutdownPipelineState: sinon.stub().returns(null),
       },
       appInspector: { startAppMonitoring: sinon.stub(), stopAppMonitoring: sinon.stub() },
       appsRuntimeState: {
@@ -276,14 +276,14 @@ describe('appReconciler tests', () => {
 
   describe('shutdown pipeline holds (LB drain state)', () => {
     it('takes no action on a stopped component while its app is stopping', async () => {
-      stubs.globalState.getAppLbState.returns('stopping');
+      stubs.globalState.getAppShutdownPipelineState.returns('stopping');
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
     it('does not stop a still-running component while its app is draining', async () => {
-      stubs.globalState.getAppLbState.returns('draining');
+      stubs.globalState.getAppShutdownPipelineState.returns('draining');
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
@@ -291,7 +291,7 @@ describe('appReconciler tests', () => {
 
     it('does not restart a running-but-unhealthy component while its app is draining', async () => {
       // the shutdown-pipeline hold (desired:null) must win over the livenessProbe actuator
-      stubs.globalState.getAppLbState.returns('draining');
+      stubs.globalState.getAppShutdownPipelineState.returns('draining');
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'unhealthy' } } });
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerRestart.called).to.be.false;
@@ -299,7 +299,7 @@ describe('appReconciler tests', () => {
     });
 
     it('restarts the stopped component on the first reconcile after the state clears', async () => {
-      stubs.globalState.getAppLbState.returns(null);
+      stubs.globalState.getAppShutdownPipelineState.returns(null);
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStart.calledWith('www_App')).to.be.true;
     });

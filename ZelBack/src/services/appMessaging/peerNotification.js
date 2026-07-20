@@ -8,14 +8,12 @@ const messageStore = require('./messageStore');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
 const appsRepository = require('../appDatabase/appsRepository');
-const appQueryService = require('../appQuery/appQueryService');
 const dockerService = require('../dockerService');
 const appReconciler = require('../appMonitoring/appReconciler');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 
 const fluxEventBus = require('../utils/fluxEventBus');
 
-let checkAndNotifyPeersOfRunningAppsFirstRun = true;
 let broadcastInterval = null;
 let broadcastInProgress = false;
 let rebroadcastNeeded = false;
@@ -123,7 +121,7 @@ async function checkAndNotifyPeersOfRunningApps() {
             name: appName,
             hash: application.hash || '',
             runningSince: runningOnMyNodeSince,
-            state: globalState.getAppLbState(appName) ?? 'active',
+            state: globalState.getAppShutdownPipelineState(appName) ?? 'active',
             ...(identity != null ? { replica: identity } : {}),
           });
         }
@@ -153,7 +151,7 @@ async function checkAndNotifyPeersOfRunningApps() {
     } catch (err) {
       log.error(err);
     }
-    const runningAppsCache = globalState.runningAppsCache;
+    const { runningAppsCache } = globalState;
     runningAppsCache.clear();
     apps.forEach((app) => {
       runningAppsCache.add(app.name);
