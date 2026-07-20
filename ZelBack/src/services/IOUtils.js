@@ -7,8 +7,8 @@ const path = require('path');
 const { formidable } = require('formidable');
 const serviceHelper = require('./serviceHelper');
 const messageHelper = require('./messageHelper');
-const deviceHelper = require('./deviceHelper');
 const verificationHelper = require('./verificationHelper');
+const volumeService = require('./utils/volumeService');
 const exec = util.promisify(require('child_process').exec);
 const { URL } = require('url');
 const { sanitizePath, validateFilename, verifyRealPathOfExistingPath } = require('./utils/pathSecurity');
@@ -242,42 +242,53 @@ function bytesPerUnit(multiplier) {
   }
 }
 
+/**
+ * The API presentation of volume rows: unit conversion, rounding and field
+ * selection. Resolution lives in volumeService — keeping them apart is why the
+ * callers that just want a path no longer pass formatting arguments they have
+ * no opinion about (seven of them were passing those in the wrong order and
+ * getting away with it).
+ *
+ * @param {Array<object>} volumes - rows from volumeService.listComponentVolumeMounts
+ * @param {{multiplier?: string, decimal?: number, fields?: string}} opts
+ */
+function formatVolumeInfo(volumes, { multiplier, decimal, fields } = {}) {
+  const allowedFields = fields ? String(fields).split(',') : null;
+  const divisor = bytesPerUnit(multiplier);
+  const precision = Number(decimal);
+  const toUnit = (bytes) => {
+    const value = bytes / divisor;
+    return Number.isFinite(precision) ? Number(value.toFixed(precision)) : value;
+  };
+  return volumes
+    .map((volume) => {
+      const full = {
+        filesystem: volume.filesystem,
+        size: toUnit(volume.sizeBytes),
+        used: toUnit(volume.usedBytes),
+        available: toUnit(volume.availableBytes),
+        capacity: volume.capacity,
+        mount: volume.mount,
+        replica: volume.replica,
+      };
+      return allowedFields
+        ? Object.fromEntries(Object.entries(full).filter(([key]) => allowedFields.includes(key)))
+        : full;
+    })
+    .filter((entry) => Object.keys(entry).length > 0);
+}
+
+/**
+ * The volume-data API shape, across every identity of a component.
+ * Resolution + presentation, for the route that reports usage.
+ */
 async function getVolumeInfo(appname, component, multiplier, decimal, fields) {
   try {
-    const filesystems = await deviceHelper.listMountedFilesystems();
-    let regex;
-    if (component === 'null') {
-      // v1-3 single-component form; never named, so never replica-qualified.
-      regex = new RegExp(`flux${appname}$`);
-    } else {
-      // The optional third segment is a replica name (co-located named
-      // replicas mount one volume per replica; all of them match here).
-      regex = new RegExp(`flux${component}_${appname}(?:_[a-z0-9-]+)?$`);
-    }
-    const allowedFields = fields ? fields.split(',') : null;
-    const divisor = bytesPerUnit(multiplier);
-    const precision = Number(decimal);
-    const toUnit = (bytes) => {
-      const value = bytes / divisor;
-      return Number.isFinite(precision) ? Number(value.toFixed(precision)) : value;
-    };
-    const matched = filesystems
-      .filter((entry) => regex.test(entry.target))
-      .map((entry) => {
-        const full = {
-          filesystem: entry.source,
-          size: toUnit(entry.sizeBytes),
-          used: toUnit(entry.usedBytes),
-          available: toUnit(entry.availableBytes),
-          capacity: entry.usePercent / 100,
-          mount: entry.target,
-        };
-        return allowedFields
-          ? Object.fromEntries(Object.entries(full).filter(([key]) => allowedFields.includes(key)))
-          : full;
-      })
-      .filter((entry) => Object.keys(entry).length > 0);
-    return matched.length > 0 ? matched : false;
+    // 'null' is the v1-3 flat form, whose identifier is the bare app name.
+    const resolvedComponent = component === 'null' ? appname : component;
+    const volumes = await volumeService.listComponentVolumeMounts(appname, resolvedComponent);
+    const formatted = formatVolumeInfo(volumes, { multiplier, decimal, fields });
+    return formatted.length > 0 ? formatted : false;
   } catch (error) {
     log.error(error);
     return false;
@@ -609,6 +620,7 @@ async function fileUpload(req, res) {
 
 module.exports = {
   getVolumeInfo,
+  formatVolumeInfo,
   getPathFileList,
   getRemoteFileSize,
   getFileSize,

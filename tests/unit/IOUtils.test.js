@@ -61,6 +61,10 @@ describe('IOUtils getVolumeInfo tests', () => {
       available: 1500,
       capacity: 0.25,
       mount: '/dat/var/lib/fluxos/flux-apps/fluxweb_myapp',
+      // Reported so a co-located app's rows can be told apart: this route
+      // answers for every identity of the component, and two rows that differ
+      // only by which replica owns them are useless without it.
+      replica: null,
     }]);
   });
 

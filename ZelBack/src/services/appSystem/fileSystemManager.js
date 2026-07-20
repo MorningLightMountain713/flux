@@ -5,10 +5,10 @@ const path = require('path');
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
-const IOUtils = require('../IOUtils');
 const fs = require('fs').promises;
 const log = require('../../lib/log');
 const { sanitizePath, verifyRealPath, verifyRealPathOfExistingPath } = require('../utils/pathSecurity');
+const { resolveVolumeTarget } = require('./volumeTarget');
 
 /**
  * To create a folder in app's volume. Only accessible by app owners and above.
@@ -23,22 +23,11 @@ async function createAppsFolder(req, res) {
     if (authorized) {
       let { folder } = req.params;
       folder = folder || req.query.folder || '';
-      let { component } = req.params;
-      component = component || req.query.component || '';
-      if (!appname || !component) {
-        throw new Error('appname and component parameters are mandatory');
-      }
-      let filepath;
-      const appVolumePath = await IOUtils.getVolumeInfo(appname, component, 'B', 'mount', 0);
-      if (appVolumePath.length > 0) {
-        // Use appid level to access appdata and all other mount points
-        // Sanitize folder path to prevent directory traversal attacks
-        filepath = sanitizePath(folder, appVolumePath[0].mount);
-        // Verify resolved path stays within the allowed base directory
-        await verifyRealPathOfExistingPath(filepath, appVolumePath[0].mount);
-      } else {
-        throw new Error('Application volume not found');
-      }
+      const { mount } = await resolveVolumeTarget(req);
+      // Sanitize folder path to prevent directory traversal attacks, then
+      // verify the resolved path stays within the volume it was built from.
+      const filepath = sanitizePath(folder, mount);
+      await verifyRealPathOfExistingPath(filepath, mount);
       const mkdirResult = await serviceHelper.runCommand('mkdir', { runAsRoot: true, params: [filepath] });
       if (mkdirResult.error) {
         throw mkdirResult.error;
@@ -87,27 +76,20 @@ async function renameAppsObject(req, res) {
       }
       // stop sharing of ALL files that start with the path
       const fileURI = encodeURIComponent(oldpath);
-      let oldfullpath;
-      let newfullpath;
-      const appVolumePath = await IOUtils.getVolumeInfo(appname, component, 'B', 'mount', 0);
-      if (appVolumePath.length > 0) {
-        // Use appid level to access appdata and all other mount points
-        // Sanitize paths to prevent directory traversal attacks
-        oldfullpath = sanitizePath(oldpath, appVolumePath[0].mount);
-        newfullpath = sanitizePath(newname, appVolumePath[0].mount);
-      } else {
-        throw new Error('Application volume not found');
-      }
+      const { mount } = await resolveVolumeTarget(req);
+      // Sanitize paths to prevent directory traversal attacks
+      const oldfullpath = sanitizePath(oldpath, mount);
+      let newfullpath = sanitizePath(newname, mount);
       const fileURIArray = fileURI.split('%2F');
       fileURIArray.pop();
       if (fileURIArray.length > 0) {
         const renamingFolder = fileURIArray.join('/');
         // Sanitize the combined path as well
-        newfullpath = sanitizePath(`${renamingFolder}/${newname}`, appVolumePath[0].mount);
+        newfullpath = sanitizePath(`${renamingFolder}/${newname}`, mount);
       }
       // Verify parent directories resolve within the allowed base directory to prevent symlink escapes.
-      await verifyRealPathOfExistingPath(path.dirname(oldfullpath), appVolumePath[0].mount);
-      await verifyRealPathOfExistingPath(path.dirname(newfullpath), appVolumePath[0].mount);
+      await verifyRealPathOfExistingPath(path.dirname(oldfullpath), mount);
+      await verifyRealPathOfExistingPath(path.dirname(newfullpath), mount);
 
       // Allow renaming symlinks directly (mv renames the link itself, not the target).
       // For non-symlink targets, enforce full real path containment.
@@ -121,7 +103,7 @@ async function renameAppsObject(req, res) {
         }
       }
       if (!isSymbolicLink) {
-        await verifyRealPath(oldfullpath, appVolumePath[0].mount);
+        await verifyRealPath(oldfullpath, mount);
       }
       const mvResult = await serviceHelper.runCommand('mv', { runAsRoot: true, params: ['-T', oldfullpath, newfullpath] });
       if (mvResult.error) {
@@ -170,17 +152,11 @@ async function removeAppsObject(req, res) {
       if (!object) {
         throw new Error('No object specified');
       }
-      let filepath;
-      const appVolumePath = await IOUtils.getVolumeInfo(appname, component, 'B', 'mount', 0);
-      if (appVolumePath.length > 0) {
-        // Use appid level to access appdata and all other mount points
-        // Sanitize object path to prevent directory traversal attacks
-        filepath = sanitizePath(object, appVolumePath[0].mount);
-      } else {
-        throw new Error('Application volume not found');
-      }
+      const { mount } = await resolveVolumeTarget(req);
+      // Sanitize object path to prevent directory traversal attacks
+      const filepath = sanitizePath(object, mount);
       // Verify parent directories resolve within the allowed base directory to prevent symlink escapes.
-      await verifyRealPathOfExistingPath(path.dirname(filepath), appVolumePath[0].mount);
+      await verifyRealPathOfExistingPath(path.dirname(filepath), mount);
 
       // Allow removing symlinks directly (rm removes the link itself, not the target).
       // For non-symlink targets (or symlinks in parent components), enforce real path containment.
@@ -195,7 +171,7 @@ async function removeAppsObject(req, res) {
       }
       if (!isSymbolicLink) {
         // Verify resolved path stays within the allowed base directory
-        await verifyRealPathOfExistingPath(filepath, appVolumePath[0].mount);
+        await verifyRealPathOfExistingPath(filepath, mount);
       }
       const rmResult = await serviceHelper.runCommand('rm', { runAsRoot: true, params: ['-rf', filepath] });
       if (rmResult.error) {
@@ -245,17 +221,11 @@ async function downloadAppsFolder(req, res) {
         res.json(errorResponse);
         return;
       }
-      let folderpath;
-      const appVolumePath = await IOUtils.getVolumeInfo(appname, component, 'B', 'mount', 0);
-      if (appVolumePath.length > 0) {
-        // Use appid level to access appdata and all other mount points
-        // Sanitize folder path to prevent directory traversal attacks
-        folderpath = sanitizePath(folder, appVolumePath[0].mount);
-        // Verify real path after symlink resolution to prevent symlink escape attacks
-        await verifyRealPath(folderpath, appVolumePath[0].mount);
-      } else {
-        throw new Error('Application volume not found');
-      }
+      const { mount } = await resolveVolumeTarget(req);
+      // Sanitize folder path to prevent directory traversal attacks
+      const folderpath = sanitizePath(folder, mount);
+      // Verify real path after symlink resolution to prevent symlink escape attacks
+      await verifyRealPath(folderpath, mount);
       const zip = archiver('zip');
       const sizeStream = new PassThrough();
       let compressedSize = 0;
@@ -320,17 +290,11 @@ async function downloadAppsFile(req, res) {
         res.json(errorResponse);
         return;
       }
-      let filepath;
-      const appVolumePath = await IOUtils.getVolumeInfo(appname, component, 'B', 'mount', 0);
-      if (appVolumePath.length > 0) {
-        // Use appid level to access appdata and all other mount points
-        // Sanitize file path to prevent directory traversal attacks
-        filepath = sanitizePath(file, appVolumePath[0].mount);
-        // Verify real path after symlink resolution to prevent symlink escape attacks
-        await verifyRealPath(filepath, appVolumePath[0].mount);
-      } else {
-        throw new Error('Application volume not found');
-      }
+      const { mount } = await resolveVolumeTarget(req);
+      // Sanitize file path to prevent directory traversal attacks
+      const filepath = sanitizePath(file, mount);
+      // Verify real path after symlink resolution to prevent symlink escape attacks
+      await verifyRealPath(filepath, mount);
       const chmodResult = await serviceHelper.runCommand('chmod', { runAsRoot: true, params: ['777', filepath] });
       if (chmodResult.error) {
         throw chmodResult.error;

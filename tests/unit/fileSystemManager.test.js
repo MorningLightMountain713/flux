@@ -7,7 +7,7 @@ describe('fileSystemManager tests', () => {
   let verificationHelperStub;
   let messageHelperStub;
   let serviceHelperStub;
-  let IOUtilsStub;
+  let volumeTargetStub;
   let logStub;
   let pathSecurityStub;
 
@@ -28,8 +28,13 @@ describe('fileSystemManager tests', () => {
       runCommand: sinon.stub(),
     };
 
-    IOUtilsStub = {
-      getVolumeInfo: sinon.stub(),
+    // The handlers depend on "resolve which volume this request addresses",
+    // not on how that is done — volumeTarget owns the identity rule and is
+    // covered on its own.
+    volumeTargetStub = {
+      resolveVolumeTarget: sinon.stub().resolves({
+        appname: 'testapp', component: 'testcomp', replica: null, mount: '/mnt/testapp',
+      }),
     };
 
     logStub = {
@@ -53,9 +58,9 @@ describe('fileSystemManager tests', () => {
       '../messageHelper': messageHelperStub,
       '../verificationHelper': verificationHelperStub,
       '../serviceHelper': serviceHelperStub,
-      '../IOUtils': IOUtilsStub,
       '../../lib/log': logStub,
       '../utils/pathSecurity': pathSecurityStub,
+      './volumeTarget': volumeTargetStub,
     });
   });
 
@@ -74,7 +79,6 @@ describe('fileSystemManager tests', () => {
       };
 
       verificationHelperStub.verifyPrivilege.resolves(true);
-      IOUtilsStub.getVolumeInfo.resolves([{ mount: '/mnt/testapp' }]);
       serviceHelperStub.runCommand.resolves({});
       messageHelperStub.createSuccessMessage.returns({ status: 'success', data: { message: 'Folder Created' } });
 
@@ -119,7 +123,8 @@ describe('fileSystemManager tests', () => {
       };
 
       verificationHelperStub.verifyPrivilege.resolves(true);
-      messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'appname and component parameters are mandatory' } });
+      volumeTargetStub.resolveVolumeTarget.rejects(new Error('appname parameter is mandatory'));
+      messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'appname parameter is mandatory' } });
 
       await fileSystemManager.createAppsFolder(req, res);
 
@@ -137,7 +142,7 @@ describe('fileSystemManager tests', () => {
       };
 
       verificationHelperStub.verifyPrivilege.resolves(true);
-      IOUtilsStub.getVolumeInfo.resolves([]);
+      volumeTargetStub.resolveVolumeTarget.rejects(new Error('Application volume not found'));
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Application volume not found' } });
 
       await fileSystemManager.createAppsFolder(req, res);
@@ -161,7 +166,6 @@ describe('fileSystemManager tests', () => {
       };
 
       verificationHelperStub.verifyPrivilege.resolves(true);
-      IOUtilsStub.getVolumeInfo.resolves([{ mount: '/mnt/testapp' }]);
       serviceHelperStub.runCommand.resolves({});
       messageHelperStub.createSuccessMessage.returns({ status: 'success', data: { message: 'Rename successful' } });
 
@@ -191,7 +195,6 @@ describe('fileSystemManager tests', () => {
       };
 
       verificationHelperStub.verifyPrivilege.resolves(true);
-      IOUtilsStub.getVolumeInfo.resolves([{ mount: '/mnt/testapp' }]);
       serviceHelperStub.runCommand.resolves({});
       messageHelperStub.createSuccessMessage.returns({ status: 'success', data: { message: 'Rename successful' } });
 
@@ -284,7 +287,6 @@ describe('fileSystemManager tests', () => {
       };
 
       verificationHelperStub.verifyPrivilege.resolves(true);
-      IOUtilsStub.getVolumeInfo.resolves([{ mount: '/mnt/testapp' }]);
       serviceHelperStub.runCommand.resolves({});
       messageHelperStub.createSuccessMessage.returns({ status: 'success', data: { message: 'File Removed' } });
 
@@ -311,7 +313,6 @@ describe('fileSystemManager tests', () => {
       };
 
       verificationHelperStub.verifyPrivilege.resolves(true);
-      IOUtilsStub.getVolumeInfo.resolves([{ mount: '/mnt/testapp' }]);
       serviceHelperStub.runCommand.resolves({});
       messageHelperStub.createSuccessMessage.returns({ status: 'success', data: { message: 'File Removed' } });
 
@@ -417,7 +418,7 @@ describe('fileSystemManager tests', () => {
       };
 
       verificationHelperStub.verifyPrivilege.resolves(true);
-      IOUtilsStub.getVolumeInfo.resolves([]);
+      volumeTargetStub.resolveVolumeTarget.rejects(new Error('Application volume not found'));
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Application volume not found' } });
 
       await fileSystemManager.downloadAppsFolder(req, res);
@@ -439,7 +440,6 @@ describe('fileSystemManager tests', () => {
       };
 
       verificationHelperStub.verifyPrivilege.resolves(true);
-      IOUtilsStub.getVolumeInfo.resolves([{ mount: '/mnt/testapp' }]);
       serviceHelperStub.runCommand.resolves({});
 
       await fileSystemManager.downloadAppsFile(req, res);
@@ -499,7 +499,7 @@ describe('fileSystemManager tests', () => {
       };
 
       verificationHelperStub.verifyPrivilege.resolves(true);
-      IOUtilsStub.getVolumeInfo.resolves([]);
+      volumeTargetStub.resolveVolumeTarget.rejects(new Error('Application volume not found'));
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Application volume not found' } });
 
       await fileSystemManager.downloadAppsFile(req, res);

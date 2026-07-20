@@ -5,6 +5,7 @@ const verificationHelper = require('../verificationHelper');
 const IOUtils = require('../IOUtils');
 const log = require('../../lib/log');
 const { sanitizePath, verifyRealPath } = require('../utils/pathSecurity');
+const { resolveVolumeTarget } = require('../appSystem/volumeTarget');
 
 /**
  * To get apps folder contents.
@@ -19,22 +20,12 @@ async function getAppsFolder(req, res) {
     if (authorized) {
       let { folder } = req.params;
       folder = folder || req.query.folder || '';
-      let { component } = req.params;
-      component = component || req.query.component || '';
-      if (!appname || !component) {
-        throw new Error('appname and component parameters are mandatory');
-      }
-      let filepath;
-      const appVolumePath = await IOUtils.getVolumeInfo(appname, component, 'B', 'mount', 0);
-      if (appVolumePath.length > 0) {
-        // Browse at appid level to show appdata and all other mount points
-        // Sanitize folder path to prevent directory traversal attacks
-        filepath = sanitizePath(folder, appVolumePath[0].mount);
-        // Verify resolved path stays within the allowed base directory
-        await verifyRealPath(filepath, appVolumePath[0].mount);
-      } else {
-        throw new Error('Application volume not found');
-      }
+      // Browse at appid level to show appdata and all other mount points.
+      const { mount } = await resolveVolumeTarget(req);
+      // Sanitize folder path to prevent directory traversal attacks
+      const filepath = sanitizePath(folder, mount);
+      // Verify resolved path stays within the allowed base directory
+      await verifyRealPath(filepath, mount);
       const options = {
         withFileTypes: false,
       };
