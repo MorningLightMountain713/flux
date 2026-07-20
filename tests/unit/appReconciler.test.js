@@ -183,12 +183,17 @@ describe('appReconciler tests', () => {
       '../serviceHelper': stubs.serviceHelper,
       '../telemetrySinkCache': stubs.telemetrySinkCache,
       '../utils/appConstants': { localAppsInformation: 'zelappsinformation' },
-      '../utils/componentIdentifier': {
-        appNameFromIdentifier: (id) => { const parts = id.split('_'); return parts.length <= 1 ? id : parts[1]; },
-        componentNameFromIdentifier: (id) => id.split('_')[0],
-        replicaFromIdentifier: (id) => { const parts = id.split('_'); return parts.length >= 3 ? parts[2] : null; },
+      // The identifier rule comes from flux-spec itself now, awaited, rather
+      // than through the retired sync bridge.
+      '../utils/specLibs': {
+        getSpecBackend: sinon.stub().resolves({
+          DeploymentSpec: {
+            appNameFromIdentifier: (id) => { const parts = id.split('_'); return parts.length <= 1 ? id : parts[1]; },
+            componentNameFromIdentifier: (id) => id.split('_')[0],
+            replicaFromIdentifier: (id) => { const parts = id.split('_'); return parts.length >= 3 ? parts[2] : null; },
+          },
+        }),
       },
-      '../utils/specLibs': { getSpecBackend: sinon.stub().resolves() },
     });
   });
 
