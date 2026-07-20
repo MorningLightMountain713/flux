@@ -21,6 +21,30 @@ const {
   GuardedHttpsAgent,
 } = require('../../ZelBack/src/services/utils/urlSecurity');
 
+// The DNS-resolving entry point gets a fake resolver. Left real, these cases
+// asserted on the machine's DNS: one needed example.com to resolve, the other
+// needed a made-up name NOT to — which quietly inverts on any resolver that
+// hijacks NXDOMAIN. urlSecurity promisifies dns.lookup at module load, so the
+// fake is injected rather than stubbed after the fact.
+const RESOLVES_TO = {
+  'example.com': [{ address: '93.184.216.34', family: 4 }],
+};
+const { validateUrlWithDns } = proxyquire('../../ZelBack/src/services/utils/urlSecurity', {
+  dns: {
+    lookup: (hostname, opts, cb) => {
+      const done = typeof opts === 'function' ? opts : cb;
+      const answer = RESOLVES_TO[hostname];
+      if (!answer) {
+        const err = new Error(`getaddrinfo ENOTFOUND ${hostname}`);
+        err.code = 'ENOTFOUND';
+        done(err);
+        return;
+      }
+      done(null, answer);
+    },
+  },
+});
+
 describe('urlSecurity', () => {
   describe('validateUrl', () => {
     it('should allow valid external HTTPS URLs', () => {
