@@ -7,6 +7,7 @@ const log = require('../../lib/log');
 const { sanitizePath, verifyRealPathOfExistingPath } = require('../utils/pathSecurity');
 const { isReservedName, reachesReservedName } = require('../appSystem/volumeReservedNames');
 const { Privilege, authOf } = require('../utils/privileges');
+const { resolveVolumeTarget } = require('../appSystem/volumeTarget');
 
 /**
  * To get apps folder contents.
@@ -21,27 +22,17 @@ async function getAppsFolder(req, res) {
     if (authorized) {
       let { folder } = req.params;
       folder = folder || req.query.folder || '';
-      let { component } = req.params;
-      component = component || req.query.component || '';
-      if (!appname || !component) {
-        throw new Error('appname and component parameters are mandatory');
-      }
-      let filepath;
-      const { mounts } = await IOUtils.getVolumeInfo(appname, component, 'B', 'mount', 0);
-      if (mounts.length > 0) {
-        // Browse at appid level to show appdata and all other mount points
-        // Sanitize folder path to prevent directory traversal attacks
-        filepath = sanitizePath(folder, mounts[0].mount);
-        // Verify resolved path stays within the allowed base directory
-        const realPath = await verifyRealPathOfExistingPath(filepath, mounts[0].mount);
-        // Inside the volume is not the same as the owner's. The filter below hides
-        // these from the root listing; this is what makes asking for one by name get
-        // the same answer, which is the answer every write path already gives.
-        if (await reachesReservedName(realPath, mounts[0].mount)) {
-          throw new Error('Folder is not accessible');
-        }
-      } else {
-        throw new Error('Application volume not found');
+      // Browse at appid level to show appdata and all other mount points.
+      const { mount } = await resolveVolumeTarget(req);
+      // Sanitize folder path to prevent directory traversal attacks
+      const filepath = sanitizePath(folder, mount);
+      // Verify resolved path stays within the allowed base directory
+      const realPath = await verifyRealPathOfExistingPath(filepath, mount);
+      // Inside the volume is not the same as the owner's. The filter below hides
+      // these from the root listing; this is what makes asking for one by name get
+      // the same answer, which is the answer every write path already gives.
+      if (await reachesReservedName(realPath, mount)) {
+        throw new Error('Folder is not accessible');
       }
       const options = {
         withFileTypes: false,
@@ -55,7 +46,7 @@ async function getAppsFolder(req, res) {
       // sweep. They are implementation detail, they cannot be written through
       // any endpoint, and a listing that offers them invites an operation that
       // will only be refused.
-      const atRoot = filepath === mounts[0].mount;
+      const atRoot = filepath === mount;
       const files = atRoot ? listed.filter((name) => !isReservedName(name)) : listed;
 
       const filesWithDetails = [];

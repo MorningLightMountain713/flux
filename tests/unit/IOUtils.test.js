@@ -39,44 +39,49 @@ describe('IOUtils getVolumeInfo tests', () => {
     const result = await IOUtils.getVolumeInfo('myapp', 'web', 'B', 0, 'mount');
 
     sinon.assert.calledOnce(listStub);
-    expect(result).to.eql([{ mount: '/dat/var/lib/fluxos/flux-apps/fluxweb_myapp' }]);
+    expect(result).to.eql({ error: null, mounts: [{ mount: '/dat/var/lib/fluxos/flux-apps/fluxweb_myapp' }] });
   });
 
   it('matches only the requested component, not a sibling of the same app', async () => {
     const result = await IOUtils.getVolumeInfo('myapp', 'db', 'B', 0, 'mount');
-    expect(result).to.eql([{ mount: '/dat/var/lib/fluxos/flux-apps/fluxdb_myapp' }]);
+    expect(result).to.eql({ error: null, mounts: [{ mount: '/dat/var/lib/fluxos/flux-apps/fluxdb_myapp' }] });
   });
 
   it("matches a single-component app when component is 'null'", async () => {
     const result = await IOUtils.getVolumeInfo('singleapp', 'null', 'B', 0, 'mount');
-    expect(result).to.eql([{ mount: '/dat/var/lib/fluxos/flux-apps/fluxsingleapp' }]);
+    expect(result).to.eql({ error: null, mounts: [{ mount: '/dat/var/lib/fluxos/flux-apps/fluxsingleapp' }] });
   });
 
   it('returns full usage in MB with capacity as a fraction when no fields filter is given', async () => {
     const result = await IOUtils.getVolumeInfo('myapp', 'web', 'MB', '0', '');
-    expect(result).to.eql([{
+    expect(result).to.eql({ error: null, mounts: [{
       filesystem: '/dev/loop2',
       size: 2000,
       used: 500,
       available: 1500,
       capacity: 0.25,
       mount: '/dat/var/lib/fluxos/flux-apps/fluxweb_myapp',
-    }]);
+      // Reported so a co-located app's rows can be told apart: this route
+      // answers for every identity of the component, and two rows that differ
+      // only by which replica owns them are useless without it.
+      replica: null,
+    }] });
   });
 
   it('reports raw bytes for the B multiplier', async () => {
     const result = await IOUtils.getVolumeInfo('myapp', 'web', 'B', 0, 'size,available');
-    expect(result).to.eql([{ size: 2000000000, available: 1500000000 }]);
+    expect(result).to.eql({ error: null, mounts: [{ size: 2000000000, available: 1500000000 }] });
   });
 
-  it('returns false when no mount matches', async () => {
+  it('answers "not mounted" - empty mounts, no error - when nothing matches', async () => {
     const result = await IOUtils.getVolumeInfo('absent', 'web', 'B', 0, 'mount');
-    expect(result).to.equal(false);
+    expect(result).to.eql({ error: null, mounts: [] });
   });
 
-  it('returns false when listMountedFilesystems throws', async () => {
+  it('reports the mount table failure as an error, distinct from "not mounted"', async () => {
     listStub.rejects(new Error('findmnt failed'));
     const result = await IOUtils.getVolumeInfo('myapp', 'web', 'B', 0, 'mount');
-    expect(result).to.equal(false);
+    expect(result.mounts).to.eql([]);
+    expect(result.error).to.be.an('error');
   });
 });

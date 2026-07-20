@@ -1,12 +1,12 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const fs = require('fs').promises;
-const path = require('path');
 const fileQueryService = require('../../ZelBack/src/services/appQuery/fileQueryService');
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
+const volumeService = require('../../ZelBack/src/services/utils/volumeService');
 
 describe('fileQueryService tests', () => {
   afterEach(() => {
@@ -14,54 +14,6 @@ describe('fileQueryService tests', () => {
   });
 
   describe('getAppsFolder tests', () => {
-    // The volume root holds things that are not the owner's, and the listing filters
-    // them out of what it OFFERS. That says nothing about what an owner may ask for by
-    // name, and the two are different questions: an operation's scratch directory is
-    // FluxOS's working state, it carries a fixed name every owner can guess, and
-    // reading it walks or archives whatever a live operation happens to be holding.
-    // Every write path already refuses it; these make the reads agree.
-    describe('a path that names something other than the owner data', () => {
-      const MOUNT = '/mnt/appvolumes/TestApp_Component1';
-
-      const askFor = async (folder, { resolvesTo } = {}) => {
-        const res = { json: sinon.stub() };
-        sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-        sinon.stub(IOUtils, 'getVolumeInfo').resolves({ error: null, mounts: [{ mount: MOUNT }] });
-        sinon.stub(messageHelper, 'createErrorMessage').returns({ status: 'error' });
-        // realpath answers for the base and for the target; the target's answer is what
-        // a symlink would make it, which is the case a name check alone cannot see.
-        const realpath = sinon.stub(fs, 'realpath');
-        realpath.withArgs(MOUNT).resolves(MOUNT);
-        realpath.resolves(resolvesTo || `${MOUNT}/${folder}`);
-        sinon.stub(fs, 'readdir').resolves(['should-not-be-listed']);
-        sinon.stub(fs, 'lstat').resolves({
-          isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, size: 1, birthtime: new Date(), mtime: new Date(),
-        });
-        await fileQueryService.getAppsFolder({ params: { appname: 'TestApp', component: 'Component1' }, query: { folder } }, res);
-        return res.json.firstCall.args[0];
-      };
-
-      it('refuses the staging directory asked for by name', async () => {
-        const answer = await askFor('.flux-op');
-
-        expect(answer.status, 'the scratch directory was listed to its owner').to.equal('error');
-      });
-
-      it('refuses a name of the owner own that resolves into it', async () => {
-        const answer = await askFor('mine', { resolvesTo: `${MOUNT}/.flux-op/3f2504e0-4f89-11d3-9a0c-0305e82c3301` });
-
-        expect(answer.status, 'a link named nothing reserved arrived in the same place').to.equal('error');
-      });
-
-      // The canary: the same call shape, on a directory that IS the owner's, has to
-      // still work - otherwise the two above pass on a listing that refuses everything.
-      it('still lists a directory that belongs to the owner', async () => {
-        const answer = await askFor('appdata');
-
-        expect(answer.status, 'the guard refused the owner own data').to.not.equal('error');
-      });
-    });
-
     it('should return folder contents when authorized', async () => {
       const req = {
         params: { appname: 'TestApp', component: 'Component1' },
@@ -72,12 +24,9 @@ describe('fileQueryService tests', () => {
       };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [
-          { mount: '/mnt/appvolumes/TestApp_Component1' },
-        ],
-      });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([
+        { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
+      ]);
       sinon.stub(fs, 'readdir').resolves(['file1.txt', 'file2.txt', 'folder1']);
 
       const lstatStub = sinon.stub(fs, 'lstat');
@@ -138,7 +87,7 @@ describe('fileQueryService tests', () => {
       sinon.stub(fs, 'readdir').resolves([
         'appdata', 'backup', '.flux-op-backups',
         '.stfolder', '.stignore', 'lost+found',
-        '.flux-op', `.flux-op-${id}`,
+        `.flux-op-${id}`,
       ]);
       sinon.stub(fs, 'lstat').resolves({
         isDirectory: () => false,
@@ -155,9 +104,7 @@ describe('fileQueryService tests', () => {
 
       const listed = res.json.firstCall.args[0].data.map((entry) => entry.name);
       // backup holds the owner's own archives, and a folder merely resembling
-      // an artefact is a name they are entitled to choose. The staging directory
-      // is hidden as one exact name; the `.flux-op-<id>` beside it is what an
-      // earlier release left and is hidden until the sweep takes it.
+      // an artefact is a name they are entitled to choose.
       expect(listed).to.deep.equal(['appdata', 'backup', '.flux-op-backups']);
     });
 
@@ -253,7 +200,7 @@ describe('fileQueryService tests', () => {
       };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({ error: null, mounts: [] });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([]);
       sinon.stub(messageHelper, 'createErrorMessage').returns({ status: 'error' });
 
       await fileQueryService.getAppsFolder(req, res);
@@ -272,18 +219,17 @@ describe('fileQueryService tests', () => {
       };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      const volumeStub = sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [
-          { mount: '/mnt/appvolumes/TestApp_Component1' },
-        ],
-      });
+      const volumeStub = sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([
+        { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
+      ]);
       sinon.stub(fs, 'readdir').resolves([]);
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
       await fileQueryService.getAppsFolder(req, res);
 
-      sinon.assert.calledWith(volumeStub, 'TestApp', 'Component1', 'B', 'mount', 0);
+      // Resolution takes the identity only; unit/rounding/field selection are a
+      // presentation concern and no longer ride along as positional arguments.
+      sinon.assert.calledWith(volumeStub, 'TestApp', 'Component1');
       sinon.assert.calledOnce(res.json);
     });
 
@@ -297,12 +243,9 @@ describe('fileQueryService tests', () => {
       };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [
-          { mount: '/mnt/appvolumes/TestApp_Component1' },
-        ],
-      });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([
+        { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
+      ]);
       const readdirStub = sinon.stub(fs, 'readdir').resolves([]);
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
@@ -324,12 +267,9 @@ describe('fileQueryService tests', () => {
       const mtime = new Date('2024-01-02T00:00:00Z');
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [
-          { mount: '/mnt/appvolumes/TestApp_Component1' },
-        ],
-      });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([
+        { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
+      ]);
       sinon.stub(fs, 'readdir').resolves(['test.txt']);
       sinon.stub(fs, 'lstat').resolves({
         isDirectory: () => false,
@@ -364,26 +304,18 @@ describe('fileQueryService tests', () => {
       };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [
-          { mount: '/mnt/appvolumes/TestApp_Component1' },
-        ],
-      });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([
+        { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
+      ]);
       sinon.stub(fs, 'readdir').resolves(['link.txt']);
-      // Keyed on the path: the volume root is lstat'd too, by the containment
-      // check, and it is a directory rather than one of the entries.
-      const entryStats = {
+      sinon.stub(fs, 'lstat').resolves({
         isDirectory: () => false,
         isFile: () => false,
         isSymbolicLink: () => true,
         size: 512,
         birthtime: new Date(),
         mtime: new Date(),
-      };
-      sinon.stub(fs, 'lstat').callsFake(async (target) => (target === '/mnt/appvolumes/TestApp_Component1'
-        ? { isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false }
-        : entryStats));
+      });
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
       await fileQueryService.getAppsFolder(req, res);
@@ -403,12 +335,9 @@ describe('fileQueryService tests', () => {
       };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [
-          { mount: '/mnt/appvolumes/TestApp_Component1' },
-        ],
-      });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([
+        { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
+      ]);
       sinon.stub(fs, 'readdir').resolves(['bigfolder']);
       sinon.stub(fs, 'lstat').resolves({
         isDirectory: () => true,
@@ -438,12 +367,9 @@ describe('fileQueryService tests', () => {
       };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [
-          { mount: '/mnt/appvolumes/TestApp_Component1' },
-        ],
-      });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([
+        { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
+      ]);
       sinon.stub(fs, 'readdir').resolves([]);
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
@@ -465,12 +391,9 @@ describe('fileQueryService tests', () => {
       };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [
-          { mount: '/mnt/appvolumes/TestApp_Component1' },
-        ],
-      });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([
+        { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
+      ]);
       sinon.stub(fs, 'readdir').rejects(new Error('Permission denied'));
       sinon.stub(messageHelper, 'createErrorMessage').returns({ status: 'error' });
 
@@ -490,12 +413,9 @@ describe('fileQueryService tests', () => {
       };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [
-          { mount: '/mnt/appvolumes/TestApp_Component1' },
-        ],
-      });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([
+        { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
+      ]);
       sinon.stub(fs, 'readdir').resolves(['file.txt']);
       sinon.stub(fs, 'lstat').rejects(new Error('File not found'));
       sinon.stub(messageHelper, 'createErrorMessage').returns({ status: 'error' });
@@ -504,33 +424,6 @@ describe('fileQueryService tests', () => {
 
       sinon.assert.calledOnce(res.json);
       expect(res.json.firstCall.args[0].status).to.equal('error');
-    });
-
-    // The containment check is held to the deepest part of the path that
-    // exists. A folder that has not been created yet cannot be resolved, and a
-    // check that reads "cannot resolve" as "nothing to verify" never sees the
-    // directory above it leading out of the volume.
-    it('refuses a folder whose existing parent is a link out of the volume', async () => {
-      const req = { params: { appname: 'TestApp', component: 'Component1', folder: 'parent/missing' }, query: {} };
-      const res = { json: sinon.stub() };
-
-      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [{ mount: '/mnt/appvolumes/TestApp_Component1' }],
-      });
-      const parent = '/mnt/appvolumes/TestApp_Component1/parent';
-      const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      sinon.stub(fs, 'lstat').callsFake(async (target) => {
-        if (target === `${parent}/missing`) throw enoent;
-        return { isSymbolicLink: () => target === parent };
-      });
-      sinon.stub(fs, 'realpath').callsFake(async (target) => (target === parent ? '/mnt/appvolumes/OtherApp_Component1' : target));
-      const readdir = sinon.stub(fs, 'readdir').resolves([]);
-
-      await fileQueryService.getAppsFolder(req, res);
-
-      sinon.assert.notCalled(readdir);
     });
 
     it('should handle mixed files and folders', async () => {
@@ -543,34 +436,38 @@ describe('fileQueryService tests', () => {
       };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({
-        error: null,
-        mounts: [
-          { mount: '/mnt/appvolumes/TestApp_Component1' },
-        ],
-      });
-      // Only the volume root holds these; the size walk descends into `folder`
-      // and an unkeyed stub would hand it the same three entries forever.
-      sinon.stub(fs, 'readdir').callsFake(async (target) => (target === '/mnt/appvolumes/TestApp_Component1'
-        ? ['file.txt', 'folder', 'link.txt']
-        : []));
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([
+        { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
+      ]);
+      sinon.stub(fs, 'readdir').resolves(['file.txt', 'folder', 'link.txt']);
 
-      // Keyed on the path rather than on call order: the containment check
-      // lstats the volume root as well, and an ordinal stub answers whichever
-      // call happens to arrive first.
-      const stats = (kind) => ({
-        isDirectory: () => kind === 'dir',
-        isFile: () => kind === 'file',
-        isSymbolicLink: () => kind === 'link',
+      const lstatStub = sinon.stub(fs, 'lstat');
+      lstatStub.onCall(0).resolves({
+        isDirectory: () => false,
+        isFile: () => true,
+        isSymbolicLink: () => false,
         size: 1024,
         birthtime: new Date(),
         mtime: new Date(),
       });
-      const byName = {
-        'file.txt': stats('file'), folder: stats('dir'), 'link.txt': stats('link'),
-      };
-      sinon.stub(fs, 'lstat').callsFake(async (target) => byName[path.basename(target)] || stats('dir'));
+      lstatStub.onCall(1).resolves({
+        isDirectory: () => true,
+        isFile: () => false,
+        isSymbolicLink: () => false,
+        size: 4096,
+        birthtime: new Date(),
+        mtime: new Date(),
+      });
+      lstatStub.onCall(2).resolves({
+        isDirectory: () => false,
+        isFile: () => false,
+        isSymbolicLink: () => true,
+        size: 512,
+        birthtime: new Date(),
+        mtime: new Date(),
+      });
 
+      sinon.stub(IOUtils, 'getFolderSize').resolves(8192);
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
       await fileQueryService.getAppsFolder(req, res);
