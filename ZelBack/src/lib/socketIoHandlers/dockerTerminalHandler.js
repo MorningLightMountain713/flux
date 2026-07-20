@@ -24,12 +24,14 @@ async function dockerTerminalHandler(socket) {
       return;
     }
 
-    const parts = nameOrId.split('_');
-    const component = parts.length > 1 ? parts[0].replace(/^flux/, '') || null : null;
-    const analyticsAppName = parts.length > 1 ? mainAppName : mainAppName.replace(/^flux/, '');
-    trackTerminalSession(zelidauth, analyticsAppName, 'open', clientIp, component);
+    // The container name IS the identity, replica segment included. Taking it
+    // apart into component and app so analytics could rebuild
+    // `${component}_${appName}` dropped that segment, reporting two co-located
+    // siblings' sessions under one target.
+    const terminalTarget = nameOrId.replace(/^flux/, '');
+    trackTerminalSession(zelidauth, terminalTarget, 'open', clientIp);
     socket.on('disconnect', () => {
-      trackTerminalSession(zelidauth, analyticsAppName, 'close', clientIp, component);
+      trackTerminalSession(zelidauth, terminalTarget, 'close', clientIp);
     });
 
     const cmd = {
