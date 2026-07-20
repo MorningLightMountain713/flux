@@ -192,6 +192,9 @@ describe('fluxNetworkMonitor tests', () => {
 
     beforeEach(() => {
       writeFileStub = sinon.stub(fs, 'writeFile').resolves();
+      // Writing a new IP also announces it on chain; unstubbed that is a real
+      // RPC to the daemon port.
+      sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').returns(true);
       // Backup original userconfig
       originalUserConfig = globalThis.userconfig;
       // Mock userconfig with expected test values
@@ -596,6 +599,9 @@ describe('fluxNetworkMonitor tests', () => {
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
       sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').returns(true);
       sinon.stub(serviceHelper, 'delay').returns(true);
+      // The collision path probes the other node's /flux/version over HTTP; the
+      // fixture IPs below are addresses this test must never actually dial.
+      sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('unreachable'));
       sinon.stub(fluxCommunicationUtils, 'socketAddressInFluxList').resolves(true);
       deterministicFluxnodeListResponse = [
         {
@@ -843,7 +849,7 @@ describe('fluxNetworkMonitor tests', () => {
       });
 
       // Mock successful axios call - other node is reachable
-      const axiosGetStub = sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { version: '6.0.0' } });
+      const axiosGetStub = serviceHelper.axiosGet.resolves({ data: { version: '6.0.0' } });
 
       await fluxNetworkMonitor.checkDeterministicNodesCollisions();
 
@@ -912,7 +918,7 @@ describe('fluxNetworkMonitor tests', () => {
       });
 
       // Mock axios to fail (other node unreachable) on both calls
-      const axiosGetStub = sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('Connection refused'));
+      const axiosGetStub = serviceHelper.axiosGet.rejects(new Error('Connection refused'));
 
       await fluxNetworkMonitor.checkDeterministicNodesCollisions();
 
@@ -980,7 +986,7 @@ describe('fluxNetworkMonitor tests', () => {
       });
 
       // Mock axios to fail first call but succeed on second (node comes back online)
-      const axiosGetStub = sinon.stub(serviceHelper, 'axiosGet');
+      const axiosGetStub = serviceHelper.axiosGet;
       axiosGetStub.onFirstCall().rejects(new Error('Connection refused'));
       axiosGetStub.onSecondCall().resolves({ data: { version: '6.0.0' } });
 

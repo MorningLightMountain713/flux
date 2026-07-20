@@ -1202,6 +1202,10 @@ describe('dockerService tests', () => {
     beforeEach(() => {
       dockerStub = sinon.stub(Dockerode.prototype, 'createContainer').returns(Promise.resolve('created'));
       volumeStub = sinon.stub(appVolumeService, 'ensureMountSourcesExist').resolves();
+      // appDockerCreate resolves this node's address for the platform env, and
+      // unstubbed that is a real RPC to the benchmark daemon. Unknown by
+      // default; the test that asserts FLUX_NODE_HOST_IP sets its own value.
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(null);
     });
 
     afterEach(() => {
@@ -1379,7 +1383,7 @@ describe('dockerService tests', () => {
     });
 
     it('adds FLUX_NODE_HOST_IP when the node address is known', async () => {
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('44.55.66.77:16127');
+      fluxNetworkHelper.getLocalSocketAddress.resolves('44.55.66.77:16127');
       const deployComp = makeDeployComp();
 
       await dockerService.appDockerCreate(deployComp);
