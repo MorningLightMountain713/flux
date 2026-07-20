@@ -3,8 +3,8 @@ const fs2 = require('fs');
 const log = require('../lib/log');
 const axios = require('axios');
 const path = require('path');
-const deviceHelper = require('./deviceHelper');
 const serviceHelper = require('./serviceHelper');
+const volumeService = require('./utils/volumeService');
 const { URL } = require('url');
 const { measureTree } = require('./utils/treeSize');
 const { validateUrlWithDns } = require('./utils/urlSecurity');
@@ -259,60 +259,75 @@ async function getRemoteFileSize(fileurl, multiplier, decimal, number = false) {
  *          an answer ("not mounted"); an `error` is a failure to answer, which a
  *          destructive caller must refuse on rather than read as "not mounted".
  */
-async function getVolumeInfo(appname, component, multiplier, decimal, fields) {
-  try {
-    const mounts = await deviceHelper.listMountedFilesystems();
+/**
+ * Bytes-per-unit divisor for a size multiplier string (B/KB/MB/GB/TB and the binary
+ * KiB/MiB/GiB/TiB forms). Decimal by default — anything unrecognized (including 'B')
+ * resolves to raw bytes, the unit most callers ask for.
+ * @param {string} multiplier
+ * @returns {number}
+ */
+function bytesPerUnit(multiplier) {
+  switch (String(multiplier).toUpperCase()) {
+    case 'KB': return 1e3;
+    case 'MB': return 1e6;
+    case 'GB': return 1e9;
+    case 'TB': return 1e12;
+    case 'KIB': return 1024;
+    case 'MIB': return 1024 ** 2;
+    case 'GIB': return 1024 ** 3;
+    case 'TIB': return 1024 ** 4;
+    default: return 1;
+  }
+}
 
-    // The identifier is `flux<component>_<app>`, and neither name may contain an
-    // underscore (components are alphanumeric, app names alphanumeric plus
-    // internal hyphens), so the pair cannot be ambiguous. Both are validated
-    // against those charsets before reaching here, which is also what keeps them
-    // safe to interpolate into a pattern.
-    const identifier = component === 'null' ? `flux${appname}` : `flux${component}_${appname}`;
-
-    // A path the KERNEL reports as a mountpoint, selected by the request - never
-    // a path built from it. The worst a hostile appname can do is match nothing.
-    // Co-located named replicas mount one volume each, as `<identifier>_<replica>`:
-    // the replica is the third segment and no name may contain an underscore, so
-    // what follows the identifier is unambiguously one replica name. The v1-3
-    // single-component form is never named, so never replica-qualified.
-    const namesThisApp = (name) => {
-      if (name === identifier) return true;
-      if (component === 'null' || !name.startsWith(`${identifier}_`)) return false;
-      const replica = name.slice(identifier.length + 1);
-      return replica.length > 0 && !replica.includes('_');
-    };
-    const matched = mounts.filter((mount) => namesThisApp(path.basename(mount.target)));
-    if (!matched.length) return { error: null, mounts: [] };
-
-    const divisor = {
-      b: 1, kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3,
-    }[String(multiplier || 'B').toLowerCase()] ?? 1;
-    // Two argument orders for this function exist in the codebase, so `decimal`
-    // sometimes arrives as a field name. Anything non-numeric means "no rounding"
-    // rather than NaN, which is what the previous implementation produced for
-    // every size it returned to the file API.
-    const precision = Number.isFinite(+decimal) ? +decimal : null;
-    const toUnit = (bytes) => {
-      const value = bytes / divisor;
-      return precision === null ? value : Number(value.toFixed(precision));
-    };
-
-    const allowedFields = fields ? String(fields).split(',') : null;
-    const mountsInfo = matched.map((mount) => {
+/**
+ * The API presentation of volume rows: unit conversion, rounding and field
+ * selection. Resolution lives in volumeService — keeping them apart is why the
+ * callers that just want a path no longer pass formatting arguments they have
+ * no opinion about (seven of them were passing those in the wrong order and
+ * getting away with it).
+ *
+ * @param {Array<object>} volumes - rows from volumeService.listComponentVolumeMounts
+ * @param {{multiplier?: string, decimal?: number, fields?: string}} opts
+ */
+function formatVolumeInfo(volumes, { multiplier, decimal, fields } = {}) {
+  const allowedFields = fields ? String(fields).split(',') : null;
+  const divisor = bytesPerUnit(multiplier);
+  const precision = Number(decimal);
+  const toUnit = (bytes) => {
+    const value = bytes / divisor;
+    return Number.isFinite(precision) ? Number(value.toFixed(precision)) : value;
+  };
+  return volumes
+    .map((volume) => {
       const full = {
-        filesystem: mount.source,
-        size: toUnit(mount.sizeBytes),
-        used: toUnit(mount.usedBytes),
-        available: toUnit(mount.availableBytes),
-        capacity: mount.usePercent / 100,
-        mount: mount.target,
+        filesystem: volume.filesystem,
+        size: toUnit(volume.sizeBytes),
+        used: toUnit(volume.usedBytes),
+        available: toUnit(volume.availableBytes),
+        capacity: volume.capacity,
+        mount: volume.mount,
+        replica: volume.replica,
       };
       return allowedFields
         ? Object.fromEntries(Object.entries(full).filter(([key]) => allowedFields.includes(key)))
         : full;
-    }).filter((entry) => Object.keys(entry).length > 0);
-    return { error: null, mounts: mountsInfo };
+    })
+    .filter((entry) => Object.keys(entry).length > 0);
+}
+
+/**
+ * The volume-data API shape, across every identity of a component.
+ * Resolution + presentation, for the route that reports usage.
+ */
+async function getVolumeInfo(appname, component, multiplier, decimal, fields) {
+  try {
+    // 'null' is the v1-3 flat form, whose identifier is the bare app name.
+    const resolvedComponent = component === 'null' ? appname : component;
+    const volumes = await volumeService.listComponentVolumeMounts(appname, resolvedComponent);
+    // `{ error, mounts }`, not the array-or-false this replaced: development's
+    // e1a906c9f retired that three-type union and six callers destructure this.
+    return { error: null, mounts: formatVolumeInfo(volumes, { multiplier, decimal, fields }) };
   } catch (error) {
     log.error(error);
     return { error, mounts: [] };
@@ -611,6 +626,7 @@ async function removeDirectory(rpath, directory = false) {
 
 module.exports = {
   getVolumeInfo,
+  formatVolumeInfo,
   getPathFileList,
   getRemoteFileSize,
   getFileSize,

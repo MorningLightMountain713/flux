@@ -123,7 +123,9 @@ describe('fileSystemManager tests', () => {
       '../messageHelper': messageHelperStub,
       '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
       '../serviceHelper': serviceHelperStub,
-      '../IOUtils': { getVolumeInfo: sinon.stub() },
+      // The download handlers resolve their volume by identity now; the rule
+      // itself is covered in volumeTarget.test.js.
+      './volumeTarget': { resolveVolumeTarget: sinon.stub().resolves({ mount: '/mnt/appvolumes/fluxweb_myapp' }) },
       '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
       '../utils/pathSecurity': { sanitizePath: sinon.stub(), verifyRealPathOfExistingPath: sinon.stub() },
       './volumeSession': volumeSessionStub,
@@ -1004,7 +1006,9 @@ describe('fileSystemManager tests', () => {
           '../messageHelper': messageHelperStub,
           '../verificationHelper': { verifyPrivilege },
           '../serviceHelper': serviceHelperStub,
-          '../IOUtils': { getVolumeInfo: sinon.stub() },
+          // The download handlers resolve their volume by identity now; the rule
+      // itself is covered in volumeTarget.test.js.
+      './volumeTarget': { resolveVolumeTarget: sinon.stub().resolves({ mount: '/mnt/appvolumes/fluxweb_myapp' }) },
           '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
           '../utils/pathSecurity': { sanitizePath: sinon.stub(), verifyRealPathOfExistingPath: sinon.stub() },
           './volumeSession': volumeSessionStub,

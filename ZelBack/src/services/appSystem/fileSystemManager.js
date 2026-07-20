@@ -58,12 +58,12 @@ const { formidable } = require('formidable');
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
-const IOUtils = require('../IOUtils');
 const log = require('../../lib/log');
 const { sanitizePath, verifyRealPathOfExistingPath, validateFilename } = require('../utils/pathSecurity');
 const { isReservedName, reachesReservedName } = require('./volumeReservedNames');
 const { openVolume, SPACE_HEADROOM } = require('./volumeSession');
 const { sendFile } = require('../utils/fileTransfer');
+const { resolveVolumeTarget } = require('./volumeTarget');
 const executor = require('./volumeExecutor');
 const jobRegistry = require('../utils/jobRegistry');
 const operationsController = require('../appManagement/operationsController');
@@ -317,21 +317,17 @@ async function downloadAppsFolder(req, res) {
         res.json(errorResponse);
         return;
       }
-      let folderpath;
-      const { mounts } = await IOUtils.getVolumeInfo(appname, component, 'B', 'mount', 0);
-      if (mounts.length > 0) {
-        // Use appid level to access appdata and all other mount points
-        // Sanitize folder path to prevent directory traversal attacks
-        folderpath = sanitizePath(folder, mounts[0].mount);
-        // Verify real path after symlink resolution to prevent symlink escape attacks
-        const realPath = await verifyRealPathOfExistingPath(folderpath, mounts[0].mount);
-        // Inside the volume is not the same as the owner's: an archive of an operation's
-        // scratch is FluxOS's working state, and building it walks the tree twice.
-        if (await reachesReservedName(realPath, mounts[0].mount)) {
-          throw new Error('Folder is not accessible');
-        }
-      } else {
-        throw new Error('Application volume not found');
+      // Which volume this addresses, by identity: a co-located node mounts one
+      // per replica, and mounts[0] read whichever the mount table listed first.
+      const { mount } = await resolveVolumeTarget(req);
+      // Sanitize folder path to prevent directory traversal attacks
+      const folderpath = sanitizePath(folder, mount);
+      // Verify real path after symlink resolution to prevent symlink escape attacks
+      const realPath = await verifyRealPathOfExistingPath(folderpath, mount);
+      // Inside the volume is not the same as the owner's: an archive of an operation's
+      // scratch is FluxOS's working state, and building it walks the tree twice.
+      if (await reachesReservedName(realPath, mount)) {
+        throw new Error('Folder is not accessible');
       }
       const folderName = path.basename(folderpath);
       const zip = archiver('zip');
@@ -361,7 +357,7 @@ async function downloadAppsFolder(req, res) {
       // hides. A root download excludes them too, so it matches what a root
       // listing shows. Reserved at the root only: the same name inside a
       // subfolder is the owner's, so the filter is applied only there.
-      const atRoot = path.resolve(folderpath) === path.resolve(mounts[0].mount);
+      const atRoot = path.resolve(folderpath) === path.resolve(mount);
       if (atRoot) {
         zip.directory(folderpath, false, (entry) => (isReservedName(String(entry.name).split('/')[0]) ? false : entry));
       } else {
@@ -409,20 +405,16 @@ async function downloadAppsFile(req, res) {
         res.json(errorResponse);
         return;
       }
-      let filepath;
-      const { mounts } = await IOUtils.getVolumeInfo(appname, component, 'B', 'mount', 0);
-      if (mounts.length > 0) {
-        // Use appid level to access appdata and all other mount points
-        // Sanitize file path to prevent directory traversal attacks
-        filepath = sanitizePath(file, mounts[0].mount);
-        // Verify real path after symlink resolution to prevent symlink escape attacks
-        const realPath = await verifyRealPathOfExistingPath(filepath, mounts[0].mount);
-        // Inside the volume is not the same as the owner's - see getAppsFolder.
-        if (await reachesReservedName(realPath, mounts[0].mount)) {
-          throw new Error('File is not accessible');
-        }
-      } else {
-        throw new Error('Application volume not found');
+      // Which volume this addresses, by identity: a co-located node mounts one
+      // per replica, and mounts[0] read whichever the mount table listed first.
+      const { mount } = await resolveVolumeTarget(req);
+      // Sanitize file path to prevent directory traversal attacks
+      const filepath = sanitizePath(file, mount);
+      // Verify real path after symlink resolution to prevent symlink escape attacks
+      const realPath = await verifyRealPathOfExistingPath(filepath, mount);
+      // Inside the volume is not the same as the owner's - see getAppsFolder.
+      if (await reachesReservedName(realPath, mount)) {
+        throw new Error('File is not accessible');
       }
       const fileName = path.basename(filepath);
       await sendFile(res, filepath, fileName);
