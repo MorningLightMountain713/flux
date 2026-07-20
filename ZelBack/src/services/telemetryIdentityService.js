@@ -247,11 +247,31 @@ async function sendSync(socket) {
     }
   }
 
+  // The sync is an announce like any other, so it owes the same log-access
+  // grant. It used to enumerate and send without one, which meant a
+  // container first seen on this path — a daemon reconnect, a boot
+  // reconcile, or a sink rotation resync — was handed to the daemon with no
+  // readable log. The daemon attached, got EACCES, and that container's logs
+  // never shipped again. Nothing said so: the grant lives here, the failure
+  // surfaced in the daemon, and only at debug level.
+  //
+  // Granting is idempotent, so re-granting on every sync costs nothing and
+  // repairs any container whose original announce was missed.
   const entries = [];
   for (const container of containers) {
     const rawName = container.Names && container.Names[0];
     const identity = buildIdentity(rawName, container.Image, region);
-    if (identity) entries.push({ container_id: container.Id, identity });
+    if (!identity) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const granted = await setContainerAcls(container.Id);
+    if (!granted) {
+      log.error(
+        `telemetry identity: refusing to sync ${rawName} — could not grant ${TELEMETRY_USER} `
+        + 'read access to its logs; its logs will not ship until this succeeds',
+      );
+      continue;
+    }
+    entries.push({ container_id: container.Id, identity });
   }
   writeMessage(socket, { op: 'sync', containers: entries });
 }
@@ -290,24 +310,46 @@ async function setfacl(params) {
   });
   if (result.error) {
     log.warn(`telemetry identity: setfacl ${params.join(' ')} failed: ${result.error.message}`);
+    return false;
   }
+  return true;
 }
 
 // The data-root and containers dir grants are set once (they persist); the
 // daemon only needs traverse + read-dir there, and read on each json-log.
 async function setBaseAcls() {
-  await setfacl(['-m', `u:${TELEMETRY_USER}:x`, `${DOCKER_ROOT}/`]);
-  await setfacl(['-m', `u:${TELEMETRY_USER}:rX`, `${DOCKER_CONTAINERS}/`]);
+  const root = await setfacl(['-m', `u:${TELEMETRY_USER}:x`, `${DOCKER_ROOT}/`]);
+  const containers = await setfacl(['-m', `u:${TELEMETRY_USER}:rX`, `${DOCKER_CONTAINERS}/`]);
+  return root && containers;
 }
 
+/**
+ * Grant the daemon read access to a container's logs.
+ *
+ * The DEFAULT ACL is the load-bearing one: announce runs between docker
+ * `create` and `start`, so the json-log does not exist yet and the kernel
+ * applies the inherited ACL atomically when docker creates it. That is what
+ * makes the grant race-free — there is no window in which the file exists
+ * unreadable.
+ *
+ * The file-level grant is therefore only a repair path, for a log that
+ * already existed when we got here (a restart, or a container we are
+ * re-announcing). Its absence is not a failure.
+ *
+ * @returns {Promise<boolean>} whether the daemon can now read this container.
+ */
 async function setContainerAcls(containerId) {
   const dir = `${DOCKER_CONTAINERS}/${containerId}`;
   const user = `u:${TELEMETRY_USER}`;
-  // Read the current log file, traverse the dir, and a DEFAULT ACL so the
-  // log files Docker creates on rotation inherit read access automatically.
-  await setfacl(['-m', `${user}:rX`, dir]);
-  await setfacl(['-d', '-m', `${user}:r`, dir]);
-  await setfacl(['-m', `${user}:r`, `${dir}/${containerId}-json.log`]);
+  const traverse = await setfacl(['-m', `${user}:rX`, dir]);
+  const inherit = await setfacl(['-d', '-m', `${user}:r`, dir]);
+
+  const logPath = `${dir}/${containerId}-json.log`;
+  const repaired = fs.existsSync(logPath)
+    ? await setfacl(['-m', `${user}:r`, logPath])
+    : true;
+
+  return traverse && inherit && repaired;
 }
 
 /**
@@ -332,7 +374,19 @@ async function announce(idOrName, { identifierType = 'name' } = {}) {
   const identity = buildIdentity(inspect.Name, image, region);
   if (!identity) return;
 
-  await setContainerAcls(inspect.Id);
+  // Announcing a container the daemon cannot read is worse than not
+  // announcing it: the daemon attaches, gets EACCES, and the container's
+  // logs are silently absent for its whole life. Fail loudly instead and
+  // leave it unannounced — the docker `start` event and the next full sync
+  // both re-announce, so a transient failure repairs itself.
+  const granted = await setContainerAcls(inspect.Id);
+  if (!granted) {
+    log.error(
+      `telemetry identity: refusing to announce ${inspect.Name} — could not grant `
+      + `${TELEMETRY_USER} read access to its logs; its logs will not ship until this succeeds`,
+    );
+    return;
+  }
   broadcastTrack(inspect.Id, identity);
 }
 
