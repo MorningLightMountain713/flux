@@ -1026,6 +1026,48 @@ async function _buildEnv(
       if (clients[index]) await clients[index].connectEventStream();
     },
 
+    // Split the fleet into two groups that stay internally connected but cannot reach
+    // each other, by dropping cross-group node-to-node packets inside each container
+    // (iptables; the image ships it and the nodes run privileged). Faithful to a real
+    // partition — the cross-group peer sockets go half-open and die — but every node
+    // keeps its path to the daemon and to its same-group peers. A node held in the
+    // minority therefore stays daemon-confirmed (message capability intact) and above
+    // the peer floor, so it never degrades or resyncs: the "partial partition, stays
+    // above the floor, misses the fire-once gossip" case the steady-state backstop
+    // exists for. The host runner reaches nodes over the gateway, not a node IP, so its
+    // REST/SSE access to BOTH sides is unaffected — the minority is observable throughout.
+    async partitionGroups(groupA, groupB) {
+      const ops = [];
+      for (const a of groupA) {
+        for (const b of groupB) {
+          ops.push([a, fluxNodes[b].ip]);
+          ops.push([b, fluxNodes[a].ip]);
+        }
+      }
+      await Promise.all(ops.map(async ([node, otherIp]) => {
+        const res = await fluxNodes[node].container.exec(['sh', '-c', `iptables -I INPUT -s ${otherIp} -j DROP`]);
+        if (res.exitCode !== 0) {
+          throw new Error(`partitionGroups: drop on node ${node} for ${otherIp} failed (exit ${res.exitCode}): ${res.output}`);
+        }
+      }));
+    },
+
+    // Remove the cross-group drops added by partitionGroups(groupA, groupB). Per-rule
+    // best-effort (a rule already gone is not an error); the caller re-runs discovery so
+    // the dead cross-group sockets get re-dialed.
+    async healPartition(groupA, groupB) {
+      const ops = [];
+      for (const a of groupA) {
+        for (const b of groupB) {
+          ops.push([a, fluxNodes[b].ip]);
+          ops.push([b, fluxNodes[a].ip]);
+        }
+      }
+      await Promise.all(ops.map(([node, otherIp]) => fluxNodes[node].container.exec(
+        ['sh', '-c', `iptables -D INPUT -s ${otherIp} -j DROP || true`],
+      )));
+    },
+
     async startDiscovery(indices = null) {
       const teamKey = fluxTeamKey();
       const targets = indices
