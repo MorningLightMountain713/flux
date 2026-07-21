@@ -353,7 +353,18 @@ if [ "$FLUX_SHUTDOWND_REAL" = "true" ]; then
   ln -sf /etc/systemd/system/flux-shutdownd-real.service /etc/systemd/system/multi-user.target.wants/flux-shutdownd-real.service
 fi
 # The mock flux-telemetryd the telemetry suites drive (telemetryd-stub).
+# FluxOS's identity server grants the daemon user log access by chgrp/setfacl on
+# the Arcane docker data-root, /dat/var/lib/docker: the flux-telemetry user/group
+# must exist and the path must resolve to the node's data-root, or the grant fails
+# and FluxOS announces nothing over the socket. On an arcaneHost node that path IS
+# the data-root (mounted below); otherwise it points at /mnt/appdata/docker.
 if [ "$FLUX_TELEMETRYD_MOCK" = "true" ]; then
+  groupadd -f -r flux-telemetry
+  id -u flux-telemetry >/dev/null 2>&1 || useradd -r -g flux-telemetry -s /usr/sbin/nologin flux-telemetry
+  if [ "$FLUX_ARCANE_HOST" != "true" ]; then
+    mkdir -p /dat/var/lib
+    ln -sfn /mnt/appdata/docker /dat/var/lib/docker
+  fi
   ln -sf /etc/systemd/system/flux-telemetryd-mock.service /etc/systemd/system/multi-user.target.wants/flux-telemetryd-mock.service
 fi
 
