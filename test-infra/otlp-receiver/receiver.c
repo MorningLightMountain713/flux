@@ -13,7 +13,13 @@
  * without a protobuf parser — the suite greps this container's docker logs
  * for the verdict.
  *
- * Env: RECEIVER_PORT (default 4318), MARK1, MARK2 (optional substrings).
+ * A batch whose body contains REJECT_SUBSTR (optional) is answered 400 and
+ * logged as OTLP-REJECT instead of OTLP-RECV — the "receiver is up but rejects
+ * this payload" case, which the daemon must drop rather than retry. Inert when
+ * REJECT_SUBSTR is unset or absent from the body.
+ *
+ * Env: RECEIVER_PORT (default 4318), MARK1, MARK2, REJECT_SUBSTR (optional
+ * substrings).
  *
  * Compiled to a small static linux/amd64 binary (see build.sh) and pushed
  * as a single-layer image by registry-helper.pushOtlpReceiver.
@@ -32,6 +38,7 @@
 
 static const char *mark1;
 static const char *mark2;
+static const char *reject_substr;
 
 static int contains(const char *body, size_t len, const char *needle)
 {
@@ -73,6 +80,25 @@ static void serve(int fd)
             goto done; /* oversized: drop the connection */
         }
 
+        /* Reject mode: a batch carrying REJECT_SUBSTR is refused with 400 —
+         * the receiver is up but rejecting this payload, the case the daemon
+         * must drop rather than retry. Logged distinctly (OTLP-REJECT) so the
+         * suite sees it was received and refused. Inert unless REJECT_SUBSTR is
+         * set and present in the body. */
+        if (contains(body, (size_t)got, reject_substr)) {
+            char rej[1200];
+            int rn = snprintf(rej, sizeof(rej), "OTLP-REJECT path=%s bytes=%ld\n", path, got);
+            if (rn > 0) { ssize_t w = write(1, rej, (size_t)rn); (void)w; }
+            free(body);
+            const char *bad = "HTTP/1.1 400 Bad Request\r\n"
+                              "Content-Type: application/json\r\n"
+                              "Content-Length: 2\r\n"
+                              "\r\n"
+                              "{}";
+            if (write(fd, bad, strlen(bad)) < 0) break;
+            continue;
+        }
+
         /* One atomic stdout line per request — the suite's evidence. */
         char out[1200];
         int n = snprintf(out, sizeof(out), "OTLP-RECV path=%s bytes=%ld mark1=%d mark2=%d\n",
@@ -99,6 +125,7 @@ int main(void)
     signal(SIGPIPE, SIG_IGN);
     mark1 = getenv("MARK1");
     mark2 = getenv("MARK2");
+    reject_substr = getenv("REJECT_SUBSTR");
     const char *portEnv = getenv("RECEIVER_PORT");
     int port = portEnv ? atoi(portEnv) : 4318;
 
