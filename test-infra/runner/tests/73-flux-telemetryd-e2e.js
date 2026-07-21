@@ -114,6 +114,16 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     (await X(`docker logs ${name} 2>&1 | grep -cE 'OTLP-RECV .*${pattern}' || true`)).stdout.trim() || 0,
   );
 
+  // startFluxos returns when the API answers, but the submission door also needs
+  // the node re-peered: outbound >= minOutgoing and inbound >= minIncoming. After a
+  // mid-suite FluxOS restart the node re-dials from zero, so a register/update
+  // driven immediately is rejected ('not enough {incoming,outgoing} peers') until
+  // the peers are back. The counts come over REST, so they survive the restart.
+  const waitForSubmissionDoor = (node) => waitFor(async () => {
+    const [outbound, inbound] = await Promise.all([node.getPeers(), node.getIncomingPeers()]);
+    return (outbound.data?.length ?? 0) >= 2 && (inbound.data?.length ?? 0) >= 1;
+  }, { timeout: 120000, interval: 2000, label: 'submitting node re-peered past the submission door' });
+
   before(async function () {
     this.timeout(900000);
     env = await createTestEnv({
@@ -123,12 +133,18 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       systemdMode: true,
       telemetrydReal: true,
       shutdowndMock: false,
-      // Registration-door shape for a 5-node mesh (suite 52/69 sizing note).
+      // Submission-door sizing for a 5-node mesh. minOutgoing is what the mesh
+      // actually yields (~2); minIncoming drops to 1 because a later scenario
+      // restarts FluxOS on a node, and a freshly re-peered node can sit at a
+      // single inbound for a moment. Both counts recover after the restart, so the
+      // scenarios that submit afterwards wait for the door (waitForSubmissionDoor)
+      // rather than racing it — this just sets the floor that wait targets.
       // The stagger overrides are required because this suite drives a spec
       // update: adoption otherwise paces at production 60s/300s.
       configOverrides: {
         fluxapps: {
           minOutgoing: 2,
+          minIncoming: 1,
           adoptionStaggerStepMs: 15000,
           adoptionStaggerWindowMs: 15000,
         },
@@ -315,6 +331,9 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
 
   it('re-routes the real pipe at a new endpoint after a port-changing update', async function () {
     this.timeout(600000);
+    // The prune scenario restarted FluxOS on a node; wait for the submitter to
+    // re-peer past the submission door before driving the update.
+    await waitForSubmissionDoor(env.clients[0]);
     // Rotation with both real ends: the update moves the telemetry port AND
     // the receiver's listen port, so a stale endpoint cannot pass by
     // accident — traffic only reappears if the daemon was re-announced at
@@ -371,6 +390,8 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     // partial spread might miss this node entirely and prove nothing.
     await pushTestApp(APP2);
     await pushOtlpReceiver(RECV2_REPO);
+    // Same post-restart door as the update scenario: don't race the re-peer.
+    await waitForSubmissionDoor(env.clients[0]);
     const res = await registerEncryptedV9App(env.clients[0].url, {
       name: APP2,
       components: buildComponents({ appRepo: APP2, recvRepo: RECV2_REPO, webPort: WEB2_PORT }),
