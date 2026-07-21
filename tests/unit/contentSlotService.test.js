@@ -1534,6 +1534,28 @@ describe('contentSlotService', () => {
       expect(stageApply.firstCall.args[2]).to.deep.equal({ appName: 'app', owner: '1id', peers: ['p1'] });
     });
 
+    it('records the provisioned version so a later behind-check does not re-apply it with a reaction', async () => {
+      const { service } = load();
+      const provider = fakeProvider();
+      const stageApply = sinon.spy();
+      const recordApplied = sinon.spy();
+      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+
+      await service.provisionContentSlots(deployment(), { appName: 'app', peers: ['p1'] }, {
+        getApp: async () => info,
+        getLatest: async () => ({ data: { manifest: sealed }, version: 2 }),
+        stageApply,
+        recordApplied,
+        provider,
+      });
+
+      sinon.assert.calledOnce(stageApply);
+      // Without this record, applyStoredIfBehind sees the node "behind" and re-applies the
+      // just-provisioned content to the now-running container THROUGH applyManifest, firing
+      // the onUpdate reaction — a spurious install-time restart/signal.
+      sinon.assert.calledOnceWithExactly(recordApplied, 'app', 2);
+    });
+
     it('verifies and promotes a locally-quarantined manifest at install (no catch-up round-trip)', async () => {
       const { service } = load();
       const provider = fakeProvider();

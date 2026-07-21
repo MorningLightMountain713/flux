@@ -1165,6 +1165,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
     fetchFromDrive = fluxDriveClient.fetchManifest,
     store = storeManifest,
     stageApply = stageAndApplySlots,
+    recordApplied = appsRepository.setContentManifestApplied,
     verify, provider,
     ...resolveDeps
   } = deps;
@@ -1229,6 +1230,16 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
   }
 
   await stageApply(deployment, plaintext, { appName, owner, peers }, resolveDeps);
+  // Record the version we just staged so the steady-state "am I behind?" check
+  // (applyStoredIfBehind) does not re-apply this same content to the now-running
+  // container WITH a reaction — install content is provisioned before the container
+  // starts and must not fire an onUpdate reaction. Best-effort, like applyManifest's
+  // own record: a miss only costs one spurious reaction, never lost content.
+  try {
+    await recordApplied(appName, plaintext.version);
+  } catch (error) {
+    log.warn(`contentSlot: failed to record provisioned version ${plaintext.version} for ${appName} - ${error.message ?? error}`);
+  }
   fluxEventBus.publish('content:slotsProvisioned', { appName, version: plaintext.version });
 }
 
