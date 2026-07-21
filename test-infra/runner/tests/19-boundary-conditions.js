@@ -149,11 +149,15 @@ describe('Boundary: clean shutdown within SIGTERM_EXPIRY', function () {
 
   before(async function () {
     this.timeout(120000);
-    // 300s ago with sigterm — within 420s SIGTERM_EXPIRY_MS
+    // 350s ago with sigterm: past the 300s running-TTL (harness locationTtlS) but
+    // within the 420s SIGTERM window. A clean shutdown is governed by the SIGTERM
+    // window, so the app must NOT expire — sitting in the gap between the two TTLs
+    // is what distinguishes that from the running-TTL path (300s sat on the exact
+    // running-TTL boundary and only failed via boot latency).
     env = await createTestEnv({ hookCtx: this,
       nodes: 1,
       tickerAutostart: false,
-      bootContext: { lastAlive: Date.now() - 300000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
+      bootContext: { lastAlive: Date.now() - 350000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
     });
     await waitForDaemonReady(env.clients[0]);
   });
