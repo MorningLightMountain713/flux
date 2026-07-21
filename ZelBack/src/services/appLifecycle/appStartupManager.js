@@ -251,8 +251,14 @@ async function manageAppsOnBoot(bootContext) {
     if (bootContext.firstBoot) {
       log.info('appStartupManager - First boot (no heartbeat history), waiting for sync');
     } else {
-      const locationsExpired = (bootContext.cleanShutdown && bootContext.downtimeMs > SIGTERM_EXPIRY_MS)
-        || bootContext.downtimeMs > RUNNING_EXPIRY_MS;
+      // A clean sigterm shutdown is governed by the SIGTERM grace window; an
+      // unclean/unknown one by the running-location TTL. Gating the running-TTL
+      // clause on !cleanShutdown keeps the grace intact when the running TTL is
+      // shorter than the sigterm window (it never is in prod, but the intent is
+      // that a clean shutdown gets its full grace regardless).
+      const locationsExpired = bootContext.cleanShutdown
+        ? bootContext.downtimeMs > SIGTERM_EXPIRY_MS
+        : bootContext.downtimeMs > RUNNING_EXPIRY_MS;
 
       if (locationsExpired) {
         log.info(`appStartupManager - Locations expired (downtime ${Math.round(bootContext.downtimeMs / 1000)}s, cleanShutdown=${bootContext.cleanShutdown}), removing all apps`);
