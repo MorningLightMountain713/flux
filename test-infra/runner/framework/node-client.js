@@ -6,13 +6,25 @@ export function nodeClient(nodeNum) {
   const ip = getSubnetConfig().nodeIp(nodeNum);
   const url = `http://${ip}:16127`;
 
-  async function get(path) {
-    const res = await fetch(`${url}${path}`);
+  // apicache keys its cache by the FULL url (query string included — it only strips
+  // the query under the jsonp option, which FluxOS does not set), so a unique query
+  // param forces a fresh response past the 30s cache some GET routes carry. A getter
+  // (or suite) that must observe real-time state passes { noCache: true }.
+  let cacheBustSeq = 0;
+  function freshen(path, noCache) {
+    if (!noCache) return path;
+    cacheBustSeq += 1;
+    const sep = path.includes('?') ? '&' : '?';
+    return `${path}${sep}_=${Date.now()}-${cacheBustSeq}`;
+  }
+
+  async function get(path, { noCache = false } = {}) {
+    const res = await fetch(`${url}${freshen(path, noCache)}`);
     return res.json();
   }
 
-  async function getAuthed(path, zelidauth) {
-    const res = await fetch(`${url}${path}`, { headers: { zelidauth } });
+  async function getAuthed(path, zelidauth, { noCache = false } = {}) {
+    const res = await fetch(`${url}${freshen(path, noCache)}`, { headers: { zelidauth } });
     return res.json();
   }
 
@@ -228,14 +240,14 @@ export function nodeClient(nodeNum) {
     getLastEventId,
     getEventBuffer: () => [...eventBuffer],
     getVersion: () => get('/flux/version'),
-    getPeers: () => get('/flux/connectedpeers'),
-    getIncomingPeers: () => get('/flux/incomingconnections'),
+    getPeers: () => get('/flux/connectedpeers', { noCache: true }),
+    getIncomingPeers: () => get('/flux/incomingconnections', { noCache: true }),
     getNodeStatus: () => get('/daemon/getzelnodestatus'),
     getBlockchainInfo: () => get('/daemon/getblockchaininfo'),
     getExplorerHeight: () => get('/explorer/scannedheight'),
     isExplorerSynced: () => get('/explorer/issynced'),
     getFluxInfo: () => get('/flux/info'),
-    getDOSState: () => get(`/flux/dosstate?_=${Date.now()}`),
+    getDOSState: () => get('/flux/dosstate', { noCache: true }),
     setDOSState: (dosState, dosMessage, zelidauth) =>
       post('/flux/dosstate', { dosState, dosMessage }, { zelidauth }),
     getAppLocations: (name) => get(`/apps/location/${name}`),
