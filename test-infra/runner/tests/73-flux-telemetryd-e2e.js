@@ -63,6 +63,10 @@ const UPDATED_PORT = 4319;
 // test-app logs this exact line on SIGUSR1 and keeps running — the shipped
 // log payload the receiver looks for (MARK1).
 const LOG_MARKER = 'RELOAD SIGUSR1';
+// The drop-on-reject scenario poisons this line (test-app logs it on SIGUSR2):
+// the receiver 400s any batch carrying it. No other scenario provokes SIGUSR2,
+// so REJECT_SUBSTR is inert everywhere else.
+const POISON_MARKER = 'RELOAD SIGUSR2';
 
 const webContainer = `fluxweb_${APP}`;
 const collectorContainer = `fluxcollector_${APP}`;
@@ -90,7 +94,12 @@ const buildComponents = ({
     memory: 200,
     rootFsGb: 2,
     persistentStorage: { sizeGb: 1, mounts: {} },
-    env: { RECEIVER_PORT: String(receiverPort), MARK1: LOG_MARKER, MARK2: appRepo },
+    env: {
+      RECEIVER_PORT: String(receiverPort),
+      MARK1: LOG_MARKER,
+      MARK2: appRepo,
+      REJECT_SUBSTR: POISON_MARKER,
+    },
   },
 });
 
@@ -295,6 +304,42 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       timeout: 120000,
       interval: 3000,
       label: 'the held batch arriving once the collector is reachable again',
+    });
+  });
+
+  it('drops a batch the receiver rejects and keeps shipping the ones behind it', async function () {
+    this.timeout(180000);
+    // The receiver 400s any batch carrying the SIGUSR2 line (REJECT_SUBSTR): it
+    // is up and answering, it just refuses this payload — the case the daemon
+    // must DROP rather than retry. A dropped batch must not stall the ones
+    // behind it. So provoke the poison line, watch the receiver reject it, then
+    // provoke a good line and require it to arrive promptly. Without the
+    // drop-on-reject fix the good line waits out the poison batch's retry
+    // window (~120s) and this scenario's tight bound times out.
+    const rejectCount = async () => Number(
+      (await X(`docker logs ${collectorContainer} 2>&1 | grep -cE 'OTLP-REJECT' || true`)).stdout.trim() || 0,
+    );
+    const rejectsBefore = await rejectCount();
+
+    // Poison: SIGUSR2 → "RELOAD SIGUSR2", which the receiver refuses with 400.
+    const poison = await X(`docker kill --signal=SIGUSR2 ${webContainer}`);
+    expect(poison.exitCode, poison.output).to.equal(0);
+    await waitFor(async () => (await rejectCount()) > rejectsBefore, {
+      timeout: 60000,
+      interval: 2000,
+      label: 'the receiver received and rejected the poison batch',
+    });
+
+    // Good: SIGUSR1 → "RELOAD SIGUSR1" (mark1), which the receiver accepts. It
+    // can only land promptly if the rejected batch ahead of it was dropped, not
+    // retried for the whole window.
+    const goodBefore = await receiverPostCount('mark1=1');
+    const good = await X(`docker kill --signal=SIGUSR1 ${webContainer}`);
+    expect(good.exitCode, good.output).to.equal(0);
+    await waitFor(async () => (await receiverPostCount('mark1=1')) > goodBefore, {
+      timeout: 30000,
+      interval: 2000,
+      label: 'the good line shipped promptly, not stuck behind the rejected batch',
     });
   });
 
