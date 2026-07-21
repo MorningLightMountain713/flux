@@ -236,9 +236,19 @@ fi
 # host-side client of FluxOS's identity socket; the mock plays that client role
 # in-container. The runtime dir must exist BEFORE fluxos boots — FluxOS's
 # write-probe on /run/flux/telemetry is its Arcane gate for the identity server
-# (on a real Arcane node the daemon's package ships the dir). The mock itself
-# retries until the socket appears. Node built-ins only.
+# (on a real Arcane node the daemon's package ships the dir AND the flux-telemetry
+# user/group). The mock itself retries until the socket appears. Node built-ins only.
 if [ "$FLUX_TELEMETRYD_MOCK" = "true" ]; then
+  # The identity server grants the daemon user log access via chgrp/setfacl against
+  # the Arcane docker data-root (/dat/var/lib/docker). That user/group must exist,
+  # and that path must resolve to the mock dockerd's real data-root, or the grant
+  # fails and FluxOS announces nothing over the socket. On a real node the daemon
+  # package provides the user and the data-root is mounted at /dat/var/lib/docker;
+  # here we create the user and point the Arcane path at the mock data-root.
+  groupadd -f -r flux-telemetry
+  id -u flux-telemetry >/dev/null 2>&1 || useradd -r -g flux-telemetry -s /usr/sbin/nologin flux-telemetry
+  mkdir -p /dat/var/lib
+  ln -sfn /mnt/appdata/docker /dat/var/lib/docker
   mkdir -p /run/flux/telemetry
   node /flux/test-infra/telemetryd-stub/index.js &
   echo "started mock flux-telemetryd (control port ${TELEMETRYD_MOCK_CONTROL_PORT:-16198})"
