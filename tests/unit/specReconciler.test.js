@@ -21,13 +21,39 @@ describe('specReconciler tests', () => {
   const LOCAL_IP = '44.55.66.77:16127';
   const OUTPOINT_TXID = 'a'.repeat(64);
 
-  // Registry/installed rows carry a REAL Placement instance so the ladder runs
-  // the actual mode/resolution machinery rather than a hand-mocked shadow.
-  async function specWith(placementBlob, {
+  // Registry/installed rows carry REAL Placement + Assignment instances so the
+  // ladder runs the actual mode/resolution machinery rather than a hand-mocked
+  // shadow. The terse shorthand mirrors the old targeting map: an entry
+  // { identity: null } is a candidate (loose) target; { identity: [names] } pins
+  // those named replicas. Mirrors InstantiatedSpec: the cleartext placement is
+  // read at the top level; the sealed assignment (replica names) rides the
+  // decrypted runtime spec, so both hang off `.spec` too.
+  async function specWith(targetsBlob, {
     name = 'myapp', hash = 'h1', height = 100, expired = false, isEncrypted = false,
     requiresArcane = false,
   } = {}) {
-    const { Placement } = await import('@runonflux/flux-spec');
+    const { Placement, Assignment } = await import('@runonflux/flux-spec');
+    const placementBlob = { targetIps: [], targetOutpoints: [], targetOperators: [] };
+    const assignmentBlob = { targetIps: {}, targetOutpoints: {} };
+    let pinned = false;
+    let candidate = false;
+    for (const field of ['targetIps', 'targetOutpoints', 'targetOperators']) {
+      const map = targetsBlob && targetsBlob[field];
+      if (!map) continue;
+      for (const [identity, names] of Object.entries(map)) {
+        placementBlob[field].push(identity);
+        if (Array.isArray(names) && names.length > 0) {
+          pinned = true;
+          // Operators cannot pin; names live under IP/outpoint only.
+          if (field !== 'targetOperators') assignmentBlob[field][identity] = names;
+        } else {
+          candidate = true;
+        }
+      }
+    }
+    placementBlob.mode = pinned ? 'pinned' : (candidate ? 'candidate' : 'none');
+    const placement = Placement.from(placementBlob);
+    const assignment = Assignment.from(assignmentBlob);
     return {
       name,
       hash,
@@ -37,9 +63,9 @@ describe('specReconciler tests', () => {
       // Mirrors InstantiatedSpec.requiresArcane(): every encrypted spec
       // requires Arcane; cleartext only via an Arcane-requiring feature.
       requiresArcane: () => isEncrypted || requiresArcane,
-      placement: Placement.from(placementBlob),
+      placement,
       isExpired: () => expired,
-      spec: { instances: 1 },
+      spec: { name, instances: 1, placement, assignment },
     };
   }
 

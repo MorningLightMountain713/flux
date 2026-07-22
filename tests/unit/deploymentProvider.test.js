@@ -14,11 +14,38 @@ const { expect } = chai;
 
 const OUTPOINT_TXID = 'a'.repeat(64);
 
-// A spec whose placement is a REAL Placement instance, so the resolution runs
-// the actual mode/matching machinery rather than a hand-mocked shadow of it.
-async function specWithPlacement(placementBlob) {
-  const { Placement } = await import('@runonflux/flux-spec');
-  return { name: 'myapp', placement: Placement.from(placementBlob) };
+// A spec whose placement and assignment are REAL flux-spec instances, so the
+// resolution runs the actual mode/matching machinery rather than a hand-mocked
+// shadow of it. The terse shorthand mirrors the old targeting map: an entry
+// { identity: null } is a candidate (loose) target; { identity: [names] } pins
+// those named replicas. resolveLocalReplicas reads placement.mode() (cleartext)
+// then assignment.replicasFor() (the sealed replica names).
+async function specWithPlacement(targets) {
+  const { Placement, Assignment } = await import('@runonflux/flux-spec');
+  const placementBlob = { targetIps: [], targetOutpoints: [], targetOperators: [] };
+  const assignmentBlob = { targetIps: {}, targetOutpoints: {} };
+  let pinned = false;
+  let candidate = false;
+  for (const field of ['targetIps', 'targetOutpoints', 'targetOperators']) {
+    const map = targets && targets[field];
+    if (!map) continue;
+    for (const [identity, names] of Object.entries(map)) {
+      placementBlob[field].push(identity);
+      if (Array.isArray(names) && names.length > 0) {
+        pinned = true;
+        // Operators cannot pin (one key backs many nodes); names live under IP/outpoint only.
+        if (field !== 'targetOperators') assignmentBlob[field][identity] = names;
+      } else {
+        candidate = true;
+      }
+    }
+  }
+  placementBlob.mode = pinned ? 'pinned' : (candidate ? 'candidate' : 'none');
+  return {
+    name: 'myapp',
+    placement: Placement.from(placementBlob),
+    assignment: Assignment.from(assignmentBlob),
+  };
 }
 
 describe('deploymentProvider tests', () => {
