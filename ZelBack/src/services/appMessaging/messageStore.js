@@ -669,6 +669,10 @@ async function storeBatchAppRunningMessages(verifiedBroadcasts) {
         osUptime: { $cond: [isNewer, data.osUptime, { $ifNull: ['$osUptime', data.osUptime] }] },
         staticIp: { $cond: [isNewer, data.staticIp ?? null, { $ifNull: ['$staticIp', data.staticIp ?? null] }] },
         state: { $cond: [isNewer, normalizedState, { $ifNull: ['$state', normalizedState] }] },
+        // One row per identity (name+ip+replica), mirroring installing-locations: null for
+        // loose placement and legacy rows without the field. Part of the upsert key below,
+        // so co-located replicas no longer collapse onto a single (name,ip) row.
+        replica: app.replica ?? null,
       };
       const runningSince = data.runningSince ? new Date(data.runningSince) : (app.runningSince ? new Date(app.runningSince) : null);
       if (runningSince) {
@@ -676,7 +680,7 @@ async function storeBatchAppRunningMessages(verifiedBroadcasts) {
       }
       locationOps.push({
         updateOne: {
-          filter: { name: app.name, ip: data.ip },
+          filter: { name: app.name, ip: data.ip, replica: app.replica ?? null },
           update: [{ $set: setFields }],
           upsert: true,
         },
