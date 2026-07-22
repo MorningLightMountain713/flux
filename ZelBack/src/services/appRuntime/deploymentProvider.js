@@ -10,28 +10,46 @@ const log = require('../../lib/log');
 
 /**
  * The named replicas THIS node runs for a spec. Derived on demand, never
- * stored - the spec plus this node's identity (socket address, collateral
- * outpoint) determine them, so every deployment build resolves the same
- * answer. One physical node addressed through both identity forms unions both
- * entries.
+ * stored - the DECRYPTED spec plus this node's identity (socket address,
+ * collateral outpoint) determine them. The replica names live in the sealed
+ * Assignment, so the spec must be decrypted first (callers resolve it via
+ * resolveRuntimeSpec / resolveInstantiatedSpec). One physical node addressed
+ * through both identity forms unions both entries.
  *
- * @param {object} spec - a readable spec instance (placement is cleartext)
- * @returns {Promise<string[]|null>} null = loose placement (one unqualified
- *   instance); [] = named placement that does not target this node;
- *   [names...] = this node's assigned replicas (co-location when > 1)
+ * @param {object} spec - a DECRYPTED spec instance (exposes .assignment)
+ * @returns {Promise<string[]|null>} null = candidate/none placement (one
+ *   unqualified instance); [] = pinned placement that does not target this
+ *   node; [names...] = this node's assigned replicas (co-location when > 1)
  */
 async function resolveLocalReplicas(spec) {
-  if (spec.placement.mode() !== 'named') return null;
+  if (spec.placement.mode() !== 'pinned') return null;
 
   const ip = await fluxNetworkHelper.getLocalSocketAddress();
   const collateral = await generalService.obtainNodeCollateralInformation();
   const outpoint = `${collateral.txhash}:${collateral.txindex}`;
 
-  const names = spec.placement.replicasFor({ ip, outpoint, ipMatcher: socketAddressesMatch });
+  const names = spec.assignment.replicasFor({ ip, outpoint, ipMatcher: socketAddressesMatch });
   if (names.length === 0) {
-    log.warn(`deploymentProvider: named placement for ${spec.name} does not target this node`);
+    log.warn(`deploymentProvider: pinned placement for ${spec.name} does not target this node`);
   }
   return names;
+}
+
+/**
+ * The DECRYPTED runtime spec for an InstantiatedSpec: the real FluxAppSpecV9
+ * (an encrypted app resolves to a DecryptedCanonicalSpec whose `.spec` is the
+ * decrypted instance; a cleartext app resolves to itself). Callers that need
+ * the sealed body - the assignment (replica names), components, ports - go
+ * through this rather than reading the wire spec, which no longer carries the
+ * names.
+ *
+ * @param {object} instantiated - InstantiatedSpec
+ * @returns {Promise<object>} the decrypted spec instance
+ */
+async function resolveRuntimeSpec(instantiated) {
+  const resolved = await resolveInstantiatedSpec(instantiated);
+  if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
+  return instantiated.isEncrypted ? resolved.spec : resolved;
 }
 
 /**
@@ -261,6 +279,7 @@ module.exports = {
   getInstalledDeployments,
   resolveLinkedAppNames,
   resolveLocalReplicas,
+  resolveRuntimeSpec,
   resolveDeploymentIdentity,
   assignedIdentities,
   localIdentities,

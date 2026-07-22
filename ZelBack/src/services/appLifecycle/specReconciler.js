@@ -65,10 +65,12 @@ function staggerConfig() {
  */
 async function adoptionDelayMs(registrySpec, localSocketAddr) {
   const { stepMs, windowMs } = staggerConfig();
-  if (registrySpec.placement.mode() === 'named') {
-    const assigned = await deploymentProvider.resolveLocalReplicas(registrySpec);
+  if (registrySpec.placement.mode() === 'pinned') {
+    // Replica names live in the sealed assignment - decrypt to read them.
+    const runtimeSpec = await deploymentProvider.resolveRuntimeSpec(registrySpec);
+    const assigned = await deploymentProvider.resolveLocalReplicas(runtimeSpec);
     if (assigned.length === 0) return 0;
-    const names = [...registrySpec.placement.replicaNames()].sort();
+    const names = [...runtimeSpec.assignment.replicaNames()].sort();
     // A co-located node rolls once, at its earliest replica's slot: the local
     // adoption redeploys all its identities together, and the earliest ordinal
     // keeps the fleet-wide roll order intact.
@@ -156,8 +158,10 @@ async function convergeApp(installed, registrySpec, ctx) {
 
   // The identities the spec assigns this node: the named replicas targeting it,
   // or the single unqualified identity that loose placement always has.
-  const named = registrySpec.placement.mode() === 'named';
-  const assigned = named ? await deploymentProvider.resolveLocalReplicas(registrySpec) : [null];
+  // mode() is cleartext, so candidate/none apps are decided without a decrypt.
+  // Only a pinned app decrypts (assignedIdentities) to read its sealed names.
+  const named = registrySpec.placement.mode() === 'pinned';
+  const assigned = named ? await deploymentProvider.assignedIdentities(registrySpec) : [null];
   if (named && assigned.length === 0) {
     // Named placement is declarative: the targeting maps name exactly which
     // nodes run a replica, so an installed copy on a node the current spec

@@ -74,13 +74,13 @@ describe('appSpawner tests', () => {
       dataCenter: false,
       geoAllow: null,
       geoDeny: null,
-      // targeting maps: identity -> null | [replicaNames]
-      targetIps: {},
-      targetOutpoints: {},
-      targetOperators: {},
-      hasTargets: () => (Object.keys(overrides.targetIps || {}).length > 0
-        || Object.keys(overrides.targetOutpoints || {}).length > 0
-        || Object.keys(overrides.targetOperators || {}).length > 0),
+      // targeting fields: arrays of node identity strings (ip / outpoint / operator)
+      targetIps: [],
+      targetOutpoints: [],
+      targetOperators: [],
+      hasTargets: () => ((overrides.targetIps || []).length > 0
+        || (overrides.targetOutpoints || []).length > 0
+        || (overrides.targetOperators || []).length > 0),
       hasGeoRestrictions: () => false,
       matches: () => true,
       // mirrors the real Placement: with no targets set, matchesTarget is
@@ -535,7 +535,7 @@ describe('appSpawner tests', () => {
       const ipTargeted = makeCandidate({
         name: 'ipTargeted', hash: 'h2',
         placement: {
-          targetIps: { '192.168.1.1': null },
+          targetIps: ['192.168.1.1'],
           matchesTarget: (info) => info.ip === '192.168.1.1',
         },
       });
@@ -578,7 +578,7 @@ describe('appSpawner tests', () => {
     it('should defer apps with targets that do not match this node', async () => {
       const candidate = makeCandidate({
         placement: {
-          targetIps: { '10.0.0.1': null },
+          targetIps: ['10.0.0.1'],
           hasTargets: () => true,
           matchesTarget: () => false,
         },
@@ -1398,7 +1398,7 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
     }
 
-    const placementFor = (targetIps, mode = 'loose') => ({
+    const placementFor = (targetIps, mode = 'candidate') => ({
       targetIps,
       targetOutpoints: [],
       targetOperators: [],
@@ -1559,7 +1559,7 @@ describe('appSpawner tests', () => {
               targetIps: [MY_ADDR],
               targetOutpoints: [],
               targetOperators: [],
-              mode: () => 'loose',
+              mode: () => 'candidate',
               matchesTarget: ({ ip, ipMatcher }) => ipMatcher(MY_ADDR, ip),
               isPinnedTo({ ip, ipMatcher }) { return ipMatcher(MY_ADDR, ip); },
             },

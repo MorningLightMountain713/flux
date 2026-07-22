@@ -67,9 +67,9 @@ let wakePending = false;
  */
 function placementPinCount(placement) {
   if (!placement) return 0;
-  return Object.keys(placement.targetIps).length
-    + Object.keys(placement.targetOutpoints).length
-    + Object.keys(placement.targetOperators).length;
+  return placement.targetIps.length
+    + placement.targetOutpoints.length
+    + placement.targetOperators.length;
 }
 
 /**
@@ -499,11 +499,11 @@ async function trySpawningGlobalApplication() {
       }
       log.info(`trySpawningGlobalApplication - Found ${globalAppNamesLocation.length} apps that are missing instances on the network and can be selected to try to spawn on my node.`);
 
-      const ipTargeted = globalAppNamesLocation.filter((c) => Object.keys(c.instantiated.spec.placement.targetIps).length > 0
+      const ipTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetIps.length > 0
         && c.instantiated.spec.placement.matchesTarget({ ip: localSocketAddr, ipMatcher: socketAddressesMatch }));
-      const outpointTargeted = globalAppNamesLocation.filter((c) => Object.keys(c.instantiated.spec.placement.targetOutpoints).length > 0
+      const outpointTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetOutpoints.length > 0
         && c.instantiated.spec.placement.matchesTarget({ outpoint: nodeOutpoint }));
-      const operatorTargeted = globalAppNamesLocation.filter((c) => Object.keys(c.instantiated.spec.placement.targetOperators).length > 0
+      const operatorTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetOperators.length > 0
         && c.instantiated.spec.placement.matchesTarget({ operator: nodeOperator }));
 
       const pool = ipTargeted.length > 0 ? ipTargeted
@@ -1204,13 +1204,13 @@ async function notifySpecStored(specDoc) {
     // first spawn cycle resolves this node's address, before which isPinnedTo yields
     // false and the spec rides the normal cadence.
     if (!placement.isPinnedTo({ ip: lastKnownLocalSocketAddr, ipMatcher: socketAddressesMatch })) return;
-    // Named placement is contention-free by construction (each name pins exactly
-    // one node), so any named spec targeting this node wakes the loop. A loose
-    // pinned spec races other candidates, so it wakes only for the contention-free
+    // Pinned placement is contention-free by construction (each name pins exactly
+    // one node), so any pinned spec targeting this node wakes the loop. A candidate
+    // spec races other candidates, so it wakes only for the contention-free
     // enterprise case: enterprise node, enterprise-owned app, pin set no larger
     // than required instances (the instances default mirrors the global
     // aggregation's $ifNull: ['$instances', 3]).
-    if (placement.mode() !== 'named') {
+    if (placement.mode() !== 'pinned') {
       if (enterpriseNetwork.getCachedEnterpriseIdentity() !== true) return;
       if (!enterpriseNetwork.isEnterpriseAppOwner(instantiated.owner)) return;
       if (!isSoleRequiredInstaller(placement, instantiated.spec.instances ?? 3)) return;

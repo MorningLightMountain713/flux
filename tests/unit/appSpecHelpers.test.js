@@ -6,7 +6,6 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
-const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 
 function mockComponent(plain) {
@@ -20,19 +19,18 @@ function mockComponent(plain) {
 }
 
 function mockPlacement(plain) {
-  // Legacy-shaped fixtures carry nodes/targetIps as arrays; the Placement
-  // contract is a map identity -> null | [replicaNames].
-  const toMap = (value) => (Array.isArray(value)
-    ? Object.fromEntries(value.map((key) => [key, null]))
-    : (value || {}));
+  // The targeting fields are arrays of node identity strings; the free-update
+  // bar compares their lengths (the identity SET size). Legacy fixtures name
+  // the IP set via `nodes`/`targetIps`.
+  const toArray = (value) => (Array.isArray(value) ? value : []);
   return {
     staticIp: plain.staticip || false,
     dataCenter: plain.datacenter || false,
     geoAllow: [],
     geoDeny: [],
-    targetIps: toMap(plain.nodes || plain.targetIps),
-    targetOutpoints: toMap(plain.targetOutpoints),
-    targetOperators: toMap(plain.targetOperators),
+    targetIps: toArray(plain.nodes || plain.targetIps),
+    targetOutpoints: toArray(plain.targetOutpoints),
+    targetOperators: toArray(plain.targetOperators),
   };
 }
 
@@ -123,8 +121,7 @@ describe('appSpecHelpers tests', () => {
       };
 
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
-      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.true;
@@ -159,8 +156,7 @@ describe('appSpecHelpers tests', () => {
       };
 
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
-      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.true;
@@ -318,8 +314,7 @@ describe('appSpecHelpers tests', () => {
       };
 
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
-      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.true;
@@ -348,8 +343,7 @@ describe('appSpecHelpers tests', () => {
       };
 
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
-      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.true;
@@ -450,8 +444,7 @@ describe('appSpecHelpers tests', () => {
       });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
-      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      sinon.stub(dbHelper, 'findInDatabase').resolves(recentMessages);
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves(recentMessages);
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.false;
@@ -480,8 +473,7 @@ describe('appSpecHelpers tests', () => {
       };
 
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
-      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.true;
@@ -510,8 +502,7 @@ describe('appSpecHelpers tests', () => {
       };
 
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
-      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.true;
@@ -584,8 +575,7 @@ describe('appSpecHelpers tests', () => {
       };
 
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(mockInstantiatedSpec(appInfo));
-      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await appSpecHelpers.checkFreeAppUpdate(spec, daemonHeight);
       expect(result).to.be.true;
