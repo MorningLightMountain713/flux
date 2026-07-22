@@ -5,7 +5,7 @@ import { unseal } from '@runonflux/flux-spec-backend';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import {
-  buildAppSpec, registerAndConfirm, signAppSpec,
+  buildAppSpec, registerAndConfirm, confirmOnChain, signAppSpec,
 } from '../framework/app-helper.js';
 import { authenticate } from '../auth.js';
 import { nodeKey, fluxTeamKey, userKey } from '../framework/keys.js';
@@ -43,6 +43,10 @@ const ftPublicKeyB64 = Buffer.from(x25519.getPublicKey(ftPrivateKey)).toString('
 
 function getAttestations(node, hash, zelidauth) {
   return node.getAuthed(`/apps/ingressattestations/${hash}`, zelidauth, { noCache: true });
+}
+
+function getAttestationsByApp(node, name, zelidauth) {
+  return node.getAuthed(`/apps/ingressattestations/byapp/${name}`, zelidauth, { noCache: true });
 }
 
 // fluxteam-only: recover { observed, asserted } from a record's sealed envelope.
@@ -190,6 +194,43 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
     const onPeer = await getAttestations(env.clients[1], updateHash, fluxTeamAuth[1]);
     expect(onPeer.status).to.equal('success');
     expect(onPeer.data).to.have.length(1);
+  });
+
+  it('serves every attestation for an app by name - registration and update, grouped (fluxteam)', async function () {
+    this.timeout(360000);
+    const appName = 'e2eIngressByApp';
+    const spec = buildAppSpec({ name: appName });
+
+    // A confirmed registration and a confirmed update, so both are permanent messages
+    // the name resolves to. The update hash comes from its emitted attestation (the
+    // appupdate HTTP response is timing-sensitive); confirmOnChain then makes it permanent.
+    const reg = await registerAndConfirm(env.clients[0].url, nodeKey(1), spec, env.clients);
+    expect(reg.status).to.equal('success');
+    const registerHash = reg.appHash;
+
+    const cursor = env.clients[0].getLastEventId();
+    await submitUpdate(env.clients[0], nodeKey(1), { ...spec, description: 'updated for the by-app e2e' });
+    const evt = await env.clients[0].waitForEvent('network:ingressattestation', (d) => d.hash !== registerHash, 60000, { afterId: cursor });
+    const updateHash = evt.data.hash;
+    await confirmOnChain(updateHash, env.clients);
+
+    // By-app returns both messages' attestations, grouped and typed.
+    const byApp = await getAttestationsByApp(env.clients[0], appName, fluxTeamAuth[0]);
+    expect(byApp.status).to.equal('success');
+    const groups = new Map(byApp.data.map((g) => [g.hash, g]));
+    expect(groups.has(registerHash), 'registration group present').to.equal(true);
+    expect(groups.has(updateHash), 'update group present').to.equal(true);
+    expect(groups.get(registerHash).type).to.equal('fluxappregister');
+    expect(groups.get(updateHash).type).to.equal('fluxappupdate');
+
+    // Every group carries a sealed attestation that decrypts to an observed source, and the
+    // served records are ciphertext-only (the address is nowhere in cleartext).
+    for (const group of byApp.data) {
+      expect(group.attestations.length, `group ${group.hash} has attestations`).to.be.greaterThan(0);
+      const record = group.attestations[0];
+      expect(record).to.not.have.property('observed');
+      expect(decryptSource(record).observed.ip).to.be.a('string').with.length.greaterThan(0);
+    }
   });
 
   it('backfills a partitioned node via anti-entropy once the partition heals', async function () {
