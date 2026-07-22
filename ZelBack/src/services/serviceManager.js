@@ -257,6 +257,19 @@ async function prepareDatabaseSchema() {
     { key: { expireAt: 1 }, name: 'manifest_quarantine_ttl', expireAfterSeconds: 0, partialFilterExpression: { confirmed: false } },
   ]);
   log.info('App content manifests collection prepared');
+  // Ingress attestations: one node-signed record per (hash, node) — where a
+  // register/update entered the network. The unique key makes records from
+  // different ingress nodes coexist without collision or merge. The TTL reaps
+  // attestations whose message never confirmed (those still carry expireAt);
+  // confirmation unsets expireAt so real attributions persist.
+  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsIngressAttestations), [
+    { key: { hash: 1, node: 1 }, name: 'ingress attestation identity', unique: true },
+    { key: { hash: 1 }, name: 'query ingress attestations by hash' },
+    // Serves the reconcile bucket fetch and per-bucket digest recompute (confirmed members of a bucket) as an indexed lookup.
+    { key: { bucket: 1, expireAt: 1 }, name: 'ingress attestations by bucket' },
+    { key: { expireAt: 1 }, name: 'ingress_attestation_orphan_ttl', expireAfterSeconds: 0 },
+  ]);
+  log.info('App ingress attestations collection prepared');
   await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations), [
     { key: { expireAt: 1 }, expireAfterSeconds: 0 },
     { key: { name: 1 }, name: 'query for getting flux app install errors location based on specs name' },

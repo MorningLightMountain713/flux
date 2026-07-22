@@ -3,6 +3,7 @@ const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const fluxEventBus = require('../utils/fluxEventBus');
+const setReconciler = require('../appMessaging/setReconciler');
 const {
   globalAppsInformation,
   localAppsInformation,
@@ -12,6 +13,8 @@ const {
   globalAppsInstallingErrorsBroadcasts,
   globalAppsInstallingLocations,
   globalAppsLocations,
+  globalAppsIngressAttestations,
+  globalAppsIngressAttestationDigests,
   appsHashesCollection,
 } = require('../utils/appConstants');
 
@@ -661,6 +664,149 @@ async function storePermanentMessage(doc) {
   await dbHelper.insertOneToDatabase(globalDb(), globalAppsMessages, doc);
 }
 
+// ── Ingress attestations ───────────────────────────────────────────
+// One node-signed record per (hash, node): where a register/update entered the
+// network. Keyed uniquely so records from different ingress nodes never collide.
+// Unconfirmed records carry expireAt and self-reap; confirmation clears it.
+
+// Reconcile keys on the CONFIRMED set only (no expireAt): confirmed attestations are
+// immutable and never deleted, so the synced set is append-only. Orphans ride live gossip
+// and self-reap. Identity = `${hash}|${node}`; each row carries its precomputed bucket so
+// a bucket's members are an indexed lookup, not a scan.
+const ingressIdentityOf = (row) => `${row.hash}|${row.node}`;
+const INGRESS_DIGEST_DOC = 'ingress';
+
+// The K bucket digests of the confirmed set are MATERIALIZED in a single doc and kept in
+// step incrementally: a confirm touches only the affected bucket(s), and a reconcile reads
+// the doc — both O(K), never a full scan. The only O(N) work is a one-time rebuild if the
+// doc is missing (fresh node / first deploy). Digest writes are serialized so two confirms
+// in the same bucket can't race to a stale value; each recompute derives from the current
+// DB state, so it is idempotent and self-correcting.
+let ingressDigestChain = Promise.resolve();
+function serializeIngressDigest(fn) {
+  ingressDigestChain = ingressDigestChain.then(fn, fn);
+  return ingressDigestChain;
+}
+
+/** Recompute one bucket's digest from its current confirmed members and store it. */
+async function recomputeIngressBucket(bucket) {
+  const members = await dbHelper.findInDatabase(
+    globalDb(), globalAppsIngressAttestations,
+    { bucket, expireAt: { $exists: false } },
+    { projection: { _id: 0, hash: 1, node: 1 } },
+  );
+  const digest = setReconciler.combineDigest(members, { identityOf: ingressIdentityOf });
+  await dbHelper.updateOneInDatabase(
+    globalDb(), globalAppsIngressAttestationDigests,
+    { _id: INGRESS_DIGEST_DOC },
+    digest === setReconciler.ZERO_DIGEST
+      ? { $unset: { [`buckets.${bucket}`]: '' } }
+      : { $set: { [`buckets.${bucket}`]: digest } },
+    { upsert: true },
+  );
+}
+
+/** Rebuild every bucket digest from scratch — the one-time O(N) path when the doc is absent. */
+async function rebuildIngressDigests() {
+  const rows = await dbHelper.findInDatabase(
+    globalDb(), globalAppsIngressAttestations, { expireAt: { $exists: false } }, { projection: { _id: 0, hash: 1, node: 1 } },
+  );
+  const buckets = {};
+  const byBucket = new Map();
+  for (const row of rows) {
+    const b = setReconciler.bucketOf(ingressIdentityOf(row));
+    if (!byBucket.has(b)) byBucket.set(b, []);
+    byBucket.get(b).push(row);
+  }
+  for (const [b, members] of byBucket) {
+    buckets[b] = setReconciler.combineDigest(members, { identityOf: ingressIdentityOf });
+  }
+  await dbHelper.updateOneInDatabase(
+    globalDb(), globalAppsIngressAttestationDigests,
+    { _id: INGRESS_DIGEST_DOC }, { $set: { buckets } }, { upsert: true },
+  );
+}
+
+/**
+ * Insert an attestation. The unique (hash, node) index makes a re-seen record a
+ * duplicate — swallowed by insertOneToDatabase — so `inserted` distinguishes the
+ * first store (flood onward) from a duplicate (stop). Confirmed inserts update the
+ * materialized digest for their bucket.
+ * @returns {Promise<{ inserted: boolean }>}
+ */
+async function storeIngressAttestation(doc, expireAt = null) {
+  const bucket = setReconciler.bucketOf(ingressIdentityOf(doc));
+  const value = { ...doc, bucket };
+  // A confirmed message's attestation carries no TTL and persists; an unconfirmed
+  // one gets the orphan expireAt and self-reaps if the message never confirms.
+  if (expireAt != null) value.expireAt = new Date(expireAt);
+  const result = await dbHelper.insertOneToDatabase(globalDb(), globalAppsIngressAttestations, value);
+  const inserted = Boolean(result && result.insertedId);
+  // A newly-stored CONFIRMED attestation enters the reconcile digest; an orphan does not.
+  if (inserted && expireAt == null) await serializeIngressDigest(() => recomputeIngressBucket(bucket));
+  return { inserted };
+}
+
+/**
+ * Clear the orphan TTL on every attestation for a hash, so a confirmed
+ * registration/update's attribution persists as long as its permanent message. The
+ * attestations transitioning to confirmed update the materialized digest for their buckets.
+ */
+async function confirmIngressAttestations(hash) {
+  const transitioning = await dbHelper.findInDatabase(
+    globalDb(), globalAppsIngressAttestations, { hash, expireAt: { $exists: true } }, { projection: { _id: 0, bucket: 1 } },
+  );
+  if (transitioning.length === 0) return;
+  await dbHelper.updateInDatabase(
+    globalDb(), globalAppsIngressAttestations, { hash }, { $unset: { expireAt: '' } },
+  );
+  const buckets = [...new Set(transitioning.map((row) => row.bucket))];
+  await serializeIngressDigest(async () => {
+    for (const bucket of buckets) {
+      // eslint-disable-next-line no-await-in-loop
+      await recomputeIngressBucket(bucket);
+    }
+  });
+}
+
+/** All attestations recorded for a hash (fluxteam-only; storage bookkeeping stripped). */
+async function listIngressAttestations(hash) {
+  return dbHelper.findInDatabase(
+    globalDb(), globalAppsIngressAttestations, { hash }, { projection: { _id: 0, expireAt: 0, bucket: 0 } },
+  );
+}
+
+/**
+ * The sync INDEX: the K materialized bucket digests of this node's confirmed attestation
+ * set. A fixed small read (one doc) — never a scan — except the one-time rebuild when the
+ * doc is absent.
+ * @returns {Promise<string[]>}
+ */
+async function listIngressAttestationDigests() {
+  let doc = await dbHelper.findOneInDatabase(
+    globalDb(), globalAppsIngressAttestationDigests, { _id: INGRESS_DIGEST_DOC }, {},
+  );
+  if (!doc) {
+    await serializeIngressDigest(() => rebuildIngressDigests());
+    doc = await dbHelper.findOneInDatabase(
+      globalDb(), globalAppsIngressAttestationDigests, { _id: INGRESS_DIGEST_DOC }, {},
+    );
+  }
+  const buckets = (doc && doc.buckets) || {};
+  const digests = new Array(setReconciler.DEFAULT_BUCKETS);
+  for (let b = 0; b < digests.length; b += 1) digests[b] = buckets[b] || setReconciler.ZERO_DIGEST;
+  return digests;
+}
+
+/** The sync FETCH: full confirmed attestation records in the requested buckets (indexed). */
+async function listIngressAttestationsForBuckets(bucketIds) {
+  return dbHelper.findInDatabase(
+    globalDb(), globalAppsIngressAttestations,
+    { bucket: { $in: bucketIds }, expireAt: { $exists: false } },
+    { projection: { _id: 0, expireAt: 0, bucket: 0 } },
+  );
+}
+
 async function listAppMessagesByName(name) {
   const projection = { projection: { _id: 0 } };
   return dbHelper.findInDatabase(
@@ -946,6 +1092,12 @@ module.exports = {
   listAppMessagesByName,
   getPreviousOwner,
   getPreviousPermanentMessage,
+  // ingress attestations
+  storeIngressAttestation,
+  confirmIngressAttestations,
+  listIngressAttestations,
+  listIngressAttestationDigests,
+  listIngressAttestationsForBuckets,
   // upsert + errors
   upsertIfNewer,
   clearInstallingErrors,
