@@ -205,6 +205,39 @@ async function getAppsPermanentMessages(req, res) {
   }
 }
 
+/**
+ * Get ingress attestations for an app-message hash. fluxteam-only: this exposes
+ * the source address a registration/update was submitted from, which must never
+ * reach the public API.
+ * @param {object} req - Request object
+ * @param {object} res - Response object
+ */
+async function getIngressAttestations(req, res) {
+  try {
+    const authorized = await verificationHelper.verifyPrivilege('fluxteam', req);
+    if (!authorized) {
+      res.json(messageHelper.errUnauthorizedMessage());
+      return;
+    }
+    let { hash } = req.params;
+    hash = hash || req.query.hash;
+    if (!hash) {
+      res.json(messageHelper.createErrorMessage('hash parameter is mandatory'));
+      return;
+    }
+    const results = await appsRepository.listIngressAttestations(hash);
+    res.json(messageHelper.createDataMessage(results));
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    res.json(errorResponse);
+  }
+}
+
 // ── Helpers for checkAndRequestApp ──────────────────────────────────
 
 function getDaemonHeight() {
@@ -464,6 +497,9 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
 
     // Store the permanent message
     await appsRepository.storePermanentMessage(confirmedEvent.serialize());
+    // The message is durable now — clear the orphan TTL on its ingress
+    // attestations so their attribution persists alongside the permanent record.
+    await appsRepository.confirmIngressAttestations(hash);
     await appHashHasMessage(hash);
 
     // Project to InstantiatedSpec — the domain type for live app state
@@ -736,6 +772,7 @@ module.exports = {
   appHashHasMessageNotFound,
   getAppsTemporaryMessages,
   getAppsPermanentMessages,
+  getIngressAttestations,
   checkAndRequestApp,
   checkAndRequestMultipleApps,
   continuousFluxAppHashesCheck,

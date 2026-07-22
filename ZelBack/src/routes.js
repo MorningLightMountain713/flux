@@ -402,6 +402,9 @@ module.exports = (app) => {
   app.get('/apps/permanentmessages/:hash?/:owner?/:appname?', cache('2 minutes'), (req, res) => {
     messageVerifier.getAppsPermanentMessages(req, res);
   });
+  app.get('/apps/ingressattestations/:hash?', (req, res) => {
+    messageVerifier.getIngressAttestations(req, res);
+  });
   app.get('/apps/globalappsspecifications/:hash?/:owner?/:appname?', cache('30 seconds'), (req, res) => {
     registryManager.getGlobalAppsSpecifications(req, res);
   });

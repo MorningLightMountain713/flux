@@ -103,6 +103,7 @@ describe('AppSyncOrchestrator', () => {
       '../dbHelper': dbHelperStub,
       './appHashSyncService': { syncMissingHashes: syncMissingHashesStub, getMissingHashes: getMissingHashesStub, resetHashSyncForUpgrade: resetHashSyncForUpgradeStub },
       './contentManifestSyncService': { reconcile: reconcileStub, depositIndex: sinon.stub(), isPeerInActiveRound: sinon.stub().returns(false) },
+      './ingressAttestationSyncService': { reconcile: sinon.stub().resolves({ peers: 0, indexesReceived: 0, fetched: 0 }), depositDigests: sinon.stub(), isPeerInActiveRound: sinon.stub().returns(false) },
       './peerNotification': { checkAndNotifyPeersOfRunningApps: checkAndNotifyStub, stopBroadcastInterval: sinon.stub() },
       '../appDatabase/registryManager': {
         reindexGlobalAppsInformation: reindexStub,

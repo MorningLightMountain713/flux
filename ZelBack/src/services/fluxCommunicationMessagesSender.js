@@ -283,6 +283,61 @@ async function broadcastTemporaryAppMessage(message) {
   await broadcastMessageToAll(message);
 }
 
+/**
+ * Broadcast a node's ingress attestation (where a register/update entered the
+ * network). The inner attestation is already signed by the ingress node; the
+ * outer broadcast envelope is re-signed by each relaying node as usual.
+ * @param {object} record - IngressAttestation.serialize() output
+ */
+async function broadcastIngressAttestation(record) {
+  await broadcastMessageToAll({ type: 'fluxappingress', version: 1, ...record });
+}
+
+/**
+ * Step 1 of the two-step ingress-attestation reconcile: serve this node's K bucket
+ * digests of its confirmed attestation set (setReconciler) — fixed size regardless of
+ * set size, so a catching-up peer can diff digests and fetch only the buckets that differ.
+ */
+async function respondWithIngressIndex(peer) {
+  try {
+    const digests = await appsRepository.listIngressAttestationDigests();
+    await sendSignedMessage({ type: 'fluxappingressindex', digests, done: true }, peer, { awaitDrain: true });
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+/**
+ * Step 2 of the two-step ingress-attestation reconcile: serve the full attestation
+ * records that fall in the buckets a peer asked for (`msgObj.data.buckets`). Each record
+ * carries its own node signature, verified by the requester in the fluxappingresssync
+ * receive path — no rebroadcast, this is a targeted backfill.
+ */
+async function respondWithIngressAttestations(msgObj, peer) {
+  try {
+    const buckets = msgObj && msgObj.data && msgObj.data.buckets;
+    if (!Array.isArray(buckets) || buckets.length === 0 || buckets.length > 256) {
+      await sendSignedMessage({ type: 'fluxappingresssync', messages: [], done: true }, peer, { awaitDrain: true });
+      return;
+    }
+    const records = await appsRepository.listIngressAttestationsForBuckets(buckets);
+
+    const batchSize = 2000;
+    if (records.length === 0) {
+      await sendSignedMessage({ type: 'fluxappingresssync', messages: [], done: true }, peer, { awaitDrain: true });
+      return;
+    }
+    for (let i = 0; i < records.length; i += batchSize) {
+      const batch = records.slice(i, i + batchSize);
+      const done = i + batchSize >= records.length;
+      // eslint-disable-next-line no-await-in-loop
+      await sendSignedMessage({ type: 'fluxappingresssync', messages: batch, done }, peer, { awaitDrain: true });
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
 async function respondWithTempMessages(peer, sinceTimestamp = 0) {
   try {
     const globalAppsTempMessages = config.database.appsglobal.collections.appsTemporaryMessages;
@@ -450,6 +505,9 @@ module.exports = {
   broadcastMessageFromUser,
   broadcastMessageFromUserPost,
   broadcastTemporaryAppMessage,
+  broadcastIngressAttestation,
+  respondWithIngressIndex,
+  respondWithIngressAttestations,
   broadcastMessageToRandomOutgoing,
   broadcastMessageToRandomIncoming,
 };
