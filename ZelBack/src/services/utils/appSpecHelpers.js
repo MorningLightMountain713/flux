@@ -1,5 +1,3 @@
-const config = require('config');
-const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
@@ -226,11 +224,11 @@ async function checkFreeAppUpdate(spec, daemonHeight) {
   const extensionSeconds = newRemainingSeconds - oldRemainingSeconds;
 
   const placementMatch = spec.placement.staticIp === prevSpec.placement.staticIp;
-  // The targeting fields are maps (identity -> null | [replicaNames]); the
-  // free-update bar compares entry counts, mirroring the pre-map length check.
-  const targetsMatch = Object.keys(spec.placement.targetIps).length === Object.keys(prevSpec.placement.targetIps).length
-    && Object.keys(spec.placement.targetOutpoints).length === Object.keys(prevSpec.placement.targetOutpoints).length
-    && Object.keys(spec.placement.targetOperators).length === Object.keys(prevSpec.placement.targetOperators).length;
+  // The targeting fields are arrays of node identity; the free-update bar
+  // compares their lengths (the identity SET size).
+  const targetsMatch = spec.placement.targetIps.length === prevSpec.placement.targetIps.length
+    && spec.placement.targetOutpoints.length === prevSpec.placement.targetOutpoints.length
+    && spec.placement.targetOperators.length === prevSpec.placement.targetOperators.length;
   const instancesMatch = spec.instances === prevSpec.instances;
   const extensionOk = extensionSeconds <= MAX_FREE_EXTENSION_SECONDS;
 
@@ -244,12 +242,9 @@ async function checkFreeAppUpdate(spec, daemonHeight) {
     return false;
   }
 
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
-  const query = { 'appSpecifications.name': spec.name };
-  const projection = { projection: { _id: 0 } };
-  const permanentAppMessage = await dbHelper.findInDatabase(database, globalAppsMessages, query, projection);
+  // The app's full message history (register + updates), via the repository —
+  // the free-update rate limit counts recent update messages.
+  const permanentAppMessage = await appsRepository.listAppMessagesByName(spec.name);
 
   // Free-update rate limits: max 10 updates in 5 days, 8 in 2 days, 5 in 1 day.
   let messagesInLasDays = permanentAppMessage.filter(
