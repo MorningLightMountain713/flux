@@ -483,6 +483,42 @@ describe('appsRepository', () => {
       expect(query).to.deep.equal({ confirmed: true, envelope: { $exists: true }, appName: { $in: ['a'] } });
     });
 
+    describe('listIngressAttestationsByApp', () => {
+      it('groups attestations by the app message they attest to, omitting messages with none', async () => {
+        dbHelperStub.findInDatabase.callsFake(async (_db, collection, query) => {
+          if (collection === 'zelappsmessages') {
+            return [
+              { hash: 'h1', type: 'fluxappregister', timestamp: 1000 },
+              { hash: 'h2', type: 'fluxappupdate', timestamp: 2000 },
+              { hash: 'h3', type: 'fluxappupdate', timestamp: 3000 },
+            ];
+          }
+          const byHash = {
+            h1: [{ hash: 'h1', node: 'n1', sealed: { kid: 'k' } }],
+            h2: [{ hash: 'h2', node: 'n1', sealed: { kid: 'k' } }, { hash: 'h2', node: 'n2', sealed: { kid: 'k' } }],
+            h3: [],
+          };
+          return byHash[query.hash] || [];
+        });
+
+        const groups = await appsRepository.listIngressAttestationsByApp('myapp');
+
+        // h3 (an update with no attestation) is omitted; order follows the message history.
+        expect(groups).to.have.length(2);
+        expect(groups[0]).to.deep.include({ hash: 'h1', type: 'fluxappregister', timestamp: 1000 });
+        expect(groups[0].attestations).to.have.length(1);
+        expect(groups[1]).to.deep.include({ hash: 'h2', type: 'fluxappupdate' });
+        expect(groups[1].attestations).to.have.length(2);
+      });
+
+      it('resolves the app by name against the message store', async () => {
+        dbHelperStub.findInDatabase.callsFake(async (_db, collection) => (collection === 'zelappsmessages' ? [] : []));
+        expect(await appsRepository.listIngressAttestationsByApp('ghost')).to.deep.equal([]);
+        const nameQuery = dbHelperStub.findInDatabase.getCalls().find((c) => c.args[1] === 'zelappsmessages').args[2];
+        expect(nameQuery).to.deep.equal({ 'appSpecifications.name': 'ghost' });
+      });
+    });
+
     describe('materialized ingress digests', () => {
       const DIGEST_COLL = 'appingressattestationdigests';
 
