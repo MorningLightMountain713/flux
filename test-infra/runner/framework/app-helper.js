@@ -1,14 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { authenticate, signBtcMessage } from '../auth.js';
 import { appOwnerKey } from './keys.js';
 import { buildEnterpriseBlob } from './enterprise-helper.js';
 import { REGISTRY_REPO_HOST } from './subnet-config.js';
 import * as daemon from './daemon-control.js';
 import { waitFor } from './wait.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const defaultSpec = {
   version: 8,
@@ -108,16 +103,15 @@ export async function registerApp(nodeUrl, adminKeypair, spec, type = 'fluxappre
   return { ...data, auth };
 }
 
-export async function registerAndConfirm(nodeUrl, adminKeypair, spec, nodes, {
-  type = 'fluxappregister',
+/**
+ * Confirm an already-submitted app message (register or update) on chain: wait
+ * for its temp message to propagate to every node, queue the tx, then wait out
+ * the block and explorer sync. Message-type agnostic — queueAppTx takes any hash.
+ */
+export async function confirmOnChain(appHash, nodes, {
   propagationTimeoutMs = 30000,
   explorerTimeoutMs = 120000,
 } = {}) {
-  const regResult = await registerApp(nodeUrl, adminKeypair, spec, type);
-  if (regResult.status !== 'success') return regResult;
-
-  const appHash = regResult.data;
-
   let tempCount = 0;
   await waitFor(async () => {
     tempCount = 0;
@@ -143,12 +137,21 @@ export async function registerAndConfirm(nodeUrl, adminKeypair, spec, nodes, {
     return res.status === 'success' && res.data === true;
   }, { timeout: explorerTimeoutMs, interval: 2000, label: 'explorer synced after block' });
 
-  return {
-    status: 'success',
-    appHash,
-    tempPropagation: { count: tempCount, total: nodes.length },
-    targetHeight,
-  };
+  return { tempPropagation: { count: tempCount, total: nodes.length }, targetHeight };
+}
+
+export async function registerAndConfirm(nodeUrl, adminKeypair, spec, nodes, {
+  type = 'fluxappregister',
+  propagationTimeoutMs = 30000,
+  explorerTimeoutMs = 120000,
+} = {}) {
+  const regResult = await registerApp(nodeUrl, adminKeypair, spec, type);
+  if (regResult.status !== 'success') return regResult;
+
+  const appHash = regResult.data;
+  const confirm = await confirmOnChain(appHash, nodes, { propagationTimeoutMs, explorerTimeoutMs });
+
+  return { status: 'success', appHash, ...confirm };
 }
 
 export async function checkPermanentSpec(nodes, appName) {
