@@ -108,6 +108,8 @@ describe('appsRepository', () => {
         globalAppsInformation: 'zelappsinformation',
         localAppsInformation: 'zelappsinformation',
         globalAppsMessages: 'zelappsmessages',
+        globalAppsIngressAttestations: 'appingressattestations',
+        globalAppsIngressAttestationDigests: 'appingressattestationdigests',
       },
       './appsMaintenance': {
         expireHeightExpr: sinon.stub().returns({ $add: ['$height', '$expire'] }),
@@ -479,6 +481,72 @@ describe('appsRepository', () => {
       expect(out).to.deep.equal([{ ...env, data: { m: 1 } }]);
       const [, , query] = dbHelperStub.findInDatabase.firstCall.args;
       expect(query).to.deep.equal({ confirmed: true, envelope: { $exists: true }, appName: { $in: ['a'] } });
+    });
+
+    describe('materialized ingress digests', () => {
+      const DIGEST_COLL = 'appingressattestationdigests';
+
+      it('reads the digest doc for O(K) serving and rebuilds once when it is absent', async () => {
+        dbHelperStub.findOneInDatabase.onFirstCall().resolves(null); // doc absent → rebuild
+        dbHelperStub.findInDatabase.resolves([{ hash: 'h1', node: 'n1' }]); // members for the rebuild scan
+        dbHelperStub.findOneInDatabase.onSecondCall().resolves({ _id: 'ingress', buckets: {} });
+
+        const digests = await appsRepository.listIngressAttestationDigests();
+        expect(digests).to.have.length(256);
+        expect(digests.every((d) => typeof d === 'string' && d.length === 64)).to.equal(true);
+        // the rebuild wrote the digest doc
+        const wrote = dbHelperStub.updateOneInDatabase.getCalls().some((c) => c.args[1] === DIGEST_COLL);
+        expect(wrote).to.equal(true);
+      });
+
+      it('serves purely from the doc when present — no scan', async () => {
+        dbHelperStub.findOneInDatabase.resolves({ _id: 'ingress', buckets: { 5: 'a'.repeat(64) } });
+        const digests = await appsRepository.listIngressAttestationDigests();
+        expect(dbHelperStub.findInDatabase.called).to.equal(false); // no member scan
+        expect(digests[5]).to.equal('a'.repeat(64));
+        expect(digests[6]).to.equal('0'.repeat(64)); // absent bucket → zero digest
+      });
+
+      it('a confirmed store recomputes only its own bucket', async () => {
+        const setReconciler = require('../../ZelBack/src/services/appMessaging/setReconciler'); // eslint-disable-line global-require
+        dbHelperStub.insertOneToDatabase = sinon.stub().resolves({ insertedId: 'x' });
+        dbHelperStub.findInDatabase.resolves([{ hash: 'h2', node: 'n2' }]); // the bucket's members
+
+        await appsRepository.storeIngressAttestation({ hash: 'h2', node: 'n2' }, null);
+
+        const bucket = setReconciler.bucketOf('h2|n2');
+        // exactly one digest write, scoped to that bucket
+        const digestWrites = dbHelperStub.updateOneInDatabase.getCalls().filter((c) => c.args[1] === DIGEST_COLL);
+        expect(digestWrites).to.have.length(1);
+        const memberQuery = dbHelperStub.findInDatabase.lastCall.args[2];
+        expect(memberQuery).to.deep.equal({ bucket, expireAt: { $exists: false } });
+      });
+
+      it('an orphan store does not touch the digest table', async () => {
+        dbHelperStub.insertOneToDatabase = sinon.stub().resolves({ insertedId: 'x' });
+        await appsRepository.storeIngressAttestation({ hash: 'h3', node: 'n3' }, Date.now() + 1000);
+        const digestWrites = dbHelperStub.updateOneInDatabase.getCalls().filter((c) => c.args[1] === DIGEST_COLL);
+        expect(digestWrites).to.have.length(0);
+      });
+
+      it('confirming a hash recomputes the transitioning attestations\' buckets', async () => {
+        dbHelperStub.updateInDatabase = sinon.stub().resolves({ modifiedCount: 1 });
+        // first find: the transitioning attestations (with their buckets); later finds: bucket members
+        dbHelperStub.findInDatabase.onFirstCall().resolves([{ bucket: 7 }, { bucket: 7 }, { bucket: 42 }]);
+        dbHelperStub.findInDatabase.resolves([]);
+
+        await appsRepository.confirmIngressAttestations('h1');
+
+        const digestWrites = dbHelperStub.updateOneInDatabase.getCalls().filter((c) => c.args[1] === DIGEST_COLL);
+        expect(digestWrites).to.have.length(2); // buckets 7 and 42, deduped
+      });
+
+      it('does nothing when confirming a hash with no transitioning attestations', async () => {
+        dbHelperStub.updateInDatabase = sinon.stub().resolves({ modifiedCount: 0 });
+        dbHelperStub.findInDatabase.resolves([]); // none with expireAt
+        await appsRepository.confirmIngressAttestations('h1');
+        expect(dbHelperStub.updateInDatabase.called).to.equal(false); // no unset, no digest write
+      });
     });
 
     it('reapOrphanedContentManifests deletes confirmed manifests whose app left the global set, aged past the grace', async () => {

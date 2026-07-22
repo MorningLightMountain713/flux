@@ -7,6 +7,7 @@ const log = require('../../lib/log');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
+const ingressAttestationService = require('../appMessaging/ingressAttestationService');
 const registryManager = require('../appDatabase/registryManager');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
@@ -392,6 +393,8 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
     arcaneAttestation,
   };
   await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
+  // Record and gossip where this registration entered the network (best-effort).
+  await ingressAttestationService.emit(messageHASH, req);
   await serviceHelper.delay(1200);
   await messageVerifier.requestAppMessage(messageHASH);
   await serviceHelper.delay(1200);

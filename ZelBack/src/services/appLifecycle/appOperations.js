@@ -36,6 +36,7 @@ const {
   extractIp, extractPort, ipsMatch, DEFAULT_API_PORT,
 } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
+const ingressAttestationService = require('../appMessaging/ingressAttestationService');
 const registryManager = require('../appDatabase/registryManager');
 const https = require('https');
 const { getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
@@ -1446,6 +1447,9 @@ async function submitAppUpdate(req, res, processedBody, contentCtx) {
     extend: processedBody.extend,
     contentCtx,
   });
+
+  // Record and gossip where this update entered the network (best-effort).
+  await ingressAttestationService.emit(hash, req);
 
   res.json(messageHelper.createDataMessage(hash));
 }

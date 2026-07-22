@@ -107,6 +107,7 @@ function makeBaseStubs(overrides = {}) {
       existsInstalledApp: sinon.stub().resolves(false),
       removeGlobalAppInfo: sinon.stub().resolves(),
       storePermanentMessage: sinon.stub().resolves(),
+      confirmIngressAttestations: sinon.stub().resolves(),
       getPreviousPermanentMessage: sinon.stub().resolves(null),
       listAppMessagesByName: sinon.stub().resolves([]),
     },
