@@ -7,7 +7,9 @@ import {
 } from '../framework/app-helper.js';
 import { authenticate } from '../auth.js';
 import { nodeKey, fluxTeamKey, userKey } from '../framework/keys.js';
-import { waitFor } from '../framework/wait.js';
+import {
+  waitFor, waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
+} from '../framework/wait.js';
 
 // Ingress attestations record WHERE a register/update entered the network (the source
 // address the ingress node observed), gossip that record to every peer as a standalone
@@ -200,5 +202,67 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
 
     const healed = await getAttestations(isolated, appHash, fluxTeamAuth[ISOLATED]);
     expect(healed.data[0], 'backfilled record matches the majority record').to.deep.equal(onMajority.data[0]);
+  });
+});
+
+// Boot-sync path: test 4 covers the steady-state refresh converging an already-booted node.
+// This covers the OTHER durability path — a node that boots into a network that ALREADY
+// holds confirmed attestations (a fresh / long-offline node), which relies on the boot
+// reconcile (#runIngressSync), not on waiting out the refresh cadence. Its own deferred
+// fleet so the four passing tests above are untouched.
+describe('82 ingress attestation - fresh node boot backfill', function () {
+  let env;
+
+  before(async function () {
+    this.timeout(600000);
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: 6,
+      deferredNodes: 1,
+      tickerAutostart: false,
+      configOverrides: {
+        fluxapps: {
+          minOutgoing: 2, minIncoming: 1, ingressRefreshBlocks: 3, appSyncDegradedThreshold: 0,
+        },
+      },
+    });
+    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
+  });
+
+  after(async function () {
+    this.timeout(30000);
+    await env?.teardown();
+  });
+
+  it('a node booting into a populated network backfills the attestation it missed', async function () {
+    this.timeout(420000);
+    const online = env.clients.filter(Boolean); // the 5 booted nodes; the last is deferred (down)
+
+    // Register+confirm while the fresh node is down, so it never saw the live gossip.
+    const spec = buildAppSpec({ name: 'e2eIngressBoot' });
+    const reg = await registerAndConfirm(env.clients[0].url, nodeKey(1), spec, online);
+    expect(reg.status).to.equal('success');
+    const { appHash } = reg;
+
+    // Bring the fresh node up (empty DB) and peer it into the ring.
+    const idx = env.lastNodeIndex;
+    await env.startNode(idx);
+    const fresh = env.clients[idx];
+    await waitForDaemonReady(fresh);
+    await waitForNodeStatus(fresh, (d) => d.confirmed === true, 30000);
+    await waitForBlockProcessed(fresh, (d) => d.height > 2100000, 60000);
+    await env.startDiscovery();
+
+    // Once peered, the reconcile backfills the confirmed attestation it never gossiped.
+    await fresh.waitForEvent('network:ingressattestation', (d) => d.hash === appHash, 240000);
+
+    const freshAuth = (await authenticate(fresh.url, fluxTeamKey())).zelidauth;
+    await waitFor(async () => {
+      const res = await getAttestations(fresh, appHash, freshAuth);
+      return res.status === 'success' && res.data.length === 1;
+    }, { timeout: 60000, interval: 2000, label: 'fresh node backfilled the ingress attestation' });
+
+    const record = await getAttestations(fresh, appHash, freshAuth);
+    expect(record.data[0].hash).to.equal(appHash);
   });
 });
