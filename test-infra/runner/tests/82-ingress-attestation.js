@@ -21,8 +21,10 @@ import { waitFor } from '../framework/wait.js';
 // Topology: a 5-node ring is the minimum for minOutgoing:2 (needs >= 2*k+1 nodes), and
 // minIncoming:1 keeps the submission gate satisfiable when a peer drops. ingressRefreshBlocks
 // is compressed so the block-cadence anti-entropy refresh fires quickly for the heal test,
-// and appSyncDegradedThreshold:0 keeps the isolated node READY (so its refresh runs) instead
-// of degrading.
+// and appSyncDegradedThreshold:0 keeps the isolated node READY (so its refresh runs).
+//
+// NOTE: login sessions are node-local (each node's own loggedUsers), so fluxteam auth is
+// obtained per node — a session from one node 401s on another (which is the gate working).
 
 const MAJORITY = [0, 1, 2, 3];
 const ISOLATED = 4;
@@ -39,7 +41,7 @@ async function submitUpdate(node, adminKeypair, spec) {
 
 describe('82 ingress attestation - capture, gossip, gating, backfill', function () {
   let env;
-  let fluxTeamAuth;
+  let fluxTeamAuth; // per-node zelidauth (sessions are node-local)
   let userAuth;
 
   before(async function () {
@@ -58,7 +60,7 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
       },
     });
     await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
-    fluxTeamAuth = (await authenticate(env.clients[0].url, fluxTeamKey())).zelidauth;
+    fluxTeamAuth = await Promise.all(env.clients.map(async (c) => (await authenticate(c.url, fluxTeamKey())).zelidauth));
     userAuth = (await authenticate(env.clients[0].url, userKey())).zelidauth;
   });
 
@@ -75,7 +77,7 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
     const { appHash } = reg;
 
     // The ingress node recorded exactly one attestation carrying the observed source address.
-    const ingress = await getAttestations(env.clients[0], appHash, fluxTeamAuth);
+    const ingress = await getAttestations(env.clients[0], appHash, fluxTeamAuth[0]);
     expect(ingress.status).to.equal('success');
     expect(ingress.data).to.have.length(1);
     const record = ingress.data[0];
@@ -90,7 +92,7 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
       // eslint-disable-next-line no-await-in-loop
       await client.waitForEvent('network:ingressattestation', (d) => d.hash === appHash, 60000);
       // eslint-disable-next-line no-await-in-loop
-      const peer = await getAttestations(client, appHash, fluxTeamAuth);
+      const peer = await getAttestations(client, appHash, fluxTeamAuth[i]);
       expect(peer.status, `node ${i} serves the attestation`).to.equal('success');
       expect(peer.data, `node ${i} holds exactly the ingress record`).to.have.length(1);
       expect(peer.data[0], `node ${i} record matches the ingress record`).to.deep.equal(record);
@@ -105,7 +107,7 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
     const { appHash } = reg;
 
     // fluxteam sees it, and learns the source IP...
-    const authed = await getAttestations(env.clients[0], appHash, fluxTeamAuth);
+    const authed = await getAttestations(env.clients[0], appHash, fluxTeamAuth[0]);
     expect(authed.status).to.equal('success');
     expect(authed.data).to.have.length(1);
     const sourceIp = authed.data[0].observed.ip;
@@ -139,19 +141,27 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
     expect(reg.status).to.equal('success');
     const registerHash = reg.appHash;
 
-    // Submit an update through the second ingress endpoint.
-    const updatedSpec = { ...spec, description: 'updated by the ingress attestation e2e suite' };
-    const upd = await submitUpdate(env.clients[0], nodeKey(1), updatedSpec);
-    expect(upd.status, `update submission: ${JSON.stringify(upd)}`).to.equal('success');
-    const updateHash = upd.data;
+    // Submit an update through the second ingress endpoint. Its HTTP self-poll is timing-
+    // sensitive (existing submitAppUpdate behaviour), so drive the assertion off the emitted
+    // attestation event, not the response status.
+    const cursor = env.clients[0].getLastEventId();
+    await submitUpdate(env.clients[0], nodeKey(1), { ...spec, description: 'updated by the ingress attestation e2e suite' });
+
+    // The update emitted its own attestation, keyed by a new (update) hash.
+    const evt = await env.clients[0].waitForEvent('network:ingressattestation', (d) => d.hash !== registerHash, 60000, { afterId: cursor });
+    const updateHash = evt.data.hash;
     expect(updateHash).to.not.equal(registerHash);
 
-    // The update produced its own attestation, propagated and fluxteam-gated.
+    const onNode0 = await getAttestations(env.clients[0], updateHash, fluxTeamAuth[0]);
+    expect(onNode0.status).to.equal('success');
+    expect(onNode0.data).to.have.length(1);
+    expect(onNode0.data[0].hash).to.equal(updateHash);
+
+    // and it propagated to a peer.
     await env.clients[1].waitForEvent('network:ingressattestation', (d) => d.hash === updateHash, 60000);
-    const onPeer = await getAttestations(env.clients[1], updateHash, fluxTeamAuth);
+    const onPeer = await getAttestations(env.clients[1], updateHash, fluxTeamAuth[1]);
     expect(onPeer.status).to.equal('success');
     expect(onPeer.data).to.have.length(1);
-    expect(onPeer.data[0].hash).to.equal(updateHash);
   });
 
   it('backfills a partitioned node via anti-entropy once the partition heals', async function () {
@@ -168,9 +178,9 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
     const { appHash } = reg;
 
     // The majority holds the attestation; the isolated node has nothing for this hash.
-    const onMajority = await getAttestations(env.clients[0], appHash, fluxTeamAuth);
+    const onMajority = await getAttestations(env.clients[0], appHash, fluxTeamAuth[0]);
     expect(onMajority.data).to.have.length(1);
-    const isolatedBefore = await getAttestations(isolated, appHash, fluxTeamAuth);
+    const isolatedBefore = await getAttestations(isolated, appHash, fluxTeamAuth[ISOLATED]);
     expect(isolatedBefore.data, 'isolated node missed the live gossip').to.have.length(0);
 
     const backstopAfter = isolated.getLastEventId();
@@ -184,11 +194,11 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
     await isolated.waitForEvent('network:ingressattestation', (d) => d.hash === appHash, 240000, { afterId: backstopAfter });
 
     await waitFor(async () => {
-      const res = await getAttestations(isolated, appHash, fluxTeamAuth);
+      const res = await getAttestations(isolated, appHash, fluxTeamAuth[ISOLATED]);
       return res.status === 'success' && res.data.length === 1;
     }, { timeout: 60000, interval: 2000, label: 'node 4 backfilled the ingress attestation' });
 
-    const healed = await getAttestations(isolated, appHash, fluxTeamAuth);
+    const healed = await getAttestations(isolated, appHash, fluxTeamAuth[ISOLATED]);
     expect(healed.data[0], 'backfilled record matches the majority record').to.deep.equal(onMajority.data[0]);
   });
 });

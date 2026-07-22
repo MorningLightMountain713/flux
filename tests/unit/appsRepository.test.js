@@ -529,6 +529,16 @@ describe('appsRepository', () => {
         expect(digestWrites).to.have.length(0);
       });
 
+      it('deduplicates a re-seen (hash, node) with no insert and no digest write', async () => {
+        dbHelperStub.findOneInDatabase.resolves({ _id: 'already-held' });
+        dbHelperStub.insertOneToDatabase = sinon.stub().resolves({ insertedId: 'x' });
+        const res = await appsRepository.storeIngressAttestation({ hash: 'h9', node: 'n9' }, null);
+        expect(res).to.deep.equal({ inserted: false });
+        expect(dbHelperStub.insertOneToDatabase.called).to.equal(false);
+        const digestWrites = dbHelperStub.updateOneInDatabase.getCalls().filter((c) => c.args[1] === DIGEST_COLL);
+        expect(digestWrites).to.have.length(0);
+      });
+
       it('confirming a hash recomputes the transitioning attestations\' buckets', async () => {
         dbHelperStub.updateInDatabase = sinon.stub().resolves({ modifiedCount: 1 });
         // first find: the transitioning attestations (with their buckets); later finds: bucket members
