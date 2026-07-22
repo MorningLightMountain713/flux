@@ -6,6 +6,8 @@ const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const messageStore = require('./appMessaging/messageStore');
 const messageVerifier = require('./appMessaging/messageVerifier');
+const ingressAttestationService = require('./appMessaging/ingressAttestationService');
+const ingressAttestationSyncService = require('./appMessaging/ingressAttestationSyncService');
 const verificationHelper = require('./verificationHelper');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
@@ -91,6 +93,29 @@ async function handleAppMessages(message, fromIP, port) {
       } else {
         fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
       }
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+/**
+ * Verify and store an inbound ingress attestation, then flood it onward the
+ * first time it is seen. The attestation's own signature (by the ingress node)
+ * is what is verified; a bad or duplicate one is dropped without relay.
+ * @param {object} message Parsed message object.
+ * @param {string} fromIP Sender's IP.
+ * @param {string} port Sender's node Api port.
+ */
+async function handleIngressAttestation(message, fromIP, port) {
+  try {
+    const result = await ingressAttestationService.receive(message.data);
+    if (result instanceof Error) {
+      log.warn(`handleIngressAttestation - from ${fromIP}:${port} rejected: ${result.message}`);
+      return;
+    }
+    if (result.rebroadcast) {
+      await fluxCommunicationMessagesSender.broadcastIngressAttestation(result.record);
     }
   } catch (error) {
     log.error(error);
@@ -308,6 +333,44 @@ async function handleContentManifestIndexResponse(message, peerKey) {
     const { index } = message.data;
     if (!Array.isArray(index) || index.length > 100000) return;
     contentManifestSyncService.depositIndex(peerKey, index);
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+// A peer's bucket digests for its confirmed attestation set — step 1 of the two-step
+// ingress reconcile. Accepted only from a peer we asked this round (the reconcile
+// service owns the round, replacing the ephemeral isSyncRequested gate).
+async function handleIngressIndexResponse(message, peerKey) {
+  try {
+    if (!ingressAttestationSyncService.isPeerInActiveRound(peerKey)) return;
+    if (!message.data || message.data.type !== 'fluxappingressindex') return;
+    const { digests } = message.data;
+    if (!Array.isArray(digests) || digests.length > 1024) return;
+    ingressAttestationSyncService.depositDigests(peerKey, digests);
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+// The requested attestation bodies — step 2 of the two-step ingress reconcile. Same
+// active-round gate; each record is verified by its own node signature in receive()
+// before storing. No rebroadcast — this is a targeted backfill, not gossip.
+async function handleIngressSyncResponse(message, peerKey) {
+  try {
+    if (!ingressAttestationSyncService.isPeerInActiveRound(peerKey)) return;
+    if (!message.data || message.data.type !== 'fluxappingresssync') return;
+    const { messages } = message.data;
+    if (!Array.isArray(messages) || messages.length > 2500) return;
+    let stored = 0;
+    for (const record of messages) {
+      // The reconcile responder serves confirmed records only, so a backfill is filed
+      // confirmed — it enters the digest at once and the reconcile converges immediately.
+      // eslint-disable-next-line no-await-in-loop
+      const result = await ingressAttestationService.receive(record, { confirmed: true });
+      if (!(result instanceof Error)) stored += 1;
+    }
+    log.info(`handleIngressSyncResponse - Stored ${stored} of ${messages.length} attestations from ${peerKey}`);
   } catch (error) {
     log.error(error);
   }
@@ -579,7 +642,6 @@ async function handleNodeSigtermMessage(message, fromIP, port) {
  * @param {import('./utils/FluxPeerSocket').FluxPeerSocket} peerSocket FluxPeerSocket instance.
  */
 async function dispatchFluxMessage(msgObj, peerSocket) {
-  const isOutbound = peerSocket.direction === DIRECTION.OUTBOUND;
   const codes = peerSocket.closeCodes;
   const {
     pubKey, timestamp, signature, version, data,
@@ -674,6 +736,12 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
           setImmediate(() => fluxCommunicationMessagesSender.respondWithManifestIndex(peerSocket));
         } else if (msgObj.data.type === 'fluxappcontentmanifestrequest') {
           setImmediate(() => fluxCommunicationMessagesSender.respondWithContentManifests(msgObj, peerSocket));
+        } else if (msgObj.data.type === 'fluxappingress') {
+          setImmediate(() => handleIngressAttestation(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxappingressindexrequest') {
+          setImmediate(() => fluxCommunicationMessagesSender.respondWithIngressIndex(peerSocket));
+        } else if (msgObj.data.type === 'fluxappingressrequest') {
+          setImmediate(() => fluxCommunicationMessagesSender.respondWithIngressAttestations(msgObj, peerSocket));
         } else {
           log.warn(`Unrecognised message type of ${msgObj.data.type}`);
         }
@@ -741,6 +809,12 @@ async function processSyncChunk(msgObj, peerKey) {
     case 'fluxappcontentmanifestsync':
       await handleContentManifestSyncResponse(msgObj, peerKey);
       break;
+    case 'fluxappingressindex':
+      await handleIngressIndexResponse(msgObj, peerKey);
+      break;
+    case 'fluxappingresssync':
+      await handleIngressSyncResponse(msgObj, peerKey);
+      break;
     default:
       log.warn(`Unknown sync response type: ${type}`);
   }
@@ -753,8 +827,9 @@ async function dispatchSyncResponse(msgObj, peerSocket) {
     // gated by the reconcile service's active round (checked in their handlers), not the
     // ephemeral isSyncRequested flag the boot-sync types use.
     const type = msgObj.data?.type;
-    const isManifestReconcile = type === 'fluxappcontentmanifestindex' || type === 'fluxappcontentmanifestsync';
-    if (!isManifestReconcile && !peerManager.isSyncRequested(peerKey)) return;
+    const isReconcile = type === 'fluxappcontentmanifestindex' || type === 'fluxappcontentmanifestsync'
+      || type === 'fluxappingressindex' || type === 'fluxappingresssync';
+    if (!isReconcile && !peerManager.isSyncRequested(peerKey)) return;
 
     if (!syncChunkQueues.has(peerKey)) {
       syncChunkQueues.set(peerKey, { queue: [], processing: false });

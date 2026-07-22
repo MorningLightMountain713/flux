@@ -116,6 +116,7 @@ export function nodeClient(nodeNum) {
         'network:appinstallingerror',
         'network:appremoved',
         'network:appmessage',
+        'network:ingressattestation',
         'network:ipchanged',
         'network:sigterm',
         'ephemeralSync:requested',

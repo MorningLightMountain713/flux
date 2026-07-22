@@ -270,6 +270,18 @@ async function startFluxFunctions() {
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appContentManifests), { expireAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { confirmed: false }, name: 'manifest_quarantine_ttl' });
     log.info('App content manifests collection prepared');
 
+    // Ingress attestations: one node-signed record per (hash, node) — where a
+    // register/update entered the network. The unique key makes records from
+    // different ingress nodes coexist without collision or merge. The TTL reaps
+    // attestations whose message never confirmed (those still carry expireAt);
+    // confirmation unsets expireAt so real attributions persist.
+    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsIngressAttestations), { hash: 1, node: 1 }, { unique: true, name: 'ingress attestation identity' });
+    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsIngressAttestations), { hash: 1 }, { name: 'query ingress attestations by hash' });
+    // Serves the reconcile bucket fetch and per-bucket digest recompute (confirmed members of a bucket) as an indexed lookup.
+    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsIngressAttestations), { bucket: 1, expireAt: 1 }, { name: 'ingress attestations by bucket' });
+    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsIngressAttestations), { expireAt: 1 }, { expireAfterSeconds: 0, name: 'ingress_attestation_orphan_ttl' });
+    log.info('App ingress attestations collection prepared');
+
     // This fixes an issue where the appsMessage db has NaN for valueSat. Once db is repaired on all nodes,
     // we can remove this.
     await appsMaintenance.repairNanInAppsMessagesDb();

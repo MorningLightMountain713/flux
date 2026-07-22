@@ -80,6 +80,8 @@ module.exports = {
         appsInstallingBroadcasts: 'fluxappinstallingbroadcasts', // stores signed appinstalling broadcasts for sync
         appsInstallingErrorsBroadcasts: 'fluxappinstallingerrorsbroadcasts', // stores signed appinstalling error broadcasts for sync
         appContentManifests: 'appcontentmanifests', // latest owner-signed content-slot manifest per app (one doc per app, version-monotonic)
+        appsIngressAttestations: 'appingressattestations', // node-signed record of where a register/update entered the network (keyed by hash+node); fluxteam-only
+        appsIngressAttestationDigests: 'appingressattestationdigests', // materialized per-bucket digests of the confirmed ingress set, for O(K) reconcile
       },
     },
     marketplace: {

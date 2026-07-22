@@ -39,6 +39,8 @@ const globalAppsInstallingBroadcasts = config.database.appsglobal.collections.ap
 const globalAppStateEvents = config.database.appsglobal.collections.appStateEvents;
 const globalAppsInstallingErrorsLocations = config.database.appsglobal.collections.appsInstallingErrorsLocations;
 const globalAppsInstallingErrorsBroadcasts = config.database.appsglobal.collections.appsInstallingErrorsBroadcasts;
+const globalAppsIngressAttestations = config.database.appsglobal.collections.appsIngressAttestations;
+const globalAppsIngressAttestationDigests = config.database.appsglobal.collections.appsIngressAttestationDigests;
 
 // App / component name validation regexes.
 // v8+ app names allow internal hyphens; v<=7 app names and all component names are strictly alphanumeric.
@@ -123,6 +125,8 @@ module.exports = {
   globalAppStateEvents,
   globalAppsInstallingErrorsLocations,
   globalAppsInstallingErrorsBroadcasts,
+  globalAppsIngressAttestations,
+  globalAppsIngressAttestationDigests,
 
   // Validation regexes
   APP_NAME_REGEX,

@@ -4,6 +4,7 @@ const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const appHashSyncService = require('./appHashSyncService');
 const contentManifestSyncService = require('./contentManifestSyncService');
+const ingressAttestationSyncService = require('./ingressAttestationSyncService');
 const peerNotification = require('./peerNotification');
 const registryManager = require('../appDatabase/registryManager');
 const globalState = require('../utils/globalState');
@@ -50,6 +51,15 @@ const MANIFEST_REFRESH_PEERS = config.fluxapps.manifestRefreshPeers ?? 3;
 // sockets still mid-handshake or dying instantly.
 const MANIFEST_REFRESH_MIN_PEER_UPTIME_SECONDS = config.fluxapps.manifestRefreshMinPeerUptime ?? 30;
 
+// Steady-state ingress-attestation anti-entropy, on its own (slower) cadence. Attestations
+// are a forensic backstop — live gossip is the fast path and nothing is served from them —
+// so a looser convergence ceiling is fine and roughly halves the index traffic vs the
+// manifest cadence. NOTE: like the manifest reconcile this exchanges the FULL index each
+// round (O(set size)); fine at current scale, a shared bucketed-digest reconcile is the
+// planned upgrade for both once the confirmed set grows large. Reuses the manifest refresh's
+// peer count and uptime floor.
+const INGRESS_REFRESH_BLOCKS = config.fluxapps.ingressRefreshBlocks ?? 200;
+
 // The counted ephemeral sync types — each gates boot readiness. Temp messages are
 // requested with the initial batch but are best-effort and never counted toward it. The
 // content manifest is NOT here: it is permanent data reconciled on its own plane (a
@@ -93,6 +103,7 @@ class AppSyncOrchestrator {
     apprunning: 0, appinstalling: 0, apperrors: 0,
   };
   #manifestSyncComplete = false;
+  #ingressSyncComplete = false;
   #stateSyncComplete = false;
   #syncRoundAbandoned = false;
   #syncPeerLostHandler = null;
@@ -108,6 +119,8 @@ class AppSyncOrchestrator {
   #catchUpRunningContent = async () => {};
   #nextManifestRefreshHeight = 0;
   #manifestRefreshInProgress = false;
+  #nextIngressRefreshHeight = 0;
+  #ingressRefreshInProgress = false;
 
   constructor(options = {}) {
     this.#blockEmitter = options.blockEmitter;
@@ -481,6 +494,7 @@ class AppSyncOrchestrator {
       this.#checkReadiness();
       this.#checkHashRetry(blockHeight);
       this.#checkManifestRefresh(blockHeight);
+      this.#checkIngressRefresh(blockHeight);
     }
   }
 
@@ -543,6 +557,8 @@ class AppSyncOrchestrator {
       await this.#runHashSync();
     }
     await this.#runManifestSync();
+    // Best-effort, never gates readiness — attribution metadata, not operational state.
+    await this.#runIngressSync();
     this.#checkReadiness();
   }
 
@@ -652,6 +668,23 @@ class AppSyncOrchestrator {
     }
   }
 
+  // Backfill ingress attestations missed while offline. Best-effort and never gates
+  // readiness; steady-state catch-up rides the manifest refresh cadence below.
+  async #runIngressSync() {
+    if (this.#ingressSyncComplete) return;
+    if (!this.#canSendMessages) return;
+    try {
+      const peers = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
+      const result = await ingressAttestationSyncService.reconcile(peers);
+      if (result.indexesReceived >= 1) {
+        this.#ingressSyncComplete = true;
+        log.info(`AppSyncOrchestrator - Ingress attestation reconcile complete (peers=${result.peers}, indexes=${result.indexesReceived}, fetched=${result.fetched ?? 0})`);
+      }
+    } catch (error) {
+      log.error(`AppSyncOrchestrator - Ingress attestation reconcile failed: ${error.message}`);
+    }
+  }
+
   #ensureBlockThreshold() {
     if (this.#blockThreshold === 0) {
       const enterprise = this.#isEnterprise();
@@ -697,6 +730,7 @@ class AppSyncOrchestrator {
     // First steady-state refresh one period out — boot/recovery just reconciled, so there is
     // nothing to re-check immediately.
     this.#nextManifestRefreshHeight = this.#lastBlockHeight + MANIFEST_REFRESH_BLOCKS;
+    this.#nextIngressRefreshHeight = this.#lastBlockHeight + INGRESS_REFRESH_BLOCKS;
     log.info('AppSyncOrchestrator - All readiness conditions met');
   }
 
@@ -730,6 +764,32 @@ class AppSyncOrchestrator {
       log.error(`AppSyncOrchestrator - Manifest refresh failed: ${error.message}`);
     } finally {
       this.#manifestRefreshInProgress = false;
+    }
+  }
+
+  // Steady-state ingress-attestation anti-entropy on its own slower cadence — a permanent
+  // off-chain set like the manifest, best-effort and never readiness-gating.
+  async #checkIngressRefresh(blockHeight) {
+    if (this.#state !== STATES.READY) return;
+    if (!this.#canSendMessages) return;
+    if (this.#ingressRefreshInProgress) return;
+    if (blockHeight < this.#nextIngressRefreshHeight) return;
+    this.#nextIngressRefreshHeight = blockHeight + INGRESS_REFRESH_BLOCKS;
+
+    const eligible = this.#getEligibleSyncPeers(MANIFEST_REFRESH_MIN_PEER_UPTIME_SECONDS);
+    if (eligible.length === 0) return;
+    const sample = this.#samplePeers(eligible, MANIFEST_REFRESH_PEERS);
+
+    this.#ingressRefreshInProgress = true;
+    try {
+      const result = await ingressAttestationSyncService.reconcile(sample);
+      if (result.fetched > 0) {
+        log.info(`AppSyncOrchestrator - Ingress attestation refresh pulled ${result.fetched} record(s) from ${result.peers} peer(s)`);
+      }
+    } catch (error) {
+      log.error(`AppSyncOrchestrator - Ingress attestation refresh failed: ${error.message}`);
+    } finally {
+      this.#ingressRefreshInProgress = false;
     }
   }
 

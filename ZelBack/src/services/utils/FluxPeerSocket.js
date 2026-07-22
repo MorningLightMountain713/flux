@@ -380,10 +380,13 @@ class FluxPeerSocket {
 
       // Route sync responses directly — bypass the gossip pipeline
       const syncType = msgObj.data?.type;
-      // Manifest-reconcile responses ride their own request/response and are gated by the
-      // reconcile service's active round downstream, not the ephemeral isSyncRequested flag.
+      // Reconcile responses (content-manifest and ingress-attestation) ride their own
+      // request/response and are gated by the reconcile service's active round downstream,
+      // not the ephemeral isSyncRequested flag.
       if (syncType === 'fluxappcontentmanifestindex'
-        || syncType === 'fluxappcontentmanifestsync') {
+        || syncType === 'fluxappcontentmanifestsync'
+        || syncType === 'fluxappingressindex'
+        || syncType === 'fluxappingresssync') {
         if (manager.syncResponseDispatcher) {
           setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
           return;
