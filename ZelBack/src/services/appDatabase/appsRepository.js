@@ -728,13 +728,22 @@ async function rebuildIngressDigests() {
 }
 
 /**
- * Insert an attestation. The unique (hash, node) index makes a re-seen record a
- * duplicate — swallowed by insertOneToDatabase — so `inserted` distinguishes the
- * first store (flood onward) from a duplicate (stop). Confirmed inserts update the
+ * Insert an attestation, deduplicated by (hash, node). `inserted` distinguishes the first
+ * store (flood onward) from a re-seen record (stop). Confirmed inserts update the
  * materialized digest for their bucket.
+ *
+ * The gossip flood re-delivers the same record to every node several times, so a
+ * check-then-insert fast-paths the common re-seen case — otherwise every echo would hit
+ * the unique index and log an E11000 at error level, spamming error.log with expected
+ * behaviour. The unique index stays the backstop for the rare concurrent first-store race.
  * @returns {Promise<{ inserted: boolean }>}
  */
 async function storeIngressAttestation(doc, expireAt = null) {
+  const existing = await dbHelper.findOneInDatabase(
+    globalDb(), globalAppsIngressAttestations, { hash: doc.hash, node: doc.node }, { projection: { _id: 1 } },
+  );
+  if (existing) return { inserted: false };
+
   const bucket = setReconciler.bucketOf(ingressIdentityOf(doc));
   const value = { ...doc, bucket };
   // A confirmed message's attestation carries no TTL and persists; an unconfirmed
