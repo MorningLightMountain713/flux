@@ -1,5 +1,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
+import { x25519 } from '@noble/curves/ed25519.js';
+import { unseal } from '@runonflux/flux-spec-backend';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import {
@@ -31,8 +33,21 @@ import {
 const MAJORITY = [0, 1, 2, 3];
 const ISOLATED = 4;
 
+// The observed source and asserted headers are sealed to a fluxteam x25519 key before an
+// attestation leaves the ingress node. The suite generates an ephemeral fluxteam keypair,
+// points the nodes at its public half via config, and keeps the private half to decrypt —
+// so no key material is committed and the real seal -> gossip -> fluxteam-decrypt path runs.
+const FT_KID = 'ft-e2e';
+const ftPrivateKey = x25519.utils.randomSecretKey();
+const ftPublicKeyB64 = Buffer.from(x25519.getPublicKey(ftPrivateKey)).toString('base64');
+
 function getAttestations(node, hash, zelidauth) {
   return node.getAuthed(`/apps/ingressattestations/${hash}`, zelidauth, { noCache: true });
+}
+
+// fluxteam-only: recover { observed, asserted } from a record's sealed envelope.
+function decryptSource(record) {
+  return JSON.parse(Buffer.from(unseal(record.sealed, ftPrivateKey)).toString('utf8'));
 }
 
 async function submitUpdate(node, adminKeypair, spec) {
@@ -59,6 +74,7 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
           ingressRefreshBlocks: 3,
           appSyncDegradedThreshold: 0,
         },
+        ingress: { encryptionKid: FT_KID, encryptionPubkey: ftPublicKeyB64 },
       },
     });
     await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
@@ -78,7 +94,7 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
     expect(reg.status).to.equal('success');
     const { appHash } = reg;
 
-    // The ingress node recorded exactly one attestation carrying the observed source address.
+    // The ingress node recorded exactly one attestation carrying the sealed source.
     const ingress = await getAttestations(env.clients[0], appHash, fluxTeamAuth[0]);
     expect(ingress.status).to.equal('success');
     expect(ingress.data).to.have.length(1);
@@ -86,9 +102,13 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
     expect(record.hash).to.equal(appHash);
     expect(record.node).to.be.a('string').with.length.greaterThan(0);
     expect(record.signature).to.be.a('string').with.length.greaterThan(0);
-    expect(record.observed.ip).to.be.a('string').with.length.greaterThan(0);
+    // The source travels sealed, not in cleartext; fluxteam decrypts it to the observed address.
+    expect(record.sealed, 'record carries the sealed envelope').to.be.an('object');
+    expect(record.sealed.kid).to.equal(FT_KID);
+    expect(record).to.not.have.property('observed');
+    expect(decryptSource(record).observed.ip, 'fluxteam decrypts the observed source').to.be.a('string').with.length.greaterThan(0);
 
-    // It gossiped to every peer, byte-identical (same ingress node, same observed IP, same signature).
+    // It gossiped to every peer, byte-identical (same ingress node, same sealed source, same signature).
     for (const i of [1, 2, 3, 4]) {
       const client = env.clients[i];
       // eslint-disable-next-line no-await-in-loop
@@ -108,11 +128,17 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
     expect(reg.status).to.equal('success');
     const { appHash } = reg;
 
-    // fluxteam sees it, and learns the source IP...
+    // fluxteam sees it, and decrypts the sealed source to learn the IP...
     const authed = await getAttestations(env.clients[0], appHash, fluxTeamAuth[0]);
     expect(authed.status).to.equal('success');
     expect(authed.data).to.have.length(1);
-    const sourceIp = authed.data[0].observed.ip;
+    const record = authed.data[0];
+    const sourceIp = decryptSource(record).observed.ip;
+
+    // ...but encryption-at-rest: even the fluxteam-served record is ciphertext — the source
+    // address is not present in cleartext anywhere in what the node stores and serves.
+    expect(record).to.not.have.property('observed');
+    expect(JSON.stringify(record), 'served record carries only ciphertext').to.not.include(sourceIp);
 
     // ...an ordinary user identity does not (401)...
     const asUser = await getAttestations(env.clients[0], appHash, userAuth);

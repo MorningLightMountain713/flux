@@ -4,6 +4,7 @@ const fluxBroadcastHelper = require('../utils/fluxBroadcastHelper');
 const { getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const fluxEventBus = require('../utils/fluxEventBus');
+const ingressEncryptionKey = require('../utils/ingressEncryptionKey');
 
 // Wire message type for the standalone ingress-attestation gossip.
 const INGRESS_ATTESTATION_TYPE = 'fluxappingress';
@@ -43,24 +44,31 @@ function captureIngress(req, caps) {
 /**
  * Build and sign this node's attestation for a submission. Returns null if the
  * source address cannot be determined (nothing meaningful to attest).
+ *
+ * The observed source and asserted headers are sealed to the fluxteam key before
+ * signing, so the record carries only ciphertext; the node signs over that
+ * envelope, binding the attestation to the exact sealed bytes.
  */
 async function build(hash, req) {
   const {
-    buildIngressAttestMessage, USER_AGENT_MAX, FORWARDED_FOR_MAX,
+    buildIngressAttestMessage, seal, USER_AGENT_MAX, FORWARDED_FOR_MAX,
   } = await getSpecBackend();
 
   const { observed, asserted } = captureIngress(req, { USER_AGENT_MAX, FORWARDED_FOR_MAX });
   if (!observed.ip) return null;
 
+  const { kid, publicKey } = ingressEncryptionKey.current();
+  const sealed = seal(JSON.stringify({ observed, asserted }), publicKey, { kid });
+
   const observedAt = Date.now();
   const node = await fluxNetworkHelper.getFluxNodePublicKey();
   const payload = buildIngressAttestMessage({
-    hash, observedAt, node, observed, asserted,
+    hash, observedAt, node, sealed,
   });
   const signature = await fluxBroadcastHelper.getFluxMessageSignature(payload);
 
   return {
-    hash, observedAt, node, observed, asserted, signature,
+    hash, observedAt, node, sealed, signature,
   };
 }
 
@@ -91,11 +99,12 @@ async function persist(record, { confirmed = false } = {}) {
   // Test-only observability (no-op in prod): a newly stored attestation — whether from
   // this node's own ingress, live gossip, or a sync backfill — is the single point every
   // path funnels through, so the e2e harness can event-drive on attestation propagation.
+  // The source is sealed, so the event carries the sealing key id, not the address.
   if (result.inserted) {
     fluxEventBus.publish('network:ingressattestation', {
       hash: record.hash,
       node: record.node,
-      ip: record.observed && record.observed.ip,
+      kid: record.sealed && record.sealed.kid,
     });
   }
   return result;
