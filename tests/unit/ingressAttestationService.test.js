@@ -10,16 +10,23 @@ describe('ingressAttestationService tests', () => {
   let appsRepositoryStub;
   let senderStub;
   let fluxEventBusStub;
+  let ingressKeyStub;
   let specBackend;
 
-  // A minimal stand-in for the flux-spec record. The real class has its own
-  // 22-test suite in flux-spec; here we only need to steer verify/deserialize
-  // so we can exercise the service's orchestration.
+  // A minimal stand-in for the flux-spec record + seal. The real class and the
+  // real x25519 seal each have their own suites in flux-spec; here we use a fake
+  // seal (base64 marker, not real crypto) so the service test can inspect exactly
+  // what plaintext was sealed without needing real keys.
+  const FAKE_SEALED = {
+    v: 1, alg: 'x25519-xchacha20poly1305', kid: 'ft-test', epk: 'EPK', n: 'NONCE', ct: 'CIPHERTEXT',
+  };
+
   function makeSpecBackend() {
     return {
       USER_AGENT_MAX: 512,
       FORWARDED_FOR_MAX: 512,
       buildIngressAttestMessage: (fields) => `PAYLOAD:${JSON.stringify(fields)}`,
+      seal: sinon.stub().callsFake((plaintext, publicKey, { kid }) => ({ ...FAKE_SEALED, kid })),
       verifySignature: sinon.stub().resolves(true),
       IngressAttestation: {
         deserialize: (data) => {
@@ -44,6 +51,9 @@ describe('ingressAttestationService tests', () => {
     };
   }
 
+  // The JSON plaintext handed to seal, parsed back for assertions.
+  const sealedPlaintext = () => JSON.parse(specBackend.seal.firstCall.args[0]);
+
   beforeEach(() => {
     logStub = { error: sinon.stub(), warn: sinon.stub(), info: sinon.stub() };
     fluxNetworkHelperStub = { getFluxNodePublicKey: sinon.stub().resolves('04nodepub') };
@@ -54,6 +64,7 @@ describe('ingressAttestationService tests', () => {
     };
     senderStub = { broadcastIngressAttestation: sinon.stub().resolves() };
     fluxEventBusStub = { publish: sinon.stub() };
+    ingressKeyStub = { current: sinon.stub().returns({ kid: 'ft-test', publicKey: new Uint8Array(32) }) };
     specBackend = makeSpecBackend();
 
     service = proxyquire('../../ZelBack/src/services/appMessaging/ingressAttestationService', {
@@ -64,6 +75,7 @@ describe('ingressAttestationService tests', () => {
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../fluxCommunicationMessagesSender': senderStub,
       '../utils/fluxEventBus': fluxEventBusStub,
+      '../utils/ingressEncryptionKey': ingressKeyStub,
     });
   });
 
@@ -72,27 +84,34 @@ describe('ingressAttestationService tests', () => {
   });
 
   describe('emit', () => {
-    it('captures the socket peer, stores locally, and broadcasts', async () => {
+    it('captures the socket peer, seals it, stores locally, and broadcasts', async () => {
       await service.emit('a'.repeat(64), makeReq());
 
       expect(appsRepositoryStub.storeIngressAttestation.calledOnce).to.equal(true);
       const [record, expireAt] = appsRepositoryStub.storeIngressAttestation.firstCall.args;
       expect(record.hash).to.equal('a'.repeat(64));
       expect(record.node).to.equal('04nodepub');
-      expect(record.observed.ip).to.equal('203.0.113.7');
-      expect(record.observed.port).to.equal(51234);
       expect(record.signature).to.equal('SIGVALUE');
+      // the source is carried only as the sealed envelope, never in cleartext
+      expect(record.sealed).to.deep.equal({ ...FAKE_SEALED, kid: 'ft-test' });
+      expect(record.observed).to.equal(undefined);
+      expect(record.asserted).to.equal(undefined);
+      // and what was sealed is the captured observed/asserted
+      expect(sealedPlaintext()).to.deep.equal({
+        observed: { ip: '203.0.113.7', port: 51234 },
+        asserted: { userAgent: 'flux-cli/1.0', forwardedFor: null },
+      });
       expect(expireAt).to.be.a('number').and.greaterThan(Date.now());
 
       expect(senderStub.broadcastIngressAttestation.calledOnceWith(record)).to.equal(true);
     });
 
-    it('publishes a test-observability event on a new store', async () => {
+    it('publishes a test-observability event carrying the sealing key id, not the source', async () => {
       await service.emit('a'.repeat(64), makeReq());
       expect(fluxEventBusStub.publish.calledOnce).to.equal(true);
       const [event, payload] = fluxEventBusStub.publish.firstCall.args;
       expect(event).to.equal('network:ingressattestation');
-      expect(payload).to.deep.equal({ hash: 'a'.repeat(64), node: '04nodepub', ip: '203.0.113.7' });
+      expect(payload).to.deep.equal({ hash: 'a'.repeat(64), node: '04nodepub', kid: 'ft-test' });
     });
 
     it('does not publish when the store was a duplicate', async () => {
@@ -103,19 +122,19 @@ describe('ingressAttestationService tests', () => {
 
     it('normalizes an IPv4-mapped IPv6 address, leaving genuine IPv6 intact', async () => {
       await service.emit('a'.repeat(64), makeReq({ socket: { remoteAddress: '::ffff:198.51.100.9', remotePort: 40000 } }));
-      expect(appsRepositoryStub.storeIngressAttestation.firstCall.args[0].observed.ip).to.equal('198.51.100.9');
+      expect(sealedPlaintext().observed.ip).to.equal('198.51.100.9');
 
-      appsRepositoryStub.storeIngressAttestation.resetHistory();
+      specBackend.seal.resetHistory();
       await service.emit('b'.repeat(64), makeReq({ socket: { remoteAddress: '2001:db8::1', remotePort: 40000 } }));
-      expect(appsRepositoryStub.storeIngressAttestation.firstCall.args[0].observed.ip).to.equal('2001:db8::1');
+      expect(sealedPlaintext().observed.ip).to.equal('2001:db8::1');
     });
 
-    it('captures and caps client-asserted headers', async () => {
+    it('captures and caps client-asserted headers before sealing', async () => {
       const longUa = 'u'.repeat(1000);
       await service.emit('a'.repeat(64), makeReq({
         headers: { 'user-agent': longUa, 'x-forwarded-for': '203.0.113.7, 10.0.0.1' },
       }));
-      const { asserted } = appsRepositoryStub.storeIngressAttestation.firstCall.args[0];
+      const { asserted } = sealedPlaintext();
       expect(asserted.userAgent).to.have.length(512);
       expect(asserted.forwardedFor).to.equal('203.0.113.7, 10.0.0.1');
     });
@@ -133,15 +152,18 @@ describe('ingressAttestationService tests', () => {
       expect(expireAt).to.equal(null);
     });
 
-    it('signs the payload built from the captured fields', async () => {
+    it('signs the sealed envelope — the raw source is never in the signed payload', async () => {
       await service.emit('a'.repeat(64), makeReq());
       const signedMessage = fluxBroadcastHelperStub.getFluxMessageSignature.firstCall.args[0];
       expect(signedMessage).to.be.a('string').and.contain('PAYLOAD:');
-      expect(signedMessage).to.contain('203.0.113.7');
+      expect(signedMessage).to.contain('ft-test'); // the sealed envelope's kid
+      expect(signedMessage).to.contain('CIPHERTEXT'); // the ciphertext
+      expect(signedMessage).to.not.contain('203.0.113.7'); // never the cleartext source
     });
 
     it('skips entirely when the source address cannot be determined', async () => {
       await service.emit('a'.repeat(64), makeReq({ socket: {} }));
+      expect(specBackend.seal.called).to.equal(false);
       expect(appsRepositoryStub.storeIngressAttestation.called).to.equal(false);
       expect(senderStub.broadcastIngressAttestation.called).to.equal(false);
     });
@@ -166,8 +188,7 @@ describe('ingressAttestationService tests', () => {
       hash: 'a'.repeat(64),
       observedAt: 1700000000000,
       node: '04peerpub',
-      observed: { ip: '203.0.113.7', port: 51234 },
-      asserted: { userAgent: 'flux-cli/1.0', forwardedFor: null },
+      sealed: { ...FAKE_SEALED },
       signature: 'PEERSIG',
     });
 
