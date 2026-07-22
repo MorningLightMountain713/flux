@@ -447,6 +447,9 @@ module.exports = (app) => {
   app.get('/apps/permanentmessages/:hash?/:owner?/:appname?', cache('2 minutes'), asyncRoute((req, res) => {
     return messageVerifier.getAppsPermanentMessages(req, res);
   }));
+  app.get('/apps/ingressattestations/byapp/:name', asyncRoute((req, res) => {
+    return messageVerifier.getIngressAttestationsByApp(req, res);
+  }));
   app.get('/apps/ingressattestations/:hash?', asyncRoute((req, res) => {
     return messageVerifier.getIngressAttestations(req, res);
   }));

@@ -824,6 +824,23 @@ async function listAppMessagesByName(name) {
 }
 
 /**
+ * All ingress attestations for an app, grouped by the register/update message
+ * they attest to. Composes the app's message history (name -> hashes) with the
+ * per-hash attestation lookup. Records stay sealed — decryption is fluxteam's,
+ * offline. Messages with no attestation are omitted.
+ */
+async function listIngressAttestationsByApp(name) {
+  const messages = await listAppMessagesByName(name);
+  const groups = await Promise.all(messages.map(async (message) => ({
+    hash: message.hash,
+    type: message.type,
+    timestamp: message.timestamp,
+    attestations: await listIngressAttestations(message.hash),
+  })));
+  return groups.filter((group) => group.attestations.length > 0);
+}
+
+/**
  * The most recent on-chain owner of an app that differs from currentOwner.
  * Used to replay pre-v8.10.0 owner-change races: a confirmed update whose
  * signature was made by an owner older than the immediate previous one.
@@ -1105,6 +1122,7 @@ module.exports = {
   storeIngressAttestation,
   confirmIngressAttestations,
   listIngressAttestations,
+  listIngressAttestationsByApp,
   listIngressAttestationDigests,
   listIngressAttestationsForBuckets,
   // upsert + errors
