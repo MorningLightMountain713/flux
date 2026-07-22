@@ -384,6 +384,45 @@ describe('messageVerifier tests', () => {
     });
   });
 
+  describe('getIngressAttestationsByApp', () => {
+    it('returns the grouped attestations for an app to fluxteam', async () => {
+      const { stubs } = makeBaseStubs();
+      const groups = [{ hash: 'h1', type: 'fluxappregister', timestamp: 1, attestations: [{ hash: 'h1', sealed: {} }] }];
+      stubs['../appDatabase/appsRepository'].listIngressAttestationsByApp = sinon.stub().resolves(groups);
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.getIngressAttestationsByApp({ params: { name: 'myapp' }, query: {} }, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+      expect(res.json.firstCall.args[0].data).to.deep.equal(groups);
+      expect(stubs['../appDatabase/appsRepository'].listIngressAttestationsByApp.calledOnceWith('myapp')).to.be.true;
+    });
+
+    it('denies a non-fluxteam caller (401)', async () => {
+      const { stubs } = makeBaseStubs();
+      stubs['../verificationHelper'] = { verifyPrivilege: sinon.stub().resolves(false) };
+      stubs['../appDatabase/appsRepository'].listIngressAttestationsByApp = sinon.stub().resolves([]);
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.getIngressAttestationsByApp({ params: { name: 'myapp' }, query: {} }, res);
+
+      expect(res.json.firstCall.args[0].data.code).to.equal(401);
+      expect(stubs['../appDatabase/appsRepository'].listIngressAttestationsByApp.called).to.be.false;
+    });
+
+    it('requires a name', async () => {
+      const { stubs } = makeBaseStubs();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      const res = { json: sinon.stub() };
+      await mv.getIngressAttestationsByApp({ params: {}, query: {} }, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+    });
+  });
+
   describe('checkAndRequestApp', () => {
     it('should return false when height is below epochstart', async () => {
       const { stubs } = makeBaseStubs();
@@ -448,7 +487,7 @@ describe('messageVerifier tests', () => {
         serialize: sinon.stub().returns(serializedEvent),
       };
 
-      const { stubs, dbStub } = makeBaseStubs();
+      const { stubs } = makeBaseStubs();
       stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
         type: 'fluxappregister',
         version: 1,
