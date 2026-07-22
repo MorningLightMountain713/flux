@@ -522,9 +522,26 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       }
     }
 
-    // Remove unused folders and devices (parallelized for better performance)
+    // Remove unused folders and devices (parallelized for better performance).
+    // "Unused" means no installed app owns the folder - not merely "not processed
+    // this cycle". A folder whose app is still installed but was skipped this pass
+    // (volume transiently unmounted, or an operation lease held) is absent from
+    // folderIds; deleting it would race the mount-safety demotion that flips it to
+    // receiveonly and holds the container, leaving the app running over a bad
+    // mount. Gate on ownership so only genuinely orphaned folders are removed.
+    const installedFolderIds = new Set();
+    // eslint-disable-next-line no-restricted-syntax
+    for (const deployment of deployments) {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const [, deployComp] of deployment.componentEntries()) {
+        if (deployComp.hasSyncthing()) {
+          installedFolderIds.add(dockerService.getAppIdentifier(deployComp.identifier));
+        }
+      }
+    }
     const nonUsedFolders = allFoldersResp.data.filter(
-      (syncthingFolder) => !folderIds.includes(syncthingFolder.id),
+      (syncthingFolder) => !folderIds.includes(syncthingFolder.id)
+        && !installedFolderIds.has(syncthingFolder.id),
     );
     const nonUsedDevices = allDevicesResp.data.filter(
       (syncthingDevice) => !devicesIds.includes(syncthingDevice.deviceID) && syncthingDevice.deviceID !== localDeviceId,
