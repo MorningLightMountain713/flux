@@ -238,6 +238,37 @@ async function getIngressAttestations(req, res) {
   }
 }
 
+/**
+ * fluxteam-only: every ingress attestation for an app, grouped by the
+ * register/update message it attests to. Records stay sealed — the source is
+ * decrypted offline with the fluxteam keyring, never by the node.
+ */
+async function getIngressAttestationsByApp(req, res) {
+  try {
+    const authorized = await verificationHelper.verifyPrivilege('fluxteam', req);
+    if (!authorized) {
+      res.json(messageHelper.errUnauthorizedMessage());
+      return;
+    }
+    let { name } = req.params;
+    name = name || req.query.name;
+    if (!name) {
+      res.json(messageHelper.createErrorMessage('name parameter is mandatory'));
+      return;
+    }
+    const results = await appsRepository.listIngressAttestationsByApp(name);
+    res.json(messageHelper.createDataMessage(results));
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    res.json(errorResponse);
+  }
+}
+
 // ── Helpers for checkAndRequestApp ──────────────────────────────────
 
 function getDaemonHeight() {
@@ -773,6 +804,7 @@ module.exports = {
   getAppsTemporaryMessages,
   getAppsPermanentMessages,
   getIngressAttestations,
+  getIngressAttestationsByApp,
   checkAndRequestApp,
   checkAndRequestMultipleApps,
   continuousFluxAppHashesCheck,
