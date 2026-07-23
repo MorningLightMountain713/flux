@@ -138,6 +138,7 @@ describe('appReconciler tests', () => {
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
       },
       containerHealthMonitor: { recreateMissingContainers: sinon.stub().resolves() },
+      appDockerNetwork: { ensureAppNetworkPresent: sinon.stub().resolves('net') },
       appNetworkLinker: {
         ensureContainerNetworkMembership: sinon.stub().resolves({ connected: [], disconnected: [], failed: [] }),
         // Default: every declared link resolves to an installed same-owner network.
@@ -176,6 +177,7 @@ describe('appReconciler tests', () => {
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
       '../appQuery/appQueryService': stubs.appQueryService,
       './containerHealthMonitor': stubs.containerHealthMonitor,
+      '../appNetwork/appDockerNetwork': stubs.appDockerNetwork,
       '../appLifecycle/appNetworkLinker': stubs.appNetworkLinker,
       '../appLifecycle/appUninstaller': stubs.appUninstaller,
       '../appTamperingDetectionService': stubs.appTamperingDetectionService,
@@ -271,6 +273,56 @@ describe('appReconciler tests', () => {
       await appReconciler.reconcile('www_App');
 
       sinon.assert.calledOnce(stubs.dockerService.appDockerStart);
+    });
+  });
+
+  describe('the app network as a precondition of running anything', () => {
+    it('ensures the network before starting a container that already exists', async () => {
+      // The gap this closes: a container stuck `created`/`exited` whose network
+      // was pruned has exists=true, so it never reaches a recreate path. It is
+      // started, the start fails "network not found", and it backs off forever.
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: { Running: false, Status: 'created' },
+        NetworkSettings: { Networks: { fluxDockerNetwork_App: {} } },
+      });
+
+      await appReconciler.reconcile('www_App');
+
+      sinon.assert.calledOnceWithExactly(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App');
+      sinon.assert.callOrder(stubs.appDockerNetwork.ensureAppNetworkPresent, stubs.dockerService.appDockerStart);
+    });
+
+    it('ensures the network before recreating a missing container', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves(null);
+
+      await appReconciler.reconcile('www_App');
+
+      sinon.assert.calledOnceWithExactly(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App');
+      sinon.assert.callOrder(
+        stubs.appDockerNetwork.ensureAppNetworkPresent,
+        stubs.containerHealthMonitor.recreateMissingContainers,
+      );
+    });
+
+    it('does not touch the network for a container that is already running', async () => {
+      // Steady state returns above the guarantee; re-checking a demonstrably
+      // present network every pass is pure waste.
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: { Running: true, Status: 'running', ExitCode: 0 },
+        NetworkSettings: { Networks: { fluxDockerNetwork_App: {} } },
+      });
+
+      await appReconciler.reconcile('www_App');
+
+      expect(stubs.appDockerNetwork.ensureAppNetworkPresent.called).to.be.false;
+    });
+
+    it('does not touch the network when the component should be stopped', async () => {
+      stubs.globalState.getAppShutdownPipelineState.returns('stopping');
+
+      await appReconciler.reconcile('www_App');
+
+      expect(stubs.appDockerNetwork.ensureAppNetworkPresent.called).to.be.false;
     });
   });
 

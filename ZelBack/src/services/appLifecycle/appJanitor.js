@@ -1,6 +1,5 @@
 const config = require('config');
 const log = require('../../lib/log');
-const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const operationRegistry = require('../utils/operationRegistry');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -8,7 +7,7 @@ const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents')
 const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
 const appQueryService = require('../appQuery/appQueryService');
-const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const appUninstaller = require('./appUninstaller');
 
 // The janitor owns debris: things that exist on this node with no desired-state
@@ -143,45 +142,51 @@ async function registryExpirySweep() {
 }
 
 /**
- * Prune docker debris nothing owns: stopped containers, unused networks,
- * unused volumes. Images are deliberately not touched - reclamation belongs to
+ * Reap the app networks this node holds for apps it does not have installed:
+ * what an interrupted uninstall left behind, or what a restored node came back
+ * with. Networks only — a container with no installed app is the orphan sweep's,
+ * which removes it through the uninstaller with its volumes, ports and graceful
+ * shutdown budget rather than pulling it out from under docker. Images belong to
  * the imageReaper, which is reference-gated and respects image-cache pins.
- * Guards: a docker prune deletes ANY stopped container and its anonymous
- * volumes, so the sweep must not run while an installed app is merely stopped
- * (operator-stopped, standby, run-once done). anyHeld() additionally covers
- * in-flight operations and the active-standby election, both of which stop and
- * start containers the prune could otherwise eat mid-transition.
+ *
+ * Ownership decides, not docker's idea of "unused". Docker calls a network
+ * unused the moment nothing is attached to it, which is true of every healthy
+ * app whose container is briefly down (crash loop, restart, standby) — so a
+ * prune keyed on that reaps live apps' networks and leaves them unable to start
+ * at all. Asking who owns a network instead makes that unconstructable, and
+ * removes the need for the old node-wide guard that skipped the sweep whenever
+ * ANY installed component was stopped, which on a real node meant it never ran.
+ *
+ * Nothing unattributable is touched: leaked debris is recoverable, and the cost
+ * of guessing wrong is someone's app.
+ *
  * @returns {Promise<object>} sweep summary
  */
 async function dockerDebrisSweep() {
+  // Never race an install/remove/redeploy/reconcile/backup/restore anywhere on
+  // the node: mid-operation state is not debris.
   if (operationRegistry.anyHeld()) {
     log.info('appJanitor - debris sweep skipped: an operation is in progress');
     return { skipped: 'operation in flight' };
   }
 
-  const deployments = await deploymentProvider.listInstalledDeployments();
-  const runningAppsRes = await appQueryService.listRunningApps();
-  if (runningAppsRes.status !== 'success') {
-    throw new Error('Unable to check running Apps');
+  const installedAppsRes = await appQueryService.installedApps();
+  if (installedAppsRes.status !== 'success') {
+    // Without the installed set every network on the node looks unowned.
+    // Skipping is the only safe reading of an unavailable database.
+    log.warn('appJanitor - debris sweep skipped: unable to list installed apps');
+    return { skipped: 'installed list failed' };
   }
-  const runningSet = new Set(runningAppsRes.data.map((app) => app.Names[0].slice(5)));
-  const stoppedComponents = [];
-  deployments.forEach((deployment) => {
-    deployment.componentEntries().forEach(([, comp]) => {
-      if (!runningSet.has(comp.identifier)) stoppedComponents.push(comp.identifier);
-    });
-  });
-  if (stoppedComponents.length > 0) {
-    log.info(`appJanitor - debris sweep skipped: ${stoppedComponents.length} installed component(s) not running`);
-    return { skipped: 'stopped apps present' };
+  const installedAppNames = new Set(installedAppsRes.data.map((app) => app.name));
+
+  const { removed, unidentified } = await appDockerNetwork.removeUnownedAppNetworks(installedAppNames);
+
+  if (unidentified > 0) {
+    log.info(`appJanitor - debris sweep left ${unidentified} unattributable network(s) in place`);
   }
+  log.info(`appJanitor - debris swept: ${removed.length} network(s) removed`);
 
-  await dockerService.pruneContainers();
-  await dockerService.pruneNetworks();
-  await dockerService.pruneVolumes();
-  log.info('appJanitor - docker debris pruned (containers, networks, volumes)');
-
-  return { pruned: true };
+  return { networksRemoved: removed.length, unidentified };
 }
 
 const SWEEPS = {

@@ -1806,26 +1806,13 @@ async function getAppContainerNames(appName) {
   return names;
 }
 
-/**
- * Remove all unused containers. Unused contaienrs are those wich are not running
- */
-async function pruneContainers() {
-  return docker.pruneContainers();
-}
-
-/**
- * Remove all unused networks. Unused networks are those which are not referenced by any running containers
- */
-async function pruneNetworks() {
-  return docker.pruneNetworks();
-}
-
-/**
- * Remove all unused Volumes. Unused Volumes are those which are not referenced by any containers
- */
-async function pruneVolumes() {
-  return docker.pruneVolumes();
-}
+// No blanket container/network/volume prune primitive is exposed, deliberately.
+// Docker's "unused" is a runtime predicate - nothing attached right now - which
+// is true of every healthy app whose container is momentarily down, so a prune
+// keyed on it destroys live apps' networks and containers, and then the
+// anonymous volumes those containers were holding. Removal of flux objects is
+// scoped by OWNERSHIP instead: appNetwork/appDockerNetwork for app networks,
+// appUninstaller for an app's containers and volumes.
 
 /**
  * Remove all unused Images. Unused Images are those which are not referenced by any containers
@@ -2024,10 +2011,7 @@ module.exports = {
   getFluxDockerNetworkSubnets,
   getFreeFluxAppNetworkOctet,
   migrateContainerRestartPolicies,
-  pruneContainers,
   pruneImages,
-  pruneNetworks,
-  pruneVolumes,
   removeFluxAppDockerNetwork,
   forceRemoveFluxAppDockerNetwork,
   appDockerNetworkConnect,
@@ -2040,6 +2024,5 @@ module.exports = {
   classifyContainerNetworkAttachment,
   isContainerDetachedFromNetwork,
   dockerNetworkState,
-  migrateContainerRestartPolicies,
   waitForDocker,
 };

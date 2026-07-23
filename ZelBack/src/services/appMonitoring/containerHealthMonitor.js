@@ -1,6 +1,5 @@
 const log = require('../../lib/log');
 const componentProvisioner = require('../appLifecycle/componentProvisioner');
-const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const appVolumeService = require('../appLifecycle/appVolumeService');
 const syncthingMonitorHelpers = require('./syncthingMonitorHelpers');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -32,14 +31,10 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
     throw new Error(`App ${mainAppName} not found in local database`);
   }
 
-  // A container can only be (re)created onto an existing docker network, but the
-  // per-app network (fluxDockerNetwork_<app>) is otherwise created only at install
-  // time. If it was pruned - docker prune, daemon restart, the janitor's debris
-  // sweep - every recreate below would loop forever on "network not found".
-  // Recreate it first; ensureAppDockerNetwork returns early (no create, no
-  // firewall work) when the network already exists, so the common
-  // intact-network recreate stays cheap.
-  await appDockerNetwork.ensureAppDockerNetwork(mainAppName);
+  // The app's docker network is a precondition of the recreate below, and the
+  // reconciler guarantees it before reaching any path that runs a container -
+  // this one included. Deliberately not re-ensured here: two owners of the same
+  // guarantee is how they drift apart.
 
   // Every identity installed here. The deployment layer minted these
   // identifiers, so it is also the authority on which one an identifier names:

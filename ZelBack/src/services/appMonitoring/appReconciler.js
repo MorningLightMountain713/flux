@@ -13,6 +13,7 @@ const appQueryService = require('../appQuery/appQueryService');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
+const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const appVolumeService = require('../appLifecycle/appVolumeService');
 const appSwapPoolService = require('../appLifecycle/appSwapPoolService');
 const volumeService = require('../utils/volumeService');
@@ -1351,6 +1352,21 @@ async function reconcile(rawIdentifier) {
     }
     return; // healthy / starting / probe-less — running and properly attached
   }
+
+  // Everything below brings a container UP - recreating a missing one, or
+  // starting one that exists - and every one of those needs the app's docker
+  // network to be there. The network can go while the app stays installed (a
+  // docker prune, a daemon restart, an operator), and nothing about the
+  // container's own state reveals that: a container whose network vanished
+  // simply fails to start, forever, because a failed start is not a state any
+  // recreate path looks at.
+  //
+  // So the guarantee lives here, once, above the branches, rather than inside
+  // whichever ones happen to recreate. Any future path that runs a container
+  // inherits it. Costs one network state read on a pass that was about to
+  // actuate anyway, and nothing at all in steady state - a running container
+  // returns above this.
+  await appDockerNetwork.ensureAppNetworkPresent(mainAppName);
 
   if (!actual.exists) {
     // Durable, so it survives a FluxOS restart mid-heal: if WE removed this
