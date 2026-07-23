@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const config = require('config');
 const log = require('../../lib/log');
-const dbHelper = require('../dbHelper');
+const nodeStartupRepository = require('../appDatabase/nodeStartupRepository');
 const appHashSyncService = require('./appHashSyncService');
 const contentManifestSyncService = require('./contentManifestSyncService');
 const ingressAttestationSyncService = require('./ingressAttestationSyncService');
@@ -14,7 +14,6 @@ const verificationHelper = require('../verificationHelper');
 const { appSyncEvents, EVENTS } = require('../utils/appSyncEvents');
 const fluxEventBus = require('../utils/fluxEventBus');
 
-const startupCollection = config.database.local.collections.nodeStartupTracker;
 
 const STATES = Object.freeze({
   INITIALIZING: 'INITIALIZING',
@@ -565,9 +564,7 @@ class AppSyncOrchestrator {
   async #checkVersionUpgrade() {
     if (!this.#fluxVersion) return;
     try {
-      const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.local.database);
-      const marker = await dbHelper.findOneInDatabase(database, startupCollection, { _id: 'hashSyncVersion' });
+      const marker = await nodeStartupRepository.getHashSyncVersionMarker();
       if (!marker || marker.version !== this.#fluxVersion) {
         const resetCount = await appHashSyncService.resetHashSyncForUpgrade(this.#lastBlockHeight);
         log.info(`AppSyncOrchestrator - Version upgrade to ${this.#fluxVersion}, reset ${resetCount} hash sync entries`);
@@ -580,14 +577,7 @@ class AppSyncOrchestrator {
   async #writeVersionMarker() {
     if (!this.#fluxVersion) return;
     try {
-      const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.local.database);
-      await dbHelper.findOneAndUpdateInDatabase(
-        database, startupCollection,
-        { _id: 'hashSyncVersion' },
-        { $set: { version: this.#fluxVersion } },
-        { upsert: true },
-      );
+      await nodeStartupRepository.setHashSyncVersionMarker(this.#fluxVersion);
     } catch (error) {
       log.error(`AppSyncOrchestrator - Failed to update hashSyncVersion marker: ${error.message}`);
     }
@@ -845,9 +835,7 @@ class AppSyncOrchestrator {
 
   static async readBootContext() {
     try {
-      const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.local.database);
-      const heartbeat = await dbHelper.findOneInDatabase(database, startupCollection, { _id: 'heartbeat' });
+      const heartbeat = await nodeStartupRepository.getHeartbeat();
 
       let currentBootId = null;
       try {
@@ -879,9 +867,7 @@ class AppSyncOrchestrator {
 
   async #clearShutdownReason() {
     try {
-      const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.local.database);
-      await dbHelper.findOneAndUpdateInDatabase(database, startupCollection, { _id: 'heartbeat' }, { $unset: { shutdownReason: '' } });
+      await nodeStartupRepository.clearShutdownReason();
     } catch (error) {
       log.error(`Failed to clear shutdown reason: ${error.message}`);
     }
@@ -890,13 +876,10 @@ class AppSyncOrchestrator {
   #startHeartbeat() {
     const writeHeartbeat = async () => {
       try {
-        const db = dbHelper.databaseConnection();
-        const database = db.db(config.database.local.database);
-        const update = { $set: { lastAlive: Date.now() } };
-        if (this.#bootContext?.currentBootId) {
-          update.$set.machineBootId = this.#bootContext.currentBootId;
-        }
-        await dbHelper.findOneAndUpdateInDatabase(database, startupCollection, { _id: 'heartbeat' }, update, { upsert: true });
+        await nodeStartupRepository.writeHeartbeat({
+          lastAlive: Date.now(),
+          machineBootId: this.#bootContext?.currentBootId,
+        });
       } catch (error) {
         log.error(`Heartbeat write failed: ${error.message}`);
       }
@@ -908,19 +891,7 @@ class AppSyncOrchestrator {
 
   static async writeShutdownReason(reason) {
     try {
-      const db = dbHelper.databaseConnection();
-      if (!db) return;
-      const database = db.db(config.database.local.database);
-      await Promise.race([
-        dbHelper.findOneAndUpdateInDatabase(
-          database,
-          config.database.local.collections.nodeStartupTracker,
-          { _id: 'heartbeat' },
-          { $set: { shutdownReason: reason } },
-          { upsert: true },
-        ),
-        new Promise((_, reject) => { setTimeout(() => reject(new Error('shutdown write timeout')), 3000); }),
-      ]);
+      await nodeStartupRepository.setShutdownReason(reason);
     } catch (error) {
       log.error(`Failed to write shutdown reason: ${error.message}`);
     }
