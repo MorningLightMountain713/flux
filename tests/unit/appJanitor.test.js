@@ -16,7 +16,7 @@ describe('appJanitor tests', () => {
   let appsRepositoryStub;
   let registryManagerStub;
   let appQueryServiceStub;
-  let deploymentProviderStub;
+  let appDockerNetworkStub;
   let appUninstallerStub;
 
   const container = (name, labels = null) => ({
@@ -27,9 +27,10 @@ describe('appJanitor tests', () => {
   beforeEach(() => {
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
     dockerServiceStub = {
-      pruneContainers: sinon.stub().resolves(),
-      pruneNetworks: sinon.stub().resolves(),
-      pruneVolumes: sinon.stub().resolves(),
+      appDockerForceRemove: sinon.stub().resolves(),
+    };
+    appDockerNetworkStub = {
+      removeUnownedAppNetworks: sinon.stub().resolves({ removed: [], unidentified: 0 }),
     };
     fluxNetworkHelperStub = {
       getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
@@ -50,9 +51,6 @@ describe('appJanitor tests', () => {
       installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
       listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
     };
-    deploymentProviderStub = {
-      listInstalledDeployments: sinon.stub().resolves([]),
-    };
     appUninstallerStub = {
       uninstallApplication: sinon.stub().resolves({ status: 'removed', reason: null }),
     };
@@ -65,7 +63,7 @@ describe('appJanitor tests', () => {
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appDatabase/registryManager': registryManagerStub,
       '../appQuery/appQueryService': appQueryServiceStub,
-      '../appRuntime/deploymentProvider': deploymentProviderStub,
+      '../appNetwork/appDockerNetwork': appDockerNetworkStub,
       './appUninstaller': appUninstallerStub,
     });
   });
@@ -203,42 +201,82 @@ describe('appJanitor tests', () => {
       const result = await appJanitor.sweepDockerDebris();
 
       expect(result.skipped).to.equal('operation in flight');
-      expect(dockerServiceStub.pruneContainers.called).to.be.false;
+      expect(appDockerNetworkStub.removeUnownedAppNetworks.called).to.be.false;
+      expect(dockerServiceStub.appDockerForceRemove.called).to.be.false;
     });
 
-    it('skips when an installed component is not running - prune would eat its volumes', async () => {
-      deploymentProviderStub.listInstalledDeployments.resolves([{
-        componentEntries: () => [['web', { identifier: 'web_stoppedapp' }]],
-      }]);
+    it('runs while an installed app sits stopped - ownership decides, not run state', async () => {
+      // The old guard skipped the whole sweep whenever any installed component
+      // was down, which on a real node meant it never ran at all.
+      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [{ name: 'stoppedapp' }] });
+      appQueryServiceStub.listAllApps.resolves({
+        status: 'success', data: [{ ...container('/fluxweb_stoppedapp'), State: 'exited' }],
+      });
 
       const result = await appJanitor.sweepDockerDebris();
 
-      expect(result.skipped).to.equal('stopped apps present');
-      expect(dockerServiceStub.pruneContainers.called).to.be.false;
+      expect(result.skipped).to.equal(undefined);
+      sinon.assert.calledOnce(appDockerNetworkStub.removeUnownedAppNetworks);
+      // and the stopped app's own network is not up for collection
+      const [installedAppNames] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
+      expect(installedAppNames.has('stoppedapp')).to.be.true;
     });
 
-    it('prunes containers, networks and volumes when every installed component runs', async () => {
-      deploymentProviderStub.listInstalledDeployments.resolves([{
-        componentEntries: () => [['web', { identifier: 'web_runningapp' }]],
-      }]);
-      appQueryServiceStub.listRunningApps.resolves({ status: 'success', data: [{ Names: ['/fluxweb_runningapp'] }] });
+    it('hands the installed set to the network reap, so ownership is what decides', async () => {
+      appQueryServiceStub.installedApps.resolves({
+        status: 'success', data: [{ name: 'liveapp' }, { name: 'stoppedapp' }],
+      });
+      appDockerNetworkStub.removeUnownedAppNetworks.resolves({ removed: ['goneapp'], unidentified: 0 });
 
       const result = await appJanitor.sweepDockerDebris();
 
-      expect(result.pruned).to.be.true;
-      sinon.assert.calledOnce(dockerServiceStub.pruneContainers);
-      sinon.assert.calledOnce(dockerServiceStub.pruneNetworks);
-      sinon.assert.calledOnce(dockerServiceStub.pruneVolumes);
+      const [installedAppNames] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
+      expect([...installedAppNames].sort()).to.deep.equal(['liveapp', 'stoppedapp']);
+      expect(result.networksRemoved).to.equal(1);
+    });
+
+    it('leaves containers to the orphan sweep - it removes them through the uninstaller', async () => {
+      // The debris sweep never actuates container run-state: a container with no
+      // installed app is the orphan sweep's, which tears it down with its volumes,
+      // ports and shutdown budget instead of pulling it out from under docker.
+      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [] });
+      appQueryServiceStub.listAllApps.resolves({
+        status: 'success', data: [{ ...container('/fluxweb_goneapp'), State: 'exited' }],
+      });
+
+      await appJanitor.sweepDockerDebris();
+
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
+      expect(dockerServiceStub.appDockerForceRemove.called).to.be.false;
+    });
+
+    it('reports what it declined to attribute rather than removing it', async () => {
+      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [] });
+      appDockerNetworkStub.removeUnownedAppNetworks.resolves({ removed: [], unidentified: 2 });
+
+      const result = await appJanitor.sweepDockerDebris();
+
+      expect(result.unidentified).to.equal(2);
+      expect(result.networksRemoved).to.equal(0);
+    });
+
+    it('skips entirely when the installed set cannot be read - everything would look unowned', async () => {
+      appQueryServiceStub.installedApps.resolves({ status: 'error' });
+
+      const result = await appJanitor.sweepDockerDebris();
+
+      expect(result.skipped).to.equal('installed list failed');
+      expect(appDockerNetworkStub.removeUnownedAppNetworks.called).to.be.false;
     });
 
     it('logs and absorbs a failure instead of throwing', async () => {
-      appQueryServiceStub.listRunningApps.resolves({ status: 'error' });
+      appQueryServiceStub.installedApps.rejects(new Error('mongo down'));
 
       const result = await appJanitor.sweepDockerDebris();
 
       expect(result).to.equal(null);
       expect(logStub.error.calledWithMatch(sinon.match(/dockerDebris sweep failed/))).to.be.true;
-      expect(dockerServiceStub.pruneContainers.called).to.be.false;
+      expect(appDockerNetworkStub.removeUnownedAppNetworks.called).to.be.false;
     });
   });
 

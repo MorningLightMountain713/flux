@@ -171,4 +171,158 @@ describe('appDockerNetwork tests', () => {
 
     expect(dockerServiceStub.createFluxAppDockerNetwork.calledOnce).to.be.true;
   });
+
+  describe('ensureAppNetworkPresent — single-flight', () => {
+    it('collapses concurrent callers for one app onto a single create', async () => {
+      // Every component of an app reconciles independently; without the
+      // single-flight they all race for the same octet and all but one lose.
+      let release;
+      dockerServiceStub.createFluxAppDockerNetwork.returns(new Promise((resolve) => {
+        release = () => resolve('network-created');
+      }));
+
+      const calls = [
+        appDockerNetwork.ensureAppNetworkPresent('myapp'),
+        appDockerNetwork.ensureAppNetworkPresent('myapp'),
+        appDockerNetwork.ensureAppNetworkPresent('myapp'),
+      ];
+      release();
+      await Promise.all(calls);
+
+      expect(dockerServiceStub.createFluxAppDockerNetwork.calledOnce).to.be.true;
+    });
+
+    it('does not collapse different apps onto one another', async () => {
+      await Promise.all([
+        appDockerNetwork.ensureAppNetworkPresent('appone'),
+        appDockerNetwork.ensureAppNetworkPresent('apptwo'),
+      ]);
+
+      expect(dockerServiceStub.createFluxAppDockerNetwork.calledTwice).to.be.true;
+    });
+
+    it('clears the in-flight entry on failure so a later pass can retry', async () => {
+      // A retained rejected promise would hand every later caller the same stale
+      // failure and wedge the app's repair permanently.
+      dockerServiceStub.getFreeFluxAppNetworkOctet.resolves(null);
+      await appDockerNetwork.ensureAppNetworkPresent('myapp').catch(() => {});
+
+      dockerServiceStub.getFreeFluxAppNetworkOctet.resolves(7);
+      const result = await appDockerNetwork.ensureAppNetworkPresent('myapp');
+
+      expect(result).to.equal('network-created');
+    });
+
+    it('clears the in-flight entry on success so a later prune can be repaired', async () => {
+      await appDockerNetwork.ensureAppNetworkPresent('myapp');
+      await appDockerNetwork.ensureAppNetworkPresent('myapp');
+
+      expect(dockerServiceStub.createFluxAppDockerNetwork.calledTwice).to.be.true;
+    });
+  });
+
+  describe('appNetworkOwner', () => {
+    it('reads the ownership label when one is stamped', () => {
+      const owner = appDockerNetwork.appNetworkOwner({
+        Name: 'fluxDockerNetwork_myapp', Labels: { 'runonflux.app-network': 'myapp' },
+      });
+
+      expect(owner).to.equal('myapp');
+    });
+
+    it('falls back to the name for a pre-label network', () => {
+      // The whole estate is unlabelled until each network is recreated, so the
+      // name convention has to carry ownership for them.
+      const owner = appDockerNetwork.appNetworkOwner({ Name: 'fluxDockerNetwork_legacyapp' });
+
+      expect(owner).to.equal('legacyapp');
+    });
+
+    it('prefers the label over the name when they disagree', () => {
+      const owner = appDockerNetwork.appNetworkOwner({
+        Name: 'fluxDockerNetwork_stalename', Labels: { 'runonflux.app-network': 'realowner' },
+      });
+
+      expect(owner).to.equal('realowner');
+    });
+
+    it('returns null for a network it cannot attribute', () => {
+      expect(appDockerNetwork.appNetworkOwner({ Name: 'bridge' })).to.equal(null);
+      expect(appDockerNetwork.appNetworkOwner({ Name: 'fluxDockerNetwork_' })).to.equal(null);
+    });
+  });
+
+  describe('removeUnownedAppNetworks', () => {
+    const net = (name, labels = null) => ({ Name: name, ...(labels ? { Labels: labels } : {}) });
+
+    beforeEach(() => {
+      dockerServiceStub.getFluxDockerNetworks = sinon.stub().resolves([]);
+      dockerServiceStub.forceRemoveFluxAppDockerNetwork = sinon.stub().resolves();
+    });
+
+    it('keeps the network of an installed app whose containers are all stopped', async () => {
+      // The bug this exists to prevent: docker calls a network unused the moment
+      // nothing is attached, which is true of every crash-looping or stopped app.
+      dockerServiceStub.getFluxDockerNetworks.resolves([
+        net('fluxDockerNetwork_stoppedapp', { 'runonflux.app-network': 'stoppedapp' }),
+      ]);
+
+      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set(['stoppedapp']));
+
+      expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.called).to.be.false;
+      expect(result.removed).to.deep.equal([]);
+    });
+
+    it('removes the network of an app that is not installed', async () => {
+      dockerServiceStub.getFluxDockerNetworks.resolves([
+        net('fluxDockerNetwork_goneapp', { 'runonflux.app-network': 'goneapp' }),
+      ]);
+
+      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set(['liveapp']));
+
+      sinon.assert.calledOnceWithExactly(dockerServiceStub.forceRemoveFluxAppDockerNetwork, 'goneapp');
+      expect(result.removed).to.deep.equal(['goneapp']);
+    });
+
+    it('reaps a pre-label network by name when its app is gone', async () => {
+      dockerServiceStub.getFluxDockerNetworks.resolves([net('fluxDockerNetwork_legacygone')]);
+
+      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set());
+
+      sinon.assert.calledOnceWithExactly(dockerServiceStub.forceRemoveFluxAppDockerNetwork, 'legacygone');
+      expect(result.removed).to.deep.equal(['legacygone']);
+    });
+
+    it('leaves an unattributable network alone and counts it', async () => {
+      // Absence of an owner label is not evidence of absence of an owner.
+      dockerServiceStub.getFluxDockerNetworks.resolves([net('fluxDockerNetworkOddball')]);
+
+      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set());
+
+      expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.called).to.be.false;
+      expect(result.unidentified).to.equal(1);
+    });
+
+    it('never removes the node-wide flux network', async () => {
+      dockerServiceStub.getFluxDockerNetworks.resolves([net('fluxDockerNetwork')]);
+
+      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set());
+
+      expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.called).to.be.false;
+      // it is a known network, not something we failed to attribute
+      expect(result.unidentified).to.equal(0);
+    });
+
+    it('keeps sweeping after one removal fails', async () => {
+      dockerServiceStub.getFluxDockerNetworks.resolves([
+        net('fluxDockerNetwork_first'), net('fluxDockerNetwork_second'),
+      ]);
+      dockerServiceStub.forceRemoveFluxAppDockerNetwork.onFirstCall().rejects(new Error('docker busy'));
+
+      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set());
+
+      expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.calledTwice).to.be.true;
+      expect(result.removed).to.deep.equal(['first', 'second']);
+    });
+  });
 });

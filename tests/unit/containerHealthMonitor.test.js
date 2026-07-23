@@ -79,7 +79,10 @@ describe('containerHealthMonitor tests', () => {
     };
     volumeServiceStub = { verifyAppVolumeMount: sinon.stub().resolves(false) };
     globalStateStub = { appsMonitored: new Map() };
-    appDockerNetworkStub = { ensureAppDockerNetwork: sinon.stub().resolves('net') };
+    appDockerNetworkStub = {
+      ensureAppDockerNetwork: sinon.stub().resolves('net'),
+      ensureAppNetworkPresent: sinon.stub().resolves('net'),
+    };
 
     containerHealthMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/containerHealthMonitor', {
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
@@ -245,16 +248,15 @@ describe('containerHealthMonitor tests', () => {
       expect(opts.requiresEncryption).to.equal(false);
     });
 
-    it('ensures the app docker network before recreating any container', async () => {
-      // A pruned per-app network (docker prune / daemon restart / the janitor's
-      // debris sweep) is created only at install time; without this the recreate
-      // loops forever on "network not found".
+    it('does not ensure the app network itself - the reconciler owns that guarantee', async () => {
+      // The network is still a precondition of the recreate, but it is
+      // guaranteed once above every path that runs a container. Two owners of
+      // one guarantee is how they drift apart, so this path must not re-ensure.
       await containerHealthMonitor.recreateMissingContainers('web_testapp');
 
-      expect(appDockerNetworkStub.ensureAppDockerNetwork.calledOnceWith('testapp')).to.be.true;
-      expect(appDockerNetworkStub.ensureAppDockerNetwork.calledBefore(
-        componentProvisionerStub.installComponent,
-      )).to.be.true;
+      expect(componentProvisionerStub.installComponent.called).to.be.true;
+      expect(appDockerNetworkStub.ensureAppDockerNetwork.called).to.be.false;
+      expect(appDockerNetworkStub.ensureAppNetworkPresent.called).to.be.false;
     });
 
     it('recreates every component for a whole-app identifier', async () => {
