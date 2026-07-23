@@ -332,6 +332,7 @@ export function nodeClient(nodeNum) {
         // pass over an app CHANGING - excluded becoming a candidate, or the
         // reverse. That happens rarely, which is what makes it an event.
         'spawner:candidacy',
+        'janitor:sweep',
         'content:blobUploaded',
         'content:blobResolved',
         'content:blobPeerMiss',
