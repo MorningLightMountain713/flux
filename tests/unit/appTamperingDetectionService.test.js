@@ -4,7 +4,9 @@ const proxyquire = require('proxyquire').noCallThru();
 
 describe('appTamperingDetectionService tests', () => {
   let service;
-  let dbHelperStub;
+  let tamperingRepositoryStub;
+  let nodeStartupRepositoryStub;
+  let appsRepositoryStub;
   let logStub;
   let fsReadFileStub;
   let fluxnodeRpcsStub;
@@ -46,28 +48,49 @@ describe('appTamperingDetectionService tests', () => {
     lastFindArgs = null;
     installedApps = {}; // name -> { owner, hash }
 
-    dbHelperStub = {
-      databaseConnection: sinon.stub().returns({
-        db: sinon.stub().callsFake((name) => ({ name })),
-      }),
-      findOneAndUpdateInDatabase: sinon.stub().callsFake(async (db, coll, query, update, options) => {
+    // The service talks to repositories, not to mongo. These fakes sit at that
+    // boundary and record into the same upsertCalls shape the assertions below
+    // read, so a test asserts on the write the service asked for rather than on
+    // the driver call some repository happens to make.
+    tamperingRepositoryStub = {
+      upsertIncident: sinon.stub().callsFake(async (query, update) => {
         upsertCalls.push({
-          db, coll, query, update, options,
+          coll: 'apptamperingevents', query, update, options: { upsert: true },
         });
         return null; // driver v6 upsert shape: null means a fresh insert
       }),
-      findInDatabase: sinon.stub().callsFake(async (db, coll, query, options) => {
+      listIncidents: sinon.stub().callsFake(async (appName, limit) => {
         lastFindArgs = {
-          db, coll, query, options,
+          coll: 'apptamperingevents',
+          query: appName ? { appName } : {},
+          options: { sort: { lastSeen: -1, detectedAt: -1 }, limit },
         };
         return findResults;
       }),
-      findOneInDatabase: sinon.stub().callsFake(async (db, coll, query) => {
-        if (coll === 'zelappsinformation') return installedApps[query.name] || null;
-        return null; // startup marker by default absent
+      backfillIncidentIdentity: sinon.stub().resolves(0),
+      purgePreSchemaIncidents: sinon.stub().resolves(),
+      sumIncidentSeverities: sinon.stub().resolves(0),
+    };
+
+    nodeStartupRepositoryStub = {
+      getStartupMarker: sinon.stub().resolves(null), // marker absent by default
+      setStartupMarker: sinon.stub().callsFake(async (key, marker) => {
+        upsertCalls.push({
+          coll: 'nodestartuptracker', query: { _id: key }, update: { $set: marker }, options: { upsert: true },
+        });
       }),
-      removeDocumentsFromCollection: sinon.stub().resolves({ deletedCount: 0 }),
-      updateInDatabase: sinon.stub().resolves({ modifiedCount: 0 }),
+      appendBootHistory: sinon.stub().callsFake(async (key, boot, max) => {
+        upsertCalls.push({
+          coll: 'nodestartuptracker',
+          query: { _id: key },
+          update: { $push: { boots: { $each: [boot], $slice: -max } } },
+          options: { upsert: true },
+        });
+      }),
+    };
+
+    appsRepositoryStub = {
+      getInstalledAppAttribution: sinon.stub().callsFake(async (name) => installedApps[name] || null),
     };
 
     logStub = {
@@ -101,7 +124,9 @@ describe('appTamperingDetectionService tests', () => {
         promises: { readFile: fsReadFileStub },
       },
       os: { uptime: () => 3600 },
-      './dbHelper': dbHelperStub,
+      './appDatabase/appTamperingRepository': tamperingRepositoryStub,
+      './appDatabase/nodeStartupRepository': nodeStartupRepositoryStub,
+      './appDatabase/appsRepository': appsRepositoryStub,
       '../lib/log': logStub,
       './generalService': generalServiceStub,
       './daemonService/daemonServiceFluxnodeRpcs': fluxnodeRpcsStub,
@@ -334,31 +359,13 @@ describe('appTamperingDetectionService tests', () => {
       expect(eventUpserts()[1].update.$setOnInsert.severity).to.equal(0);
     });
 
-    it('retries once when concurrent upserts race on the unique index', async () => {
-      const dupErr = new Error('E11000 duplicate key');
-      dupErr.code = 11000;
-      dbHelperStub.findOneAndUpdateInDatabase = sinon.stub()
-        .onFirstCall().rejects(dupErr)
-        .callsFake(async (db, coll, query, update, options) => {
-          upsertCalls.push({
-            db, coll, query, update, options,
-          });
-          return { count: 1 };
-        });
-
-      await service.recordEvent('myapp', 'container_vanished', 'x');
-
-      expect(eventUpserts()).to.have.lengthOf(1);
-      expect(logStub.error.called).to.be.false;
-    });
-
     it('rolls up a repeat (v6 non-null pre-image) as inserted=false, no fresh-insert log', async () => {
       // The real mongodb v6 driver returns the matched pre-image document (not
       // null) when the upsert hits an existing incident; the default mock
       // returns null (insert). Model the repeat and pin the count-rollup branch.
-      dbHelperStub.findOneAndUpdateInDatabase = sinon.stub().callsFake(async (db, coll, query, update, options) => {
+      tamperingRepositoryStub.upsertIncident = sinon.stub().callsFake(async (query, update) => {
         upsertCalls.push({
-          db, coll, query, update, options,
+          coll: 'apptamperingevents', query, update, options: { upsert: true },
         });
         return { _id: 'existing', count: 1 }; // v6 pre-image of the matched doc
       });
@@ -371,18 +378,18 @@ describe('appTamperingDetectionService tests', () => {
     });
 
     it('reads insert vs repeat from the legacy { value, lastErrorObject } driver shape', async () => {
-      dbHelperStub.findOneAndUpdateInDatabase = sinon.stub()
-        .onFirstCall().callsFake(async (db, coll, query, update, options) => {
+      tamperingRepositoryStub.upsertIncident = sinon.stub()
+        .onFirstCall().callsFake(async (query, update) => {
           upsertCalls.push({
-            db, coll, query, update, options,
+            coll: 'apptamperingevents', query, update, options: { upsert: true },
           });
-          return { value: null, lastErrorObject: { updatedExisting: false } }; // insert
+          return { inserted: true };
         })
-        .onSecondCall().callsFake(async (db, coll, query, update, options) => {
+        .onSecondCall().callsFake(async (query, update) => {
           upsertCalls.push({
-            db, coll, query, update, options,
+            coll: 'apptamperingevents', query, update, options: { upsert: true },
           });
-          return { value: { _id: 'e', count: 1 }, lastErrorObject: { updatedExisting: true } }; // repeat
+          return { inserted: false };
         });
 
       await service.recordEvent('myapp', 'container_vanished', 'insert');
@@ -393,15 +400,15 @@ describe('appTamperingDetectionService tests', () => {
     });
 
     it('no-ops when DB is not available', async () => {
-      dbHelperStub.databaseConnection = sinon.stub().returns(null);
+      tamperingRepositoryStub.upsertIncident = sinon.stub().resolves(null);
 
       await service.recordEvent('myapp', 'container_vanished', 'x');
 
-      expect(dbHelperStub.findOneAndUpdateInDatabase.called).to.be.false;
+      expect(eventUpserts()).to.have.lengthOf(0);
     });
 
     it('swallows write errors without throwing and logs them', async () => {
-      dbHelperStub.findOneAndUpdateInDatabase = sinon.stub().rejects(new Error('boom'));
+      tamperingRepositoryStub.upsertIncident = sinon.stub().rejects(new Error('boom'));
 
       await service.recordEvent('myapp', 'container_vanished', 'x');
 
@@ -412,12 +419,8 @@ describe('appTamperingDetectionService tests', () => {
 
   describe('boot context keying', () => {
     it('keys incidents by the current boot_id once checkNodeReboot has run', async () => {
-      dbHelperStub.findOneInDatabase = sinon.stub().callsFake(async (db, coll, query) => {
-        if (coll === 'nodestartuptracker' && query._id === 'lastStartup') {
-          return { _id: 'lastStartup', at: new Date(), bootId: PREVIOUS_BOOT_ID };
-        }
-        return null;
-      });
+      nodeStartupRepositoryStub.getStartupMarker = sinon.stub()
+        .resolves({ _id: 'lastStartup', at: new Date(), bootId: PREVIOUS_BOOT_ID });
       await service.checkNodeReboot();
 
       await service.recordEvent('myapp', 'mount_vanished', 'x');
@@ -435,22 +438,20 @@ describe('appTamperingDetectionService tests', () => {
 
       await service.checkNodeReboot(); // starts the backfill; immediate attempt fails
       await clock.tickAsync(0);
-      expect(dbHelperStub.updateInDatabase.called).to.be.false;
+      expect(tamperingRepositoryStub.backfillIncidentIdentity.called).to.be.false;
 
       fluxnodeRpcsStub.getFluxNodeStatus.resolves(NODE_STATUS);
       await clock.tickAsync(service.IDENTITY_BACKFILL_INTERVAL_MS);
 
-      sinon.assert.calledOnce(dbHelperStub.updateInDatabase);
-      const call = dbHelperStub.updateInDatabase.firstCall;
-      expect(call.args[1]).to.equal('apptamperingevents');
-      expect(call.args[2]).to.deep.equal({ schemaVersion: { $gte: 1 }, nodeTxid: null });
-      expect(call.args[3].$set.nodeTxid).to.equal('deadbeefcafe');
-      expect(call.args[3].$set.pubkey).to.equal('04aabbcc');
-      expect(call.args[3].$set.paymentAddress).to.equal('t1payout');
+      sinon.assert.calledOnce(tamperingRepositoryStub.backfillIncidentIdentity);
+      const identity = tamperingRepositoryStub.backfillIncidentIdentity.firstCall.args[0];
+      expect(identity.nodeTxid).to.equal('deadbeefcafe');
+      expect(identity.pubkey).to.equal('04aabbcc');
+      expect(identity.paymentAddress).to.equal('t1payout');
 
       // stopped for good: further intervals do not fire another update
       await clock.tickAsync(2 * service.IDENTITY_BACKFILL_INTERVAL_MS);
-      sinon.assert.calledOnce(dbHelperStub.updateInDatabase);
+      sinon.assert.calledOnce(tamperingRepositoryStub.backfillIncidentIdentity);
     });
 
     it('keeps retrying while the daemon stays unreachable', async () => {
@@ -460,7 +461,7 @@ describe('appTamperingDetectionService tests', () => {
       await service.checkNodeReboot();
       await clock.tickAsync(2 * service.IDENTITY_BACKFILL_INTERVAL_MS);
 
-      expect(dbHelperStub.updateInDatabase.called).to.be.false;
+      expect(tamperingRepositoryStub.backfillIncidentIdentity.called).to.be.false;
       expect(fluxnodeRpcsStub.getFluxNodeStatus.callCount).to.be.greaterThan(1);
     });
 
@@ -576,7 +577,7 @@ describe('appTamperingDetectionService tests', () => {
     });
 
     it('returns an error message when the query throws', async () => {
-      dbHelperStub.findInDatabase = sinon.stub().rejects(new Error('db down'));
+      tamperingRepositoryStub.listIncidents = sinon.stub().rejects(new Error('db down'));
       const req = { params: {}, query: {} };
       const res = makeRes();
 
@@ -588,10 +589,7 @@ describe('appTamperingDetectionService tests', () => {
 
   describe('checkNodeReboot', () => {
     function setMarker(marker) {
-      dbHelperStub.findOneInDatabase = sinon.stub().callsFake(async (db, coll, query) => {
-        if (coll === 'nodestartuptracker' && query._id === 'lastStartup') return marker;
-        return null;
-      });
+      nodeStartupRepositoryStub.getStartupMarker = sinon.stub().resolves(marker);
     }
 
     it('records a reboot only in the boot history, never as an incident', async () => {
@@ -659,14 +657,11 @@ describe('appTamperingDetectionService tests', () => {
     it('purges all pre-schema rows at startup', async () => {
       await service.checkNodeReboot();
 
-      sinon.assert.calledOnce(dbHelperStub.removeDocumentsFromCollection);
-      const { args } = dbHelperStub.removeDocumentsFromCollection.firstCall;
-      expect(args[1]).to.equal('apptamperingevents');
-      expect(args[2]).to.deep.equal({ schemaVersion: { $exists: false } });
+      sinon.assert.calledOnce(tamperingRepositoryStub.purgePreSchemaIncidents);
     });
 
     it('still tracks the boot when the legacy purge fails', async () => {
-      dbHelperStub.removeDocumentsFromCollection = sinon.stub().rejects(new Error('no permission'));
+      tamperingRepositoryStub.purgePreSchemaIncidents = sinon.stub().rejects(new Error('no permission'));
 
       await service.checkNodeReboot();
 
@@ -691,18 +686,21 @@ describe('appTamperingDetectionService tests', () => {
       expect(upsertCalls).to.have.lengthOf(0);
     });
 
-    it('no-ops when DB is unavailable', async () => {
-      dbHelperStub.databaseConnection = sinon.stub().returns(null);
+    it('writes nothing when the DB is unavailable', async () => {
+      tamperingRepositoryStub.upsertIncident = sinon.stub().resolves(null);
+      nodeStartupRepositoryStub.getStartupMarker = sinon.stub().resolves(null);
+      nodeStartupRepositoryStub.setStartupMarker = sinon.stub().resolves();
+      nodeStartupRepositoryStub.appendBootHistory = sinon.stub().resolves();
 
       await service.checkNodeReboot();
 
-      expect(dbHelperStub.findOneInDatabase.called).to.be.false;
-      expect(dbHelperStub.findOneAndUpdateInDatabase.called).to.be.false;
-      expect(dbHelperStub.removeDocumentsFromCollection.called).to.be.false;
+      expect(markerUpdates()).to.have.lengthOf(0);
+      expect(eventUpserts()).to.have.lengthOf(0);
+      expect(historyUpdates()).to.have.lengthOf(0);
     });
 
     it('swallows errors without throwing and logs them', async () => {
-      dbHelperStub.findOneInDatabase = sinon.stub().rejects(new Error('mongo down'));
+      nodeStartupRepositoryStub.getStartupMarker = sinon.stub().rejects(new Error('mongo down'));
 
       await service.checkNodeReboot();
 

@@ -2,11 +2,12 @@ const config = require('config');
 const os = require('os');
 const fs = require('fs').promises;
 const log = require('../lib/log');
-const dbHelper = require('./dbHelper');
 const messageHelper = require('./messageHelper');
 const generalService = require('./generalService');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
-const { localAppsInformation } = require('./utils/appConstants');
+const appTamperingRepository = require('./appDatabase/appTamperingRepository');
+const nodeStartupRepository = require('./appDatabase/nodeStartupRepository');
+const appsRepository = require('./appDatabase/appsRepository');
 
 // All tamper-feature behaviour (incident rollup, boot identity, severities)
 // deliberately lives inside this service rather than at the emitting call
@@ -16,9 +17,6 @@ const { localAppsInformation } = require('./utils/appConstants');
 // keeps the feature rebase-safe and guarantees every emitter gets the same
 // semantics without call-site edits. Call sites still pass plain
 // (appName, eventType, details); everything else is derived here.
-
-const tamperingEventsCollection = config.database.local.collections.appTamperingEvents;
-const nodeStartupTrackerCollection = config.database.local.collections.nodeStartupTracker;
 
 const STARTUP_MARKER_KEY = 'lastStartup';
 const BOOT_HISTORY_KEY = 'bootHistory';
@@ -157,24 +155,7 @@ function startIdentityBackfill() {
     try {
       const identity = await getNodeIdentity();
       if (!identity || !identity.nodeTxid) return; // daemon not ready — next tick retries
-      const db = dbHelper.databaseConnection();
-      if (!db) return;
-      const database = db.db(config.database.local.database);
-      const result = await dbHelper.updateInDatabase(
-        database,
-        tamperingEventsCollection,
-        { schemaVersion: { $gte: 1 }, nodeTxid: null },
-        {
-          $set: {
-            nodeTxid: identity.nodeTxid,
-            nodeOutidx: identity.nodeOutidx,
-            nodeIp: identity.nodeIp,
-            pubkey: identity.pubkey,
-            paymentAddress: identity.paymentAddress,
-          },
-        },
-      );
-      const updated = result?.modifiedCount ?? 0;
+      const updated = await appTamperingRepository.backfillIncidentIdentity(identity);
       if (updated > 0) log.info(`appTamperingDetection - backfilled identity onto ${updated} incident(s)`);
       clearInterval(identityBackfillTimer);
       identityBackfillTimer = null;
@@ -217,19 +198,11 @@ async function getAppAttribution(appName) {
   const cached = appAttributionCache.get(appName);
   if (cached && Date.now() - cached.cachedAt < ATTRIBUTION_TTL_MS) return cached;
   try {
-    const db = dbHelper.databaseConnection();
-    if (!db) return null;
-    const appsDatabase = db.db(config.database.appslocal.database);
-    const projection = { projection: { _id: 0, owner: 1, hash: 1 } };
-    let app = await dbHelper.findOneInDatabase(
-      appsDatabase, localAppsInformation, { name: appName }, projection,
-    );
+    let app = await appsRepository.getInstalledAppAttribution(appName);
     if (!app) {
       const mainName = deriveMainAppName(appName);
       if (mainName !== appName) {
-        app = await dbHelper.findOneInDatabase(
-          appsDatabase, localAppsInformation, { name: mainName }, projection,
-        );
+        app = await appsRepository.getInstalledAppAttribution(mainName);
       }
     }
     const attribution = {
@@ -260,12 +233,6 @@ async function getAppAttribution(appName) {
  */
 async function recordEvent(appName, eventType, details) {
   try {
-    const db = dbHelper.databaseConnection();
-    if (!db) {
-      log.warn('appTamperingDetection - DB not available, skipping event');
-      return;
-    }
-    const database = db.db(config.database.local.database);
     const now = new Date();
     const incidentKey = `${currentBootId ?? 'unknown'}:${Math.floor(now.getTime() / INCIDENT_BUCKET_MS)}`;
     const [identity, attribution] = await Promise.all([
@@ -295,26 +262,12 @@ async function recordEvent(appName, eventType, details) {
       $set: { lastSeen: now },
       $inc: { count: 1 },
     };
-    let result;
-    try {
-      result = await dbHelper.findOneAndUpdateInDatabase(
-        database, tamperingEventsCollection, query, update, { upsert: true },
-      );
-    } catch (error) {
-      // Two concurrent upserts racing on a brand-new incident key can trip
-      // the unique index; the loser retries once and lands as the increment.
-      if (error && error.code === 11000) {
-        result = await dbHelper.findOneAndUpdateInDatabase(
-          database, tamperingEventsCollection, query, update, { upsert: true },
-        );
-      } else {
-        throw error;
-      }
+    const outcome = await appTamperingRepository.upsertIncident(query, update);
+    if (!outcome) {
+      log.warn('appTamperingDetection - DB not available, skipping event');
+      return;
     }
-    // Insert detection across driver result shapes: v6 returns the pre-image
-    // doc or null; older shapes return { value, lastErrorObject }.
-    const inserted = !result || result.value === null || result?.lastErrorObject?.updatedExisting === false;
-    if (inserted) {
+    if (outcome.inserted) {
       log.info(`appTamperingDetection - recorded ${eventType} for ${appName}`);
     } else {
       log.debug(`appTamperingDetection - ${eventType} for ${appName} repeated, incident count incremented`);
@@ -344,13 +297,7 @@ async function getEvents(req, res) {
     const limit = Number.isNaN(requestedLimit)
       ? EVENTS_DEFAULT_LIMIT
       : Math.min(Math.max(requestedLimit, 1), EVENTS_MAX_LIMIT);
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.local.database);
-    const query = appname ? { appName: appname } : {};
-    const options = { sort: { lastSeen: -1, detectedAt: -1 }, limit };
-    const results = await dbHelper.findInDatabase(
-      database, tamperingEventsCollection, query, options,
-    );
+    const results = await appTamperingRepository.listIncidents(appname || null, limit);
     const message = messageHelper.createDataMessage(results);
     res.json(message);
   } catch (error) {
@@ -380,13 +327,6 @@ async function getEvents(req, res) {
  */
 async function checkNodeReboot() {
   try {
-    const db = dbHelper.databaseConnection();
-    if (!db) {
-      log.warn('appTamperingDetection - DB not available, skipping reboot check');
-      return;
-    }
-    const database = db.db(config.database.local.database);
-
     // Pre-schema rows (no schemaVersion) are row-per-observation noise with
     // no identity, severity or dedup — nothing consumes them, but the public
     // API would keep serving them for up to 30 days of TTL. Sweeping them at
@@ -394,9 +334,7 @@ async function checkNodeReboot() {
     // boot. A no-op on every boot after that; removable once the fleet has
     // upgraded past the incident schema.
     try {
-      await dbHelper.removeDocumentsFromCollection(
-        database, tamperingEventsCollection, { schemaVersion: { $exists: false } },
-      );
+      await appTamperingRepository.purgePreSchemaIncidents();
     } catch (error) {
       log.warn(`appTamperingDetection - pre-schema row purge failed: ${error.message}`);
     }
@@ -423,9 +361,7 @@ async function checkNodeReboot() {
     currentBootId = bootId;
 
     const now = new Date();
-    const previous = await dbHelper.findOneInDatabase(
-      database, nodeStartupTrackerCollection, { _id: STARTUP_MARKER_KEY },
-    );
+    const previous = await nodeStartupRepository.getStartupMarker(STARTUP_MARKER_KEY);
     const previousBootId = previous && previous.bootId ? previous.bootId : null;
 
     if (previousBootId !== currentBootId) {
@@ -437,25 +373,17 @@ async function checkNodeReboot() {
       // boot period itself, free of FluxOS's variable start lag; `at` is when
       // FluxOS first saw the boot.
       const bootedAt = new Date(now.getTime() - Math.round(os.uptime() * 1000));
-      await dbHelper.findOneAndUpdateInDatabase(
-        database,
-        nodeStartupTrackerCollection,
-        { _id: BOOT_HISTORY_KEY },
-        { $push: { boots: { $each: [{ bootId: currentBootId, bootedAt, at: now }], $slice: -BOOT_HISTORY_MAX } } },
-        { upsert: true },
+      await nodeStartupRepository.appendBootHistory(
+        BOOT_HISTORY_KEY,
+        { bootId: currentBootId, bootedAt, at: now },
+        BOOT_HISTORY_MAX,
       );
       if (previousBootId) {
         log.info(`appTamperingDetection - machine reboot: boot_id ${previousBootId.slice(0, 8)} -> ${currentBootId.slice(0, 8)}`);
       }
     }
 
-    await dbHelper.findOneAndUpdateInDatabase(
-      database,
-      nodeStartupTrackerCollection,
-      { _id: STARTUP_MARKER_KEY },
-      { $set: { at: now, bootId: currentBootId } },
-      { upsert: true },
-    );
+    await nodeStartupRepository.setStartupMarker(STARTUP_MARKER_KEY, { at: now, bootId: currentBootId });
   } catch (error) {
     log.error(`appTamperingDetection - checkNodeReboot failed: ${error.message}`);
   }

@@ -455,6 +455,25 @@ async function getInstalledApp(name) {
 }
 
 /**
+ * Owner and hash of an installed app, read WITHOUT hydrating the spec.
+ * Deliberately not getInstalledApp: hydration goes through the spec-backend
+ * bridge, which only resolves once something else has warmed it. Callers here
+ * (tampering attribution during the boot sweep) run ahead of that and need two
+ * scalars, not a domain object — so this stays a plain projection.
+ * @param {string} name
+ * @returns {Promise<{owner: string|null, hash: string|null}|null>} null when not installed
+ */
+async function getInstalledAppAttribution(name) {
+  const doc = await dbHelper.findOneInDatabase(
+    localDb(), localAppsInformation,
+    { name: nameRegex(name) },
+    { projection: { _id: 0, owner: 1, hash: 1 } },
+  );
+  if (!doc) return null;
+  return { owner: doc.owner ?? null, hash: doc.hash ?? null };
+}
+
+/**
  * One identity's installed row, or null. This is the provisioning question:
  * a null answer means this replica is NOT installed here, however many
  * siblings are.
@@ -1097,6 +1116,7 @@ module.exports = {
   // installed apps
   prepareInstalledAppsCollection,
   getInstalledApp,
+  getInstalledAppAttribution,
   countInstalledApps,
   existsInstalledApp,
   listInstalledApps,
