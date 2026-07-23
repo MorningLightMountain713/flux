@@ -130,7 +130,7 @@ describe('flux-shutdownd (real): per-identity plans and replica-scoped drains', 
 
     const res = await registerEncryptedV9App(env.clients[0].url, {
       name: appName,
-      placement: { targetIps: { [nodeIp(HOST_NODE)]: ['s1', 's2'] } },
+      assignment: { targetIps: { [nodeIp(HOST_NODE)]: ['s1', 's2'] } },
       components: webComponents({
         hostPort: 37010,
         replicaOverrides: { s2: { ports: { game: { hostPort: 37011 } } } },
@@ -186,7 +186,7 @@ describe('flux-shutdownd (real): per-identity plans and replica-scoped drains', 
 
     const upd = await updateEncryptedV9App(env.clients[0].url, {
       name: appName,
-      placement: { targetIps: { [nodeIp(HOST_NODE)]: ['s1'] } },
+      assignment: { targetIps: { [nodeIp(HOST_NODE)]: ['s1'] } },
       components: webComponents({ hostPort: 37010 }),
     });
     expect(upd.status, `update ${appName}`).to.equal('success');

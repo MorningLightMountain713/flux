@@ -51,10 +51,12 @@ async function sealExport(plaintext, aadBytes, recipientPubB64) {
 // Build a sparse v9 submission spec. A single component by default, with optional
 // content mounts: contentRefHash adds an immutable contentRef file mount, and each
 // contentSlots entry adds a mutable contentSlot file mount. Pass `components` to
-// override entirely (e.g. the multi-component capstone), `placement` for the
-// targeting maps. Named placement derives `instances` from the replica-name count,
-// so the field is omitted unless authored; loose/untargeted placement requires it
-// (defaulted to 3). Pass `instances: null` to force omission.
+// override entirely (e.g. the multi-component capstone), `assignment` for the
+// replica-name map (identity -> [replicaNames]) and `placement` for the cleartext
+// identity sets (identity arrays + geo). A pinned app derives its identity set,
+// `mode` and `instances` from the assignment, so all three are omitted unless
+// authored; candidate/untargeted placement authors `instances` (defaulted to 3).
+// Pass `instances: null` to force omission.
 export function buildV9ContentSpec({
   name = 'e2e-content-app',
   owner,
@@ -65,12 +67,12 @@ export function buildV9ContentSpec({
   contentSlots = [],
   components,
   placement,
+  assignment,
   ...overrides
 } = {}) {
   if (!owner) throw new Error('buildV9ContentSpec: owner required');
-  const targetingMaps = placement ? Object.values(placement) : [];
-  const named = targetingMaps.some((map) => map && Object.values(map).some(Array.isArray));
-  const instancesValue = instances === undefined && !named ? 3 : instances;
+  const pinned = Object.values(assignment || {}).some((map) => map && Object.keys(map).length > 0);
+  const instancesValue = instances === undefined && !pinned ? 3 : instances;
   const mounts = { '/data': { source: 'data', destination: '/data' } };
   if (contentRefHash) {
     mounts['/etc/ref.conf'] = {
@@ -99,6 +101,7 @@ export function buildV9ContentSpec({
     ttl,
     contacts: { email: ['admin@example.com'] },
     ...(placement ? { placement } : {}),
+    ...(assignment ? { assignment } : {}),
     components: components || {
       web: {
         name: 'web',
