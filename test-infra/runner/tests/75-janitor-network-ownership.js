@@ -3,9 +3,11 @@ import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from '../framework/test-env.js';
 import {
   getAppContainerStatus, getAppNetwork, getAppNetworkSubnet, networkExists,
-  stopAppContainer, createAppNetworkRaw, createNetworkNamed,
+  createAppNetworkRaw, createNetworkNamed,
 } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
+import { authenticate } from '../auth.js';
+import { appOwnerKey } from '../framework/keys.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 
 // The janitor's debris sweep removes what this node holds for apps it does not
@@ -29,10 +31,14 @@ const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 // The sweeps are single-flight and publish their summary; wait for one to land
 // rather than sleeping a guessed interval, so an assertion can never pass
 // vacuously against a sweep that never ran.
+//
+// A skipped sweep publishes the same event (with `skipped`), so requiring the
+// summary to carry a count is what distinguishes "swept and left this alone"
+// from "never looked" - the whole assertion rests on that difference.
 async function waitForDebrisSweep(client, timeout, afterId) {
   return client.waitForEvent(
     'janitor:sweep',
-    (d) => d.sweep === 'dockerDebris',
+    (d) => d.sweep === 'dockerDebris' && d.skipped === undefined && typeof d.networksRemoved === 'number',
     timeout,
     { afterId },
   );
@@ -87,18 +93,24 @@ describe('janitor reaps app networks by ownership, not by docker "unused"', func
     const subnetBefore = await getAppNetworkSubnet(client.container, appName);
     expect(subnetBefore, 'the app network exists before the stop').to.be.a('string');
 
-    // Stop the container: docker now reports the network as having nothing
-    // attached, i.e. exactly what a prune would consider collectable.
-    await stopAppContainer(client.container, appName, appName);
+    // An operator stop, not a docker stop: operatorStopped is durable, so the
+    // reconciler will NOT restart it underneath us. The container therefore stays
+    // down across as many sweeps as we like - and docker reports the network as
+    // having nothing attached the whole time, which is exactly what a prune reads
+    // as collectable. A plain docker stop would be restarted within the backoff
+    // ladder's first step and the window would close before a sweep ever saw it.
+    const auth = await authenticate(client.url, appOwnerKey());
+    const stopRes = await client.getAuthed(`/apps/appstop/${appName}`, auth.zelidauth);
+    expect(stopRes.status).to.equal('success');
     await waitFor(async () => {
       const s = await getAppContainerStatus(client.container, appName, { all: true });
       return s && !s.status.startsWith('Up');
-    }, { timeout: 60000, interval: 1000, label: 'container stopped' });
+    }, { timeout: 60000, interval: 1000, label: 'stopped after appstop' });
 
     // Two sweeps, so this cannot pass on a sweep that happened to miss the window.
     const afterId = client.getLastEventId();
-    await waitForDebrisSweep(client, 60000, afterId);
-    await waitForDebrisSweep(client, 60000, client.getLastEventId());
+    await waitForDebrisSweep(client, 90000, afterId);
+    await waitForDebrisSweep(client, 90000, client.getLastEventId());
 
     const net = await getAppNetwork(client.container, appName);
     expect(net, 'an installed app keeps its network however long its container is down').to.not.equal(null);
@@ -107,11 +119,12 @@ describe('janitor reaps app networks by ownership, not by docker "unused"', func
 
   it('lets the app come back up on the network it never lost', async function () {
     this.timeout(180000);
-    // The reconciler owns run state and wants it running again; the point here is
-    // that the start has a network to attach to, which is what used to be lost.
-    await waitForUp(client, appName, 'restarted after the sweeps');
-    const subnet = await getAppNetworkSubnet(client.container, appName);
-    expect(subnet, 'started onto a live network').to.be.a('string');
+    // The old sweep would have taken the network out from under a deliberately
+    // stopped app, and this start would fail "network not found" forever.
+    const auth = await authenticate(client.url, appOwnerKey());
+    await client.getAuthed(`/apps/appstart/${appName}`, auth.zelidauth);
+    await waitForUp(client, appName, 'running again after appstart');
+    expect(await getAppNetworkSubnet(client.container, appName), 'started onto a live network').to.be.a('string');
   });
 
   it('still reaps a network no installed app owns - the sweep is not simply disabled', async function () {

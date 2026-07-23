@@ -106,6 +106,9 @@ describe('appReconciler tests', () => {
         }),
         isContainerDetachedFromNetwork: sinon.stub().returns(false),
         dockerNetworkState: sinon.stub().resolves('exists'),
+        // Default: whatever the container recorded is the live network, i.e. no
+        // stale binding. Tests that rebuild a network override this.
+        dockerNetworkId: sinon.stub().resolves(null),
         getAppIdentifier: (id) => `flux${id}`,
         getAppDockerNameIdentifier: (id) => `/flux${id}`,
         getBaseAppName: (id) => (id.startsWith('flux') ? id.slice(4) : id),
@@ -323,6 +326,49 @@ describe('appReconciler tests', () => {
       await appReconciler.reconcile('www_App');
 
       expect(stubs.appDockerNetwork.ensureAppNetworkPresent.called).to.be.false;
+    });
+
+    // Having the network back is not the same as the container being able to
+    // reach it: docker binds to the network's ID, so a same-name rebuild leaves
+    // an existing container pointing at one that is gone. Proven on a real
+    // daemon - the container keeps the dead id through the rebuild and every
+    // start fails "network not found" forever.
+    const boundTo = (networkId, status = 'exited') => ({
+      State: { Running: false, Status: status, ExitCode: 1 },
+      HostConfig: { NetworkMode: 'fluxDockerNetwork_App' },
+      NetworkSettings: { Networks: { fluxDockerNetwork_App: { NetworkID: networkId } } },
+    });
+
+    it('recreates a container bound to a network id that no longer exists', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves(boundTo('deadnetworkid'));
+      stubs.dockerService.dockerNetworkId.resolves('livenetworkid');
+
+      await appReconciler.reconcile('www_App');
+
+      expect(stubs.dockerService.appDockerStart.called, 'starting it can only fail - it must be rebuilt').to.be.false;
+      expect(stubs.dockerService.appDockerForceRemove.called, 'removed so the recreate can bind it to the live network').to.be.true;
+      expect(stubs.appsRuntimeState.setNetworkHealRemoval.calledWith('www_App', true), 'durably marked ours, so the absence is never read as tampering').to.be.true;
+    });
+
+    it('starts normally when the container is bound to the live network', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves(boundTo('livenetworkid'));
+      stubs.dockerService.dockerNetworkId.resolves('livenetworkid');
+
+      await appReconciler.reconcile('www_App');
+
+      expect(stubs.dockerService.appDockerForceRemove.called, 'a healthy binding is not rebuilt').to.be.false;
+      sinon.assert.calledOnce(stubs.dockerService.appDockerStart);
+    });
+
+    it('destroys nothing when the live network id cannot be read', async () => {
+      // This ends in a force-remove, so "cannot tell" must never read as
+      // "mismatched".
+      stubs.dockerService.dockerContainerInspect.resolves(boundTo('somenetworkid'));
+      stubs.dockerService.dockerNetworkId.resolves(null);
+
+      await appReconciler.reconcile('www_App');
+
+      expect(stubs.dockerService.appDockerForceRemove.called).to.be.false;
     });
   });
 

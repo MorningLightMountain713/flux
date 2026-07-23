@@ -452,6 +452,12 @@ async function dockerActual(identifier) {
       // docker-network memberships, for the network-membership convergence.
       // null (the error paths below) means unknown - never converge on it.
       networks: Object.keys(info.NetworkSettings?.Networks ?? {}),
+      // The container's primary network BY NAME, and the docker id it recorded
+      // for it. The id is the part that matters: docker binds to the id, so a
+      // network rebuilt under the same name leaves this pointing at a network
+      // that no longer exists - invisible by name, and fatal to every start.
+      networkMode: info.HostConfig?.NetworkMode ?? null,
+      networkId: info.NetworkSettings?.Networks?.[info.HostConfig?.NetworkMode]?.NetworkID ?? null,
     };
   } catch (err) {
     let containers;
@@ -890,28 +896,57 @@ async function healDetachedNetwork(identifier, mainAppName) {
   }
   networkPrunedNoted.delete(identifier);
 
+  await rebuildOntoNetwork(identifier, {
+    action: 'networkDetached',
+    why: 'running but not attached to its docker network; clearing the stale endpoint',
+    blockedWhy: 'runs detached',
+    recordAnomaly: async () => {
+      if (networkDetachedNoted.has(identifier)) return;
+      await appTamperingDetectionService.recordEvent(mainAppName, 'network_detached', `Container ${identifier} running with no network endpoint on its own network`);
+      networkDetachedNoted.add(identifier);
+    },
+  });
+}
+
+/**
+ * Remove a container whose network binding cannot be repaired in place, and
+ * recreate it. Shared by the two ways that happens: a running container holding
+ * a stale libnetwork endpoint, and a container of any run state bound to a
+ * network id that no longer exists.
+ *
+ * The remove is destructive, so every precondition is checked BEFORE it: the
+ * volume must be verifiable, the heal ladder must permit an attempt, and no other
+ * operation may hold the container. Recreation runs with allowVolumeCreation
+ * false, so a transient volume-verify failure can never reformat the app's data.
+ *
+ * @param {string} identifier component identifier
+ * @param {{action: string, why: string, blockedWhy: string, recordAnomaly?: function}} desc
+ */
+async function rebuildOntoNetwork(identifier, {
+  action, why, blockedWhy, recordAnomaly = null,
+}) {
   // Never destroy what we cannot rebuild: every precondition of the recreate must
-  // hold BEFORE the remove, or the heal turns a half-alive container into a gone one.
+  // hold BEFORE the remove, or this turns a half-alive container into a gone one.
   const blocker = await networkHealBlocker(identifier);
   if (blocker) {
-    log.error(`appReconciler - ${identifier} runs detached but must NOT be recreated: ${blocker}; leaving the container in place (app NOT touched)`);
+    log.error(`appReconciler - ${identifier} ${blockedWhy} but must NOT be recreated: ${blocker}; leaving the container in place (app NOT touched)`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'networkHealBlocked', reason: blocker });
     scheduleRetry(identifier, NETWORK_PRUNED_RETRY_MS);
     return;
   }
 
   // Paced on its OWN durable ladder (0, 30s, 5m, 15m, 30m cap), not the crash one:
-  // a container that keeps coming back detached is retried forever but at a decaying
+  // a container that keeps coming back broken is retried forever but at a decaying
   // rate, without holding down (or being held down by) the restart backoff.
   const wait = await appsRuntimeState.networkHealWaitMs(identifier);
   if (wait > 0) {
-    log.warn(`appReconciler - ${identifier} still detached, backing off ${Math.round(wait / 1000)}s before the next heal attempt`);
+    log.warn(`appReconciler - ${identifier} still needs a network rebuild, backing off ${Math.round(wait / 1000)}s before the next attempt`);
     scheduleRetry(identifier, wait);
     return;
   }
 
   // The ONLY ownership sample was at reconcile entry, and everything above this
-  // point - the settle, two inspects, the network probe, the volume check - has
+  // point - the settle, the inspects, the network probe, the volume check - has
   // taken seconds. A redeploy/backup/uninstall may have taken a lease on the
   // container in the meantime, and force-removing it from under them is exactly
   // what the lease check exists to prevent. Re-check at actuation time (the same
@@ -922,8 +957,8 @@ async function healDetachedNetwork(identifier, mainAppName) {
     return;
   }
 
-  log.warn(`appReconciler - ${identifier} running but not attached to its docker network; clearing the stale endpoint`);
-  fluxEventBus.publish('reconciler:actuated', { identifier, action: 'networkDetached' });
+  log.warn(`appReconciler - ${identifier} ${why}`);
+  fluxEventBus.publish('reconciler:actuated', { identifier, action });
 
   try {
     // Record the anomaly (once per episode) and the durable "I removed this on
@@ -932,10 +967,7 @@ async function healDetachedNetwork(identifier, mainAppName) {
     // the absence was ours - without it, the vanished path records a false tampering
     // event and can uninstall the whole app on a failed recreate. The marker is only
     // set AFTER a successful record, so a failed write does not suppress the event.
-    if (!networkDetachedNoted.has(identifier)) {
-      await appTamperingDetectionService.recordEvent(mainAppName, 'network_detached', `Container ${identifier} running with no network endpoint on its own network`);
-      networkDetachedNoted.add(identifier);
-    }
+    if (recordAnomaly) await recordAnomaly();
     await appsRuntimeState.recordNetworkHealAttempt(identifier);
     await appsRuntimeState.setNetworkHealRemoval(identifier, true);
   } catch (err) {
@@ -962,7 +994,7 @@ async function healDetachedNetwork(identifier, mainAppName) {
     // stays set on purpose - the remove may have partially succeeded, and a stale
     // flag only keeps us on the recreate path (never the uninstall one).
     appInspector.startAppMonitoring(identifier, globalState.appsMonitored);
-    log.error(`appReconciler - failed to remove detached ${identifier}: ${err.message}; will retry`);
+    log.error(`appReconciler - failed to remove ${identifier}: ${err.message}; will retry`);
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
   }
@@ -1376,6 +1408,27 @@ async function reconcile(rawIdentifier) {
   // actuate anyway, and nothing at all in steady state - a running container
   // returns above this.
   await appDockerNetwork.ensureAppNetworkPresent(mainAppName);
+
+  // Having the network back is not the same as the container being able to reach
+  // it. Docker binds a container to the network's ID, so a network rebuilt under
+  // the same name is a different network to a container that predates it: its
+  // recorded id points at one that no longer exists, and every start fails
+  // "network not found" forever. Nothing about that is visible by name - the
+  // container still lists the network as its own - so the ids have to be compared.
+  // Only a recreate re-binds it.
+  if (actual.exists && actual.networkId && actual.networkMode) {
+    const liveNetworkId = await dockerService.dockerNetworkId(actual.networkMode);
+    // A null read is "cannot tell", never "mismatched": this ends in a destructive
+    // remove, so no evidence means leave the container alone.
+    if (liveNetworkId && liveNetworkId !== actual.networkId) {
+      await rebuildOntoNetwork(identifier, {
+        action: 'networkRebound',
+        why: `bound to a docker network that no longer exists (${actual.networkMode} was rebuilt under a new id); recreating it onto the live one`,
+        blockedWhy: 'is bound to a dead docker network',
+      });
+      return;
+    }
+  }
 
   if (!actual.exists) {
     // Durable, so it survives a FluxOS restart mid-heal: if WE removed this

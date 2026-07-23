@@ -1031,7 +1031,17 @@ function containerGoneError(idOrName) {
 // docker's own rejections from the same removal window: the container 404s (removal
 // just finished) or docker refuses the transition while its removal is in progress.
 function tagIfContainerGone(err) {
-  if (err.statusCode === 404 || /removal of container .* is already in progress|marked for removal|being removed/i.test(err.message || '')) {
+  const message = err.message || '';
+  // A start that could not set up networking also comes back 404, worded as if the
+  // CONTAINER were missing ("no such container - failed to set up container
+  // networking: network <id> not found"). The container is right where we left it;
+  // its network is what is gone. Reading that as "the world changed underneath us"
+  // defers forever on a paced retry: it never records the failure, never advances
+  // the backoff ladder and never fail-converges, so the app sits down silently.
+  if (/failed to set up container networking|network .* not found/i.test(message)) {
+    return err;
+  }
+  if (err.statusCode === 404 || /removal of container .* is already in progress|marked for removal|being removed/i.test(message)) {
     err.code = 'ENOCONTAINER';
   }
   return err;
@@ -1359,6 +1369,32 @@ async function dockerNetworkState(networkName) {
       return 'unknown';
     }
     return networks.some((n) => n.Name === networkName) ? 'exists' : 'absent';
+  }
+}
+
+/**
+ * The live docker id of a network, or null if it is not there.
+ *
+ * Docker binds a container to the network's ID, not its name: a network removed
+ * and recreated under the same name is a DIFFERENT network to every container
+ * that was on the old one, and their recorded id keeps pointing at the dead one
+ * forever. Comparing this against what a container recorded is the only way to
+ * see that, since the name still matches on both sides and the container still
+ * lists the network as one of its own.
+ *
+ * Null on any failure: a caller comparing ids must treat "cannot tell" as "no
+ * evidence of a mismatch" and leave the container alone, never destroy it.
+ *
+ * @param {string} networkName
+ * @returns {Promise<string|null>} docker network id, or null
+ */
+async function dockerNetworkId(networkName) {
+  if (!networkName) return null;
+  try {
+    const info = await docker.getNetwork(networkName).inspect();
+    return info?.Id ?? null;
+  } catch (err) {
+    return null;
   }
 }
 
@@ -2024,5 +2060,6 @@ module.exports = {
   classifyContainerNetworkAttachment,
   isContainerDetachedFromNetwork,
   dockerNetworkState,
+  dockerNetworkId,
   waitForDocker,
 };

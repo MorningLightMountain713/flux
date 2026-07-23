@@ -508,6 +508,19 @@ describe('dockerService tests', () => {
       expect(err.code).to.be.undefined;
     });
 
+    // Docker answers a networking failure with a 404 worded as if the CONTAINER
+    // were missing. It is not - it is right there, and its network is gone. Tagged
+    // ENOCONTAINER this defers on a paced retry forever: never recording the
+    // failure, never advancing the ladder, never fail-converging, so the app sits
+    // down silently. This exact shape wedged an app in production.
+    it('does not tag a start that failed to set up networking, however much its 404 reads like a missing container', async () => {
+      const netErr = new Error('(HTTP code 404) no such container - failed to set up container networking: network 0177b93c28af not found ');
+      netErr.statusCode = 404;
+      dockerStub.rejects(netErr);
+      const err = await dockerService.appDockerStart(appName).catch((e) => e);
+      expect(err.code, 'a missing network is a real start failure, not a vanished container').to.be.undefined;
+    });
+
     // The 'actuating' lease makes a start mutually exclusive with a concurrent
     // teardown's remove: held across the start (a die inside it is a real crash, NOT
     // swallowed) and released own-lease-only when it settles.
