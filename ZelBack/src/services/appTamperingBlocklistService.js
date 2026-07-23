@@ -1,7 +1,7 @@
 const config = require('config');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
-const dbHelper = require('./dbHelper');
+const appTamperingRepository = require('./appDatabase/appTamperingRepository');
 const nodeDosState = require('./nodeDosState');
 const generalService = require('./generalService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
@@ -17,8 +17,6 @@ const SLOT_WATCH_MS = 60 * 1000; // 60s
 const SYNC_POLL_MS = 60 * 1000; // 60s while waiting for daemon sync
 const TAMPER_SCORE_THRESHOLD = 10;
 const DOS_MESSAGE_PREFIX = 'Node flagged via tampering blocklist';
-
-const tamperingEventsCollection = config.database.local.collections.appTamperingEvents;
 
 let intervalHandle = null;
 let slotWatchHandle = null;
@@ -102,19 +100,13 @@ function isArcaneOs() {
  */
 async function computeTamperScore() {
   try {
-    const db = dbHelper.databaseConnection();
     // null, never 0: a score this node could not read is not a score of zero,
     // and returning zero would take the clear branch and release a node this
     // service had deliberately DOSed - the same distinction the blocklist
-    // fetch makes between could-not-ask and nothing-listed
-    if (!db) return null;
-    const database = db.db(config.database.local.database);
-    const pipeline = [
-      { $match: { schemaVersion: { $gte: 1 } } },
-      { $project: { _id: 0, severity: 1 } },
-    ];
-    const incidents = await dbHelper.aggregateInDatabase(database, tamperingEventsCollection, pipeline);
-    return incidents.reduce((score, incident) => score + (incident.severity ?? 0), 0);
+    // fetch makes between could-not-ask and nothing-listed. The repository
+    // answers null when it cannot reach the database, so it passes straight
+    // through - no `?? 0`.
+    return await appTamperingRepository.sumIncidentSeverities();
   } catch (error) {
     log.warn(`appTamperingBlocklist - failed to compute tamper score: ${error.message}`);
     return null;

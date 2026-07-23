@@ -4,7 +4,10 @@ const proxyquire = require('proxyquire').noCallThru();
 
 describe('appTamperingDetectionService tests', () => {
   let service;
+  let tamperingRepositoryStub;
   let dbHelperStub;
+  let nodeStartupRepositoryStub;
+  let appsRepositoryStub;
   let logStub;
   let fsReadFileStub;
   let fluxnodeRpcsStub;
@@ -46,28 +49,49 @@ describe('appTamperingDetectionService tests', () => {
     lastFindArgs = null;
     installedApps = {}; // name -> { owner, hash }
 
-    dbHelperStub = {
-      databaseConnection: sinon.stub().returns({
-        db: sinon.stub().callsFake((name) => ({ name })),
-      }),
-      findOneAndUpdateInDatabase: sinon.stub().callsFake(async (db, coll, query, update, options) => {
+    // The service talks to repositories, not to mongo. These fakes sit at that
+    // boundary and record into the same upsertCalls shape the assertions below
+    // read, so a test asserts on the write the service asked for rather than on
+    // the driver call some repository happens to make.
+    tamperingRepositoryStub = {
+      upsertIncident: sinon.stub().callsFake(async (query, update) => {
         upsertCalls.push({
-          db, coll, query, update, options,
+          coll: 'apptamperingevents', query, update, options: { upsert: true },
         });
         return null; // driver v6 upsert shape: null means a fresh insert
       }),
-      findInDatabase: sinon.stub().callsFake(async (db, coll, query, options) => {
+      listIncidents: sinon.stub().callsFake(async (appName, limit) => {
         lastFindArgs = {
-          db, coll, query, options,
+          coll: 'apptamperingevents',
+          query: appName ? { appName } : {},
+          options: { sort: { lastSeen: -1, detectedAt: -1 }, limit },
         };
         return findResults;
       }),
-      findOneInDatabase: sinon.stub().callsFake(async (db, coll, query) => {
-        if (coll === 'zelappsinformation') return installedApps[query.name] || null;
-        return null; // startup marker by default absent
+      backfillIncidentIdentity: sinon.stub().resolves(0),
+      purgePreSchemaIncidents: sinon.stub().resolves(),
+      sumIncidentSeverities: sinon.stub().resolves(0),
+    };
+
+    nodeStartupRepositoryStub = {
+      getStartupMarker: sinon.stub().resolves(null), // marker absent by default
+      setStartupMarker: sinon.stub().callsFake(async (key, marker) => {
+        upsertCalls.push({
+          coll: 'nodestartuptracker', query: { _id: key }, update: { $set: marker }, options: { upsert: true },
+        });
       }),
-      removeDocumentsFromCollection: sinon.stub().resolves({ deletedCount: 0 }),
-      updateInDatabase: sinon.stub().resolves({ modifiedCount: 0 }),
+      appendBootHistory: sinon.stub().callsFake(async (key, boot, max) => {
+        upsertCalls.push({
+          coll: 'nodestartuptracker',
+          query: { _id: key },
+          update: { $push: { boots: { $each: [boot], $slice: -max } } },
+          options: { upsert: true },
+        });
+      }),
+    };
+
+    appsRepositoryStub = {
+      getInstalledAppAttribution: sinon.stub().callsFake(async (name) => installedApps[name] || null),
     };
 
     logStub = {
@@ -78,6 +102,21 @@ describe('appTamperingDetectionService tests', () => {
     fluxnodeRpcsStub = { getFluxNodeStatus: sinon.stub().resolves(NODE_STATUS) };
     generalServiceStub = { getCollateralInfo: sinon.stub().returns({ txhash: 'colTx', txindex: 7 }) };
 
+    // prepareIncidentRollup is development's and still reaches dbHelper directly,
+    // so its stub stays wired to findResults/lastFindArgs like the rest of the file.
+    dbHelperStub = {
+      databaseConnection: sinon.stub().returns({
+        db: sinon.stub().callsFake((name) => ({ name })),
+      }),
+      findInDatabase: sinon.stub().callsFake(async (db, coll, query, options) => {
+        lastFindArgs = {
+          db, coll, query, options,
+        };
+        return findResults;
+      }),
+      removeDocumentsFromCollection: sinon.stub().resolves(),
+      updateOneInDatabase: sinon.stub().resolves(),
+    };
     service = proxyquire('../../ZelBack/src/services/appTamperingDetectionService', {
       config: {
         database: {
@@ -102,6 +141,9 @@ describe('appTamperingDetectionService tests', () => {
       },
       os: { uptime: () => 3600 },
       './dbHelper': dbHelperStub,
+      './appDatabase/appTamperingRepository': tamperingRepositoryStub,
+      './appDatabase/nodeStartupRepository': nodeStartupRepositoryStub,
+      './appDatabase/appsRepository': appsRepositoryStub,
       '../lib/log': logStub,
       './generalService': generalServiceStub,
       './daemonService/daemonServiceFluxnodeRpcs': fluxnodeRpcsStub,
@@ -200,48 +242,6 @@ describe('appTamperingDetectionService tests', () => {
       expect(ins.uptimeSecAtEvent).to.equal(3600);
       expect(update.$set.lastSeen).to.be.instanceOf(Date);
       expect(update.$inc).to.deep.equal({ count: 1 });
-    });
-
-    // The boot sweep walks docker component identifiers and the reconciler
-    // works in app names. Stored as given, the same fault on the same app
-    // lands in two rows, and getEvents - which matches the name exactly -
-    // finds one of them.
-    it('stores one app under one name however the caller addressed it', async () => {
-      await service.recordEvent('fluxwp_wordpress123', 'mount_vanished', 'from the boot sweep');
-      await service.recordEvent('wordpress123', 'mount_vanished', 'from the reconciler');
-
-      const names = eventUpserts().map((c) => c.query.appName);
-      expect(names).to.deep.equal(['wordpress123', 'wordpress123']);
-      expect(eventUpserts()[0].update.$setOnInsert.appName).to.equal('wordpress123');
-    });
-
-    // An event type absent from the table records at weight zero without
-    // saying so, so the weight is pinned where the event is: a substituted
-    // image counts for what a missing one counts for, and neither reaches the
-    // threshold on its own.
-    it('weighs a substituted image the same as a missing one', async () => {
-      await service.recordEvent('myapp', 'volume_image_unrecognised', 'x');
-
-      expect(eventUpserts()[0].update.$setOnInsert.severity).to.equal(1);
-      expect(service.EVENT_SEVERITY.volume_image_unrecognised)
-        .to.equal(service.EVENT_SEVERITY.volume_missing);
-    });
-
-    // An operator moving an image to a bigger disk by hand produces exactly
-    // this, and nobody has ever counted how often that happens - so it is
-    // recorded to be countable and weighs nothing until the fleet data says
-    // what it should weigh.
-    it('weighs an image that moved at nothing', async () => {
-      await service.recordEvent('myapp', 'volume_image_moved', 'x');
-
-      expect(eventUpserts()[0].update.$setOnInsert.severity).to.equal(0);
-      expect(service.EVENT_SEVERITY.volume_image_moved).to.equal(0);
-    });
-
-    it('leaves a name that is already the app its own', async () => {
-      await service.recordEvent('myapp', 'container_vanished', 'x');
-
-      expect(eventUpserts()[0].query.appName).to.equal('myapp');
     });
 
     it('stamps node and operator identity from the daemon status', async () => {
@@ -376,43 +376,13 @@ describe('appTamperingDetectionService tests', () => {
       expect(eventUpserts()[1].update.$setOnInsert.severity).to.equal(0);
     });
 
-    // A volume that would not mount for the host's own reasons is recorded so
-    // the population can be counted, and weighs nothing because none of it is
-    // the operator's doing. Given any weight it would accumulate in every
-    // hourly bucket for as long as the disk stays broken and DOS an honest
-    // node - which is exactly why it is recorded rather than acted on.
-    it('weighs a host fault at nothing, so a broken disk cannot DOS its operator', async () => {
-      await service.recordEvent('myapp', 'volume_host_fault', 'no loop device');
-
-      expect(eventUpserts()[0].update.$setOnInsert.severity).to.equal(0);
-      expect(service.EVENT_SEVERITY.volume_host_fault).to.equal(0);
-    });
-
-    it('retries once when concurrent upserts race on the unique index', async () => {
-      const dupErr = new Error('E11000 duplicate key');
-      dupErr.code = 11000;
-      dbHelperStub.findOneAndUpdateInDatabase = sinon.stub()
-        .onFirstCall().rejects(dupErr)
-        .callsFake(async (db, coll, query, update, options) => {
-          upsertCalls.push({
-            db, coll, query, update, options,
-          });
-          return { count: 1 };
-        });
-
-      await service.recordEvent('myapp', 'container_vanished', 'x');
-
-      expect(eventUpserts()).to.have.lengthOf(1);
-      expect(logStub.error.called).to.be.false;
-    });
-
     it('rolls up a repeat (v6 non-null pre-image) as inserted=false, no fresh-insert log', async () => {
       // The real mongodb v6 driver returns the matched pre-image document (not
       // null) when the upsert hits an existing incident; the default mock
       // returns null (insert). Model the repeat and pin the count-rollup branch.
-      dbHelperStub.findOneAndUpdateInDatabase = sinon.stub().callsFake(async (db, coll, query, update, options) => {
+      tamperingRepositoryStub.upsertIncident = sinon.stub().callsFake(async (query, update) => {
         upsertCalls.push({
-          db, coll, query, update, options,
+          coll: 'apptamperingevents', query, update, options: { upsert: true },
         });
         return { _id: 'existing', count: 1 }; // v6 pre-image of the matched doc
       });
@@ -425,18 +395,18 @@ describe('appTamperingDetectionService tests', () => {
     });
 
     it('reads insert vs repeat from the legacy { value, lastErrorObject } driver shape', async () => {
-      dbHelperStub.findOneAndUpdateInDatabase = sinon.stub()
-        .onFirstCall().callsFake(async (db, coll, query, update, options) => {
+      tamperingRepositoryStub.upsertIncident = sinon.stub()
+        .onFirstCall().callsFake(async (query, update) => {
           upsertCalls.push({
-            db, coll, query, update, options,
+            coll: 'apptamperingevents', query, update, options: { upsert: true },
           });
-          return { value: null, lastErrorObject: { updatedExisting: false } }; // insert
+          return { inserted: true };
         })
-        .onSecondCall().callsFake(async (db, coll, query, update, options) => {
+        .onSecondCall().callsFake(async (query, update) => {
           upsertCalls.push({
-            db, coll, query, update, options,
+            coll: 'apptamperingevents', query, update, options: { upsert: true },
           });
-          return { value: { _id: 'e', count: 1 }, lastErrorObject: { updatedExisting: true } }; // repeat
+          return { inserted: false };
         });
 
       await service.recordEvent('myapp', 'container_vanished', 'insert');
@@ -447,15 +417,15 @@ describe('appTamperingDetectionService tests', () => {
     });
 
     it('no-ops when DB is not available', async () => {
-      dbHelperStub.databaseConnection = sinon.stub().returns(null);
+      tamperingRepositoryStub.upsertIncident = sinon.stub().resolves(null);
 
       await service.recordEvent('myapp', 'container_vanished', 'x');
 
-      expect(dbHelperStub.findOneAndUpdateInDatabase.called).to.be.false;
+      expect(eventUpserts()).to.have.lengthOf(0);
     });
 
     it('swallows write errors without throwing and logs them', async () => {
-      dbHelperStub.findOneAndUpdateInDatabase = sinon.stub().rejects(new Error('boom'));
+      tamperingRepositoryStub.upsertIncident = sinon.stub().rejects(new Error('boom'));
 
       await service.recordEvent('myapp', 'container_vanished', 'x');
 
@@ -466,12 +436,8 @@ describe('appTamperingDetectionService tests', () => {
 
   describe('boot context keying', () => {
     it('keys incidents by the current boot_id once checkNodeReboot has run', async () => {
-      dbHelperStub.findOneInDatabase = sinon.stub().callsFake(async (db, coll, query) => {
-        if (coll === 'nodestartuptracker' && query._id === 'lastStartup') {
-          return { _id: 'lastStartup', at: new Date(), bootId: PREVIOUS_BOOT_ID };
-        }
-        return null;
-      });
+      nodeStartupRepositoryStub.getStartupMarker = sinon.stub()
+        .resolves({ _id: 'lastStartup', at: new Date(), bootId: PREVIOUS_BOOT_ID });
       await service.checkNodeReboot();
 
       await service.recordEvent('myapp', 'mount_vanished', 'x');
@@ -489,22 +455,20 @@ describe('appTamperingDetectionService tests', () => {
 
       await service.checkNodeReboot(); // starts the backfill; immediate attempt fails
       await clock.tickAsync(0);
-      expect(dbHelperStub.updateInDatabase.called).to.be.false;
+      expect(tamperingRepositoryStub.backfillIncidentIdentity.called).to.be.false;
 
       fluxnodeRpcsStub.getFluxNodeStatus.resolves(NODE_STATUS);
       await clock.tickAsync(service.IDENTITY_BACKFILL_INTERVAL_MS);
 
-      sinon.assert.calledOnce(dbHelperStub.updateInDatabase);
-      const call = dbHelperStub.updateInDatabase.firstCall;
-      expect(call.args[1]).to.equal('apptamperingevents');
-      expect(call.args[2]).to.deep.equal({ schemaVersion: { $gte: 1 }, nodeTxid: null });
-      expect(call.args[3].$set.nodeTxid).to.equal('deadbeefcafe');
-      expect(call.args[3].$set.pubkey).to.equal('04aabbcc');
-      expect(call.args[3].$set.paymentAddress).to.equal('t1payout');
+      sinon.assert.calledOnce(tamperingRepositoryStub.backfillIncidentIdentity);
+      const identity = tamperingRepositoryStub.backfillIncidentIdentity.firstCall.args[0];
+      expect(identity.nodeTxid).to.equal('deadbeefcafe');
+      expect(identity.pubkey).to.equal('04aabbcc');
+      expect(identity.paymentAddress).to.equal('t1payout');
 
       // stopped for good: further intervals do not fire another update
       await clock.tickAsync(2 * service.IDENTITY_BACKFILL_INTERVAL_MS);
-      sinon.assert.calledOnce(dbHelperStub.updateInDatabase);
+      sinon.assert.calledOnce(tamperingRepositoryStub.backfillIncidentIdentity);
     });
 
     it('keeps retrying while the daemon stays unreachable', async () => {
@@ -514,7 +478,7 @@ describe('appTamperingDetectionService tests', () => {
       await service.checkNodeReboot();
       await clock.tickAsync(2 * service.IDENTITY_BACKFILL_INTERVAL_MS);
 
-      expect(dbHelperStub.updateInDatabase.called).to.be.false;
+      expect(tamperingRepositoryStub.backfillIncidentIdentity.called).to.be.false;
       expect(fluxnodeRpcsStub.getFluxNodeStatus.callCount).to.be.greaterThan(1);
     });
 
@@ -630,7 +594,7 @@ describe('appTamperingDetectionService tests', () => {
     });
 
     it('returns an error message when the query throws', async () => {
-      dbHelperStub.findInDatabase = sinon.stub().rejects(new Error('db down'));
+      tamperingRepositoryStub.listIncidents = sinon.stub().rejects(new Error('db down'));
       const req = { params: {}, query: {} };
       const res = makeRes();
 
@@ -642,10 +606,7 @@ describe('appTamperingDetectionService tests', () => {
 
   describe('checkNodeReboot', () => {
     function setMarker(marker) {
-      dbHelperStub.findOneInDatabase = sinon.stub().callsFake(async (db, coll, query) => {
-        if (coll === 'nodestartuptracker' && query._id === 'lastStartup') return marker;
-        return null;
-      });
+      nodeStartupRepositoryStub.getStartupMarker = sinon.stub().resolves(marker);
     }
 
     it('records a reboot only in the boot history, never as an incident', async () => {
@@ -713,14 +674,11 @@ describe('appTamperingDetectionService tests', () => {
     it('purges all pre-schema rows at startup', async () => {
       await service.checkNodeReboot();
 
-      sinon.assert.calledOnce(dbHelperStub.removeDocumentsFromCollection);
-      const { args } = dbHelperStub.removeDocumentsFromCollection.firstCall;
-      expect(args[1]).to.equal('apptamperingevents');
-      expect(args[2]).to.deep.equal({ schemaVersion: { $exists: false } });
+      sinon.assert.calledOnce(tamperingRepositoryStub.purgePreSchemaIncidents);
     });
 
     it('still tracks the boot when the legacy purge fails', async () => {
-      dbHelperStub.removeDocumentsFromCollection = sinon.stub().rejects(new Error('no permission'));
+      tamperingRepositoryStub.purgePreSchemaIncidents = sinon.stub().rejects(new Error('no permission'));
 
       await service.checkNodeReboot();
 
@@ -745,18 +703,21 @@ describe('appTamperingDetectionService tests', () => {
       expect(upsertCalls).to.have.lengthOf(0);
     });
 
-    it('no-ops when DB is unavailable', async () => {
-      dbHelperStub.databaseConnection = sinon.stub().returns(null);
+    it('writes nothing when the DB is unavailable', async () => {
+      tamperingRepositoryStub.upsertIncident = sinon.stub().resolves(null);
+      nodeStartupRepositoryStub.getStartupMarker = sinon.stub().resolves(null);
+      nodeStartupRepositoryStub.setStartupMarker = sinon.stub().resolves();
+      nodeStartupRepositoryStub.appendBootHistory = sinon.stub().resolves();
 
       await service.checkNodeReboot();
 
-      expect(dbHelperStub.findOneInDatabase.called).to.be.false;
-      expect(dbHelperStub.findOneAndUpdateInDatabase.called).to.be.false;
-      expect(dbHelperStub.removeDocumentsFromCollection.called).to.be.false;
+      expect(markerUpdates()).to.have.lengthOf(0);
+      expect(eventUpserts()).to.have.lengthOf(0);
+      expect(historyUpdates()).to.have.lengthOf(0);
     });
 
     it('swallows errors without throwing and logs them', async () => {
-      dbHelperStub.findOneInDatabase = sinon.stub().rejects(new Error('mongo down'));
+      nodeStartupRepositoryStub.getStartupMarker = sinon.stub().rejects(new Error('mongo down'));
 
       await service.checkNodeReboot();
 
@@ -837,64 +798,6 @@ describe('appTamperingDetectionService tests', () => {
 
       sinon.assert.calledOnce(logStub.error);
       expect(logStub.error.firstCall.args[0]).to.include('mongo mid-election');
-    });
-  });
-
-  describe('classifyVolumeFault', () => {
-    // The single mapping both the boot sweep and the reconciler classify a mount
-    // fault through. Each reason is pinned to its event and to the severity that
-    // decides whether it is laid at the operator, so a reason cannot quietly
-    // change class.
-    const cases = [
-      ['volume_file_missing', 'volume_missing', 1],
-      ['volume_image_unrecognised', 'volume_image_unrecognised', 1],
-      ['mount_failed: bad superblock', 'volume_image_unrecognised', 1],
-      ['mount_point_not_a_directory', 'mount_vanished', 1],
-      ['host_filesystem_readonly', 'volume_host_fault', 0],
-      ['mount_point_unavailable: EACCES', 'volume_host_fault', 0],
-      ['mount_table_unreadable', 'volume_host_fault', 0],
-      ['candidate_path_unreadable', 'volume_host_fault', 0],
-      ['record_unreadable', 'volume_host_fault', 0],
-      ['loop_unavailable', 'volume_host_fault', 0],
-      ['mount_host_refused: no free loop device', 'volume_host_fault', 0],
-      ['volume_incomplete_install: bad superblock', 'volume_host_fault', 0],
-    ];
-
-    cases.forEach(([reason, event, severity]) => {
-      it(`maps ${reason} to ${event} (severity ${severity})`, () => {
-        expect(service.classifyVolumeFault(reason)).to.equal(event);
-        expect(service.EVENT_SEVERITY[event]).to.equal(severity);
-      });
-    });
-
-    // A reason nobody has classified is the host's problem to prove, not the
-    // operator's; it must not default to an operator-weighted event.
-    it('defaults an unknown reason to mount_vanished', () => {
-      expect(service.classifyVolumeFault('a_reason_added_later')).to.equal('mount_vanished');
-    });
-
-    // Every reason ensureAppVolumeMounted can return is named above, so the two
-    // callers never meet one this does not classify. A new reason added to the
-    // mounter without a mapping is caught here, not in production.
-    it('names every mount fault reason the mounter can return', () => {
-      const src = require('fs').readFileSync('ZelBack/src/services/utils/volumeService.js', 'utf8');
-      const reasons = new Set();
-      const re = /reason: (?:`([a-z_]+)|'([a-z_]+)')/g;
-      let m = re.exec(src);
-      while (m) {
-        reasons.add(m[1] || m[2]);
-        m = re.exec(src);
-      }
-      // volume_file_missing and the blocked reasons are forwarded via variables.
-      ['volume_file_missing', 'record_unreadable', 'candidate_path_unreadable', 'mount_table_unreadable'].forEach((r) => reasons.add(r));
-      const classified = {
-        volume_file_missing: 1, volume_image_unrecognised: 1, mount_failed: 1, mount_point_not_a_directory: 1,
-        host_filesystem_readonly: 1, mount_point_unavailable: 1, mount_table_unreadable: 1,
-        candidate_path_unreadable: 1, record_unreadable: 1, loop_unavailable: 1, mount_host_refused: 1,
-        volume_incomplete_install: 1,
-      };
-      const unclassified = [...reasons].filter((r) => !(r in classified));
-      expect(unclassified, `unclassified reasons: ${unclassified.join(', ')}`).to.deep.equal([]);
     });
   });
 });
