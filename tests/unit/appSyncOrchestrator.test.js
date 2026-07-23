@@ -27,7 +27,7 @@ describe('AppSyncOrchestrator', () => {
   let checkAndNotifyStub;
   let startBroadcastingStub;
   let resetHashSyncForUpgradeStub;
-  let dbHelperStub;
+  let nodeStartupRepositoryStub;
   let findOneAndUpdateStub;
   let getFluxNodePublicKeyStub;
   let getFluxNodePrivateKeyStub;
@@ -147,10 +147,14 @@ describe('AppSyncOrchestrator', () => {
     startBroadcastingStub = sinon.stub();
     resetHashSyncForUpgradeStub = sinon.stub().resolves(0);
     findOneAndUpdateStub = sinon.stub().resolves();
-    dbHelperStub = {
-      databaseConnection: sinon.stub().returns({ db: sinon.stub().returns({}) }),
-      findOneInDatabase: sinon.stub().resolves(null),
-      findOneAndUpdateInDatabase: findOneAndUpdateStub,
+    // The orchestrator talks to the startup repository, not to mongo.
+    nodeStartupRepositoryStub = {
+      getHashSyncVersionMarker: sinon.stub().resolves(null),
+      setHashSyncVersionMarker: sinon.stub().resolves(),
+      getHeartbeat: sinon.stub().resolves(null),
+      writeHeartbeat: sinon.stub().resolves(),
+      setShutdownReason: sinon.stub().resolves(),
+      clearShutdownReason: sinon.stub().resolves(),
     };
     getFluxNodePublicKeyStub = sinon.stub().resolves('04testpubkey1234567890');
     getFluxNodePrivateKeyStub = sinon.stub().resolves('L1testprivkey');
@@ -170,7 +174,7 @@ describe('AppSyncOrchestrator', () => {
     proxyquireMap = {
       'fs': { promises: { readFile: sinon.stub().resolves('test-boot-id-12345\n') } },
       '../../lib/log': logStub,
-      '../dbHelper': dbHelperStub,
+      '../appDatabase/nodeStartupRepository': nodeStartupRepositoryStub,
       './appHashSyncService': { syncMissingHashes: syncMissingHashesStub, getMissingHashes: getMissingHashesStub, resetHashSyncForUpgrade: resetHashSyncForUpgradeStub },
       './contentManifestSyncService': { reconcile: reconcileStub, depositIndex: sinon.stub(), isPeerInActiveRound: sinon.stub().returns(false) },
       './ingressAttestationSyncService': { reconcile: sinon.stub().resolves({ peers: 0, indexesReceived: 0, fetched: 0 }), depositDigests: sinon.stub(), isPeerInActiveRound: sinon.stub().returns(false) },
@@ -2750,7 +2754,7 @@ describe('AppSyncOrchestrator', () => {
 
   describe('version upgrade reset', () => {
     it('should call resetHashSyncForUpgrade with block height on version change', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
+      nodeStartupRepositoryStub.getHashSyncVersionMarker.resolves(null);
 
       const orchestrator = makeOrchestrator({ fluxVersion: '8.12.0' });
       orchestrator.start(defaultBootContext);
@@ -2764,7 +2768,7 @@ describe('AppSyncOrchestrator', () => {
     });
 
     it('should skip reset when version matches marker', async () => {
-      dbHelperStub.findOneInDatabase.resolves({ _id: 'hashSyncVersion', version: '8.12.0' });
+      nodeStartupRepositoryStub.getHashSyncVersionMarker.resolves({ _id: 'hashSyncVersion', version: '8.12.0' });
 
       const orchestrator = makeOrchestrator({ fluxVersion: '8.12.0' });
       orchestrator.start(defaultBootContext);
@@ -2776,7 +2780,7 @@ describe('AppSyncOrchestrator', () => {
     });
 
     it('should write version marker after hash sync completes', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
+      nodeStartupRepositoryStub.getHashSyncVersionMarker.resolves(null);
 
       const orchestrator = makeOrchestrator({ fluxVersion: '8.12.0' });
       orchestrator.start(defaultBootContext);
@@ -2784,15 +2788,11 @@ describe('AppSyncOrchestrator', () => {
       blockEmitter.emit('blocksProcessed', 2555000);
       await clock.tickAsync(0);
 
-      const versionCall = findOneAndUpdateStub.getCalls().find(
-        (c) => c.args[2]?._id === 'hashSyncVersion',
-      );
-      expect(versionCall).to.not.be.undefined;
-      expect(versionCall.args[3]).to.deep.equal({ $set: { version: '8.12.0' } });
+      sinon.assert.calledWith(nodeStartupRepositoryStub.setHashSyncVersionMarker, '8.12.0');
     });
 
     it('writes no version marker while the reset fails, and runs the reset again on the next hash retry', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
+      nodeStartupRepositoryStub.getHashSyncVersionMarker.resolves(null);
       resetHashSyncForUpgradeStub.onFirstCall().rejects(new Error('db down'));
       const versionWrites = () => findOneAndUpdateStub.getCalls().filter((c) => c.args[2]?._id === 'hashSyncVersion');
 
@@ -2849,7 +2849,7 @@ describe('AppSyncOrchestrator', () => {
 
   describe('readBootContext', () => {
     it('should detect machine reboot when boot_id differs', async () => {
-      dbHelperStub.findOneInDatabase.resolves({
+      nodeStartupRepositoryStub.getHeartbeat.resolves({
         lastAlive: Date.now() - 60000,
         machineBootId: 'old-boot-id',
         shutdownReason: 'sigterm',
@@ -2864,7 +2864,7 @@ describe('AppSyncOrchestrator', () => {
     });
 
     it('should detect FluxOS-only restart when boot_id matches', async () => {
-      dbHelperStub.findOneInDatabase.resolves({
+      nodeStartupRepositoryStub.getHeartbeat.resolves({
         lastAlive: Date.now() - 5000,
         machineBootId: 'test-boot-id-12345',
         shutdownReason: 'sigterm',
@@ -2877,7 +2877,7 @@ describe('AppSyncOrchestrator', () => {
     });
 
     it('should detect first boot when no heartbeat exists', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
+      nodeStartupRepositoryStub.getHeartbeat.resolves(null);
 
       const ctx = await AppSyncOrchestrator.readBootContext();
 
@@ -2887,7 +2887,7 @@ describe('AppSyncOrchestrator', () => {
     });
 
     it('should detect unclean shutdown when shutdownReason is absent', async () => {
-      dbHelperStub.findOneInDatabase.resolves({
+      nodeStartupRepositoryStub.getHeartbeat.resolves({
         lastAlive: Date.now() - 120000,
         machineBootId: 'old-boot-id',
       });
@@ -2900,7 +2900,7 @@ describe('AppSyncOrchestrator', () => {
 
     it('should compute downtime from lastAlive', async () => {
       const fiveMinAgo = Date.now() - 300000;
-      dbHelperStub.findOneInDatabase.resolves({
+      nodeStartupRepositoryStub.getHeartbeat.resolves({
         lastAlive: fiveMinAgo,
         machineBootId: 'old-boot-id',
       });
@@ -2911,7 +2911,7 @@ describe('AppSyncOrchestrator', () => {
     });
 
     it('reports an unread context as unreadable, neither a first boot nor a long absence', async () => {
-      dbHelperStub.findOneInDatabase.rejects(new Error('DB down'));
+      nodeStartupRepositoryStub.getHeartbeat.rejects(new Error('DB down'));
 
       const ctx = await AppSyncOrchestrator.readBootContext();
 
@@ -2926,15 +2926,11 @@ describe('AppSyncOrchestrator', () => {
     it('should write shutdown reason to heartbeat doc', async () => {
       await AppSyncOrchestrator.writeShutdownReason('sigterm');
 
-      const call = findOneAndUpdateStub.getCalls().find(
-        (c) => c.args[2]?._id === 'heartbeat',
-      );
-      expect(call).to.not.be.undefined;
-      expect(call.args[3]).to.deep.equal({ $set: { shutdownReason: 'sigterm' } });
+      sinon.assert.calledWith(nodeStartupRepositoryStub.setShutdownReason, 'sigterm');
     });
 
     it('should not throw on error', async () => {
-      findOneAndUpdateStub.rejects(new Error('DB down'));
+      nodeStartupRepositoryStub.setShutdownReason.rejects(new Error('DB down'));
       await AppSyncOrchestrator.writeShutdownReason('sigterm');
       expect(logStub.error.calledWithMatch(/Failed to write shutdown reason/)).to.be.true;
     });
@@ -2945,11 +2941,10 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator();
       await orchestrator.start(defaultBootContext);
 
-      const heartbeatCall = findOneAndUpdateStub.getCalls().find(
-        (c) => c.args[2]?._id === 'heartbeat' && c.args[3]?.$set && 'lastAlive' in c.args[3].$set,
-      );
-      expect(heartbeatCall).to.not.be.undefined;
-      expect(heartbeatCall.args[3].$set.machineBootId).to.equal('test-boot-id-12345');
+      sinon.assert.called(nodeStartupRepositoryStub.writeHeartbeat);
+      const beat = nodeStartupRepositoryStub.writeHeartbeat.firstCall.args[0];
+      expect(beat.lastAlive).to.be.a('number');
+      expect(beat.machineBootId).to.equal('test-boot-id-12345');
       await orchestrator.stop();
     });
 
