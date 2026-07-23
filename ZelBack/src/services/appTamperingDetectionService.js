@@ -2,11 +2,16 @@ const config = require('config');
 const os = require('os');
 const fs = require('fs').promises;
 const log = require('../lib/log');
-const dbHelper = require('./dbHelper');
 const messageHelper = require('./messageHelper');
 const generalService = require('./generalService');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
-const { localAppsInformation } = require('./utils/appConstants');
+// prepareIncidentRollup is development's and still reaches the collection directly;
+// the repository has no equivalent for it. Everything else here goes through one.
+const dbHelper = require('./dbHelper');
+const tamperingEventsCollection = config.database.local.collections.appTamperingEvents;
+const appTamperingRepository = require('./appDatabase/appTamperingRepository');
+const nodeStartupRepository = require('./appDatabase/nodeStartupRepository');
+const appsRepository = require('./appDatabase/appsRepository');
 
 // All tamper-feature behaviour (incident rollup, boot identity, severities)
 // deliberately lives inside this service rather than at the emitting call
@@ -16,9 +21,6 @@ const { localAppsInformation } = require('./utils/appConstants');
 // keeps the feature rebase-safe and guarantees every emitter gets the same
 // semantics without call-site edits. Call sites still pass plain
 // (appName, eventType, details); everything else is derived here.
-
-const tamperingEventsCollection = config.database.local.collections.appTamperingEvents;
-const nodeStartupTrackerCollection = config.database.local.collections.nodeStartupTracker;
 
 const STARTUP_MARKER_KEY = 'lastStartup';
 const BOOT_HISTORY_KEY = 'bootHistory';
@@ -217,24 +219,7 @@ function startIdentityBackfill() {
     try {
       const identity = await getNodeIdentity();
       if (!identity || !identity.nodeTxid) return; // daemon not ready — next tick retries
-      const db = dbHelper.databaseConnection();
-      if (!db) return;
-      const database = db.db(config.database.local.database);
-      const result = await dbHelper.updateInDatabase(
-        database,
-        tamperingEventsCollection,
-        { schemaVersion: { $gte: 1 }, nodeTxid: null },
-        {
-          $set: {
-            nodeTxid: identity.nodeTxid,
-            nodeOutidx: identity.nodeOutidx,
-            nodeIp: identity.nodeIp,
-            pubkey: identity.pubkey,
-            paymentAddress: identity.paymentAddress,
-          },
-        },
-      );
-      const updated = result?.modifiedCount ?? 0;
+      const updated = await appTamperingRepository.backfillIncidentIdentity(identity);
       if (updated > 0) log.info(`appTamperingDetection - backfilled identity onto ${updated} incident(s)`);
       clearInterval(identityBackfillTimer);
       identityBackfillTimer = null;
@@ -268,8 +253,7 @@ function deriveMainAppName(appName) {
  * Owner/spec-hash attribution for an app from the local installed-apps
  * database, cached per emitted name. Tries the name as passed first (a real
  * app name may itself start with 'flux'), then the derived main app name.
- * Null fields when the app cannot be found; rejects when the installed apps
- * cannot be read.
+ * Best-effort: returns null fields when the app cannot be found.
  * @param {string} appName - Name exactly as passed by the emitter
  * @returns {Promise<object|null>}
  */
@@ -277,132 +261,25 @@ async function getAppAttribution(appName) {
   if (!appName) return null;
   const cached = appAttributionCache.get(appName);
   if (cached && Date.now() - cached.cachedAt < ATTRIBUTION_TTL_MS) return cached;
-  const db = dbHelper.databaseConnection();
-  if (!db) throw new Error('no database connection');
-  const appsDatabase = db.db(config.database.appslocal.database);
-  const projection = { projection: { _id: 0, owner: 1, hash: 1 } };
-  let app = await dbHelper.findOneInDatabase(
-    appsDatabase, localAppsInformation, { name: appName }, projection,
-  );
-  if (!app) {
-    const mainName = deriveMainAppName(appName);
-    if (mainName !== appName) {
-      app = await dbHelper.findOneInDatabase(
-        appsDatabase, localAppsInformation, { name: mainName }, projection,
-      );
-    }
-  }
-  const attribution = {
-    ownerZelid: app?.owner ?? null,
-    appHash: app?.hash ?? null,
-    cachedAt: Date.now(),
-  };
-  appAttributionCache.set(appName, attribution);
-  return attribution;
-}
-
-// The delays before incidents that could not be written are written again, by
-// attempt; the last repeats until they are. At most PENDING_INCIDENTS_MAX wait,
-// the oldest going first. A retry is idempotent for the score: it sums one
-// severity per incident document, whatever its count.
-const INCIDENT_RETRY_MS = [30 * 1000, 60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000];
-const PENDING_INCIDENTS_MAX = 500;
-const pendingIncidents = [];
-let incidentRetryTimer = null;
-
-/**
- * Writes one observation onto its incident rollup. Rejects when the database
- * does not answer.
- * @param {object} observation From recordEvent.
- * @returns {Promise<void>}
- */
-async function writeIncident(observation) {
-  const {
-    appName, eventType, details, at, bootId, uptimeSec,
-  } = observation;
-  const db = dbHelper.databaseConnection();
-  if (!db) throw new Error('no database connection');
-  const database = db.db(config.database.local.database);
-  const incidentKey = `${bootId ?? 'unknown'}:${Math.floor(at.getTime() / INCIDENT_BUCKET_MS)}`;
-  const [identity, attribution] = await Promise.all([
-    getNodeIdentity(),
-    getAppAttribution(appName),
-  ]);
-  const query = { appName, eventType, incidentKey };
-  const update = {
-    $setOnInsert: {
-      schemaVersion: 1,
-      appName,
-      eventType,
-      incidentKey,
-      severity: EVENT_SEVERITY[eventType] ?? 0,
-      bootId,
-      uptimeSecAtEvent: uptimeSec,
-      firstSeen: at,
-      detailsSample: details,
-      nodeTxid: identity?.nodeTxid ?? null,
-      nodeOutidx: identity?.nodeOutidx ?? null,
-      nodeIp: identity?.nodeIp ?? null,
-      pubkey: identity?.pubkey ?? null,
-      paymentAddress: identity?.paymentAddress ?? null,
-      ownerZelid: attribution?.ownerZelid ?? null,
-      appHash: attribution?.appHash ?? null,
-    },
-    $set: { lastSeen: at },
-    $inc: { count: 1 },
-  };
-  let result;
   try {
-    result = await dbHelper.findOneAndUpdateInDatabase(
-      database, tamperingEventsCollection, query, update, { upsert: true },
-    );
+    let app = await appsRepository.getInstalledAppAttribution(appName);
+    if (!app) {
+      const mainName = deriveMainAppName(appName);
+      if (mainName !== appName) {
+        app = await appsRepository.getInstalledAppAttribution(mainName);
+      }
+    }
+    const attribution = {
+      ownerZelid: app?.owner ?? null,
+      appHash: app?.hash ?? null,
+      cachedAt: Date.now(),
+    };
+    appAttributionCache.set(appName, attribution);
+    return attribution;
   } catch (error) {
-    // Two concurrent upserts racing on a brand-new incident key can trip
-    // the unique index; the loser retries once and lands as the increment.
-    if (error && error.code === 11000) {
-      result = await dbHelper.findOneAndUpdateInDatabase(
-        database, tamperingEventsCollection, query, update, { upsert: true },
-      );
-    } else {
-      throw error;
-    }
+    log.debug(`appTamperingDetection - attribution lookup failed for ${appName}: ${error.message}`);
+    return null;
   }
-  // Insert detection across driver result shapes: v6 returns the pre-image
-  // doc or null; older shapes return { value, lastErrorObject }.
-  const inserted = !result || result.value === null || result?.lastErrorObject?.updatedExisting === false;
-  if (inserted) {
-    log.info(`appTamperingDetection - recorded ${eventType} for ${appName}`);
-  } else {
-    log.debug(`appTamperingDetection - ${eventType} for ${appName} repeated, incident count incremented`);
-  }
-}
-
-/**
- * Writes the pending incidents in order, stopping at the first that fails and
- * trying again after the next delay.
- * @param {number} attempt How many flushes failed before this one.
- * @returns {Promise<void>}
- */
-async function flushPendingIncidents(attempt) {
-  incidentRetryTimer = null;
-  while (pendingIncidents.length) {
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await writeIncident(pendingIncidents[0]);
-      pendingIncidents.shift();
-    } catch (error) {
-      scheduleIncidentRetry(attempt + 1);
-      return;
-    }
-  }
-  log.info('appTamperingDetection - pending incidents written');
-}
-
-function scheduleIncidentRetry(attempt) {
-  if (incidentRetryTimer) return;
-  const delay = INCIDENT_RETRY_MS[Math.min(attempt, INCIDENT_RETRY_MS.length - 1)];
-  incidentRetryTimer = setTimeout(flushPendingIncidents, delay, attempt);
-  if (incidentRetryTimer.unref) incidentRetryTimer.unref();
 }
 
 /**
@@ -414,37 +291,60 @@ function scheduleIncidentRetry(attempt) {
  * identity, app attribution and severity so fleet-level consumers can
  * attribute and weigh it without joining local state.
  * Documents expire 30 days after lastSeen (TTL index).
- * An event that cannot be written waits in memory and is written later
- * (INCIDENT_RETRY_MS), under the time it was seen.
  * @param {string} appName - Application name
  * @param {string} eventType - One of the EVENT_SEVERITY keys
  * @param {string} details - Free-text context (stored once per incident)
  */
 async function recordEvent(rawAppName, eventType, details) {
-  // Stored under the app's own name whatever a caller addressed it by. The
-  // boot sweep walks docker component identifiers and the reconciler works
-  // in app names, so without this the same fault on the same app lands in
-  // two rows and getEvents, which matches the name exactly, finds one of
-  // them. Idempotent: an app name carries neither the prefix nor the
-  // component part this strips.
-  const observation = {
-    appName: deriveMainAppName(rawAppName),
-    eventType,
-    details,
-    at: new Date(),
-    bootId: currentBootId,
-    uptimeSec: Math.round(os.uptime()),
-  };
   try {
-    await writeIncident(observation);
-  } catch (error) {
-    log.error(`appTamperingDetection - failed to record event, written again later: ${error.message}`);
-    if (pendingIncidents.length >= PENDING_INCIDENTS_MAX) {
-      const dropped = pendingIncidents.shift();
-      log.warn(`appTamperingDetection - ${PENDING_INCIDENTS_MAX} incidents wait to be written, dropping ${dropped.eventType} for ${dropped.appName}`);
+    const now = new Date();
+    const incidentKey = `${currentBootId ?? 'unknown'}:${Math.floor(now.getTime() / INCIDENT_BUCKET_MS)}`;
+    // Stored under the app's own name whatever a caller addressed it by. The
+    // boot sweep walks docker component identifiers and the reconciler works
+    // in app names, so without this the same fault on the same app lands in
+    // two rows and getEvents, which matches the name exactly, finds one of
+    // them. Idempotent: an app name carries neither the prefix nor the
+    // component part this strips.
+    const appName = deriveMainAppName(rawAppName);
+    const [identity, attribution] = await Promise.all([
+      getNodeIdentity(),
+      getAppAttribution(appName),
+    ]);
+    const query = { appName, eventType, incidentKey };
+    const update = {
+      $setOnInsert: {
+        schemaVersion: 1,
+        appName,
+        eventType,
+        incidentKey,
+        severity: EVENT_SEVERITY[eventType] ?? 0,
+        bootId: currentBootId,
+        uptimeSecAtEvent: Math.round(os.uptime()),
+        firstSeen: now,
+        detailsSample: details,
+        nodeTxid: identity?.nodeTxid ?? null,
+        nodeOutidx: identity?.nodeOutidx ?? null,
+        nodeIp: identity?.nodeIp ?? null,
+        pubkey: identity?.pubkey ?? null,
+        paymentAddress: identity?.paymentAddress ?? null,
+        ownerZelid: attribution?.ownerZelid ?? null,
+        appHash: attribution?.appHash ?? null,
+      },
+      $set: { lastSeen: now },
+      $inc: { count: 1 },
+    };
+    const outcome = await appTamperingRepository.upsertIncident(query, update);
+    if (!outcome) {
+      log.warn('appTamperingDetection - DB not available, skipping event');
+      return;
     }
-    pendingIncidents.push(observation);
-    scheduleIncidentRetry(0);
+    if (outcome.inserted) {
+      log.info(`appTamperingDetection - recorded ${eventType} for ${appName}`);
+    } else {
+      log.debug(`appTamperingDetection - ${eventType} for ${appName} repeated, incident count incremented`);
+    }
+  } catch (error) {
+    log.error(`appTamperingDetection - failed to record event: ${error.message}`);
   }
 }
 
@@ -468,13 +368,7 @@ async function getEvents(req, res) {
     const limit = Number.isNaN(requestedLimit)
       ? EVENTS_DEFAULT_LIMIT
       : Math.min(Math.max(requestedLimit, 1), EVENTS_MAX_LIMIT);
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.local.database);
-    const query = appname ? { appName: appname } : {};
-    const options = { sort: { lastSeen: -1, detectedAt: -1 }, limit };
-    const results = await dbHelper.findInDatabase(
-      database, tamperingEventsCollection, query, options,
-    );
+    const results = await appTamperingRepository.listIncidents(appname || null, limit);
     const message = messageHelper.createDataMessage(results);
     res.json(message);
   } catch (error) {
@@ -504,13 +398,6 @@ async function getEvents(req, res) {
  */
 async function checkNodeReboot() {
   try {
-    const db = dbHelper.databaseConnection();
-    if (!db) {
-      log.warn('appTamperingDetection - DB not available, skipping reboot check');
-      return;
-    }
-    const database = db.db(config.database.local.database);
-
     // Pre-schema rows (no schemaVersion) are row-per-observation noise with
     // no identity, severity or dedup — nothing consumes them, but the public
     // API would keep serving them for up to 30 days of TTL. Sweeping them at
@@ -518,9 +405,7 @@ async function checkNodeReboot() {
     // boot. A no-op on every boot after that; removable once the fleet has
     // upgraded past the incident schema.
     try {
-      await dbHelper.removeDocumentsFromCollection(
-        database, tamperingEventsCollection, { schemaVersion: { $exists: false } },
-      );
+      await appTamperingRepository.purgePreSchemaIncidents();
     } catch (error) {
       log.warn(`appTamperingDetection - pre-schema row purge failed: ${error.message}`);
     }
@@ -547,80 +432,31 @@ async function checkNodeReboot() {
     currentBootId = bootId;
 
     const now = new Date();
-    // The machine's boot moment (uptime-derived): cadence consumers want the
-    // boot period itself, free of FluxOS's variable start lag.
-    const bootedAt = new Date(now.getTime() - Math.round(os.uptime() * 1000));
-    await recordBootUntilWritten(now, bootedAt);
+    const previous = await nodeStartupRepository.getStartupMarker(STARTUP_MARKER_KEY);
+    const previousBootId = previous && previous.bootId ? previous.bootId : null;
+
+    if (previousBootId !== currentBootId) {
+      // First sighting of this boot_id: genuine reboot, first run, or upgrade
+      // from the pre-boot_id marker. All three land in the boot history; a
+      // same-boot_id process restart does not, keeping the history a record
+      // of machine boots rather than FluxOS restarts. `bootedAt` is the
+      // machine's boot moment (uptime-derived) — cadence consumers want the
+      // boot period itself, free of FluxOS's variable start lag; `at` is when
+      // FluxOS first saw the boot.
+      const bootedAt = new Date(now.getTime() - Math.round(os.uptime() * 1000));
+      await nodeStartupRepository.appendBootHistory(
+        BOOT_HISTORY_KEY,
+        { bootId: currentBootId, bootedAt, at: now },
+        BOOT_HISTORY_MAX,
+      );
+      if (previousBootId) {
+        log.info(`appTamperingDetection - machine reboot: boot_id ${previousBootId.slice(0, 8)} -> ${currentBootId.slice(0, 8)}`);
+      }
+    }
+
+    await nodeStartupRepository.setStartupMarker(STARTUP_MARKER_KEY, { at: now, bootId: currentBootId });
   } catch (error) {
     log.error(`appTamperingDetection - checkNodeReboot failed: ${error.message}`);
-  }
-}
-
-// The delays before a boot that could not be recorded is recorded again, by
-// attempt; the last repeats until it is.
-const BOOT_RECORD_RETRY_MS = [30 * 1000, 60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000];
-
-/**
- * Records the boot this process runs in: in the boot history the first time
- * its boot_id is seen there, and as the startup marker. Repeating it records
- * nothing twice.
- * @param {Date} now When FluxOS first saw this boot.
- * @param {Date} bootedAt When the machine booted.
- * @returns {Promise<void>}
- */
-async function recordBoot(now, bootedAt) {
-  const database = dbHelper.databaseConnection().db(config.database.local.database);
-  const previous = await dbHelper.findOneInDatabase(
-    database, nodeStartupTrackerCollection, { _id: STARTUP_MARKER_KEY },
-  );
-  const previousBootId = previous && previous.bootId ? previous.bootId : null;
-
-  if (previousBootId !== currentBootId) {
-    // First sighting of this boot_id: genuine reboot, first run, or upgrade
-    // from the pre-boot_id marker. All three land in the boot history; a
-    // same-boot_id process restart does not, keeping the history a record
-    // of machine boots rather than FluxOS restarts.
-    const history = await dbHelper.findOneInDatabase(
-      database, nodeStartupTrackerCollection, { _id: BOOT_HISTORY_KEY },
-    );
-    if (!(history?.boots ?? []).some((boot) => boot.bootId === currentBootId)) {
-      await dbHelper.findOneAndUpdateInDatabase(
-        database,
-        nodeStartupTrackerCollection,
-        { _id: BOOT_HISTORY_KEY },
-        { $push: { boots: { $each: [{ bootId: currentBootId, bootedAt, at: now }], $slice: -BOOT_HISTORY_MAX } } },
-        { upsert: true },
-      );
-    }
-    if (previousBootId) {
-      log.info(`appTamperingDetection - machine reboot: boot_id ${previousBootId.slice(0, 8)} -> ${currentBootId.slice(0, 8)}`);
-    }
-  }
-
-  await dbHelper.findOneAndUpdateInDatabase(
-    database,
-    nodeStartupTrackerCollection,
-    { _id: STARTUP_MARKER_KEY },
-    { $set: { at: now, bootId: currentBootId } },
-    { upsert: true },
-  );
-}
-
-/**
- * recordBoot, run again after BOOT_RECORD_RETRY_MS until it succeeds.
- * @param {Date} now
- * @param {Date} bootedAt
- * @param {number} [attempt]
- * @returns {Promise<void>}
- */
-async function recordBootUntilWritten(now, bootedAt, attempt = 0) {
-  try {
-    await recordBoot(now, bootedAt);
-  } catch (error) {
-    const delay = BOOT_RECORD_RETRY_MS[Math.min(attempt, BOOT_RECORD_RETRY_MS.length - 1)];
-    log.error(`appTamperingDetection - this boot could not be recorded, retrying in ${Math.round(delay / 1000)}s: ${error.message}`);
-    const timer = setTimeout(recordBootUntilWritten, delay, now, bootedAt, attempt + 1);
-    if (timer.unref) timer.unref();
   }
 }
 
