@@ -585,6 +585,19 @@ describe('appTamperingDetectionService tests', () => {
 
       sinon.assert.calledWith(res.json, sinon.match({ status: 'error' }));
     });
+
+    it('errors rather than reporting "no incidents" when the DB is not up', async () => {
+      // The HTTP listeners bind before mongo is up, so this endpoint is publicly
+      // reachable with no database. Answering success/[] would tell an operator the
+      // node is clean when it simply cannot look.
+      tamperingRepositoryStub.listIncidents = sinon.stub().resolves(null);
+      const req = { params: {}, query: {} };
+      const res = makeRes();
+
+      await service.getEvents(req, res);
+
+      sinon.assert.calledWith(res.json, sinon.match({ status: 'error' }));
+    });
   });
 
   describe('checkNodeReboot', () => {

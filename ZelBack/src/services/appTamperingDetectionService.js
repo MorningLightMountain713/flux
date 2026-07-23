@@ -298,6 +298,7 @@ async function getEvents(req, res) {
       ? EVENTS_DEFAULT_LIMIT
       : Math.min(Math.max(requestedLimit, 1), EVENTS_MAX_LIMIT);
     const results = await appTamperingRepository.listIncidents(appname || null, limit);
+    if (results === null) throw new Error('Database is not available');
     const message = messageHelper.createDataMessage(results);
     res.json(message);
   } catch (error) {

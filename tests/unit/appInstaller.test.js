@@ -121,6 +121,10 @@ describe('appInstaller tests', () => {
       '../geolocationService': {
         isStaticIP: sinon.stub().returns(true),
       },
+      // Stubbed HERE because proxyquire does not recurse: the install path ensures
+      // the app network through this module, and leaving it real resolves the real
+      // dockerService + fluxNetworkHelper and drives the actual docker daemon.
+      '../appNetwork/appDockerNetwork': { ensureAppDockerNetwork: sinon.stub().resolves('net') },
       '../dockerService': {
         dockerListContainers: sinon.stub().resolves([]),
         pruneContainers: sinon.stub().resolves(),
@@ -425,6 +429,7 @@ describe('appInstaller tests', () => {
           removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true),
         },
         '../geolocationService': { isStaticIP: sinon.stub().returns(true) },
+        '../appNetwork/appDockerNetwork': { ensureAppDockerNetwork: sinon.stub().resolves('net') },
         '../dockerService': {
           dockerListContainers: sinon.stub().resolves([]),
           pruneContainers: sinon.stub().resolves(),
