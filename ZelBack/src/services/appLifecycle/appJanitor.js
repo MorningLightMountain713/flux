@@ -1,6 +1,5 @@
 const config = require('config');
 const log = require('../../lib/log');
-const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const operationRegistry = require('../utils/operationRegistry');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -8,7 +7,7 @@ const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents')
 const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
 const appQueryService = require('../appQuery/appQueryService');
-const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const appUninstaller = require('./appUninstaller');
 
 // The janitor owns debris: things that exist on this node with no desired-state
@@ -143,63 +142,51 @@ async function registryExpirySweep() {
 }
 
 /**
- * Reclaim the per-app docker networks no installed app accounts for.
- *
- * This began as a blanket prune of stopped containers, unused networks and
- * unused volumes. Development deleted those three primitives (9d30697bd) with an
- * argument the guard below only half answers: docker's "unused" is a RUNTIME
- * predicate, equally true of a healthy app whose container is momentarily down
- * (the guard does cover that), of a container FluxOS runs for its own purposes,
- * and of anything the node operator left stopped on their own machine (it covers
- * neither). A blanket prune cannot tell those apart, and this is not the thing
- * that should decide.
- *
- * What survives is the part that can be scoped to what FluxOS owns.
- * `reclaimAppNetworks` takes the expected network names from the caller rather
- * than parsing them out of what it finds, and leaves any network with something
- * attached — so it can only ever remove a `fluxDockerNetwork_*` that no installed
- * app accounts for and nothing is using.
- *
- * The other two halves are already owned elsewhere, safely: orphaned app
- * CONTAINERS are the dockerOrphanSweep above, by label and with graceful
- * removals, and an app container's anonymous volumes go with it. IMAGES belong to
+ * Reap the app networks this node holds for apps it does not have installed:
+ * what an interrupted uninstall left behind, or what a restored node came back
+ * with. Networks only — a container with no installed app is the orphan sweep's,
+ * which removes it through the uninstaller with its volumes, ports and graceful
+ * shutdown budget rather than pulling it out from under docker. Images belong to
  * the imageReaper, which is reference-gated and respects image-cache pins.
  *
- * The guards stay as they were: anyHeld() covers in-flight operations and the
- * active-standby election, and a stopped installed component stands the sweep
- * down entirely.
+ * Ownership decides, not docker's idea of "unused". Docker calls a network
+ * unused the moment nothing is attached to it, which is true of every healthy
+ * app whose container is briefly down (crash loop, restart, standby) — so a
+ * prune keyed on that reaps live apps' networks and leaves them unable to start
+ * at all. Asking who owns a network instead makes that unconstructable, and
+ * removes the need for the old node-wide guard that skipped the sweep whenever
+ * ANY installed component was stopped, which on a real node meant it never ran.
+ *
+ * Nothing unattributable is touched: leaked debris is recoverable, and the cost
+ * of guessing wrong is someone's app.
+ *
  * @returns {Promise<object>} sweep summary
  */
 async function dockerDebrisSweep() {
+  // Never race an install/remove/redeploy/reconcile/backup/restore anywhere on
+  // the node: mid-operation state is not debris.
   if (operationRegistry.anyHeld()) {
     log.info('appJanitor - debris sweep skipped: an operation is in progress');
     return { skipped: 'operation in flight' };
   }
 
-  const deployments = await deploymentProvider.listInstalledDeployments();
-  const runningAppsRes = await appQueryService.listRunningApps();
-  if (runningAppsRes.status !== 'success') {
-    throw new Error('Unable to check running Apps');
+  const installedAppsRes = await appQueryService.installedApps();
+  if (installedAppsRes.status !== 'success') {
+    // Without the installed set every network on the node looks unowned.
+    // Skipping is the only safe reading of an unavailable database.
+    log.warn('appJanitor - debris sweep skipped: unable to list installed apps');
+    return { skipped: 'installed list failed' };
   }
-  const runningSet = new Set(runningAppsRes.data.map((app) => app.Names[0].slice(5)));
-  const stoppedComponents = [];
-  deployments.forEach((deployment) => {
-    deployment.componentEntries().forEach(([, comp]) => {
-      if (!runningSet.has(comp.identifier)) stoppedComponents.push(comp.identifier);
-    });
-  });
-  if (stoppedComponents.length > 0) {
-    log.info(`appJanitor - debris sweep skipped: ${stoppedComponents.length} installed component(s) not running`);
-    return { skipped: 'stopped apps present' };
-  }
+  const installedAppNames = new Set(installedAppsRes.data.map((app) => app.name));
 
-  const expected = new Set(deployments.map((deployment) => `fluxDockerNetwork_${deployment.appName}`));
-  const reclaimed = await dockerService.reclaimAppNetworks(expected);
-  if (reclaimed.length > 0) {
-    log.info(`appJanitor - reclaimed ${reclaimed.length} app network(s) nothing accounts for: ${reclaimed.join(', ')}`);
-  }
+  const { removed, unidentified } = await appDockerNetwork.removeUnownedAppNetworks(installedAppNames);
 
-  return { pruned: true, networksReclaimed: reclaimed.length };
+  if (unidentified > 0) {
+    log.info(`appJanitor - debris sweep left ${unidentified} unattributable network(s) in place`);
+  }
+  log.info(`appJanitor - debris swept: ${removed.length} network(s) removed`);
+
+  return { networksRemoved: removed.length, unidentified };
 }
 
 const SWEEPS = {

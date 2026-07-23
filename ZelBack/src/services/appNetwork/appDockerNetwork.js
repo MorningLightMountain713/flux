@@ -4,9 +4,23 @@ const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 
 // Ownership of the per-app docker network (fluxDockerNetwork_<app>) and the
-// 172.23.x.0/24 subnet it sits on. Both the install path and the reconciler's
-// heal path need it, and neither owns it — dockerService performs the docker
-// calls, this decides which network an app gets and when.
+// 172.23.x.0/24 subnet it sits on. Every caller that creates, repairs or reaps
+// one comes through here — dockerService performs the docker calls, this decides
+// which network an app gets, when it appears and when it may be removed.
+//
+// The invariant: an app network exists if and only if the app is installed on
+// this node. Creation repairs a violation (install, or a reconciler pass about
+// to run a container); removal enforces the other direction (uninstall, and the
+// janitor sweep as its backstop). Because the janitor only removes networks
+// whose owner is NOT installed and the reconciler only creates them for apps
+// that ARE, the two can never fight over the same network.
+
+// The per-app network name prefix, and the ownership label stamped at creation.
+const APP_NETWORK_PREFIX = 'fluxDockerNetwork_';
+const APP_NETWORK_OWNER_LABEL = 'runonflux.app-network';
+
+// The node-wide flux network (no app suffix) — not an app network, never reaped.
+const NODE_NETWORK_NAME = 'fluxDockerNetwork';
 
 // Legacy apps that pinned their gateway octet by name before allocation existed.
 const appsThatMightBeUsingOldGatewayIpAssignment = ['HNSDoH', 'dane', 'fdm', 'Jetpack2', 'fdmdedicated', 'isokosse', 'ChainBraryDApp', 'health', 'ethercalc'];
@@ -89,8 +103,100 @@ async function ensureAppDockerNetwork(appName, { onStatus = null } = {}) {
   return fluxNet;
 }
 
+// One in-flight ensure per app. An app's components reconcile independently, so
+// a node that lost a network hands every one of them the same repair at once;
+// without this they race for the same octet, and all but one lose the create,
+// log the failure and walk to a higher octet before the name check rescues them.
+const ensuresInFlight = new Map();
+
+/**
+ * Ensures the app's network exists, collapsing concurrent callers for the same
+ * app onto one create. Cheap when the network is already there (one state read,
+ * no allocation, no firewall work), so callers may treat it as a precondition
+ * rather than something to guard with their own check.
+ *
+ * @param {string} appName bare app name
+ * @returns {Promise<object|string>} the created-or-existing network response
+ */
+async function ensureAppNetworkPresent(appName) {
+  const inFlight = ensuresInFlight.get(appName);
+  if (inFlight) return inFlight;
+
+  // Settle clears the entry on BOTH outcomes: a retained rejected promise would
+  // hand every later caller the same stale failure and wedge the app's repair.
+  const pending = ensureAppDockerNetwork(appName)
+    .finally(() => ensuresInFlight.delete(appName));
+  ensuresInFlight.set(appName, pending);
+  return pending;
+}
+
+/**
+ * Resolve which app a docker network belongs to.
+ *
+ * Labels are the ownership authority, but they only exist on networks created
+ * since the label shipped: an estate upgraded onto this code carries none until
+ * each network is recreated. The name convention identifies those. A network we
+ * can identify by NEITHER is not ours to reason about, so this returns null and
+ * the caller leaves it alone — absence of a label is not evidence of absence of
+ * an owner, and on a removal path that distinction is the whole safety story.
+ *
+ * @param {object} network - docker network list entry (Name, Labels)
+ * @returns {string|null} owning app name, or null when unidentifiable
+ */
+function appNetworkOwner(network) {
+  const labelled = network.Labels && network.Labels[APP_NETWORK_OWNER_LABEL];
+  if (labelled) return labelled;
+  const name = network.Name || '';
+  if (name.startsWith(APP_NETWORK_PREFIX)) {
+    return name.slice(APP_NETWORK_PREFIX.length) || null;
+  }
+  return null;
+}
+
+/**
+ * Remove the app networks on this node that no installed app owns: what an
+ * interrupted uninstall left behind, or what a restored node came back with.
+ *
+ * Scoped by ownership rather than by docker's idea of "unused" — docker calls a
+ * network unused the instant nothing is attached to it, which is true of every
+ * healthy app whose container is momentarily down (crash loop, restart,
+ * standby), so a prune keyed on that reaps live apps' networks.
+ *
+ * @param {Set<string>} installedAppNames - apps with an installed row on this node
+ * @returns {Promise<{removed: string[], unidentified: number}>} what went and what was left
+ */
+async function removeUnownedAppNetworks(installedAppNames) {
+  const networks = await dockerService.getFluxDockerNetworks();
+  const removed = [];
+  let unidentified = 0;
+
+  // eslint-disable-next-line no-restricted-syntax
+  for (const network of networks) {
+    // eslint-disable-next-line no-continue
+    if (network.Name === NODE_NETWORK_NAME) continue;
+    const owner = appNetworkOwner(network);
+    if (!owner) {
+      unidentified += 1;
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    // eslint-disable-next-line no-continue
+    if (installedAppNames.has(owner)) continue;
+    log.info(`appDockerNetwork - removing the network of ${owner}: no installed app owns it`);
+    // eslint-disable-next-line no-await-in-loop
+    await dockerService.forceRemoveFluxAppDockerNetwork(owner)
+      .catch((error) => log.error(`appDockerNetwork - failed to remove the network of ${owner}: ${error.message}`));
+    removed.push(owner);
+  }
+
+  return { removed, unidentified };
+}
+
 module.exports = {
   ensureAppDockerNetwork,
+  ensureAppNetworkPresent,
+  appNetworkOwner,
+  removeUnownedAppNetworks,
   appsThatMightBeUsingOldGatewayIpAssignment,
   legacyPinnedOctets,
 };

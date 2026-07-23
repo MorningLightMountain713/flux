@@ -2386,13 +2386,11 @@ async function getAppContainerNames(appName) {
 
 // No blanket container/network/volume prune primitive is exposed, deliberately.
 // Docker's "unused" is a runtime predicate - nothing attached right now - which
-// is true of every healthy app whose container is momentarily down, of every
-// container FluxOS runs for its own purposes between exiting and being reaped,
-// and of anything the node operator left stopped on their own machine. A prune
-// keyed on it deletes all three. Removal of flux objects is scoped by OWNERSHIP
-// instead: appUninstaller for an app's containers and volumes, appNetwork for
-// its networks, and the identity labels stamped by componentIdentityLabels for
-// everything else.
+// is true of every healthy app whose container is momentarily down, so a prune
+// keyed on it destroys live apps' networks and containers, and then the
+// anonymous volumes those containers were holding. Removal of flux objects is
+// scoped by OWNERSHIP instead: appNetwork/appDockerNetwork for app networks,
+// appUninstaller for an app's containers and volumes.
 
 /**
  * Remove all unused Images. Unused Images are those which are not referenced by any containers
