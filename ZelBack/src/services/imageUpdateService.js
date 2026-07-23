@@ -171,7 +171,7 @@ async function getRemoteManifestDigest(repotag, repoauth, appName) {
     const digest = await verifier.fetchManifestDigestOnly();
 
     if (verifier.error) {
-      const errorMeta = verifier.errorMeta;
+      const { errorMeta } = verifier;
       if (errorMeta && errorMeta.errorType === 'rate_limit') {
         log.warn(`Rate limited while checking ${repotag}`);
         return { error: 'rate_limited', digest: null };
@@ -345,7 +345,7 @@ async function checkForImageUpdates() {
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(DELAY_BETWEEN_APPS);
       } catch (error) {
-        log.warn(`Error checking app ${appSpec.name}: ${error.message}`);
+        log.warn(`Error checking app ${deployment.appName}: ${error.message}`);
       }
     }
 
