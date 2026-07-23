@@ -14,10 +14,32 @@ const makeDockerServiceStub = (overrides = {}) => ({
   ...overrides,
 });
 
+// Everything this module calls on dockerService. Proxyquire replaces that module
+// wholesale, so a stub can happily answer a function the real one does not export
+// and every test here still passes while the node throws on the first sweep -
+// which is exactly what shipped once (getFluxDockerNetworks was defined but never
+// exported). Assert the real surface, not the stub's.
+const DOCKER_SERVICE_API_USED = [
+  'dockerNetworkState',
+  'getFreeFluxAppNetworkOctet',
+  'createFluxAppDockerNetwork',
+  'getFluxDockerNetworkPhysicalInterfaceNames',
+  'getFluxDockerNetworks',
+  'forceRemoveFluxAppDockerNetwork',
+];
+
 describe('appDockerNetwork tests', () => {
   let appDockerNetwork;
   let dockerServiceStub;
   let removeAccessStub;
+
+  it('calls only dockerService functions the real module exports', () => {
+    // eslint-disable-next-line global-require
+    const realDockerService = require('../../ZelBack/src/services/dockerService');
+    DOCKER_SERVICE_API_USED.forEach((fn) => {
+      expect(realDockerService[fn], `dockerService.${fn} is stubbed here but not exported`).to.be.a('function');
+    });
+  });
 
   beforeEach(() => {
     dockerServiceStub = makeDockerServiceStub({ getFreeFluxAppNetworkOctet: sinon.stub().resolves(7) });
