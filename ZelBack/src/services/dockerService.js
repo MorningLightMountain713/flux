@@ -2698,6 +2698,7 @@ module.exports = {
   getBaseAppName,
   getDockerContainer,
   getDockerContainerHandle,
+  getFluxDockerNetworks,
   getFluxDockerNetworkPhysicalInterfaceNames,
   getFluxDockerNetworkSubnets,
   getFreeFluxAppNetworkOctet,
