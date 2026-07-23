@@ -345,7 +345,7 @@ async function checkForImageUpdates() {
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(DELAY_BETWEEN_APPS);
       } catch (error) {
-        log.warn(`Error checking app ${appSpec.name}: ${error.message}`);
+        log.warn(`Error checking app ${deployment.appName}: ${error.message}`);
       }
     }
 
