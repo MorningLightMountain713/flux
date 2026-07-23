@@ -82,16 +82,16 @@ describe('replica co-location: two named replicas of one app on one node, separa
     };
   }
 
-  async function registerApp(name, { placement, components }) {
-    const res = await registerEncryptedV9App(env.clients[0].url, { name, placement, components });
+  async function registerApp(name, { assignment, components }) {
+    const res = await registerEncryptedV9App(env.clients[0].url, { name, assignment, components });
     expect(res.status, `register ${name}`).to.equal('success');
     await queueAppTx(res.data);
     await advanceBlocks(3);
     return res.data;
   }
 
-  async function updateApp(name, { placement, components }) {
-    const res = await updateEncryptedV9App(env.clients[0].url, { name, placement, components });
+  async function updateApp(name, { assignment, components }) {
+    const res = await updateEncryptedV9App(env.clients[0].url, { name, assignment, components });
     expect(res.status, `update ${name}`).to.equal('success');
     await queueAppTx(res.data);
     await advanceBlocks(3);
@@ -205,7 +205,7 @@ describe('replica co-location: two named replicas of one app on one node, separa
     // are what make co-location legal, and s2's override is what keeps them
     // disjoint.
     await registerApp(appName, {
-      placement: { targetIps: { [nodeIp(HOST_NODE)]: ['s1', 's2'] } },
+      assignment: { targetIps: { [nodeIp(HOST_NODE)]: ['s1', 's2'] } },
       components: webComponents(appName, {
         hostPort: 36010,
         replicaOverrides: { s2: { ports: { game: { hostPort: 36011 } } } },
@@ -215,7 +215,7 @@ describe('replica co-location: two named replicas of one app on one node, separa
     // Registered with ONE replica; a later test adds a co-located sibling and
     // pins that the existing replica is not disturbed by the arrival.
     await registerApp(scaleName, {
-      placement: { targetIps: { [nodeIp(HOST_NODE)]: ['k1'] } },
+      assignment: { targetIps: { [nodeIp(HOST_NODE)]: ['k1'] } },
       components: webComponents(scaleName, { hostPort: 36020 }),
     });
   });
@@ -389,7 +389,7 @@ describe('replica co-location: two named replicas of one app on one node, separa
     // A named replica is qualified even when alone on its node, so gaining a
     // sibling never rewrites the existing identity — no recreate, no rename.
     await updateApp(scaleName, {
-      placement: { targetIps: { [nodeIp(HOST_NODE)]: ['k1', 'k2'] } },
+      assignment: { targetIps: { [nodeIp(HOST_NODE)]: ['k1', 'k2'] } },
       components: webComponents(scaleName, {
         hostPort: 36020,
         replicaOverrides: { k2: { ports: { game: { hostPort: 36021 } } } },
@@ -410,7 +410,7 @@ describe('replica co-location: two named replicas of one app on one node, separa
 
     // s2 leaves the spec; s1 stays.
     await updateApp(appName, {
-      placement: { targetIps: { [nodeIp(HOST_NODE)]: ['s1'] } },
+      assignment: { targetIps: { [nodeIp(HOST_NODE)]: ['s1'] } },
       components: webComponents(appName, { hostPort: 36010 }),
     });
 

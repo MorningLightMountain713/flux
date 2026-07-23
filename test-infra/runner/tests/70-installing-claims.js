@@ -56,11 +56,7 @@ describe('installing claims: election losers release their seats by cleared broa
       // pinned-contended path, where every candidate announces its claim before
       // parking on the collision window. Node 5 stays an uninvolved observer
       // whose DB sees the claims purely via gossip.
-      placement: {
-        targetIps: {
-          [nodeIp(1)]: null, [nodeIp(2)]: null, [nodeIp(3)]: null, [nodeIp(4)]: null,
-        },
-      },
+      placement: { targetIps: [nodeIp(1), nodeIp(2), nodeIp(3), nodeIp(4)] },
       instances: 2,
       components: {
         web: {

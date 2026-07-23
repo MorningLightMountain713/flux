@@ -13,13 +13,13 @@ import {
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 
-// Named-replica placement (v9) end to end: the value-discriminated targeting maps
-// (identity -> null | [replicaNames]), instances derivation, per-replica hostPort
-// overrides, the FLUX_* platform env (injected + ${FLUX_PORT_x} templated),
-// declarative install/removal (a named replica installs on exactly its node; a
-// de-named replica is removed from exactly its node), loose->named mode switches,
-// co-location of several replicas on one node, and the API-level validation
-// rejects.
+// Named-replica placement (v9) end to end: the sealed assignment map
+// (identity -> [replicaNames]) alongside the cleartext placement identity set,
+// instances derivation, per-replica hostPort overrides, the FLUX_* platform env
+// (injected + ${FLUX_PORT_x} templated), declarative install/removal (a named
+// replica installs on exactly its node; a de-named replica is removed from
+// exactly its node), candidate->pinned mode switches, co-location of several
+// replicas on one node, and the API-level validation rejects.
 // Assertions ride the SSE event bus + per-node DB rows + docker inspect — never
 // log scraping.
 //
@@ -85,13 +85,13 @@ async function boundHostPorts(client, appName) {
   return Object.values(bindings).flat().map((b) => Number(b.HostPort));
 }
 
-describe('replica placement (v9): targeting maps, overrides, platform env, declarative convergence', function () {
+describe('replica placement (v9): assignment + placement, overrides, platform env, declarative convergence', function () {
   let env;
 
   const base = `repl${Date.now()}`;
   const nameSingle = `${base}a`; // named single replica + platform env/templating
   const nameOverride = `${base}b`; // two named replicas, per-replica hostPort override
-  const nameLoose = `${base}c`; // loose candidate map, later mode-switched
+  const nameCandidate = `${base}c`; // candidate identity set, later mode-switched
   const nameColoc = `${base}d`; // spec-valid co-location -> Phase-1 fail-loud
   const nameOutpoint = `${base}e`; // outpoint-keyed named replica
 
@@ -113,17 +113,21 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     };
   }
 
-  async function registerApp(name, { placement, instances, components }) {
+  async function registerApp(name, {
+    placement, assignment, instances, components,
+  }) {
     const res = await registerEncryptedV9App(env.clients[0].url, {
-      name, placement, instances, components,
+      name, placement, assignment, instances, components,
     });
     expect(res.status, `register ${name}`).to.equal('success');
     return res.data; // appHash
   }
 
-  async function updateApp(name, { placement, instances, components }) {
+  async function updateApp(name, {
+    placement, assignment, instances, components,
+  }) {
     const res = await updateEncryptedV9App(env.clients[0].url, {
-      name, placement, instances, components,
+      name, placement, assignment, instances, components,
     });
     expect(res.status, `update ${name}`).to.equal('success');
     await queueAppTx(res.data);
@@ -181,7 +185,7 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
           // their defaults.)
           spawnDeferrals: { targetedNodesMs: { encrypted: 30000, standard: 30000 } },
           // Adoption staggering (rolling updates) is production pacing; shrink
-          // it so a loose instance's bounded-window adoption lands inside the
+          // it so a candidate instance's bounded-window adoption lands inside the
           // test windows.
           adoptionStaggerStepMs: 15000,
           adoptionStaggerWindowMs: 15000,
@@ -192,35 +196,36 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
 
     await pushImage(nameSingle, 'v1');
     await pushImage(nameOverride, 'v1');
-    await pushImage(nameLoose, 'v1');
+    await pushImage(nameCandidate, 'v1');
     await pushImage(nameColoc, 'v1');
     await pushImage(nameOutpoint, 'v1');
 
-    // instances omitted on every named app: derived from the replica-name count.
+    // instances and the cleartext placement are omitted on every pinned app:
+    // both are derived from the assignment.
     const singleHash = await registerApp(nameSingle, {
-      placement: { targetIps: { [nodeIp(2)]: ['s1'] } },
+      assignment: { targetIps: { [nodeIp(2)]: ['s1'] } },
       components: webComponents(nameSingle, {
         hostPort: 35010,
         env: { ADVERTISE: '${FLUX_PORT_game}', RAW_HOME: '${HOME}' },
       }),
     });
     const overrideHash = await registerApp(nameOverride, {
-      placement: { targetIps: { [nodeIp(3)]: ['r1'], [nodeIp(4)]: ['r2'] } },
+      assignment: { targetIps: { [nodeIp(3)]: ['r1'], [nodeIp(4)]: ['r2'] } },
       components: webComponents(nameOverride, {
         hostPort: 35020,
         env: { ADVERTISE: '${FLUX_PORT_game}' },
         replicaOverrides: { r2: { ports: { game: { hostPort: 35021 } } } },
       }),
     });
-    const looseHash = await registerApp(nameLoose, {
-      placement: { targetIps: { [nodeIp(1)]: null, [nodeIp(2)]: null, [nodeIp(5)]: null } },
+    const candidateHash = await registerApp(nameCandidate, {
+      placement: { targetIps: [nodeIp(1), nodeIp(2), nodeIp(5)] },
       instances: 2,
-      components: webComponents(nameLoose, { hostPort: 35030 }),
+      components: webComponents(nameCandidate, { hostPort: 35030 }),
     });
     // Three replicas on ONE node with distinct effective ports: legal precisely
     // because the per-node effective hostPorts stay pairwise distinct.
     const colocHash = await registerApp(nameColoc, {
-      placement: { targetIps: { [nodeIp(5)]: ['d1', 'd2', 'd3'] } },
+      assignment: { targetIps: { [nodeIp(5)]: ['d1', 'd2', 'd3'] } },
       components: webComponents(nameColoc, {
         hostPort: 35040,
         replicaOverrides: {
@@ -230,13 +235,13 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
       }),
     });
     const outpointHash = await registerApp(nameOutpoint, {
-      placement: { targetOutpoints: { [nodeOutpoint(4)]: ['o1'] } },
+      assignment: { targetOutpoints: { [nodeOutpoint(4)]: ['o1'] } },
       components: webComponents(nameOutpoint, { hostPort: 35050 }),
     });
 
     await queueAppTx(singleHash);
     await queueAppTx(overrideHash);
-    await queueAppTx(looseHash);
+    await queueAppTx(candidateHash);
     await queueAppTx(colocHash);
     await queueAppTx(outpointHash);
     await advanceBlocks(3);
@@ -307,7 +312,7 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     expect(installedEventIndexes(nameOutpoint)).to.deep.equal([3]);
   });
 
-  it('keeps loose candidate semantics through the map shape: instances of the candidates run, unnamed', async function () {
+  it('keeps candidate semantics through the identity set: instances of the candidates run, unnamed', async function () {
     this.timeout(300000);
     // Candidates are nodes 1,2,5 (indexes 0,1,4) with instances:2 — any 2 of the
     // 3 converge; the non-candidates must never install.
@@ -315,23 +320,23 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     let last = '';
     await waitFor(
       async () => {
-        const running = await runningIndexes(nameLoose);
+        const running = await runningIndexes(nameCandidate);
         const key = running.join(',');
         const ok = running.length === 2 && running.every((i) => [0, 1, 4].includes(i));
         stable = ok && key === last ? stable + 1 : 0;
         last = key;
         return stable >= 2;
       },
-      { timeout: 240000, interval: 3000, label: `${nameLoose} converged to 2 candidate instances` },
+      { timeout: 240000, interval: 3000, label: `${nameCandidate} converged to 2 candidate instances` },
     );
-    const running = await runningIndexes(nameLoose);
+    const running = await runningIndexes(nameCandidate);
     for (const i of running) {
       // eslint-disable-next-line no-await-in-loop
-      const envMap = await containerEnv(env.clients[i], nameLoose);
+      const envMap = await containerEnv(env.clients[i], nameCandidate);
       expect(envMap, 'running container env').to.not.equal(null);
-      expect(envMap.FLUX_REPLICA, 'a loose instance has no replica identity').to.equal(undefined);
+      expect(envMap.FLUX_REPLICA, 'a candidate instance has no replica identity').to.equal(undefined);
     }
-    expect(installedEventIndexes(nameLoose).every((i) => [0, 1, 4].includes(i)), 'non-candidates never install a targeted app').to.equal(true);
+    expect(installedEventIndexes(nameCandidate).every((i) => [0, 1, 4].includes(i)), 'non-candidates never install a targeted app').to.equal(true);
   });
 
   it('co-locates several replicas on one targeted node, and nowhere else', async function () {
@@ -353,13 +358,13 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     expect(await runningIndexes(nameColoc), 'a named set installs only on its targeted node').to.deep.equal([4]);
   });
 
-  it('scales up by map edit: the new replica installs, the running replica is untouched', async function () {
+  it('scales up by assignment edit: the new replica installs, the running replica is untouched', async function () {
     this.timeout(420000);
     const startedBefore = await containerStartedAt(env.clients[1], nameSingle);
     expect(startedBefore, `${nameSingle} running before scale-up`).to.not.equal('');
 
     const updateHash = await updateApp(nameSingle, {
-      placement: { targetIps: { [nodeIp(2)]: ['s1'], [nodeIp(3)]: ['s2'] } },
+      assignment: { targetIps: { [nodeIp(2)]: ['s1'], [nodeIp(3)]: ['s2'] } },
       components: webComponents(nameSingle, {
         hostPort: 35010,
         env: { ADVERTISE: '${FLUX_PORT_game}', RAW_HOME: '${HOME}' },
@@ -399,7 +404,7 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
 
     // r2 (and its override) leave the spec; r1 stays.
     const updateHash = await updateApp(nameOverride, {
-      placement: { targetIps: { [nodeIp(3)]: ['r1'] } },
+      assignment: { targetIps: { [nodeIp(3)]: ['r1'] } },
       components: webComponents(nameOverride, {
         hostPort: 35020,
         env: { ADVERTISE: '${FLUX_PORT_game}' },
@@ -428,57 +433,57 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     expect(await containerStartedAt(env.clients[2], nameOverride), 'surviving replica must not restart on scale-down').to.equal(survivorBefore);
   });
 
-  it('mode-switches loose -> named: converges to the named node, de-targeted instances removed', async function () {
+  it('mode-switches candidate -> pinned: converges to the named node, de-targeted instances removed', async function () {
     this.timeout(420000);
-    await updateApp(nameLoose, {
-      placement: { targetIps: { [nodeIp(1)]: ['m1'] } },
-      components: webComponents(nameLoose, { hostPort: 35030 }),
+    await updateApp(nameCandidate, {
+      assignment: { targetIps: { [nodeIp(1)]: ['m1'] } },
+      components: webComponents(nameCandidate, { hostPort: 35030 }),
     });
 
     await untilWithBlocks(
-      async () => (await runningIndexes(nameLoose)).join(',') === '0',
-      { rounds: 60, label: `${nameLoose} converged to node 1 only` },
+      async () => (await runningIndexes(nameCandidate)).join(',') === '0',
+      { rounds: 60, label: `${nameCandidate} converged to node 1 only` },
     );
     // The kept node's own adoption is a scheduled rolling redeploy (the
     // de-targeted removals land first, deliberately) — wait for the recreated
     // container to carry the replica identity.
     await waitFor(
-      async () => (await containerEnv(env.clients[0], nameLoose))?.FLUX_REPLICA === 'm1',
-      { timeout: 120000, interval: 3000, label: `${nameLoose} node 1 adopted the named identity` },
+      async () => (await containerEnv(env.clients[0], nameCandidate))?.FLUX_REPLICA === 'm1',
+      { timeout: 120000, interval: 3000, label: `${nameCandidate} node 1 adopted the named identity` },
     );
   });
 
-  it('mode-switches named -> loose: candidate semantics return, replica identity drops', async function () {
+  it('mode-switches pinned -> candidate: candidate semantics return, replica identity drops', async function () {
     // Churn from the earlier phases used to strand appsinstallinglocations rows
     // until their TTL — this test's old 1200s budget existed only to outwait
     // them. Aborted attempts and election losers now broadcast cleared claims,
     // and the compressed harness TTL (installingTtlS, 60s) is honored as the
     // crash backstop, so normal convergence pace bounds the respawn.
     this.timeout(300000);
-    await updateApp(nameLoose, {
-      placement: { targetIps: { [nodeIp(1)]: null, [nodeIp(2)]: null, [nodeIp(5)]: null } },
+    await updateApp(nameCandidate, {
+      placement: { targetIps: [nodeIp(1), nodeIp(2), nodeIp(5)] },
       instances: 2,
-      components: webComponents(nameLoose, { hostPort: 35030 }),
+      components: webComponents(nameCandidate, { hostPort: 35030 }),
     });
 
     let stable = 0;
     let last = '';
     await untilWithBlocks(
       async () => {
-        const running = await runningIndexes(nameLoose);
+        const running = await runningIndexes(nameCandidate);
         const key = running.join(',');
         const ok = running.length === 2 && running.every((i) => [0, 1, 4].includes(i));
         stable = ok && key === last ? stable + 1 : 0;
         last = key;
         return stable >= 2;
       },
-      { rounds: 200, label: `${nameLoose} back to 2 candidate instances` },
+      { rounds: 200, label: `${nameCandidate} back to 2 candidate instances` },
     );
-    const running = await runningIndexes(nameLoose);
+    const running = await runningIndexes(nameCandidate);
     for (const i of running) {
       // eslint-disable-next-line no-await-in-loop
-      const envMap = await containerEnv(env.clients[i], nameLoose);
-      expect(envMap.FLUX_REPLICA, 'loose instances carry no replica identity').to.equal(undefined);
+      const envMap = await containerEnv(env.clients[i], nameCandidate);
+      expect(envMap.FLUX_REPLICA, 'candidate instances carry no replica identity').to.equal(undefined);
     }
 
     // Every seat reservation for the app must already be released on every
@@ -488,11 +493,11 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     await waitFor(
       async () => {
         const rows = await Promise.all(
-          env.clients.map((c) => dbClient(c.num).getAppInstallingLocations(nameLoose)),
+          env.clients.map((c) => dbClient(c.num).getAppInstallingLocations(nameCandidate)),
         );
         return rows.every((r) => r.length === 0);
       },
-      { timeout: 30000, interval: 2000, label: `${nameLoose} installing claims all released` },
+      { timeout: 30000, interval: 2000, label: `${nameCandidate} installing claims all released` },
     );
   });
 
@@ -502,16 +507,21 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
   // flux-spec error through as a field-precise message.
   const DUMMY_HASH = 'ab'.repeat(32);
 
-  it('rejects mixed candidate/named placement at the API with a field-precise message', async function () {
+  // The cleartext identity set must equal the sealed assignment's keys: a node
+  // the public list claims but the assignment never names anyone for is the
+  // closest analog of the old mixed pinned/candidate map, and it is what the
+  // consistency invariant exists to catch.
+  it('rejects a placement identity not covered by the assignment at the API with a field-precise message', async function () {
     this.timeout(60000);
     const res = await registerEncryptedV9App(env.clients[0].url, {
-      name: `${base}mixed`,
+      name: `${base}mismatch`,
       contentHash: DUMMY_HASH,
-      placement: { targetIps: { [nodeIp(1)]: ['x1'], [nodeIp(2)]: null } },
+      assignment: { targetIps: { [nodeIp(1)]: ['x1'] } },
+      placement: { mode: 'pinned', targetIps: [nodeIp(1), nodeIp(2)] },
       components: webComponents(nameSingle, { hostPort: 35060 }),
     });
     expect(res.status).to.equal('error');
-    expect(res.data.message).to.include('MIXED_TARGETING_MODE');
+    expect(res.data.message).to.include('PLACEMENT_IDENTITY_MISMATCH');
   });
 
   it('rejects an override naming an undeclared replica at the API', async function () {
@@ -519,7 +529,7 @@ describe('replica placement (v9): targeting maps, overrides, platform env, decla
     const res = await registerEncryptedV9App(env.clients[0].url, {
       name: `${base}ghost`,
       contentHash: DUMMY_HASH,
-      placement: { targetIps: { [nodeIp(1)]: ['x1'] } },
+      assignment: { targetIps: { [nodeIp(1)]: ['x1'] } },
       components: webComponents(nameSingle, {
         hostPort: 35061,
         replicaOverrides: { ghost: { ports: { game: { hostPort: 35062 } } } },
