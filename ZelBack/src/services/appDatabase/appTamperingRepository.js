@@ -100,13 +100,16 @@ async function backfillIncidentIdentity(identity) {
  * Incidents most recent first, for the public API. The caller supplies an
  * already-clamped limit — the route is public, so an uncapped query would dump
  * the collection to anyone.
+ * Returns null when the DB is not up, never [] — the endpoint is publicly reachable
+ * before mongo is (the HTTP listeners bind ahead of serviceManager), and answering
+ * "success, no incidents" to an operator whose database is simply down is a lie.
  * @param {string|null} appName - filter to one app, or null for all
  * @param {number} limit
- * @returns {Promise<Array<object>>}
+ * @returns {Promise<Array<object>|null>} null when the DB is not up
  */
 async function listIncidents(appName, limit) {
   const database = db();
-  if (!database) return [];
+  if (!database) return null;
   const query = appName ? { appName } : {};
   const options = { sort: { lastSeen: -1, detectedAt: -1 }, limit };
   return dbHelper.findInDatabase(database, tamperingEventsCollection, query, options);

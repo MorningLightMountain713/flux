@@ -24,6 +24,7 @@ describe('containerHealthMonitor tests', () => {
   let tamperingStub;
   let volumeServiceStub;
   let globalStateStub;
+  let appDockerNetworkStub;
   let instantiated;
   let webComp;
   let dbComp;
@@ -78,10 +79,15 @@ describe('containerHealthMonitor tests', () => {
     };
     volumeServiceStub = { verifyAppVolumeMount: sinon.stub().resolves(false) };
     globalStateStub = { appsMonitored: new Map() };
+    appDockerNetworkStub = { ensureAppDockerNetwork: sinon.stub().resolves('net') };
 
     containerHealthMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/containerHealthMonitor', {
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       '../dockerService': dockerServiceStub,
+      // The heal path ensures the app network through this module. It must be
+      // stubbed HERE: proxyquire does not recurse, so leaving it real resolves the
+      // real dockerService + fluxNetworkHelper and drives the actual docker daemon.
+      '../appNetwork/appDockerNetwork': appDockerNetworkStub,
       '../appLifecycle/componentProvisioner': componentProvisionerStub,
       '../appLifecycle/appVolumeService': appVolumeServiceStub,
       '../appLifecycle/appUninstaller': appUninstallerStub,
@@ -237,6 +243,18 @@ describe('containerHealthMonitor tests', () => {
       await containerHealthMonitor.recreateMissingContainers('web_testapp');
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.requiresEncryption).to.equal(false);
+    });
+
+    it('ensures the app docker network before recreating any container', async () => {
+      // A pruned per-app network (docker prune / daemon restart / the janitor's
+      // debris sweep) is created only at install time; without this the recreate
+      // loops forever on "network not found".
+      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+
+      expect(appDockerNetworkStub.ensureAppDockerNetwork.calledOnceWith('testapp')).to.be.true;
+      expect(appDockerNetworkStub.ensureAppDockerNetwork.calledBefore(
+        componentProvisionerStub.installComponent,
+      )).to.be.true;
     });
 
     it('recreates every component for a whole-app identifier', async () => {
