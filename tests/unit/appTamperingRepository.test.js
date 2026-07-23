@@ -211,10 +211,10 @@ describe('appTamperingRepository tests', () => {
       expect(dbHelperStub.findInDatabase.firstCall.args[2]).to.deep.equal({});
     });
 
-    it('returns [] when the DB is not up', async () => {
+    it('reports null when the DB is not up, so the public endpoint cannot answer "no incidents"', async () => {
       dbHelperStub.databaseConnection.returns(null);
 
-      expect(await repository.listIncidents(null, 10)).to.deep.equal([]);
+      expect(await repository.listIncidents(null, 10)).to.equal(null);
     });
   });
 
