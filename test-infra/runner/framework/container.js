@@ -201,12 +201,20 @@ export function fluxAppNetworkName(appName) {
   return `fluxDockerNetwork_${appName}`;
 }
 
-// The app's docker network if it still exists on this node, else null.
-export async function getAppNetwork(container, appName) {
+// Whether a docker network of this exact name exists on the node. Takes the raw
+// name, so a suite can assert about networks that deliberately do NOT follow the
+// per-app convention (an unattributable one the janitor must leave alone).
+export async function networkExists(container, networkName) {
   const { stdout } = await execInContainer(container,
     "docker network ls --format '{{.Name}}' 2>/dev/null || echo \"\"");
   const names = stdout.trim().split('\n').map((s) => s.trim()).filter(Boolean);
-  return names.find((n) => n === fluxAppNetworkName(appName)) ?? null;
+  return names.includes(networkName);
+}
+
+// The app's docker network if it still exists on this node, else null.
+export async function getAppNetwork(container, appName) {
+  const name = fluxAppNetworkName(appName);
+  return (await networkExists(container, name)) ? name : null;
 }
 
 // ── Network-detach synthesis (the network-heal suite) ─────────────────
@@ -236,9 +244,15 @@ export async function removeAppNetworkRaw(container, appName) {
   return execInContainer(container, `docker network rm ${fluxAppNetworkName(appName)}`);
 }
 
-export async function createAppNetworkRaw(container, appName, subnet) {
+// Create a network under an exact name - for the networks a suite needs docker to
+// hold that FluxOS would never mint itself.
+export async function createNetworkNamed(container, networkName, subnet) {
   const subnetFlag = subnet ? ` --subnet ${subnet}` : '';
-  return execInContainer(container, `docker network create${subnetFlag} ${fluxAppNetworkName(appName)}`);
+  return execInContainer(container, `docker network create${subnetFlag} ${networkName}`);
+}
+
+export async function createAppNetworkRaw(container, appName, subnet) {
+  return createNetworkNamed(container, fluxAppNetworkName(appName), subnet);
 }
 
 // Docker's container ID: survives nothing - a recreate mints a new one - so ID

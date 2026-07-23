@@ -3,8 +3,8 @@ import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from '../framework/test-env.js';
 import {
   getAppContainerStatus, getAppContainerId, getAppContainerAttachment,
-  disconnectAppNetwork, connectAppNetwork,
-  getAppNetworkSubnet, removeAppNetworkRaw, createAppNetworkRaw,
+  disconnectAppNetwork, connectAppNetwork, stopAppContainer,
+  getAppNetwork, getAppNetworkSubnet, removeAppNetworkRaw,
   removeAppImage, restartFluxos, execInContainer,
 } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
@@ -62,6 +62,8 @@ describe('reconciler network-detach heal', function () {
   const stormComps = ['www', 'api', 'db'];
   const restartName = `e2ehealboot${Date.now()}`;
   const restartId = `${restartName}_${restartName}`;
+  const stopName = `e2ehealstop${Date.now()}`;
+  const stopId = `${stopName}_${stopName}`;
   const markerPath = (app) => `/mnt/appdata/flux-apps/flux${app}_${app}/appdata/heal-marker`;
 
   before(async function () {
@@ -146,6 +148,30 @@ describe('reconciler network-detach heal', function () {
     });
     await installOnNodes(env, restartApp, [idx]);
     await waitForReconcileActuated(client, restartId, 'firstRunProven', 90000);
+
+    // The stopped-container app: exercises the state no recreate path observes -
+    // container present but not running, network gone underneath it.
+    await pushImage(stopName, 'v1');
+    const stopApp = await buildSeedableApp({
+      name: stopName,
+      compose: [{
+        name: stopName,
+        description: 'stopped-with-pruned-network component',
+        repotag: `${REGISTRY_REPO_HOST}/${stopName}:v1`,
+        ports: [31116],
+        domains: [''],
+        environmentParameters: [],
+        commands: [],
+        containerPorts: [80],
+        containerData: '/tmp',
+        cpu: 0.1,
+        ram: 100,
+        hdd: 1,
+        repoauth: '',
+      }],
+    });
+    await installOnNodes(env, stopApp, [idx]);
+    await waitForReconcileActuated(client, stopId, 'firstRunProven', 90000);
   });
 
   after(async function () {
@@ -202,34 +228,57 @@ describe('reconciler network-detach heal', function () {
     expect(destructive, 'no destructive actuation for a detach that did not persist').to.deep.equal([]);
   });
 
-  it('refuses to destroy a container whose network is GONE, and heals once the network returns', async function () {
+  it('rebuilds its own missing network and heals - no operator restore needed', async function () {
     this.timeout(120000);
     await waitForUp(client, healName, 'running before the prune');
-    const subnet = await getAppNetworkSubnet(client.container, healName);
-    expect(subnet, 'the app network must exist (with a subnet) before the prune').to.be.a('string');
-    const idBefore = await getAppContainerId(client.container, healName);
+    expect(await getAppNetworkSubnet(client.container, healName), 'the app network must exist before the prune').to.be.a('string');
 
     const afterId = client.getLastEventId();
     await disconnectAppNetwork(client.container, healName);
     const rm = await removeAppNetworkRaw(client.container, healName);
     expect(rm.exitCode, `network rm failed: ${rm.output}`).to.equal(0);
 
-    // docker itself confirms the network is absent -> refuse the remove, record it
+    // The network exists because the app is installed, so the node rebuilds it
+    // rather than parking until somebody restores it. Nothing below recreates
+    // the network by hand - that is the point of the test.
     await waitForReconcileActuated(client, healId, 'networkPruned', 60000, { afterId });
-    const status = await getAppContainerStatus(client.container, healName, { all: true });
-    expect(status?.status?.startsWith('Up'), 'the un-recreatable container must be left in place, running').to.be.true;
-    expect(await getAppContainerId(client.container, healName), 'and untouched').to.equal(idBefore);
-
-    // the network returns (same subnet, as a restore would) -> the parked heal
-    // proceeds on its re-check pace: remove, recreate, attach
-    const mk = await createAppNetworkRaw(client.container, healName, subnet);
-    expect(mk.exitCode, `network create failed: ${mk.output}`).to.equal(0);
     await waitForHealRecreated(client, healId, 90000, afterId);
-    await waitForUp(client, healName, 'healed after the network returned');
+    await waitForUp(client, healName, 'healed on its own after the network was pruned');
+
+    expect(await getAppNetworkSubnet(client.container, healName), 'the node rebuilt the network itself').to.be.a('string');
     const attachment = await getAppContainerAttachment(client.container, healName);
-    expect(attachment.attached).to.be.true;
+    expect(attachment.attached, 'and the container came back attached to it').to.be.true;
     const r = await execInContainer(client.container, `cat ${markerPath(healName)}`);
     expect(r.stdout.trim(), 'appdata survives this heal too').to.equal('precious');
+  });
+
+  it('starts a STOPPED container whose network was pruned - the state that wedged forever', async function () {
+    this.timeout(150000);
+    // The production wedge, and suite 31's failure. A container that exists but is
+    // not running never reaches a recreate path, so nothing used to re-ensure its
+    // network: every start failed "network not found" and it backed off forever.
+    await waitForUp(client, stopName, 'running before the stop');
+
+    const afterId = client.getLastEventId();
+    await stopAppContainer(client.container, stopName, stopName);
+    await waitFor(async () => {
+      const s = await getAppContainerStatus(client.container, stopName, { all: true });
+      return s && !s.status.startsWith('Up');
+    }, { timeout: 60000, interval: 1000, label: 'container stopped' });
+
+    const rm = await removeAppNetworkRaw(client.container, stopName);
+    expect(rm.exitCode, `network rm failed: ${rm.output}`).to.equal(0);
+    expect(await getAppNetwork(client.container, stopName), 'the network really is gone').to.equal(null);
+
+    // The controller still wants it running, so the next pass must rebuild the
+    // network and start the EXISTING container - no recreate, no uninstall.
+    await waitForUp(client, stopName, 'started again on a rebuilt network');
+    expect(await getAppNetworkSubnet(client.container, stopName), 'the network was rebuilt').to.be.a('string');
+    const attachment = await getAppContainerAttachment(client.container, stopName);
+    expect(attachment.attached).to.be.true;
+
+    const acts = actuationsSince(client, stopId, afterId);
+    expect(acts.some((a) => a.action === 'uninstalled'), 'a missing network must never escalate to an uninstall').to.be.false;
   });
 
   it('a node-wide detach is a docker fault: the storm guard refuses to rebuild the workload', async function () {

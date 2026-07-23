@@ -132,6 +132,7 @@ export function nodeClient(nodeNum) {
         'reconciler:actuated',
         'reconciler:desiredChanged',
         'reconciler:swept',
+        'janitor:sweep',
         'content:blobUploaded',
         'content:blobResolved',
         'content:blobPeerMiss',

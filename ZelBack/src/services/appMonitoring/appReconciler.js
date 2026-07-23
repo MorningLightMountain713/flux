@@ -857,12 +857,10 @@ async function healDetachedNetwork(identifier, mainAppName) {
     return;
   }
 
-  // Only a stale endpoint (network present, container not attached) is heal-able.
-  // If the network itself is gone the recreate would fail on a missing NetworkMode,
-  // so removing the container would only take it from partially-alive to removed-
-  // and-unrecreatable. And absence must be PROVEN: a failed network read is not
-  // evidence of a missing network, and acting on it destroys a container we then
-  // cannot bring back.
+  // The recreate below attaches the new container to this network, so it has to
+  // exist first. Absence must still be PROVEN: a failed network read is not
+  // evidence of a missing network, and destroying a container on a bad read
+  // leaves it gone and unrecreatable.
   const networkState = await dockerService.dockerNetworkState(networkMode);
   if (networkState === 'unknown') {
     log.warn(`appReconciler - cannot determine whether ${networkMode} exists; deferring the heal of ${identifier}`);
@@ -870,14 +868,25 @@ async function healDetachedNetwork(identifier, mainAppName) {
     return;
   }
   if (networkState === 'absent') {
+    // Still worth recording once: an app network does not disappear on its own,
+    // and whatever removed it acted from outside this node's lifecycle.
     if (!networkPrunedNoted.has(identifier)) {
       networkPrunedNoted.add(identifier);
-      log.error(`appReconciler - ${identifier} detached because its network ${networkMode} is missing; not recreating (needs network restore, app NOT touched)`);
+      log.error(`appReconciler - ${identifier} detached because its network ${networkMode} is missing; rebuilding it before the heal`);
       await appTamperingDetectionService.recordEvent(mainAppName, 'network_pruned', `Network ${networkMode} missing while ${identifier} runs detached`);
       fluxEventBus.publish('reconciler:actuated', { identifier, action: 'networkPruned' });
     }
-    scheduleRetry(identifier, NETWORK_PRUNED_RETRY_MS); // keep watching for a restored network
-    return;
+    // Rebuilding it is this node's job, not an operator's - the network exists
+    // because the app is installed. Until this could be done the heal had to
+    // park here, since a remove it could not follow with a recreate would take
+    // the container from partially-alive to gone.
+    try {
+      await appDockerNetwork.ensureAppNetworkPresent(mainAppName);
+    } catch (err) {
+      log.error(`appReconciler - cannot rebuild ${networkMode} for ${identifier} (${err.message}); leaving the container in place`);
+      scheduleRetry(identifier, NETWORK_PRUNED_RETRY_MS);
+      return;
+    }
   }
   networkPrunedNoted.delete(identifier);
 

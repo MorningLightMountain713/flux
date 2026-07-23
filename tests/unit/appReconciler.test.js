@@ -2220,13 +2220,54 @@ describe('appReconciler tests', () => {
       expect(storm, 'says loudly that it refused a node-wide rebuild').to.be.true;
     });
 
-    it('does not destroy the container when docker confirms its network is gone (records network_pruned)', async () => {
+    it('rebuilds a missing network and then heals, instead of waiting for someone to restore it', async () => {
+      // This used to park: a remove it could not follow with a recreate would
+      // take the container from partially-alive to gone. The network is an owned
+      // resource now, so the precondition is something to satisfy, not to wait on.
       stubs.dockerService.dockerNetworkState.resolves('absent');
+
       await healPasses();
-      expect(stubs.dockerService.appDockerForceRemove.called, 'must not remove a container it cannot recreate').to.be.false;
-      expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
+
+      sinon.assert.calledWith(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App');
+      sinon.assert.callOrder(
+        stubs.appDockerNetwork.ensureAppNetworkPresent,
+        stubs.dockerService.appDockerForceRemove,
+      );
+      expect(stubs.dockerService.appDockerForceRemove.called, 'the heal proceeds once the network is back').to.be.true;
       const pruned = stubs.appTamperingDetectionService.recordEvent.getCalls().some((c) => c.args[1] === 'network_pruned');
-      expect(pruned, 'records a network_pruned event').to.be.true;
+      expect(pruned, 'a network does not vanish on its own - still recorded once').to.be.true;
+    });
+
+    it('destroys nothing when the network cannot be rebuilt', async () => {
+      stubs.dockerService.dockerNetworkState.resolves('absent');
+      stubs.appDockerNetwork.ensureAppNetworkPresent.rejects(new Error('no free subnet'));
+
+      await healPasses();
+
+      expect(stubs.dockerService.appDockerForceRemove.called, 'never remove what still cannot be recreated').to.be.false;
+      expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
+    });
+
+    it('does not rebuild anything on a detach storm - that is a docker fault, not a missing network', async () => {
+      // The storm guard sits ABOVE the network question, so making the network
+      // rebuildable must not give a node-wide docker fault a way through.
+      localSpec = {
+        name: 'App',
+        version: 4,
+        compose: [{ name: 'www', containerData: '/data' }, { name: 'api', containerData: '/data' }, { name: 'db', containerData: '/data' }],
+      };
+      stubs.dockerService.dockerNetworkState.resolves('absent');
+
+      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('api_App');
+      await appReconciler.reconcile('db_App');
+      clock.tick(61 * 1000);
+      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('api_App');
+      await appReconciler.reconcile('db_App');
+
+      expect(stubs.appDockerNetwork.ensureAppNetworkPresent.called, 'no rebuild while docker itself looks broken').to.be.false;
+      expect(stubs.dockerService.appDockerForceRemove.called).to.be.false;
     });
 
     it('defers (destroys nothing, records nothing) when docker cannot say whether the network exists', async () => {
