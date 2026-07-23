@@ -23,14 +23,14 @@ export async function fetchTransportPubKey(nodeUrl, appName, owner) {
  *
  * @param {string} nodeUrl
  * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?,
- *   contentRef?: Buffer, contentSlots?: [{ name, destination, bytes, onUpdate?, atomic? }],
+ *   assignment?, contentRef?: Buffer, contentSlots?: [{ name, destination, bytes, onUpdate?, atomic? }],
  *   ownerKey?, timestamp? }
  * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName }
  */
 export async function deployContentApp(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
   const owner = opts.owner || ownerKey.zelid;
-  const name = opts.name;
+  const { name } = opts;
   const timestamp = opts.timestamp || Date.now();
   const contentSlots = opts.contentSlots || [];
 
@@ -44,6 +44,7 @@ export async function deployContentApp(nodeUrl, opts) {
     ttl: opts.ttl,
     components: opts.components,
     placement: opts.placement,
+    assignment: opts.assignment,
     contentRefHash,
     contentSlots: contentSlots.map((s) => ({
       name: s.name, destination: s.destination, source: s.source, onUpdate: s.onUpdate, atomic: s.atomic, uid: s.uid, gid: s.gid, mode: s.mode,
@@ -106,14 +107,14 @@ export async function deployContentApp(nodeUrl, opts) {
  * sibling for the no-content case.
  *
  * @param {string} nodeUrl
- * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?, ownerKey?, timestamp? }
+ * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?, assignment?, ownerKey?, timestamp? }
  *   `components` is the full v9 components map (pass shutdown/preStop/etc. on a component here).
  * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName }
  */
 export async function registerEncryptedV9App(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
   const owner = opts.owner || ownerKey.zelid;
-  const name = opts.name;
+  const { name } = opts;
   const timestamp = opts.timestamp || Date.now();
 
   const submissionSpec = tk.buildV9ContentSpec({
@@ -124,6 +125,7 @@ export async function registerEncryptedV9App(nodeUrl, opts) {
     ttl: opts.ttl,
     components: opts.components,
     placement: opts.placement,
+    assignment: opts.assignment,
     // Extra top-level v9 spec fields (e.g. a telemetry block) — spread last
     // by the builder, so they land on the submission verbatim.
     ...(opts.specOverrides || {}),
@@ -155,13 +157,13 @@ export async function registerEncryptedV9App(nodeUrl, opts) {
  * as a registration, then the fleet converges on the new spec.
  *
  * @param {string} nodeUrl
- * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?, ownerKey?, timestamp? }
+ * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?, assignment?, ownerKey?, timestamp? }
  * @returns {Promise<object>} the /apps/appupdate response + { contentHash, appName }
  */
 export async function updateEncryptedV9App(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
   const owner = opts.owner || ownerKey.zelid;
-  const name = opts.name;
+  const { name } = opts;
   const timestamp = opts.timestamp || Date.now();
 
   const submissionSpec = tk.buildV9ContentSpec({
@@ -172,6 +174,7 @@ export async function updateEncryptedV9App(nodeUrl, opts) {
     ttl: opts.ttl,
     components: opts.components,
     placement: opts.placement,
+    assignment: opts.assignment,
     // Extra top-level v9 spec fields (e.g. a telemetry block) — spread last
     // by the builder, so they land on the submission verbatim.
     ...(opts.specOverrides || {}),
@@ -211,8 +214,7 @@ export async function updateEncryptedV9App(nodeUrl, opts) {
 export async function pushContentUpdate(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
   const owner = opts.owner || ownerKey.zelid;
-  const name = opts.name;
-  const { version } = opts;
+  const { name, version } = opts;
   const timestamp = opts.timestamp || Date.now();
 
   const slotMap = {};
