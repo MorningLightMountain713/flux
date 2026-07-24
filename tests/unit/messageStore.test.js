@@ -934,6 +934,12 @@ describe('messageStore tests', () => {
       // Elections rank on announcedAt; a sync intake that dropped it would
       // silently reorder contenders on freshly synced nodes.
       expect(locationOps[0].updateOne.update[0].$set.announcedAt).to.exist;
+      // The identity is written flat (it is what the filter matched), but every
+      // recency-bearing field goes through the newer-wins guard - a late-arriving
+      // older claim must not roll the row's timestamps backwards.
+      expect(locationOps[0].updateOne.update[0].$set.broadcastedAt).to.have.property('$cond');
+      expect(locationOps[0].updateOne.update[0].$set.expireAt).to.have.property('$cond');
+      expect(locationOps[0].updateOne.update[0].$set.announcedAt).to.have.property('$cond');
     });
   });
 

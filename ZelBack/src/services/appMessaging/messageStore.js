@@ -830,23 +830,24 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
       },
     });
 
-    const incomingDate = new Date(data.broadcastedAt);
-    const incomingExpiry = new Date(validTill);
-    const isNewer = { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] };
-    const locationSet = {
-      name: data.name,
-      ip: data.ip,
-      replica,
-      broadcastedAt: { $cond: [isNewer, incomingDate, '$broadcastedAt'] },
-      expireAt: { $cond: [isNewer, incomingExpiry, '$expireAt'] },
+    const locationFields = {
+      broadcastedAt: new Date(data.broadcastedAt),
+      expireAt: new Date(validTill),
     };
+    // announcedAt is the claim's ORIGINAL announce time and must not drift on a
+    // renewal - the renewal carries the original value, so taking the incoming one
+    // when it is newer preserves it.
     if (typeof data.announcedAt === 'number') {
-      locationSet.announcedAt = { $cond: [isNewer, new Date(data.announcedAt), '$announcedAt'] };
+      locationFields.announcedAt = new Date(data.announcedAt);
     }
     locationOps.push({
       updateOne: {
         filter: { name: data.name, ip: data.ip, replica },
-        update: [{ $set: locationSet }],
+        // The identity is what the filter matched on, so it is never conditional on
+        // recency - only the claim's timestamps and expiry are.
+        update: buildConditionalUpsert(data.broadcastedAt, locationFields, {
+          alwaysSetFields: { name: data.name, ip: data.ip, replica },
+        }),
         upsert: true,
       },
     });
@@ -922,18 +923,16 @@ async function storeBatchAppInstallingErrorMessages(verifiedBroadcasts) {
       },
     });
 
-    const isNewer = { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] };
     locationOps.push({
       updateOne: {
         filter: { name: data.name, hash: data.hash, ip: data.ip },
-        update: [{ $set: {
-          name: data.name,
-          hash: data.hash,
-          ip: data.ip,
-          error: { $cond: [isNewer, data.error, { $ifNull: ['$error', data.error] }] },
-          broadcastedAt: { $cond: [isNewer, incomingDate, '$broadcastedAt'] },
-          expireAt: { $cond: [isNewer, incomingExpiry, '$expireAt'] },
-        } }],
+        update: buildConditionalUpsert(data.broadcastedAt, {
+          error: data.error,
+          broadcastedAt: incomingDate,
+          expireAt: incomingExpiry,
+        }, {
+          alwaysSetFields: { name: data.name, hash: data.hash, ip: data.ip },
+        }),
         upsert: true,
       },
     });
