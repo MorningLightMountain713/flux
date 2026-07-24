@@ -21,6 +21,7 @@ describe('appsRepository', () => {
       removeDocumentsFromCollection: sinon.stub(),
       updateOneInDatabase: sinon.stub().resolves({ acknowledged: true }),
       aggregateInDatabase: sinon.stub().resolves([]),
+      bulkWriteInDatabase: sinon.stub().resolves({ upsertedCount: 0 }),
     };
 
     // getSpec() returns { FluxAppSpecBase: { getVersionClass } }.
@@ -200,6 +201,29 @@ describe('appsRepository', () => {
       dbHelperStub.findOneInDatabase.resolves(null);
       expect(await appsRepository.getGlobalAppHeight('missing')).to.be.null;
     });
+
+    it('listInstalledAppNames reads names through a name projection', async () => {
+      dbHelperStub.findInDatabase.resolves([{ name: 'AppA' }, { name: 'AppB' }]);
+      const result = await appsRepository.listInstalledAppNames();
+      expect(result).to.deep.equal(['AppA', 'AppB']);
+      const options = dbHelperStub.findInDatabase.firstCall.args[3];
+      expect(options.projection).to.deep.equal({ _id: 0, name: 1 });
+      expect(specLibsStub.getSpecBackend.called).to.be.false;
+    });
+
+    it('listInstalledAppNames keeps an app whose spec would not hydrate', async () => {
+      // The reason this exists rather than listInstalledApps: the boot sweep runs
+      // before the spec-backend bridge is warm, and must not lose apps to it.
+      dbHelperStub.findInDatabase.resolves([{ name: 'AppA', version: 42 }]);
+      expect(await appsRepository.listInstalledAppNames()).to.deep.equal(['AppA']);
+    });
+
+    it('listInstalledAppNames returns one entry per app, not per identity', async () => {
+      dbHelperStub.findInDatabase.resolves([
+        { name: 'AppA' }, { name: 'appa' }, { name: 'AppB' },
+      ]);
+      expect(await appsRepository.listInstalledAppNames()).to.deep.equal(['AppA', 'AppB']);
+    });
   });
 
   describe('writes', () => {
@@ -227,6 +251,25 @@ describe('appsRepository', () => {
       const query = dbHelperStub.removeDocumentsFromCollection.firstCall.args[2];
       expect('BYEAPP').to.match(query.name);
       expect('byeapp').to.match(query.name);
+    });
+
+    it('upsertAppInstallingErrorLocations upserts each record on its identity', async () => {
+      const records = [
+        { name: 'AppA', hash: 'h1', ip: '1.1.1.1:16127', error: 'boom' },
+        { name: 'AppB', hash: 'h2', ip: '2.2.2.2:16127', error: 'bang' },
+      ];
+      await appsRepository.upsertAppInstallingErrorLocations(records);
+      const operations = dbHelperStub.bulkWriteInDatabase.firstCall.args[2];
+      expect(operations).to.have.length(2);
+      expect(operations[0].updateOne.filter).to.deep.equal({ name: 'AppA', hash: 'h1', ip: '1.1.1.1:16127' });
+      expect(operations[0].updateOne.update).to.deep.equal({ $set: records[0] });
+      expect(operations[0].updateOne.upsert).to.equal(true);
+      expect(operations[1].updateOne.filter.name).to.equal('AppB');
+    });
+
+    it('upsertAppInstallingErrorLocations tolerates a peer reporting no errors', async () => {
+      await appsRepository.upsertAppInstallingErrorLocations([]);
+      expect(dbHelperStub.bulkWriteInDatabase.firstCall.args[2]).to.deep.equal([]);
     });
   });
 

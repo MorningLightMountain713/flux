@@ -13,6 +13,7 @@ const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appReconciler = require('../appMonitoring/appReconciler');
+const appsRepository = require('../appDatabase/appsRepository');
 const nodeDosState = require('../nodeDosState');
 const appUninstaller = require('./appUninstaller');
 const appNetworkLinker = require('./appNetworkLinker');
@@ -53,6 +54,16 @@ async function awaitWithin(work, timeoutMs, reason) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Names of the apps installed on this node. Rejects when the installed apps
+ * cannot be read: an empty answer would read as "nothing installed" — a boot
+ * sweep with nothing to do, and every placement record taken for a stray.
+ * @returns {Promise<Array<string>>}
+ */
+async function getInstalledAppNamesFromDb() {
+  return appsRepository.listInstalledAppNames();
 }
 
 /**
@@ -227,15 +238,14 @@ async function reconcileAppsOnBoot() {
   try {
     log.info('appStartupManager - Starting boot reconciliation check');
 
-    // Get all installed apps from database (just to get the list of app names)
-    const installedApps = await getInstalledAppsFromDb();
+    const installedApps = await getInstalledAppNamesFromDb();
     if (installedApps.length === 0) {
       log.info('appStartupManager - No installed apps found');
       return results;
     }
 
     // Create a set for quick lookup of installed app names
-    const installedAppNames = new Set(installedApps.map((app) => app.name));
+    const installedAppNames = new Set(installedApps);
 
     // Get all stopped Flux containers + the apps they belong to.
     const stoppedContainers = await getStoppedFluxContainers();
@@ -253,12 +263,12 @@ async function reconcileAppsOnBoot() {
     // is actually restarting. Runs even when nothing is stopped (the re-arm still matters).
     // Best-effort per app: a content failure must never block the app from starting on its
     // persisted on-disk content.
-    for (const app of installedApps) {
+    for (const installedAppName of installedApps) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        await contentSlotService.reconcileBootContent(app.name, { restarting: appsWithStoppedContainers.has(app.name) });
+        await contentSlotService.reconcileBootContent(installedAppName, { restarting: appsWithStoppedContainers.has(installedAppName) });
       } catch (contentError) {
-        log.warn(`appStartupManager - boot content recovery for ${app.name} failed (starting on on-disk content) - ${contentError.message ?? contentError}`);
+        log.warn(`appStartupManager - boot content recovery for ${installedAppName} failed (starting on on-disk content) - ${contentError.message ?? contentError}`);
       }
     }
 
@@ -397,8 +407,7 @@ async function removeAllApps(reason) {
  */
 async function tidyPlacementsOnBoot() {
   await untilSucceeds('Removing stray placement records', async () => {
-    const installed = await getInstalledAppsFromDb();
-    await appPlacements.removeStrayPlacements(installed.map((app) => app.name));
+    await appPlacements.removeStrayPlacements(await getInstalledAppNamesFromDb());
   });
 }
 
@@ -485,5 +494,5 @@ module.exports = {
   openInstalledAppPorts,
   reconcileAppsOnBoot,
   getStoppedFluxContainers,
-  getInstalledAppsFromDb,
+  getInstalledAppNamesFromDb,
 };

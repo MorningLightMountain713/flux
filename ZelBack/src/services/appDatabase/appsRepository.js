@@ -569,6 +569,29 @@ async function listInstalledApps({ filter = {} } = {}) {
 }
 
 /**
+ * The NAMES of the apps installed here, read WITHOUT hydrating the specs.
+ * Deliberately not listInstalledApps: hydration goes through the spec-backend
+ * bridge, so a caller running before that bridge is warm — the boot recovery
+ * sweep — would silently lose every app whose spec did not resolve. One entry
+ * per app, matching listInstalledApps.
+ * @returns {Promise<Array<string>>}
+ */
+async function listInstalledAppNames() {
+  const docs = await dbHelper.findInDatabase(
+    localDb(), localAppsInformation, {}, { projection: { _id: 0, name: 1 } },
+  );
+  const names = [];
+  const seen = new Set();
+  for (const doc of docs) {
+    const key = String(doc.name).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(doc.name);
+  }
+  return names;
+}
+
+/**
  * Remove EVERY identity's row for an app — the whole app leaves this node.
  * A single replica's departure uses removeInstalledIdentity instead.
  */
@@ -905,6 +928,27 @@ async function clearInstallingErrors(name) {
   );
 }
 
+/**
+ * Adopt a peer's installing-error location records wholesale, keyed by the
+ * record's identity. This is boot catch-up from a peer with more uptime than
+ * us, so its copy is taken as given — the newer-wins merge lives on the live
+ * broadcast path, which is the only one carrying a broadcast timestamp to
+ * compare.
+ * @param {Array<object>} records
+ */
+async function upsertAppInstallingErrorLocations(records) {
+  const operations = records.map((record) => ({
+    updateOne: {
+      filter: { name: record.name, hash: record.hash, ip: record.ip },
+      update: { $set: record },
+      upsert: true,
+    },
+  }));
+  await dbHelper.bulkWriteInDatabase(
+    globalDb(), globalAppsInstallingErrorsLocations, operations,
+  );
+}
+
 // ── App Locations (globalAppsLocations) ────────────────────────────
 
 const locationProjection = {
@@ -1120,6 +1164,7 @@ module.exports = {
   countInstalledApps,
   existsInstalledApp,
   listInstalledApps,
+  listInstalledAppNames,
   removeInstalledApp,
   insertInstalledApp,
   upsertInstalledApp,
@@ -1148,6 +1193,7 @@ module.exports = {
   // upsert + errors
   upsertIfNewer,
   clearInstallingErrors,
+  upsertAppInstallingErrorLocations,
   // locations
   getAppLocation,
   isAppRunningOnIp,
