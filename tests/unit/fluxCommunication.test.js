@@ -2313,7 +2313,6 @@ describe('fluxCommunication tests', () => {
       sinon.stub(verifyPool, 'verify').callsFake(async (items) => items.map(() => true));
       sinon.stub(messageStore, 'storeAppStateEvent').resolves();
       sinon.stub(messageStore, 'storeIPChangedMessage').resolves(true);
-      sinon.stub(messageStore, 'pruneAppRunningLocations').resolves();
       expireStub = sinon.stub(messageStore, 'expireLocationsForSigterm').resolves();
       removeStub = sinon.stub(messageStore, 'removeLocationForAppRemoved').resolves();
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({ collection: () => ({}) }) });
@@ -2371,55 +2370,6 @@ describe('fluxCommunication tests', () => {
 
       sinon.assert.notCalled(messageStore.storeAppStateEvent);
       sinon.assert.notCalled(messageStore.storeIPChangedMessage);
-    });
-
-    // A node's newest broadcast says which of its rows stand; its refused
-    // entries say nothing about what it runs.
-    describe('pruning against what a synced node runs', () => {
-      const apprunning = (apps, broadcastedAt = Date.now() - 60000) => ({
-        type: 'apprunning',
-        ip: SENDER,
-        envelope,
-        data: {
-          type: 'fluxapprunning', version: 2, apps, ip: SENDER, broadcastedAt, osUptime: 1, staticIp: false,
-        },
-      });
-
-      beforeEach(() => {
-        sinon.stub(messageStore, 'storeBatchAppRunningMessages').resolves({ stored: 1, writeFailed: false });
-      });
-
-      it('prunes against the apps the broadcast names that can be stored', async () => {
-        await fluxCommunication.handleAppRunningSyncResponse({
-          data: { type: 'fluxapprunningsync', messages: [apprunning([{ name: 'web', hash: 'h1' }, { name: 'probe' }])], done: true },
-        }, PEER_SOCKET);
-
-        const [newestByIp] = messageStore.pruneAppRunningLocations.firstCall.args;
-        expect(newestByIp.get(SENDER).names).to.deep.equal(['web']);
-      });
-
-      it('never prunes against a broadcast whose every app is refused', async () => {
-        await fluxCommunication.handleAppRunningSyncResponse({
-          data: { type: 'fluxapprunningsync', messages: [apprunning([{ name: 'probe' }])], done: true },
-        }, PEER_SOCKET);
-
-        const [newestByIp] = messageStore.pruneAppRunningLocations.firstCall.args;
-        expect(newestByIp.has(SENDER), 'pruned the sender\'s rows against an empty list').to.equal(false);
-      });
-
-      it('prunes against the newest broadcast it can read, past a later one it refuses', async () => {
-        const now = Date.now();
-        await fluxCommunication.handleAppRunningSyncResponse({
-          data: {
-            type: 'fluxapprunningsync',
-            messages: [apprunning([{ name: 'web', hash: 'h1' }], now - 120000), apprunning([{ name: 'probe' }], now - 60000)],
-            done: true,
-          },
-        }, PEER_SOCKET);
-
-        const [newestByIp] = messageStore.pruneAppRunningLocations.firstCall.args;
-        expect(newestByIp.get(SENDER)).to.deep.equal({ names: ['web'], broadcastedAt: now - 120000 });
-      });
     });
 
     it('hands an eviction to messageStore with the time it was made', async () => {
@@ -2481,9 +2431,9 @@ describe('fluxCommunication tests', () => {
       // arrival -> queue -> handler rather than the envelope check.
       sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
         .resolves(fluxCommunicationUtils.VerifyResult.OK);
-      // An empty final batch is the whole path here: processInSlices does
-      // nothing, and apprunning's pruning is the only step that needs a store.
-      sinon.stub(messageStore, 'pruneAppRunningLocations').resolves();
+      // An empty final batch is the whole path here: processInSlices does nothing.
+      // (The location prune that used to need a store here is gone: messageStore no
+      // longer maintains the materialized cache.)
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({ collection: () => ({}) }) });
     });
 
@@ -2626,7 +2576,7 @@ describe('fluxCommunication tests', () => {
       });
 
       it('is not counted as a completed apprunning survey', async () => {
-        sinon.stub(messageStore, 'storeBatchAppRunningMessages').resolves({ stored: 1, writeFailed: true });
+        sinon.stub(messageStore, 'storeBatchAppRunningEvents').resolves({ stored: 1, writeFailed: true });
         const event = {
           type: 'apprunning',
           envelope: { version: 1, timestamp: Date.now(), pubKey: '04key', signature: 'sig' },
@@ -2635,7 +2585,7 @@ describe('fluxCommunication tests', () => {
 
         await fluxCommunication.handleAppRunningSyncResponse({ data: { type: 'fluxapprunningsync', messages: [event], done: true } }, PEER_SOCKET);
 
-        expect(messageStore.storeBatchAppRunningMessages.called, 'the fixture never reached the store').to.be.true;
+        expect(messageStore.storeBatchAppRunningEvents.called, 'the fixture never reached the store').to.be.true;
         expect(completions).to.deep.equal([]);
       });
 
@@ -2670,7 +2620,7 @@ describe('fluxCommunication tests', () => {
         [
           ['appinstalling', 'storeBatchAppInstallingMessages', 'handleAppInstallingSyncResponse', 'fluxappinstallingsync', broadcast],
           ['apperrors', 'storeBatchAppInstallingErrorMessages', 'handleAppInstallingErrorsSyncResponse', 'fluxappinstallingerrorssync', broadcast],
-          ['apprunning', 'storeBatchAppRunningMessages', 'handleAppRunningSyncResponse', 'fluxapprunningsync', running],
+          ['apprunning', 'storeBatchAppRunningEvents', 'handleAppRunningSyncResponse', 'fluxapprunningsync', running],
         ].forEach(([syncType, store, handler, type, event]) => {
           it(`for ${syncType}`, async () => {
             sinon.stub(messageStore, store).resolves({ stored: 1, writeFailed: true });
@@ -2713,7 +2663,7 @@ describe('fluxCommunication tests', () => {
         verdict = fluxCommunicationUtils.VerifyResult.OK;
         appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_WRITE_FAILED, onWriteFailed);
         sinon.stub(fluxCommunicationUtils, 'verifyBroadcasts').callsFake(async (items) => items.map(() => ({ result: verdict })));
-        sinon.stub(messageStore, 'storeBatchAppRunningMessages').resolves({ stored: 1, writeFailed: false });
+        sinon.stub(messageStore, 'storeBatchAppRunningEvents').resolves({ stored: 1, writeFailed: false });
         sinon.stub(messageStore, 'storeBatchAppInstallingMessages').resolves({ stored: 1, writeFailed: false });
         sinon.stub(messageStore, 'storeBatchAppInstallingErrorMessages').resolves({ stored: 1, writeFailed: false });
         sinon.stub(messageStore, 'storeAppStateEvent').resolves();
@@ -2751,16 +2701,6 @@ describe('fluxCommunication tests', () => {
 
         await respond('handleAppInstallingSyncResponse', 'fluxappinstallingsync', [broadcast()], true);
 
-        expect(writeFailures).to.deep.equal([PEER]);
-        expect(completions).to.deep.equal([]);
-      });
-
-      it('ends the apprunning request when pruning its locations throws', async () => {
-        messageStore.pruneAppRunningLocations.rejects(new Error('operation exceeded time limit'));
-
-        await respond('handleAppRunningSyncResponse', 'fluxapprunningsync', [running()], true);
-
-        expect(messageStore.pruneAppRunningLocations.called, 'the fixture never reached the prune').to.be.true;
         expect(writeFailures).to.deep.equal([PEER]);
         expect(completions).to.deep.equal([]);
       });

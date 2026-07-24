@@ -6,12 +6,10 @@ const benchmarkService = require('../benchmarkService');
 const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
-const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const { getSpec, validateGossipSpec } = require('../utils/specLibs');
 const { getPreviousState } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const { appRunningEntries } = require('../utils/appRunningEntries');
-const fluxEventBus = require('../utils/fluxEventBus');
 const {
   globalAppsMessages,
   globalAppsTempMessages,
@@ -24,7 +22,6 @@ const {
   appsHashesCollection,
 } = require('../utils/appConstants');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
-const { addressMoveEvents, EVENTS: ADDRESS_MOVE_EVENTS } = require('../utils/addressMoveEvents');
 
 const {
   GOSSIP_VALIDITY_MS,
@@ -34,11 +31,6 @@ const {
   EVICTED_EXPIRY_MS,
   SIGTERM_EXPIRY_MS,
 } = require('../utils/appConstants');
-
-// Cap on how many location operations are handed to one bulk write. The driver
-// encodes the whole batch before sending it, and that encoding is what a large
-// sync response leaves behind in memory.
-const LOCATION_OPS_PER_WRITE = 500;
 
 const APP_STATE_EVENT_TYPES = Object.freeze({
   APPRUNNING: 'apprunning',
@@ -236,20 +228,6 @@ async function storeAppPermanentMessage(message) {
     throw error;
   });
   return true;
-}
-
-/**
- * The runningSince a location write sets. A report written at the address its
- * node moved to meets the row the move carried there, which is the same
- * instance: the earlier of the two is kept, as storeIPChangedMessage keeps it.
- * @param {object} isNewer Expression: the report is newer than the row.
- * @param {Date} runningSince The report's.
- * @param {boolean} moved Whether the report was made at an address its node has since left.
- * @returns {object} Aggregation expression.
- */
-function runningSinceOf(isNewer, runningSince, moved) {
-  if (moved) return { $min: [{ $ifNull: ['$runningSince', runningSince] }, runningSince] };
-  return { $cond: [isNewer, runningSince, { $ifNull: ['$runningSince', runningSince] }] };
 }
 
 /**
@@ -553,9 +531,9 @@ async function storeAppRemovedMessage(message) {
     return false;
   }
 
-  await removeLocationForAppRemoved(message.ip, message.appName, message.broadcastedAt, message.replica);
-
-  // all stored, rebroadcast
+  // Nothing to delete: the removal is recorded in the app state event log by
+  // storeAppStateEvent, and the derivation excludes the app from the node's running
+  // set from that moment.
   return true;
 }
 
@@ -677,12 +655,11 @@ async function storeAppInstallingErrorMessage(message) {
 const IP_CHANGED_VALIDITY_MS = RUNNING_EXPIRY_MS;
 
 /**
- * Applies a move to the location table: the rows reported at the old address
- * before the move are carried to where the node is now, and addressMoveEvents
- * is told. Every path a move arrives by - gossip, sync, this node's own - applies
- * it here.
+ * Checks a move: every path a move arrives by - gossip, sync, this node's own -
+ * checks it here. The move itself is recorded in the event log, which the
+ * derivation re-addresses the node's announcements off.
  * @param {object} message - The move
- * @returns {Promise<boolean|Error>} true when applied, false when too old to
+ * @returns {Promise<boolean|Error>} true when current, false when too old to
  *   apply, an Error when refused
  */
 async function storeIPChangedMessage(message) {
@@ -719,182 +696,11 @@ async function storeIPChangedMessage(message) {
     return false;
   }
 
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  // The rows the move speaks for are the ones reported before it: a later row at
-  // the old address is whoever holds it now. They go where the node is now, which
-  // is further on when it has moved again since, and keep their own report time.
-  const reportedBefore = { ip: message.oldIP, broadcastedAt: { $lt: new Date(message.broadcastedAt) } };
-  const [newIp] = await registryManager.currentAddressesOf([{ ip: message.newIP, at: message.broadcastedAt }]);
-  // the node has since moved back: its rows are where they belong
-  if (socketAddressesMatch(newIp, message.oldIP)) return true;
-  // A row the node has already announced at its new address is the same instance
-  // as its row at the old one: it keeps the earlier runningSince and the old row
-  // goes, so the move leaves one row per app rather than two.
-  const moving = await dbHelper.findInDatabase(database, globalAppsLocations, reportedBefore, { projection: { _id: 0, name: 1, runningSince: 1 } });
-  if (moving.length) {
-    const present = await dbHelper.findInDatabase(
-      database,
-      globalAppsLocations,
-      { ip: newIp, name: { $in: moving.map((row) => row.name) } },
-      { projection: { _id: 0, name: 1 } },
-    );
-    // eslint-disable-next-line no-restricted-syntax
-    for (const { name } of present) {
-      const { runningSince } = moving.find((row) => row.name === name);
-      if (runningSince) {
-        // eslint-disable-next-line no-await-in-loop
-        await dbHelper.updateOneInDatabase(database, globalAppsLocations, { ip: newIp, name }, [
-          { $set: { runningSince: { $min: ['$runningSince', runningSince] } } },
-        ]);
-      }
-    }
-    if (present.length) {
-      await dbHelper.removeDocumentsFromCollection(database, globalAppsLocations, { ...reportedBefore, name: { $in: present.map((row) => row.name) } });
-    }
-  }
-  await dbHelper.updateInDatabase(database, globalAppsLocations, reportedBefore, { $set: { ip: newIp } });
-  addressMoveEvents.emit(ADDRESS_MOVE_EVENTS.APPLIED, { from: message.oldIP, to: newIp, broadcastedAt: message.broadcastedAt });
+  // Nothing to rewrite: the move is recorded in the event log, and the derivation
+  // re-addresses the node's announcements off it.
 
   // all stored, rebroadcast
   return true;
-}
-
-async function storeBatchAppRunningMessages(verifiedBroadcasts) {
-  if (verifiedBroadcasts.length === 0) return { stored: 0, writeFailed: false };
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-
-  const { stored, writeFailed: eventsFailed } = await storeBatchAppRunningEvents(verifiedBroadcasts);
-
-  // One operation is built per app per broadcast and each carries a merge
-  // pipeline, so a sync response of a few thousand broadcasts expands into tens
-  // of thousands of them. Writing in bounded batches keeps both this array and
-  // the driver's encoding of it small; the operations are independent of one
-  // another, which is what makes the unordered write safe to split.
-  const locationOps = [];
-  let writeFailed = eventsFailed;
-  const flushLocationOps = async () => {
-    if (!locationOps.length) return;
-    const batch = locationOps.splice(0, locationOps.length);
-    await database.collection(globalAppsLocations).bulkWrite(batch, { ordered: false })
-      .catch((err) => {
-        writeFailed = true;
-        log.error(`storeBatchAppRunningMessages locations: ${err.message}`);
-      });
-  };
-
-  const addresses = await registryManager.currentAddressesOf(
-    verifiedBroadcasts.map(({ data }) => ({ ip: data.ip, at: data.broadcastedAt })),
-  );
-
-  // one log line per call: a sync response is stored a slice at a time, and a
-  // slice holds thousands of broadcasts
-  const refusals = [];
-  for (const [index, broadcast] of verifiedBroadcasts.entries()) {
-    const { data } = broadcast;
-    const validTill = data.broadcastedAt + RUNNING_EXPIRY_MS;
-    if (validTill < Date.now()) continue;
-    const ip = addresses[index];
-
-    const { stored: apps, refused } = appRunningEntries(data.version === 2 ? (data.apps || []) : [{ name: data.name, hash: data.hash }]);
-    if (refused.length) refusals.push({ ip: data.ip, broadcastedAt: data.broadcastedAt, refused });
-    const incomingDate = new Date(data.broadcastedAt);
-    const incomingExpiry = new Date(validTill);
-    const isNewer = { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] };
-    for (const app of apps) {
-      // Normalize the LB lifecycle state at ingest:
-      // only explicit draining/stopping survive; absent/other defaults to active.
-      const normalizedState = ['draining', 'stopping'].includes(app.state) ? app.state : 'active';
-      const setFields = {
-        name: app.name,
-        ip,
-        hash: { $cond: [isNewer, app.hash, { $ifNull: ['$hash', app.hash] }] },
-        broadcastedAt: { $cond: [isNewer, incomingDate, '$broadcastedAt'] },
-        expireAt: { $cond: [isNewer, incomingExpiry, '$expireAt'] },
-        osUptime: { $cond: [isNewer, data.osUptime, { $ifNull: ['$osUptime', data.osUptime] }] },
-        staticIp: { $cond: [isNewer, data.staticIp ?? null, { $ifNull: ['$staticIp', data.staticIp ?? null] }] },
-        state: { $cond: [isNewer, normalizedState, { $ifNull: ['$state', normalizedState] }] },
-        // One row per identity (name+ip+replica), mirroring installing-locations: null for
-        // loose placement and legacy rows without the field. Part of the upsert key below,
-        // so co-located replicas no longer collapse onto a single (name,ip) row.
-        replica: app.replica ?? null,
-      };
-      const runningSince = data.runningSince ? new Date(data.runningSince) : (app.runningSince ? new Date(app.runningSince) : null);
-      if (runningSince) {
-        setFields.runningSince = runningSinceOf(isNewer, runningSince, ip !== data.ip);
-      }
-      locationOps.push({
-        updateOne: {
-          filter: { name: app.name, ip, replica: app.replica ?? null },
-          update: [{ $set: setFields }],
-          upsert: true,
-        },
-      });
-
-      if (locationOps.length >= LOCATION_OPS_PER_WRITE) {
-        // eslint-disable-next-line no-await-in-loop
-        await flushLocationOps();
-      }
-    }
-  }
-
-  await flushLocationOps();
-  logRefusedEntries('storeBatchAppRunningMessages', refusals);
-  if (refusals.length) {
-    fluxEventBus.publish('network:apprunningRefused', {
-      path: 'sync',
-      refusals: refusals.map(({ ip, refused }) => ({ ip, names: refused.map((app) => app?.name ?? null) })),
-    });
-  }
-
-  // Upserts only. Removing the rows a node no longer reports belongs to
-  // pruneAppRunningLocations, which is driven from the newest broadcast per node
-  // rather than from whatever happened to arrive in this batch.
-  return { stored, writeFailed };
-}
-
-/**
- * Drop location rows a node no longer reports.
- *
- * Only the newest broadcast from a node says which apps it still runs, so this
- * cannot be done from part of a sync response - a slice holding an older
- * broadcast would prune against a stale app list, and one holding a newer
- * broadcast would leave rows an earlier slice had already written. The caller
- * passes the newest broadcast seen per node across the whole response.
- *
- * @param {Map<string, {names: Array<string>, broadcastedAt: number}>} newestByIp Newest broadcast per node.
- * @returns {Promise<void>}
- */
-async function pruneAppRunningLocations(newestByIp) {
-  if (!newestByIp || newestByIp.size === 0) return;
-
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const ops = [];
-
-  const flush = async () => {
-    if (!ops.length) return;
-    const batch = ops.splice(0, ops.length);
-    await database.collection(globalAppsLocations).bulkWrite(batch, { ordered: false });
-  };
-
-  const newest = [...newestByIp];
-  const addresses = await registryManager.currentAddressesOf(newest.map(([ip, { broadcastedAt }]) => ({ ip, at: broadcastedAt })));
-  for (const [index, [, { names, broadcastedAt }]] of newest.entries()) {
-    const ip = addresses[index];
-    ops.push({
-      deleteMany: {
-        filter: { ip, name: { $nin: names }, broadcastedAt: { $lte: new Date(broadcastedAt) } },
-      },
-    });
-    if (ops.length >= LOCATION_OPS_PER_WRITE) {
-      // eslint-disable-next-line no-await-in-loop
-      await flush();
-    }
-  }
-
-  await flush();
 }
 
 // --- Event Log Functions ---
@@ -1402,8 +1208,6 @@ module.exports = {
   storeAppPermanentMessage,
   processPendingUpdates,
   releaseInstallingClaims,
-  storeBatchAppRunningMessages,
-  pruneAppRunningLocations,
   storeAppStateEvent,
   storeBatchAppRunningEvents,
   APP_STATE_EVENT_TYPES,

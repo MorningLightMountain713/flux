@@ -6,7 +6,6 @@ const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const dbHelper = require('./dbHelper');
 const messageStore = require('./appMessaging/messageStore');
-const { appRunningEntries } = require('./utils/appRunningEntries');
 const messageVerifier = require('./appMessaging/messageVerifier');
 const ingressAttestationService = require('./appMessaging/ingressAttestationService');
 const ingressAttestationSyncService = require('./appMessaging/ingressAttestationSyncService');
@@ -18,7 +17,6 @@ const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const messageHelper = require('./messageHelper');
 const { peerManager, PEER_SOURCE, CLOSE_CODES } = require('./utils/peerState');
-const { RUNNING_EXPIRY_MS } = require('./utils/appConstants');
 const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
@@ -265,12 +263,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // before this response was processed in slices.
     const evictions = [];
     const stateEvents = [];
-    // Which apps a node still runs is only known from its newest broadcast in
-    // the whole response, so pruning cannot be decided from inside a slice. Only
-    // verified broadcasts count - pruning deletes rows, and an unsigned event
-    // must never be able to do that.
-    const newestByIp = new Map();
-    let locationWriteFailed = false;
+    let eventWriteFailed = false;
 
     await serviceHelper.processInSlices(messages, SYNC_EVENTS_PER_SLICE, async (slice) => {
       const appRunningBroadcasts = [];
@@ -311,45 +304,23 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
         }
       }
 
-      for (const broadcast of verifiedAppRunning) {
-        const { data } = broadcast;
-        if (!data || data.version !== 2 || !Array.isArray(data.apps) || !data.apps.length) continue;
-        // Skipped for the same reason messageStore skips it when it builds this
-        // map itself: an expired broadcast is not evidence of what an IP is
-        // running now. The prune it feeds only deletes rows at or below the
-        // broadcast's own timestamp, so an expired one could only ever take
-        // already-expired rows - but that is a bound to be read out of another
-        // file, and two builders of one input should not need reconciling.
-        if (data.broadcastedAt + RUNNING_EXPIRY_MS < Date.now()) continue;
-        // Pruned against the apps the broadcast names that can be stored: one
-        // naming only entries this node refuses says nothing about what its
-        // sender runs, and is never read as one naming no apps at all.
-        const { stored } = appRunningEntries(data.apps);
-        if (!stored.length) continue;
-        const seen = newestByIp.get(data.ip);
-        if (!seen || data.broadcastedAt > seen.broadcastedAt) {
-          newestByIp.set(data.ip, { names: stored.map((a) => a.name), broadcastedAt: data.broadcastedAt });
-        }
-      }
-
       if (verifiedAppRunning.length > 0) {
-        const { stored, writeFailed } = await messageStore.storeBatchAppRunningMessages(verifiedAppRunning);
-        if (writeFailed) locationWriteFailed = true;
+        const { stored, writeFailed } = await messageStore.storeBatchAppRunningEvents(verifiedAppRunning);
+        if (writeFailed) eventWriteFailed = true;
         log.info(`handleAppRunningSyncResponse - Stored ${stored} of ${verifiedAppRunning.length} verified apprunning events`);
         fluxEventBus.publish('sync:chunkVerified', { syncType: 'apprunning', peer: peerKey, verified: verifiedAppRunning.length, stored });
       }
     });
 
-    if (locationWriteFailed) {
+    if (eventWriteFailed) {
       // What this peer sent is not all recorded, so its request ends here and
       // another peer is asked; the rest of its answer is not read.
-      log.warn(`handleAppRunningSyncResponse - a location write failed, ending ${peerKey}'s request`);
+      log.warn(`handleAppRunningSyncResponse - an apprunning event write failed, ending ${peerKey}'s request`);
       appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_WRITE_FAILED, peerKey);
       return;
     }
-    await messageStore.pruneAppRunningLocations(newestByIp);
 
-    // Applied after every slice, once every apprunning row in the response is
+    // Applied after every slice, once every apprunning event in the response is
     // stored. Each event removes, shortens or carries only the rows broadcast
     // before it. An eviction's time is createdAt, when the evicting node made it.
     for (const event of [...evictions, ...stateEvents]) {
