@@ -82,8 +82,8 @@ async function dockerOrphanSweep() {
     let shouldBroadcast = false;
     try {
       // eslint-disable-next-line no-await-in-loop
-      const location = await appsRepository.getAppLocation(appName, localSocketAddr);
-      if (location) {
+      const claims = await appsRepository.appLocationFromEvents({ appname: appName, ip: localSocketAddr });
+      if (claims.length) {
         shouldBroadcast = true;
         log.info(`appJanitor - ${appName} found in locations for this IP (${localSocketAddr}), will broadcast removal`);
       }

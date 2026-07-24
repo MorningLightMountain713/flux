@@ -3,14 +3,13 @@ const config = require('config');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
-const dbHelper = require('../dbHelper');
+const appsRepository = require('../appDatabase/appsRepository');
 const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const appConstants = require('./appConstants');
 const { appsFolder } = appConstants;
 const fluxCaching = require('./cacheManager');
 const { getSpecBackend, getSpecPolicy } = require('./specLibs');
 
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 
 /**
@@ -383,27 +382,21 @@ function parseContainerName(containerName) {
 }
 
 /**
- * Whether this node holds an unexpired location record for an app.
+ * Does the network still consider this app ours?
+ *
+ * Membership is the whole answer: the derivation only returns live claims — an
+ * announcement past its TTL, a node past its shutdown grace, and an evicted node are
+ * all already excluded — so a row existing IS the claim being valid. Reading an
+ * expiry field back would only re-check what the query enforced.
  * @param {string} appName
  * @param {string} localSocketAddr
- * @returns {Promise<boolean|null>} null when the records cannot be read: an unread record is
+ * @returns {Promise<boolean|null>} null when the claims cannot be read: an unread claim is
  *   neither a valid nor an expired one.
  */
 async function appHasValidLocationOnNode(appName, localSocketAddr) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = { name: appName, ip: localSocketAddr };
-    const projection = { _id: 0, expireAt: 1 };
-    const records = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-    if (!records || records.length === 0) {
-      return false;
-    }
-    const now = Date.now();
-    return records.some((record) => {
-      if (!record.expireAt) return false;
-      return new Date(record.expireAt).getTime() > now;
-    });
+    const claims = await appsRepository.appLocationFromEvents({ appname: appName, ip: localSocketAddr });
+    return claims.length > 0;
   } catch (error) {
     log.error(`Error checking app location for ${appName}: ${error.message}`);
     return null;

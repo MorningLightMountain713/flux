@@ -32,10 +32,7 @@ const BOOT_RETRY_MAX_WAIT_MS = 60 * 1000;
  * @returns {Promise<Array>} Application locations
  */
 async function appLocation(appname) {
-  if (appname) {
-    return appsRepository.listLocationsByApp(appname);
-  }
-  return appsRepository.listLocations();
+  return appsRepository.appLocationFromEvents(appname ? { appname } : {});
 }
 
 /**

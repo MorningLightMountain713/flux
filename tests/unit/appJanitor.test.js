@@ -37,7 +37,7 @@ describe('appJanitor tests', () => {
     };
     fluxEventBusStub = { publish: sinon.stub() };
     appsRepositoryStub = {
-      getAppLocation: sinon.stub().resolves(null),
+      appLocationFromEvents: sinon.stub().resolves([]),
       listGlobalAppInfo: sinon.stub().resolves([]),
       removeGlobalAppInfo: sinon.stub().resolves(),
       removeAppInstallingErrorRecords: sinon.stub().resolves(),
@@ -139,7 +139,7 @@ describe('appJanitor tests', () => {
           container('/fluxweb_unlocated', { 'runonflux.app': 'unlocated' }),
         ],
       });
-      appsRepositoryStub.getAppLocation.callsFake(async (name) => (name === 'located' ? { name } : null));
+      appsRepositoryStub.appLocationFromEvents.callsFake(async ({ appname }) => (appname === 'located' ? [{ name: appname }] : []));
 
       await appJanitor.sweepDockerOrphans();
 

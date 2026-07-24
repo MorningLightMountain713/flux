@@ -3,6 +3,7 @@ const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const { requireMongo } = require('./dbTestHelper');
 const { SIGTERM_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
 
@@ -90,7 +91,7 @@ describe('the location table and the event-derived view agree', () => {
       else await event(ip, runningAt + offset);
 
       const table = (await registryManager.appLocation(appName)).map((row) => row.ip);
-      const derived = (await registryManager.appLocationFromEvents({ appname: appName })).map((row) => row.ip);
+      const derived = (await appsRepository.appLocationFromEvents({ appname: appName })).map((row) => row.ip);
 
       expect(derived, 'the two views disagree').to.deep.equal(table);
       expect(table, 'both views agree on the wrong answer').to.deep.equal(running ? [ip] : []);
@@ -255,7 +256,7 @@ describe('the location table and the event-derived view agree', () => {
                 if (step.shutDown) await shutDown(step.shutDown[0], at(step.shutDown[1]));
                 /* eslint-enable no-await-in-loop */
               }
-              const derived = (await registryManager.appLocationFromEvents({ appname: appName })).map((row) => row.ip).sort();
+              const derived = (await appsRepository.appLocationFromEvents({ appname: appName })).map((row) => row.ip).sort();
               expect(derived, 'the event view').to.deep.equal(expected);
               if (tableHasWhatItNeeds(order)) {
                 const table = (await registryManager.appLocation(appName)).map((row) => row.ip).sort();
@@ -287,7 +288,7 @@ describe('the location table and the event-derived view agree', () => {
       const notAMove = { type: 'fluxipchanged', version: 2, oldIP: A, newIP: B, broadcastedAt: now - 160000 };
       await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.IPCHANGED, { message: notAMove, envelope });
 
-      expect((await registryManager.appLocationFromEvents({ appname: appName })).map((row) => row.ip)).to.deep.equal([A]);
+      expect((await appsRepository.appLocationFromEvents({ appname: appName })).map((row) => row.ip)).to.deep.equal([A]);
     });
 
     it('a sync response prunes what a node stopped running where the node is now', async () => {
@@ -306,7 +307,7 @@ describe('the location table and the event-derived view agree', () => {
       await messageStore.pruneAppRunningLocations(new Map([[A, { names: [appName], broadcastedAt: now - 240000 }]]));
 
       expect((await registryManager.appLocation(`${appName}gone`)).map((row) => row.ip)).to.deep.equal([]);
-      expect((await registryManager.appLocationFromEvents({ appname: `${appName}gone` })).map((row) => row.ip)).to.deep.equal([]);
+      expect((await appsRepository.appLocationFromEvents({ appname: `${appName}gone` })).map((row) => row.ip)).to.deep.equal([]);
       expect((await registryManager.appLocation(appName)).map((row) => row.ip)).to.deep.equal([B]);
     });
 
@@ -336,8 +337,8 @@ describe('the location table and the event-derived view agree', () => {
       await reportRunning(A, appName, now - 240000);
       await move(A, B, now - 160000);
 
-      expect((await registryManager.appLocationFromEvents({ ip: B })).map((row) => row.ip)).to.deep.equal([B]);
-      expect(await registryManager.appLocationFromEvents({ ip: A })).to.deep.equal([]);
+      expect((await appsRepository.appLocationFromEvents({ ip: B })).map((row) => row.ip)).to.deep.equal([B]);
+      expect(await appsRepository.appLocationFromEvents({ ip: A })).to.deep.equal([]);
     });
   });
 });

@@ -26,6 +26,7 @@ const {
   extractIp, extractPort, normalizeSocketAddress, parseSocketAddress, socketAddressesMatch,
 } = require('./utils/socketAddressUtils');
 const registryManager = require('./appDatabase/registryManager');
+const appsRepository = require('./appDatabase/appsRepository');
 const contentSlotService = require('./appLifecycle/contentSlotService');
 const contentManifestSyncService = require('./appMessaging/contentManifestSyncService');
 const fluxEventBus = require('./utils/fluxEventBus');
@@ -967,7 +968,7 @@ async function handleNodeSigtermMessage(message, fromIP, port) {
       return;
     }
 
-    const appsOnNode = await registryManager.appLocationFromEvents({ ip });
+    const appsOnNode = await appsRepository.appLocationFromEvents({ ip });
 
     if (!appsOnNode || appsOnNode.length === 0) {
       log.info(`No apps found for node ${ip} in event log view, not rebroadcasting sigterm`);
