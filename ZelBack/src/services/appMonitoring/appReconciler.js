@@ -129,17 +129,6 @@ const CONVERGE_RETRY_MS = config.fluxapps.convergeRetryMs ?? 10 * 1000;
 // a start is not proof (an exit-127 container "starts" a second before dying).
 const FIRST_RUN_PROOF_MS = config.fluxapps.firstRunProofMs ?? 60 * 1000;
 
-// A container start is information the network wants immediately: a backoff
-// straggler that starts minutes after boot must refresh its appsLocations row
-// inside the sigterm TTL window, not at the next hourly broadcast.
-// serviceManager wires this to the peer broadcast (which coalesces bursts),
-// mirroring appInstaller.setOnInstallComplete.
-let onContainerStarted = null;
-
-function setOnContainerStarted(callback) {
-  onContainerStarted = callback;
-}
-
 // serviceManager wires this to appShutdownCoordinator.requestGracefulStop. When set and
 // it returns true, the daemon owns a graceful stop-but-keep of the app and this
 // reconciler takes no docker action (the 'stopping' LB gate holds subsequent passes).
@@ -147,15 +136,6 @@ let requestGracefulStop = null;
 
 function setRequestGracefulStop(callback) {
   requestGracefulStop = callback;
-}
-
-function notifyContainerStarted(identifier) {
-  if (!onContainerStarted) return;
-  try {
-    onContainerStarted(identifier);
-  } catch (err) {
-    log.error(`appReconciler - onContainerStarted callback failed for ${identifier}: ${err.message}`);
-  }
 }
 
 // while an install/remove/redeploy/backup/restore or a deliberate stop owns a
@@ -1480,9 +1460,8 @@ async function reconcile(rawIdentifier) {
       // first-run proof, so there the armed pass must hold.
       scheduleRetry(identifier, POST_START_VERIFY_MS, { holdsSettle: !(restartState && restartState.hasSuccessfullyStarted) });
       // Last, because it throws. The bounce above already happened, so a write
-      // failure must not also cost the event, the peer notification and the
-      // attachment check a successful restart is owed - it is the record that
-      // failed, not the restart.
+      // failure must not also cost the event and the attachment check a successful
+      // restart is owed - it is the record that failed, not the restart.
       //
       // The throw reaches the pass-level retry, which PACES it - a rate, not a
       // bound, and the difference matters. UNHANDLED_FAILURE_RETRIES clears only
@@ -2236,7 +2215,6 @@ module.exports = {
   releaseStarting,
   committedIdentifiers,
   requestStopAndClearData,
-  setOnContainerStarted,
   setRequestGracefulStop,
   waitForBootDrainSettled: reconcilerQueue.waitForBootDrainSettled,
   start,
