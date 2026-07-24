@@ -1,6 +1,4 @@
 // Resource Query Service - Query functions for app and node resource usage
-const config = require('config');
-const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const hwRequirements = require('../appRequirements/hwRequirements');

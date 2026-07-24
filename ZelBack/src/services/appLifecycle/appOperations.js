@@ -16,7 +16,6 @@ const config = require('config');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const axios = require('axios');
-const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
@@ -28,7 +27,6 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 // eslint-disable-next-line no-unused-vars
 const upnpService = require('../upnpService');
 const {
-  globalAppsInstallingErrorsLocations,
   appsFolder,
   appsFolderPath,
 } = require('../utils/appConstants');
@@ -2295,17 +2293,8 @@ async function getPeerAppsInstallingErrorMessages() {
       }
       const apps = appsResponse.data.data;
       log.info(`getPeerAppsInstallingErrorMessages - Will process ${apps.length} apps installing errors locations messages`);
-      const operations = apps.map((message) => ({
-        updateOne: {
-          filter: { name: message.name, hash: message.hash, ip: message.ip },
-          update: { $set: message },
-          upsert: true,
-        },
-      }));
-      const dbopen = dbHelper.databaseConnection();
-      const database = dbopen.db(config.database.appsglobal.database);
       // eslint-disable-next-line no-await-in-loop
-      await dbHelper.bulkWriteInDatabase(database, globalAppsInstallingErrorsLocations, operations);
+      await appsRepository.upsertAppInstallingErrorLocations(apps);
       finished = true;
     }
   } catch (error) {

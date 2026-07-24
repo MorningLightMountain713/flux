@@ -4,10 +4,9 @@ const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const imageVerifier = require('../utils/imageVerifier');
-const dbHelper = require('../dbHelper');
 const verificationHelper = require('../verificationHelper');
 const log = require('../../lib/log');
-const { supportedArchitectures, globalAppsMessages, globalAppsInformation } = require('../utils/appConstants');
+const { supportedArchitectures } = require('../utils/appConstants');
 const fluxCaching = require('../utils/cacheManager').default;
 const { Privilege, authOf } = require('../utils/privileges');
 
@@ -277,7 +276,7 @@ async function getUserBlockedRepositories() {
       return cacheUserBlockedRepos;
     }
 
-    const userconfig = globalThis.userconfig;
+    const { userconfig } = globalThis;
     // Normalise case up front: image references are lowercase, but operators
     // type blockedRepositories config in any case. Stored entries are the
     // tag/digest-stripped name, which is what isImageBlocked compares against.
