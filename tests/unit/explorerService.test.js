@@ -1,8 +1,6 @@
 const sinon = require('sinon');
 const explorerService = require('../../ZelBack/src/services/explorerService');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
 const appJanitor = require('../../ZelBack/src/services/appLifecycle/appJanitor');
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
@@ -18,6 +16,9 @@ const { requireMongo } = require('./dbTestHelper');
 
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
+
+// 320-char OP_RETURN payload, hoisted so the call site stays inside max-len.
+const longAsm = 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031';
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -1911,7 +1912,6 @@ describe('explorerService tests', () => {
       sinon.assert.calledWithMatch(logInfoSpy, 'Bootstrap: Using address-index fast path');
       sinon.assert.calledWithMatch(logInfoSpy, 'Preparing apps collections');
       sinon.assert.calledWithMatch(logInfoSpy, 'Preparation done');
-      sinon.assert.calledWithMatch(dropCollectionStub, sinon.match.object, 'zelappslocation');
       sinon.assert.calledWithMatch(dropCollectionStub, sinon.match.object, 'zelappsmessages');
       sinon.assert.calledWithMatch(dropCollectionStub, sinon.match.object, 'coinbasefusionindex');
       sinon.assert.calledWithMatch(dropCollectionStub, sinon.match.object, 'zelappshashes');
@@ -2104,7 +2104,7 @@ describe('explorerService tests', () => {
           valueSat: 500000000,
           scriptPubKey: {
             addresses: [config.fluxapps.appPaymentAddresses[0].address],
-            asm: 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031',
+            asm: longAsm,
           },
         }],
         ...overrides,
@@ -2132,7 +2132,7 @@ describe('explorerService tests', () => {
 
     it('should skip tx below minPrice', () => {
       const hashBatch = [];
-      explorerService.processBootstrapTx(makeTx({ vout: [{ valueSat: 100, scriptPubKey: { addresses: [config.fluxapps.appPaymentAddresses[0].address], asm: 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031' } }] }), [{ height: -1, minPrice: 1 }], new Set(), hashBatch);
+      explorerService.processBootstrapTx(makeTx({ vout: [{ valueSat: 100, scriptPubKey: { addresses: [config.fluxapps.appPaymentAddresses[0].address], asm: longAsm } }] }), [{ height: -1, minPrice: 1 }], new Set(), hashBatch);
       expect(hashBatch).to.have.length(0);
     });
 

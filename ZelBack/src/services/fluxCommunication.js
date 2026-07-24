@@ -320,21 +320,16 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
       return;
     }
 
-    // Applied after every slice, once every apprunning event in the response is
-    // stored. Each event removes, shortens or carries only the rows broadcast
-    // before it. An eviction's time is createdAt, when the evicting node made it.
+    // Applied after every slice, never inside one: evictions carry no
+    // broadcastedAt, so the sender's timestamp sort puts them in the earliest
+    // slice every time, and nothing here establishes that the event log is
+    // indifferent to seeing them last. An eviction's time is createdAt, when the
+    // evicting node made it.
     for (const event of [...evictions, ...stateEvents]) {
-      if (event.type === 'sigterm') {
+      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
-        await messageStore.expireLocationsForSigterm(event.data.ip, event.data.broadcastedAt);
-      } else if (event.type === 'appremoved') {
-        await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
-        await messageStore.removeLocationForAppRemoved(event.data.ip, event.data.appName, event.data.broadcastedAt);
       } else if (event.type === 'evicted') {
         await messageStore.applyEviction(event.ip, Date.parse(event.createdAt));
-      } else if (event.type === 'ipchanged') {
-        await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
-        await messageStore.storeIPChangedMessage(event.data);
       }
     }
 
@@ -944,7 +939,6 @@ async function handleNodeSigtermMessage(message, fromIP, port) {
     await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.SIGTERM, { message: message.data, envelope });
     fluxEventBus.publish('network:sigterm', { ip });
 
-    await messageStore.expireLocationsForSigterm(ip, broadcastedAt);
 
     // Rebroadcast to other peers
     announceToPeers(message, `${fromIP}:${port}`);

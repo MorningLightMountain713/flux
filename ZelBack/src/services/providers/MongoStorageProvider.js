@@ -5,7 +5,6 @@ const DEFAULT_STORE_MAP = Object.freeze({
   appSpecs: { database: 'globalzelapps', collection: 'zelappsinformation' },
   appMessages: { database: 'globalzelapps', collection: 'zelappsmessages' },
   tempAppMessages: { database: 'globalzelapps', collection: 'zelappstemporarymessages' },
-  appsLocations: { database: 'globalzelapps', collection: 'zelappslocation' },
   appsInstallingLocations: { database: 'globalzelapps', collection: 'appsinstallinglocations' },
   appsInstallingErrorsLocations: { database: 'globalzelapps', collection: 'appsInstallingErrorsLocations' },
   localAppSpecs: { database: 'localzelapps', collection: 'zelappsinformation' },

@@ -432,13 +432,12 @@ async function shutDown() {
 
         const signedMessage = await fluxCommunicationMessagesSender.broadcastMessageToAll(sigtermMessage);
 
-        // Store sigterm event in event log and shorten location TTL to ~7 minutes.
-        // Peers apply the same when receiving the sigterm via gossip.
+        // Store the sigterm in the event log, which ends this node's claims after the
+        // shutdown grace. Peers do the same when the sigterm reaches them by gossip.
         try {
           const envelope = { version: signedMessage.version, timestamp: signedMessage.timestamp, pubKey: signedMessage.pubKey, signature: signedMessage.signature };
           await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.SIGTERM, { message: sigtermMessage, envelope });
-          await messageStore.expireLocationsForSigterm(ip, sigtermMessage.broadcastedAt);
-          log.info('Local sigterm event stored and location records updated to expire in ~7 minutes');
+          log.info('Local sigterm event stored');
         } catch (dbError) {
           log.warn(`Failed to update local app expiration: ${dbError.message}`);
         }

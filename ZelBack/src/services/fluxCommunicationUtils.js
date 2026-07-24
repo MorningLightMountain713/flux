@@ -4,6 +4,7 @@ const dbHelper = require('./dbHelper');
 const serviceHelper = require('./serviceHelper');
 const verificationHelper = require('./verificationHelper');
 const networkStateService = require('./networkStateService');
+const appsRepository = require('./appDatabase/appsRepository');
 
 /**
  * @typedef {{
@@ -141,10 +142,9 @@ function signerAddresses(payload, target) {
  *   is stored for it. Rejects when either cannot be read.
  */
 async function lastSignerAt(address) {
-  const database = dbHelper.databaseConnection().db(config.database.appsglobal.database);
-  const row = await database.collection(config.database.appsglobal.collections.appsLocations)
-    .findOne({ ip: address }, { projection: { _id: 0, ip: 1 } });
+  const [row] = await appsRepository.appLocationFromEvents({ ip: address });
   if (!row) return null;
+  const database = dbHelper.databaseConnection().db(config.database.appsglobal.database);
   const [event] = await database.collection(config.database.appsglobal.collections.appStateEvents)
     .find(
       { ip: address, type: 'apprunning', expireAt: { $gt: new Date() } },

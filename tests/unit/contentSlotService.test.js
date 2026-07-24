@@ -18,6 +18,7 @@ const freshTs = String(NOW_MS);
 // canonicalization/validation is exercised in flux-spec's own suite.
 function defaultSpecStub() {
   return {
+    // eslint-disable-next-line no-unused-vars
     canonicalContentManifest: (m) => { const { ownerSignature, ...rest } = m; return JSON.stringify(rest); },
     assertValidContentManifest: sinon.stub().callsFake((m) => m),
   };
@@ -31,7 +32,6 @@ function fakeRepo(overrides = {}) {
   return {
     getGlobalAppInfo: sinon.stub().resolves(null),
     getInstalledApp: sinon.stub().resolves(null),
-    listLocationsByApp: sinon.stub().resolves([]),
     getContentManifest: sinon.stub().resolves(null),
     setContentManifestApplied: sinon.stub().resolves(),
     upsertContentManifest: sinon.stub().resolves(true),

@@ -13,7 +13,6 @@ const { appRunningEntries } = require('../utils/appRunningEntries');
 const {
   globalAppsMessages,
   globalAppsTempMessages,
-  globalAppsLocations,
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts: appsInstallingBroadcasts,
   globalAppsInstallingErrorsLocations,
@@ -29,7 +28,6 @@ const {
   INSTALLING_EXPIRY_MS,
   INSTALLING_ERRORS_EXPIRY_MS,
   EVICTED_EXPIRY_MS,
-  SIGTERM_EXPIRY_MS,
 } = require('../utils/appConstants');
 
 const APP_STATE_EVENT_TYPES = Object.freeze({
@@ -538,60 +536,6 @@ async function storeAppRemovedMessage(message) {
 }
 
 /**
- * Shortens the location rows a node's shutdown speaks for.
- *
- * A sigterm covers only what its node broadcast before it: a row from a later
- * apprunning broadcast is the node running again and keeps its own expiry, which
- * is the same rule the event-derived view applies. A sigterm may arrive long
- * after it was sent (a peer sync replays every unexpired event), so the new
- * expiry can already be in the past and must never be applied to a newer row.
- * It applies where its node is now, which differs from where it was signed when
- * the node has moved since.
- *
- * @param {string} signedAt - The node's socket address when it signed it
- * @param {number} broadcastedAt - The sigterm's broadcast time, ms
- * @returns {Promise<void>}
- */
-async function expireLocationsForSigterm(signedAt, broadcastedAt) {
-  const [ip] = await registryManager.currentAddressesOf([{ ip: signedAt, at: broadcastedAt }]);
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  await dbHelper.updateInDatabase(
-    database,
-    globalAppsLocations,
-    { ip, broadcastedAt: { $lt: new Date(broadcastedAt) } },
-    { $min: { expireAt: new Date(broadcastedAt + SIGTERM_EXPIRY_MS) } },
-  );
-}
-
-/**
- * Removes the location row an appremoved broadcast speaks for: the app's row on
- * that node, when it was broadcast no later than the removal. A row from a later
- * apprunning broadcast is the app installed again and stays. The same rule as
- * the event-derived view, which keeps a report only when it is newer than the
- * node's removal of that app. It applies where its node is now, which differs
- * from where it was signed when the node has moved since.
- *
- * A replica-tagged removal (one co-located identity scaled away) clears only its
- * own row; an untagged removal clears every row the node held for the app, which
- * for a co-located pair is all of its replica rows.
- *
- * @param {string} signedAt - The node's socket address when it signed it
- * @param {string} appName - The removed app
- * @param {number} broadcastedAt - The removal's broadcast time, ms
- * @param {string} [replica] - The removed identity, for a co-located node
- * @returns {Promise<void>}
- */
-async function removeLocationForAppRemoved(signedAt, appName, broadcastedAt, replica) {
-  const [ip] = await registryManager.currentAddressesOf([{ ip: signedAt, at: broadcastedAt }]);
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const query = { ip, name: appName, broadcastedAt: { $lte: new Date(broadcastedAt) } };
-  if (typeof replica === 'string') query.replica = replica;
-  await dbHelper.removeDocumentsFromCollection(database, globalAppsLocations, query);
-}
-
-/**
  * Store app installing error message
  * @param {object} message - Error message to store
  * @returns {Promise<boolean>} Whether message should be rebroadcast
@@ -847,10 +791,8 @@ async function handleEvictedEvent({ ip, evictedAt }) {
 }
 
 /**
- * Applies a node's eviction: records it, and removes the node's location rows
- * broadcast before it. A row from a broadcast after the eviction is the node
- * back on the network and stays. An eviction older than a location lifetime
- * changes nothing.
+ * Applies a node's eviction: records it under the time it was made. An eviction
+ * older than a location lifetime changes nothing.
  *
  * @param {string} ip - The evicted node's socket address
  * @param {number} [evictedAt] - When the eviction was made, ms; now when absent
@@ -861,14 +803,6 @@ async function applyEviction(ip, evictedAt) {
   const at = evictionTime(evictedAt);
   if (at + EVICTED_EXPIRY_MS <= Date.now()) return;
   await handleEvictedEvent({ ip, evictedAt: at });
-  const [evicted] = await registryManager.currentAddressesOf([{ ip, at }]);
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  await dbHelper.removeDocumentsFromCollection(
-    database,
-    globalAppsLocations,
-    { ip: evicted, broadcastedAt: { $lt: new Date(at) } },
-  );
 }
 
 async function handleIPChangedEvent({ message, envelope }) {
@@ -1216,8 +1150,6 @@ module.exports = {
   storeSignedAppInstallingBroadcast,
   storeBatchAppInstallingMessages,
   storeAppRemovedMessage,
-  expireLocationsForSigterm,
-  removeLocationForAppRemoved,
   applyEviction,
   storeAppInstallingErrorMessage,
   storeSignedAppInstallingErrorBroadcast,

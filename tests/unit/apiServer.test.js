@@ -673,16 +673,20 @@ describe('handleSigterm drains syncthing folders before it exits', () => {
     expect(drainStub.firstCall.callId).to.be.greaterThan(stopStub.firstCall.callId);
   });
 
-  it('expires only its own location rows broadcast before the sigterm', async () => {
+  it('records its own sigterm in the event log, under the time it was sent', async () => {
     globalState.runningAppsCache.add('fluxprobe_app');
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('203.0.113.7:16127');
     sinon.stub(fluxCommunicationMessagesSender, 'broadcastMessageToAll').resolves({ version: 1, timestamp: 1, pubKey: 'P', signature: 'S' });
-    sinon.stub(messageStore, 'storeAppStateEvent').resolves();
-    const expire = sinon.stub(messageStore, 'expireLocationsForSigterm').resolves();
+    const store = sinon.stub(messageStore, 'storeAppStateEvent').resolves();
 
     await apiServer.handleSigterm();
 
-    sinon.assert.calledOnceWithExactly(expire, '203.0.113.7:16127', sinon.match.number);
+    sinon.assert.calledOnceWithExactly(store, messageStore.APP_STATE_EVENT_TYPES.SIGTERM, {
+      message: sinon.match({ type: 'fluxnodesigterm', ip: '203.0.113.7:16127', broadcastedAt: sinon.match.number }),
+      envelope: {
+        version: 1, timestamp: 1, pubKey: 'P', signature: 'S',
+      },
+    });
     globalState.runningAppsCache.clear();
   });
 
