@@ -2015,9 +2015,9 @@ describe('fluxCommunication tests', () => {
       // arrival -> queue -> handler rather than the envelope check.
       sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
         .resolves(fluxCommunicationUtils.VerifyResult.OK);
-      // An empty final batch is the whole path here: processInSlices does
-      // nothing, and apprunning's pruning is the only step that needs a store.
-      sinon.stub(messageStore, 'pruneAppRunningLocations').resolves();
+      // An empty final batch is the whole path here: processInSlices does nothing.
+      // (The location prune that used to need a store here is gone: messageStore no
+      // longer maintains the materialized cache.)
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({ collection: () => ({}) }) });
     });
 

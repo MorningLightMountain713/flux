@@ -1063,7 +1063,7 @@ function buildAppLocationPipeline({
         osUptime: '$_v2Filtered.osUptime',
         staticIp: '$_v2Filtered.staticIp',
         // LB lifecycle state + replica identity, per-replica off the v2 apps entry.
-        // Normalized to match the stored-collection ingest (storeBatchAppRunningMessages):
+        // Normalized at ingest, so no reader has to branch on absence:
         // only explicit draining/stopping survive, everything else is active.
         state: { $cond: [{ $in: ['$_v2Filtered.apps.state', ['draining', 'stopping']] }, '$_v2Filtered.apps.state', 'active'] },
         replica: { $ifNull: ['$_v2Filtered.apps.replica', null] },

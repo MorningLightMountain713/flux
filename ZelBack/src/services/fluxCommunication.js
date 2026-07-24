@@ -17,7 +17,7 @@ const fluxNetworkHelper = require('./fluxNetworkHelper');
 const messageHelper = require('./messageHelper');
 const dbHelper = require('./dbHelper');
 const { peerManager, PEER_SOURCE } = require('./utils/peerState');
-const { SIGTERM_EXPIRY_MS, RUNNING_EXPIRY_MS } = require('./utils/appConstants');
+const { SIGTERM_EXPIRY_MS } = require('./utils/appConstants');
 const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
@@ -255,12 +255,6 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // before this response was processed in slices.
     const evictions = [];
     const stateEvents = [];
-    // Which apps a node still runs is only known from its newest broadcast in
-    // the whole response, so pruning cannot be decided from inside a slice. Only
-    // verified broadcasts count - pruning deletes rows, and an unsigned event
-    // must never be able to do that.
-    const newestByIp = new Map();
-    let locationWriteFailed = false;
 
     await serviceHelper.processInSlices(messages, SYNC_EVENTS_PER_SLICE, async (slice) => {
       const appRunningBroadcasts = [];
@@ -301,35 +295,12 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
         }
       }
 
-      for (const broadcast of verifiedAppRunning) {
-        const { data } = broadcast;
-        if (!data || data.version !== 2 || !Array.isArray(data.apps) || !data.apps.length) continue;
-        // Skipped for the same reason messageStore skips it when it builds this
-        // map itself: an expired broadcast is not evidence of what an IP is
-        // running now. The prune it feeds only deletes rows at or below the
-        // broadcast's own timestamp, so an expired one could only ever take
-        // already-expired rows - but that is a bound to be read out of another
-        // file, and two builders of one input should not need reconciling.
-        if (data.broadcastedAt + RUNNING_EXPIRY_MS < Date.now()) continue;
-        const seen = newestByIp.get(data.ip);
-        if (!seen || data.broadcastedAt > seen.broadcastedAt) {
-          newestByIp.set(data.ip, { names: data.apps.map((a) => a.name), broadcastedAt: data.broadcastedAt });
-        }
-      }
-
       if (verifiedAppRunning.length > 0) {
-        const { stored, writeFailed } = await messageStore.storeBatchAppRunningMessages(verifiedAppRunning);
-        if (writeFailed) locationWriteFailed = true;
+        const { stored } = await messageStore.storeBatchAppRunningEvents(verifiedAppRunning);
         log.info(`handleAppRunningSyncResponse - Stored ${stored} of ${verifiedAppRunning.length} verified apprunning events`);
         fluxEventBus.publish('sync:chunkVerified', { syncType: 'apprunning', peer: peerKey, verified: verifiedAppRunning.length, stored });
       }
     });
-
-    if (locationWriteFailed) {
-      log.warn('handleAppRunningSyncResponse - skipping location pruning, a location write failed');
-    } else {
-      await messageStore.pruneAppRunningLocations(newestByIp);
-    }
 
     // Applied after every slice, never inside one. An eviction clears a node's
     // locations outright, so a slice storing that node's apprunning events
