@@ -1,5 +1,6 @@
 const config = require('config');
 const natUpnp = require('@runonflux/nat-upnp');
+const { Device } = require('@runonflux/nat-upnp/build/src/nat-upnp/device');
 const serviceHelper = require('./serviceHelper');
 const messageHelper = require('./messageHelper');
 const verificationHelper = require('./verificationHelper');
@@ -10,17 +11,37 @@ const util = require('util');
 const log = require('../lib/log');
 const { Privilege, authOf } = require('./utils/privileges');
 
-const client = new natUpnp.Client();
+let client = null;
 
-if (config.upnp.gatewayUrl) {
-  // eslint-disable-next-line global-require
-  const { Device } = require('@runonflux/nat-upnp/build/src/nat-upnp/device');
-  const { gatewayUrl } = config.upnp;
-  const nodeIp = config.upnp.nodeIp || '127.0.0.1';
-  client.getGateway = async () => ({
-    gateway: new Device(gatewayUrl),
-    address: nodeIp,
-  });
+/**
+ * The UPnP client, built on first use.
+ *
+ * Not constructed at import: the Ssdp constructor inside it opens one UDP socket
+ * per non-internal address for multicast discovery, and this module is pulled in
+ * transitively (benchmarkService -> fluxNetworkHelper -> dockerService) by
+ * effectively every process, whether or not that process ever speaks UPnP. On a
+ * dev machine with VPN tunnels that was 16 sockets opened for nothing.
+ *
+ * The gateway override has to be applied here rather than beside the import, or a
+ * lazily-built client would silently skip it and talk to a discovered gateway
+ * instead of the configured one.
+ * @returns {object} the nat-upnp client
+ */
+function getClient() {
+  if (client) return client;
+
+  client = new natUpnp.Client();
+
+  if (config.upnp.gatewayUrl) {
+    const { gatewayUrl } = config.upnp;
+    const nodeIp = config.upnp.nodeIp || '127.0.0.1';
+    client.getGateway = async () => ({
+      gateway: new Device(gatewayUrl),
+      address: nodeIp,
+    });
+  }
+
+  return client;
 }
 
 let upnpMachine = false;
@@ -130,7 +151,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
       await adjustFirewallForUPNP();
     }
     // run test on apiport + 1
-    await client.getPublicIp();
+    await getClient().getPublicIp();
 
     await serviceHelper.delay(500);
   } catch (error) {
@@ -140,7 +161,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
     return false;
   }
   try {
-    await client.getGateway();
+    await getClient().getGateway();
 
     await serviceHelper.delay(500);
   } catch (error) {
@@ -150,7 +171,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
     return false;
   }
   try {
-    await client.createMapping({
+    await getClient().createMapping({
       public: +apiport + 3,
       private: +apiport + 3,
       ttl: 0,
@@ -165,7 +186,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
     return false;
   }
   try {
-    await client.getMappings();
+    await getClient().getMappings();
 
     await serviceHelper.delay(500);
   } catch (error) {
@@ -175,7 +196,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
     return false;
   }
   try {
-    await client.removeMapping({
+    await getClient().removeMapping({
       public: +apiport + 3,
     });
 
@@ -198,7 +219,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
  */
 async function setupUPNP(apiport = config.server.apiport) {
   try {
-    await client.createMapping({
+    await getClient().createMapping({
       public: +apiport,
       private: +apiport,
       ttl: 0, // Some routers force low ttl if 0, indefinite/default is used. Flux refreshes this every 6 blocks ~ 12 minutes
@@ -207,7 +228,7 @@ async function setupUPNP(apiport = config.server.apiport) {
 
     await serviceHelper.delay(500);
 
-    await client.createMapping({
+    await getClient().createMapping({
       public: +apiport + 1,
       private: +apiport + 1,
       ttl: 0, // Some routers force low ttl if 0, indefinite/default is used. Flux refreshes this every 6 blocks ~ 12 minutes
@@ -216,7 +237,7 @@ async function setupUPNP(apiport = config.server.apiport) {
 
     await serviceHelper.delay(500);
 
-    await client.createMapping({
+    await getClient().createMapping({
       public: +apiport - 1,
       private: +apiport - 1,
       ttl: 0,
@@ -225,7 +246,7 @@ async function setupUPNP(apiport = config.server.apiport) {
 
     await serviceHelper.delay(500);
 
-    await client.createMapping({
+    await getClient().createMapping({
       public: +apiport + 2,
       private: +apiport + 2,
       ttl: 0,
@@ -249,7 +270,7 @@ async function setupUPNP(apiport = config.server.apiport) {
  */
 async function mapUpnpPort(port, description) {
   try {
-    await client.createMapping({
+    await getClient().createMapping({
       public: port,
       private: port,
       ttl: 0,
@@ -259,7 +280,7 @@ async function mapUpnpPort(port, description) {
 
     await serviceHelper.delay(500);
 
-    await client.createMapping({
+    await getClient().createMapping({
       public: port,
       private: port,
       ttl: 0,
@@ -283,14 +304,14 @@ async function mapUpnpPort(port, description) {
  */
 async function removeMapUpnpPort(port) {
   try {
-    await client.removeMapping({
+    await getClient().removeMapping({
       public: port,
       protocol: 'TCP',
     });
 
     await serviceHelper.delay(500);
 
-    await client.removeMapping({
+    await getClient().removeMapping({
       public: port,
       protocol: 'UDP',
     });
@@ -319,7 +340,7 @@ async function mapPortApi(req, res) {
         throw new Error('No Port address specified.');
       }
       port = serviceHelper.ensureNumber(port);
-      await client.createMapping({
+      await getClient().createMapping({
         public: port,
         private: port,
         ttl: 0,
@@ -327,7 +348,7 @@ async function mapPortApi(req, res) {
         description: 'Flux_manual_entry',
       });
 
-      await client.createMapping({
+      await getClient().createMapping({
         public: port,
         private: port,
         ttl: 0,
@@ -366,11 +387,11 @@ async function removeMapPortApi(req, res) {
         throw new Error('No Port address specified.');
       }
       port = serviceHelper.ensureNumber(port);
-      await client.removeMapping({
+      await getClient().removeMapping({
         public: port,
         protocol: 'TCP',
       });
-      await client.removeMapping({
+      await getClient().removeMapping({
         public: port,
         protocol: 'UDP',
       });
@@ -400,7 +421,7 @@ async function getMapApi(req, res) {
   try {
     const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
     if (authorized) {
-      const map = await client.getMappings();
+      const map = await getClient().getMappings();
       const message = messageHelper.createDataMessage(map);
       res.json(message);
     } else {
@@ -427,7 +448,7 @@ async function getIpApi(req, res) {
   try {
     const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
     if (authorized) {
-      const ip = await client.getPublicIp();
+      const ip = await getClient().getPublicIp();
       const message = messageHelper.createDataMessage(ip);
       res.json(message);
     } else {
@@ -454,7 +475,7 @@ async function getGatewayApi(req, res) {
   try {
     const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
     if (authorized) {
-      const gateway = await client.getGateway();
+      const gateway = await getClient().getGateway();
       const message = messageHelper.createDataMessage(gateway);
       res.json(message);
     } else {

@@ -30,6 +30,36 @@ const upnpService = proxyquire(
 );
 
 describe('upnpService tests', () => {
+  // The configured-gateway override replaces getGateway on the CLIENT INSTANCE, so
+  // it has to be applied wherever the instance is built. The client is constructed
+  // lazily (constructing at import opened a UDP socket per address in every process
+  // that transitively required this module), which is exactly where an override
+  // applied beside the import would be silently skipped - a node with a configured
+  // gateway would quietly fall back to SSDP discovery.
+  describe('configured gateway override', () => {
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('uses the configured gateway instead of discovering one', async () => {
+      const scoped = proxyquire(
+        '../../ZelBack/src/services/upnpService',
+        { config: { apiport: '5550', upnp: { gatewayUrl: 'http://10.10.10.1:5000/rootDesc.xml', nodeIp: '10.10.10.5' } } },
+      );
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      // deliberately NOT stubbed on the prototype: the instance override must win,
+      // and stubbing it here would hide whether the override was applied at all.
+      const res = generateResponse();
+
+      await scoped.getGatewayApi({ params: {}, query: {} }, res);
+
+      const message = res.json.firstCall.args[0];
+      expect(message.status).to.equal('success');
+      expect(message.data.address).to.equal('10.10.10.5');
+      expect(message.data.gateway).to.exist;
+    });
+  });
+
   describe('verifyUPNPsupport tests', () => {
     let logSpy;
 
