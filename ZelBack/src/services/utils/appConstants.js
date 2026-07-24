@@ -33,7 +33,6 @@ const localAppsInformation = config.database.appslocal.collections.appsInformati
 const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
 const globalAppsInformation = config.database.appsglobal.collections.appsInformation;
 const globalAppsTempMessages = config.database.appsglobal.collections.appsTemporaryMessages;
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 const globalAppsInstallingLocations = config.database.appsglobal.collections.appsInstallingLocations;
 const globalAppsInstallingBroadcasts = config.database.appsglobal.collections.appsInstallingBroadcasts;
 const globalAppStateEvents = config.database.appsglobal.collections.appStateEvents;
@@ -119,7 +118,6 @@ module.exports = {
   globalAppsMessages,
   globalAppsInformation,
   globalAppsTempMessages,
-  globalAppsLocations,
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts,
   globalAppStateEvents,

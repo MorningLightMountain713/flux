@@ -35,7 +35,6 @@ describe('appInstaller tests', () => {
             appsMessages: 'appsMessages',
             appsInformation: 'globalAppsInformation',
             appsTemporaryMessages: 'appsTemporaryMessages',
-            appsLocations: 'appsLocations',
             appsInstallingLocations: 'appsInstallingLocations',
             appsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
           },

@@ -14,9 +14,7 @@ const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSend
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const messageHelper = require('./messageHelper');
-const dbHelper = require('./dbHelper');
 const { peerManager, PEER_SOURCE } = require('./utils/peerState');
-const { SIGTERM_EXPIRY_MS } = require('./utils/appConstants');
 const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
@@ -26,7 +24,6 @@ const contentSlotService = require('./appLifecycle/contentSlotService');
 const contentManifestSyncService = require('./appMessaging/contentManifestSyncService');
 const fluxEventBus = require('./utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 const { messageCache, wsPeerCache } = cacheManager;
 
@@ -253,21 +250,11 @@ async function handleAppRunningSyncResponse(message, peerKey) {
       log.info(`handleAppRunningSyncResponse - Stored ${stored} of ${verifiedAppRunning.length} verified apprunning events`);
       fluxEventBus.publish('sync:chunkVerified', { syncType: 'apprunning', peer: peerKey, verified: verifiedAppRunning.length, stored });
     }
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
     for (const event of otherEvents) {
-      if (event.type === 'sigterm') {
+      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
-        const newExpireAt = new Date(event.data.broadcastedAt + SIGTERM_EXPIRY_MS);
-        await dbHelper.updateInDatabase(database, globalAppsLocations, { ip: event.data.ip }, { $set: { expireAt: newExpireAt } });
-      } else if (event.type === 'appremoved') {
-        await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
-        await dbHelper.findOneAndDeleteInDatabase(database, globalAppsLocations, { ip: event.data.ip, name: event.data.appName }, {});
       } else if (event.type === 'evicted') {
         await messageStore.storeAppStateEvent(event.type, { ip: event.ip });
-        await dbHelper.removeDocumentsFromCollection(database, globalAppsLocations, { ip: event.ip });
-      } else if (event.type === 'ipchanged') {
-        await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
       }
     }
     if (done) {
@@ -617,13 +604,6 @@ async function handleNodeSigtermMessage(message, fromIP, port) {
     const envelope = { version: message.version, timestamp: message.timestamp, pubKey: message.pubKey, signature: message.signature };
     await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.SIGTERM, { message: message.data, envelope });
     fluxEventBus.publish('network:sigterm', { ip });
-
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const newExpireAt = new Date(broadcastedAt + SIGTERM_EXPIRY_MS);
-    const update = { $set: { expireAt: newExpireAt } };
-    const query = { ip };
-    await dbHelper.updateInDatabase(database, globalAppsLocations, query, update);
 
     // Rebroadcast to other peers
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();

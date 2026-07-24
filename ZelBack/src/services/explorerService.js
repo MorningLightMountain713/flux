@@ -1465,9 +1465,6 @@ async function initiateBlockProcessor(restoreDatabase, deepRestore, reindexOrRes
         const resultF = await dbHelper.dropCollection(databaseGlobal, config.database.appsglobal.collections.appsInformation).catch((error) => {
           if (error.message !== 'ns not found') throw error;
         });
-        const resultG = await dbHelper.dropCollection(databaseGlobal, config.database.appsglobal.collections.appsLocations).catch((error) => {
-          if (error.message !== 'ns not found') throw error;
-        });
         const resultH = await dbHelper.dropCollection(databaseGlobal, config.database.appsglobal.collections.appsInstallingLocations).catch((error) => {
           if (error.message !== 'ns not found') throw error;
         });
@@ -1483,7 +1480,7 @@ async function initiateBlockProcessor(restoreDatabase, deepRestore, reindexOrRes
         const resultL = await dbHelper.dropCollection(databaseGlobal, config.database.appsglobal.collections.appsInstallingBroadcasts).catch((error) => {
           if (error.message !== 'ns not found') throw error;
         });
-        log.info(resultE, resultF, resultG, resultH, resultI, resultJ, resultK, resultL);
+        log.info(resultE, resultF, resultH, resultI, resultJ, resultK, resultL);
         await databaseGlobal.collection(config.database.appsglobal.collections.appStateEvents).createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 });
         await databaseGlobal.collection(config.database.appsglobal.collections.appStateEvents).createIndex({ ip: 1, type: 1, dedupKey: 1 }, { unique: true });
         await databaseGlobal.collection(config.database.appsglobal.collections.appStateEvents).createIndex({ broadcastedAt: 1 });
@@ -1502,11 +1499,6 @@ async function initiateBlockProcessor(restoreDatabase, deepRestore, reindexOrRes
       await databaseGlobal.collection(config.database.appsglobal.collections.appsInformation).createIndex({ repotag: 1 }, { name: 'query for getting zelapp based on image' });
       await databaseGlobal.collection(config.database.appsglobal.collections.appsInformation).createIndex({ height: 1 }, { name: 'query for getting zelapp based on last height update' });
       await databaseGlobal.collection(config.database.appsglobal.collections.appsInformation).createIndex({ hash: 1 }, { name: 'query for getting zelapp based on last hash' });
-      await database.collection(config.database.appsglobal.collections.appsLocations).createIndex({ name: 1 }, { name: 'query for getting zelapp location based on zelapp specs name' });
-      await database.collection(config.database.appsglobal.collections.appsLocations).createIndex({ hash: 1 }, { name: 'query for getting zelapp location based on zelapp hash' });
-      await database.collection(config.database.appsglobal.collections.appsLocations).createIndex({ ip: 1 }, { name: 'query for getting zelapp location based on ip' });
-      await database.collection(config.database.appsglobal.collections.appsLocations).createIndex({ name: 1, ip: 1 }, { name: 'query for getting app based on ip and name' });
-      await database.collection(config.database.appsglobal.collections.appsLocations).createIndex({ name: 1, ip: 1, broadcastedAt: 1 }, { name: 'query for getting app to ensure we possess a message' });
       await database.collection(config.database.appsglobal.collections.appsInstallingLocations).createIndex({ name: 1 }, { name: 'query for getting zelapp install location based on zelapp specs name' });
       await database.collection(config.database.appsglobal.collections.appsInstallingLocations).createIndex({ name: 1, ip: 1 }, { name: 'query for getting flux app install location based on specs name and node ip' });
       await database.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations).createIndex({ name: 1 }, { name: 'query for getting flux app install errors location based on specs name' });
@@ -2008,53 +2000,6 @@ async function reindexExplorer(req, res) {
   } else {
     const errMessage = messageHelper.errUnauthorizedMessage();
     res.json(errMessage);
-  }
-}
-
-async function fixExplorer(height = 1670000, rescanApps = true) {
-  try {
-    const dbopen = dbHelper.databaseConnection();
-    const blockheight = serviceHelper.ensureNumber(height);
-    const database = dbopen.db(config.database.daemon.database);
-    const query = { generalScannedHeight: { $gte: 0 } };
-    const projection = {
-      projection: {
-        _id: 0,
-        generalScannedHeight: 1,
-      },
-    };
-    const currentHeight = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
-    if (!currentHeight) {
-      throw new Error('No scanned height found');
-    }
-    if (currentHeight.generalScannedHeight <= blockheight) {
-      throw new Error('Block height shall be lower than currently scanned');
-    }
-    if (blockheight < 0) {
-      throw new Error('BlockHeight lower than 0');
-    }
-    const rescanapps = serviceHelper.ensureBoolean(rescanApps);
-    if (blockheight === 0) {
-      await dbHelper.dropCollection(database, scannedHeightCollection).catch((error) => {
-        if (error.message !== 'ns not found') {
-          log.error(error);
-        }
-      });
-    } else {
-      // stop block processing
-      const update = { $set: { generalScannedHeight: blockheight } };
-      const options = {
-        upsert: true,
-      };
-      // update scanned Height in scannedBlockHeightCollection
-      await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
-    }
-    initiateBlockProcessor(true, false, rescanapps); // restore database and possibly do rescan of apps
-    const message = messageHelper.createSuccessMessage(`Explorer rescan from blockheight ${blockheight} initiated`);
-    log.info(message);
-  } catch (error) {
-    log.warn(error);
-    initiateBlockProcessor(true, true);
   }
 }
 

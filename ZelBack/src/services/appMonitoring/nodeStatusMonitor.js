@@ -1,7 +1,6 @@
 // Node Status Monitor - Monitors node status and uninstalls apps if node is not confirmed
 const axios = require('axios');
 const config = require('config');
-const dbHelper = require('../dbHelper');
 const serviceHelper = require('../serviceHelper');
 const nodeDosState = require('../nodeDosState');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
@@ -11,11 +10,9 @@ const log = require('../../lib/log');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appQueryService = require('../appQuery/appQueryService');
+const appsRepository = require('../appDatabase/appsRepository');
 
 let removalInProgress = false;
-
-// Database collections
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 /**
  * Method responsible to monitor node status and uninstall apps if node is not confirmed
@@ -79,11 +76,7 @@ async function monitorNodeStatus() {
     } if (nodeConfirmationService.isConfirmed()) {
       log.info('monitorNodeStatus - Node is Confirmed');
       // lets remove from locations when nodes are no longer confirmed
-      const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.appsglobal.database);
-      const variable = 'ip';
-      // we already have the exact same data
-      const appslocations = await dbHelper.distinctDatabase(database, globalAppsLocations, variable);
+      const appslocations = await appsRepository.listRunningAddresses();
       const appsLocationCount = appslocations.length;
       log.info(`monitorNodeStatus - Found ${appsLocationCount} distinct IP's on appslocations`);
 
@@ -131,12 +124,9 @@ async function monitorNodeStatus() {
         if (response && response.data && response.data.status === 'success' && response.data.data.status === 'CONFIRMED') {
           log.info(`monitorNodeStatus - IP ${location} is available and confirmed, awaiting for a new confirmation transaction`);
         } else {
-          log.info(`monitorNodeStatus - Removing IP ${location} from globalAppsLocations`);
+          log.info(`monitorNodeStatus - Evicting IP ${location}, it is not on the node list and did not answer`);
           // eslint-disable-next-line no-await-in-loop
           await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.EVICTED, { ip: location });
-          const query = { ip: location };
-          // eslint-disable-next-line no-await-in-loop
-          await dbHelper.removeDocumentsFromCollection(database, globalAppsLocations, query);
         }
       }
     }

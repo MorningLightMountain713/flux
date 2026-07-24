@@ -259,12 +259,12 @@ async function startFluxFunctions() {
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsMessages), { hash: 1 }, { name: 'query for getting zelapp message based on hash', unique: true });
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsMessages), { 'appSpecifications.version': 1 }, { name: 'query for getting app message based on version' });
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsMessages), { 'appSpecifications.nodes': 1 }, { name: 'query for getting app message based on nodes' });
-    // TTL is driven by expireAt (set per-document by store functions). Migrate from old broadcastedAt-based TTL.
-    await databaseTemp.collection(config.database.appsglobal.collections.appsLocations).dropIndex('broadcastedAt_1').catch(() => {});
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsLocations), { expireAt: 1 }, { expireAfterSeconds: 0 });
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsLocations), { name: 1 }, { name: 'query for getting zelapp location based on zelapp specs name' });
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsLocations), { ip: 1, name: 1 });
-    log.info('Flux Apps locations prepared');
+    // The running set is derived from the app state event log on read; the materialized
+    // location collection it replaced is no longer written or read. Dropped rather than
+    // left to its TTL so an upgraded node does not carry a dead collection - and its
+    // per-minute TTL sweep - indefinitely. Named literally: the config key is gone, and
+    // a drop of a collection that is not there is a no-op, so this self-retires.
+    await databaseTemp.collection('zelappslocation').drop().catch(() => {});
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appStateEvents), { expireAt: 1 }, { expireAfterSeconds: 0 });
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appStateEvents), { ip: 1, type: 1, dedupKey: 1 }, { unique: true });
     await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appStateEvents), { broadcastedAt: 1 });

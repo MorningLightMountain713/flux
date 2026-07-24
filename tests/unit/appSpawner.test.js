@@ -27,7 +27,7 @@ describe('appSpawner tests', () => {
       database: {
         daemon: { database: 'daemon' },
         appslocal: { database: 'localapps' },
-        appsglobal: { database: 'globalapps', collections: { appsLocations: 'zelappslocation' } },
+        appsglobal: { database: 'globalapps', collections: {} },
       },
       fluxapps: {
         installation: { delay: 300 },

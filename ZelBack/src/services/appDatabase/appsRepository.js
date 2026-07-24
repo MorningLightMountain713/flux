@@ -12,7 +12,6 @@ const {
   globalAppsInstallingErrorsLocations,
   globalAppsInstallingErrorsBroadcasts,
   globalAppsInstallingLocations,
-  globalAppsLocations,
   globalAppsIngressAttestations,
   globalAppsIngressAttestationDigests,
   globalAppStateEvents,
@@ -48,6 +47,7 @@ async function hydrate(doc) {
   // `replica` is this collection's own key field, not part of the spec's wire
   // form. The encrypted deserializers reject unknown fields outright, so the
   // storage key is stripped here rather than leaking into the spec layer.
+  // eslint-disable-next-line no-unused-vars
   const { replica, ...specDoc } = doc;
 
   try {
@@ -1102,6 +1102,14 @@ const RUNNING_COUNT_TAIL = [
   { $group: { _id: '$_v2Filtered.apps.name', count: { $sum: 1 } } },
 ];
 
+// Which addresses currently run anything. Same rules again, grouping on the address
+// instead of the app - so an address that only ever appears on announcements the
+// shared stages exclude (shut down, or every app since removed) is not reported as
+// running something.
+const RUNNING_ADDRESS_TAIL = [
+  { $group: { _id: '$_v2Filtered.ip' } },
+];
+
 /**
  * Which pre-move announcements are dead, and which addresses still need translating.
  *
@@ -1193,100 +1201,39 @@ async function countRunningByApp() {
   return new Map(counts.map((row) => [String(row._id).toLowerCase(), row.count]));
 }
 
-// ── App Locations (globalAppsLocations) ────────────────────────────
+/**
+ * Every address the network currently believes is running at least one app.
+ *
+ * The same derivation as appLocationFromEvents and countRunningByApp, so the three
+ * cannot disagree about what counts as running. Address moves need the full
+ * treatment here, not just the supersede exclusion the count uses: the caller acts
+ * ON the address (it probes it, and evicts what does not answer), so a node that
+ * has moved must be reported at the address it moved TO.
+ *
+ * @returns {Promise<Array<string>>} socket addresses, deduplicated
+ */
+async function listRunningAddresses() {
+  const dbopen = dbHelper.databaseConnection();
+  const database = dbopen.db(config.database.appsglobal.database);
+  const collection = database.collection(globalAppStateEvents);
+  const now = new Date();
 
-const locationProjection = {
-  projection: {
-    _id: 0, name: 1, hash: 1, ip: 1, replica: 1,
-    broadcastedAt: 1, expireAt: 1, runningSince: 1,
-    osUptime: 1, staticIp: 1, state: 1,
-  },
-};
+  const { supersededIps, translate } = await resolveAddressMoves(collection, now);
+  const rows = await collection.aggregate([
+    ...buildAppLocationPipeline({ now, supersededIps }),
+    ...RUNNING_ADDRESS_TAIL,
+  ]).toArray();
 
-async function getAppLocation(appName, ip, replica) {
-  const query = { name: appName, ip };
-  // null matches loose/legacy rows (field absent); omitted matches any row
-  // for the (name, ip) - the legacy single-row read.
-  if (replica !== undefined) query.replica = replica;
-  return dbHelper.findOneInDatabase(
-    globalDb(), globalAppsLocations, query, locationProjection,
-  );
+  if (translate.size === 0) return rows.map((row) => row._id);
+  // Translating can collapse two rows onto one address, so dedupe after mapping.
+  return [...new Set(rows.map((row) => translate.get(row._id) ?? row._id))];
 }
 
-async function isAppRunningOnIp(appName, ip) {
-  const locations = await listLocationsByApp(appName);
-  return locations.some((loc) => loc.ip.split(':')[0] === ip);
-}
-
-async function listLocations() {
-  return dbHelper.findInDatabase(
-    globalDb(), globalAppsLocations, {}, { projection: { _id: 0 } },
-  );
-}
-
-async function listLocationsByApp(appName) {
-  return dbHelper.findInDatabase(
-    globalDb(), globalAppsLocations,
-    { name: nameRegex(appName) }, locationProjection,
-  );
-}
-
-async function listLocationsByIp(ipPrefix) {
-  return dbHelper.findInDatabase(
-    globalDb(), globalAppsLocations,
-    { ip: new RegExp(`^${ipPrefix}`) }, locationProjection,
-  );
-}
-
-async function listAppNamesOnIp(ip) {
-  return dbHelper.findInDatabase(
-    globalDb(), globalAppsLocations,
-    { ip }, { projection: { _id: 0, name: 1 } },
-  );
-}
-
-async function upsertLocation(record) {
-  return dbHelper.updateOneInDatabase(
-    globalDb(), globalAppsLocations,
-    { name: record.name, ip: record.ip },
-    { $set: record }, { upsert: true },
-  );
-}
-
-async function removeLocation(appName, ip) {
-  return dbHelper.findOneAndDeleteInDatabase(
-    globalDb(), globalAppsLocations, { ip, name: appName }, {},
-  );
-}
-
-async function removeLocationsByIp(ip) {
-  await dbHelper.removeDocumentsFromCollection(
-    globalDb(), globalAppsLocations, { ip },
-  );
-  await dbHelper.removeDocumentsFromCollection(
-    globalDb(), globalAppsInstallingLocations, { ip },
-  );
-}
+// ── Installing Locations ───────────────────────────────────────────
 
 async function removeInstallingLocation(appName, ip) {
   return dbHelper.removeDocumentsFromCollection(
     globalDb(), globalAppsInstallingLocations, { name: appName, ip },
-  );
-}
-
-async function updateLocationIp(oldIp, newIp, broadcastedAt) {
-  return dbHelper.updateInDatabase(
-    globalDb(), globalAppsLocations,
-    { ip: oldIp },
-    { $set: { ip: newIp, broadcastedAt: new Date(broadcastedAt) } },
-  );
-}
-
-async function updateLocationExpiry(ip, broadcastedAt, expireAt) {
-  return dbHelper.updateInDatabase(
-    globalDb(), globalAppsLocations,
-    { ip },
-    { $set: { broadcastedAt, expireAt } },
   );
 }
 
@@ -1438,21 +1385,11 @@ module.exports = {
   upsertIfNewer,
   clearInstallingErrors,
   upsertAppInstallingErrorLocations,
-  // locations
-  getAppLocation,
-  isAppRunningOnIp,
+  // the running set, derived from the app state event log
   appLocationFromEvents,
   countRunningByApp,
-  listLocations,
-  listLocationsByApp,
-  listLocationsByIp,
-  listAppNamesOnIp,
-  upsertLocation,
-  removeLocation,
-  removeLocationsByIp,
+  listRunningAddresses,
   removeInstallingLocation,
-  updateLocationIp,
-  updateLocationExpiry,
   // conflict checks
   assertNoNameConflicts,
   // secrets

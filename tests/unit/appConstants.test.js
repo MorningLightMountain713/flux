@@ -131,14 +131,12 @@ describe('appConstants tests', () => {
       expect(appConstants.globalAppsMessages).to.exist;
       expect(appConstants.globalAppsInformation).to.exist;
       expect(appConstants.globalAppsTempMessages).to.exist;
-      expect(appConstants.globalAppsLocations).to.exist;
       expect(appConstants.globalAppsInstallingLocations).to.exist;
       expect(appConstants.globalAppsInstallingErrorsLocations).to.exist;
 
       expect(typeof appConstants.globalAppsMessages).to.equal('string');
       expect(typeof appConstants.globalAppsInformation).to.equal('string');
       expect(typeof appConstants.globalAppsTempMessages).to.equal('string');
-      expect(typeof appConstants.globalAppsLocations).to.equal('string');
       expect(typeof appConstants.globalAppsInstallingLocations).to.equal('string');
       expect(typeof appConstants.globalAppsInstallingErrorsLocations).to.equal('string');
     });
@@ -272,7 +270,6 @@ describe('appConstants tests', () => {
       expect(appConstants).to.have.property('globalAppsMessages');
       expect(appConstants).to.have.property('globalAppsInformation');
       expect(appConstants).to.have.property('globalAppsTempMessages');
-      expect(appConstants).to.have.property('globalAppsLocations');
       expect(appConstants).to.have.property('globalAppsInstallingLocations');
       expect(appConstants).to.have.property('globalAppsInstallingErrorsLocations');
     });

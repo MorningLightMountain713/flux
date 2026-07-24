@@ -35,7 +35,6 @@ describe('appUninstaller tests', () => {
             appsMessages: 'appsMessages',
             appsInformation: 'globalAppsInformation',
             appsTemporaryMessages: 'appsTemporaryMessages',
-            appsLocations: 'appsLocations',
           },
           database: 'globalapps',
         },

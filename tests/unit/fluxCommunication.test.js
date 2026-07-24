@@ -1471,7 +1471,7 @@ describe('fluxCommunication tests', () => {
   describe('handleNodeSigtermMessage tests', () => {
     let relaySpy;
     let findInDatabaseStub;
-    let updateInDatabaseStub;
+    let storeAppStateEventStub;
     let logInfoSpy;
 
     before(requireMongo);
@@ -1491,8 +1491,7 @@ describe('fluxCommunication tests', () => {
       };
       sinon.stub(dbHelper, 'databaseConnection').returns(mockDb);
       findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase');
-      updateInDatabaseStub = sinon.stub(dbHelper, 'updateInDatabase').resolves();
-      sinon.stub(messageStore, 'storeAppStateEvent');
+      storeAppStateEventStub = sinon.stub(messageStore, 'storeAppStateEvent');
       sinon.stub(appsRepository, 'appLocationFromEvents').resolves([]);
 
       logInfoSpy = sinon.spy(log, 'info');
@@ -1529,7 +1528,7 @@ describe('fluxCommunication tests', () => {
 
       sinon.assert.calledWith(logInfoSpy, sinon.match(/Received SIGTERM notification from node/));
       sinon.assert.calledWith(logInfoSpy, sinon.match(/Found 2 apps for node/));
-      sinon.assert.calledOnce(updateInDatabaseStub);
+      sinon.assert.calledWithMatch(storeAppStateEventStub, 'sigterm', sinon.match.has('message'));
       sinon.assert.calledOnce(relaySpy);
     }).timeout(10000);
 
@@ -1552,7 +1551,7 @@ describe('fluxCommunication tests', () => {
       await fluxCommunication.handleNodeSigtermMessage(message, fromIp, port);
 
       sinon.assert.calledWith(logInfoSpy, sinon.match(/No apps found for node.*event log view/));
-      sinon.assert.notCalled(updateInDatabaseStub);
+      sinon.assert.notCalled(storeAppStateEventStub);
       sinon.assert.notCalled(relaySpy);
     });
 
