@@ -46,7 +46,7 @@ describe('peerNotification tests', () => {
     };
 
     enqueueAllStub = sinon.stub().resolves();
-    getAppLocationStub = sinon.stub().resolves(null);
+    getAppLocationStub = sinon.stub().resolves([]);
     // cleartext instances resolve to their own spec; encrypted default to null
     // (unresolvable) unless a test supplies a decrypted view
     resolveInstantiatedStub = sinon.stub().callsFake(async (inst) => (inst.isEncrypted ? null : inst.spec));
@@ -91,7 +91,7 @@ describe('peerNotification tests', () => {
       '../appDatabase/appsRepository': {
         listInstalledApps: listInstalledAppsStub,
         listInstalledIdentities: listInstalledIdentitiesStub,
-        getAppLocation: getAppLocationStub,
+        appLocationFromEvents: getAppLocationStub,
       },
       '../utils/specCutover': {
         resolveInstantiatedSpec: resolveInstantiatedStub,
@@ -153,13 +153,41 @@ describe('peerNotification tests', () => {
       });
     });
 
-    it('should use appsRepository.getAppLocation for location lookup', async () => {
-      getAppLocationStub.resolves({ runningSince: '2025-01-01T00:00:00.000Z' });
+    // runningSince originates here and every peer echoes it back, so it must survive
+    // our own restarts - it is read off our previous announcement, never restamped.
+    it('carries runningSince forward from our own previous announcement', async () => {
+      getAppLocationStub.resolves([{ name: 'app1', ip: '192.168.1.1:16127', replica: null, runningSince: '2025-01-01T00:00:00.000Z' }]);
 
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
-      expect(getAppLocationStub.calledOnce).to.be.true;
-      expect(getAppLocationStub.firstCall.args).to.deep.equal(['app1', '192.168.1.1:16127', null]);
+      expect(getAppLocationStub.calledOnceWithExactly({ appname: 'app1', ip: '192.168.1.1:16127' })).to.be.true;
+      expect(broadcastAllStub.firstCall.args[0].apps[0].runningSince).to.equal('2025-01-01T00:00:00.000Z');
+    });
+
+    it('stamps a fresh runningSince when we have never announced this app', async () => {
+      getAppLocationStub.resolves([]);
+      const before = Date.now();
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      const stamped = new Date(broadcastAllStub.firstCall.args[0].apps[0].runningSince).getTime();
+      expect(stamped).to.be.at.least(before);
+    });
+
+    it('matches each replica to its own prior runningSince', async () => {
+      listInstalledIdentitiesStub.resolves(['r0', 'r1']);
+      getAppLocationStub.resolves([
+        { name: 'app1', replica: 'r1', runningSince: '2025-02-02T00:00:00.000Z' },
+        { name: 'app1', replica: 'r0', runningSince: '2025-01-01T00:00:00.000Z' },
+      ]);
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      const { apps } = broadcastAllStub.firstCall.args[0];
+      expect(apps.map((a) => [a.replica, a.runningSince])).to.deep.equal([
+        ['r0', '2025-01-01T00:00:00.000Z'],
+        ['r1', '2025-02-02T00:00:00.000Z'],
+      ]);
     });
 
     it('broadcasts an installed app as present even when no container is running', async () => {
@@ -222,7 +250,7 @@ describe('peerNotification tests', () => {
         '../appDatabase/appsRepository': {
           listInstalledApps: listInstalledAppsStub,
           listInstalledIdentities: listInstalledIdentitiesStub,
-          getAppLocation: getAppLocationStub,
+          appLocationFromEvents: getAppLocationStub,
         },
         '../utils/specCutover': { resolveInstantiatedSpec: resolveInstantiatedStub },
         '../nodeConfirmationService': {
