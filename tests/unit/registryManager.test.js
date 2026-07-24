@@ -824,20 +824,6 @@ describe('registryManager tests', () => {
       };
     }
 
-    function makeV1Event(ip, name, hash, broadcastedAt) {
-      return {
-        ip,
-        type: 'apprunning',
-        dedupKey: `v1:${name}`,
-        broadcastedAt: new Date(broadcastedAt),
-        expireAt: new Date(broadcastedAt + 125 * 60 * 1000),
-        data: {
-          ip, name, hash, broadcastedAt, runningSince: new Date(broadcastedAt), osUptime: 1000, staticIp: true,
-        },
-        envelope: { version: 1, timestamp: broadcastedAt, pubKey: '04abc', signature: 'sig' },
-      };
-    }
-
     function makeAppRemovedEvent(ip, appName, broadcastedAt) {
       return {
         ip,
@@ -892,39 +878,6 @@ describe('registryManager tests', () => {
       const names = result.map((r) => r.name).sort();
       expect(names).to.deep.equal(['AppA', 'AppB']);
       expect(result[0].ip).to.equal('1.2.3.4');
-    });
-
-    it('should derive locations from v1 events', async () => {
-      await database.collection(eventsCollection).insertOne(
-        makeV1Event('5.6.7.8', 'AppC', 'h3', now),
-      );
-
-      const result = await registryManager.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(1);
-      expect(result[0].name).to.equal('AppC');
-    });
-
-    it('should include v1 newer than latest v2 for same IP', async () => {
-      await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now - 60000),
-        makeV1Event('1.2.3.4', 'AppB', 'h2', now),
-      ]);
-
-      const result = await registryManager.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(2);
-      const names = result.map((r) => r.name).sort();
-      expect(names).to.deep.equal(['AppA', 'AppB']);
-    });
-
-    it('should exclude v1 older than latest v2 for same IP', async () => {
-      await database.collection(eventsCollection).insertMany([
-        makeV1Event('1.2.3.4', 'OldApp', 'h0', now - 120000),
-        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now),
-      ]);
-
-      const result = await registryManager.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(1);
-      expect(result[0].name).to.equal('AppA');
     });
 
     it('should exclude apps with newer appremoved event', async () => {
@@ -1059,6 +1012,94 @@ describe('registryManager tests', () => {
       result.forEach((r) => expect(r.ip).to.equal('2.2.2.2'));
     });
 
+    // A node's announcement is the COMPLETE list of what it runs, so an app missing
+    // from the post-move announcement has stopped. Asking by name is the sharp case:
+    // the announcement that retires the app is the one that no longer names it, so a
+    // name-scoped read cannot see it and the superseded announcement has to be
+    // excluded before the query runs.
+    it('drops an app the post-move announcement no longer lists', async () => {
+      await database.collection(eventsCollection).insertMany([
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }], now - 120000),
+        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60000),
+        makeV2Event('2.2.2.2', [{ name: 'AppB', hash: 'h2' }], now),
+      ]);
+
+      const all = await registryManager.appLocationFromEvents();
+      expect(all.map((r) => `${r.name}@${r.ip}`)).to.deep.equal(['AppB@2.2.2.2']);
+
+      const byName = await registryManager.appLocationFromEvents({ appname: 'AppA' });
+      expect(byName).to.be.an('array').with.lengthOf(0);
+    });
+
+    it('re-addresses a node that moved but has not re-announced', async () => {
+      await database.collection(eventsCollection).insertMany([
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], now - 120000),
+        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60000),
+      ]);
+
+      for (const result of [
+        await registryManager.appLocationFromEvents(),
+        await registryManager.appLocationFromEvents({ appname: 'AppA' }),
+      ]) {
+        expect(result).to.be.an('array').with.lengthOf(1);
+        expect(result[0].ip).to.equal('2.2.2.2');
+      }
+    });
+
+    it('ignores a move that predates the announcement', async () => {
+      await database.collection(eventsCollection).insertMany([
+        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 120000),
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], now - 60000),
+      ]);
+
+      const result = await registryManager.appLocationFromEvents();
+      expect(result).to.be.an('array').with.lengthOf(1);
+      expect(result[0].ip).to.equal('1.1.1.1');
+    });
+
+    // Co-located replicas of one app share a name and an address, so they are only
+    // distinguishable by replica - the reason the derivation carries replica and
+    // state per row rather than collapsing on {name, ip}.
+    it('reports co-located replicas separately, with their own LB state', async () => {
+      await database.collection(eventsCollection).insertOne(
+        makeV2Event('1.1.1.1', [
+          { name: 'AppA', hash: 'h1', replica: 'r0', state: 'active' },
+          { name: 'AppA', hash: 'h1', replica: 'r1', state: 'draining' },
+        ], now),
+      );
+
+      const result = await registryManager.appLocationFromEvents({ appname: 'AppA' });
+      expect(result).to.have.lengthOf(2);
+      const byReplica = Object.fromEntries(result.map((r) => [r.replica, r.state]));
+      expect(byReplica).to.deep.equal({ r0: 'active', r1: 'draining' });
+    });
+
+    it('keeps co-located replicas distinct across a move', async () => {
+      await database.collection(eventsCollection).insertMany([
+        makeV2Event('1.1.1.1', [
+          { name: 'AppA', hash: 'h1', replica: 'r0', state: 'active' },
+          { name: 'AppA', hash: 'h1', replica: 'r1', state: 'draining' },
+        ], now - 120000),
+        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60000),
+      ]);
+
+      const result = await registryManager.appLocationFromEvents({ appname: 'AppA' });
+      expect(result).to.have.lengthOf(2);
+      result.forEach((r) => expect(r.ip).to.equal('2.2.2.2'));
+      expect(result.map((r) => r.replica).sort()).to.deep.equal(['r0', 'r1']);
+    });
+
+    it('an untagged install reports a null replica and active state', async () => {
+      await database.collection(eventsCollection).insertOne(
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], now),
+      );
+
+      const result = await registryManager.appLocationFromEvents({ appname: 'AppA' });
+      expect(result).to.have.lengthOf(1);
+      expect(result[0].replica).to.equal(null);
+      expect(result[0].state).to.equal('active');
+    });
+
     it('should exclude expired events', async () => {
       const expired = now - 130 * 60 * 1000;
       await database.collection(eventsCollection).insertOne(
@@ -1077,20 +1118,6 @@ describe('registryManager tests', () => {
       const result = await registryManager.appLocationFromEvents({ appname: 'appa' });
       expect(result).to.be.an('array').with.lengthOf(1);
       expect(result[0].name).to.equal('AppA');
-    });
-
-    it('should dedup v1 overriding same app in v2 with newer timestamp', async () => {
-      await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'old' }, { name: 'AppB', hash: 'h2' }], now - 60000),
-        makeV1Event('1.2.3.4', 'AppA', 'new', now),
-      ]);
-
-      const result = await registryManager.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(2);
-      const appA = result.find((r) => r.name === 'AppA');
-      expect(appA.hash).to.equal('new');
-      const appB = result.find((r) => r.name === 'AppB');
-      expect(appB.hash).to.equal('h2');
     });
 
     it('should handle multiple IPs independently', async () => {
