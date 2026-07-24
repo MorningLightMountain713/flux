@@ -28,7 +28,6 @@ describe('nodeStatusMonitor tests', () => {
           appsglobal: {
             database: 'globalapps',
             collections: {
-              appsLocations: 'appsLocations',
             },
           },
         },

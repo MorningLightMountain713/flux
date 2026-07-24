@@ -15,9 +15,7 @@ const policyStore = require('./policyStore');
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const messageHelper = require('./messageHelper');
-const dbHelper = require('./dbHelper');
 const { peerManager, PEER_SOURCE } = require('./utils/peerState');
-const { SIGTERM_EXPIRY_MS } = require('./utils/appConstants');
 const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
@@ -31,7 +29,6 @@ const { INTENT } = require('./utils/messageIntent');
 const {
   ROUTE, register, declaredIntent, handlerFor, isOrdered,
 } = require('./utils/messageRoutes');
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 const { announcementSeen, announcementStore, wsPeerCache } = cacheManager;
 
@@ -302,26 +299,18 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
       }
     });
 
-    // Applied after every slice, never inside one. An eviction clears a node's
-    // locations outright, so a slice storing that node's apprunning events
-    // afterwards would put them straight back - and evictions carry no
-    // broadcastedAt, so the sender's timestamp sort puts them in the earliest
-    // slice every time.
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    // Applied after every slice, never inside one. The reason was the location
+    // table - an eviction cleared a node's rows outright, so a slice storing that
+    // node's apprunning events afterwards put them straight back - and that table
+    // is now gone. The order is kept because the other half of the reason still
+    // holds: evictions carry no broadcastedAt, so the sender's timestamp sort puts
+    // them in the earliest slice every time, and nothing here establishes that the
+    // event log is indifferent to seeing them last.
     for (const event of [...evictions, ...stateEvents]) {
-      if (event.type === 'sigterm') {
+      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
-        const newExpireAt = new Date(event.data.broadcastedAt + SIGTERM_EXPIRY_MS);
-        await dbHelper.updateInDatabase(database, globalAppsLocations, { ip: event.data.ip }, { $set: { expireAt: newExpireAt } });
-      } else if (event.type === 'appremoved') {
-        await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
-        await dbHelper.findOneAndDeleteInDatabase(database, globalAppsLocations, { ip: event.data.ip, name: event.data.appName }, {});
       } else if (event.type === 'evicted') {
         await messageStore.storeAppStateEvent(event.type, { ip: event.ip });
-        await dbHelper.removeDocumentsFromCollection(database, globalAppsLocations, { ip: event.ip });
-      } else if (event.type === 'ipchanged') {
-        await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
       }
     }
 
@@ -694,13 +683,6 @@ async function handleNodeSigtermMessage(message, fromIP, port) {
     const envelope = { version: message.version, timestamp: message.timestamp, pubKey: message.pubKey, signature: message.signature };
     await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.SIGTERM, { message: message.data, envelope });
     fluxEventBus.publish('network:sigterm', { ip });
-
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const newExpireAt = new Date(broadcastedAt + SIGTERM_EXPIRY_MS);
-    const update = { $set: { expireAt: newExpireAt } };
-    const query = { ip };
-    await dbHelper.updateInDatabase(database, globalAppsLocations, query, update);
 
     // Rebroadcast to other peers
     announceToPeers(message, `${fromIP}:${port}`);

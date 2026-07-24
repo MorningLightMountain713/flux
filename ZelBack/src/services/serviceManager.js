@@ -410,14 +410,12 @@ async function startFluxFunctions() {
       { key: { 'appSpecifications.version': 1 }, name: 'query for getting app message based on version' },
       { key: { 'appSpecifications.nodes': 1 }, name: 'query for getting app message based on nodes' },
     ]);
-    // TTL is driven by expireAt (set per-document by store functions). Migrate from old broadcastedAt-based TTL.
-    await databaseTemp.collection(config.database.appsglobal.collections.appsLocations).dropIndex('broadcastedAt_1').catch(() => {});
-    await ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsLocations), [
-      { key: { expireAt: 1 }, expireAfterSeconds: 0 },
-      { key: { name: 1 }, name: 'query for getting zelapp location based on zelapp specs name' },
-      { key: { ip: 1, name: 1 } },
-    ]);
-    log.info('Flux Apps locations prepared');
+    // The running set is derived from the app state event log on read; the materialized
+    // location collection it replaced is no longer written or read. Dropped rather than
+    // left to its TTL so an upgraded node does not carry a dead collection - and its
+    // per-minute TTL sweep - indefinitely. Named literally: the config key is gone, and
+    // a drop of a collection that is not there is a no-op, so this self-retires.
+    await databaseTemp.collection('zelappslocation').drop().catch(() => {});
     await ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appStateEvents), [
       { key: { expireAt: 1 }, expireAfterSeconds: 0 },
       { key: { ip: 1, type: 1, dedupKey: 1 }, unique: true, recover: dedupeByKey },

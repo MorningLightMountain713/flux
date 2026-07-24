@@ -68,7 +68,6 @@ describe('messageStore tests', () => {
       '../utils/appConstants': {
         globalAppsMessages: 'appsMessages',
         globalAppsTempMessages: 'appsTempMessages',
-        globalAppsLocations: 'appsLocations',
         globalAppsInstallingLocations: 'appsInstallingLocations',
         globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
         globalAppsInstallingErrorsBroadcasts: 'appsInstallingErrorsBroadcasts',
@@ -127,7 +126,6 @@ describe('messageStore tests', () => {
         appsglobal: {
           database: 'appsdb',
           collections: {
-            appsLocations: 'appsLocations',
             appStateEvents: 'appStateEvents',
             appsInstallingBroadcasts: 'appsInstallingBroadcasts',
             appsInstallingErrorsBroadcasts: 'appsInstallingErrorsBroadcasts',
