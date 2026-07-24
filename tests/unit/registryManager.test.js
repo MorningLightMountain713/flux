@@ -764,6 +764,30 @@ describe('registryManager tests', () => {
 
   // Port conflicts are a property of the machine, so this selects every node at an
   // address regardless of apiport - and must not spill onto a neighbouring address.
+  describe('reindexGlobalAppsLocationAPI (deprecated no-op)', () => {
+    afterEach(() => sinon.restore());
+
+    it('reports success without touching any collection', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      const dropSpy = sinon.spy(dbHelper, 'dropCollection');
+      const res = { json: sinon.stub() };
+
+      await registryManager.reindexGlobalAppsLocationAPI({}, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+      expect(dropSpy.called).to.equal(false);
+    });
+
+    it('still refuses an unprivileged caller', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
+      const res = { json: sinon.stub() };
+
+      await registryManager.reindexGlobalAppsLocationAPI({}, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+    });
+  });
+
   describe('getRunningAppIpList tests', () => {
     const announcement = (ip, apps) => {
       const broadcastedAt = Date.now();

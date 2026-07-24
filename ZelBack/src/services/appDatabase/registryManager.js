@@ -17,7 +17,6 @@ const {
   globalAppsInformation,
   localAppsInformation,
   globalAppsMessages,
-  globalAppsLocations,
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts,
   globalAppsInstallingErrorsLocations,
@@ -1085,32 +1084,13 @@ async function reconstructAppMessagesHashCollectionAPI(req, res) {
 
 
 /**
- * Drops and recreates global apps locations collection with indexes
- * @returns {Promise<boolean>} True if successful
- */
-async function reindexGlobalAppsLocation() {
-  try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    await dbHelper.dropCollection(database, globalAppsLocations).catch((error) => {
-      if (error.message !== 'ns not found') {
-        throw error;
-      }
-    });
-    await database.collection(globalAppsLocations).createIndex({ name: 1 }, { name: 'query for getting app location based on app specs name' });
-    await database.collection(globalAppsLocations).createIndex({ hash: 1 }, { name: 'query for getting app location based on app hash' });
-    await database.collection(globalAppsLocations).createIndex({ ip: 1 }, { name: 'query for getting app location based on ip' });
-    await database.collection(globalAppsLocations).createIndex({ name: 1, ip: 1 }, { name: 'query for getting app based on ip and name' });
-    await database.collection(globalAppsLocations).createIndex({ name: 1, ip: 1, broadcastedAt: 1 }, { name: 'query for getting app to ensure we possess a message' });
-    return true;
-  } catch (error) {
-    log.error(error);
-    throw error;
-  }
-}
-
-/**
- * To reindex global apps location via API. Only accessible by admins and Flux team members.
+ * DEPRECATED — no-op. Only accessible by admins and Flux team members.
+ *
+ * This rebuilt the materialized appsLocations collection, which no longer exists:
+ * the running set is derived from the app state event log on read, so it is always
+ * current and there is nothing to reindex. The route and its response envelope are
+ * kept so existing operator tooling neither breaks nor has to special-case a
+ * version, and the privilege check still applies.
  * @param {object} req Request.
  * @param {object} res Response.
  */
@@ -1118,9 +1098,7 @@ async function reindexGlobalAppsLocationAPI(req, res) {
   try {
     const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
     if (authorized === true) {
-      await reindexGlobalAppsLocation();
-      const message = messageHelper.createSuccessMessage('Reindex successfull');
-      res.json(message);
+      res.json(messageHelper.createSuccessMessage('Deprecated: app locations are derived from the app state event log, there is nothing to reindex'));
     } else {
       const errMessage = messageHelper.errUnauthorizedMessage();
       res.json(errMessage);
@@ -1341,7 +1319,6 @@ module.exports = {
   getRunningAppIpList,
   registrationInformation,
   reindexGlobalAppsInformation,
-  reindexGlobalAppsLocation,
   rescanGlobalAppsInformation,
   reconstructAppMessagesHashCollection,
   reconstructAppMessagesHashCollectionAPI,

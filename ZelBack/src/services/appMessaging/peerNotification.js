@@ -109,13 +109,18 @@ async function checkAndNotifyPeersOfRunningApps() {
         // eslint-disable-next-line no-await-in-loop
         const replicas = await appsRepository.listInstalledIdentities(appName);
         const identities = replicas.length > 0 ? replicas : [null];
+        // What we last told the network about ourselves. runningSince originates
+        // here and is echoed back by every peer, so it has to survive our own
+        // restarts: we read it off our previous announcement rather than restamping
+        // it, or an app would look freshly started on every broadcast.
+        // eslint-disable-next-line no-await-in-loop
+        const priorClaims = await appsRepository.appLocationFromEvents({ appname: appName, ip: localSocketAddr });
         // eslint-disable-next-line no-restricted-syntax
         for (const identity of identities) {
-          // eslint-disable-next-line no-await-in-loop
-          const result = await appsRepository.getAppLocation(appName, localSocketAddr, identity);
+          const prior = priorClaims.find((claim) => (claim.replica ?? null) === identity);
           let runningOnMyNodeSince = new Date().toISOString();
-          if (result && result.runningSince) {
-            runningOnMyNodeSince = result.runningSince;
+          if (prior && prior.runningSince) {
+            runningOnMyNodeSince = prior.runningSince;
           }
           apps.push({
             name: appName,
