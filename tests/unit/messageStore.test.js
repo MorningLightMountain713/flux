@@ -964,7 +964,7 @@ describe('messageStore tests', () => {
       expect(result.message).to.include('appName cannot be empty');
     });
 
-    it('should store valid removed message and delete location', async () => {
+    it('accepts a removal for relay without deleting any row', async () => {
       const message = {
         type: 'fluxappremoved',
         version: 1,
@@ -975,17 +975,13 @@ describe('messageStore tests', () => {
 
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findOneAndDeleteInDatabase.resolves();
 
       const result = await messageStore.storeAppRemovedMessage(message);
 
       expect(result).to.be.true;
-      // An untagged removal clears EVERY row the node held for the app (a
-      // co-located pair has one row per replica).
-      expect(dbHelperStub.removeDocumentsFromCollection.calledOnce).to.be.true;
-      expect(dbHelperStub.removeDocumentsFromCollection.firstCall.args[2]).to.deep.equal({
-        ip: '192.168.1.1', name: 'testapp',
-      });
+      // The removal is recorded in the event log; the derivation drops the app from
+      // the node's running set off that event, so there is nothing to delete here.
+      expect(dbHelperStub.removeDocumentsFromCollection.called).to.be.false;
     });
   });
 
@@ -1096,7 +1092,7 @@ describe('messageStore tests', () => {
       expect(result.message).to.include('oldIP and newIP are the same');
     });
 
-    it('should store valid IP changed message', async () => {
+    it('accepts an address move for relay without rewriting any row', async () => {
       const message = {
         type: 'fluxipchanged',
         version: 1,
@@ -1107,12 +1103,13 @@ describe('messageStore tests', () => {
 
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.updateInDatabase.resolves();
 
       const result = await messageStore.storeIPChangedMessage(message);
 
       expect(result).to.be.true;
-      expect(dbHelperStub.updateInDatabase.calledOnce).to.be.true;
+      // The move is recorded in the event log; the derivation re-addresses the
+      // node's announcements off it rather than mutating stored rows.
+      expect(dbHelperStub.updateInDatabase.called).to.be.false;
     });
   });
 

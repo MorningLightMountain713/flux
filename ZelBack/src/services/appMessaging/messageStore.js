@@ -12,7 +12,6 @@ const globalState = require('../utils/globalState');
 const {
   globalAppsMessages,
   globalAppsTempMessages,
-  globalAppsLocations,
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts: appsInstallingBroadcasts,
   globalAppsInstallingErrorsLocations,
@@ -471,17 +470,9 @@ async function storeAppRemovedMessage(message) {
     return false;
   }
 
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  // A replica-tagged removal (one co-located identity scaled away) clears only
-  // its own row; an untagged removal clears every row the node held for the
-  // app - which for a co-located pair is all of its replica rows.
-  const query = typeof message.replica === 'string'
-    ? { ip: message.ip, name: message.appName, replica: message.replica }
-    : { ip: message.ip, name: message.appName };
-  await dbHelper.removeDocumentsFromCollection(database, globalAppsLocations, query);
-
-  // all stored, rebroadcast
+  // Nothing to delete: the removal is recorded in the app state event log by
+  // storeAppStateEvent, and the derivation excludes the app from the node's running
+  // set from that moment.
   return true;
 }
 
@@ -583,88 +574,11 @@ async function storeIPChangedMessage(message) {
     return false;
   }
 
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const query = { ip: message.oldIP };
-  const update = { $set: { ip: message.newIP, broadcastedAt: new Date(message.broadcastedAt) } };
-  await dbHelper.updateInDatabase(database, globalAppsLocations, query, update);
+  // Nothing to rewrite: the move is recorded in the event log, and the derivation
+  // re-addresses the node's announcements off it.
 
   // all stored, rebroadcast
   return true;
-}
-
-async function storeBatchAppRunningMessages(verifiedBroadcasts) {
-  if (verifiedBroadcasts.length === 0) return { stored: 0 };
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-
-  const { stored } = await storeBatchAppRunningEvents(verifiedBroadcasts);
-
-  const locationOps = [];
-  const v2AppsByIp = new Map();
-
-  for (const broadcast of verifiedBroadcasts) {
-    const { data } = broadcast;
-    const validTill = data.broadcastedAt + RUNNING_EXPIRY_MS;
-    if (validTill < Date.now()) continue;
-
-    const apps = data.version === 2 ? (data.apps || []) : [{ name: data.name, hash: data.hash }];
-    if (data.version === 2 && apps.length > 0) {
-      const existing = v2AppsByIp.get(data.ip);
-      if (!existing || data.broadcastedAt > existing.broadcastedAt) {
-        v2AppsByIp.set(data.ip, { names: apps.map((a) => a.name), broadcastedAt: data.broadcastedAt });
-      }
-    }
-    const incomingDate = new Date(data.broadcastedAt);
-    const incomingExpiry = new Date(validTill);
-    const isNewer = { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] };
-    for (const app of apps) {
-      // Normalize the LB lifecycle state at ingest:
-      // only explicit draining/stopping survive; absent/other defaults to active.
-      const normalizedState = ['draining', 'stopping'].includes(app.state) ? app.state : 'active';
-      const setFields = {
-        name: app.name,
-        ip: data.ip,
-        hash: { $cond: [isNewer, app.hash, { $ifNull: ['$hash', app.hash] }] },
-        broadcastedAt: { $cond: [isNewer, incomingDate, '$broadcastedAt'] },
-        expireAt: { $cond: [isNewer, incomingExpiry, '$expireAt'] },
-        osUptime: { $cond: [isNewer, data.osUptime, { $ifNull: ['$osUptime', data.osUptime] }] },
-        staticIp: { $cond: [isNewer, data.staticIp ?? null, { $ifNull: ['$staticIp', data.staticIp ?? null] }] },
-        state: { $cond: [isNewer, normalizedState, { $ifNull: ['$state', normalizedState] }] },
-        // One row per identity (name+ip+replica), mirroring installing-locations: null for
-        // loose placement and legacy rows without the field. Part of the upsert key below,
-        // so co-located replicas no longer collapse onto a single (name,ip) row.
-        replica: app.replica ?? null,
-      };
-      const runningSince = data.runningSince ? new Date(data.runningSince) : (app.runningSince ? new Date(app.runningSince) : null);
-      if (runningSince) {
-        setFields.runningSince = { $cond: [isNewer, runningSince, { $ifNull: ['$runningSince', runningSince] }] };
-      }
-      locationOps.push({
-        updateOne: {
-          filter: { name: app.name, ip: data.ip, replica: app.replica ?? null },
-          update: [{ $set: setFields }],
-          upsert: true,
-        },
-      });
-    }
-  }
-
-  for (const [ip, { names, broadcastedAt }] of v2AppsByIp) {
-    const cutoff = new Date(broadcastedAt);
-    locationOps.push({
-      deleteMany: {
-        filter: { ip, name: { $nin: names }, broadcastedAt: { $lte: cutoff } },
-      },
-    });
-  }
-
-  if (locationOps.length > 0) {
-    await database.collection(globalAppsLocations).bulkWrite(locationOps, { ordered: false })
-      .catch((err) => log.error(`storeBatchAppRunningMessages locations: ${err.message}`));
-  }
-
-  return { stored };
 }
 
 // --- Event Log Functions ---
@@ -1058,7 +972,6 @@ module.exports = {
   storeAppPermanentMessage,
   processPendingUpdates,
   releaseInstallingClaims,
-  storeBatchAppRunningMessages,
   storeAppStateEvent,
   storeBatchAppRunningEvents,
   APP_STATE_EVENT_TYPES,

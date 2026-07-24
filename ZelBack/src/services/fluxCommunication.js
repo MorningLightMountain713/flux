@@ -249,7 +249,7 @@ async function handleAppRunningSyncResponse(message, peerKey) {
     }
 
     if (verifiedAppRunning.length > 0) {
-      const { stored } = await messageStore.storeBatchAppRunningMessages(verifiedAppRunning);
+      const { stored } = await messageStore.storeBatchAppRunningEvents(verifiedAppRunning);
       log.info(`handleAppRunningSyncResponse - Stored ${stored} of ${verifiedAppRunning.length} verified apprunning events`);
       fluxEventBus.publish('sync:chunkVerified', { syncType: 'apprunning', peer: peerKey, verified: verifiedAppRunning.length, stored });
     }
