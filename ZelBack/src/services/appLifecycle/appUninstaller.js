@@ -22,6 +22,7 @@ const contentStore = require('./contentStore');
 const appSwapPoolService = require('./appSwapPoolService');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
+const globalCommand = require('../appManagement/globalCommand');
 const volumeService = require('../utils/volumeService');
 const imageManager = require('../appSecurity/imageManager');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -1297,9 +1298,7 @@ async function removeAppLocallyApi(req, res) {
     }
 
     if (global) {
-      // eslint-disable-next-line global-require
-      const appController = require('../appManagement/appController');
-      appController.executeAppGlobalCommand(appname, 'appremove', req.headers.zelidauth); // do not wait
+      globalCommand.executeAppGlobalCommand(appname, 'appremove', req.headers.zelidauth); // do not wait
       const appResponse = messageHelper.createSuccessMessage(`${appname} queried for global reinstallation`);
       return res.json(appResponse);
     }

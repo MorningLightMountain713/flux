@@ -8,6 +8,7 @@ const sinon = require('sinon');
 const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const appController = require('../../ZelBack/src/services/appManagement/appController');
+const globalCommand = require('../../ZelBack/src/services/appManagement/globalCommand');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
@@ -246,7 +247,7 @@ describe('appController tests', () => {
         json: sinon.fake((param) => param),
       };
 
-      sinon.stub(appController, 'executeAppGlobalCommand');
+      sinon.stub(globalCommand, 'executeAppGlobalCommand');
 
       await appController.appStart(req, res);
 
@@ -692,47 +693,6 @@ describe('appController tests', () => {
       sinon.assert.calledWith(stopStub.secondCall, 'container2');
 
       clock.restore();
-    });
-  });
-
-  describe('executeAppGlobalCommand tests', () => {
-    beforeEach(() => {
-      const locations = [
-        { ip: '192.168.1.1:16127', name: 'TestApp' },
-        { ip: '192.168.1.2:16127', name: 'TestApp' },
-      ];
-      sinon.stub(appsRepository, 'appLocationFromEvents').resolves(locations);
-    });
-
-    it('should execute command on all app instances', async () => {
-      // eslint-disable-next-line global-require
-      const axios = require('axios');
-      const axiosStub = sinon.stub(axios, 'get').resolves({ status: 200 });
-
-      await appController.executeAppGlobalCommand('TestApp', 'appstart', 'test-auth');
-
-      sinon.assert.calledTwice(axiosStub);
-    });
-
-    it('should skip own IP when bypassMyIp is true', async () => {
-      sinon.restore();
-      const locations = [
-        { ip: '192.168.1.3:16127', name: 'TestApp' },
-        { ip: '192.168.1.2:16127', name: 'TestApp' },
-      ];
-      sinon.stub(appsRepository, 'appLocationFromEvents').resolves(locations);
-      // eslint-disable-next-line global-require, no-shadow
-      const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.3:16127');
-
-      // eslint-disable-next-line global-require
-      const axios = require('axios');
-      const axiosStub = sinon.stub(axios, 'get').resolves({ status: 200 });
-
-      await appController.executeAppGlobalCommand('TestApp', 'appstart', 'test-auth', null, true);
-
-      // Should only call once, skipping own IP
-      sinon.assert.calledOnce(axiosStub);
     });
   });
 });
