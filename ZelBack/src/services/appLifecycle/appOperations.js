@@ -46,6 +46,7 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appReconciler = require('../appMonitoring/appReconciler');
 const syncthingMonitorHelpers = require('../appMonitoring/syncthingMonitorHelpers');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
+const globalCommand = require('../appManagement/globalCommand');
 const appVolumeService = require('./appVolumeService');
 const volumeService = require('../utils/volumeService');
 const appUninstaller = require('./appUninstaller');
@@ -527,9 +528,7 @@ async function redeployApplicationAPI(req, res) {
     isGlobal = serviceHelper.ensureBoolean(isGlobal);
 
     if (isGlobal) {
-      // eslint-disable-next-line global-require
-      const appController = require('../appManagement/appController');
-      appController.executeAppGlobalCommand(appname, 'redeploy', req.headers.zelidauth, force);
+      globalCommand.executeAppGlobalCommand(appname, 'redeploy', req.headers.zelidauth, force);
       const label = force ? 'hard' : 'soft';
       res.json(messageHelper.createSuccessMessage(`${appname} queried for global ${label} redeploy`));
       return;
@@ -1090,9 +1089,7 @@ async function appendRestoreTask(req, res) {
       await startApplication(appname);
       if (restoreSynced.length) {
         await sendChunk(res, 'Redeploying other instances...\n');
-        // eslint-disable-next-line global-require
-        const appController = require('../appManagement/appController');
-        appController.executeAppGlobalCommand(appname, 'redeploy', req.headers.zelidauth, true);
+        globalCommand.executeAppGlobalCommand(appname, 'redeploy', req.headers.zelidauth, true);
         await serviceHelper.delay(1 * 60 * 1000);
       }
       await sendChunk(res, 'Finalizing...\n');
