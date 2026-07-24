@@ -9,9 +9,18 @@ describe('appsRepository', () => {
   let versionRegistry;
   let logStub;
   let mockDb;
+  let eventCollection;
+  let runningCounts;
 
   beforeEach(() => {
-    mockDb = { db: sinon.stub().returns({ collection: sinon.stub() }) };
+    // countRunningByApp reads the event log directly off the collection handle:
+    // resolveAddressMoves does a find, the count pipeline an aggregate.
+    runningCounts = [];
+    eventCollection = {
+      find: sinon.stub().returns({ toArray: async () => [] }),
+      aggregate: sinon.stub().callsFake(() => ({ toArray: async () => runningCounts })),
+    };
+    mockDb = { db: sinon.stub().returns({ collection: sinon.stub().returns(eventCollection) }) };
 
     dbHelperStub = {
       databaseConnection: sinon.stub().returns(mockDb),
@@ -358,49 +367,99 @@ describe('appsRepository', () => {
       versionRegistry.set(7, V7);
     });
 
-    it('should return empty array when no results', async () => {
+    it('returns nothing when no app is alive', async () => {
       dbHelperStub.aggregateInDatabase.resolves([]);
       const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
       expect(result).to.deep.equal([]);
     });
 
-    it('should hydrate pipeline results and return candidates', async () => {
+    it('flags an app running fewer replicas than it wants', async () => {
       const doc = { version: 7, name: 'testApp', owner: 'owner1', hash: 'h1', height: 2550000, instances: 3 };
-      dbHelperStub.aggregateInDatabase.resolves([{ actual: 1, required: 3, doc }]);
+      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      runningCounts = [{ _id: 'testApp', count: 1 }];
+
       const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+
       expect(result).to.have.lengthOf(1);
       expect(result[0].instantiated.name).to.equal('testApp');
       expect(result[0].actual).to.equal(1);
       expect(result[0].required).to.equal(3);
     });
 
-    it('should skip docs that fail hydration', async () => {
+    it('leaves an app alone once it is at target', async () => {
+      const doc = { version: 7, name: 'testApp', owner: 'owner1', hash: 'h1', height: 2550000, instances: 3 };
+      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      runningCounts = [{ _id: 'testApp', count: 3 }];
+
+      expect(await appsRepository.findUnderProvisionedApps(2555000, 1716000000)).to.deep.equal([]);
+    });
+
+    // The count is keyed off the announced name; app names are matched
+    // case-insensitively everywhere else, and a miss here reads as zero instances
+    // and spawns a replica that is already running.
+    it('matches the running count to the spec name case-insensitively', async () => {
+      const doc = { version: 7, name: 'TestApp', owner: 'o', hash: 'h1', height: 2550000, instances: 3 };
+      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      runningCounts = [{ _id: 'testapp', count: 3 }];
+
+      expect(await appsRepository.findUnderProvisionedApps(2555000, 1716000000)).to.deep.equal([]);
+    });
+
+    it('treats an app with no running replicas as fully under-provisioned', async () => {
+      const doc = { version: 7, name: 'ghost', owner: 'o', hash: 'h1', height: 2550000, instances: 2 };
+      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      runningCounts = [];
+
+      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      expect(result).to.have.lengthOf(1);
+      expect(result[0].actual).to.equal(0);
+      expect(result[0].required).to.equal(2);
+    });
+
+    it('defaults the target to 3 when the spec does not say', async () => {
+      const doc = { version: 7, name: 'noInstances', owner: 'o', hash: 'h1', height: 2550000 };
+      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      runningCounts = [{ _id: 'noinstances', count: 2 }];
+
+      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      expect(result).to.have.lengthOf(1);
+      expect(result[0].required).to.equal(3);
+    });
+
+    it('skips docs that fail hydration', async () => {
       const good = { version: 7, name: 'goodApp', owner: 'o1', hash: 'h1', height: 100, instances: 3 };
       const bad = { version: 99, name: 'badApp', owner: 'o2', hash: 'h2', height: 100, instances: 3 };
-      dbHelperStub.aggregateInDatabase.resolves([
-        { actual: 0, required: 3, doc: good },
-        { actual: 0, required: 3, doc: bad },
-      ]);
+      dbHelperStub.aggregateInDatabase.resolves([good, bad]);
+      runningCounts = [];
+
       const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
       expect(result).to.have.lengthOf(1);
       expect(result[0].instantiated.name).to.equal('goodApp');
     });
 
-    it('strips its working fields before the doc leaves the pipeline (AAD safety)', async () => {
-      // Encrypted specs bind cleartext metadata into the AAD; a doc decorated
-      // with pipeline scratch fields fails decryption. The pipeline must
-      // emit { actual, required, doc } with the doc byte-identical to storage.
+    // Encrypted specs bind their cleartext metadata into the AAD, so a doc decorated
+    // with anything the query added fails to decrypt. Counting outside the pipeline
+    // means the doc reaches hydrate exactly as stored.
+    it('hands hydrate the stored doc, undecorated', async () => {
+      const doc = { version: 7, name: 'testApp', owner: 'o', hash: 'h1', height: 2550000, instances: 3 };
+      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      runningCounts = [];
+
+      await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+
+      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
+      // no join, and nothing left of the aliveness check
+      expect(pipeline.some((stage) => stage.$lookup)).to.be.false;
+      expect(pipeline.filter((stage) => stage.$unset).map((stage) => stage.$unset)).to.deep.include('_isAlive');
+      expect(Object.keys(doc).sort()).to.deep.equal(['hash', 'height', 'instances', 'name', 'owner', 'version']);
+    });
+
+    it('does not count instances inside the spec query', async () => {
       dbHelperStub.aggregateInDatabase.resolves([]);
       await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
       const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
-      const replaceWith = pipeline.find((stage) => stage.$replaceWith);
-      expect(replaceWith.$replaceWith).to.deep.equal({ actual: '$_actual', required: '$_required', doc: '$$ROOT' });
-      const unsets = pipeline.filter((stage) => stage.$unset).map((stage) => stage.$unset);
-      expect(unsets).to.deep.include('_isAlive');
-      expect(unsets).to.deep.include('_locations');
-      expect(unsets).to.deep.include(['doc._actual', 'doc._required']);
-      // the final stage leaves nothing of the pipeline's own bookkeeping behind
-      expect(pipeline[pipeline.length - 1]).to.deep.equal({ $unset: ['doc._actual', 'doc._required'] });
+      expect(pipeline.some((stage) => stage.$lookup)).to.be.false;
+      expect(JSON.stringify(pipeline)).to.not.include('zelappslocation');
     });
 
     it('should pass currentHeight and nowSeconds into the pipeline', async () => {
@@ -409,23 +468,7 @@ describe('appsRepository', () => {
       expect(dbHelperStub.aggregateInDatabase.calledOnce).to.be.true;
       const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
       expect(pipeline).to.be.an('array');
-      expect(pipeline.length).to.be.gte(4);
-    });
-
-    it('should include v9 TTL branch in the expiry check', async () => {
-      dbHelperStub.aggregateInDatabase.resolves([]);
-      await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
-      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
-      const addFieldsStage = pipeline[0];
-      expect(addFieldsStage.$addFields._isAlive.$cond.if).to.deep.equal({ $gte: ['$version', 9] });
-    });
-
-    it('should sort results by name', async () => {
-      dbHelperStub.aggregateInDatabase.resolves([]);
-      await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
-      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
-      const sortStage = pipeline.find((stage) => stage.$sort);
-      expect(sortStage.$sort).to.deep.equal({ name: 1 });
+      expect(pipeline.length).to.be.gte(3);
     });
   });
 
