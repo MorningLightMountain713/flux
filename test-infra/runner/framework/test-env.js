@@ -726,14 +726,33 @@ async function _buildEnv(
     // Real flux-telemetryd (systemd mode only): the pinned daemon build from
     // test-infra/flux-telemetryd/dist (binary + its REAL hardened unit),
     // bind-mounted; the entrypoint installs them and FluxOS starts the unit
-    // (production flow). Fail fast on a missing/stale dist rather than
-    // letting a skewed daemon produce runtime mysteries.
+    // (production flow). A dist that is missing, or built from anything but the
+    // pin, fails here rather than letting a skewed daemon produce runtime
+    // mysteries — see the pin check below for why stale is the dangerous case.
     if (telemetrydReal) {
       const distDir = join(__dirname, '..', '..', 'flux-telemetryd', 'dist');
+      const overridden = Boolean(process.env.TELEMETRYD_BINARY);
       const distBinary = process.env.TELEMETRYD_BINARY ?? join(distDir, 'flux-telemetryd');
       const distUnit = process.env.TELEMETRYD_UNIT ?? join(distDir, 'flux-telemetryd.service');
+      const buildCmd = 'run: bash test-infra/flux-telemetryd/build.sh';
       if (!existsSync(distBinary) || !existsSync(distUnit)) {
-        throw new Error(`telemetrydReal: ${distBinary} missing — run: bash test-infra/flux-telemetryd/build.sh`);
+        throw new Error(`telemetrydReal: ${distBinary} missing — ${buildCmd}`);
+      }
+      // A stale dist is worse than a missing one: the suite runs, the daemon
+      // behaves like whatever it was built from, and a test written for a fix the
+      // binary does not carry passes anyway — proving nothing while reading green.
+      // Skipped when TELEMETRYD_BINARY names a binary explicitly: .built-ref
+      // describes the dist build, not an override, so comparing it there would
+      // block the deliberate case (running a chosen build to check a test can
+      // actually fail).
+      if (!overridden) {
+        const pin = readFileSync(join(__dirname, '..', '..', 'flux-telemetryd', 'pin'), 'utf-8').trim();
+        const builtRef = existsSync(join(distDir, '.built-ref'))
+          ? readFileSync(join(distDir, '.built-ref'), 'utf-8').trim()
+          : '(none)';
+        if (builtRef !== pin) {
+          throw new Error(`telemetrydReal: dist built from ${builtRef}, pin is ${pin} — ${buildCmd}`);
+        }
       }
       bindMounts.push(
         { source: distBinary, target: '/opt/telemetryd-dist/flux-telemetryd', mode: 'ro' },
