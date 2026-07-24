@@ -15,6 +15,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const contentSlotService = require('../appLifecycle/contentSlotService');
 const {
   SIGTERM_EXPIRY_MS,
+  RUNNING_EXPIRY_MS,
   globalAppsInformation,
   localAppsInformation,
   globalAppsMessages,
@@ -111,15 +112,20 @@ async function getAppHashes(_req, res) {
 }
 
 /**
- * Get app location information
- * @param {string} appname - Optional app name filter
- * @returns {Promise<Array>} Array of app locations
+ * Where an app is running, network-wide — or everything running, with no name.
+ *
+ * Derived from the app state event log rather than read from the materialized
+ * appsLocations collection. That collection only ever gains and updates rows, so an
+ * app a node quietly stopped between announcements kept a row until its TTL swept it,
+ * and the network went on believing the app was there for up to the running TTL. The
+ * derivation has no such gap: it reads each node's latest announcement, and an app
+ * absent from that announcement is absent, immediately.
+ *
+ * @param {string} [appname] - optional app name filter
+ * @returns {Promise<Array>} location rows
  */
 async function appLocation(appname) {
-  if (appname) {
-    return appsRepository.listLocationsByApp(appname);
-  }
-  return appsRepository.listLocations();
+  return appLocationFromEvents(appname ? { appname } : {});
 }
 
 /**
@@ -1367,14 +1373,36 @@ function buildAppLocationPipeline({
         state: { $cond: [{ $in: ['$_v2Filtered.apps.state', ['draining', 'stopping']] }, '$_v2Filtered.apps.state', 'active'] },
         replica: { $ifNull: ['$_v2Filtered.apps.replica', null] },
         removals: 1,
+        shutdowns: 1,
       },
     },
     { $addFields: { _removedAt: { $ifNull: [{ $let: { vars: { r: { $first: { $filter: { input: '$removals', as: 'r', cond: { $and: [{ $eq: ['$$r._id.ip', '$ip'] }, { $eq: ['$$r._id.name', '$name'] }] } } } } }, in: '$$r.removedAt' } }, new Date(0)] } } },
     { $match: { $expr: { $gt: ['$broadcastedAt', '$_removedAt'] } } },
+    // When this row stops being believable. Derived rather than stored, but to the
+    // same rule the materialized collection writes: an announcement is good for the
+    // running TTL, and a node that announced a clean shutdown only keeps its rows for
+    // the sigterm grace. Callers read this field off /apps/locations, so it has to
+    // mean what it has always meant.
+    {
+      $addFields: {
+        expireAt: {
+          $let: {
+            vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$ip'] } } } } },
+            in: {
+              $cond: [
+                { $and: [{ $ne: ['$$sd', null] }, { $eq: ['$$sd.type', 'sigterm'] }, { $gt: ['$$sd.eventAt', '$broadcastedAt'] }] },
+                { $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] },
+                { $add: ['$broadcastedAt', RUNNING_EXPIRY_MS] },
+              ],
+            },
+          },
+        },
+      },
+    },
     // One row per running replica. No trailing $group: a node announces each replica
     // once, so nothing remains to deduplicate, and grouping on {name, ip} would merge
     // co-located replicas and discard the per-replica state and identity above.
-    { $project: { removals: 0, _removedAt: 0 } },
+    { $project: { removals: 0, shutdowns: 0, _removedAt: 0 } },
   ];
 }
 

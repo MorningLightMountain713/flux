@@ -11,6 +11,7 @@ const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepos
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const transportCryptoProvider = require('../../ZelBack/src/services/providers/FluxOSTransportProvider');
 const legacyTransportProvider = require('../../ZelBack/src/services/providers/FluxOSLegacyTransportProvider');
+const { RUNNING_EXPIRY_MS, SIGTERM_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { requireMongo } = require('./dbTestHelper');
 
 describe('registryManager tests', () => {
@@ -108,15 +109,26 @@ describe('registryManager tests', () => {
     });
   });
 
+  // appLocation reads the app state event log, not the materialized locations
+  // collection - so these seed a node's running-announcement.
   describe('appLocation tests', () => {
     beforeEach(async () => {
-      const collection = config.database.appsglobal.collections.appsLocations;
-      const testLocation = {
-        name: 'TestApp',
-        hash: 'testhash123',
+      const collection = config.database.appsglobal.collections.appStateEvents;
+      const broadcastedAt = Date.now();
+      const announcement = {
         ip: '192.168.1.1:16127',
-        broadcastedAt: new Date(),
-        expireAt: new Date(Date.now() + 3600000),
+        type: 'apprunning',
+        dedupKey: 'v2',
+        broadcastedAt: new Date(broadcastedAt),
+        expireAt: new Date(broadcastedAt + 125 * 60 * 1000),
+        data: {
+          ip: '192.168.1.1:16127',
+          version: 2,
+          apps: [{ name: 'TestApp', hash: 'testhash123' }],
+          broadcastedAt,
+          osUptime: 1000,
+          staticIp: true,
+        },
       };
 
       try {
@@ -124,7 +136,7 @@ describe('registryManager tests', () => {
       } catch (err) {
         // Collection doesn't exist
       }
-      await dbHelper.insertOneToDatabase(database, collection, testLocation);
+      await dbHelper.insertOneToDatabase(database, collection, announcement);
     });
 
     it('should return app location for specific app', async () => {
@@ -1098,6 +1110,32 @@ describe('registryManager tests', () => {
       expect(result).to.have.lengthOf(1);
       expect(result[0].replica).to.equal(null);
       expect(result[0].state).to.equal('active');
+    });
+
+    // expireAt is read off /apps/locations by callers outside this codebase, so it is
+    // derived to the same rule the materialized collection wrote it by.
+    it('derives expireAt from the announcement and the running TTL', async () => {
+      const at = now - 60000;
+      await database.collection(eventsCollection).insertOne(
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], at),
+      );
+
+      const result = await registryManager.appLocationFromEvents({ appname: 'AppA' });
+      expect(result).to.have.lengthOf(1);
+      expect(new Date(result[0].expireAt).getTime()).to.equal(at + RUNNING_EXPIRY_MS);
+    });
+
+    it('shortens expireAt to the sigterm grace for a node announcing shutdown', async () => {
+      const announcedAt = now - 60000;
+      const sigtermAt = now - 30000;
+      await database.collection(eventsCollection).insertMany([
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], announcedAt),
+        makeSigtermEvent('1.1.1.1', sigtermAt),
+      ]);
+
+      const result = await registryManager.appLocationFromEvents({ appname: 'AppA' });
+      expect(result).to.have.lengthOf(1);
+      expect(new Date(result[0].expireAt).getTime()).to.equal(sigtermAt + SIGTERM_EXPIRY_MS);
     });
 
     it('should exclude expired events', async () => {
