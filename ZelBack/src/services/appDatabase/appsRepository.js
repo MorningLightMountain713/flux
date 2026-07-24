@@ -97,40 +97,27 @@ async function findUnderProvisionedApps(currentHeight, nowSeconds) {
     },
     { $match: { _isAlive: true } },
     { $unset: '_isAlive' },
-    {
-      $lookup: {
-        from: config.database.appsglobal.collections.appsLocations,
-        localField: 'name',
-        foreignField: 'name',
-        as: '_locations',
-      },
-    },
-    {
-      $addFields: {
-        _actual: { $size: '$_locations' },
-        _required: { $ifNull: ['$instances', 3] },
-      },
-    },
-    { $unset: '_locations' },
-    {
-      $match: {
-        $expr: { $lt: ['$_actual', '$_required'] },
-      },
-    },
     { $sort: { name: 1 } },
-    // Emit { actual, required, doc } with doc byte-identical to storage: the
-    // pipeline's working fields must never reach hydrate (encrypted specs
-    // bind their cleartext metadata into the AAD, and deserialize rejects
-    // foreign fields).
-    { $replaceWith: { actual: '$_actual', required: '$_required', doc: '$$ROOT' } },
-    { $unset: ['doc._actual', 'doc._required'] },
   ];
 
   const database = globalDb();
-  const results = await dbHelper.aggregateInDatabase(database, globalAppsInformation, pipeline);
+  // The instance count comes from the event log, not from a join against the
+  // materialized locations collection. That collection only gained and updated rows,
+  // so an app a node quietly stopped kept counting toward its target for up to the
+  // running TTL and the spawner would not replace it — measured live on three apps.
+  const [alive, runningByApp] = await Promise.all([
+    dbHelper.aggregateInDatabase(database, globalAppsInformation, pipeline),
+    countRunningByApp(),
+  ]);
 
   const candidates = [];
-  for (const { actual, required, doc } of results) {
+  for (const doc of alive) {
+    const actual = runningByApp.get(String(doc.name).toLowerCase()) || 0;
+    const required = doc.instances ?? 3;
+    if (actual >= required) continue;
+    // hydrate only the shortfall: the doc must reach hydrate byte-identical to
+    // storage (encrypted specs bind their cleartext metadata into the AAD, and
+    // deserialize rejects foreign fields), so nothing above may decorate it.
     // eslint-disable-next-line no-await-in-loop
     const instantiated = await hydrate(doc);
     if (instantiated) {
@@ -1052,54 +1039,68 @@ function buildAppLocationPipeline({
     { $unwind: '$_v2Filtered' },
     { $unwind: '$_v2Filtered.apps' },
     ...(nameMatch ? [{ $match: { '_v2Filtered.apps.name': nameMatch } }] : []),
-    {
-      $project: {
-        _id: 0,
-        name: '$_v2Filtered.apps.name',
-        hash: '$_v2Filtered.apps.hash',
-        ip: '$_v2Filtered.ip',
-        broadcastedAt: '$_v2Filtered.broadcastedAt',
-        runningSince: { $ifNull: ['$_v2Filtered.apps.runningSince', '$_v2Filtered.runningSince'] },
-        osUptime: '$_v2Filtered.osUptime',
-        staticIp: '$_v2Filtered.staticIp',
-        // LB lifecycle state + replica identity, per-replica off the v2 apps entry.
-        // Normalized at ingest, so no reader has to branch on absence:
-        // only explicit draining/stopping survive, everything else is active.
-        state: { $cond: [{ $in: ['$_v2Filtered.apps.state', ['draining', 'stopping']] }, '$_v2Filtered.apps.state', 'active'] },
-        replica: { $ifNull: ['$_v2Filtered.apps.replica', null] },
-        removals: 1,
-        shutdowns: 1,
-      },
+    // An app the node has since reported removed is gone even though its announcement
+    // still names it. Compared against the unwound fields so this stays a shared rule
+    // rather than something each tail has to re-apply after projecting.
+    { $addFields: { _removedAt: { $ifNull: [{ $let: { vars: { r: { $first: { $filter: { input: '$removals', as: 'r', cond: { $and: [{ $eq: ['$$r._id.ip', '$_v2Filtered.ip'] }, { $eq: ['$$r._id.name', '$_v2Filtered.apps.name'] }] } } } } }, in: '$$r.removedAt' } }, new Date(0)] } } },
+    { $match: { $expr: { $gt: ['$_v2Filtered.broadcastedAt', '$_removedAt'] } } },
+  ];
+}
+
+// One row per running replica: the full location payload every reader of the running
+// set expects. Appended to the shared stages by appLocationFromEvents.
+const RUNNING_ROW_TAIL = [
+  {
+    $project: {
+      _id: 0,
+      name: '$_v2Filtered.apps.name',
+      hash: '$_v2Filtered.apps.hash',
+      ip: '$_v2Filtered.ip',
+      broadcastedAt: '$_v2Filtered.broadcastedAt',
+      runningSince: { $ifNull: ['$_v2Filtered.apps.runningSince', '$_v2Filtered.runningSince'] },
+      osUptime: '$_v2Filtered.osUptime',
+      staticIp: '$_v2Filtered.staticIp',
+      // LB lifecycle state + replica identity, per-replica off the v2 apps entry.
+      // Normalized at ingest, so no reader has to branch on absence:
+      // only explicit draining/stopping survive, everything else is active.
+      state: { $cond: [{ $in: ['$_v2Filtered.apps.state', ['draining', 'stopping']] }, '$_v2Filtered.apps.state', 'active'] },
+      replica: { $ifNull: ['$_v2Filtered.apps.replica', null] },
+      shutdowns: 1,
     },
-    { $addFields: { _removedAt: { $ifNull: [{ $let: { vars: { r: { $first: { $filter: { input: '$removals', as: 'r', cond: { $and: [{ $eq: ['$$r._id.ip', '$ip'] }, { $eq: ['$$r._id.name', '$name'] }] } } } } }, in: '$$r.removedAt' } }, new Date(0)] } } },
-    { $match: { $expr: { $gt: ['$broadcastedAt', '$_removedAt'] } } },
-    // When this row stops being believable. Derived rather than stored, but to the
-    // same rule the materialized collection writes: an announcement is good for the
-    // running TTL, and a node that announced a clean shutdown only keeps its rows for
-    // the sigterm grace. Callers read this field off /apps/locations, so it has to
-    // mean what it has always meant.
-    {
-      $addFields: {
-        expireAt: {
-          $let: {
-            vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$ip'] } } } } },
-            in: {
-              $cond: [
-                { $and: [{ $ne: ['$$sd', null] }, { $eq: ['$$sd.type', 'sigterm'] }, { $gt: ['$$sd.eventAt', '$broadcastedAt'] }] },
-                { $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] },
-                { $add: ['$broadcastedAt', RUNNING_EXPIRY_MS] },
-              ],
-            },
+  },
+  // When this row stops being believable. Derived rather than stored, but to the same
+  // rule the materialized collection wrote it by: an announcement is good for the
+  // running TTL, and a node that announced a clean shutdown only keeps its rows for
+  // the sigterm grace. Callers read this field off /apps/locations, so it has to mean
+  // what it has always meant.
+  {
+    $addFields: {
+      expireAt: {
+        $let: {
+          vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$ip'] } } } } },
+          in: {
+            $cond: [
+              { $and: [{ $ne: ['$$sd', null] }, { $eq: ['$$sd.type', 'sigterm'] }, { $gt: ['$$sd.eventAt', '$broadcastedAt'] }] },
+              { $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] },
+              { $add: ['$broadcastedAt', RUNNING_EXPIRY_MS] },
+            ],
           },
         },
       },
     },
-    // One row per running replica. No trailing $group: a node announces each replica
-    // once, so nothing remains to deduplicate, and grouping on {name, ip} would merge
-    // co-located replicas and discard the per-replica state and identity above.
-    { $project: { removals: 0, shutdowns: 0, _removedAt: 0 } },
-  ];
-}
+  },
+  // No trailing $group: a node announces each replica once, so nothing remains to
+  // deduplicate, and grouping on {name, ip} would merge co-located replicas and
+  // discard the per-replica state and identity above.
+  { $project: { shutdowns: 0 } },
+];
+
+// How many replicas of each app are running network-wide. Same rules, none of the row
+// payload — the wide projection and the expireAt lookup are what make the row tail
+// cost roughly half again as much, and a count needs neither.
+const RUNNING_COUNT_TAIL = [
+  { $group: { _id: '$_v2Filtered.apps.name', count: { $sum: 1 } } },
+];
 
 /**
  * Which pre-move announcements are dead, and which addresses still need translating.
@@ -1155,14 +1156,41 @@ async function appLocationFromEvents(options = {}) {
   const now = new Date();
 
   const { supersededIps, translate } = await resolveAddressMoves(collection, now);
-  const rows = await collection.aggregate(
-    buildAppLocationPipeline({
+  const rows = await collection.aggregate([
+    ...buildAppLocationPipeline({
       now, appname, ip, host, supersededIps,
     }),
-  ).toArray();
+    ...RUNNING_ROW_TAIL,
+  ]).toArray();
 
   if (translate.size === 0) return rows;
   return rows.map((row) => (translate.has(row.ip) ? { ...row, ip: translate.get(row.ip) } : row));
+}
+
+/**
+ * How many replicas of each app are running network-wide, keyed by lowercased name.
+ *
+ * The same derivation as appLocationFromEvents — one shared set of rules, so the two
+ * can never disagree about what counts as running — stopping before the row payload
+ * it does not need. A replica announced as draining or stopping still counts: it IS
+ * running, and the spawner should not replace a node that has merely said it is going
+ * away. Address moves need only the supersede exclusion here, not the re-addressing:
+ * moving a row to a different address does not change how many there are.
+ *
+ * @returns {Promise<Map<string, number>>}
+ */
+async function countRunningByApp() {
+  const dbopen = dbHelper.databaseConnection();
+  const database = dbopen.db(config.database.appsglobal.database);
+  const collection = database.collection(globalAppStateEvents);
+  const now = new Date();
+
+  const { supersededIps } = await resolveAddressMoves(collection, now);
+  const counts = await collection.aggregate([
+    ...buildAppLocationPipeline({ now, supersededIps }),
+    ...RUNNING_COUNT_TAIL,
+  ]).toArray();
+  return new Map(counts.map((row) => [String(row._id).toLowerCase(), row.count]));
 }
 
 // ── App Locations (globalAppsLocations) ────────────────────────────
@@ -1414,6 +1442,7 @@ module.exports = {
   getAppLocation,
   isAppRunningOnIp,
   appLocationFromEvents,
+  countRunningByApp,
   listLocations,
   listLocationsByApp,
   listLocationsByIp,
