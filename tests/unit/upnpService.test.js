@@ -52,7 +52,7 @@ class RecordingClient extends natUpnp.Client {
     clientOptions.push(options);
   }
 }
-proxyquire(
+const recordingService = proxyquire(
   '../../ZelBack/src/services/upnpService',
   { config, './fluxadmPort': fluxadmPortStub, '@runonflux/nat-upnp': { ...natUpnp, Client: RecordingClient } },
 );
@@ -65,7 +65,22 @@ const upnpServiceAtGatewayUrl = proxyquire(
 
 describe('upnpService tests', () => {
   describe('client tests', () => {
-    it('should keep the router it discovers between calls', () => {
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    // Constructing the client opens a UDP socket per address for discovery, so
+    // requiring the module must not construct one.
+    it('builds no client at import', () => {
+      expect(clientOptions).to.deep.equal([]);
+    });
+
+    it('should keep the router it discovers between calls', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      sinon.stub(RecordingClient.prototype, 'getGateway').rejects(new Error('no router'));
+
+      await recordingService.getGatewayApi({ params: {}, query: {} }, generateResponse());
+
       expect(clientOptions).to.deep.equal([{ cacheGateway: true }]);
     });
   });
