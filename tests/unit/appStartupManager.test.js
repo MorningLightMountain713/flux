@@ -31,6 +31,7 @@ describe('appStartupManager tests', () => {
     // it no longer shares a findInDatabase call sequence with the location reads.
     appsRepositoryStub = {
       listInstalledAppNames: sinon.stub().resolves([]),
+      appLocationFromEvents: sinon.stub().resolves([]),
     };
 
     dockerServiceStub = {
@@ -68,7 +69,7 @@ describe('appStartupManager tests', () => {
     };
 
     appUtilities = proxyquire('../../ZelBack/src/services/utils/appUtilities', {
-      '../dbHelper': dbHelperStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
       '../../lib/log': logStub,
     });
 
@@ -98,86 +99,38 @@ describe('appStartupManager tests', () => {
     sinon.restore();
   });
 
+  // The derivation only returns LIVE claims - an announcement past its TTL, a node
+  // past its shutdown grace, and an evicted node are all excluded by the query - so a
+  // row existing is the claim being valid. There is no expiry field to re-check.
   describe('appHasValidLocationOnNode', () => {
-    it('should return true when expireAt is in the future', async () => {
-      const expireAt = new Date(Date.now() + (60 * 1000)); // 1 minute from now
-      dbHelperStub.findInDatabase.resolves([{ expireAt }]);
+    it('is true when the network still holds a claim for this app here', async () => {
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'myApp', ip: '10.0.0.1:16127' }]);
 
-      const result = await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127');
-
-      expect(result).to.equal(true);
+      expect(await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127')).to.equal(true);
     });
 
-    it('should return false when no location records exist', async () => {
-      dbHelperStub.findInDatabase.resolves([]);
+    it('is false when no claim remains', async () => {
+      appsRepositoryStub.appLocationFromEvents.resolves([]);
 
-      const result = await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127');
-
-      expect(result).to.equal(false);
+      expect(await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127')).to.equal(false);
     });
 
-    it('should return false when records is null', async () => {
-      dbHelperStub.findInDatabase.resolves(null);
-
-      const result = await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127');
-
-      expect(result).to.equal(false);
-    });
-
-    it('should return false when expireAt is in the past', async () => {
-      const expireAt = new Date(Date.now() - (60 * 1000)); // 1 minute ago
-      dbHelperStub.findInDatabase.resolves([{ expireAt }]);
-
-      const result = await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127');
-
-      expect(result).to.equal(false);
-    });
-
-    it('should return true if at least one record is still valid among mixed records', async () => {
-      const expiredRecord = new Date(Date.now() - (60 * 1000));
-      const validRecord = new Date(Date.now() + (300 * 1000));
-      dbHelperStub.findInDatabase.resolves([
-        { expireAt: expiredRecord },
-        { expireAt: validRecord },
-      ]);
-
-      const result = await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127');
-
-      expect(result).to.equal(true);
-    });
-
-    it('should return true on database error (fail-safe)', async () => {
-      dbHelperStub.findInDatabase.rejects(new Error('DB connection lost'));
-
-      const result = await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127');
-
-      expect(result).to.equal(true);
-    });
-
-    it('should query with correct app name and IP', async () => {
-      dbHelperStub.findInDatabase.resolves([]);
+    it('asks only about this app at this node address', async () => {
+      appsRepositoryStub.appLocationFromEvents.resolves([]);
 
       await appUtilities.appHasValidLocationOnNode('testApp', '192.168.1.1:16127');
 
-      const query = dbHelperStub.findInDatabase.firstCall.args[2];
-      expect(query).to.deep.equal({ name: 'testApp', ip: '192.168.1.1:16127' });
+      expect(appsRepositoryStub.appLocationFromEvents.calledOnceWithExactly({
+        appname: 'testApp', ip: '192.168.1.1:16127',
+      })).to.equal(true);
     });
 
-    it('should project only the expireAt field', async () => {
-      dbHelperStub.findInDatabase.resolves([]);
+    // The caller UNINSTALLS on a false answer, so a read failure must never be the
+    // reason an app is deleted.
+    it('fails open when the lookup throws', async () => {
+      appsRepositoryStub.appLocationFromEvents.rejects(new Error('DB connection lost'));
 
-      await appUtilities.appHasValidLocationOnNode('testApp', '10.0.0.1:16127');
-
-      const projection = dbHelperStub.findInDatabase.firstCall.args[3];
-      expect(projection).to.deep.equal({ _id: 0, expireAt: 1 });
-    });
-
-    it('should return false when expireAt field is missing from record', async () => {
-      dbHelperStub.findInDatabase.resolves([{ broadcastedAt: new Date() }]);
-
-      const result = await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127');
-
-      expect(result).to.equal(false);
+      expect(await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127')).to.equal(true);
     });
   });
 
@@ -255,8 +208,8 @@ describe('appStartupManager tests', () => {
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       // Valid location record (expireAt in the future)
-      const futureExpiry = new Date(Date.now() + (300 * 1000));
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ expireAt: futureExpiry }]);
+      // the network still claims this app here
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -271,9 +224,8 @@ describe('appStartupManager tests', () => {
       ]);
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
-      // Expired location record (expireAt in the past)
-      const pastExpiry = new Date(Date.now() - (60 * 1000));
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ expireAt: pastExpiry }]);
+      // the claim lapsed while the node was down - the derivation excludes it
+      appsRepositoryStub.appLocationFromEvents.resolves([]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -290,7 +242,7 @@ describe('appStartupManager tests', () => {
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       // No location records
-      dbHelperStub.findInDatabase.onFirstCall().resolves([]);
+      appsRepositoryStub.appLocationFromEvents.resolves([]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -320,13 +272,10 @@ describe('appStartupManager tests', () => {
       ]);
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
 
-      // AppA has valid location (expireAt in the future)
-      const futureExpiry = new Date(Date.now() + (300 * 1000));
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ expireAt: futureExpiry }]);
-
-      // AppB has expired location (expireAt in the past)
-      const pastExpiry = new Date(Date.now() - (60 * 1000));
-      dbHelperStub.findInDatabase.onSecondCall().resolves([{ expireAt: pastExpiry }]);
+      // AppA is still claimed here; AppB's claim is gone (the derivation excludes it)
+      appsRepositoryStub.appLocationFromEvents.callsFake(
+        async ({ appname }) => (appname === 'AppA' ? [{ name: 'AppA' }] : []),
+      );
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -341,7 +290,7 @@ describe('appStartupManager tests', () => {
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       // Expired location
-      dbHelperStub.findInDatabase.onFirstCall().resolves([]);
+      appsRepositoryStub.appLocationFromEvents.resolves([]);
 
       appUninstallerStub.uninstallApplication.rejects(new Error('Remove failed'));
 
@@ -360,7 +309,7 @@ describe('appStartupManager tests', () => {
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       // Location check throws error - appHasValidLocationOnNode returns true (fail-safe)
-      dbHelperStub.findInDatabase.onFirstCall().rejects(new Error('DB error'));
+      appsRepositoryStub.appLocationFromEvents.rejects(new Error('DB error'));
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -375,10 +324,10 @@ describe('appStartupManager tests', () => {
       ]);
       appsRepositoryStub.listInstalledAppNames.resolves(['SyncApp', 'NormalApp']);
 
-      // SyncApp has a valid location, NormalApp's has expired
-      const futureExpiry = new Date(Date.now() + (300 * 1000));
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ expireAt: futureExpiry }]);
-      dbHelperStub.findInDatabase.onSecondCall().resolves([]);
+      // SyncApp is still claimed here, NormalApp is not
+      appsRepositoryStub.appLocationFromEvents.callsFake(
+        async ({ appname }) => (appname === 'SyncApp' ? [{ name: 'SyncApp' }] : []),
+      );
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -395,8 +344,8 @@ describe('appStartupManager tests', () => {
       appsRepositoryStub.listInstalledAppNames.resolves(['MixedApp']);
 
       // Valid location
-      const futureExpiry = new Date(Date.now() + (300 * 1000));
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ expireAt: futureExpiry }]);
+      // the network still claims this app here
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 

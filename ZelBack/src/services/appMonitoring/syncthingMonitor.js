@@ -1,7 +1,5 @@
 // Syncthing Monitor - Manages syncthing configuration for apps
 const path = require('node:path');
-const config = require('config');
-const dbHelper = require('../dbHelper');
 // eslint-disable-next-line no-unused-vars
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
@@ -10,6 +8,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const syncthingService = require('../syncthingService');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const log = require('../../lib/log');
+const appsRepository = require('../appDatabase/appsRepository');
 const {
   MONITOR_INTERVAL_MS,
   // eslint-disable-next-line no-unused-vars
@@ -40,7 +39,6 @@ const {
 const syncthingEventsConsumer = require('./syncthingEventsConsumer');
 
 // Global collections
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 // Path constants
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
@@ -117,15 +115,12 @@ function deploymentsMatchingFolderIds(deployments, folderIds) {
   });
 }
 
-// Helper function to get app locations
+// Where an app is running, for syncthing peer selection and leader election.
+// Soft-fails to an empty list: a read failure must leave the folder alone rather
+// than reshape its peers off a partial answer.
 async function appLocation(appName) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = { name: appName };
-    const projection = { _id: 0 };
-    const results = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-    return results || [];
+    return await appsRepository.appLocationFromEvents({ appname: appName });
   } catch (error) {
     log.error(`Error getting app location for ${appName}: ${error.message}`);
     return [];

@@ -20,10 +20,7 @@ const { globalCmdDelayMs } = config.fluxapps;
  * @returns {Promise<Array>} Application locations
  */
 async function appLocation(appname) {
-  if (appname) {
-    return appsRepository.listLocationsByApp(appname);
-  }
-  return appsRepository.listLocations();
+  return appsRepository.appLocationFromEvents(appname ? { appname } : {});
 }
 
 /**

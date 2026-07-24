@@ -523,7 +523,7 @@ async function promoteQuarantinedManifest(appName, deps = {}) {
 
 /** The IPs of nodes currently running an app, for peers-first content resolution. */
 async function listAppPeers(appName) {
-  const locations = await appsRepository.listLocationsByApp(appName);
+  const locations = await appsRepository.appLocationFromEvents({ appname: appName });
   return (locations || []).map((l) => l.ip).filter(Boolean);
 }
 
@@ -864,7 +864,7 @@ async function resolveNodeCollateral(socketAddress) {
  */
 async function computeStaggerDelayMs(appName, instances, staggerSeconds, deps = {}) {
   const {
-    getLocations = appsRepository.listLocationsByApp,
+    getLocations = (appName2) => appsRepository.appLocationFromEvents({ appname: appName2 }),
     resolveCollateral = resolveNodeCollateral,
     getSelfAddress = fluxNetworkHelper.getLocalSocketAddress,
   } = deps;
@@ -1203,7 +1203,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
     const fetched = await fetchPeers(appName, peers, { owner, encrypted, spec }, { verify, provider });
     if (fetched) {
       await store(fetched.gossip);
-      plaintext = fetched.plaintext;
+      ({ plaintext } = fetched);
     } else {
       // No running peer served it (the first-install / no-peer cold start). Fall back to
       // the FluxDrive deep backstop. FluxDrive is an untrusted single-host store, so the

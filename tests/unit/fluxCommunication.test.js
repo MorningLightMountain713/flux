@@ -17,7 +17,7 @@ const messageStore = require('../../ZelBack/src/services/appMessaging/messageSto
 const generalService = require('../../ZelBack/src/services/generalService');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
-const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
 const { PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
@@ -1492,7 +1492,7 @@ describe('fluxCommunication tests', () => {
       findInDatabaseStub = sinon.stub(dbHelper, 'findInDatabase');
       updateInDatabaseStub = sinon.stub(dbHelper, 'updateInDatabase').resolves();
       sinon.stub(messageStore, 'storeAppStateEvent');
-      sinon.stub(registryManager, 'appLocationFromEvents').resolves([]);
+      sinon.stub(appsRepository, 'appLocationFromEvents').resolves([]);
 
       logInfoSpy = sinon.spy(log, 'info');
     });
@@ -1515,7 +1515,7 @@ describe('fluxCommunication tests', () => {
         timestamp: broadcastedAt,
       };
 
-      registryManager.appLocationFromEvents.resolves([{ name: 'app1', ip: '192.168.1.100:16127' }, { name: 'app2', ip: '192.168.1.100:16127' }]);
+      appsRepository.appLocationFromEvents.resolves([{ name: 'app1', ip: '192.168.1.100:16127' }, { name: 'app2', ip: '192.168.1.100:16127' }]);
 
       const wsOutgoing = await connectWs();
       wsOutgoing.ip = '127.8.8.1';
@@ -1590,7 +1590,7 @@ describe('fluxCommunication tests', () => {
         timestamp: broadcastedAt,
       };
 
-      registryManager.appLocationFromEvents.resolves([{ name: 'app1', ip: '192.168.1.100:16127' }]);
+      appsRepository.appLocationFromEvents.resolves([{ name: 'app1', ip: '192.168.1.100:16127' }]);
 
       // Add sender connection
       const wsSender = await connectWs();
@@ -1630,7 +1630,7 @@ describe('fluxCommunication tests', () => {
         timestamp: broadcastedAt,
       };
 
-      registryManager.appLocationFromEvents.resolves(null);
+      appsRepository.appLocationFromEvents.resolves(null);
 
       await fluxCommunication.handleNodeSigtermMessage(message, fromIp, port);
 

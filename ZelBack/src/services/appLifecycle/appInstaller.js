@@ -332,7 +332,7 @@ async function installApplication(instantiated, options = {}) {
           if (onStatus) onStatus({ status: 'Provisioning content...' });
           // Locations are normalized ip:port, usable directly as peer URLs; shuffle
           // so installing nodes don't all hit the same peer first (herd-safety).
-          const locations = await appsRepository.listLocationsByApp(appName);
+          const locations = await appsRepository.appLocationFromEvents({ appname: appName });
           const peers = locations.map((loc) => loc.ip).filter(Boolean);
           for (let i = peers.length - 1; i > 0; i -= 1) {
             const j = Math.floor(Math.random() * (i + 1));

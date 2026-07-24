@@ -5,12 +5,10 @@ const config = require('config');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
-const dbHelper = require('../dbHelper');
+const appsRepository = require('../appDatabase/appsRepository');
 const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const { getSpecBackend, getSpecPolicy } = require('./specLibs');
 const { appsFolder } = require('./appConstants');
-
-const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
 
 const cmdAsync = util.promisify(nodecmd.run);
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
@@ -250,21 +248,21 @@ function parseContainerName(containerName) {
   };
 }
 
+/**
+ * Does the network still consider this app ours?
+ *
+ * Membership is the whole answer: the derivation only returns live claims — an
+ * announcement past its TTL, a node past its shutdown grace, and an evicted node are
+ * all already excluded — so a row existing IS the claim being valid. Reading an
+ * expiry field back would only re-check what the query enforced.
+ *
+ * Fails OPEN. The caller uninstalls on a false answer, and a database wobble must
+ * never be the reason an app is deleted.
+ */
 async function appHasValidLocationOnNode(appName, localSocketAddr) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    const query = { name: appName, ip: localSocketAddr };
-    const projection = { _id: 0, expireAt: 1 };
-    const records = await dbHelper.findInDatabase(database, globalAppsLocations, query, projection);
-    if (!records || records.length === 0) {
-      return false;
-    }
-    const now = Date.now();
-    return records.some((record) => {
-      if (!record.expireAt) return false;
-      return new Date(record.expireAt).getTime() > now;
-    });
+    const claims = await appsRepository.appLocationFromEvents({ appname: appName, ip: localSocketAddr });
+    return claims.length > 0;
   } catch (error) {
     log.error(`Error checking app location for ${appName}: ${error.message}`);
     return true;
