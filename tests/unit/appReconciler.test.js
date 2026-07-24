@@ -1938,40 +1938,6 @@ describe('appReconciler tests', () => {
     });
   });
 
-  // The started-nudge: a container start is information the network wants NOW
-  // (a backoff straggler that starts minutes after boot must refresh its
-  // appsLocations row inside the ~7min sigterm TTL window, not at the hourly
-  // tick). serviceManager wires this callback to the peer broadcast, mirroring
-  // appInstaller.setOnInstallComplete; the broadcast layer coalesces bursts.
-  describe('container-started notification', () => {
-    it('notifies the registered callback after a successful start', async () => {
-      const onStarted = sinon.stub();
-      appReconciler.setOnContainerStarted(onStarted);
-      await appReconciler.reconcile('www_App'); // stopped + always policy -> starts
-      expect(stubs.dockerService.appDockerStart.calledOnce).to.be.true;
-      expect(onStarted.calledOnceWith('www_App')).to.be.true;
-    });
-
-    it('does not notify on a stop or a failed start', async () => {
-      const onStarted = sinon.stub();
-      appReconciler.setOnContainerStarted(onStarted);
-
-      // reconcile that stops an operator-stopped running container
-      stubs.appsRuntimeState.isOperatorStopped.resolves(true);
-      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStop.calledOnce).to.be.true;
-      expect(onStarted.called).to.be.false;
-
-      // reconcile whose docker start throws
-      stubs.appsRuntimeState.isOperatorStopped.resolves(false);
-      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 1 } });
-      stubs.dockerService.appDockerStart.rejects(new Error('boom'));
-      await appReconciler.reconcile('www_App').catch(() => {});
-      expect(onStarted.called).to.be.false;
-    });
-  });
-
   describe('workqueue', () => {
     it('enqueue runs a reconcile once the boot gate is open', async () => {
       // startAppMonitoring is the last step of a start-path reconcile

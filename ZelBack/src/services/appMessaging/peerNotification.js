@@ -8,7 +8,6 @@ const messageStore = require('./messageStore');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
 const appsRepository = require('../appDatabase/appsRepository');
-const dockerService = require('../dockerService');
 const appReconciler = require('../appMonitoring/appReconciler');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 
@@ -102,12 +101,13 @@ async function checkAndNotifyPeersOfRunningApps() {
       // eslint-disable-next-line no-restricted-syntax
       for (const application of applicationsToBroadcast) {
         const appName = application.name;
-        // One entry per identity this node runs: a co-located app reports each
-        // replica (from its containers' identity labels); loose and
-        // pre-qualification installs report the single untagged entry.
+        // One entry per identity this node holds: a co-located app reports each
+        // replica; loose and pre-qualification installs report the single untagged
+        // entry. Read from the installed set, NOT from docker — this message states
+        // what the node is assigned, and assignment does not change when a container
+        // stops, dies or is rebuilt.
         // eslint-disable-next-line no-await-in-loop
-        const appContainers = await dockerService.getAppContainerObjects(appName).catch(() => []);
-        const replicas = [...new Set(appContainers.map((c) => (c.Labels && c.Labels['runonflux.replica']) || null))];
+        const replicas = await appsRepository.listInstalledIdentities(appName);
         const identities = replicas.length > 0 ? replicas : [null];
         // eslint-disable-next-line no-restricted-syntax
         for (const identity of identities) {

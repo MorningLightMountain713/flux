@@ -33,6 +33,7 @@ describe('peerNotification tests', () => {
   let getAppLocationStub;
   let resolveInstantiatedStub;
   let listInstalledAppsStub;
+  let listInstalledIdentitiesStub;
   let broadcastAllStub;
   let listRunningAppsStub;
   let drainingAppsMap;
@@ -52,6 +53,8 @@ describe('peerNotification tests', () => {
     listInstalledAppsStub = sinon.stub().resolves([
       mockInstantiatedSpec({ name: 'app1', version: 4, hash: 'abc123', componentNames: ['c1'] }),
     ]);
+    // the installed set is the identity authority - docker is not consulted
+    listInstalledIdentitiesStub = sinon.stub().resolves([]);
     broadcastAllStub = sinon.stub().resolves();
     listRunningAppsStub = sinon.stub().resolves({
       status: 'success',
@@ -87,6 +90,7 @@ describe('peerNotification tests', () => {
       },
       '../appDatabase/appsRepository': {
         listInstalledApps: listInstalledAppsStub,
+        listInstalledIdentities: listInstalledIdentitiesStub,
         getAppLocation: getAppLocationStub,
       },
       '../utils/specCutover': {
@@ -177,6 +181,68 @@ describe('peerNotification tests', () => {
       const message = broadcastAllStub.firstCall.args[0];
       expect(message.apps[0].name).to.equal('app1');
       expect(message.apps[0].state).to.equal('draining');
+    });
+
+    it('reports one entry per installed identity, read from the installed set', async () => {
+      listInstalledIdentitiesStub.resolves(['r0', 'r1']);
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      expect(listInstalledIdentitiesStub.calledOnceWith('app1')).to.be.true;
+      const message = broadcastAllStub.firstCall.args[0];
+      expect(message.apps.map((a) => a.replica)).to.deep.equal(['r0', 'r1']);
+    });
+
+    it('omits replica on a loose install', async () => {
+      listInstalledIdentitiesStub.resolves([null]);
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      const message = broadcastAllStub.firstCall.args[0];
+      expect(message.apps).to.have.length(1);
+      expect(message.apps[0]).to.not.have.property('replica');
+    });
+
+    it('does not consult docker to build the snapshot', async () => {
+      // The message states what this node is ASSIGNED. Reading container state
+      // made a restart look like news and let a docker blip silently drop a
+      // co-located app's replica identities from the network's view.
+      listInstalledIdentitiesStub.resolves(['r0', 'r1']);
+      const dockerless = proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', {
+        config: { fluxapps: { peerNotifyIntervalMs: 3600000 } },
+        '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127') },
+        '../geolocationService': { isStaticIP: sinon.stub().returns(true) },
+        '../fluxCommunicationMessagesSender': { broadcastMessageToAll: broadcastAllStub },
+        './messageStore': {
+          storeAppRunningMessage: sinon.stub().resolves(),
+          storeAppStateEvent: sinon.stub().resolves(),
+          APP_STATE_EVENT_TYPES: { APPRUNNING: 'apprunning' },
+        },
+        '../appMonitoring/appReconciler': { enqueueAll: enqueueAllStub, waitForBootDrainSettled: sinon.stub().resolves() },
+        '../appDatabase/appsRepository': {
+          listInstalledApps: listInstalledAppsStub,
+          listInstalledIdentities: listInstalledIdentitiesStub,
+          getAppLocation: getAppLocationStub,
+        },
+        '../utils/specCutover': { resolveInstantiatedSpec: resolveInstantiatedStub },
+        '../nodeConfirmationService': {
+          canSendMessages: sinon.stub().returns(true),
+          onMessageCapabilityChange: sinon.stub(),
+        },
+        '../utils/globalState': {
+          runningAppsCache: new Set(),
+          getAppShutdownPipelineState: () => null,
+        },
+        '../utils/fluxEventBus': { publish: sinon.stub() },
+        '../../lib/log': logStub,
+        // no dockerService stub: noCallThru would throw on any require of it
+        '../dockerService': null,
+      });
+
+      await dockerless.checkAndNotifyPeersOfRunningApps();
+
+      const message = broadcastAllStub.firstCall.args[0];
+      expect(message.apps.map((a) => a.replica)).to.deep.equal(['r0', 'r1']);
     });
   });
 });

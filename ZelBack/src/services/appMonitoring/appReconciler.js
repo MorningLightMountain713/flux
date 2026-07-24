@@ -122,17 +122,6 @@ const CONVERGE_RETRY_MS = config.fluxapps.convergeRetryMs ?? 10 * 1000;
 // a start is not proof (an exit-127 container "starts" a second before dying).
 const FIRST_RUN_PROOF_MS = config.fluxapps.firstRunProofMs ?? 60 * 1000;
 
-// A container start is information the network wants immediately: a backoff
-// straggler that starts minutes after boot must refresh its appsLocations row
-// inside the sigterm TTL window, not at the next hourly broadcast.
-// serviceManager wires this to the peer broadcast (which coalesces bursts),
-// mirroring appInstaller.setOnInstallComplete.
-let onContainerStarted = null;
-
-function setOnContainerStarted(callback) {
-  onContainerStarted = callback;
-}
-
 // serviceManager wires this to appShutdownCoordinator.requestGracefulStop. When set and
 // it returns true, the daemon owns a graceful stop-but-keep of the app and this
 // reconciler takes no docker action (the 'stopping' LB gate holds subsequent passes).
@@ -140,15 +129,6 @@ let requestGracefulStop = null;
 
 function setRequestGracefulStop(callback) {
   requestGracefulStop = callback;
-}
-
-function notifyContainerStarted(identifier) {
-  if (!onContainerStarted) return;
-  try {
-    onContainerStarted(identifier);
-  } catch (err) {
-    log.error(`appReconciler - onContainerStarted callback failed for ${identifier}: ${err.message}`);
-  }
 }
 
 // while an install/remove/redeploy/backup/restore or a deliberate stop owns a
@@ -1300,7 +1280,6 @@ async function reconcile(rawIdentifier) {
       }
       await appsRuntimeState.recordRestartGeneration(identifier, desiredGen);
       fluxEventBus.publish('reconciler:actuated', { identifier, action: 'restartRequested', generation: desiredGen });
-      notifyContainerStarted(identifier);
       // A restart is a start: it can come up detached the same way (stale endpoint
       // born at start time), so re-verify the attachment shortly. Surveillance for
       // a proven component (no converge hold); an unproven one still owes its
@@ -1598,7 +1577,6 @@ async function reconcile(rawIdentifier) {
   if (pendingGen > actuatedGen) await appsRuntimeState.recordRestartGeneration(identifier, pendingGen);
   log.info(`appReconciler - ${identifier} ${firstStart ? 'started (first start)' : 'restarted'}`);
   fluxEventBus.publish('reconciler:actuated', { identifier, action: firstStart ? 'firstStart' : 'restart', exitCode: actual.exitCode });
-  notifyContainerStarted(identifier);
   // A start is exactly when a container can come up attached to no network (a stale
   // endpoint left by an earlier failed start). The attachment we hold was sampled
   // BEFORE this start, so verify the new one shortly - otherwise a detached-at-boot
@@ -1847,7 +1825,6 @@ module.exports = {
   setControllerDesired,
   clearControllerDesired,
   requestStopAndClearData,
-  setOnContainerStarted,
   setRequestGracefulStop,
   waitForBootDrainSettled: reconcilerQueue.waitForBootDrainSettled,
   start,
