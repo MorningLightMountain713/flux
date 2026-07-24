@@ -7,6 +7,7 @@ describe('appStartupManager tests', () => {
   let appUtilities;
   let logStub;
   let dbHelperStub;
+  let appsRepositoryStub;
   let dockerServiceStub;
   let fluxNetworkHelperStub;
   let appReconcilerStub;
@@ -24,6 +25,12 @@ describe('appStartupManager tests', () => {
     dbHelperStub = {
       databaseConnection: sinon.stub(),
       findInDatabase: sinon.stub(),
+    };
+
+    // The installed-apps read is names-only and goes through the repository, so
+    // it no longer shares a findInDatabase call sequence with the location reads.
+    appsRepositoryStub = {
+      listInstalledAppNames: sinon.stub().resolves([]),
     };
 
     dockerServiceStub = {
@@ -73,6 +80,7 @@ describe('appStartupManager tests', () => {
       '../fluxNetworkHelper': fluxNetworkHelperStub,
       '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
       '../appMonitoring/appReconciler': appReconcilerStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../appQuery/appQueryService': appQueryServiceStub,
@@ -178,7 +186,7 @@ describe('appStartupManager tests', () => {
       // One installed app whose containers all auto-restarted (nothing stopped):
       // the sweep must still run on such a boot - an orphaned collector's
       // containers are typically running after a reboot.
-      dbHelperStub.findInDatabase.resolves([{ name: 'AppX' }]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppX']);
       dockerServiceStub.dockerListContainers.resolves([]);
       fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
     });
@@ -201,6 +209,7 @@ describe('appStartupManager tests', () => {
         '../fluxNetworkHelper': fluxNetworkHelperStub,
         '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
         '../appMonitoring/appReconciler': appReconcilerStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
         './appUninstaller': appUninstallerStub,
         '../utils/globalState': globalStateStub,
         '../appQuery/appQueryService': appQueryServiceStub,
@@ -225,15 +234,11 @@ describe('appStartupManager tests', () => {
       { Names: ['/fluxAppC'], State: 'exited' },
     ];
 
-    const installedApps = [
-      { name: 'AppA' },
-      { name: 'AppB' },
-      { name: 'AppC' },
-    ];
+    const installedApps = ['AppA', 'AppB', 'AppC'];
 
     beforeEach(() => {
       // Default: installed apps in local DB
-      dbHelperStub.findInDatabase.onFirstCall().resolves(installedApps);
+      appsRepositoryStub.listInstalledAppNames.resolves(installedApps);
 
       // Default: stopped containers
       dockerServiceStub.dockerListContainers.resolves(stoppedFluxContainers);
@@ -247,11 +252,11 @@ describe('appStartupManager tests', () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/fluxAppA'], State: 'exited' },
       ]);
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'AppA' }]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       // Valid location record (expireAt in the future)
       const futureExpiry = new Date(Date.now() + (300 * 1000));
-      dbHelperStub.findInDatabase.onSecondCall().resolves([{ expireAt: futureExpiry }]);
+      dbHelperStub.findInDatabase.onFirstCall().resolves([{ expireAt: futureExpiry }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -264,11 +269,11 @@ describe('appStartupManager tests', () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/fluxAppA'], State: 'exited' },
       ]);
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'AppA' }]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       // Expired location record (expireAt in the past)
       const pastExpiry = new Date(Date.now() - (60 * 1000));
-      dbHelperStub.findInDatabase.onSecondCall().resolves([{ expireAt: pastExpiry }]);
+      dbHelperStub.findInDatabase.onFirstCall().resolves([{ expireAt: pastExpiry }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -282,10 +287,10 @@ describe('appStartupManager tests', () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/fluxAppA'], State: 'exited' },
       ]);
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'AppA' }]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       // No location records
-      dbHelperStub.findInDatabase.onSecondCall().resolves([]);
+      dbHelperStub.findInDatabase.onFirstCall().resolves([]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -300,7 +305,7 @@ describe('appStartupManager tests', () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/fluxAppA'], State: 'exited' },
       ]);
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'AppA' }]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -313,18 +318,15 @@ describe('appStartupManager tests', () => {
         { Names: ['/fluxAppA'], State: 'exited' },
         { Names: ['/fluxAppB'], State: 'exited' },
       ]);
-      dbHelperStub.findInDatabase.onFirstCall().resolves([
-        { name: 'AppA' },
-        { name: 'AppB' },
-      ]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
 
       // AppA has valid location (expireAt in the future)
       const futureExpiry = new Date(Date.now() + (300 * 1000));
-      dbHelperStub.findInDatabase.onSecondCall().resolves([{ expireAt: futureExpiry }]);
+      dbHelperStub.findInDatabase.onFirstCall().resolves([{ expireAt: futureExpiry }]);
 
       // AppB has expired location (expireAt in the past)
       const pastExpiry = new Date(Date.now() - (60 * 1000));
-      dbHelperStub.findInDatabase.onThirdCall().resolves([{ expireAt: pastExpiry }]);
+      dbHelperStub.findInDatabase.onSecondCall().resolves([{ expireAt: pastExpiry }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -336,10 +338,10 @@ describe('appStartupManager tests', () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/fluxAppA'], State: 'exited' },
       ]);
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'AppA' }]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       // Expired location
-      dbHelperStub.findInDatabase.onSecondCall().resolves([]);
+      dbHelperStub.findInDatabase.onFirstCall().resolves([]);
 
       appUninstallerStub.uninstallApplication.rejects(new Error('Remove failed'));
 
@@ -355,10 +357,10 @@ describe('appStartupManager tests', () => {
       dockerServiceStub.dockerListContainers.resolves([
         { Names: ['/fluxAppA'], State: 'exited' },
       ]);
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'AppA' }]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       // Location check throws error - appHasValidLocationOnNode returns true (fail-safe)
-      dbHelperStub.findInDatabase.onSecondCall().rejects(new Error('DB error'));
+      dbHelperStub.findInDatabase.onFirstCall().rejects(new Error('DB error'));
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -371,15 +373,12 @@ describe('appStartupManager tests', () => {
         { Names: ['/fluxSyncApp'], State: 'exited' },
         { Names: ['/fluxNormalApp'], State: 'exited' },
       ]);
-      dbHelperStub.findInDatabase.onFirstCall().resolves([
-        { name: 'SyncApp' },
-        { name: 'NormalApp' },
-      ]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['SyncApp', 'NormalApp']);
 
       // SyncApp has a valid location, NormalApp's has expired
       const futureExpiry = new Date(Date.now() + (300 * 1000));
-      dbHelperStub.findInDatabase.onSecondCall().resolves([{ expireAt: futureExpiry }]);
-      dbHelperStub.findInDatabase.onThirdCall().resolves([]);
+      dbHelperStub.findInDatabase.onFirstCall().resolves([{ expireAt: futureExpiry }]);
+      dbHelperStub.findInDatabase.onSecondCall().resolves([]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -393,11 +392,11 @@ describe('appStartupManager tests', () => {
         { Names: ['/fluxweb_MixedApp'], State: 'exited' },
         { Names: ['/fluxdb_MixedApp'], State: 'exited' },
       ]);
-      dbHelperStub.findInDatabase.onFirstCall().resolves([{ name: 'MixedApp' }]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['MixedApp']);
 
       // Valid location
       const futureExpiry = new Date(Date.now() + (300 * 1000));
-      dbHelperStub.findInDatabase.onSecondCall().resolves([{ expireAt: futureExpiry }]);
+      dbHelperStub.findInDatabase.onFirstCall().resolves([{ expireAt: futureExpiry }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 

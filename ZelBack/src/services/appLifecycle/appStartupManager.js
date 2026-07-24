@@ -8,11 +8,11 @@
 
 const config = require('config');
 const log = require('../../lib/log');
-const dbHelper = require('../dbHelper');
 const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appReconciler = require('../appMonitoring/appReconciler');
+const appsRepository = require('../appDatabase/appsRepository');
 const nodeDosState = require('../nodeDosState');
 const appUninstaller = require('./appUninstaller');
 const appNetworkLinker = require('./appNetworkLinker');
@@ -23,25 +23,21 @@ const telemetryIdentityService = require('../telemetryIdentityService');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const nodeConfirmationService = require('../nodeConfirmationService');
-const { localAppsInformation, SIGTERM_EXPIRY_MS, RUNNING_EXPIRY_MS } = require('../utils/appConstants');
+const { SIGTERM_EXPIRY_MS, RUNNING_EXPIRY_MS } = require('../utils/appConstants');
 const { parseContainerName, appHasValidLocationOnNode } = require('../utils/appUtilities');
 
 const SYNC_TIMEOUT_MS = config.system.bootSyncTimeoutMs ?? 300000;
 
 /**
- * Get all installed apps from local database
- * @returns {Promise<Array>} Array of installed app specifications
+ * Names of the apps installed on this node. Soft-fails to an empty list: a
+ * database read that fails this early must leave boot recovery doing nothing
+ * rather than abort it, and every decision below treats an absent name as
+ * "leave it alone".
+ * @returns {Promise<Array<string>>}
  */
-async function getInstalledAppsFromDb() {
+async function getInstalledAppNamesFromDb() {
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const appsDatabase = dbopen.db(config.database.appslocal.database);
-    const appsQuery = {};
-    const appsProjection = {
-      projection: { _id: 0 },
-    };
-    const apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-    return apps || [];
+    return await appsRepository.listInstalledAppNames();
   } catch (error) {
     log.error(`appStartupManager - Error getting installed apps: ${error.message}`);
     return [];
@@ -98,15 +94,14 @@ async function reconcileAppsOnBoot() {
   try {
     log.info('appStartupManager - Starting boot reconciliation check');
 
-    // Get all installed apps from database (just to get the list of app names)
-    const installedApps = await getInstalledAppsFromDb();
+    const installedApps = await getInstalledAppNamesFromDb();
     if (installedApps.length === 0) {
       log.info('appStartupManager - No installed apps found');
       return results;
     }
 
     // Create a set for quick lookup of installed app names
-    const installedAppNames = new Set(installedApps.map((app) => app.name));
+    const installedAppNames = new Set(installedApps);
 
     // Get all stopped Flux containers + the apps they belong to.
     const stoppedContainers = await getStoppedFluxContainers();
@@ -124,12 +119,12 @@ async function reconcileAppsOnBoot() {
     // is actually restarting. Runs even when nothing is stopped (the re-arm still matters).
     // Best-effort per app: a content failure must never block the app from starting on its
     // persisted on-disk content.
-    for (const app of installedApps) {
+    for (const installedAppName of installedApps) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        await contentSlotService.reconcileBootContent(app.name, { restarting: appsWithStoppedContainers.has(app.name) });
+        await contentSlotService.reconcileBootContent(installedAppName, { restarting: appsWithStoppedContainers.has(installedAppName) });
       } catch (contentError) {
-        log.warn(`appStartupManager - boot content recovery for ${app.name} failed (starting on on-disk content) - ${contentError.message ?? contentError}`);
+        log.warn(`appStartupManager - boot content recovery for ${installedAppName} failed (starting on on-disk content) - ${contentError.message ?? contentError}`);
       }
     }
 
@@ -323,5 +318,5 @@ module.exports = {
   manageAppsOnBoot,
   reconcileAppsOnBoot,
   getStoppedFluxContainers,
-  getInstalledAppsFromDb,
+  getInstalledAppNamesFromDb,
 };

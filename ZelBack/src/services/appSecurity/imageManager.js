@@ -2,15 +2,11 @@ const config = require('config');
 const axios = require('axios');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
-// eslint-disable-next-line no-unused-vars
-const pgpService = require('../pgpService');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const imageVerifier = require('../utils/imageVerifier');
-const dbHelper = require('../dbHelper');
 const verificationHelper = require('../verificationHelper');
-const appsRepository = require('../appDatabase/appsRepository');
 const log = require('../../lib/log');
-const { supportedArchitectures, globalAppsMessages, globalAppsInformation } = require('../utils/appConstants');
+const { supportedArchitectures } = require('../utils/appConstants');
 const fluxCaching = require('../utils/cacheManager').default;
 
 // Cache for blocked repositories
@@ -281,7 +277,7 @@ async function getUserBlockedRepositories() {
       return cacheUserBlockedRepos;
     }
 
-    const userconfig = globalThis.userconfig;
+    const { userconfig } = globalThis;
     // Normalise case up front: image references are lowercase, but operators
     // type blockedRepositories config in any case. Stored entries are the
     // tag/digest-stripped name, which is what isImageBlocked compares against.

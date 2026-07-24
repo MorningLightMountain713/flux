@@ -5,13 +5,11 @@ const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
-const dbHelper = require('../dbHelper');
 const globalState = require('../utils/globalState');
 const operationRegistry = require('../utils/operationRegistry');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const log = require('../../lib/log');
-const { globalAppsMessages } = require('../utils/appConstants');
 const config = require('config');
 const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -681,15 +679,7 @@ async function uninstallApplication(appName, options = {}) {
         const localApps = await appsRepository.listInstalledApps();
         spec = [...globalApps, ...localApps].find((a) => a.name === appName) || null;
         if (!spec) {
-          const dbopen = dbHelper.databaseConnection();
-          const database = dbopen.db(config.database.appsglobal.database);
-          const messages = await dbHelper.findInDatabase(
-            database, globalAppsMessages, {}, { projection: { _id: 0 } },
-          );
-          const appMessages = messages.filter((message) => {
-            const s = message.appSpecifications;
-            return s && s.name === appName;
-          });
+          const appMessages = await appsRepository.listAppMessagesByName(appName);
           let latest;
           appMessages.forEach((message) => {
             if (!latest || message.height > latest.height) latest = message;

@@ -6,7 +6,6 @@ const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const appNetworkLinker = require('./appNetworkLinker');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
-const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appUninstaller = require('./appUninstaller');
@@ -165,10 +164,6 @@ async function installApplication(instantiated, options = {}) {
 
     log.info('Running initial checks for Flux App...');
     if (onStatus) onStatus({ status: 'Running initial checks for Flux App...' });
-
-    log.info('Connecting to database...');
-    if (onStatus) onStatus({ status: 'Connecting to database...' });
-    dbHelper.databaseConnection();
 
     log.info('Checking database...');
     if (onStatus) onStatus({ status: 'Checking database...' });

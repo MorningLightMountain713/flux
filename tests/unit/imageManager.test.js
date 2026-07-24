@@ -6,8 +6,6 @@ const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const imageVerifier = require('../../ZelBack/src/services/utils/imageVerifier');
 const registryCredentialHelper = require('../../ZelBack/src/services/utils/registryCredentialHelper');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
-
 describe('imageManager tests', () => {
   let imageManager;
 
