@@ -598,30 +598,22 @@ async function handleRequestMessageHash(messageHash, fromIP, port) {
  */
 async function handleAppRunningMessage(message, fromIP, port) {
   try {
-    await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: message });
-    const result = await messageStore.storeAppRunningMessage(message.data);
-    if (result instanceof Error) {
-      log.warn(`handleAppRunningMessage - not stored, from ${fromIP}:${port} for ${message.data?.ip}: ${result.message}`);
-      return;
+    // Whether this told us anything new is the event log's answer, not the claim
+    // release's: the log is what holds the node's running state, so it is what knows
+    // if this announcement moved it. An announcement that advances nothing stops here
+    // rather than being passed on.
+    const { isNewer } = await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: message });
+    const released = await messageStore.releaseInstallingClaims(message.data);
+    if (released instanceof Error) {
+      log.warn(`handleAppRunningMessage - claims not released, from ${fromIP}:${port} for ${message.data?.ip}: ${released.message}`);
+    }
+    if (isNewer) {
+      fluxEventBus.publish('network:apprunning', { ip: message.data.ip, apps: message.data.apps || [{ name: message.data.name }] });
     }
     const currentTimeStamp = Date.now();
     const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
-    const relayed = Boolean(result.rebroadcast && timestampOK);
-    if (relayed) {
+    if (isNewer && timestampOK) {
       announceToPeers(message, `${fromIP}:${port}`);
-    }
-    // Everything this node did with the message: the entries it wrote, the names
-    // it refused, whether it cleared the sender's rows, and whether it passed it on.
-    // A message that did none of these, such as a copy of one already stored,
-    // publishes nothing.
-    if (result.written.length || result.refused.length || result.cleared || relayed) {
-      fluxEventBus.publish('network:apprunning', {
-        ip: message.data.ip,
-        apps: result.written,
-        refused: result.refused,
-        cleared: result.cleared,
-        relayed,
-      });
     }
   } catch (error) {
     log.error(error);
