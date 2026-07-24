@@ -131,11 +131,11 @@ async function checkAndNotifyPeersOfRunningApps() {
           });
         }
       }
-      // An empty snapshot is NEVER broadcast: the receive side treats an empty
-      // v2 message as "delete every appsLocations row for this IP" - and we
-      // store our own message first, so it would erase our own presence. Every
-      // legitimate correction has a targeted mechanism instead (fluxappremoved
-      // on uninstall, sigterm/TTL row expiry for wiped or dead nodes).
+      // An empty snapshot is NEVER broadcast: peers read an empty v2 message as
+      // "this node holds nothing", which releases every seat it had reserved and
+      // erases it from the derived running set. Every legitimate correction has a
+      // targeted mechanism instead (fluxappremoved on uninstall, sigterm/TTL
+      // expiry for wiped or dead nodes).
       if (apps.length === 0) {
         return;
       }
@@ -148,7 +148,7 @@ async function checkAndNotifyPeersOfRunningApps() {
         osUptime: os.uptime(),
         staticIp: geolocationService.isStaticIP(),
       };
-      await messageStore.storeAppRunningMessage(appRunningMessage);
+      await messageStore.releaseInstallingClaims(appRunningMessage);
       const signed = await fluxCommunicationMessagesSender.broadcastMessageToAll(appRunningMessage);
       await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: signed });
       fluxEventBus.publish('app:running', { apps, ip: appRunningMessage.ip });

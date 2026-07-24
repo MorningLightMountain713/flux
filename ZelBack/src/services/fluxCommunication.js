@@ -441,14 +441,18 @@ async function handleRequestMessageHash(messageHash, fromIP, port) {
  */
 async function handleAppRunningMessage(message, fromIP, port) {
   try {
-    await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: message });
-    const result = await messageStore.storeAppRunningMessage(message.data);
-    if (result.stored) {
+    // Whether this told us anything new is the event log's answer, not the claim
+    // release's: the log is what holds the node's running state, so it is what knows
+    // if this announcement moved it. An announcement that advances nothing stops here
+    // rather than being passed on.
+    const { isNewer } = await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: message });
+    await messageStore.releaseInstallingClaims(message.data);
+    if (isNewer) {
       fluxEventBus.publish('network:apprunning', { ip: message.data.ip, apps: message.data.apps || [{ name: message.data.name }] });
     }
     const currentTimeStamp = Date.now();
     const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
-    if (result.rebroadcast && timestampOK) {
+    if (isNewer && timestampOK) {
       const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
       const daemonHeight = syncStatus.data.height || 0;
       if (daemonHeight >= config.messagesBroadcastRefactorStart) {

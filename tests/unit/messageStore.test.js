@@ -96,6 +96,7 @@ describe('messageStore tests', () => {
       updateInDatabase: sinon.stub(),
       removeDocumentsFromCollection: sinon.stub(),
       findOneAndDeleteInDatabase: sinon.stub(),
+      findOneAndUpdateInDatabase: sinon.stub().resolves(null),
       countInDatabase: sinon.stub(),
     };
 
@@ -439,11 +440,11 @@ describe('messageStore tests', () => {
     });
   });
 
-  describe('storeAppRunningMessage', () => {
+  describe('releaseInstallingClaims', () => {
     it('should return error for invalid message structure', async () => {
       const invalidMessage = { type: 'fluxapprunning' };
 
-      const result = await messageStore.storeAppRunningMessage(invalidMessage);
+      const result = await messageStore.releaseInstallingClaims(invalidMessage);
 
       expect(result).to.be.instanceOf(Error);
       expect(result.message).to.include('Invalid Flux App Running message');
@@ -457,7 +458,7 @@ describe('messageStore tests', () => {
         ip: '192.168.1.1',
       };
 
-      const result = await messageStore.storeAppRunningMessage(message);
+      const result = await messageStore.releaseInstallingClaims(message);
 
       expect(result).to.be.instanceOf(Error);
       expect(result.message).to.include('version 99 not supported');
@@ -473,13 +474,13 @@ describe('messageStore tests', () => {
         ip: '192.168.1.1',
       };
 
-      const result = await messageStore.storeAppRunningMessage(message);
+      const result = await messageStore.releaseInstallingClaims(message);
 
-      expect(result).to.deep.equal({ stored: false, rebroadcast: false });
+      expect(result).to.deep.equal({ released: 0 });
       expect(logStub.warn.called).to.be.true;
     });
 
-    it('should store valid version 1 running message', async () => {
+    it('releases the claim for a version 1 announcement, storing nothing', async () => {
       const message = {
         type: 'fluxapprunning',
         version: 1,
@@ -491,16 +492,16 @@ describe('messageStore tests', () => {
 
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.updateOneInDatabase.resolves({ modifiedCount: 0, upsertedCount: 1 });
       dbHelperStub.removeDocumentsFromCollection.resolves();
 
-      const result = await messageStore.storeAppRunningMessage(message);
+      const result = await messageStore.releaseInstallingClaims(message);
 
-      expect(result).to.deep.equal({ stored: true, rebroadcast: true });
-      expect(dbHelperStub.updateOneInDatabase.calledOnce).to.be.true;
+      expect(result).to.deep.equal({ released: 1 });
+      // the announcement itself is recorded by storeAppStateEvent, not here
+      expect(dbHelperStub.updateOneInDatabase.called).to.be.false;
     });
 
-    it('should store valid version 2 running message with multiple apps', async () => {
+    it('releases a claim per app in a version 2 announcement', async () => {
       const message = {
         type: 'fluxapprunning',
         version: 2,
@@ -517,11 +518,11 @@ describe('messageStore tests', () => {
       dbHelperStub.updateOneInDatabase.resolves({ modifiedCount: 0, upsertedCount: 1 });
       dbHelperStub.removeDocumentsFromCollection.resolves();
 
-      const result = await messageStore.storeAppRunningMessage(message);
+      const result = await messageStore.releaseInstallingClaims(message);
 
-      expect(result).to.deep.equal({ stored: true, rebroadcast: true });
-      expect(dbHelperStub.updateOneInDatabase.callCount).to.equal(2);
-      // Should clean up installing records for each app (location + broadcast per app)
+      expect(result).to.deep.equal({ released: 2 });
+      // nothing is stored here - the claim row and its archived announce per app
+      expect(dbHelperStub.updateOneInDatabase.called).to.be.false;
       expect(dbHelperStub.removeDocumentsFromCollection.callCount).to.equal(4);
     });
 
@@ -539,9 +540,9 @@ describe('messageStore tests', () => {
       dbHelperStub.updateOneInDatabase.resolves({ modifiedCount: 0, upsertedCount: 1 });
       dbHelperStub.removeDocumentsFromCollection.resolves();
 
-      const result = await messageStore.storeAppRunningMessage(message);
+      const result = await messageStore.releaseInstallingClaims(message);
 
-      expect(result).to.deep.equal({ stored: true, rebroadcast: true });
+      expect(result.released).to.be.a('number');
       // The sibling replica's claim (location row AND archived announce) must survive
       // s1 starting to run, or message sync would strip its seat mid-install.
       expect(dbHelperStub.removeDocumentsFromCollection.firstCall.args[2]).to.deep.equal({
@@ -552,7 +553,7 @@ describe('messageStore tests', () => {
       });
     });
 
-    it('should handle version 2 message with empty apps array', async () => {
+    it('releases every claim the node held when a v2 announcement carries no apps', async () => {
       const message = {
         type: 'fluxapprunning',
         version: 2,
@@ -566,11 +567,11 @@ describe('messageStore tests', () => {
       dbHelperStub.findInDatabase.resolves([{ name: 'app1' }]);
       dbHelperStub.removeDocumentsFromCollection.resolves();
 
-      const result = await messageStore.storeAppRunningMessage(message);
+      const result = await messageStore.releaseInstallingClaims(message);
 
-      expect(result).to.deep.equal({ stored: true, rebroadcast: true });
-      // Called three times: locations, installing locations, installing broadcasts
-      expect(dbHelperStub.removeDocumentsFromCollection.callCount).to.equal(3);
+      expect(result).to.deep.equal({ released: 0 });
+      // the node holds nothing: its installing claims and their archived announces go
+      expect(dbHelperStub.removeDocumentsFromCollection.callCount).to.equal(2);
     });
   });
 
@@ -1124,6 +1125,62 @@ describe('messageStore tests', () => {
       dbHelperStub.databaseConnection.returns(mockDb);
     });
 
+    // What damps the gossip: an announcement that advances nothing is not passed on,
+    // so it dies here instead of circulating. Derived from the stored broadcast
+    // timestamp, NOT from whether the write modified anything - receivedAt is written
+    // unconditionally, so a modified count is true even for a stale echo.
+    describe('gossip damping', () => {
+      const announcement = (broadcastedAt) => ({
+        signedBroadcast: {
+          version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
+          data: { ip: '1.2.3.4', broadcastedAt, apps: [{ name: 'a', hash: 'h' }] },
+        },
+      });
+
+      it('is news when we held nothing for the node', async () => {
+        dbHelperStub.findOneAndUpdateInDatabase.resolves(null);
+
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(Date.now()),
+        );
+
+        expect(result).to.deep.equal({ isNewer: true });
+      });
+
+      it('is news when it advances the stored announcement', async () => {
+        const now = Date.now();
+        dbHelperStub.findOneAndUpdateInDatabase.resolves({ broadcastedAt: new Date(now - 60000) });
+
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(now),
+        );
+
+        expect(result).to.deep.equal({ isNewer: true });
+      });
+
+      it('is NOT news when an older announcement arrives late', async () => {
+        const now = Date.now();
+        dbHelperStub.findOneAndUpdateInDatabase.resolves({ broadcastedAt: new Date(now) });
+
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(now - 60000),
+        );
+
+        expect(result).to.deep.equal({ isNewer: false });
+      });
+
+      it('is NOT news when the same announcement is seen again', async () => {
+        const now = Date.now();
+        dbHelperStub.findOneAndUpdateInDatabase.resolves({ broadcastedAt: new Date(now) });
+
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(now),
+        );
+
+        expect(result).to.deep.equal({ isNewer: false });
+      });
+    });
+
     it('should store apprunning v2 event with correct dedupKey', async () => {
       const payload = {
         signedBroadcast: {
@@ -1132,8 +1189,8 @@ describe('messageStore tests', () => {
         },
       };
       await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, payload);
-      expect(collectionStub.updateOne.calledOnce).to.be.true;
-      const filter = collectionStub.updateOne.firstCall.args[0];
+      expect(dbHelperStub.findOneAndUpdateInDatabase.calledOnce).to.be.true;
+      const filter = dbHelperStub.findOneAndUpdateInDatabase.firstCall.args[2];
       expect(filter.ip).to.equal('1.2.3.4');
       expect(filter.type).to.equal('apprunning');
       expect(filter.dedupKey).to.equal('v2');
@@ -1147,8 +1204,8 @@ describe('messageStore tests', () => {
         },
       };
       await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, payload);
-      expect(collectionStub.updateOne.calledOnce).to.be.true;
-      const filter = collectionStub.updateOne.firstCall.args[0];
+      expect(dbHelperStub.findOneAndUpdateInDatabase.calledOnce).to.be.true;
+      const filter = dbHelperStub.findOneAndUpdateInDatabase.firstCall.args[2];
       expect(filter.dedupKey).to.equal('v1:myapp');
     });
 

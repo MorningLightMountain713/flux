@@ -229,11 +229,20 @@ async function storeAppPermanentMessage(message) {
 }
 
 /**
- * Store app running message
- * @param {object} message - Message to store
- * @returns {Promise<boolean|Error>} Whether message should be rebroadcast or Error if invalid
+ * Release the installing claims an apprunning announcement supersedes.
+ *
+ * A node announcing an app as running has finished installing it, so the seat it
+ * reserved while installing is spent — both the claim row and its archived announce,
+ * or message sync would hand the seat back. A v2 announcement carrying no apps says
+ * the node holds nothing at all, and releases everything it had.
+ *
+ * Stores nothing: the announcement itself is recorded by storeAppStateEvent, which
+ * owns whether it is news and therefore whether it travels further.
+ *
+ * @param {object} message - the apprunning message
+ * @returns {Promise<Error|{released: number}>} Error when the message is malformed
  */
-async function storeAppRunningMessage(message) {
+async function releaseInstallingClaims(message) {
   /* message object
   * @param type string
   * @param version number
@@ -285,65 +294,18 @@ async function storeAppRunningMessage(message) {
 
   if (message.broadcastedAt + GOSSIP_VALIDITY_MS < Date.now()) {
     log.warn(`Rejecting old/not valid Fluxapprunning message, message:${JSON.stringify(message)}`);
-    return { stored: false, rebroadcast: false };
+    return { released: 0 };
   }
 
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
-  const expireAt = new Date(message.broadcastedAt + RUNNING_EXPIRY_MS);
 
-  let anyStored = false;
-  const incomingDate = new Date(message.broadcastedAt);
-  const isNewer = { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] };
-
-  for (let i = 0; i < appsMessages.length; i += 1) {
-    const app = appsMessages[i];
-    const runningSince = new Date(message.runningSince ?? app.runningSince ?? message.broadcastedAt);
-    const incoming = {
-      name: app.name,
-      hash: app.hash,
-      ip: message.ip,
-      // One row per identity: a co-located node reports one entry per replica.
-      // null (loose / old senders) matches rows without the field.
-      replica: typeof app.replica === 'string' ? app.replica : null,
-      broadcastedAt: incomingDate,
-      expireAt,
-      osUptime: message.osUptime,
-      staticIp: message.staticIp,
-      runningSince,
-      // Normalize the LB lifecycle state at ingest so every row carries a valid
-      // value and no reader branches on absence: only explicit draining/stopping
-      // survive; absent (old nodes) or anything else defaults to active.
-      state: ['draining', 'stopping'].includes(app.state) ? app.state : 'active',
-    };
-    const conditionalSet = Object.fromEntries(
-      Object.entries(incoming).map(([k, v]) => [k, { $cond: [isNewer, v, { $ifNull: [`$${k}`, v] }] }]),
-    );
-
-    // eslint-disable-next-line no-await-in-loop
-    const result = await dbHelper.updateOneInDatabase(
-      database, globalAppsLocations,
-      { name: app.name, ip: message.ip, replica: incoming.replica },
-      [{ $set: conditionalSet }],
-      { upsert: true },
-    );
-    if (result.modifiedCount > 0 || result.upsertedCount > 0) {
-      anyStored = true;
-    }
-  }
-
+  // A v2 announcement with no apps says the node holds nothing: every seat it
+  // reserved is released, not just the ones it named.
   if (message.version === 2 && appsMessages.length === 0) {
-    const result = await dbHelper.findInDatabase(database, globalAppsLocations, { ip: message.ip }, { projection: { _id: 0, runningSince: 1 } });
-    if (result.length > 0) {
-      const broadcastDate = new Date(message.broadcastedAt);
-      const olderThanBroadcast = { ip: message.ip, broadcastedAt: { $lte: broadcastDate } };
-      await dbHelper.removeDocumentsFromCollection(database, globalAppsLocations, olderThanBroadcast);
-      await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, { ip: message.ip });
-      await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, { 'data.ip': message.ip });
-      anyStored = true;
-    } else {
-      return { stored: false, rebroadcast: false };
-    }
+    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingLocations, { ip: message.ip });
+    await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, { 'data.ip': message.ip });
+    return { released: 0 };
   }
 
   for (const app of appsMessages) {
@@ -364,7 +326,7 @@ async function storeAppRunningMessage(message) {
     await dbHelper.removeDocumentsFromCollection(database, appsInstallingBroadcasts, broadcastQuery);
   }
 
-  return { stored: anyStored, rebroadcast: anyStored };
+  return { released: appsMessages.length };
 }
 
 /**
@@ -657,7 +619,7 @@ async function storeBatchAppRunningMessages(verifiedBroadcasts) {
     const incomingExpiry = new Date(validTill);
     const isNewer = { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] };
     for (const app of apps) {
-      // Normalize the LB lifecycle state at ingest (see storeAppRunningMessage):
+      // Normalize the LB lifecycle state at ingest:
       // only explicit draining/stopping survive; absent/other defaults to active.
       const normalizedState = ['draining', 'stopping'].includes(app.state) ? app.state : 'active';
       const setFields = {
@@ -707,24 +669,41 @@ async function storeBatchAppRunningMessages(verifiedBroadcasts) {
 
 // --- Event Log Functions ---
 
+/**
+ * Record a node's running-apps announcement.
+ *
+ * Reports `isNewer` — whether this told us something we did not already hold — which
+ * is what damps the gossip: a message that advances nothing is not passed on, so it
+ * dies here instead of circulating. The seen-message cache in fluxCommunication has
+ * already dropped exact duplicates by hash; what reaches this is an unseen message,
+ * which may still be a node's OLDER announcement arriving late behind a newer one.
+ *
+ * Deliberately compares the stored broadcast timestamp rather than asking whether the
+ * write modified anything: `receivedAt` is written unconditionally, so a modified
+ * count is true even for a stale message and would have every node relaying every
+ * echo forever.
+ *
+ * @returns {Promise<{isNewer: boolean}>}
+ */
 async function handleAppRunningEvent({ signedBroadcast }) {
   try {
     const { data } = signedBroadcast;
-    if (!data || !data.ip || !data.broadcastedAt) return;
-    if (data.broadcastedAt + GOSSIP_VALIDITY_MS < Date.now()) return;
+    if (!data || !data.ip || !data.broadcastedAt) return { isNewer: false };
+    if (data.broadcastedAt + GOSSIP_VALIDITY_MS < Date.now()) return { isNewer: false };
 
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.appsglobal.database);
 
     if (data.version === 2 && (!data.apps || data.apps.length === 0)) {
       const existing = await database.collection(globalAppStateEvents).findOne({ ip: data.ip, type: APP_STATE_EVENT_TYPES.APPRUNNING });
-      if (!existing) return;
+      if (!existing) return { isNewer: false };
     }
 
     const dedupKey = data.apps ? 'v2' : `v1:${data.name}`;
     const envelope = { version: signedBroadcast.version, timestamp: signedBroadcast.timestamp, pubKey: signedBroadcast.pubKey, signature: signedBroadcast.signature };
 
-    await database.collection(globalAppStateEvents).updateOne(
+    const prior = await dbHelper.findOneAndUpdateInDatabase(
+      database, globalAppStateEvents,
       { ip: data.ip, type: APP_STATE_EVENT_TYPES.APPRUNNING, dedupKey },
       buildConditionalUpsert(data.broadcastedAt, {
         ip: data.ip, type: APP_STATE_EVENT_TYPES.APPRUNNING, dedupKey,
@@ -732,10 +711,15 @@ async function handleAppRunningEvent({ signedBroadcast }) {
         expireAt: new Date(data.broadcastedAt + RUNNING_EXPIRY_MS),
         data, envelope,
       }, { alwaysSetFields: { receivedAt: new Date() } }),
-      { upsert: true },
+      { upsert: true, returnDocument: 'before', projection: { _id: 0, broadcastedAt: 1 } },
     );
+
+    // No prior document means we had nothing for this node: everything is news.
+    const priorAt = prior && prior.broadcastedAt ? new Date(prior.broadcastedAt).getTime() : 0;
+    return { isNewer: data.broadcastedAt > priorAt };
   } catch (err) {
     log.error(`storeAppStateEvent(apprunning): ${err.message}`);
+    return { isNewer: false };
   }
 }
 
@@ -1073,7 +1057,7 @@ module.exports = {
   storeAppTemporaryMessage,
   storeAppPermanentMessage,
   processPendingUpdates,
-  storeAppRunningMessage,
+  releaseInstallingClaims,
   storeBatchAppRunningMessages,
   storeAppStateEvent,
   storeBatchAppRunningEvents,

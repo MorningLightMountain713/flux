@@ -80,7 +80,7 @@ describe('peerNotification tests', () => {
         broadcastMessageToAll: broadcastAllStub,
       },
       './messageStore': {
-        storeAppRunningMessage: sinon.stub().resolves(),
+        releaseInstallingClaims: sinon.stub().resolves({ released: 0 }),
         storeAppStateEvent: sinon.stub().resolves(),
         APP_STATE_EVENT_TYPES: { APPRUNNING: 'apprunning' },
       },
@@ -242,7 +242,7 @@ describe('peerNotification tests', () => {
         '../geolocationService': { isStaticIP: sinon.stub().returns(true) },
         '../fluxCommunicationMessagesSender': { broadcastMessageToAll: broadcastAllStub },
         './messageStore': {
-          storeAppRunningMessage: sinon.stub().resolves(),
+          releaseInstallingClaims: sinon.stub().resolves({ released: 0 }),
           storeAppStateEvent: sinon.stub().resolves(),
           APP_STATE_EVENT_TYPES: { APPRUNNING: 'apprunning' },
         },

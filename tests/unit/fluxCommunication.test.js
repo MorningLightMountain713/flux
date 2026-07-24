@@ -273,8 +273,9 @@ describe('fluxCommunication tests', () => {
     });
 
     it('should broadcast the app message if a proper data is given', async () => {
-      sinon.stub(messageStore, 'storeAppRunningMessage').resolves({ stored: true, rebroadcast: true });
-      sinon.stub(messageStore, 'storeAppStateEvent');
+      // relay is gated on the event log saying the announcement was news
+      sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
+      sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true });
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 0 } });
       const fromIp = '127.0.0.5';
       const port = '16127';
