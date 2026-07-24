@@ -221,11 +221,11 @@ async function checkAndNotifyPeersOfRunningApps() {
           });
         }
       }
-      // An empty snapshot is NEVER broadcast: the receive side treats an empty
-      // v2 message as "delete every appsLocations row for this IP" - and we
-      // store our own message first, so it would erase our own presence. Every
-      // legitimate correction has a targeted mechanism instead (fluxappremoved
-      // on uninstall, sigterm/TTL row expiry for wiped or dead nodes).
+      // An empty snapshot is NEVER broadcast: peers read an empty v2 message as
+      // "this node holds nothing", which releases every seat it had reserved and
+      // erases it from the derived running set. Every legitimate correction has a
+      // targeted mechanism instead (fluxappremoved on uninstall, sigterm/TTL
+      // expiry for wiped or dead nodes).
       if (apps.length === 0) {
         return;
       }
@@ -238,17 +238,17 @@ async function checkAndNotifyPeersOfRunningApps() {
         osUptime: os.uptime(),
         staticIp: geolocationService.isStaticIP(),
       };
-      // The announcement is one fact, recorded twice - the location table, and
-      // the event log that peers sync from - and sent once. A node that cannot
-      // sign as itself sends nothing a peer would accept, so it records nothing
-      // either: its own view of where it runs stays the network's view. Asked
-      // before the first write, for that reason.
+      // The announcement is one fact, recorded once - on the event log that peers
+      // sync from - and sent once. A node that cannot sign as itself sends nothing
+      // a peer would accept, so it records nothing either: its own view of where
+      // it runs stays the network's view. Asked before the first write, for that
+      // reason.
       const signer = await nodeSigner();
       if (!signer) {
         log.warn('checkAndNotifyPeersOfRunningApps - this node cannot sign as itself; its running apps are not announced');
         return;
       }
-      await messageStore.storeAppRunningMessage(appRunningMessage);
+      await messageStore.releaseInstallingClaims(appRunningMessage);
       const signed = await fluxCommunicationMessagesSender.broadcastMessageToAll(appRunningMessage);
       await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: signed });
       fluxEventBus.publish('app:running', { apps, ip: appRunningMessage.ip });
