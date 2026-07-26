@@ -130,15 +130,17 @@ async function handleIngressAttestation(message, fromIP, port) {
 }
 
 /**
- * The broadcasts of a sync response that verify. Rejects when any of them
- * could not be verified because the database did not answer: the response is
- * then not all recorded, and its peer has not answered.
+ * The broadcasts of a sync response that verify, and the node each speaks for.
+ * Rejects when any of them could not be verified because the database did not
+ * answer: the response is then not all recorded, and its peer has not answered.
  * @param {object[]} broadcasts
  * @param {string} label
- * @returns {Promise<object[]>}
+ * @returns {Promise<{verified: object[], announcers: Map<object, object|null>}>}
+ *   announcers is keyed by the broadcast object itself, so callers that already track
+ *   broadcasts by identity keep working unchanged.
  */
 async function batchVerifyBroadcasts(broadcasts, label) {
-  if (broadcasts.length === 0) return [];
+  if (broadcasts.length === 0) return { verified: [], announcers: new Map() };
 
   const { VerifyResult } = fluxCommunicationUtils;
   const verdicts = await fluxCommunicationUtils.verifyBroadcasts(broadcasts, {
@@ -146,7 +148,13 @@ async function batchVerifyBroadcasts(broadcasts, label) {
   });
   const unreadable = verdicts.filter(({ result }) => result === VerifyResult.UNREADABLE).length;
   if (unreadable > 0) throw new Error(`${label} - ${unreadable} broadcasts could not be verified, the database did not answer`);
-  const verified = broadcasts.filter((broadcast, i) => verdicts[i].result === VerifyResult.OK);
+  const verified = [];
+  const announcers = new Map();
+  broadcasts.forEach((broadcast, i) => {
+    if (verdicts[i].result !== VerifyResult.OK) return;
+    verified.push(broadcast);
+    announcers.set(broadcast, verdicts[i].announcer);
+  });
   const signatureFailures = verdicts.filter(({ result }) => result === VerifyResult.BAD_SIGNATURE).length;
   const nodeCheckFailures = broadcasts.length - verified.length - signatureFailures;
 
@@ -155,7 +163,7 @@ async function batchVerifyBroadcasts(broadcasts, label) {
   }
 
   log.info(`${label} - Verified ${verified.length}/${broadcasts.length} broadcasts (${nodeCheckFailures} node lookup failures, ${signatureFailures} signature failures)`);
-  return verified;
+  return { verified, announcers };
 }
 
 async function handleTempSyncResponse(message, peerSocket) {
@@ -292,10 +300,10 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
         }
       }
 
-      const verifiedAppRunning = await batchVerifyBroadcasts(appRunningBroadcasts, 'handleAppRunningSyncResponse');
+      const { verified: verifiedAppRunning, announcers } = await batchVerifyBroadcasts(appRunningBroadcasts, 'handleAppRunningSyncResponse');
 
       const otherToVerify = otherBroadcasts.map((e) => ({ ...e.envelope, data: e.data }));
-      const verifiedOther = await batchVerifyBroadcasts(otherToVerify, 'handleAppRunningSyncResponse');
+      const { verified: verifiedOther } = await batchVerifyBroadcasts(otherToVerify, 'handleAppRunningSyncResponse');
       const verifiedOtherSet = new Set(verifiedOther);
       evictions.push(...evictedEvents);
       for (let i = 0; i < otherBroadcasts.length; i++) {
@@ -305,7 +313,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
       }
 
       if (verifiedAppRunning.length > 0) {
-        const { stored, writeFailed } = await messageStore.storeBatchAppRunningEvents(verifiedAppRunning);
+        const { stored, writeFailed } = await messageStore.storeBatchAppRunningEvents(verifiedAppRunning, announcers);
         if (writeFailed) eventWriteFailed = true;
         log.info(`handleAppRunningSyncResponse - Stored ${stored} of ${verifiedAppRunning.length} verified apprunning events`);
         fluxEventBus.publish('sync:chunkVerified', { syncType: 'apprunning', peer: peerKey, verified: verifiedAppRunning.length, stored });
@@ -359,7 +367,7 @@ async function handleAppInstallingSyncResponse(message, peerSocket) {
     log.info(`handleAppInstallingSyncResponse - Received ${messages.length} broadcasts from ${peerKey} (done: ${!!done})`);
     let writeFailed = false;
     await serviceHelper.processInSlices(messages, SYNC_EVENTS_PER_SLICE, async (slice) => {
-      const verified = await batchVerifyBroadcasts(slice, 'handleAppInstallingSyncResponse');
+      const { verified } = await batchVerifyBroadcasts(slice, 'handleAppInstallingSyncResponse');
       if (verified.length === 0) return;
       const stored = await messageStore.storeBatchAppInstallingMessages(verified);
       if (stored.writeFailed) writeFailed = true;
@@ -399,7 +407,7 @@ async function handleAppInstallingErrorsSyncResponse(message, peerSocket) {
     log.info(`handleAppInstallingErrorsSyncResponse - Received ${messages.length} broadcasts from ${peerKey} (done: ${!!done})`);
     let writeFailed = false;
     await serviceHelper.processInSlices(messages, SYNC_EVENTS_PER_SLICE, async (slice) => {
-      const verified = await batchVerifyBroadcasts(slice, 'handleAppInstallingErrorsSyncResponse');
+      const { verified } = await batchVerifyBroadcasts(slice, 'handleAppInstallingErrorsSyncResponse');
       if (verified.length === 0) return;
       const stored = await messageStore.storeBatchAppInstallingErrorMessages(verified);
       if (stored.writeFailed) writeFailed = true;
@@ -504,7 +512,7 @@ async function handleContentManifestSyncResponse(message, peerKey) {
     log.info(`handleContentManifestSyncResponse - Received ${messages.length} manifests from ${peerKey}`);
     // batchVerifyBroadcasts verifies the relaying node's envelope; storeBatchContentManifests
     // then applies the manifest owner-sig + spec gate before storing (or quarantining) each.
-    const verified = await batchVerifyBroadcasts(messages, 'handleContentManifestSyncResponse');
+    const { verified } = await batchVerifyBroadcasts(messages, 'handleContentManifestSyncResponse');
     if (verified.length > 0) {
       const { stored } = await contentSlotService.storeBatchContentManifests(verified);
       log.info(`handleContentManifestSyncResponse - Stored ${stored} of ${verified.length} verified manifests`);
@@ -562,13 +570,16 @@ async function handleRequestMessageHash(messageHash, fromIP, port) {
  * @param {string} fromIP Sender's IP address.
  * @param {string} port Sender's node Api port.
  */
-async function handleAppRunningMessage(message, fromIP, port) {
+async function handleAppRunningMessage(message, fromIP, port, announcer = null) {
   try {
     // Whether this told us anything new is the event log's answer, not the claim
     // release's: the log is what holds the node's running state, so it is what knows
     // if this announcement moved it. An announcement that advances nothing stops here
     // rather than being passed on.
-    const { isNewer } = await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: message });
+    const { isNewer } = await messageStore.storeAppStateEvent(
+      messageStore.APP_STATE_EVENT_TYPES.APPRUNNING,
+      { signedBroadcast: message, announcer },
+    );
     const released = await messageStore.releaseInstallingClaims(message.data);
     if (released instanceof Error) {
       log.warn(`handleAppRunningMessage - claims not released, from ${fromIP}:${port} for ${message.data?.ip}: ${released.message}`);
@@ -1062,7 +1073,7 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
   }
   const currentTimeStamp = Date.now();
   const { VerifyResult } = fluxCommunicationUtils;
-  const verifyResult = await fluxCommunicationUtils.verifyFluxBroadcast(msgObj, undefined, currentTimeStamp);
+  const { result: verifyResult, announcer } = await fluxCommunicationUtils.verifyFluxBroadcast(msgObj, undefined, currentTimeStamp);
 
   if (verifyResult === VerifyResult.UNREADABLE) {
     // The slot stays claimed while the broadcast waits, so its copies are not
@@ -1086,7 +1097,7 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
         } else if (msgObj.data.type === 'fluxapprequest') {
           setImmediate(() => fluxCommunicationMessagesSender.respondWithAppMessage(msgObj, peerSocket));
         } else if (msgObj.data.type === 'fluxapprunning') {
-          setImmediate(() => handleAppRunningMessage(msgObj, peerSocket.ip, peerSocket.port));
+          setImmediate(() => handleAppRunningMessage(msgObj, peerSocket.ip, peerSocket.port, announcer));
         } else if (msgObj.data.type === 'fluxipchanged') {
           setImmediate(() => handleIPChangedMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxappremoved') {
@@ -1202,7 +1213,8 @@ async function processSyncChunk(msgObj, peerSocket) {
  */
 async function verifySyncEnvelope(msgObj) {
   try {
-    return await fluxCommunicationUtils.verifyFluxBroadcast(msgObj);
+    const { result } = await fluxCommunicationUtils.verifyFluxBroadcast(msgObj);
+    return result;
   } catch (error) {
     log.error(error);
     return null;

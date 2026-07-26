@@ -93,17 +93,17 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
     it('is accepted when its signer last sent apprunning from the address it left', async () => {
       await ranAt(OLD, pubKey);
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.OK);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.OK);
     });
 
     it('is refused when another node last sent apprunning from the address it left', async () => {
       await ranAt(OLD, 'theothernodeskey');
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.PUBKEY_MISMATCH);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.PUBKEY_MISMATCH);
     });
 
     it('is dropped, as nothing shows who left, when no apprunning is stored for the address it left', async () => {
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.NODE_NOT_FOUND);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.NODE_NOT_FOUND);
     });
 
     it('is unreadable, not dropped, when the rows at the address it left cannot be read', async () => {
@@ -112,19 +112,19 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
         db: () => ({ collection: () => ({ findOne: sinon.stub().rejects(new MongoNetworkTimeoutError('timed out')) }) }),
       });
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.UNREADABLE);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.UNREADABLE);
     });
 
     it('is dropped when the only apprunning stored for the address it left has expired', async () => {
       await ranAt(OLD, pubKey, { ago: 2 * HOUR });
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.NODE_NOT_FOUND);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.NODE_NOT_FOUND);
     });
 
     it('is dropped from a node that stopped all its apps there, as no rows stand there to carry', async () => {
       await ranAt(OLD, pubKey, { apps: [] });
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.NODE_NOT_FOUND);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.NODE_NOT_FOUND);
     });
 
     // The previous holder's apprunning outlives its rows: it is still stored, and
@@ -133,7 +133,7 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
       await ranAt(OLD, 'theformerholderskey');
       await messageStore.applyEviction(OLD, Date.now());
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.NODE_NOT_FOUND);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.NODE_NOT_FOUND);
     });
 
     it('is dropped, not refused, from an address whose previous holder moved away from it', async () => {
@@ -142,21 +142,21 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
         type: 'fluxipchanged', version: 1, oldIP: OLD, newIP: ELSEWHERE, broadcastedAt: Date.now() - MINUTE,
       });
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.NODE_NOT_FOUND);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.NODE_NOT_FOUND);
     });
 
     it('is judged by the newest apprunning from an address another node held before', async () => {
       await ranAt(OLD, 'theformerholderskey', { ago: 40 * MINUTE, dedupKey: 'v1:proofapp' });
       await ranAt(OLD, pubKey, { ago: 5 * MINUTE });
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.OK);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.OK);
     });
 
     it('is refused from a node that held the address before another sent apprunning from it', async () => {
       await ranAt(OLD, pubKey, { ago: 40 * MINUTE, dedupKey: 'v1:proofapp' });
       await ranAt(OLD, 'thelaterholderskey', { ago: 5 * MINUTE });
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.PUBKEY_MISMATCH);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.PUBKEY_MISMATCH);
     });
 
     it('is accepted for a move of the port alone', async () => {
@@ -199,7 +199,7 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
   it('needs no proof for a move whose node is still listed at the address it left', async () => {
     listedAt.withArgs(OLD).resolves({ ip: OLD, pubkey: pubKey });
 
-    expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move())).to.equal(VerifyResult.OK);
+    expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.OK);
   });
 
   describe('a move arriving by app state sync, with its node listed at the new address only', () => {

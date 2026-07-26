@@ -174,24 +174,26 @@ async function lastSignerAt(address) {
  *   not listed       not listed                  NODE_NOT_FOUND
  * @param {string[]} addresses From signerAddresses.
  * @param {string} pubKey
- * @returns {Promise<string>} VerifyResult.OK, PUBKEY_MISMATCH or NODE_NOT_FOUND,
- *   or SIGNER_AT_NEW_ADDRESS_ONLY.
+ * @returns {Promise<{verdict: string, node: object|null}>} verdict is
+ *   VerifyResult.OK, PUBKEY_MISMATCH or NODE_NOT_FOUND, or
+ *   SIGNER_AT_NEW_ADDRESS_ONLY; node is the signer's list entry for OK and
+ *   SIGNER_AT_NEW_ADDRESS_ONLY.
  */
 async function listedSignerVerdict(addresses, pubKey) {
   const [first, ...others] = addresses;
   const node = await networkStateService.getFluxnodeBySocketAddress(first);
-  if (node) return node.pubkey === pubKey ? VerifyResult.OK : VerifyResult.PUBKEY_MISMATCH;
-  let signerListed = false;
+  if (node) return node.pubkey === pubKey ? { verdict: VerifyResult.OK, node } : { verdict: VerifyResult.PUBKEY_MISMATCH, node: null };
+  let signerNode = null;
   let otherListed = false;
   // eslint-disable-next-line no-restricted-syntax
   for (const address of others) {
     // eslint-disable-next-line no-await-in-loop
     const listed = await networkStateService.getFluxnodeBySocketAddress(address);
-    if (listed?.pubkey === pubKey) signerListed = true;
+    if (listed?.pubkey === pubKey) signerNode = listed;
     else if (listed) otherListed = true;
   }
-  if (!signerListed) return otherListed ? VerifyResult.PUBKEY_MISMATCH : VerifyResult.NODE_NOT_FOUND;
-  return SIGNER_AT_NEW_ADDRESS_ONLY;
+  if (!signerNode) return { verdict: otherListed ? VerifyResult.PUBKEY_MISMATCH : VerifyResult.NODE_NOT_FOUND, node: null };
+  return { verdict: SIGNER_AT_NEW_ADDRESS_ONLY, node: signerNode };
 }
 
 /**
@@ -260,6 +262,51 @@ async function broadcastTarget(payload, pubKey) {
 }
 
 /**
+ * The node a broadcast speaks for, by the node list alone: the one definition of
+ * who sent a broadcast, which both the single and the batch verification use.
+ * A move whose signer the list shows at the new address only names the address
+ * it left in `proveAt`, which lastSignerVerdict decides.
+ * @param {object} payload The broadcast's data.
+ * @param {string} pubKey The key the broadcast was signed with.
+ * @returns {Promise<{result: string, reason?: string, announcer: object|null, proveAt?: string}>}
+ *   announcer is the list entry of the node it speaks for, and null for a type
+ *   attributed only to its key - owner-granular, since one key serves a fleet.
+ */
+async function lookUpAnnouncer(payload, pubKey) {
+  const { target, error } = await broadcastTarget(payload, pubKey);
+  if (target === null) return { result: VerifyResult.NODE_NOT_FOUND, reason: error, announcer: null };
+  // a Map is the node found by its key: it is listed
+  if (target instanceof Map) return { result: VerifyResult.OK, announcer: null };
+  const addresses = signerAddresses(payload, target);
+  const { verdict, node } = await listedSignerVerdict(addresses, pubKey);
+  if (verdict === VerifyResult.NODE_NOT_FOUND) return { result: verdict, reason: error, announcer: null };
+  if (verdict === VerifyResult.PUBKEY_MISMATCH) {
+    return { result: verdict, reason: `Sender pubkey ${pubKey} does not match node at ${target}`, announcer: null };
+  }
+  if (verdict === SIGNER_AT_NEW_ADDRESS_ONLY) return { result: VerifyResult.OK, announcer: node, proveAt: addresses[0] };
+  return { result: VerifyResult.OK, announcer: node };
+}
+
+/**
+ * Which listed node a broadcast speaks for, and whether `pubKey` is that node's.
+ * Checks no signature. A move the list shows at its new address only is decided
+ * here by lastSignerVerdict.
+ * @param {object} payload The broadcast's data.
+ * @param {string} pubKey The key the broadcast was signed with.
+ * @returns {Promise<{result: string, announcer: object|null}>} a VerifyResult, and
+ *   the node's list entry when it is OK and the type names an address.
+ */
+async function resolveBroadcastAnnouncer(payload, pubKey) {
+  const { result, reason, announcer, proveAt } = await lookUpAnnouncer(payload, pubKey);
+  if (reason) log.warn(reason);
+  if (result !== VerifyResult.OK) return { result, announcer: null };
+  if (!proveAt) return { result, announcer };
+  const proof = await lastSignerVerdict(proveAt, pubKey);
+  if (proof.reason) log.warn(proof.reason);
+  return proof.result === VerifyResult.OK ? { result: proof.result, announcer } : { result: proof.result, announcer: null };
+}
+
+/**
  * The checks of one broadcast that need no signature: its shape, then the node
  * list. A refusal, or what its signature is checked over.
  * @param {FluxNetworkMessage} broadcast
@@ -279,24 +326,14 @@ async function checkBeforeSignature(broadcast, now) {
     return { refused: { result: VerifyResult.MALFORMED, reason: 'VerifyBroadcast: Message from future, rejecting' } };
   }
 
-  const { target, error } = await broadcastTarget(payload, pubKey);
-  if (target === null) return { refused: { result: VerifyResult.NODE_NOT_FOUND, reason: error } };
-
-  let proveAt = null;
-  // a Map is the node found by its key: it is listed
-  if (!(target instanceof Map)) {
-    const addresses = signerAddresses(payload, target);
-    const listed = await listedSignerVerdict(addresses, pubKey);
-    if (listed === VerifyResult.NODE_NOT_FOUND) return { refused: { result: listed, reason: error } };
-    if (listed === VerifyResult.PUBKEY_MISMATCH) {
-      return { refused: { result: listed, reason: `Sender pubkey ${pubKey} does not match node at ${target}` } };
-    }
-    if (listed === SIGNER_AT_NEW_ADDRESS_ONLY) [proveAt] = addresses;
-  }
+  const {
+    result, reason, announcer, proveAt = null,
+  } = await lookUpAnnouncer(payload, pubKey);
+  if (result !== VerifyResult.OK) return { refused: { result, reason } };
 
   return {
     item: {
-      messageToVerify: version + message + timestamp, pubKey, signature, proveAt,
+      messageToVerify: version + message + timestamp, pubKey, signature, proveAt, announcer,
     },
   };
 }
@@ -323,8 +360,9 @@ function verifySignaturesInline(items) {
  * @param {function(object[]): (boolean[]|Promise<boolean[]>)} [options.verifySignatures]
  *   Whether each item's `signature` over `messageToVerify` is `pubKey`'s, in
  *   order. Checked here, one by one, unless given: a batch passes a worker pool.
- * @returns {Promise<Array<{result: string, reason?: string}>>} A VerifyResult per
- *   broadcast, in order, and why when it was refused.
+ * @returns {Promise<Array<{result: string, reason?: string, announcer: object|null}>>}
+ *   A VerifyResult per broadcast, in order, why when it was refused, and the
+ *   node it speaks for (resolveBroadcastAnnouncer) when it was not.
  */
 async function verifyBroadcasts(broadcasts, { verifySignatures = verifySignaturesInline } = {}) {
   const now = Date.now();
@@ -333,17 +371,23 @@ async function verifyBroadcasts(broadcasts, { verifySignatures = verifySignature
   for (let i = 0; i < broadcasts.length; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     const { refused, item } = await checkBeforeSignature(broadcasts[i], now);
-    if (refused) verdicts[i] = refused;
+    if (refused) verdicts[i] = { ...refused, announcer: null };
     else unsigned.push({ index: i, ...item });
   }
 
   const signed = await verifySignatures(unsigned);
 
   for (let i = 0; i < unsigned.length; i += 1) {
-    const { index, pubKey, proveAt } = unsigned[i];
-    if (!signed[i]) verdicts[index] = { result: VerifyResult.BAD_SIGNATURE };
-    // eslint-disable-next-line no-await-in-loop
-    else verdicts[index] = proveAt ? await lastSignerVerdict(proveAt, pubKey) : { result: VerifyResult.OK };
+    const {
+      index, pubKey, proveAt, announcer,
+    } = unsigned[i];
+    if (!signed[i]) {
+      verdicts[index] = { result: VerifyResult.BAD_SIGNATURE, announcer: null };
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      const verdict = proveAt ? await lastSignerVerdict(proveAt, pubKey) : { result: VerifyResult.OK };
+      verdicts[index] = { ...verdict, announcer: verdict.result === VerifyResult.OK ? announcer : null };
+    }
   }
   return verdicts;
 }
@@ -351,7 +395,8 @@ async function verifyBroadcasts(broadcasts, { verifySignatures = verifySignature
 /**
  * Verify one Flux broadcast, as verifyBroadcasts does.
  * @param {FluxNetworkMessage} broadcast Flux network layer message containing public key, timestamp, signature and version.
- * @returns {Promise<string>} A VerifyResult.
+ * @returns {Promise<{result: string, announcer: object|null}>} A VerifyResult, and
+ *   the node it speaks for when it is OK (resolveBroadcastAnnouncer).
  */
 async function verifyFluxBroadcast(broadcast) {
   counter += 1;
@@ -370,9 +415,9 @@ async function verifyFluxBroadcast(broadcast) {
     log.info(`Receiving broadcast message rate: ${rounded} MSG/s`);
   }
 
-  const [{ result, reason }] = await verifyBroadcasts([broadcast]);
+  const [{ result, reason, announcer }] = await verifyBroadcasts([broadcast]);
   if (reason) log.warn(reason);
-  return result;
+  return { result, announcer };
 }
 
 /**
@@ -413,14 +458,14 @@ function verifyTimestampInFluxBroadcast(data, currentTimeStamp, maxOld = 300_000
  * @param {object} data Data.
  * @param {object[]} obtainedFluxNodeList List of FluxNodes.
  * @param {number} currentTimeStamp Current timestamp.
- * @returns {Promise<boolean>} False unless message is successfully verified.
+ * @returns {Promise<{result: string, announcer: object|null}>} As verifyFluxBroadcast; MALFORMED when too old.
  */
 async function verifyOriginalFluxBroadcast(data, currentTimeStamp) {
   const timeStampOK = verifyTimestampInFluxBroadcast(data, currentTimeStamp);
   if (timeStampOK) {
     return verifyFluxBroadcast(data);
   }
-  return VerifyResult.MALFORMED;
+  return { result: VerifyResult.MALFORMED, announcer: null };
 }
 
 module.exports = {
@@ -434,4 +479,5 @@ module.exports = {
   getFluxnodeFromFluxList,
   verifyBroadcasts,
   verifyFluxBroadcast,
+  resolveBroadcastAnnouncer,
 };
