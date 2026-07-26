@@ -65,10 +65,10 @@ module.exports = (app) => {
     return daemonServiceControlRpcs.getInfo(req, res);
   }));
   app.get('/daemon/getfluxnodestatus', cache('60 seconds'), asyncRoute((req, res) => {
-    return daemonServiceNodeRpcs.getFluxNodeStatus(req, res);
+    return daemonServiceNodeRpcs.getFluxNodeStatusApi(req, res);
   }));
   app.get('/daemon/getzelnodestatus', cache('60 seconds'), asyncRoute((req, res) => { // DEPRECATED
-    return daemonServiceNodeRpcs.getFluxNodeStatus(req, res);
+    return daemonServiceNodeRpcs.getFluxNodeStatusApi(req, res);
   }));
   app.get('/daemon/listfluxnodes/:filter?', cache('30 seconds'), asyncRoute((req, res) => {
     return daemonServiceNodeRpcs.listFluxNodes(req, res);
