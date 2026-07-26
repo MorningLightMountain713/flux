@@ -65,6 +65,32 @@ function isFluxSupportTeamZelid(zelid) {
 }
 
 /**
+ * Whether a self-presented login phrase is inside its validity window.
+ *
+ * Used on nodes that never issued the phrase, so there is no stored challenge to
+ * compare against and the embedded timestamp is the only bound on how long a signed
+ * phrase keeps authenticating. The prefix is therefore required to be 13 digits: a
+ * non-numeric prefix parses to NaN, and every comparison against NaN is false, so an
+ * arithmetic-only check silently admits the phrase with no expiry at all.
+ *
+ * @param {string} message loginPhrase presented by the caller.
+ * @param {number} maxAgeMs how far back the embedded timestamp may sit.
+ * @returns {boolean} true only if the length and the timestamp window both hold.
+ */
+function loginPhraseWithinWindow(message, maxAgeMs) {
+  if (typeof message !== 'string') return false;
+  if (message.length < 40 || message.length > 70) return false;
+
+  const prefix = message.substring(0, 13);
+  if (!/^\d{13}$/.test(prefix)) return false;
+
+  const issuedAt = Number(prefix);
+  const now = Date.now();
+
+  return issuedAt >= now - maxAgeMs && issuedAt <= now;
+}
+
+/**
  * Verifies admin session
  * @param {string|object} zelidauth - the value of the zelidauth header
  *
@@ -117,12 +143,8 @@ async function verifyUserSession(zelidauth) {
   const loggedUser = await dbHelper.findOneInDatabase(database, collection, query, projection);
   // if not logged, check if not older than 16 hours
   if (!loggedUser) {
-    const timestamp = Date.now();
-    const message = auth.loginPhrase;
     const maxHours = 16 * 60 * 60 * 1000;
-    if (Number(message.substring(0, 13)) < (timestamp - maxHours) || Number(message.substring(0, 13)) > timestamp || message.length > 70 || message.length < 40) {
-      return false;
-    }
+    if (!loginPhraseWithinWindow(auth.loginPhrase, maxHours)) return false;
   }
 
   // check if signature corresponds to message with that zelid
@@ -231,12 +253,8 @@ async function verifyAppOwnerSession(zelidauth, appName) {
   const loggedUser = await dbHelper.findOneInDatabase(database, collection, query, projection);
   // if not logged, check if not older than 2 hours
   if (!loggedUser) {
-    const timestamp = Date.now();
-    const message = auth.loginPhrase;
     const twoHours = 2 * 60 * 60 * 1000;
-    if (Number(message.substring(0, 13)) < (timestamp - twoHours) || Number(message.substring(0, 13)) > timestamp || message.length > 70 || message.length < 40) {
-      return false;
-    }
+    if (!loginPhraseWithinWindow(auth.loginPhrase, twoHours)) return false;
   }
   // check if signature corresponds to message with that zelid
   let valid = false;
@@ -304,12 +322,8 @@ async function verifyAppOwnerOrFluxTeamSession(zelidauth, appName) {
   const loggedUser = await dbHelper.findOneInDatabase(database, collection, query, projection);
   // if not logged, check if not older than 2 hours
   if (!loggedUser) {
-    const timestamp = Date.now();
-    const message = auth.loginPhrase;
     const maxHours = 2 * 60 * 60 * 1000;
-    if (Number(message.substring(0, 13)) < (timestamp - maxHours) || Number(message.substring(0, 13)) > timestamp || message.length > 70 || message.length < 40) {
-      return false;
-    }
+    if (!loginPhraseWithinWindow(auth.loginPhrase, maxHours)) return false;
   }
 
   // check if signature corresponds to message with that zelid
@@ -327,6 +341,7 @@ async function verifyAppOwnerOrFluxTeamSession(zelidauth, appName) {
 }
 
 module.exports = {
+  loginPhraseWithinWindow,
   fluxSupportTeamZelids,
   isFluxSupportTeamZelid,
   nodeOperatorZelid,
