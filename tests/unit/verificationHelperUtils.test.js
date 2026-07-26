@@ -753,4 +753,47 @@ describe('verificationHelperUtils tests', () => {
       expect(isOwnerOrHigherSession).to.be.false;
     });
   });
+  describe('loginPhraseWithinWindow tests', () => {
+    const digits13 = (ms) => String(ms).padStart(13, '0');
+    const pad = (prefix, len = 56) => prefix + 'a'.repeat(len - prefix.length);
+    const oneHour = 60 * 60 * 1000;
+
+    it('should accept a phrase whose 13-digit prefix sits inside the window', () => {
+      const phrase = pad(digits13(Date.now() - oneHour));
+      expect(verificationHelperUtils.loginPhraseWithinWindow(phrase, 2 * oneHour)).to.be.true;
+    });
+
+    it('should reject a phrase older than the window', () => {
+      const phrase = pad(digits13(Date.now() - (3 * oneHour)));
+      expect(verificationHelperUtils.loginPhraseWithinWindow(phrase, 2 * oneHour)).to.be.false;
+    });
+
+    it('should reject a future-dated phrase', () => {
+      const phrase = pad(digits13(Date.now() + oneHour));
+      expect(verificationHelperUtils.loginPhraseWithinWindow(phrase, 2 * oneHour)).to.be.false;
+    });
+
+    // A non-numeric prefix parses to NaN, and every comparison against NaN is false, so
+    // an arithmetic-only check admits the phrase with no expiry applied at all.
+    it('should reject a non-numeric prefix rather than skipping the window', () => {
+      const phrase = pad('abcdefghijklm');
+      expect(verificationHelperUtils.loginPhraseWithinWindow(phrase, 2 * oneHour)).to.be.false;
+    });
+
+    it('should reject a partially numeric prefix', () => {
+      const phrase = pad(`164493588901x${'b'.repeat(4)}`);
+      expect(verificationHelperUtils.loginPhraseWithinWindow(phrase, 2 * oneHour)).to.be.false;
+    });
+
+    it('should reject phrases outside the 40-70 character bounds', () => {
+      const now = digits13(Date.now());
+      expect(verificationHelperUtils.loginPhraseWithinWindow(pad(now, 39), 2 * oneHour)).to.be.false;
+      expect(verificationHelperUtils.loginPhraseWithinWindow(pad(now, 71), 2 * oneHour)).to.be.false;
+    });
+
+    it('should reject non-string input', () => {
+      expect(verificationHelperUtils.loginPhraseWithinWindow(undefined, oneHour)).to.be.false;
+      expect(verificationHelperUtils.loginPhraseWithinWindow(1644935889016, oneHour)).to.be.false;
+    });
+  });
 });
