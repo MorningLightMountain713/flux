@@ -4,6 +4,8 @@ const dbHelper = require('../dbHelper');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const fluxEventBus = require('../utils/fluxEventBus');
 const setReconciler = require('../appMessaging/setReconciler');
+const MongoStorageProvider = require('../providers/MongoStorageProvider');
+const { expireHeightExpr } = require('./appsMaintenance');
 const {
   globalAppsInformation,
   localAppsInformation,
@@ -28,7 +30,6 @@ let storageProviderInstance;
 
 async function storageProvider() {
   if (!storageProviderInstance) {
-    const MongoStorageProvider = require('../providers/MongoStorageProvider');
     storageProviderInstance = await MongoStorageProvider.create();
   }
   return storageProviderInstance;
@@ -71,8 +72,6 @@ function localDb() {
 }
 
 // ── Spawner Queries ──────────────────────────────────────────────────
-
-const { expireHeightExpr } = require('./appsMaintenance');
 
 async function findUnderProvisionedApps(currentHeight, nowSeconds) {
   const minBlocksAllowance = config.fluxapps.newMinBlocksAllowance;
@@ -998,7 +997,10 @@ function buildAppLocationPipeline({
           { $match: { type: 'apprunning', 'data.apps': { $exists: true } } },
           { $group: { _id: '$ip', doc: { $first: '$$ROOT' } } },
           { $replaceRoot: { newRoot: '$doc' } },
-          { $project: { _id: 0, ip: '$data.ip', broadcastedAt: 1, apps: '$data.apps', osUptime: '$data.osUptime', staticIp: '$data.staticIp', runningSince: '$data.runningSince' } },
+          // outpoint is row-level, not from data: data holds the exact bytes the
+          // originator signed and is re-served verbatim on the sync path, so it is
+          // never written to. The outpoint is resolved locally at ingest.
+          { $project: { _id: 0, ip: '$data.ip', outpoint: 1, broadcastedAt: 1, apps: '$data.apps', osUptime: '$data.osUptime', staticIp: '$data.staticIp', runningSince: '$data.runningSince' } },
         ],
         // $max, not $first: these must not depend on an upstream sort that no longer exists.
         removals: [
@@ -1056,6 +1058,9 @@ const RUNNING_ROW_TAIL = [
       name: '$_v2Filtered.apps.name',
       hash: '$_v2Filtered.apps.hash',
       ip: '$_v2Filtered.ip',
+      // Null rather than absent on announcements that predate the field, so readers
+      // get one shape and can tell "not claimed" from "not projected".
+      outpoint: { $ifNull: ['$_v2Filtered.outpoint', null] },
       broadcastedAt: '$_v2Filtered.broadcastedAt',
       runningSince: { $ifNull: ['$_v2Filtered.apps.runningSince', '$_v2Filtered.runningSince'] },
       osUptime: '$_v2Filtered.osUptime',

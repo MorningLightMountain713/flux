@@ -37,6 +37,18 @@ const APP_STATE_EVENT_TYPES = Object.freeze({
   IPCHANGED: 'ipchanged',
 });
 
+/**
+ * The announcing node's chain identity, as resolved by the verification layer that
+ * had already looked the node up. Stored beside data, never inside it: data is the
+ * exact byte string the originator signed and is re-served verbatim over sync, so
+ * writing into it would invalidate the signature for every peer downstream.
+ * Null when unresolved, which readers take as unknown rather than unclaimed.
+ */
+function outpointOf(announcer) {
+  if (!announcer || !announcer.txhash) return null;
+  return `${announcer.txhash}:${announcer.outidx}`;
+}
+
 function buildConditionalUpsert(broadcastedAt, conditionalFields, options = {}) {
   const alwaysSetFields = options.alwaysSetFields ?? {};
   const incomingDate = new Date(broadcastedAt);
@@ -599,7 +611,7 @@ async function storeIPChangedMessage(message) {
  *
  * @returns {Promise<{isNewer: boolean}>}
  */
-async function handleAppRunningEvent({ signedBroadcast }) {
+async function handleAppRunningEvent({ signedBroadcast, announcer = null }) {
   try {
     const { data } = signedBroadcast;
     if (!data || !data.ip || !data.broadcastedAt) return { isNewer: false };
@@ -620,7 +632,8 @@ async function handleAppRunningEvent({ signedBroadcast }) {
       database, globalAppStateEvents,
       { ip: data.ip, type: APP_STATE_EVENT_TYPES.APPRUNNING, dedupKey },
       buildConditionalUpsert(data.broadcastedAt, {
-        ip: data.ip, type: APP_STATE_EVENT_TYPES.APPRUNNING, dedupKey,
+        ip: data.ip, outpoint: outpointOf(announcer),
+        type: APP_STATE_EVENT_TYPES.APPRUNNING, dedupKey,
         broadcastedAt: new Date(data.broadcastedAt),
         expireAt: new Date(data.broadcastedAt + RUNNING_EXPIRY_MS),
         data, envelope,
@@ -725,7 +738,7 @@ function storeAppStateEvent(type, payload) {
   }
 }
 
-async function storeBatchAppRunningEvents(verifiedBroadcasts) {
+async function storeBatchAppRunningEvents(verifiedBroadcasts, announcers = new Map()) {
   if (verifiedBroadcasts.length === 0) return { stored: 0 };
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
@@ -745,7 +758,8 @@ async function storeBatchAppRunningEvents(verifiedBroadcasts) {
       updateOne: {
         filter: { ip: data.ip, type: 'apprunning', dedupKey },
         update: buildConditionalUpsert(data.broadcastedAt, {
-          ip: data.ip, type: 'apprunning', dedupKey,
+          ip: data.ip, outpoint: outpointOf(announcers.get(broadcast)),
+          type: 'apprunning', dedupKey,
           broadcastedAt: new Date(data.broadcastedAt),
           expireAt: new Date(validTill),
           data, envelope,

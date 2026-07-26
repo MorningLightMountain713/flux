@@ -97,27 +97,91 @@ const VerifyResult = Object.freeze({
   PUBKEY_MISMATCH: 'pubkeyMismatch',
 });
 
+/**
+ * Resolve which node in the deterministic list a broadcast claims to come from, and
+ * confirm the signer holds that node's registered key.
+ *
+ * The single definition of "who sent this". Both the per-message and the batched
+ * verification paths route through here so the per-type address selection and the
+ * pubkey binding cannot drift apart, and so callers can consume the resolved node
+ * rather than re-deriving identity from the payload's address string.
+ *
+ * @param {object} payload Broadcast data object.
+ * @param {string} pubKey Public key the envelope was signed with.
+ * @returns {Promise<{result: string, announcer: object|null}>} announcer is the list
+ *   entry for address-addressed message types, and null for types that can only be
+ *   attributed to a pubkey — which is owner-granular, since one key serves a fleet.
+ */
+async function resolveBroadcastAnnouncer(payload, pubKey) {
+  const { type: msgType } = payload;
+
+  let target;
+  switch (msgType) {
+    case 'fluxapprunning':
+    case 'fluxappinstalling':
+    case 'fluxappinstallingerror':
+    case 'fluxappremoved':
+    case 'fluxnodesigterm':
+      target = payload.ip;
+      break;
+
+    // Verified against the address being left, not the one being taken: the new
+    // address is not in the deterministic list yet, so it can prove nothing.
+    case 'fluxipchanged':
+      target = payload.oldIP;
+      break;
+
+    // zelappregister zelappupdate fluxappregister fluxappupdate fluxapprequest
+    default:
+      target = await networkStateService.getFluxnodesByPubkey(pubKey);
+  }
+
+  if (!target) {
+    log.warn(`No node belonging to ${pubKey} found for ${msgType}`);
+    return { result: VerifyResult.NODE_NOT_FOUND, announcer: null };
+  }
+
+  // A Map means the pubkey lookup above: the key is in the network, but it maps to
+  // many nodes, so there is no single announcer to name.
+  if (target instanceof Map) return { result: VerifyResult.OK, announcer: null };
+
+  const announcer = await networkStateService.getFluxnodeBySocketAddress(target);
+  if (!announcer) {
+    // Most of these are our deterministic list being a couple of minutes stale.
+    log.warn(`Invalid ${msgType} message, target: ${target} pubkey: ${pubKey}`);
+    return { result: VerifyResult.NODE_NOT_FOUND, announcer: null };
+  }
+  if (announcer.pubkey !== pubKey) {
+    log.warn(`Sender pubkey ${pubKey} does not match node at ${target}`);
+    return { result: VerifyResult.PUBKEY_MISMATCH, announcer: null };
+  }
+
+  return { result: VerifyResult.OK, announcer };
+}
+
 async function verifyFluxBroadcast(broadcast) {
   const {
     pubKey, timestamp, signature, version, data: payload,
   } = broadcast;
 
-  if (version !== 1) return VerifyResult.MALFORMED;
+  const malformed = { result: VerifyResult.MALFORMED, announcer: null };
+
+  if (version !== 1) return malformed;
 
   const message = serviceHelper.ensureString(payload);
 
-  if (!message) return VerifyResult.MALFORMED;
+  if (!message) return malformed;
 
   const { type: msgType } = payload;
 
-  if (!msgType) return VerifyResult.MALFORMED;
+  if (!msgType) return malformed;
 
   const now = Date.now();
 
   // message was broadcasted in the future. Allow 120 sec clock sync
   if (now < timestamp - 120_000) {
     log.error('VerifyBroadcast: Message from future, rejecting');
-    return VerifyResult.MALFORMED;
+    return malformed;
   }
 
   counter += 1;
@@ -136,73 +200,8 @@ async function verifyFluxBroadcast(broadcast) {
     log.info(`Receiving broadcast message rate: ${rounded} MSG/s`);
   }
 
-  let error = '';
-  let target = '';
-
-  switch (msgType) {
-    case 'fluxapprunning':
-      target = payload.ip;
-      // most of invalids are caused because our deterministic list is cached for couple of minutes
-      error = `Invalid fluxapprunning message, ip: ${payload.ip} pubkey: ${pubKey}`;
-      break;
-
-    case 'fluxappinstalling':
-      target = payload.ip;
-      error = `Invalid fluxappinstalling message, ip: ${payload.ip} pubkey: ${pubKey}`;
-      break;
-
-    case 'fluxappinstallingerror':
-      target = payload.ip;
-      error = `Invalid fluxappinstallingerror message, ip: ${payload.ip} pubkey: ${pubKey}`;
-      break;
-
-    case 'fluxipchanged':
-      target = payload.oldIP;
-      error = `Invalid fluxipchanged message, oldIP: ${payload.oldIP} pubkey: ${pubKey}`;
-      break;
-
-    case 'fluxappremoved':
-      target = payload.ip;
-      error = `Invalid fluxappremoved message, ip: ${payload.ip} pubkey: ${pubKey}`;
-      break;
-
-    case 'fluxnodesigterm':
-      target = payload.ip;
-      error = `Invalid fluxnodesigterm message, ip: ${payload.ip} pubkey: ${pubKey}`;
-      break;
-
-    // zelappregister zelappupdate fluxappregister fluxappupdate fluxapprequest
-    default: {
-      // this used to just take the first node. I.e:
-      //   node = zl.find((key) => key.pubkey === pubKey);
-      // however, that doesn't prove anything. So if we find the pubkey, good enough
-      // ideally - every message should also have the source ip
-      target = await networkStateService.getFluxnodesByPubkey(pubKey);
-      error = `No node belonging to ${pubKey} found for ${msgType}`;
-    }
-  }
-
-  // no public key found in cache
-  if (target === null) {
-    log.warn(error);
-    return VerifyResult.NODE_NOT_FOUND;
-  }
-
-  // if we get a map, we have hit the default case and searched for pubkeys
-  if (target instanceof Map) {
-    // default case: already verified pubkey exists in network
-  } else {
-    const node = await networkStateService.getFluxnodeBySocketAddress(target);
-    if (!node) {
-      log.warn(error);
-      return VerifyResult.NODE_NOT_FOUND;
-    }
-    // verify the sender's pubKey matches the node at the target IP
-    if (node.pubkey !== pubKey) {
-      log.warn(`Sender pubkey ${pubKey} does not match node at ${target}`);
-      return VerifyResult.PUBKEY_MISMATCH;
-    }
-  }
+  const { result: lookup, announcer } = await resolveBroadcastAnnouncer(payload, pubKey);
+  if (lookup !== VerifyResult.OK) return { result: lookup, announcer: null };
 
   const messageToVerify = version + message + timestamp;
   const verified = verificationHelper.verifyMessage(
@@ -211,7 +210,9 @@ async function verifyFluxBroadcast(broadcast) {
     signature,
   );
 
-  return verified ? VerifyResult.OK : VerifyResult.BAD_SIGNATURE;
+  if (!verified) return { result: VerifyResult.BAD_SIGNATURE, announcer: null };
+
+  return { result: VerifyResult.OK, announcer };
 }
 
 /**
@@ -252,7 +253,7 @@ async function verifyOriginalFluxBroadcast(data, currentTimeStamp) {
   if (timeStampOK) {
     return verifyFluxBroadcast(data);
   }
-  return VerifyResult.MALFORMED;
+  return { result: VerifyResult.MALFORMED, announcer: null };
 }
 
 module.exports = {
@@ -264,4 +265,5 @@ module.exports = {
   socketAddressInFluxList,
   getFluxnodeFromFluxList,
   verifyFluxBroadcast,
+  resolveBroadcastAnnouncer,
 };

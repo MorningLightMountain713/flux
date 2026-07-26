@@ -1121,7 +1121,10 @@ describe('messageStore tests', () => {
     let collectionStub;
 
     beforeEach(() => {
-      collectionStub = { updateOne: sinon.stub().resolves({ modifiedCount: 1 }) };
+      collectionStub = {
+        updateOne: sinon.stub().resolves({ modifiedCount: 1 }),
+        bulkWrite: sinon.stub().resolves({}),
+      };
       const mockDb = { db: sinon.stub().returns({ collection: sinon.stub().returns(collectionStub) }) };
       dbHelperStub.databaseConnection.returns(mockDb);
     });
@@ -1195,6 +1198,56 @@ describe('messageStore tests', () => {
       expect(filter.ip).to.equal('1.2.3.4');
       expect(filter.type).to.equal('apprunning');
       expect(filter.dedupKey).to.equal('v2');
+    });
+
+    it('records the announcer chain identity the verification layer resolved', async () => {
+      const payload = {
+        signedBroadcast: {
+          version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
+          data: { ip: '1.2.3.4', broadcastedAt: Date.now(), apps: [{ name: 'a', hash: 'h' }] },
+        },
+        announcer: { txhash: 'd3ffeeb8b470', outidx: '0', pubkey: 'pk' },
+      };
+      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, payload);
+      const [{ $set: set }] = dbHelperStub.findOneAndUpdateInDatabase.firstCall.args[3];
+      // conditional fields are [isNewer, valueWhenNewer, keepWhatIsStored]
+      expect(set.outpoint.$cond[1]).to.equal('d3ffeeb8b470:0');
+    });
+
+    it('leaves the outpoint null when no announcer was resolved', async () => {
+      // Sync-delivered rows arrive without one; null means unknown rather than absent,
+      // and the node's next direct announcement fills it in.
+      const payload = {
+        signedBroadcast: {
+          version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
+          data: { ip: '1.2.3.4', broadcastedAt: Date.now(), apps: [{ name: 'a', hash: 'h' }] },
+        },
+      };
+      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, payload);
+      const [{ $set: set }] = dbHelperStub.findOneAndUpdateInDatabase.firstCall.args[3];
+      expect(set.outpoint.$cond[1]).to.equal(null);
+    });
+
+    it('records the announcer identity on sync-delivered rows too, keyed per broadcast', async () => {
+      // Sync catch-up must attribute rows the same way live gossip does, or the two
+      // delivery routes disagree about who a row belongs to.
+      const broadcastFor = (ip) => ({
+        version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
+        data: { ip, broadcastedAt: Date.now(), apps: [{ name: 'a', hash: 'h' }] },
+      });
+      const first = broadcastFor('1.2.3.4:16127');
+      const second = broadcastFor('5.6.7.8:16127');
+      const announcers = new Map([
+        [first, { txhash: 'aaa', outidx: '0' }],
+        [second, { txhash: 'bbb', outidx: '2' }],
+      ]);
+
+      const { stored } = await messageStore.storeBatchAppRunningEvents([first, second], announcers);
+
+      expect(stored).to.equal(2);
+      const ops = collectionStub.bulkWrite.firstCall.args[0];
+      const outpointIn = (op) => op.updateOne.update[0].$set.outpoint.$cond[1];
+      expect(ops.map(outpointIn)).to.deep.equal(['aaa:0', 'bbb:2']);
     });
 
     it('should store apprunning v1 event with name in dedupKey', async () => {

@@ -340,7 +340,7 @@ describe('fluxCommunicationUtils tests', () => {
 
       networkStateByPubkeyStub.resolves(stateResult);
 
-      const isValid = await fluxCommunicationUtils.verifyOriginalFluxBroadcast(dataToSend);
+      const { result: isValid } = await fluxCommunicationUtils.verifyOriginalFluxBroadcast(dataToSend);
 
       expect(isValid).to.equal(VerifyResult.OK);
     });
@@ -358,7 +358,7 @@ describe('fluxCommunicationUtils tests', () => {
         signature,
       };
 
-      const isValid = await fluxCommunicationUtils.verifyOriginalFluxBroadcast(dataToSend, null, fluxList);
+      const { result: isValid } = await fluxCommunicationUtils.verifyOriginalFluxBroadcast(dataToSend, null, fluxList);
 
       expect(isValid).to.equal(VerifyResult.MALFORMED);
     });
@@ -381,7 +381,7 @@ describe('fluxCommunicationUtils tests', () => {
 
       networkStateByPubkeyStub.resolves(stateResult);
 
-      const isValid = await fluxCommunicationUtils.verifyOriginalFluxBroadcast(dataToSend, providedTimestamp);
+      const { result: isValid } = await fluxCommunicationUtils.verifyOriginalFluxBroadcast(dataToSend, providedTimestamp);
 
       expect(isValid).to.equal(VerifyResult.OK);
     });
@@ -400,7 +400,7 @@ describe('fluxCommunicationUtils tests', () => {
       };
       const providedTimestamp = Date.now() + 100;
 
-      const isValid = await fluxCommunicationUtils.verifyOriginalFluxBroadcast(dataToSend, providedTimestamp);
+      const { result: isValid } = await fluxCommunicationUtils.verifyOriginalFluxBroadcast(dataToSend, providedTimestamp);
 
       expect(isValid).to.equal(VerifyResult.MALFORMED);
     });
@@ -432,7 +432,7 @@ describe('fluxCommunicationUtils tests', () => {
         signature,
       };
 
-      const isValid = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend, fluxList);
+      const { result: isValid } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend, fluxList);
 
       expect(isValid).to.equal(VerifyResult.MALFORMED);
     });
@@ -450,7 +450,7 @@ describe('fluxCommunicationUtils tests', () => {
         signature,
       };
 
-      const isValid = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend, fluxList);
+      const { result: isValid } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend, fluxList);
 
       expect(isValid).to.equal(VerifyResult.MALFORMED);
     });
@@ -468,7 +468,7 @@ describe('fluxCommunicationUtils tests', () => {
         signature,
       };
 
-      const isValid = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend, fluxList);
+      const { result: isValid } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend, fluxList);
 
       expect(isValid).to.equal(VerifyResult.MALFORMED);
     });
@@ -484,7 +484,7 @@ describe('fluxCommunicationUtils tests', () => {
         signature: 'test12341234567',
       };
 
-      const isValid = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend, fluxList);
+      const { result: isValid } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend, fluxList);
 
       expect(isValid).to.equal(VerifyResult.MALFORMED);
     });
@@ -580,7 +580,7 @@ describe('fluxCommunicationUtils tests', () => {
       // Mock that node exists in network state with matching pubkey
       networkStateStub.withArgs(nodeIp).resolves({ ip: nodeIp, tier: 'CUMULUS', pubkey: pubKey });
 
-      const isValid = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
+      const { result: isValid } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
 
       expect(isValid).to.equal(VerifyResult.OK);
     });
@@ -610,7 +610,7 @@ describe('fluxCommunicationUtils tests', () => {
       // Mock node exists but with a different pubkey
       networkStateStub.withArgs(nodeIp).resolves({ ip: nodeIp, tier: 'CUMULUS', pubkey: 'differentpubkey123' });
 
-      const isValid = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
+      const { result: isValid } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
 
       expect(isValid).to.equal(VerifyResult.PUBKEY_MISMATCH);
     });
@@ -640,7 +640,7 @@ describe('fluxCommunicationUtils tests', () => {
       // Mock that node does NOT exist in network state
       networkStateStub.withArgs(nodeIp).resolves(null);
 
-      const isValid = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
+      const { result: isValid } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
 
       expect(isValid).to.equal(VerifyResult.NODE_NOT_FOUND);
     });
@@ -666,7 +666,7 @@ describe('fluxCommunicationUtils tests', () => {
 
       networkStateStub.withArgs(nodeIp).resolves({ ip: nodeIp, tier: 'CUMULUS', pubkey: pubKey });
 
-      const isValid = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
+      const { result: isValid } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
 
       expect(isValid).to.equal(VerifyResult.BAD_SIGNATURE);
     });
@@ -695,7 +695,7 @@ describe('fluxCommunicationUtils tests', () => {
 
       networkStateStub.withArgs(nodeIp).resolves({ ip: nodeIp, tier: 'CUMULUS' });
 
-      const isValid = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
+      const { result: isValid } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
 
       expect(isValid).to.equal(VerifyResult.MALFORMED);
     });
