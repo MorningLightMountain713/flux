@@ -5,6 +5,7 @@ const serviceHelper = require('./serviceHelper');
 const verificationHelper = require('./verificationHelper');
 const networkStateService = require('./networkStateService');
 const appsRepository = require('./appDatabase/appsRepository');
+const { CLOCK_SKEW_ALLOWANCE_MS } = require('./utils/appConstants');
 
 /**
  * @typedef {{
@@ -99,7 +100,7 @@ let lastUpdate = 0;
  * is a sender choosing when its message expires, and a check bounded only on the old
  * side lets them choose never.
  */
-const BROADCAST_CLOCK_SKEW_MS = 120_000;
+const BROADCAST_CLOCK_SKEW_MS = CLOCK_SKEW_ALLOWANCE_MS;
 
 const VerifyResult = Object.freeze({
   OK: 'ok',
