@@ -598,13 +598,14 @@ module.exports = {
     // Freshness window for accepting an app gossip broadcast. Compressed with the
     // TTLs above by the harness; a window that does not move with them makes peers
     // refuse each other's current messages.
-    gossipValidityS: 300,
+    gossipValidityS: 300, // freshness window for accepting app gossip broadcasts
     // 24 hours. This was 3600 while a collection-level TTL index on `cachedAt`
     // drove it; that index was dropped when expiry moved per-document, and the
     // key kept the old mechanism's number for three months while nothing read
     // it. The 24h the code has actually run since is the value.
     installErrorTtlS: 86400,
     tempMsgTtlS: 3600, // collection-level index, serviceManager.js
+    clockSkewAllowanceMs: 120000, // how far a peer's self-reported timestamp may run AHEAD of ours before we distrust it. Bounds clock disagreement, NOT message usefulness, so it is deliberately not the 5-min staleness window in verifyTimestampInFluxBroadcast. Consumed by both the envelope guard in verifyFluxBroadcast and the broadcastedAt guard in messageStore; boundary tests in both suites are written relative to this value, so changing it moves the tested boundary with it rather than breaking them
     hashSyncIntervalMs: 1800000,
     cpuCheckIntervalMs: 900000,
     statsSampleIntervalMs: 60000,

@@ -2,6 +2,7 @@ const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const verificationHelper = require('./verificationHelper');
 const networkStateService = require('./networkStateService');
+const { CLOCK_SKEW_ALLOWANCE_MS } = require('./utils/appConstants');
 
 /**
  * @typedef {{
@@ -193,8 +194,8 @@ async function verifyFluxBroadcast(broadcast) {
 
   const now = Date.now();
 
-  // message was broadcasted in the future. Allow 120 sec clock sync
-  if (now < timestamp - BROADCAST_CLOCK_SKEW_MS) {
+  // message was broadcasted in the future; allow for clock disagreement
+  if (now < timestamp - CLOCK_SKEW_ALLOWANCE_MS) {
     log.error('VerifyBroadcast: Message from future, rejecting');
     return malformed;
   }

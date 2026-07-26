@@ -103,6 +103,10 @@ const defaultNodeSpecs = {
 const GOSSIP_VALIDITY_MS = (config.fluxapps.gossipValidityS ?? 300) * 1000;
 const RUNNING_EXPIRY_MS = (config.fluxapps.locationTtlS ?? 7500) * 1000;
 const INSTALLING_EXPIRY_MS = (config.fluxapps.installingTtlS ?? 900) * 1000;
+// Bounds clock disagreement, not message usefulness — see the config comment.
+// Defaulted, not read bare: consumed in arithmetic, so a missing key would become NaN
+// and silently disable every comparison that uses it.
+const CLOCK_SKEW_ALLOWANCE_MS = config.fluxapps.clockSkewAllowanceMs ?? 120_000;
 // Renewal cadence for a long-running install's fluxappinstalling claim: re-broadcast
 // before INSTALLING_EXPIRY_MS lapses so a live install keeps its seat, with slack for
 // gossip propagation. A dead node stops renewing and its claim expires on the TTL.
@@ -209,6 +213,7 @@ module.exports = {
 
   // Expiry / TTL
   GOSSIP_VALIDITY_MS,
+  CLOCK_SKEW_ALLOWANCE_MS,
   RUNNING_EXPIRY_MS,
   ANNOUNCE_INTERVAL_MS,
   ANNOUNCE_CYCLE_WAIT_MS,
