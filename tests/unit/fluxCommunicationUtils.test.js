@@ -10,6 +10,7 @@ const { VerifyResult } = fluxCommunicationUtils;
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const fluxList = require('./data/listfluxnodes.json');
+const { CLOCK_SKEW_ALLOWANCE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 
 describe('fluxCommunicationUtils tests', () => {
   describe('deterministicFluxList tests', () => {
@@ -669,6 +670,36 @@ describe('fluxCommunicationUtils tests', () => {
       const { result: isValid } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
 
       expect(isValid).to.equal(VerifyResult.BAD_SIGNATURE);
+    });
+
+    // Pins the boundary itself, relative to the configured allowance: the previous
+    // future-timestamp test used a fixed +5 min and so would have passed at any
+    // allowance below that, leaving the actual value unguarded.
+    [
+      { label: 'just inside', offset: -1000, expectMalformed: false },
+      { label: 'just outside', offset: 1000, expectMalformed: true },
+    ].forEach(({ label, offset, expectMalformed }) => {
+      it(`should treat a timestamp ${label} the clock-skew allowance accordingly`, async () => {
+        const nodeIp = '192.168.1.100:16127';
+        const data = {
+          type: 'fluxnodesigterm', ip: nodeIp, broadcastedAt: Date.now(), version: 1,
+        };
+        const timestamp = Date.now() + CLOCK_SKEW_ALLOWANCE_MS + offset;
+        const version = 1;
+        const signature = await fluxCommunicationMessagesSender.getFluxMessageSignature(
+          version + JSON.stringify(data) + timestamp, privKey,
+        );
+        const dataToSend = {
+          version, pubKey, timestamp, data, signature,
+        };
+
+        networkStateStub.withArgs(nodeIp).resolves({ ip: nodeIp, tier: 'CUMULUS', pubkey: pubKey });
+
+        const { result } = await fluxCommunicationUtils.verifyFluxBroadcast(dataToSend);
+
+        if (expectMalformed) expect(result).to.equal(VerifyResult.MALFORMED);
+        else expect(result).to.not.equal(VerifyResult.MALFORMED);
+      });
     });
 
     it('should return false for fluxnodesigterm message from future', async () => {

@@ -27,6 +27,7 @@ const {
   INSTALLING_EXPIRY_MS,
   INSTALLING_ERRORS_EXPIRY_MS,
   EVICTED_EXPIRY_MS,
+  CLOCK_SKEW_ALLOWANCE_MS,
 } = require('../utils/appConstants');
 
 const APP_STATE_EVENT_TYPES = Object.freeze({
@@ -47,6 +48,28 @@ const APP_STATE_EVENT_TYPES = Object.freeze({
 function outpointOf(announcer) {
   if (!announcer || !announcer.txhash) return null;
   return `${announcer.txhash}:${announcer.outidx}`;
+}
+
+/**
+ * Whether a self-reported broadcastedAt is usable as an ordering key.
+ *
+ * broadcastedAt drives newer-wins across every app-state event AND is what expireAt is
+ * derived from, so an unbounded future value both wins every comparison forever and
+ * sets a TTL that never fires. The staleness checks throughout this module are
+ * one-sided and do not catch it, and the envelope's own future guard covers a different
+ * field. validityMs is a staleness window and varies by path (5 min live, the row TTL on
+ * sync); the forward bound is clock disagreement and is the same everywhere.
+ *
+ * @param {number} broadcastedAt ms epoch claimed by the announcer.
+ * @param {number} validityMs how far in the past the value may sit.
+ * @returns {boolean}
+ */
+function broadcastedAtUsable(broadcastedAt, validityMs) {
+  if (!Number.isFinite(broadcastedAt) || !Number.isFinite(validityMs)) return false;
+  const skew = Number.isFinite(CLOCK_SKEW_ALLOWANCE_MS) ? CLOCK_SKEW_ALLOWANCE_MS : 0;
+  const now = Date.now();
+  if (broadcastedAt > now + skew) return false;
+  return broadcastedAt + validityMs >= now;
 }
 
 function buildConditionalUpsert(broadcastedAt, conditionalFields, options = {}) {
@@ -303,8 +326,8 @@ async function releaseInstallingClaims(message) {
     }
   }
 
-  if (message.broadcastedAt + GOSSIP_VALIDITY_MS < Date.now()) {
-    log.warn(`Rejecting old/not valid Fluxapprunning message, message:${JSON.stringify(message)}`);
+  if (!broadcastedAtUsable(message.broadcastedAt, GOSSIP_VALIDITY_MS)) {
+    log.warn(`Rejecting old/future/not valid Fluxapprunning message, message:${JSON.stringify(message)}`);
     return { released: 0 };
   }
 
@@ -376,8 +399,8 @@ async function storeAppInstallingMessage(message) {
     return new Error('Invalid Flux App Installing message for storing announcedAt required for version 2');
   }
 
-  if (message.broadcastedAt + GOSSIP_VALIDITY_MS < Date.now()) {
-    log.warn(`Rejecting old/not valid fluxappinstalling message, message:${JSON.stringify(message)}`);
+  if (!broadcastedAtUsable(message.broadcastedAt, GOSSIP_VALIDITY_MS)) {
+    log.warn(`Rejecting old/future/not valid fluxappinstalling message, message:${JSON.stringify(message)}`);
     return false;
   }
 
@@ -476,9 +499,9 @@ async function storeAppRemovedMessage(message) {
   log.info('New Flux App Removed message received.');
   log.info(message);
 
-  const validTill = message.broadcastedAt + (65 * 60 * 1000); // 3900 seconds
-  if (validTill < Date.now()) {
-    // reject old message
+  const messageValidityMs = 65 * 60 * 1000; // 3900 seconds
+  if (!broadcastedAtUsable(message.broadcastedAt, messageValidityMs)) {
+    // reject old or future-dated message
     return false;
   }
 
@@ -513,8 +536,8 @@ async function storeAppInstallingErrorMessage(message) {
     return new Error(`Invalid Flux App Installing Error message for storing version ${message.version} not supported`);
   }
 
-  if (message.broadcastedAt + GOSSIP_VALIDITY_MS < Date.now()) {
-    log.warn(`Rejecting old/not valid fluxappinstallingerror message, message:${JSON.stringify(message)}`);
+  if (!broadcastedAtUsable(message.broadcastedAt, GOSSIP_VALIDITY_MS)) {
+    log.warn(`Rejecting old/future/not valid fluxappinstallingerror message, message:${JSON.stringify(message)}`);
     return false;
   }
 
@@ -580,9 +603,9 @@ async function storeIPChangedMessage(message) {
   log.info('New Flux IP Changed message received.');
   log.info(message);
 
-  const validTill = message.broadcastedAt + (65 * 60 * 1000); // 3900 seconds
-  if (validTill < Date.now()) {
-    // reject old message
+  const messageValidityMs = 65 * 60 * 1000; // 3900 seconds
+  if (!broadcastedAtUsable(message.broadcastedAt, messageValidityMs)) {
+    // reject old or future-dated message
     return false;
   }
 
@@ -615,7 +638,7 @@ async function handleAppRunningEvent({ signedBroadcast, announcer = null }) {
   try {
     const { data } = signedBroadcast;
     if (!data || !data.ip || !data.broadcastedAt) return { isNewer: false };
-    if (data.broadcastedAt + GOSSIP_VALIDITY_MS < Date.now()) return { isNewer: false };
+    if (!broadcastedAtUsable(data.broadcastedAt, GOSSIP_VALIDITY_MS)) return { isNewer: false };
 
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.appsglobal.database);
@@ -748,8 +771,8 @@ async function storeBatchAppRunningEvents(verifiedBroadcasts, announcers = new M
   for (const broadcast of verifiedBroadcasts) {
     const { data } = broadcast;
     if (!data || !data.ip || !data.broadcastedAt) continue;
+    if (!broadcastedAtUsable(data.broadcastedAt, RUNNING_EXPIRY_MS)) continue;
     const validTill = data.broadcastedAt + RUNNING_EXPIRY_MS;
-    if (validTill < Date.now()) continue;
 
     const dedupKey = data.apps ? 'v2' : `v1:${data.name}`;
     const envelope = { version: broadcast.version, timestamp: broadcast.timestamp, pubKey: broadcast.pubKey, signature: broadcast.signature };
@@ -818,8 +841,8 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
   for (const broadcast of verifiedBroadcasts) {
     const { data } = broadcast;
     if (data.cleared === true) continue;
+    if (!broadcastedAtUsable(data.broadcastedAt, INSTALLING_EXPIRY_MS)) continue;
     const validTill = data.broadcastedAt + INSTALLING_EXPIRY_MS;
-    if (validTill < Date.now()) continue;
 
     // The claim identity: one archived announce and one location row per replica;
     // null (loose / v1) matches legacy docs stored without the field.
@@ -912,8 +935,8 @@ async function storeBatchAppInstallingErrorMessages(verifiedBroadcasts) {
 
   for (const broadcast of verifiedBroadcasts) {
     const { data } = broadcast;
+    if (!broadcastedAtUsable(data.broadcastedAt, INSTALLING_ERRORS_EXPIRY_MS)) continue;
     const validTill = data.broadcastedAt + INSTALLING_ERRORS_EXPIRY_MS;
-    if (validTill < Date.now()) continue;
 
     const incomingDate = new Date(data.broadcastedAt);
     const incomingExpiry = new Date(validTill);

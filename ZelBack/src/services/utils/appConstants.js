@@ -88,6 +88,10 @@ const appsMonitoredTemplate = {
 // Expiry / TTL constants (milliseconds), derived from config (fluxapps) — the
 // integrity-checked tunable surface. Config carries these in seconds.
 const GOSSIP_VALIDITY_MS = config.fluxapps.gossipValidityS * 1000;
+// Bounds clock disagreement, not message usefulness — see the config comment.
+// Defaulted, not read bare: consumed in arithmetic, so a missing key would become NaN
+// and silently disable every comparison that uses it.
+const CLOCK_SKEW_ALLOWANCE_MS = config.fluxapps.clockSkewAllowanceMs ?? 120_000;
 const RUNNING_EXPIRY_MS = config.fluxapps.locationTtlS * 1000;
 const INSTALLING_EXPIRY_MS = config.fluxapps.installingTtlS * 1000;
 // Renewal cadence for a long-running install's fluxappinstalling claim: re-broadcast
@@ -139,6 +143,7 @@ module.exports = {
 
   // Expiry / TTL
   GOSSIP_VALIDITY_MS,
+  CLOCK_SKEW_ALLOWANCE_MS,
   RUNNING_EXPIRY_MS,
   INSTALLING_EXPIRY_MS,
   INSTALLING_RENEWAL_MS,

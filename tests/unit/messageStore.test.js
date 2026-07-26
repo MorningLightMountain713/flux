@@ -3,6 +3,10 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
 describe('messageStore tests', () => {
+  // Mirrors config.fluxapps.clockSkewAllowanceMs. Declared once so the stub and the
+  // boundary assertions cannot drift apart.
+  const STUB_CLOCK_SKEW_ALLOWANCE_MS = 120 * 1000;
+
   let messageStore;
   let dbHelperStub;
   let appsRepositoryStub;
@@ -79,6 +83,7 @@ describe('messageStore tests', () => {
         INSTALLING_ERRORS_EXPIRY_MS: 24 * 60 * 60 * 1000,
         SIGTERM_EXPIRY_MS: 420 * 1000,
         EVICTED_EXPIRY_MS: 125 * 60 * 1000,
+        CLOCK_SKEW_ALLOWANCE_MS: STUB_CLOCK_SKEW_ALLOWANCE_MS,
       },
       ...overrides,
     };
@@ -1295,15 +1300,48 @@ describe('messageStore tests', () => {
       expect(update.$set.createdAt).to.be.instanceOf(Date);
     });
 
+    const apprunningPayload = (broadcastedAt) => ({
+      signedBroadcast: {
+        version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
+        data: { ip: '1.2.3.4', broadcastedAt, apps: [{ name: 'a', hash: 'h' }] },
+      },
+    });
+
+    // Assert on findOneAndUpdateInDatabase: the apprunning path never calls
+    // collectionStub.updateOne, so asserting that stub proves nothing either way.
+    // Count deltas rather than the sticky `called` flag, so the assertion holds
+    // regardless of what earlier suites left on the shared stub.
+    const storeApprunning = async (broadcastedAt) => {
+      const before = dbHelperStub.findOneAndUpdateInDatabase.callCount;
+      await messageStore.storeAppStateEvent(
+        messageStore.APP_STATE_EVENT_TYPES.APPRUNNING,
+        apprunningPayload(broadcastedAt),
+      );
+      return dbHelperStub.findOneAndUpdateInDatabase.callCount - before;
+    };
+
     it('should reject expired apprunning events', async () => {
-      const payload = {
-        signedBroadcast: {
-          version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
-          data: { ip: '1.2.3.4', broadcastedAt: Date.now() - (130 * 60 * 1000), apps: [{ name: 'a', hash: 'h' }] },
-        },
-      };
-      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, payload);
-      expect(collectionStub.updateOne.called).to.be.false;
+      expect(await storeApprunning(Date.now() - (130 * 60 * 1000))).to.equal(0);
+    });
+
+    // broadcastedAt is both the newer-wins ordering key and the source of expireAt, so a
+    // future-dated value would win every comparison indefinitely AND set a TTL that never
+    // fires. The staleness check above is one-sided and does not catch it.
+    it('should reject future-dated apprunning events beyond the clock-skew allowance', async () => {
+      expect(await storeApprunning(Date.now() + (365 * 24 * 60 * 60 * 1000))).to.equal(0);
+    });
+
+    it('should accept an apprunning event inside the clock-skew allowance', async () => {
+      expect(await storeApprunning(Date.now() + 30_000)).to.equal(1);
+    });
+
+    // Pin the boundary relative to the configured allowance, not to a fixed offset:
+    // +30s and +1yr above hold for almost any allowance, so on their own they leave the
+    // actual value unguarded.
+    it('should accept right up to the clock-skew allowance and reject just past it', async () => {
+      const allowance = STUB_CLOCK_SKEW_ALLOWANCE_MS;
+      expect(await storeApprunning(Date.now() + allowance - 1000)).to.equal(1);
+      expect(await storeApprunning(Date.now() + allowance + 1000)).to.equal(0);
     });
   });
 });
