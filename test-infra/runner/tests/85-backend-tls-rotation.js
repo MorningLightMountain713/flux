@@ -7,7 +7,7 @@ import { deployContentApp } from '../framework/content-helper.js';
 import { pushTlsEcho } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks, appCaCertificate } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitForUp, waitFor } from '../framework/wait.js';
-import { readFileInContainer, execInContainer, getAppContainerStatus } from '../framework/container.js';
+import { execInContainer, getAppContainerStatus } from '../framework/container.js';
 import { startHaproxy } from '../framework/haproxy-control.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
@@ -39,7 +39,6 @@ describe('backend TLS: certificate rotation under live traffic', function () {
   const SUITE = `rot${Date.now()}`;
   const app = `${SUITE}app`;
   const HOST_PORT = 31000;
-  const CERT_PATH = '/io.runonflux/tls/cert.pem';
 
   let appClient;
   let hostTlsDir;
@@ -48,10 +47,16 @@ describe('backend TLS: certificate rotation under live traffic', function () {
   const fingerprintOf = (pem) => crypto.createHash('sha256')
     .update(new crypto.X509Certificate(pem).raw).digest('hex');
 
-  // The certificate as it currently stands INSIDE the container.
+  // The certificate as it currently stands on disk, read from the NODE's side of
+  // the mount. Not by exec'ing into the app: the tls-echo image is a single
+  // static binary with no shell and no busybox, so there is nothing in there to
+  // run a `cat` with — and the host side is where the node writes it anyway.
   async function servedCertPem() {
-    const { content, exitCode } = await readFileInContainer(appClient.container, app, 'web', CERT_PATH);
-    return exitCode === 0 ? content : null;
+    if (!hostTlsDir) return null;
+    const { stdout, exitCode } = await execInContainer(
+      appClient.container, `cat ${hostTlsDir}/cert.pem`,
+    );
+    return exitCode === 0 ? stdout : null;
   }
 
   before(async function () {
@@ -93,10 +98,10 @@ describe('backend TLS: certificate rotation under live traffic', function () {
     appClient = env.clients[idx];
     await waitForUp(appClient, app, 'tls-echo backend up');
 
-    originalFingerprint = fingerprintOf(await servedCertPem());
-
     // The host directory the node writes into, read off the mount rather than
     // rebuilt from a path guess — the same reason backendTlsPaths() exists.
+    // Resolved before anything reads the certificate, since that read goes
+    // through this path.
     const cont = await getAppContainerStatus(appClient.container, app);
     const { stdout } = await execInContainer(
       appClient.container,
@@ -105,6 +110,10 @@ describe('backend TLS: certificate rotation under live traffic', function () {
     const mount = JSON.parse(stdout.trim()).find((m) => m.Destination === '/io.runonflux/tls');
     expect(mount, 'reserved TLS mount present').to.not.equal(undefined);
     hostTlsDir = mount.Source;
+
+    const initialPem = await servedCertPem();
+    expect(initialPem, 'a certificate was delivered').to.be.a('string');
+    originalFingerprint = fingerprintOf(initialPem);
 
     const appCaPem = await appCaCertificate(app);
     haproxy = await startHaproxy(env.networkName, {
