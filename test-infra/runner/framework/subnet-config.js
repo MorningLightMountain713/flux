@@ -50,7 +50,16 @@ export function getSubnetConfig(base = resolveBase()) {
     externalStub: `${base}.6`,
     fdm: `${base}.7`,
     fluxDrive: `${base}.8`,
-    // nodes occupy .10+ (gateway .1, services .2-.8); node number is 1-based
+    // haproxy — the real load balancer, started only by the suites that need it
+    // (see haproxy-control.js), not part of the base fleet.
+    //
+    // .9 was the last free address in the infra range, so the next infra service
+    // forces the range to widen, which touches every helper deriving from here.
+    // Taken now rather than widening pre-emptively: the widening edit is the same
+    // size whenever it is paid, so paying it before there is a second claimant is
+    // work for a need that does not exist yet.
+    haproxy: `${base}.9`,
+    // nodes occupy .10+ (gateway .1, services .2-.9); node number is 1-based
     nodeIp: (num) => `${base}.${num + 9}`,
   };
 }
