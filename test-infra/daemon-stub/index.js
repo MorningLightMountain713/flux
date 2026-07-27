@@ -353,6 +353,19 @@ const benchHandlers = {
     return JSON.stringify({ status: 'ok', ...res });
   },
 
+  // Backend TLS. signcertificate takes the request as one JSON string (the POST
+  // proxy convention); cacertificate takes a query string (the transportpublickey
+  // convention). Both match what benchmarkService sends.
+  signcertificate: async (params) => {
+    const res = await benchCrypto.signCertificate(JSON.parse(params[0]));
+    return JSON.stringify({ status: 'ok', ...res });
+  },
+  cacertificate: async (params) => {
+    const q = new URLSearchParams(params[0]);
+    const res = await benchCrypto.caCertificate({ appName: q.get('appName') });
+    return JSON.stringify({ status: 'ok', ...res });
+  },
+
   help: () => 'Flux benchmark stub',
   stop: () => 'Flux benchmark stopping (stub)',
 };

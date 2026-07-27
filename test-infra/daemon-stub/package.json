@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@hpke/core": "~1.9.0",
+    "@peculiar/x509": "~1.12.3",
     "express": "^4.21.2"
   }
 }
