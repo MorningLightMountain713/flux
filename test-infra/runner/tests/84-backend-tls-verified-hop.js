@@ -52,7 +52,7 @@ describe('backend TLS: the verified hop through a real HAProxy', function () {
       rootFsGb: 2,
       persistentStorage: { sizeGb: 10, mounts: { '/data': { source: 'data', destination: '/data' } } },
       ports: { http: { containerPort: 8443, hostPort: HOST_PORT } },
-      environmentParameters: [`PORT=8443`],
+      env: { PORT: '8443' },
       loadBalancing: { http: { provider: 'haproxy', mode: 'http', backendTls: { verify: 'required' } } },
     },
   });
