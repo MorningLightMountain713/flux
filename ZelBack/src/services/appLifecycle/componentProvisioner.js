@@ -20,6 +20,7 @@ const imageVerifier = require('../utils/imageVerifier');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const appVolumeService = require('./appVolumeService');
 const appSwapPoolService = require('./appSwapPoolService');
+const backendTlsService = require('./backendTlsService');
 const volumeService = require('../utils/volumeService');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -302,6 +303,39 @@ async function installComponent(component, options = {}) {
       + 'rootFsGb must budget the image plus writable-layer headroom.',
     );
   }
+  // Platform-managed backend TLS: a verify:required component serves HTTPS from a
+  // cert this node issues, delivered as files in the reserved /io.runonflux/tls/
+  // mount (materialized by flux-spec, created by the volume pass above). Write it
+  // before the container is created so the app finds it at its very first start.
+  // This is the single container-creation funnel, so every path that can recreate
+  // a container - fresh install, redeploy, spec update, health recreate - reissues
+  // here; a hard redeploy wipes the volume, and this is what puts the cert back.
+  //
+  // A failure here ABORTS the install. Without the cert the app cannot serve the
+  // HTTPS its spec promises, and FDM's verify:required fails closed - so starting
+  // anyway produces a container that is up, counted by peers as a live instance,
+  // and serving nothing, which nothing will ever re-place. Failing instead lets
+  // the app land on a node that can provision it. The BACKEND_TLS_UNAVAILABLE code
+  // tags this as a NODE condition, so appInstaller defers (retry next cycle)
+  // rather than broadcasting it to the network as a verdict on the app itself.
+  if (component.requiresBackendTls()) {
+    const tlsPaths = component.backendTlsPaths();
+    if (!tlsPaths) {
+      // Both answers come from the same resolved component, so disagreement is a
+      // plumbing defect, not a node condition: fail outright rather than retry.
+      throw new Error(`${id} requires a managed backend-TLS cert but has no platform TLS mount`);
+    }
+    status(`Provisioning backend TLS certificate for ${id}...`);
+    try {
+      await backendTlsService.provisionCert(appName, tlsPaths);
+    } catch (error) {
+      throw Object.assign(
+        new Error(`Could not provision the backend-TLS certificate for ${id}: ${error.message}`),
+        { code: 'BACKEND_TLS_UNAVAILABLE' },
+      );
+    }
+  }
+
   // Pre-create backstop: re-check immediately before the container is created. A data
   // (r:/g:) app skips the test-only start block below, so for a real install this is the
   // last guard between volume-create and appDockerCreate against a racing cancel.

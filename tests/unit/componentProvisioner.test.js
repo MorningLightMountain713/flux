@@ -9,12 +9,14 @@ describe('componentProvisioner tests', () => {
   let appDockerImageSizeStub;
   let allowPortStub;
   let mapUpnpPortStub;
+  let provisionCertStub;
 
   // installComponent isolated behind its provisioning deps. noCallThru + every
   // require stubbed, so nothing touches a real service.
   function loadProvisioner(opts = {}) {
     const {
       teardownOwed = false, isCondemnedStub = null, firewallActive = false, isUPNP = false, pullError = null,
+      certError = null,
     } = opts;
     appDockerStartStub = sinon.stub().resolves('ok');
     appDockerCreateStub = sinon.stub().resolves();
@@ -22,6 +24,7 @@ describe('componentProvisioner tests', () => {
     appDockerImageSizeStub = sinon.stub().resolves(0);
     allowPortStub = sinon.stub().resolves({ status: true });
     mapUpnpPortStub = sinon.stub().resolves(true);
+    provisionCertStub = certError ? sinon.stub().rejects(certError) : sinon.stub().resolves();
     return proxyquire.load('../../ZelBack/src/services/appLifecycle/componentProvisioner', {
       config: { fluxapps: { maxImageSize: 10000000000 } },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
@@ -39,6 +42,7 @@ describe('componentProvisioner tests', () => {
       '../utils/registryCredentialHelper': { getCredentials: sinon.stub().resolves(null) },
       './appVolumeService': { createAppVolume: createAppVolumeStub },
       './appSwapPoolService': { reconcile: sinon.stub().resolves() },
+      './backendTlsService': { provisionCert: provisionCertStub },
       '../utils/volumeService': { verifyAppVolumeMount: sinon.stub().resolves() },
       '../telemetryIdentityService': { onComponentCreated: sinon.stub().resolves() },
       '../appManagement/appInspector': { startAppMonitoring: sinon.stub() },
@@ -61,8 +65,29 @@ describe('componentProvisioner tests', () => {
       imageFitsRootFs: () => true,
       hasActiveStandbySyncthing: () => syncMode === 'activeStandby',
       requiresSyncBeforeStart: () => syncMode === 'syncFirst',
+      requiresBackendTls: () => false,
+      backendTlsPaths: () => null,
+      mounts: [],
       ...overrides,
     };
+  }
+
+  // A verify:required component as flux-spec resolves it. backendTlsPaths() is
+  // the domain type's own accessor - the runtime never rebuilds these paths, so
+  // the fixture hands back what the real method would.
+  const TLS_DIR = '/host/fluxweb_syncholdapp/io.runonflux/tls';
+  function makeTlsComponent(overrides = {}) {
+    return makeComponent(null, {
+      requiresBackendTls: () => true,
+      backendTlsPaths: () => ({
+        dir: TLS_DIR, certPath: `${TLS_DIR}/cert.pem`, keyPath: `${TLS_DIR}/key.pem`,
+      }),
+      mounts: [
+        { Target: '/data', Source: '/host/fluxweb_syncholdapp/appdata' },
+        { Target: '/io.runonflux/tls', Source: TLS_DIR },
+      ],
+      ...overrides,
+    });
   }
 
   async function installWith(syncMode, createVolumes) {
@@ -197,6 +222,73 @@ describe('componentProvisioner tests', () => {
         expect(err.message).to.include('exceeds');
       }
       expect(appDockerStartStub.called).to.be.false;
+    });
+  });
+
+  // installComponent is the only path to appDockerCreate, so writing the managed
+  // cert here is what covers every recreate route (install, redeploy, update,
+  // health recreate) - including a hard redeploy that wiped the volume.
+  describe('backend-TLS certificate provisioning', () => {
+    it('writes the cert into the materialized mount source before the container is created', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeTlsComponent(), { owner: 'owner1', createVolumes: true });
+
+      expect(provisionCertStub.calledOnce).to.be.true;
+      const [appName, tlsPaths] = provisionCertStub.firstCall.args;
+      expect(appName).to.equal('syncholdapp');
+      // exactly what the domain type reported - not a path the runtime rebuilt
+      expect(tlsPaths).to.deep.equal(makeTlsComponent().backendTlsPaths());
+      expect(provisionCertStub.calledBefore(appDockerCreateStub), 'cert written before create').to.be.true;
+      // after the volume pass, which is what creates and chmods the mount source
+      expect(createAppVolumeStub.calledBefore(provisionCertStub), 'cert written after the volume pass').to.be.true;
+    });
+
+    it('provisions nothing for a component that does not use platform-verified TLS', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeComponent(null), { owner: 'owner1', createVolumes: true });
+
+      expect(provisionCertStub.called).to.be.false;
+      sinon.assert.calledOnce(appDockerCreateStub);
+    });
+
+    it('rehearses the real thing on a test install', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeTlsComponent(), { test: true });
+
+      expect(provisionCertStub.calledOnce).to.be.true;
+    });
+
+    it('aborts the install when the cert cannot be issued, tagged as a node condition', async () => {
+      // Starting anyway would leave a container that is up and serving nothing
+      // while peers count it as a live instance - nothing would ever re-place it.
+      // BACKEND_TLS_UNAVAILABLE tells appInstaller to defer rather than blame the app.
+      const provisioner = loadProvisioner({ certError: new Error('signer unreachable') });
+      try {
+        await provisioner.installComponent(makeTlsComponent(), { owner: 'owner1', createVolumes: true });
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err.code).to.equal('BACKEND_TLS_UNAVAILABLE');
+        expect(err.message).to.include('signer unreachable');
+      }
+      sinon.assert.notCalled(appDockerCreateStub);
+    });
+
+    it('fails outright - not as a node condition - when the TLS mount is missing', async () => {
+      // Both answers come from the same resolved component, so disagreement is a
+      // plumbing defect that should surface, not be retried forever.
+      const provisioner = loadProvisioner();
+      try {
+        await provisioner.installComponent(
+          makeTlsComponent({ backendTlsPaths: () => null }),
+          { owner: 'owner1', createVolumes: true },
+        );
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err.code).to.equal(undefined);
+        expect(err.message).to.include('platform TLS mount');
+      }
+      expect(provisionCertStub.called, 'nowhere to write it').to.be.false;
+      sinon.assert.notCalled(appDockerCreateStub);
     });
   });
 
