@@ -348,6 +348,23 @@ async function blobLocator(params) {
   return executeCall(rpccall, rpcparameters);
 }
 
+// Backend-TLS: submit a CSR through fluxbench and get back a signed 30-day host
+// cert. The RPC takes the request object as a single JSON string param (same
+// convention as the other POST proxy methods).
+async function signCertificate({ csr, appName }) {
+  const rpccall = 'signcertificate';
+  const rpcparameters = [JSON.stringify({ csr, appName })];
+  return executeCall(rpccall, rpcparameters);
+}
+
+// Backend-TLS: fetch the per-app CA cert (byte-deterministic, ~100-year window).
+// Query-string param, same convention as transportPublicKey.
+async function caCertificate({ appName }) {
+  const rpccall = 'cacertificate';
+  const rpcparameters = [`appName=${encodeURIComponent(appName)}`];
+  return executeCall(rpccall, rpcparameters);
+}
+
 // Arcane upload signature (the anti-abuse factor) over the blob upload message.
 async function signBlobUpload(params) {
   const rpccall = 'signblobupload';
@@ -540,4 +557,6 @@ module.exports = {
   blobLocator,
   signBlobUpload,
   attest,
+  signCertificate,
+  caCertificate,
 };
