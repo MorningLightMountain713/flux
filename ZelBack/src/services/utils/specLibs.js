@@ -1,20 +1,17 @@
 const config = require('config');
+const { load } = require('@runonflux/flux-spec-cjs');
 
-let specCache;
-let specBackendCache;
-let specPolicyCache;
-
-async function getSpec() {
-  return (specCache ??= await import('@runonflux/flux-spec'));
-}
-
-async function getSpecBackend() {
-  return (specBackendCache ??= await import('@runonflux/flux-spec-backend'));
-}
-
-async function getSpecPolicy() {
-  return (specPolicyCache ??= await import('@runonflux/flux-spec-policy'));
-}
+// The flux-spec ESM packages are consumed through the shared CJS bridge
+// (@runonflux/flux-spec-cjs), which imports spec + spec-backend + spec-policy
+// once and flattens them into one frozen namespace — rather than re-deriving the
+// dynamic-import accessor here (the bridge's docstring names FluxOS as a
+// consumer, and FDM already routes through it). getSpec/getSpecBackend/
+// getSpecPolicy stay as named accessors so existing call sites are unchanged;
+// each returns that same merged namespace, and callers destructure the classes
+// they need.
+async function getSpec() { return load(); }
+async function getSpecBackend() { return load(); }
+async function getSpecPolicy() { return load(); }
 
 /**
  * Validate a submission-shape spec blob through the appropriate version
