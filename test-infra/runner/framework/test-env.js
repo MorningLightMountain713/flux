@@ -172,7 +172,12 @@ const IMAGE_TAG = process.env.FLUX_E2E_TAG || 'latest';
 
 const image = (name) => `${name}:${IMAGE_TAG}`;
 
-class StaticIpContainer extends GenericContainer {
+// Exported for suite-scoped infra that is not part of the base fleet (see
+// haproxy-control.js). Anything joining the test network needs what this adds:
+// the static-IP assignment, because the runner reaches services by subnet IP and
+// never by a mapped host port, and the run labels, because run-all.sh's
+// between-suite cleanup scopes removal by them.
+export class StaticIpContainer extends GenericContainer {
   #staticIp;
   #networkName;
   #aliases = [];

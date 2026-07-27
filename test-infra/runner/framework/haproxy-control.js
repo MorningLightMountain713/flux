@@ -1,9 +1,9 @@
-import { GenericContainer } from 'testcontainers';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import axios from 'axios';
 import { getSubnetConfig } from './subnet-config.js';
+import { StaticIpContainer } from './test-env.js';
 
 // A real HAProxy in front of app backends, for the suites that need to prove the
 // verified hop rather than assume it.
@@ -92,16 +92,35 @@ export async function startHaproxy(networkName, { backends, cas = {} }) {
     writeFileSync(join(caDir, caFileName(appName)), pem);
   }
 
-  const container = await new GenericContainer(HAPROXY_IMAGE)
+  // Static IP on the test network, not a published host port: the runner reaches
+  // every service in this harness by subnet IP (see fdm-control, daemon-control),
+  // and asking testcontainers to bind a host port instead times out waiting for a
+  // mapping that never appears.
+  const container = await new StaticIpContainer(HAPROXY_IMAGE)
+    .withStaticIp(networkName, subnet.haproxy)
     .withBindMounts([
       { source: join(dir, 'haproxy.cfg'), target: '/usr/local/etc/haproxy/haproxy.cfg', mode: 'ro' },
       { source: caDir, target: CA_DIR, mode: 'ro' },
     ])
-    .withNetworkMode(networkName)
-    .withExposedPorts(FRONTEND_PORT)
     .start();
 
-  const base = `http://${container.getHost()}:${container.getMappedPort(FRONTEND_PORT)}`;
+  const base = `http://${subnet.haproxy}:${FRONTEND_PORT}`;
+
+  // haproxy binds a moment after the container starts. Any HTTP answer means the
+  // frontend is up — a 503 is a perfectly good sign of life here, since it is
+  // also what a backend that failed verification produces.
+  const deadline = Date.now() + 30000;
+  for (;;) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await axios.get(base, { validateStatus: () => true, timeout: 2000 });
+      break;
+    } catch (error) {
+      if (Date.now() > deadline) throw new Error(`haproxy did not answer on ${base}: ${error.message}`);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => { setTimeout(resolve, 500); });
+    }
+  }
 
   return {
     container,
