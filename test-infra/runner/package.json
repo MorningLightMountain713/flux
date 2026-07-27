@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@hpke/core": "~1.9.0",
+    "@peculiar/x509": "~1.12.3",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@scure/base": "^2.2.0",
