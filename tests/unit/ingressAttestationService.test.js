@@ -208,20 +208,26 @@ describe('ingressAttestationService tests', () => {
       expect(result.rebroadcast).to.equal(false);
     });
 
-    it('files a sync backfill as confirmed — no TTL, no local message lookup', async () => {
-      const result = await service.receive(inbound(), { confirmed: true });
-      expect(result).to.deep.include({ rebroadcast: true });
-      // confirmed by construction (the responder serves confirmed only) — don't derive TTL
-      expect(appsRepositoryStub.getPermanentMessage.called).to.equal(false);
+    it('quarantines an attestation naming a message this node does not hold', async () => {
+      await service.receive(inbound());
+      expect(appsRepositoryStub.getPermanentMessage.calledOnce).to.equal(true);
+      const [, expireAt] = appsRepositoryStub.storeIngressAttestation.firstCall.args;
+      expect(expireAt).to.be.a('number').and.greaterThan(Date.now());
+    });
+
+    it('persists an attestation naming a message this node holds', async () => {
+      appsRepositoryStub.getPermanentMessage.resolves({ hash: 'a'.repeat(64) });
+      await service.receive(inbound());
       const [, expireAt] = appsRepositoryStub.storeIngressAttestation.firstCall.args;
       expect(expireAt).to.equal(null);
     });
 
-    it('files a live-gossip receive with a TTL (unconfirmed message)', async () => {
-      await service.receive(inbound()); // confirmed defaults to false
+    it('derives durability from local message state, never from the sender', async () => {
+      // A sync backfill used to be filed confirmed on the serving peer's word. Both
+      // sources now take the same path, so a peer cannot make a record permanent by
+      // asserting it is.
+      await service.receive(inbound());
       expect(appsRepositoryStub.getPermanentMessage.calledOnce).to.equal(true);
-      const [, expireAt] = appsRepositoryStub.storeIngressAttestation.firstCall.args;
-      expect(expireAt).to.be.a('number').and.greaterThan(Date.now());
     });
 
     it('rejects and does not store an attestation with a bad signature', async () => {

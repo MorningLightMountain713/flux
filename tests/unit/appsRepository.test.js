@@ -683,7 +683,7 @@ describe('appsRepository', () => {
         expect(digests[6]).to.equal('0'.repeat(64)); // absent bucket → zero digest
       });
 
-      it('a confirmed store recomputes only its own bucket', async () => {
+      it('a store recomputes only its own bucket, counting every row held', async () => {
         const setReconciler = require('../../ZelBack/src/services/appMessaging/setReconciler'); // eslint-disable-line global-require
         dbHelperStub.insertOneToDatabase = sinon.stub().resolves({ insertedId: 'x' });
         dbHelperStub.findInDatabase.resolves([{ hash: 'h2', node: 'n2' }]); // the bucket's members
@@ -695,14 +695,20 @@ describe('appsRepository', () => {
         const digestWrites = dbHelperStub.updateOneInDatabase.getCalls().filter((c) => c.args[1] === DIGEST_COLL);
         expect(digestWrites).to.have.length(1);
         const memberQuery = dbHelperStub.findInDatabase.lastCall.args[2];
-        expect(memberQuery).to.deep.equal({ bucket, expireAt: { $exists: false } });
+        expect(memberQuery).to.deep.equal({ bucket });
       });
 
-      it('an orphan store does not touch the digest table', async () => {
+      it('a quarantined store enters the digest too, so a served record converges', async () => {
+        // The digest states what this node HOLDS. Leaving a quarantined row out would
+        // make our index disagree with the peer that just served it to us, and the
+        // record would be re-offered every round until its message confirmed locally.
         dbHelperStub.insertOneToDatabase = sinon.stub().resolves({ insertedId: 'x' });
+        dbHelperStub.findInDatabase.resolves([{ hash: 'h3', node: 'n3' }]);
+
         await appsRepository.storeIngressAttestation({ hash: 'h3', node: 'n3' }, Date.now() + 1000);
+
         const digestWrites = dbHelperStub.updateOneInDatabase.getCalls().filter((c) => c.args[1] === DIGEST_COLL);
-        expect(digestWrites).to.have.length(0);
+        expect(digestWrites).to.have.length(1);
       });
 
       it('deduplicates a re-seen (hash, node) with no insert and no digest write', async () => {
@@ -715,23 +721,18 @@ describe('appsRepository', () => {
         expect(digestWrites).to.have.length(0);
       });
 
-      it('confirming a hash recomputes the transitioning attestations\' buckets', async () => {
-        dbHelperStub.updateInDatabase = sinon.stub().resolves({ modifiedCount: 1 });
-        // first find: the transitioning attestations (with their buckets); later finds: bucket members
-        dbHelperStub.findInDatabase.onFirstCall().resolves([{ bucket: 7 }, { bucket: 7 }, { bucket: 42 }]);
-        dbHelperStub.findInDatabase.resolves([]);
+      it('confirming a hash clears the TTL and leaves the digest untouched', async () => {
+        // Promotion changes neither (hash, node) identity nor bucket, and the row was
+        // already counted when it was stored — so there is nothing for the digest to do.
+        dbHelperStub.updateInDatabase = sinon.stub().resolves({ modifiedCount: 2 });
 
         await appsRepository.confirmIngressAttestations('h1');
 
+        const [, , filter, update] = dbHelperStub.updateInDatabase.firstCall.args;
+        expect(filter).to.deep.equal({ hash: 'h1' });
+        expect(update).to.deep.equal({ $unset: { expireAt: '' } });
         const digestWrites = dbHelperStub.updateOneInDatabase.getCalls().filter((c) => c.args[1] === DIGEST_COLL);
-        expect(digestWrites).to.have.length(2); // buckets 7 and 42, deduped
-      });
-
-      it('does nothing when confirming a hash with no transitioning attestations', async () => {
-        dbHelperStub.updateInDatabase = sinon.stub().resolves({ modifiedCount: 0 });
-        dbHelperStub.findInDatabase.resolves([]); // none with expireAt
-        await appsRepository.confirmIngressAttestations('h1');
-        expect(dbHelperStub.updateInDatabase.called).to.equal(false); // no unset, no digest write
+        expect(digestWrites).to.have.length(0);
       });
     });
 

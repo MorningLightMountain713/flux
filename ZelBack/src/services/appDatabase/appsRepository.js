@@ -700,30 +700,34 @@ async function storePermanentMessage(doc) {
 // network. Keyed uniquely so records from different ingress nodes never collide.
 // Unconfirmed records carry expireAt and self-reap; confirmation clears it.
 
-// Reconcile keys on the CONFIRMED set only (no expireAt): confirmed attestations are
-// immutable and never deleted, so the synced set is append-only. Orphans ride live gossip
-// and self-reap. Identity = `${hash}|${node}`; each row carries its precomputed bucket so
-// a bucket's members are an indexed lookup, not a scan.
+// Reconcile keys on EVERY row this node holds, quarantined included — the same split the
+// content-manifest plane uses: what you count is what you hold, what you serve is only what
+// you have verified. Counting only confirmed rows would drop a quarantined record off this
+// node's index while the peer that served it still lists it, so the two would never agree
+// and the record would be re-fetched every round. Confirmation does not change a row's
+// identity, so promoting one leaves the digest untouched.
+// Identity = `${hash}|${node}`; each row carries its precomputed bucket so a bucket's
+// members are an indexed lookup, not a scan.
 const ingressIdentityOf = (row) => `${row.hash}|${row.node}`;
 const INGRESS_DIGEST_DOC = 'ingress';
 
-// The K bucket digests of the confirmed set are MATERIALIZED in a single doc and kept in
-// step incrementally: a confirm touches only the affected bucket(s), and a reconcile reads
-// the doc — both O(K), never a full scan. The only O(N) work is a one-time rebuild if the
-// doc is missing (fresh node / first deploy). Digest writes are serialized so two confirms
-// in the same bucket can't race to a stale value; each recompute derives from the current
-// DB state, so it is idempotent and self-correcting.
+// The K bucket digests of the held set are MATERIALIZED in a single doc and kept in step
+// incrementally: a store touches only its own bucket, and a reconcile reads the doc — both
+// O(K), never a full scan. The only O(N) work is a one-time rebuild if the doc is missing
+// (fresh node / first deploy). Digest writes are serialized so two stores in the same
+// bucket can't race to a stale value; each recompute derives from the current DB state, so
+// it is idempotent and self-correcting.
 let ingressDigestChain = Promise.resolve();
 function serializeIngressDigest(fn) {
   ingressDigestChain = ingressDigestChain.then(fn, fn);
   return ingressDigestChain;
 }
 
-/** Recompute one bucket's digest from its current confirmed members and store it. */
+/** Recompute one bucket's digest from its current members and store it. */
 async function recomputeIngressBucket(bucket) {
   const members = await dbHelper.findInDatabase(
     globalDb(), globalAppsIngressAttestations,
-    { bucket, expireAt: { $exists: false } },
+    { bucket },
     { projection: { _id: 0, hash: 1, node: 1 } },
   );
   const digest = setReconciler.combineDigest(members, { identityOf: ingressIdentityOf });
@@ -740,7 +744,7 @@ async function recomputeIngressBucket(bucket) {
 /** Rebuild every bucket digest from scratch — the one-time O(N) path when the doc is absent. */
 async function rebuildIngressDigests() {
   const rows = await dbHelper.findInDatabase(
-    globalDb(), globalAppsIngressAttestations, { expireAt: { $exists: false } }, { projection: { _id: 0, hash: 1, node: 1 } },
+    globalDb(), globalAppsIngressAttestations, {}, { projection: { _id: 0, hash: 1, node: 1 } },
   );
   const buckets = {};
   const byBucket = new Map();
@@ -782,31 +786,23 @@ async function storeIngressAttestation(doc, expireAt = null) {
   if (expireAt != null) value.expireAt = new Date(expireAt);
   const result = await dbHelper.insertOneToDatabase(globalDb(), globalAppsIngressAttestations, value);
   const inserted = Boolean(result && result.insertedId);
-  // A newly-stored CONFIRMED attestation enters the reconcile digest; an orphan does not.
-  if (inserted && expireAt == null) await serializeIngressDigest(() => recomputeIngressBucket(bucket));
+  // Every newly-stored attestation enters the reconcile digest, quarantined or not: the
+  // digest states what this node holds, so a peer that served us a record sees us holding it.
+  if (inserted) await serializeIngressDigest(() => recomputeIngressBucket(bucket));
   return { inserted };
 }
 
 /**
- * Clear the orphan TTL on every attestation for a hash, so a confirmed
- * registration/update's attribution persists as long as its permanent message. The
- * attestations transitioning to confirmed update the materialized digest for their buckets.
+ * Clear the quarantine TTL on every attestation for a hash, so a confirmed
+ * registration/update's attribution persists as long as its permanent message.
+ *
+ * No digest work: a row was already counted when it was stored, and promoting it changes
+ * neither its `(hash, node)` identity nor its bucket.
  */
 async function confirmIngressAttestations(hash) {
-  const transitioning = await dbHelper.findInDatabase(
-    globalDb(), globalAppsIngressAttestations, { hash, expireAt: { $exists: true } }, { projection: { _id: 0, bucket: 1 } },
-  );
-  if (transitioning.length === 0) return;
   await dbHelper.updateInDatabase(
     globalDb(), globalAppsIngressAttestations, { hash }, { $unset: { expireAt: '' } },
   );
-  const buckets = [...new Set(transitioning.map((row) => row.bucket))];
-  await serializeIngressDigest(async () => {
-    for (const bucket of buckets) {
-      // eslint-disable-next-line no-await-in-loop
-      await recomputeIngressBucket(bucket);
-    }
-  });
 }
 
 /** All attestations recorded for a hash (fluxteam-only; storage bookkeeping stripped). */
@@ -817,9 +813,9 @@ async function listIngressAttestations(hash) {
 }
 
 /**
- * The sync INDEX: the K materialized bucket digests of this node's confirmed attestation
- * set. A fixed small read (one doc) — never a scan — except the one-time rebuild when the
- * doc is absent.
+ * The sync INDEX: the K materialized bucket digests of every attestation this node holds,
+ * quarantined included. A fixed small read (one doc) — never a scan — except the one-time
+ * rebuild when the doc is absent.
  * @returns {Promise<string[]>}
  */
 async function listIngressAttestationDigests() {
@@ -838,7 +834,11 @@ async function listIngressAttestationDigests() {
   return digests;
 }
 
-/** The sync FETCH: full confirmed attestation records in the requested buckets (indexed). */
+/**
+ * The sync FETCH: full attestation records in the requested buckets (indexed), CONFIRMED
+ * only. We count what we hold but serve only what we have verified, so a quarantined record
+ * is never relayed onward as though it were established.
+ */
 async function listIngressAttestationsForBuckets(bucketIds) {
   return dbHelper.findInDatabase(
     globalDb(), globalAppsIngressAttestations,
