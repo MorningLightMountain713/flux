@@ -93,7 +93,12 @@ const INITIAL_HEIGHT = 2100000;
 const RUN_LABEL = process.env.E2E_RUN_LABEL || '';
 const runLabels = () => (RUN_LABEL ? { 'flux-e2e-run': RUN_LABEL } : {});
 
-class StaticIpContainer extends GenericContainer {
+// Exported for suite-scoped infra that is not part of the base fleet (see
+// haproxy-control.js). Anything joining the test network needs what this adds:
+// the static-IP assignment, because the runner reaches services by subnet IP and
+// never by a mapped host port, and the run labels, because run-all.sh's
+// between-suite cleanup scopes removal by them.
+export class StaticIpContainer extends GenericContainer {
   #staticIp;
   #networkName;
   #aliases = [];
