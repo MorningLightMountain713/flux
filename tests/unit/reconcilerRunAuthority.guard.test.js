@@ -10,6 +10,15 @@ const path = require('path');
 // reconciler (set durable/operation intent + enqueue, or drive()), don't actuate Docker
 // directly. If the authority surface legitimately changes, update the expected counts
 // here ON PURPOSE — that conscious edit is the point.
+//
+// A REFERENCE counts, not just a call. The pattern deliberately does not require the
+// opening bracket, because taking the primitive as an injected dependency —
+//   const { restart = dockerService.appDockerRestart } = deps;  ...  await restart(id);
+// — mutates run state exactly as much as calling it directly, while producing no
+// `.appDockerRestart(` anywhere for a call-shaped pattern to find. Two modules already
+// do this for their reload reactions, and both were invisible to this guard until the
+// pattern was loosened: the invariant read as "only these files mutate run state" while
+// anything could step outside it by accepting the function as a parameter.
 
 const SERVICES = path.join(__dirname, '..', '..', 'ZelBack', 'src', 'services');
 
@@ -45,8 +54,17 @@ describe('reconciler run-authority guard', () => {
       'appLifecycle/appUninstaller.js': 7, // terminal teardown: uninstallComponent (redeploy) kill+stop+force-remove, runTeardown worker kill+stop + 2 paced force-removes
       'appLifecycle/componentProvisioner.js': 1, // test-install inline start (synchronous fail-fast)
       'appManagement/appController.js': 1, // stopAllNonFluxRunningApps janitor (foreign, non-Flux containers)
+      // Owner-declared reload reactions. Both take the primitive as an injected
+      // dependency rather than calling it inline, so each shows up as one
+      // reference, not one call. Restarting is the owner's own choice of reaction
+      // to their content or certificate being replaced under a running container —
+      // it is not the reconciler arbitrating run state, which is why these are
+      // exceptions rather than routes through it.
+      'appLifecycle/contentSlotService.js': 1, // onUpdate: { action: 'restart' }
+      'appLifecycle/backendTlsRenewal.js': 1, // backendTls.reload: { action: 'restart' }
     };
-    const call = /\.appDocker(Start|Stop|Restart|Kill|ForceRemove)\(/;
+    // No `\(` — a bare reference is a mutation too; see the header.
+    const call = /\.appDocker(Start|Stop|Restart|Kill|ForceRemove)\b/;
     const offenders = [];
     const counts = {};
     for (const file of files) {
