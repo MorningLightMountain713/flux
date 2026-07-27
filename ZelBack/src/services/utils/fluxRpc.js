@@ -133,6 +133,8 @@ class FluxRpc {
       ['signblobupload', null],
       ['transportdecap', null],
       ['attest', null],
+      ['signcertificate', null],
+      ['cacertificate', null],
     ]),
   };
 
