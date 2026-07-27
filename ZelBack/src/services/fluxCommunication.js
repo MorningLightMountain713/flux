@@ -355,10 +355,10 @@ async function handleIngressSyncResponse(message, peerKey) {
     if (!Array.isArray(messages) || messages.length > 2500) return;
     let stored = 0;
     for (const record of messages) {
-      // The reconcile responder serves confirmed records only, so a backfill is filed
-      // confirmed — it enters the digest at once and the reconcile converges immediately.
+      // Same rule as live gossip: durability comes from whether this node holds the
+      // message, not from the serving peer asserting it is confirmed.
       // eslint-disable-next-line no-await-in-loop
-      const result = await ingressAttestationService.receive(record, { confirmed: true });
+      const result = await ingressAttestationService.receive(record);
       if (!(result instanceof Error)) stored += 1;
     }
     log.info(`handleIngressSyncResponse - Stored ${stored} of ${messages.length} attestations from ${peerKey}`);

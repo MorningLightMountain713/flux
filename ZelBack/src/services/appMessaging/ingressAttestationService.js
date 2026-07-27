@@ -9,10 +9,10 @@ const ingressEncryptionKey = require('../utils/ingressEncryptionKey');
 // Wire message type for the standalone ingress-attestation gossip.
 const INGRESS_ATTESTATION_TYPE = 'fluxappingress';
 
-// Attestations whose message never confirms on-chain self-reap after this
-// window; confirmation clears the TTL so real registrations' attribution
-// persists as long as their permanent message.
-const ORPHAN_TTL_MS = 2 * 60 * 60 * 1000;
+// An attestation naming a message this node does not hold cannot be judged yet, so it is
+// held quarantined under this TTL and self-reaps unless the message confirms first.
+// Matches the content-manifest quarantine window, so both planes expire in lockstep.
+const QUARANTINE_TTL_MS = 2 * 60 * 60 * 1000;
 
 /**
  * IPv4-mapped IPv6 (::ffff:1.2.3.4) → 1.2.3.4; a genuine IPv6 address is left
@@ -73,28 +73,22 @@ async function build(hash, req) {
 }
 
 /**
- * Store an attestation with the right durability.
+ * Store an attestation with the right durability, by one rule for every source: an
+ * attestation for a message this node holds persists, one for a message it does not is
+ * quarantined under a TTL and self-reaps unless the message confirms first — at which
+ * point confirmIngressAttestations promotes it.
  *
- * A `confirmed` record persists with no TTL and so enters the reconcile digest
- * immediately. Otherwise the durability is derived from local message state — a
- * confirmed message's attestation persists, an unconfirmed one gets the orphan TTL and
- * self-reaps if the message never confirms (cleared later by confirmIngressAttestations).
- *
- * The `confirmed` flag is set for a sync backfill: the responder only ever serves records
- * for on-chain-confirmed messages, so the message IS confirmed globally even if this node
- * has not processed it yet. Storing such a record as an orphan would keep it out of this
- * node's confirmed digest, so its digest would never match the peer that served it and it
- * would be re-fetched every refresh round until the message confirmed locally. Filing it
- * confirmed lets the digest converge on the first backfill.
+ * A sync backfill used to file records as confirmed outright, on the grounds that the
+ * responder only serves confirmed messages, because quarantining them kept them out of
+ * this node's reconcile digest and the peer that served them would re-offer them every
+ * round. That is fixed at the digest instead: it now counts everything held, quarantined
+ * included, so quarantining converges and a peer's word is no longer load-bearing.
  *
  * @returns {Promise<{ inserted: boolean }>}
  */
-async function persist(record, { confirmed = false } = {}) {
-  let expireAt = null;
-  if (!confirmed) {
-    const permanent = await appsRepository.getPermanentMessage(record.hash);
-    expireAt = permanent ? null : Date.now() + ORPHAN_TTL_MS;
-  }
+async function persist(record) {
+  const permanent = await appsRepository.getPermanentMessage(record.hash);
+  const expireAt = permanent ? null : Date.now() + QUARANTINE_TTL_MS;
   const result = await appsRepository.storeIngressAttestation(record, expireAt);
   // Test-only observability (no-op in prod): a newly stored attestation — whether from
   // this node's own ingress, live gossip, or a sync backfill — is the single point every
@@ -134,16 +128,14 @@ async function emit(hash, req) {
 }
 
 /**
- * Validate, verify, and store an attestation received from a peer.
+ * Validate, verify, and store an attestation received from a peer. Live gossip and sync
+ * backfill take the same path — durability is always derived from local message state,
+ * never from where the record came from.
  * @param {object} data - the inbound message payload
- * @param {object} [opts]
- * @param {boolean} [opts.confirmed=false] - true for a sync backfill (the responder only
- *   serves confirmed records), so it is filed confirmed rather than re-derived from local
- *   message state. Live gossip leaves it false.
  * @returns {Promise<{ rebroadcast: boolean, record: object }|Error>} rebroadcast
  *   is true only on first store, so the flood terminates.
  */
-async function receive(data, { confirmed = false } = {}) {
+async function receive(data) {
   const { IngressAttestation, verifySignature } = await getSpecBackend();
 
   let attestation;
@@ -159,7 +151,7 @@ async function receive(data, { confirmed = false } = {}) {
   }
 
   const record = attestation.serialize();
-  const { inserted } = await persist(record, { confirmed });
+  const { inserted } = await persist(record);
   return { rebroadcast: inserted, record };
 }
 
