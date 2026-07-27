@@ -7,7 +7,7 @@ import { deployContentApp } from '../framework/content-helper.js';
 import { pushTlsEcho } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks, appCaCertificate } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitForUp } from '../framework/wait.js';
-import { readFileInContainer } from '../framework/container.js';
+import { execInContainer, getAppContainerStatus } from '../framework/container.js';
 import { startHaproxy } from '../framework/haproxy-control.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
@@ -86,7 +86,22 @@ describe('backend TLS: the verified hop through a real HAProxy', function () {
 
     // The fingerprint of what the node actually delivered — the yardstick for
     // "the certificate that answered is the certificate we issued".
-    const { content: certPem } = await readFileInContainer(appClient.container, app, 'web', '/io.runonflux/tls/cert.pem');
+    //
+    // Read from the NODE's side of the mount, not by exec'ing into the app. The
+    // tls-echo image is a single static binary with no shell and no busybox, so
+    // readFileInContainer cannot reach into it — and the host side is where the
+    // node wrote the file in the first place.
+    const cont = await getAppContainerStatus(appClient.container, app);
+    const { stdout: mountsJson } = await execInContainer(
+      appClient.container, `docker inspect --format '{{json .Mounts}}' ${cont.name}`,
+    );
+    const tlsMount = JSON.parse(mountsJson.trim()).find((m) => m.Destination === '/io.runonflux/tls');
+    expect(tlsMount, 'reserved TLS mount present').to.not.equal(undefined);
+
+    const { stdout: certPem, exitCode: certRc } = await execInContainer(
+      appClient.container, `cat ${tlsMount.Source}/cert.pem`,
+    );
+    expect(certRc, 'delivered certificate readable on the node').to.equal(0);
     deliveredFingerprint = crypto.createHash('sha256')
       .update(new crypto.X509Certificate(certPem).raw).digest('hex');
 
