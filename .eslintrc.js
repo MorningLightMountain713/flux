@@ -70,5 +70,18 @@ module.exports = {
         mocha: true,
       },
     },
+    {
+      // test-infra is ESM ("type": "module" in the runner), and ESM requires the
+      // file extension on a relative import — drop it and node throws
+      // ERR_MODULE_NOT_FOUND at startup. The repo-wide `js: 'never'` is correct
+      // for ZelBack, which is CommonJS and does not need one, but it is
+      // unsatisfiable here: every file in the tree violated it, so the errors
+      // were permanent noise that trained everyone to skip past them. Inverted
+      // rather than silenced, so a genuinely missing extension still fails.
+      files: ['test-infra/**/*.js'],
+      rules: {
+        'import/extensions': ['error', 'ignorePackages', { js: 'always' }],
+      },
+    },
   ],
 };
