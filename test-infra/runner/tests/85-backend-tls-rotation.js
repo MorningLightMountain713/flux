@@ -51,6 +51,17 @@ describe('backend TLS: certificate rotation under live traffic', function () {
   // the mount. Not by exec'ing into the app: the tls-echo image is a single
   // static binary with no shell and no busybox, so there is nothing in there to
   // run a `cat` with — and the host side is where the node writes it anyway.
+  // The container's absolute identity: when it started, and the PID it is running
+  // as. A reload leaves both untouched; a restart or recreate changes them.
+  async function containerIdentity() {
+    const cont = await getAppContainerStatus(appClient.container, app);
+    const { stdout } = await execInContainer(
+      appClient.container,
+      `docker inspect --format '{{.State.StartedAt}} {{.State.Pid}}' ${cont.name}`,
+    );
+    return stdout.trim();
+  }
+
   async function servedCertPem() {
     if (!hostTlsDir) return null;
     const { stdout, exitCode } = await execInContainer(
@@ -138,8 +149,11 @@ describe('backend TLS: certificate rotation under live traffic', function () {
   it('re-issues, signals, and serves the new certificate without recreating the container', async function () {
     this.timeout(600000);
 
-    const before = await getAppContainerStatus(appClient.container, app);
-    const startedAtBefore = before.status;
+    // StartedAt and the PID, not the human-readable uptime: the latter is a
+    // relative string that changes on its own as the test runs, so comparing it
+    // across a rotation proves nothing either way. These two only change if the
+    // process was actually replaced.
+    const identityBefore = await containerIdentity();
 
     // Drive the hop continuously across the rotation. If the swap is not seamless
     // this is what notices: a window where the backend is unverifiable shows up as
@@ -200,9 +214,12 @@ describe('backend TLS: certificate rotation under live traffic', function () {
     );
     expect(appLogs, 'the reload reaction reached the app').to.match(/RELOAD SIGHUP/);
 
-    // Still the same container: rotation happened underneath a running process,
-    // which is the entire reason the certificate is delivered as files.
-    expect(after.status, 'container was never recreated').to.equal(startedAtBefore);
+    // Still the same container AND the same process: the rotation happened
+    // underneath a running app, which is the entire reason the certificate is
+    // delivered as files rather than as environment contents.
+    const identityAfter = await containerIdentity();
+    expect(identityAfter, 'same StartedAt and PID — reloaded in place, not restarted')
+      .to.equal(identityBefore);
 
     expect(seen.certs.has(originalFingerprint), 'old certificate was served before the swap').to.equal(true);
     expect(seen.certs.has(rotatedFingerprint), 'new certificate served after it').to.equal(true);
