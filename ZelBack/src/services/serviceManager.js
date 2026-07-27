@@ -34,6 +34,7 @@ const registryManager = require('./appDatabase/registryManager');
 const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const appJanitor = require('./appLifecycle/appJanitor');
+const backendTlsRenewal = require('./appLifecycle/backendTlsRenewal');
 const containerMountRecovery = require('./appLifecycle/containerMountRecovery');
 const appStartupManager = require('./appLifecycle/appStartupManager');
 const contentSlotService = require('./appLifecycle/contentSlotService');
@@ -603,6 +604,9 @@ async function startFluxFunctions() {
       }, imageReaperIntervalMs);
     }, bootDelay(10 * 60 * 1000));
     appJanitor.start();
+    // Re-issue managed backend-TLS leaves before their 30-day life runs out
+    // (dormant on a node running no verify:required app).
+    backendTlsRenewal.start();
     setTimeout(() => {
       daemonHealthMonitor.checkDaemonHealthAndCleanup();
       setInterval(() => {

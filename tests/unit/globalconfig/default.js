@@ -328,6 +328,7 @@ module.exports = {
     adoptionStaggerWindowMs: 300000,
     orphanSweepIntervalMs: 7200000,
     dockerDebrisIntervalMs: 21600000,
+    backendTlsRenewalIntervalMs: 21600000,
     installCollisionWaitMs: 90000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
     portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct prefix, excluding our own

@@ -382,6 +382,7 @@ module.exports = {
     adoptionStaggerWindowMs: 300000, // loose-instance adoption spread window (bounds the fleet-wide restart stagger)
     orphanSweepIntervalMs: 7200000, // docker-orphan janitor cadence (containers with no installed-app row)
     dockerDebrisIntervalMs: 21600000, // docker prune cadence (stopped containers/unused networks/volumes; guarded)
+    backendTlsRenewalIntervalMs: 21600000, // managed backend-TLS renewal cadence (6h; the 30-day leaf is re-issued with ~10 days to spare, so the pace only bounds how fast a missing cert heals)
     installCollisionWaitMs: 90000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
     portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct prefix, excluding our own
