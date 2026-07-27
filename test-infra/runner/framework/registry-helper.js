@@ -147,6 +147,12 @@ const BUSYBOX_BIN = join(__dirname, '..', '..', 'busybox-fixture', 'busybox');
 // the collector component for the real-telemetryd e2e suite.
 const OTLP_RECEIVER_BIN = join(__dirname, '..', '..', 'otlp-receiver', 'otlp-receiver');
 
+// Path to the compiled tls-echo fixture (see test-infra/tls-echo) — an HTTPS
+// server that reads its certificate from FLUX_TLS_CERT_PATH/KEY_PATH and re-reads
+// it on SIGHUP. test-app cannot serve TLS, so this is the app on the far side of
+// the platform-managed backend-TLS hop.
+const TLS_ECHO_BIN = join(__dirname, '..', '..', 'tls-echo', 'tls-echo');
+
 function buildBinaryLayerTar(binPath, binName, markerContent) {
   if (!existsSync(binPath)) {
     throw new Error(`fixture binary not found at ${binPath}. Build it once (see the matching test-infra/<fixture>/build.sh)`);
@@ -172,6 +178,54 @@ export async function pushOtlpReceiver(repo, tag = 'v1', markerContent = 'otlpre
     architecture: 'amd64',
     os: 'linux',
     config: { Entrypoint: ['/bin/otlp-receiver'] },
+    rootfs: { type: 'layers', diff_ids: [diffId] },
+  };
+  const configBuf = Buffer.from(JSON.stringify(configObj));
+  const configDigest = await uploadBlob(repo, configBuf);
+
+  const manifest = {
+    schemaVersion: 2,
+    mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
+    config: {
+      mediaType: 'application/vnd.docker.container.image.v1+json',
+      size: configBuf.length,
+      digest: configDigest,
+    },
+    layers: [{
+      mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
+      size: gzippedLayer.length,
+      digest: layerDigest,
+    }],
+  };
+
+  const manifestRes = await registryClient.put(
+    `/v2/${repo}/manifests/${tag}`,
+    JSON.stringify(manifest),
+    {
+      headers: { 'Content-Type': 'application/vnd.docker.distribution.manifest.v2+json' },
+      validateStatus: (s) => s === 201,
+    },
+  );
+
+  return manifestRes.headers['docker-content-digest'];
+}
+
+// Push the tls-echo image (entrypoint /bin/tls-echo). Serves HTTPS from the
+// certificate the platform delivers, and answers every request with that
+// certificate's SHA-256 fingerprint in X-Tls-Echo, so a caller can tell which
+// certificate served it without inspecting the handshake. PORT is set from the
+// app spec's environmentParameters.
+export async function pushTlsEcho(repo, tag = 'v1', markerContent = 'tlsecho') {
+  const gzippedLayer = buildBinaryLayerTar(TLS_ECHO_BIN, 'tls-echo', markerContent);
+  const layerDigest = await uploadBlob(repo, gzippedLayer);
+
+  const uncompressedLayer = zlib.gunzipSync(gzippedLayer);
+  const diffId = `sha256:${sha256(uncompressedLayer)}`;
+
+  const configObj = {
+    architecture: 'amd64',
+    os: 'linux',
+    config: { Entrypoint: ['/bin/tls-echo'] },
     rootfs: { type: 'layers', diff_ids: [diffId] },
   };
   const configBuf = Buffer.from(JSON.stringify(configObj));
