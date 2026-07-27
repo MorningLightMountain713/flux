@@ -83,8 +83,24 @@ async function provisionCert(appName, tlsPaths) {
   await fsp.mkdir(dir, { recursive: true, mode: 0o755 });
 
   const { csr, keyPem } = await generateKeypairAndCsr(appName);
-  const response = await benchmarkService.signCertificate({ csr, appName });
-  if (!response || response.status !== 'ok' || !response.certificate) {
+
+  // Two envelopes, both of which have to be unwrapped — the same shape
+  // enterpriseHelper handles for decryptRSAMessage. benchmarkService.executeCall
+  // wraps every result in { status: 'success' | 'error', data }, and `data` is
+  // the signer's own JSON string carrying { status: 'ok', certificate }. Reading
+  // the signer's status off the outer object silently never matches, because the
+  // outer status is 'success', so every issue looks like a refusal to sign.
+  const returned = await benchmarkService.signCertificate({ csr, appName });
+  if (!returned || returned.status !== 'success') {
+    throw new Error(`Could not reach the certificate signer for ${appName}`);
+  }
+  let signed;
+  try {
+    signed = typeof returned.data === 'string' ? JSON.parse(returned.data) : returned.data;
+  } catch (error) {
+    throw new Error(`The certificate signer returned an unreadable response for ${appName}`);
+  }
+  if (!signed || signed.status !== 'ok' || !signed.certificate) {
     throw new Error(`No backend-TLS cert was signed for ${appName}`);
   }
 
@@ -93,7 +109,7 @@ async function provisionCert(appName, tlsPaths) {
   // container is single-tenant, so in-container world-read is acceptable; a
   // tighter uid-scoped mode is a future hardening).
   await writeAtomic(keyPath, keyPem, 0o644);
-  await writeAtomic(certPath, response.certificate, 0o644);
+  await writeAtomic(certPath, signed.certificate, 0o644);
   log.info(`Backend-TLS cert provisioned for ${appName} at ${dir}`);
 }
 
