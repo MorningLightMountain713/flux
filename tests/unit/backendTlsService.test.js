@@ -18,6 +18,18 @@ const tlsPathsFor = (dir) => ({
   keyPath: path.join(dir, 'key.pem'),
 });
 
+// What benchmarkService.signCertificate REALLY returns. executeCall wraps every
+// result as { status: 'success' | 'error', data }, and `data` is the signer's own
+// JSON string carrying { status: 'ok', certificate } — the same double envelope
+// enterpriseHelper unwraps for decryptRSAMessage. Stubbing the inner shape
+// directly is how a condition that can never be satisfied — reading the signer's
+// status off the OUTER envelope — passed every test in this file and then failed
+// on every node the moment it met a real benchmark channel.
+const signerReturns = (certificate) => ({
+  status: 'success',
+  data: JSON.stringify({ status: 'ok', certificate }),
+});
+
 describe('backendTlsService.provisionCert', () => {
   let dir;
   let tlsPaths;
@@ -39,7 +51,7 @@ describe('backendTlsService.provisionCert', () => {
     signStub.callsFake(async ({ csr, appName }) => {
       expect(appName).to.equal('myapp');
       expect(csr).to.include('BEGIN CERTIFICATE REQUEST');
-      return { status: 'ok', certificate: LEAF };
+      return signerReturns(LEAF);
     });
 
     await backendTlsService.provisionCert('myapp', tlsPaths);
@@ -58,7 +70,7 @@ describe('backendTlsService.provisionCert', () => {
     // The app reads the cert through FLUX_TLS_*_PATH, which flux-spec derives from
     // the same constants as these paths. A service that rebuilt the layout could
     // write somewhere the mount does not reach.
-    signStub.resolves({ status: 'ok', certificate: 'LEAF\n' });
+    signStub.resolves(signerReturns('LEAF\n'));
     const odd = tlsPathsFor(path.join(dir, 'somewhere', 'else'));
 
     await backendTlsService.provisionCert('myapp', odd);
@@ -67,8 +79,26 @@ describe('backendTlsService.provisionCert', () => {
     expect(fs.existsSync(tlsPaths.dir), 'nothing written to a self-derived path').to.equal(false);
   });
 
-  it('throws and writes nothing when the cert is not signed', async () => {
-    signStub.resolves({ status: 'error' });
+  it('throws and writes nothing when the signer refuses to sign', async () => {
+    // Inner refusal: the call reached the signer, which declined.
+    signStub.resolves({ status: 'success', data: JSON.stringify({ status: 'error' }) });
+
+    let threw = false;
+    try {
+      await backendTlsService.provisionCert('myapp', tlsPaths);
+    } catch (e) {
+      threw = true;
+    }
+    expect(threw).to.equal(true);
+    expect(fs.existsSync(tlsPaths.certPath)).to.equal(false);
+  });
+
+  it('throws and writes nothing when the signer cannot be reached at all', async () => {
+    // Outer envelope failure: executeCall caught the transport error. Distinct
+    // from a refusal to sign, and the case whose absence let the two envelopes be
+    // conflated — with only the happy path stubbed at the inner shape, nothing
+    // here ever exercised the outer one.
+    signStub.resolves({ status: 'error', data: { message: 'benchd unreachable' } });
 
     let threw = false;
     try {
@@ -81,11 +111,11 @@ describe('backendTlsService.provisionCert', () => {
   });
 
   it('replaces an existing cert in place, so a renewal is a plain overwrite', async () => {
-    signStub.resolves({ status: 'ok', certificate: 'OLD\n' });
+    signStub.resolves(signerReturns('OLD\n'));
     await backendTlsService.provisionCert('myapp', tlsPaths);
     const oldKey = fs.readFileSync(tlsPaths.keyPath, 'utf8');
 
-    signStub.resolves({ status: 'ok', certificate: 'NEW\n' });
+    signStub.resolves(signerReturns('NEW\n'));
     await backendTlsService.provisionCert('myapp', tlsPaths);
 
     expect(fs.readFileSync(tlsPaths.certPath, 'utf8')).to.equal('NEW\n');
