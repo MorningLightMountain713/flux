@@ -387,7 +387,10 @@ async function installApplication(instantiated, options = {}) {
       // A transient-class registry failure (unreachable/rate-limited/5xx, tagged at
       // the pull/verify source) is a node condition too: peers must not count it as
       // the app failing - only a permanent verdict on the image is network knowledge.
+      // A managed backend-TLS cert this node could not get signed is the same class:
+      // nothing is wrong with the app, this node just cannot serve it right now.
       if (!test && !cancelInFlight && error.code !== 'NETWORK_DEPENDENCY_NOT_READY'
+        && error.code !== 'BACKEND_TLS_UNAVAILABLE'
         && error.registryErrorClass !== 'transient') {
         await storeAndBroadcastInstallError(appName, instantiated.hash, error);
       }
@@ -456,6 +459,15 @@ async function installApplication(instantiated, options = {}) {
       // DEFER so the spawner retries next cycle instead of 7-day-benching the hash.
       if (error.registryErrorClass === 'transient') {
         log.warn(`Install of ${appName} deferred: registry unreachable (${error.message})`);
+        return { status: InstallStatus.DEFERRED, reason: error.message };
+      }
+
+      // This node could not get a managed backend-TLS cert signed. Starting the app
+      // without one would leave a container that is up and serving nothing while
+      // peers count it as a live instance, so the install aborts - but the app is
+      // blameless, so DEFER and let it place on a node that can provision it.
+      if (error.code === 'BACKEND_TLS_UNAVAILABLE') {
+        log.warn(`Install of ${appName} deferred: ${error.message}`);
         return { status: InstallStatus.DEFERRED, reason: error.message };
       }
     }

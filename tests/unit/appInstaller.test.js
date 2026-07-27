@@ -622,6 +622,26 @@ describe('appInstaller tests', () => {
         expect(broadcastMessageToAll.called, 'no fluxappinstallingerror broadcast').to.be.false;
       });
 
+      it('classifies an unissuable backend-TLS cert as DEFERRED — cleanup runs, nothing stored or broadcast', async () => {
+        // Without the cert the app cannot serve the HTTPS its spec promises, so the
+        // install aborts rather than leaving a container up and serving nothing that
+        // peers would count as a live instance. The app itself is blameless, so this
+        // defers and lets it place on a node that can provision it.
+        const {
+          installer, uninstallApplication, broadcastMessageToAll, storeAppInstallingErrorMessage,
+        } = loadFresh({
+          installComponentError: Object.assign(new Error('Could not provision the backend-TLS certificate for web_newapp: signer unreachable'), { code: 'BACKEND_TLS_UNAVAILABLE' }),
+          components: [['web', mockComponent]],
+        });
+
+        const result = await installer.installApplication(mockInstantiated, {});
+
+        expect(result.status, 'a node that cannot sign defers, never fails').to.equal(appInstaller.InstallStatus.DEFERRED);
+        expect(uninstallApplication.called, 'the partial install is still cleaned up').to.be.true;
+        expect(storeAppInstallingErrorMessage.called, 'no install-error stored - not a verdict on the app').to.be.false;
+        expect(broadcastMessageToAll.called, 'no fluxappinstallingerror broadcast').to.be.false;
+      });
+
       it('a genuine install failure (no cancel) still FAILS, tears down, and broadcasts the error', async () => {
         const {
           installer, uninstallApplication, broadcastMessageToAll,
