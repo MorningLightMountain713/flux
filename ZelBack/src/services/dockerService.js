@@ -16,12 +16,6 @@ const shutdownPlan = require('./appLifecycle/shutdownPlan');
 
 const operationRegistry = require('./utils/operationRegistry');
 
-const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
-// ToDo: Fix all the string concatenation in this file and use path.join()
-const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
-// eslint-disable-next-line no-unused-vars
-const appsFolder = `${appsFolderPath}/`;
-
 const docker = new Docker();
 
 /**
