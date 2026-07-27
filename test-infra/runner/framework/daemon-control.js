@@ -165,3 +165,40 @@ export async function clearSeededData() {
 export async function resetAll() {
   return post('/reset');
 }
+
+// -- Benchmark channel (fluxbenchd stub) --
+
+const BENCHD = process.env.BENCHD_URL || `http://${getSubnetConfig().daemon}:16224`;
+
+/**
+ * Call the benchmark stub's JSON-RPC directly — the same interface the node uses.
+ *
+ * Suites reach the signer this way rather than importing daemon-stub/benchCrypto
+ * into the runner process. That import only works when the stub's dependencies
+ * happen to be installed on the host, and they are not: they live in the stub's
+ * image. Going over the wire also means a suite asks the signer the same question
+ * FDM asks it, instead of re-deriving the answer alongside it.
+ *
+ * @param {string} method e.g. 'cacertificate'
+ * @param {Array<string>} params the stub's params array (a JSON string, or a query string)
+ */
+export async function benchRpc(method, params = []) {
+  const res = await fetch(BENCHD, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ method, params, id: 1 }),
+  });
+  const body = await res.json();
+  if (body.error) throw new Error(`benchd ${method} failed: ${JSON.stringify(body.error)}`);
+  // The stub mirrors fluxbenchd's convention: result is a JSON *string* carrying
+  // { status, ... }.
+  const parsed = typeof body.result === 'string' ? JSON.parse(body.result) : body.result;
+  if (!parsed || parsed.status !== 'ok') throw new Error(`benchd ${method} returned ${JSON.stringify(parsed)}`);
+  return parsed;
+}
+
+/** An app's backend-TLS CA certificate (PEM), fetched the way FDM fetches it. */
+export async function appCaCertificate(appName) {
+  const { certificate } = await benchRpc('cacertificate', [`appName=${encodeURIComponent(appName)}`]);
+  return certificate;
+}

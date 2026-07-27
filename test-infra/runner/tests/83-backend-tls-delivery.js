@@ -1,12 +1,11 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import crypto from 'node:crypto';
-import benchCrypto from '../../daemon-stub/benchCrypto.js';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { deployContentApp } from '../framework/content-helper.js';
 import { pushBusybox } from '../framework/registry-helper.js';
-import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
+import { queueAppTx, advanceBlocks, appCaCertificate } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitForUp } from '../framework/wait.js';
 import {
   readFileInContainer, statFileInContainer, execInContainer, getAppContainerStatus,
@@ -26,9 +25,10 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 // CA, that a different app's CA rejects it, and that the paths the app is told to
 // read are the paths the node actually wrote.
 //
-// The suite derives the expected CA itself from benchCrypto rather than asking
-// the node for it — the node is the thing under test, so trusting its answer
-// about its own output would make the assertion circular.
+// The expected CA is fetched from the SIGNER over its RPC, not from the node —
+// the node is the thing under test, so trusting its account of its own output
+// would make the assertion circular. It is also the route FDM uses in production,
+// so the fetch itself is exercised rather than simulated.
 //
 // Inspected components run the static-busybox fixture so the host (the DinD node)
 // can `docker exec /bin/busybox cat|stat` into them. arcane:true is the default
@@ -161,13 +161,13 @@ describe('backend TLS: managed certificate delivery into the container', functio
     const { content: certPem } = await readFileInContainer(verifiedClient.container, verifiedApp, 'web', CERT_PATH);
     const leaf = new crypto.X509Certificate(certPem);
 
-    const { certificate: ownCaPem } = await benchCrypto.caCertificate({ appName: verifiedApp });
+    const ownCaPem = await appCaCertificate(verifiedApp);
     const ownCa = new crypto.X509Certificate(ownCaPem);
     expect(leaf.verify(ownCa.publicKey), 'leaf signed by its own app CA').to.equal(true);
 
     // Per-app isolation is the entire point of a per-app CA. If another app's CA
     // verified this leaf, one tenant could impersonate another's backend.
-    const { certificate: foreignCaPem } = await benchCrypto.caCertificate({ appName: ownCertApp });
+    const foreignCaPem = await appCaCertificate(ownCertApp);
     const foreignCa = new crypto.X509Certificate(foreignCaPem);
     expect(leaf.verify(foreignCa.publicKey), 'another app CA must not verify it').to.equal(false);
   });
