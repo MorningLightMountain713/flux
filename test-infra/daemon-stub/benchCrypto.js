@@ -157,9 +157,22 @@ async function transportDecap({ appName, fluxID, encapsulatedKey }) {
 // an Ed25519 CA, a leaf carrying serverAuth EKU and the app's SANs, and a CA
 // certificate whose bytes are identical on every node so a cached copy is
 // never stale.
-const x509 = require('@peculiar/x509');
-
-x509.cryptoProvider.set(crypto.webcrypto);
+// Loaded on FIRST USE, never at import. This module is imported directly by the
+// test runner — content-helper and several suites pull it in for the locator and
+// key derivations — and there the stub's dependencies do not exist, because they
+// live inside the stub's image rather than on the host. A top-level require here
+// therefore fails every one of those consumers at import with MODULE_NOT_FOUND,
+// which is exactly what it did. Only the certificate paths below need x509, and
+// they only ever run inside the stub container, where the dependency is present.
+let x509Lib = null;
+function getX509() {
+  if (!x509Lib) {
+    // eslint-disable-next-line global-require
+    x509Lib = require('@peculiar/x509');
+    x509Lib.cryptoProvider.set(crypto.webcrypto);
+  }
+  return x509Lib;
+}
 
 // The CA window is fixed rather than relative so the certificate is
 // byte-deterministic: every node deriving it independently must produce the
@@ -190,6 +203,7 @@ const caCache = new Map();
 async function appCa(appName) {
   if (caCache.has(appName)) return caCache.get(appName);
   const pending = (async () => {
+    const x509 = getX509();
     const keys = await importCaKeyPair(hkdf32('backendtls-ca', `ca-signing-key:${appName}`));
     // Deterministic serial: same app, same bytes, on every node.
     const serialNumber = crypto.createHash('sha256')
@@ -233,6 +247,7 @@ async function caCertificate({ appName }) {
  * @param {{csr: string, appName: string}} req
  */
 async function signCertificate({ csr, appName }) {
+  const x509 = getX509();
   const request = new x509.Pkcs10CertificateRequest(csr);
   const { keys, cert: caCert } = await appCa(appName);
   const notBefore = new Date();

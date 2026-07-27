@@ -1,12 +1,11 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import crypto from 'node:crypto';
-import benchCrypto from '../../daemon-stub/benchCrypto.js';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { deployContentApp } from '../framework/content-helper.js';
 import { pushTlsEcho } from '../framework/registry-helper.js';
-import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
+import { queueAppTx, advanceBlocks, appCaCertificate } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitForUp } from '../framework/wait.js';
 import { readFileInContainer } from '../framework/container.js';
 import { startHaproxy } from '../framework/haproxy-control.js';
@@ -93,8 +92,8 @@ describe('backend TLS: the verified hop through a real HAProxy', function () {
 
     // FDM fetches the app's CA and writes it where the config names it; the
     // suite does the same thing by the same route.
-    const { certificate: appCaPem } = await benchCrypto.caCertificate({ appName: app });
-    const { certificate: foreignCaPem } = await benchCrypto.caCertificate({ appName: `${app}other` });
+    const appCaPem = await appCaCertificate(app);
+    const foreignCaPem = await appCaCertificate(`${app}other`);
 
     haproxy = await startHaproxy(env.networkName, {
       backends: [
