@@ -2298,9 +2298,43 @@ async function coordinateActiveStandbyApps() {
     log.error(`activeStandby: ${error}`);
   } finally {
     operationRegistry.release(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY, coordinateToken);
-    await serviceHelper.delay(config.fluxapps.masterSlaveIntervalMs ?? 30 * 1000);
-    coordinateActiveStandbyApps();
   }
+}
+
+// A pass must never overlap itself: the cadence is a fixed interval, so a pass that
+// outruns it would otherwise have a second one racing its own promotions.
+let coordinatorPassInFlight = false;
+
+/**
+ * Drives the active-standby election on a fixed interval.
+ *
+ * The cadence is level-triggered on purpose. The loop used to re-arm itself from its own
+ * `finally` - the only reschedule there was - so a pass that never settled stopped
+ * election on that node permanently, recoverable only by restarting FluxOS. The operation
+ * registry does not cover this: its TTL bounds the coordinator LEASE so other operations
+ * proceed, but nothing re-arms the decider. A timer that fires regardless of what the
+ * previous pass did removes that whole failure mode.
+ *
+ * Note this bounds overlap, not pass duration: a pass that hangs still holds the
+ * single-flight and no election happens until it settles. Abandoning it would need a
+ * supersession guard first, or the abandoned pass keeps running and later flips a live
+ * primary's folder to receiveonly or reverses a start its replacement already made.
+ * @returns {NodeJS.Timeout} the interval handle
+ */
+function startActiveStandbyCoordinator() {
+  const intervalMs = config.fluxapps.masterSlaveIntervalMs ?? 30 * 1000;
+  return setInterval(async () => {
+    if (coordinatorPassInFlight) {
+      log.info('activeStandby: previous pass still in flight, skipping this tick');
+      return;
+    }
+    coordinatorPassInFlight = true;
+    try {
+      await coordinateActiveStandbyApps();
+    } finally {
+      coordinatorPassInFlight = false;
+    }
+  }, intervalMs);
 }
 
 /**
@@ -2385,6 +2419,7 @@ module.exports = {
   reconcileApp,
   shutdownPlanResync,
   coordinateActiveStandbyApps,
+  startActiveStandbyCoordinator,
   getPeerAppsInstallingErrorMessages,
   startApplication,
   stopApplication,

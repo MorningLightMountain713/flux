@@ -573,9 +573,7 @@ async function startFluxFunctions() {
         globalState,
         () => globalState,
       ); // rechecks syncthing configuration each cycle
-      setTimeout(() => {
-        appOperations.coordinateActiveStandbyApps();
-      }, config.fluxapps.masterSlaveIntervalMs ?? 30 * 1000);
+      appOperations.startActiveStandbyCoordinator();
       setTimeout(() => {
         appInspector.monitorSharedDBApps();
       }, 60 * 1000);
