@@ -8,6 +8,7 @@ const appUninstaller = require('../appLifecycle/appUninstaller');
 const messageHelper = require('../messageHelper');
 const syncthingService = require('../syncthingService');
 const serviceHelper = require('../serviceHelper');
+const appCaches = require('../utils/appCaches');
 const { appsFolder } = require('../utils/appConstants');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const { socketAddressesMatch, extractIp } = require('../utils/socketAddressUtils');
@@ -650,7 +651,7 @@ async function handleFirstRun(params) {
     const cache = { numberOfExecutions: 1 };
 
     // Set cache BEFORE requesting the reset to prevent re-processing as "new"
-    receiveOnlySyncthingAppsCache.set(appId, cache);
+    await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);
 
     appReconciler.requestStopAndClearData(appId, 'syncthing first-run clean install');
 
@@ -706,7 +707,7 @@ async function handleSkippedAppSecondEncounter(params) {
   const cache = { numberOfExecutions: 1 };
 
   // Set cache BEFORE requesting the reset to prevent re-processing as "new"
-  receiveOnlySyncthingAppsCache.set(appId, cache);
+  await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);
 
   // stop + local appdata clear is declared to the reconciler (the sole actuator)
   appReconciler.requestStopAndClearData(appId, 'syncthing skipped-app second encounter');
@@ -1218,7 +1219,7 @@ async function handleNewApp(params) {
 
   // Set cache BEFORE requesting the reset so subsequent monitoring cycles don't
   // re-process this app as "new"
-  receiveOnlySyncthingAppsCache.set(appId, cache);
+  await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);
 
   // stop + local appdata clear is declared to the reconciler (the sole actuator)
   appReconciler.requestStopAndClearData(appId, 'syncthing new app clean install');
@@ -1308,7 +1309,7 @@ async function manageFolderSyncState(params) {
           blockedReason: mountSafety.reason,
           blockedAt: Date.now(),
         };
-        receiveOnlySyncthingAppsCache.set(appId, cache);
+        await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);
 
         // Hold the container too: its binds point at the same unsafe dir. The
         // reconciler is the actuator; the receiveonly machinery flips the
@@ -1323,7 +1324,7 @@ async function manageFolderSyncState(params) {
     // Mount is safe, proceed normally
     await ensureContainerRunning(appId, requiresSyncBeforeStart);
     // Ensure cache entry exists so health monitor can track this folder
-    const existingCache = receiveOnlySyncthingAppsCache.get(appId);
+    const existingCache = await appCaches.syncedMark(receiveOnlySyncthingAppsCache, appId);
     const cache = existingCache || { restarted: true };
     return { syncthingFolder, cache };
   }
@@ -1339,7 +1340,9 @@ async function manageFolderSyncState(params) {
     return result;
   }
 
-  const cache = receiveOnlySyncthingAppsCache.get(appId);
+  // A mark describing a replaced volume reads as absent, so the app falls through to the
+  // new-app path below and re-runs the receive-only bootstrap against its empty disk.
+  const cache = await appCaches.syncedMark(receiveOnlySyncthingAppsCache, appId);
 
   // Second encounter of a skipped app
   if (cache?.firstEncounterSkipped) {

@@ -49,6 +49,7 @@ const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const globalCommand = require('../appManagement/globalCommand');
 const appVolumeService = require('./appVolumeService');
 const volumeService = require('../utils/volumeService');
+const appCaches = require('../utils/appCaches');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
 const pendingTeardownStore = require('./pendingTeardownStore');
@@ -1072,14 +1073,12 @@ async function appendRestoreTask(req, res) {
                 volume.replica,
               );
               const appId = dockerService.getAppIdentifier(identifier);
-              // eslint-disable-next-line global-require
-              const { receiveOnlySyncthingAppsCache } = require('../utils/appCaches');
-              const cache = {
+              // eslint-disable-next-line no-await-in-loop
+              await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, appId, {
                 restarted: true,
                 numberOfExecutionsRequired: 4,
                 numberOfExecutions: 10,
-              };
-              receiveOnlySyncthingAppsCache.set(appId, cache);
+              });
             }
           }
         }
@@ -1978,8 +1977,11 @@ async function coordinateActiveStandbyApps() {
             if ((!ip)) {
               log.info(`activeStandby: app:${appName} has currently no primary set`);
               if (!runningAppsNames.includes(identifier)) {
-                // Check if app is ready (syncthing data is synced) before allowing it to become primary
-                let isReady = receiveOnlySyncthingAppsCache.has(appId) && receiveOnlySyncthingAppsCache.get(appId).restarted;
+                // Check if app is ready (syncthing data is synced) before allowing it to become primary.
+                // syncedMark rejects a mark left behind by a previous incarnation of this
+                // component's volume - promoting on one would serve an empty disk as primary.
+                // eslint-disable-next-line no-await-in-loop
+                let isReady = (await appCaches.syncedMark(receiveOnlySyncthingAppsCache, appId))?.restarted === true;
 
                 // Fallback: If not in cache or not ready, check if syncthing folder is already in sendreceive mode
                 // This handles the case where folder is synced but cache was cleared/lost
@@ -2185,8 +2187,10 @@ async function coordinateActiveStandbyApps() {
                 appReconciler.setControllerDesired(identifier, 'stopped', 'masterSlave standby');
                 log.info(`activeStandby: stopping docker component:${identifier} it's running on ip:${ip} and localSocketAddr is: ${localSocketAddr}`);
               } else if (ipsMatch(localSocketAddr, ip) && !runningAppsNames.includes(identifier)) {
-                // Check if app is ready (syncthing data is synced) before starting
-                let isReady = receiveOnlySyncthingAppsCache.has(appId) && receiveOnlySyncthingAppsCache.get(appId).restarted;
+                // Check if app is ready (syncthing data is synced) before starting. As above,
+                // a mark describing a replaced volume must not certify this disk as synced.
+                // eslint-disable-next-line no-await-in-loop
+                let isReady = (await appCaches.syncedMark(receiveOnlySyncthingAppsCache, appId))?.restarted === true;
 
                 // Fallback: If not in cache or not ready, check if syncthing folder is already in sendreceive mode
                 if (!isReady) {

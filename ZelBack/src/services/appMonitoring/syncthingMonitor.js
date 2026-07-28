@@ -4,6 +4,7 @@ const path = require('node:path');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const operationRegistry = require('../utils/operationRegistry');
+const appCaches = require('../utils/appCaches');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const messageHelper = require('../messageHelper');
 const syncthingService = require('../syncthingService');
@@ -338,7 +339,7 @@ async function processContainerData(params) {
 
     // Update cache if provided
     if (cache !== null) {
-      state.receiveOnlySyncthingAppsCache.set(appId, cache);
+      await appCaches.setSyncedMark(state.receiveOnlySyncthingAppsCache, appId, cache);
     }
 
     // Skip processing if marked to skip
