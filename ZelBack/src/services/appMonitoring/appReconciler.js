@@ -237,6 +237,24 @@ function removalBackoffMs(attempts) {
 const SILENT_HOLD_WARN_MS = 10 * 60 * 1000;
 const silentHoldSince = new Map(); // id -> { since, warned }
 
+// A component that is desired stopped AND already stopped has nothing for the pass to do,
+// so it returned in silence - every cycle, for as long as the state lasted. The reason was
+// computed and thrown away. That silence is what made four customer outages unreadable in
+// 2026-07: the system had decided, correctly, and said nothing about the decision.
+//
+// Announced when it takes effect and again whenever the reason changes, never per pass.
+// Unlike a silent hold these states are deliberate (an operator stop, a teardown, a
+// controller's verdict) and can legitimately last weeks, so warning by age would be a
+// false alarm - and a warning that is usually a false alarm gets skimmed past.
+const stoppedReasonAnnounced = new Map(); // identifier -> the reason last announced
+
+function announceSettledStop(identifier, reason) {
+  if (stoppedReasonAnnounced.get(identifier) === reason) return;
+  stoppedReasonAnnounced.set(identifier, reason);
+  log.info(`appReconciler - ${identifier} is stopped and desired stopped: ${reason}`);
+  fluxEventBus.publish('reconciler:actuated', { identifier, action: 'settledStopped', reason });
+}
+
 function trackSilentHold(identifier, reason) {
   const entry = silentHoldSince.get(identifier);
   if (!entry) {
@@ -1011,6 +1029,7 @@ async function reconcile(rawIdentifier) {
     const removal = await appUninstaller.driveOwedTeardown(await appNameFromIdentifier(identifier));
     if (removal.status === 'removed') {
       silentHoldSince.delete(identifier);
+      stoppedReasonAnnounced.delete(identifier);
       log.info(`appReconciler - ${identifier} teardown converged; component is gone`);
       fluxEventBus.publish('reconciler:actuated', { identifier, action: 'removed' });
       return;
@@ -1023,6 +1042,7 @@ async function reconcile(rawIdentifier) {
       return;
     }
     silentHoldSince.delete(identifier);
+    stoppedReasonAnnounced.delete(identifier);
     // drop the in-memory heal markers for a gone app (its durable runtime-state doc
     // is dropped by the uninstaller via appsRuntimeState.remove)
     networkDetachedNoted.delete(identifier);
@@ -1228,9 +1248,16 @@ async function reconcile(rawIdentifier) {
       // a polling interval erroring against it.
       appInspector.stopAppMonitoring(identifier, false, globalState.appsMonitored);
       fluxEventBus.publish('reconciler:actuated', { identifier, action: 'stopped', reason, forced: forceKill });
+      // the stop above is its own log line; the settled state is announced on the pass
+      // that next finds it down, so the reason is stated once the container is actually at rest
+      stoppedReasonAnnounced.delete(identifier);
+    } else {
+      announceSettledStop(identifier, reason);
     }
     return;
   }
+
+  stoppedReasonAnnounced.delete(identifier);
 
   if (actual.running) {
     // A running container is normally "already where we want it" - but a start

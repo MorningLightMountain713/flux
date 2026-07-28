@@ -4,6 +4,7 @@ const proxyquire = require('proxyquire').noCallThru();
 // The real registry singleton — the reconciler's hasOperationLease reads it, and
 // proxyquire (un-stubbed dep) gives the reconciler this same instance.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 
 // Mirrors appUninstaller.UninstallStatus (proxyquire.noCallThru stubs the real module out).
 const UninstallStatus = Object.freeze({
@@ -692,6 +693,41 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
+    const settledStops = (spy, identifier) => spy.getCalls().filter(
+      (c) => c.args[0] === 'reconciler:actuated'
+        && c.args[1].action === 'settledStopped'
+        && c.args[1].identifier === identifier,
+    );
+
+    it('states why a component is down once, not on every pass', async () => {
+      // A component that is desired stopped AND already stopped had the pass return in
+      // silence, every cycle - the reason was computed and discarded. Four customer
+      // outages in 2026-07 were diagnosed from log ABSENCE for exactly this shape.
+      const publishSpy = sinon.spy(fluxEventBus, 'publish');
+      stubs.appsRuntimeState.isOperatorStopped.resolves(true);
+
+      await appReconciler.reconcile('www_App'); // inspect default: stopped
+      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_App');
+
+      const stated = settledStops(publishSpy, 'www_App');
+      expect(stated).to.have.lengthOf(1);
+      expect(stated[0].args[1].reason).to.equal('operatorStopped');
+    });
+
+    it('states the new reason when a stopped component stays down for a different one', async () => {
+      const publishSpy = sinon.spy(fluxEventBus, 'publish');
+      stubs.appsRuntimeState.isOperatorStopped.resolves(true);
+      await appReconciler.reconcile('www_App');
+
+      // the operator lock lifts but the component is condemned - still down, different why
+      stubs.appsRuntimeState.isOperatorStopped.resolves(false);
+      stubs.appsRuntimeState.isCondemned.resolves(true);
+      await appReconciler.reconcile('www_App');
+
+      expect(settledStops(publishSpy, 'www_App').map((c) => c.args[1].reason)).to.eql(['operatorStopped', 'condemned']);
+    });
+
     it('gracefully stops a running condemned container and never starts it (tombstoning)', async () => {
       stubs.appsRuntimeState.isCondemned.resolves(true);
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
@@ -1140,7 +1176,6 @@ describe('appReconciler tests', () => {
     });
 
     it('publishes recreateFailedKept when a proven app is kept over a failed rebuild (observable keep-vs-remove)', async () => {
-      const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
       const publishSpy = sinon.spy(fluxEventBus, 'publish');
       stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('image not found'));
@@ -1261,8 +1296,6 @@ describe('appReconciler tests', () => {
     });
 
     it('a same-state controller verdict repeat is a no-op; only a transition re-publishes (decider poll ticks)', () => {
-      // eslint-disable-next-line global-require
-      const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
       const publishSpy = sinon.spy(fluxEventBus, 'publish');
       const desiredEvents = () => publishSpy.getCalls().filter((c) => c.args[0] === 'reconciler:desiredChanged').length;
 
