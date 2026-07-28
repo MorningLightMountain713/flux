@@ -10,7 +10,20 @@
 # can read per-suite pass/fail tallies. Per-suite TAP is also saved under /tmp/e2e-logs.
 #
 # Usage (from anywhere): test-infra/runner/run-all.sh
-#   optional: SUITE_GLOB='tests/3*.js' test-infra/runner/run-all.sh  (subset)
+#   optional: SUITE_GLOB='tests/3??-*.js' test-infra/runner/run-all.sh  (one block)
+#
+# Suites are numbered in blocks by what they exercise, so a block is a glob:
+#   1xx node bootstrap, identity, peering, daemon, chain state
+#   2xx app lifecycle and the spawner
+#   3xx reconciler
+#   4xx syncthing
+#   5xx content delivery
+#   6xx storage and volumes
+#   7xx networking, TLS, ingress
+#   8xx telemetry and logging
+#   9xx replicas and colocation
+# The number says WHAT a suite covers and nothing about how long it takes - each suite
+# declares that itself with `// weight: heavy|light`, which is what orders a parallel run.
 
 set -uo pipefail
 
