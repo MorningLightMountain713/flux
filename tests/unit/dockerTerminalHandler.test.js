@@ -7,7 +7,7 @@ const { expect } = chai;
 describe('dockerTerminalHandler tests', () => {
   let trackTerminalSession;
   let verifyAppOwnerOrHigherSession;
-  let getDockerContainerByIdOrName;
+  let getDockerContainer;
   let dockerTerminalHandler;
 
   // Minimal stand-in for a socket.io socket. `fire` returns the listener's own
@@ -34,11 +34,11 @@ describe('dockerTerminalHandler tests', () => {
   beforeEach(() => {
     trackTerminalSession = sinon.stub();
     verifyAppOwnerOrHigherSession = sinon.stub().resolves(true);
-    getDockerContainerByIdOrName = sinon.stub().resolves({ exec: sinon.stub() });
+    getDockerContainer = sinon.stub().resolves({ exec: sinon.stub() });
     dockerTerminalHandler = proxyquire('../../ZelBack/src/lib/socketIoHandlers/dockerTerminalHandler', {
       '../../services/analyticsService': { trackTerminalSession },
       '../../services/verificationHelperUtils': { verifyAppOwnerOrHigherSession },
-      '../../services/dockerService': { getDockerContainerByIdOrName },
+      '../../services/dockerService': { getDockerContainer },
     });
   });
 
@@ -72,7 +72,7 @@ describe('dockerTerminalHandler tests', () => {
   it('pairs open with close for a session that did open', async () => {
     const stream = { on: sinon.stub(), destroy: sinon.stub(), write: sinon.stub() };
     const execInstance = { start: (options, cb) => cb(null, stream), resize: sinon.stub() };
-    getDockerContainerByIdOrName.resolves({ exec: (cmd, cb) => cb(null, execInstance) });
+    getDockerContainer.resolves({ exec: (cmd, cb) => cb(null, execInstance) });
 
     const socket = makeSocket();
     dockerTerminalHandler(socket);
