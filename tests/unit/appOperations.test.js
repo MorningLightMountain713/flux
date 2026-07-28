@@ -14,9 +14,17 @@ const log = require('../../ZelBack/src/lib/log');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
+const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
+const dockerService = require('../../ZelBack/src/services/dockerService');
+const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
+const syncthingService = require('../../ZelBack/src/services/syncthingService');
+const proxyquire = require('proxyquire');
 
 describe('appOperations tests', () => {
   beforeEach(() => {
@@ -516,15 +524,13 @@ describe('appOperations tests', () => {
 
     beforeEach(() => {
       let recursionCounter = 0;
-      globalStateRef = require('../../ZelBack/src/services/utils/globalState');
+      globalStateRef = globalState;
       operationRegistry.clear();
       // the first-run mount-safety gate blocks election until the syncthing
       // monitor's first cycle completes; these tests model a settled node
       globalStateRef.syncthingAppsFirstRun = false;
-      const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
       sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
 
-      const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
       sinon.stub(serviceHelper, 'delay').callsFake(async () => {
         recursionCounter += 1;
         if (recursionCounter > 1) {
@@ -533,16 +539,13 @@ describe('appOperations tests', () => {
         return Promise.resolve();
       });
 
-      const syncthingService = require('../../ZelBack/src/services/syncthingService');
       sinon.stub(syncthingService, 'getHealth').resolves({
         status: 'success',
         data: { status: 'OK' },
       });
 
-      const dp = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
-      deploymentProviderStub = sinon.stub(dp, 'listInstalledDeployments').resolves([]);
+      deploymentProviderStub = sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([]);
 
-      const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
       sinon.stub(appQueryService, 'listRunningContainers').resolves([]);
 
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
@@ -668,6 +671,124 @@ describe('appOperations tests', () => {
       expect(appDockerStopStub.called, 'primary node must not stop its own container').to.be.false;
     });
 
+    // The election's decisions are otherwise only observable as side effects on docker and
+    // syncthing, so these assert the bus events the loop publishes for each decision.
+    const decisionsFor = (publish, identifier, action) => publish.getCalls().filter(
+      (c) => c.args[0] === 'activeStandby:decided'
+        && c.args[1].identifier === identifier
+        && c.args[1].action === action,
+    );
+
+    const gDeployment = (appName, identifier) => ({
+      appName,
+      componentEntries: () => [[identifier.split('_')[0], {
+        identifier,
+        hasActiveStandbySyncthing: () => true,
+        hasSyncthing: () => true,
+      }]],
+    });
+
+    // The loop reschedules itself from its own finally, so passes after the first arrive
+    // via that reschedule rather than another call - a second direct call would hang on
+    // the stubbed delay. Let `passes` of them through, run `between` before each
+    // subsequent pass, and resolve once the last one has finished its body.
+    const runPasses = (passes, between = () => {}) => {
+      let seen = 0;
+      let settle;
+      const finished = new Promise((resolve) => { settle = resolve; });
+      serviceHelper.delay.callsFake(async () => {
+        seen += 1;
+        if (seen >= passes) {
+          settle();
+          return new Promise(() => {}); // park the chain; the pass we wanted is done
+        }
+        between(seen);
+        return undefined;
+      });
+      return finished;
+    };
+
+    it('announces an operator-stopped component once, not on every pass', async () => {
+      const identifier = 'opstopa_appa';
+      deploymentProviderStub.resolves([gDeployment('appa', identifier)]);
+
+      appsRuntimeState.isOperatorStopped.resetBehavior();
+      appsRuntimeState.isOperatorStopped.resolves(true);
+
+      sinon.stub(dockerService, 'getAppIdentifier').returns(`flux${identifier}`);
+      const publish = sinon.stub(fluxEventBus, 'publish');
+
+      const finished = runPasses(2);
+      appOperations.coordinateActiveStandbyApps();
+      await finished;
+
+      // silence here is indistinguishable from a dead loop, but a line every 30s is noise
+      expect(decisionsFor(publish, identifier, 'operatorStopExcluded')).to.have.lengthOf(1);
+    });
+
+    it('announces again after the operator lock is lifted and re-applied', async () => {
+      const identifier = 'opstopb_appb';
+      deploymentProviderStub.resolves([gDeployment('appb', identifier)]);
+
+      appsRuntimeState.isOperatorStopped.resetBehavior();
+      appsRuntimeState.isOperatorStopped.resolves(true);
+
+      sinon.stub(dockerService, 'getAppIdentifier').returns(`flux${identifier}`);
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: [] } } });
+      const publish = sinon.stub(fluxEventBus, 'publish');
+
+      // pass 1 stopped, pass 2 lock lifted, pass 3 stopped again
+      const finished = runPasses(3, (seen) => {
+        appsRuntimeState.isOperatorStopped.resetBehavior();
+        appsRuntimeState.isOperatorStopped.resolves(seen !== 1);
+      });
+      appOperations.coordinateActiveStandbyApps();
+      await finished;
+
+      expect(decisionsFor(publish, identifier, 'operatorStopCleared')).to.have.lengthOf(1);
+      expect(decisionsFor(publish, identifier, 'operatorStopExcluded')).to.have.lengthOf(2);
+    });
+
+    it('clears its own stale primary record so a stopped last primary can be elected again', async () => {
+      // The node remembers itself as primary but is not running the component - the state
+      // two production apps were stuck in for 12 and 25 hours, recoverable only by
+      // restarting FluxOS. Without the eviction every start branch is closed to it.
+      const identifier = 'staleprim_appc';
+      const appId = `flux${identifier}`;
+      deploymentProviderStub.resolves([gDeployment('appc', identifier)]);
+
+      sinon.stub(dockerService, 'getAppIdentifier').returns(appId);
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
+
+      // Pass 1 records this node as primary (FDM names it, and it is running here, so the
+      // loop takes no action beyond the record). Pass 2 is the wedge: FDM has forgotten the
+      // app and the container is gone, leaving the record naming a node that isn't running it.
+      const listRunningContainers = sinon.stub();
+      listRunningContainers.onFirstCall().resolves([{ Names: [`/${appId}`] }]);
+      listRunningContainers.resolves([]);
+      const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
+        '../appQuery/appQueryService': { ...appQueryService, listRunningContainers },
+      });
+
+      const axiosGet = sinon.stub(serviceHelper, 'axiosGet');
+      axiosGet.onFirstCall().resolves({ data: { status: 'success', data: { ips: ['192.168.1.5'] } } });
+      axiosGet.resolves({ data: { status: 'success', data: { ips: [] } } });
+
+      // this node is index 0 and its data is ready
+      sinon.stub(registryManager, 'appLocation').resolves([{ ip: '192.168.1.5:16137' }]);
+      globalStateRef.receiveOnlySyncthingAppsCache.set(appId, { restarted: true });
+
+      const publish = sinon.stub(fluxEventBus, 'publish');
+
+      // pass 1 records this node as primary; pass 2 finds it gone from FDM and not running here
+      const finished = runPasses(2);
+      appOps.coordinateActiveStandbyApps();
+      await finished;
+
+      expect(decisionsFor(publish, identifier, 'stalePrimaryEvicted')).to.have.lengthOf(1);
+      globalStateRef.receiveOnlySyncthingAppsCache.delete(appId);
+    });
   });
 
   describe('shutdownPlanResync tests', () => {
