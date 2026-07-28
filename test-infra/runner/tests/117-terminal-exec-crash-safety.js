@@ -8,7 +8,6 @@ import { appOwnerKey } from '../framework/keys.js';
 import { execInContainer, getAppContainerStatus, fluxosPid } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // MUST-PASS gate. Opening the web terminal must never take the node down.
 //
@@ -82,7 +81,6 @@ function openTerminal(client, zelidauth, nameOrId) {
 
 describe('docker terminal fails cleanly and never crashes the node', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let client;
   let zelidauth;
   const appName = `e2eterm${Date.now()}`;
