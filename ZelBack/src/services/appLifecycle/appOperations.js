@@ -50,6 +50,7 @@ const globalCommand = require('../appManagement/globalCommand');
 const appVolumeService = require('./appVolumeService');
 const volumeService = require('../utils/volumeService');
 const appCaches = require('../utils/appCaches');
+const fluxEventBus = require('../utils/fluxEventBus');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
 const pendingTeardownStore = require('./pendingTeardownStore');
@@ -70,6 +71,10 @@ const operationRegistry = require('../utils/operationRegistry');
 // Active-standby app tracking
 const activePrimaryByIdentifier = new Map();
 const scheduledPrimaryStart = new Map();
+// Components already announced as operator-stopped. A reporting latch only - nothing
+// reads it to make a decision - so that the exclusion is stated once on entry (and again
+// after a restart) instead of on every pass.
+const operatorStoppedAnnounced = new Set();
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 
@@ -1915,6 +1920,12 @@ async function coordinateActiveStandbyApps() {
       }
     }
 
+    // Silently - the entry is a reporting latch, not state anyone acts on, and an app
+    // going away is not itself an election event worth a line.
+    for (const identifier of operatorStoppedAnnounced) {
+      if (!validIdentifiers.has(identifier)) operatorStoppedAnnounced.delete(identifier);
+    }
+
     const { receiveOnlySyncthingAppsCache } = globalState;
 
     for (const deployment of deployments) {
@@ -1940,8 +1951,22 @@ async function coordinateActiveStandbyApps() {
         // operator explicitly stopped this g: component; don't elect or act on it
         // eslint-disable-next-line no-await-in-loop
         if (await appsRuntimeState.isOperatorStopped(identifier)) {
+          // Announced on entry rather than every cycle: an operator stop is durable, so
+          // at a 30s cadence a per-pass line is noise while silence is worse - the
+          // component sits unelected indefinitely with the loop emitting nothing about
+          // it, which is indistinguishable in the logs from a loop that has died. Two
+          // separate investigations with root access read it exactly that way.
+          if (!operatorStoppedAnnounced.has(identifier)) {
+            operatorStoppedAnnounced.add(identifier);
+            log.info(`activeStandby: ${identifier} is operator-stopped - excluded from primary election until it is started`);
+            fluxEventBus.publish('activeStandby:decided', { identifier, action: 'operatorStopExcluded' });
+          }
           // eslint-disable-next-line no-continue
           continue;
+        }
+        // Cleared when the lock lifts so a later stop is announced rather than swallowed.
+        if (operatorStoppedAnnounced.delete(identifier)) {
+          fluxEventBus.publish('activeStandby:decided', { identifier, action: 'operatorStopCleared' });
         }
         // Get master IP from FDM using the new /appips endpoint
         // eslint-disable-next-line no-await-in-loop
@@ -2039,65 +2064,106 @@ async function coordinateActiveStandbyApps() {
                 });
                 const index = runningAppList.findIndex((x) => ipsMatch(x.ip, localSocketAddr));
 
-                // Helper function to check if any lower-index nodes are running the app
-                const checkLowerIndexNodesRunning = async () => {
-                  if (index <= 0) return false; // Index 0 or not found, no lower nodes to check
+                // Docker reports names with a leading slash, and getAppIdentifier yields
+                // exactly the container name for this component. Compare whole names: a
+                // substring test also matches a longer app whose name merely begins the
+                // same way - myapp against myapp2, or simplexsmp against simplexsmp1,
+                // both live on the network - and a false positive here reads as "a peer
+                // already runs this", so the component is never started at all.
+                const peerRunsThisComponent = (appsRunning) => (appsRunning || []).some(
+                  (app) => (app.Names || []).some((name) => name.replace(/^\//, '') === appId),
+                );
+
+                // 'lower' consults only peers ahead of us in the ordering; 'all' consults
+                // every other peer. The index-0 start needs 'all' because it has no
+                // lower-index peer to ask, while FDM's view lags a node actually starting
+                // by ~110s measured - so an index-0 node restarting inside another node's
+                // promotion window would otherwise start a second writer on a shared
+                // volume.
+                //
+                // Probed CONCURRENTLY, not in sequence. Each probe is bounded at 10s and
+                // an unreachable peer burns the whole budget, so a sequential walk costs
+                // 10s x peers on the promotion path - paid repeatedly, since the component
+                // is not running locally throughout, and ahead of every later g: app in
+                // the same pass. The per-probe timeout is deliberately NOT shortened: this
+                // check fails open, so a peer that answers slowly must still get its full
+                // budget or a live primary reads as absent.
+                const peerRunningComponent = async (scope) => {
+                  const peers = [];
+                  for (let i = 0; i < runningAppList.length; i += 1) {
+                    if (scope === 'lower' && i >= index) break;
+                    const node = runningAppList[i];
+                    if (node && !ipsMatch(node.ip, localSocketAddr)) peers.push({ i, node });
+                  }
+                  if (!peers.length) return false;
 
                   const { CancelToken } = axios;
                   const timeout = 10 * 1000;
 
-                  // Check all nodes with lower index
-                  for (let i = 0; i < index; i += 1) {
-                    const nodeToCheck = runningAppList[i];
-                    if (!nodeToCheck) continue;
-
-                    const ipToCheck = extractIp(nodeToCheck.ip);
-                    const portToCheck = extractPort(nodeToCheck.ip);
+                  const probes = peers.map(async ({ i, node }) => {
+                    const ipToCheck = extractIp(node.ip);
+                    const portToCheck = extractPort(node.ip);
                     const source = CancelToken.source();
-                    let isResolved = false;
-
-                    setTimeout(() => {
-                      if (!isResolved) {
-                        source.cancel('Operation canceled by timeout.');
-                      }
-                    }, timeout);
-
+                    // Cleared once the request settles: every probe otherwise leaves a
+                    // live 10s timer behind, for each peer, on every pass until the
+                    // component is running locally.
+                    const cancelTimer = setTimeout(() => source.cancel('Operation canceled by timeout.'), timeout);
                     try {
-                      // eslint-disable-next-line no-await-in-loop
                       const response = await axios.get(`http://${ipToCheck}:${portToCheck}/apps/listrunningapps`, { timeout, cancelToken: source.token });
-                      isResolved = true;
-                      const appsRunning = response.data.data;
-                      // Match on the active-standby component identifier, not the app name: sibling
-                      // components (e.g. a DB cluster component) run on every node and must not be
-                      // mistaken for the active-standby component being active there.
-                      if (appsRunning.find((app) => app.Names[0].includes(identifier))) {
-                        log.info(`activeStandby: component:${identifier} is running on lower-index node (index ${i}) at ${ipToCheck}, will not start`);
+                      if (peerRunsThisComponent(response.data.data)) {
+                        log.info(`activeStandby: component:${identifier} is running on peer (index ${i}) at ${ipToCheck}, will not start`);
                         return true;
                       }
                     } catch (error) {
-                      isResolved = true;
-                      log.info(`activeStandby: Failed to check lower-index node ${i} at ${ipToCheck} for app:${appName}, error: ${error.message}`);
-                      // Continue checking other nodes
+                      // an unreachable peer is treated as not-running, so a network fault
+                      // cannot strand an app forever
+                      log.info(`activeStandby: Failed to check peer ${i} at ${ipToCheck} for app:${appName}, error: ${error.message}`);
+                    } finally {
+                      clearTimeout(cancelTimer);
                     }
-                  }
-                  return false;
+                    return false;
+                  });
+
+                  return (await Promise.all(probes)).some(Boolean);
                 };
 
+                // The remembered primary is this node, but the component is not running
+                // here - so the memory is stale: we were stopped, or the FluxOS process
+                // outlived the container. Keeping it disqualifies this node twice over,
+                // because the no-history starts below require no remembered primary and
+                // the previous-primary branch requires the remembered primary to be a
+                // DIFFERENT node. The last primary is then permanently unelectable, and
+                // when every instance is in that state the app cannot come back at all
+                // without a restart to clear this map.
+                if (activePrimaryByIdentifier.has(identifier)
+                  && ipsMatch(activePrimaryByIdentifier.get(identifier), localSocketAddr)
+                  && !runningAppsNames.includes(identifier)) {
+                  activePrimaryByIdentifier.delete(identifier);
+                  log.info(`activeStandby: cleared this node's stale primary record for ${identifier} - it is not running here`);
+                  fluxEventBus.publish('activeStandby:decided', { identifier, action: 'stalePrimaryEvicted' });
+                }
+
                 if (index === 0 && !activePrimaryByIdentifier.has(identifier)) {
-                  // Index 0: Start immediately if no history
-                  promoteApplicationToPrimary(identifier, appId);
-                  log.info(`activeStandby: starting docker component:${identifier} index: ${index}`);
+                  // Index 0 with no history. Every other start path probes peers first;
+                  // this one has no lower-index node to consult, so it asks all of them.
+                  // eslint-disable-next-line no-await-in-loop
+                  const peerRunning = await peerRunningComponent('all');
+                  if (peerRunning) {
+                    log.info(`activeStandby: not starting component:${identifier} at index 0 - a peer is already running it`);
+                    fluxEventBus.publish('activeStandby:decided', { identifier, action: 'peerProbeBlocked', index });
+                  } else {
+                    promoteApplicationToPrimary(identifier, appId);
+                    log.info(`activeStandby: starting docker component:${identifier} index: ${index}`);
+                    fluxEventBus.publish('activeStandby:decided', { identifier, action: 'primaryPromoted', index });
+                  }
                 } else if (!scheduledPrimaryStart.has(identifier) && activePrimaryByIdentifier.has(identifier) && !ipsMatch(activePrimaryByIdentifier.get(identifier), localSocketAddr)) {
                   // There was a previous master (not me), and it's no longer on FDM
                   const { CancelToken } = axios;
                   const source = CancelToken.source();
-                  let isResolved = false;
                   const timeout = 10 * 1000; // 10 seconds
-                  setTimeout(() => {
-                    if (!isResolved) {
-                      source.cancel('Operation canceled by the user.');
-                    }
-                  }, timeout * 2);
+                  // Cleared once the request settles, so a completed check leaves no live
+                  // timer behind.
+                  const cancelTimer = setTimeout(() => source.cancel('Operation canceled by the user.'), timeout * 2);
                   const previousMasterIp = activePrimaryByIdentifier.get(identifier);
                   // Look up the correct port from runningAppList since FDM API returns IP without port
                   const previousMasterNode = runningAppList.find((x) => ipsMatch(x.ip, previousMasterIp));
@@ -2107,21 +2173,21 @@ async function coordinateActiveStandbyApps() {
                   try {
                     // eslint-disable-next-line no-await-in-loop
                     const response = await axios.get(`http://${ipToCheckAppRunning}:${portToCheckAppRunning}/apps/listrunningapps`, { timeout, cancelToken: source.token });
-                    isResolved = true;
-                    const appsRunning = response.data.data;
-                    // Match on the active-standby component identifier, not the app name: sibling
-                    // components running on the previous primary must not be mistaken for the
-                    // active-standby component still being active there.
-                    if (appsRunning.find((app) => app.Names[0].includes(identifier))) {
+                    if (peerRunsThisComponent(response.data.data)) {
                       log.info(`activeStandby: component:${identifier} is not on fdm but previous master is running it at: ${ipToCheckAppRunning}:${portToCheckAppRunning}`);
                       previousMasterStillRunning = true;
                     }
                   } catch (error) {
                     log.info(`activeStandby: Failed to reach previous master at ${ipToCheckAppRunning}:${portToCheckAppRunning} for app:${appName}, will proceed with primary selection. Error: ${error.message}`);
-                    isResolved = true;
+                  } finally {
+                    clearTimeout(cancelTimer);
                   }
                   if (previousMasterStillRunning) {
-                    return;
+                    // This app is settled - move to the next one. Returning here abandoned
+                    // the whole pass, so every g: app ordered after this one lost its
+                    // election cycle for as long as the previous master kept running.
+                    // eslint-disable-next-line no-continue
+                    continue;
                   }
                   // Previous master is not running, determine next primary
                   if (index === 0) {
@@ -2143,7 +2209,7 @@ async function coordinateActiveStandbyApps() {
                     if (timetoStartApp <= Date.now()) {
                       // Time to start, but check if lower-index nodes are running
                       // eslint-disable-next-line no-await-in-loop
-                      const lowerNodeRunning = await checkLowerIndexNodesRunning();
+                      const lowerNodeRunning = await peerRunningComponent('lower');
                       if (!lowerNodeRunning) {
                         promoteApplicationToPrimary(identifier, appId);
                         log.info(`activeStandby: starting docker component:${identifier} index: ${index}`);
@@ -2156,7 +2222,7 @@ async function coordinateActiveStandbyApps() {
                 } else if (scheduledPrimaryStart.has(identifier) && scheduledPrimaryStart.get(identifier) <= Date.now()) {
                   // Scheduled start time has arrived, check if lower-index nodes are running
                   // eslint-disable-next-line no-await-in-loop
-                  const lowerNodeRunning = await checkLowerIndexNodesRunning();
+                  const lowerNodeRunning = await peerRunningComponent('lower');
                   if (!lowerNodeRunning) {
                     promoteApplicationToPrimary(identifier, appId);
                     log.info(`activeStandby: starting docker component:${identifier} index: ${index} that was scheduled to start at ${scheduledPrimaryStart.get(identifier).toString()}`);
