@@ -295,8 +295,33 @@ async function verifyAppVolumeMount(identifier) {
 
   throw new Error(`Volume mount verification failed for ${mountPath}. Mount does not exist or is not accessible.`);
 }
+
+/**
+ * Identity of the filesystem currently mounted at a component's volume mountpoint.
+ *
+ * Creating a volume runs mke2fs, which mints a fresh filesystem UUID, so this value
+ * distinguishes one incarnation of a component's storage from the next while surviving
+ * ordinary remounts (the loop device number does not, and would read as a new volume
+ * after every reboot).
+ *
+ * Null when this component's own volume is not mounted. That distinction is the whole
+ * point: `findmnt --target` resolves the CONTAINING mountpoint, so an unmounted volume
+ * reports the apps-folder filesystem, whose UUID is shared by every component on the
+ * node. Comparing targets is what separates "this component's storage" from "the disk it
+ * would live on".
+ * @param {string} appId Docker app identifier (e.g. fluxcomp_app).
+ * @returns {Promise<string|null>} Filesystem UUID, or null when it cannot be established.
+ */
+async function appVolumeFilesystemId(appId) {
+  const mountPath = `${appsFolder}${appId}`;
+  const mount = await deviceHelper.mountForTarget(mountPath).catch(() => null);
+  if (!mount || mount.target !== mountPath) return null;
+  return mount.uuid;
+}
+
 module.exports = {
   verifyAppVolumeMount,
+  appVolumeFilesystemId,
   isPathMounted,
   getVolumeFilePath,
   getComponentAppIdsFromVolumeFiles,

@@ -38,7 +38,7 @@ describe('volumeService tests', () => {
     // fallback, so tests can keep expressing mountedness via runCommand; the
     // isPathMounted describe covers the mountinfo path with real fixtures
     fsStub = { promises: { access: sinon.stub(), readdir: sinon.stub().resolves([]), readFile: sinon.stub().rejects(new Error('no mountinfo')) } };
-    deviceHelperStub = { listMountedFilesystems: sinon.stub().resolves([]) };
+    deviceHelperStub = { listMountedFilesystems: sinon.stub().resolves([]), mountForTarget: sinon.stub() };
     logStub = {
       info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
     };
@@ -290,6 +290,44 @@ describe('volumeService tests', () => {
       expect(result.mounted).to.be.false;
       expect(result.reason).to.include('mount_failed');
       expect(result.reason).to.include('bad superblock');
+    });
+  });
+
+  describe('appVolumeFilesystemId tests', () => {
+    const APP_ID = 'fluxcomp_myapp';
+    const MOUNT_PATH = `${APPS_FOLDER}${APP_ID}`;
+
+    it('should return the uuid of the volume mounted at the component own mountpoint', async () => {
+      deviceHelperStub.mountForTarget.resolves({
+        source: '/dev/loop3', target: MOUNT_PATH, fstype: 'ext4', uuid: 'uuid-v1', availableBytes: 1,
+      });
+
+      expect(await volumeService.appVolumeFilesystemId(APP_ID)).to.equal('uuid-v1');
+    });
+
+    it('should return null when the volume is not mounted, not the hosting disk uuid', async () => {
+      // findmnt --target resolves the CONTAINING mountpoint, so an unmounted volume
+      // reports the apps-folder filesystem - whose uuid every component on the node
+      // shares. Returning it would make each component look like every other one.
+      deviceHelperStub.mountForTarget.resolves({
+        source: '/dev/sda1', target: '/dat', fstype: 'ext4', uuid: 'uuid-of-the-host-disk', availableBytes: 1,
+      });
+
+      expect(await volumeService.appVolumeFilesystemId(APP_ID)).to.equal(null);
+    });
+
+    it('should return null when the mountpoint cannot be resolved at all', async () => {
+      deviceHelperStub.mountForTarget.rejects(new Error('findmnt resolved no mounted filesystem'));
+
+      expect(await volumeService.appVolumeFilesystemId(APP_ID)).to.equal(null);
+    });
+
+    it('should return null on a filesystem that carries no uuid', async () => {
+      deviceHelperStub.mountForTarget.resolves({
+        source: 'overlay', target: MOUNT_PATH, fstype: 'overlay', uuid: null, availableBytes: 1,
+      });
+
+      expect(await volumeService.appVolumeFilesystemId(APP_ID)).to.equal(null);
     });
   });
 
