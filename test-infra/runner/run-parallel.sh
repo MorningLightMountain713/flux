@@ -63,14 +63,25 @@ MIN_FREE_MB="${MIN_FREE_MB:-15000}"
 # itself (suites boot fleets mid-run too, which no admit gate can see).
 MAX_LOAD="${MAX_LOAD:-$(( $(nproc) * 3 / 4 ))}"
 
-# Default order: heavy reconciler/fleet suites first so the long pole starts ASAP;
-# everything else after. Derived from tests/ so new suites are picked up; override
-# with SUITES='..' (space-separated numeric prefixes).
+# Default order: heavy fleet suites first so the long pole starts ASAP; everything else
+# after. Weight is DECLARED by each suite (`// weight: heavy|light` on its own line), not
+# inferred from the number - the number groups suites by what they test, which says
+# nothing about how much fleet they build. An undeclared suite counts as heavy: running a
+# light one early costs nothing but ordering, while a heavy one discovered last is the
+# gate's long pole paid at the end. Derived from tests/ so new suites are picked up;
+# override with SUITES='..' (space-separated numeric prefixes).
 if [ -z "${SUITES:-}" ]; then
   all=$(ls tests/*.js 2>/dev/null | sed -E 's#.*/([0-9]+)-.*#\1#' | sort -u)
   heavy=""; light=""
   for n in $all; do
-    if [ "$((10#$n))" -ge 28 ]; then heavy="$heavy $n"; else light="$light $n"; fi
+    # a prefix is light only when EVERY file sharing it declares light
+    n_files=$(ls tests/${n}-*.js 2>/dev/null | wc -l)
+    n_light=$(grep -lx '// weight: light' tests/${n}-*.js 2>/dev/null | wc -l)
+    if [ "$n_files" -gt 0 ] && [ "$n_files" -eq "$n_light" ]; then
+      light="$light $n"
+    else
+      heavy="$heavy $n"
+    fi
   done
   SUITES="$heavy $light"
 fi
