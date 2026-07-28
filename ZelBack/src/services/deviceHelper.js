@@ -8,13 +8,17 @@ const serviceHelper = require('./serviceHelper');
  * one filesystem directly instead of guessing. `target` must be an existing path (a
  * non-existent leaf resolves to no mount on modern findmnt). Throws on findmnt failure
  * or an unresolvable path so a caller never silently places a volume on the wrong disk.
+ *
+ * `uuid` identifies the filesystem itself and survives remounts, so it distinguishes one
+ * incarnation of a volume from the next: rebuilding one runs mke2fs, which mints a fresh
+ * UUID. Null on filesystems that carry none (tmpfs, overlay).
  * @param {string} target an existing path
- * @returns {Promise<{source: string, target: string, fstype: string, availableBytes: number}>}
+ * @returns {Promise<{source: string, target: string, fstype: string, uuid: string|null, availableBytes: number}>}
  */
 async function mountForTarget(target) {
   const res = await serviceHelper.runCommand('findmnt', {
     logError: false,
-    params: ['--target', target, '--bytes', '--json', '--output', 'SOURCE,TARGET,FSTYPE,AVAIL'],
+    params: ['--target', target, '--bytes', '--json', '--output', 'SOURCE,TARGET,FSTYPE,UUID,AVAIL'],
   });
   if (res.error) {
     throw new Error(`findmnt --target ${target} failed: ${res.error.message || res.error}`);
@@ -27,6 +31,7 @@ async function mountForTarget(target) {
     source: mount.source,
     target: mount.target,
     fstype: mount.fstype,
+    uuid: mount.uuid ?? null,
     availableBytes: Number(mount.avail),
   };
 }
