@@ -30,11 +30,19 @@ describe('first post-boot broadcast: complete, never empty, never destructive', 
     ({ index: idx } = await seedSimpleApp(env, appName, { port: 31119 }));
     peerIdx = (idx + 1) % env.clients.length;
     await waitForUp(env.clients[idx], appName, 'app running before the reboot');
-    // the peer must have learned the location before the reboot
+    // the peer must have learned the location before the reboot. The wait is
+    // best-effort - the row can already be present from a broadcast that landed before
+    // it started - but KEEP why it failed: waitForEvent's timeout carries the stream's
+    // readyState and the age of its last event, which is the only thing separating "the
+    // node never broadcast" from "this client's stream never connected". Discarding it
+    // made both present as a bare missing row, which is unreadable after the fact.
     const peerDb = dbClient(peerIdx + 1);
-    await env.clients[peerIdx].waitForEvent('network:apprunning', (d) => d.apps?.some((a) => a.name === appName), 90000).catch(() => {});
+    let apprunningWait = null;
+    await env.clients[peerIdx]
+      .waitForEvent('network:apprunning', (d) => d.apps?.some((a) => a.name === appName), 90000)
+      .catch((err) => { apprunningWait = err.message; });
     const rows = await peerDb.getAppLocations(appName);
-    expect(rows.length, 'peer must hold a location row before the reboot').to.be.greaterThan(0);
+    expect(rows.length, `peer must hold a location row before the reboot${apprunningWait ? ` [apprunning wait: ${apprunningWait}]` : ''}`).to.be.greaterThan(0);
   });
 
   after(async function () {
