@@ -698,12 +698,19 @@ async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCent
           { upsert: true },
         );
       } else if (typeof bootContext === 'object') {
-        // lastAliveAgoMs pins the downtime the node will measure, not a wall
-        // clock: an absolute lastAlive computed in a before-hook rots for the
-        // whole boot-lock queue (minutes under a parallel gate), while this
-        // seed runs after the lock with only the node's own boot left ahead.
-        const lastAlive = bootContext.lastAliveAgoMs != null
-          ? Date.now() - bootContext.lastAliveAgoMs
+        // downtimeMs (v9) and lastAliveAgoMs (development) are the same fixture idea
+        // under two names, and both are in use in the tree: pin the downtime the node
+        // will MEASURE rather than a wall clock, because an absolute lastAlive computed
+        // in a before-hook rots for the whole boot-lock queue (minutes under a parallel
+        // gate) while this seed runs after the lock with only the node's own boot ahead.
+        // Both accepted until one is swept; downtimeMs wins if a caller sets both.
+        //
+        // Boot latency after this point still counts, and it only ever makes the observed
+        // downtime LONGER - so a fixture targeting a window must anchor near that window's
+        // lower bound, never its middle.
+        const downtimeAgoMs = bootContext.downtimeMs ?? bootContext.lastAliveAgoMs;
+        const lastAlive = downtimeAgoMs != null
+          ? Date.now() - downtimeAgoMs
           : (bootContext.lastAlive ?? Date.now());
         await localDb.collection('nodestartuptracker').updateOne(
           { _id: 'heartbeat' },

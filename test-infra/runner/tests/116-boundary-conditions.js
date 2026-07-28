@@ -232,12 +232,17 @@ describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
     // 25s pinned, read as ~41s: past the 30s sigtermExpiryS, and deliberately
     // still UNDER locationTtlS at 63s.
     //
-    // That second bound is the one that matters. locationsExpired is
+    // That second bound is the one that matters. locationsExpired WAS
     // `(cleanShutdown && downtime > sigterm) || downtime > running`, so a
-    // downtime past the running expiry expires on the second clause and this
-    // test passes without the sigterm window being involved at all. The old
+    // downtime past the running expiry expired on the second clause and this
+    // test passed without the sigterm window being involved at all. The old
     // 500s pin did exactly that once locationTtlS became live - green, and
     // proving nothing about the thing in its name.
+    //
+    // d24c003d0 has since made it `cleanShutdown ? downtime > sigterm : downtime
+    // > running`, so the second clause no longer fires for a clean shutdown and
+    // the pin no longer has to stay under locationTtlS to mean something. Kept
+    // under it anyway: the fixture is then correct under either expression.
     env = await createTestEnv({ hookCtx: this,
       nodes: 1,
       tickerAutostart: false,
