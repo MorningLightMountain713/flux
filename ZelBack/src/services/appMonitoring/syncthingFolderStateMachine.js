@@ -77,16 +77,26 @@ function noteSafetyObservation(appId, observation, logFn, message) {
  *   Skips (by name, by dir name, or by exact absolute path), and whether a
  *   (non-excluded) directory counts as content in its own right rather than
  *   only as a subtree to descend into.
+ *
+ * `excludeNames` and `excludeDirs` apply at the FOLDER ROOT ONLY, because that is the
+ * scope of the thing they mirror: FluxOS writes exactly `/backup` to `.stignore`, which
+ * is root-anchored, and syncthing's own internal-name suppression is root-relative too.
+ * Skipping those names at any depth made the walk disagree with the index it is checked
+ * against - syncthing counts a nested `backup/` and its files, the walk did not, and an
+ * app whose only regular files live there read as a phantom index over an empty disk and
+ * was held down while perfectly healthy.
  * @returns {Promise<number>} Number of entries found (capped at limit)
  */
 async function countFilesUpTo(dirPath, limit, { excludeNames = [], excludeDirs = [], countDirs = false, excludePaths = [] } = {}) {
   // excludePaths: exact absolute paths (files or dirs) skipped wholesale -
-  // the anchored form the injected-content excludes arrive in.
+  // the anchored form the injected-content excludes arrive in. Already absolute, so
+  // they stay depth-independent.
   const excludePathSet = new Set(excludePaths);
   let count = 0;
   const pending = [dirPath];
   while (pending.length > 0 && count < limit) {
     const current = pending.pop();
+    const atRoot = current === dirPath;
     let entries;
     try {
       // eslint-disable-next-line no-await-in-loop
@@ -104,7 +114,7 @@ async function countFilesUpTo(dirPath, limit, { excludeNames = [], excludeDirs =
         continue;
       }
       if (entry.isDirectory()) {
-        if (excludeDirs.includes(entry.name)) {
+        if (atRoot && excludeDirs.includes(entry.name)) {
           // eslint-disable-next-line no-continue
           continue;
         }
@@ -118,7 +128,7 @@ async function countFilesUpTo(dirPath, limit, { excludeNames = [], excludeDirs =
           if (count >= limit) break;
         }
         pending.push(entryPath);
-      } else if (entry.isFile() && !excludeNames.includes(entry.name)) {
+      } else if (entry.isFile() && !(atRoot && excludeNames.includes(entry.name))) {
         count += 1;
         if (count >= limit) break;
       }

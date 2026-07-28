@@ -1493,4 +1493,50 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'stopped');
     });
   });
+
+  describe('sync-scoped walk anchoring', () => {
+    const ROOT = '/appdata';
+
+    beforeEach(() => {
+      fsMock.promises.readdir.resolves([]);
+    });
+
+    it('counts files inside a NESTED backup directory', async () => {
+      // FluxOS writes exactly `/backup` to .stignore, which is root-anchored, and
+      // syncthing's own internal-name suppression is root-relative too - so syncthing
+      // indexes a nested backup/ and its files. Skipping the name at any depth made the
+      // walk disagree with the very index it is checked against, and an app whose only
+      // regular files live there read as a phantom index over an empty disk and was
+      // held down while perfectly healthy.
+      fsMock.promises.readdir.withArgs(ROOT).resolves([dirent('sub', false)]);
+      fsMock.promises.readdir.withArgs(`${ROOT}/sub`).resolves([dirent('backup', false)]);
+      fsMock.promises.readdir.withArgs(`${ROOT}/sub/backup`).resolves([dirent('save.dat')]);
+
+      const result = await stateMachine.checkDirectoryHasSyncScopedFiles(ROOT);
+
+      expect(result.fileCount).to.equal(1);
+      expect(result.hasContent).to.be.true;
+    });
+
+    it('still skips the backup directory at the folder root', async () => {
+      // the other direction: a root-level backup/ IS what .stignore excludes, so its
+      // contents must stay invisible or a wiped volume reads as populated
+      fsMock.promises.readdir.withArgs(ROOT).resolves([dirent('.stignore'), dirent('backup', false)]);
+      fsMock.promises.readdir.withArgs(`${ROOT}/backup`).resolves([dirent('save.dat')]);
+
+      const result = await stateMachine.checkDirectoryHasSyncScopedFiles(ROOT);
+
+      expect(result.fileCount).to.equal(0);
+      expect(result.hasContent).to.be.false;
+    });
+
+    it('skips .stignore at the root but counts a nested file of the same name', async () => {
+      fsMock.promises.readdir.withArgs(ROOT).resolves([dirent('.stignore'), dirent('sub', false)]);
+      fsMock.promises.readdir.withArgs(`${ROOT}/sub`).resolves([dirent('.stignore')]);
+
+      const result = await stateMachine.checkDirectoryHasSyncScopedFiles(ROOT);
+
+      expect(result.fileCount).to.equal(1);
+    });
+  });
 });
