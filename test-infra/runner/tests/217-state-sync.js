@@ -286,9 +286,8 @@ describe('State sync: 3-peer ephemeral sync', function () {
 
   it('should have synced app locations to MongoDB', async function () {
     this.timeout(10000);
-    const dc = dbClient(11);
-    const count = await dc.locationCount();
-    expect(count).to.be.greaterThan(0);
+    const located = await env.clients[10].getAllAppLocations();
+    expect(located.data.length).to.be.greaterThan(0);
   });
 
   it('should reach READY state', async function () {

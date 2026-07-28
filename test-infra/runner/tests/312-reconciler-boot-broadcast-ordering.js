@@ -2,7 +2,6 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { dbClient } from '../framework/db-client.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { waitForUp } from '../framework/wait.js';
 
@@ -36,13 +35,12 @@ describe('first post-boot broadcast: complete, never empty, never destructive', 
     // readyState and the age of its last event, which is the only thing separating "the
     // node never broadcast" from "this client's stream never connected". Discarding it
     // made both present as a bare missing row, which is unreadable after the fact.
-    const peerDb = dbClient(peerIdx + 1);
     let apprunningWait = null;
     await env.clients[peerIdx]
       .waitForEvent('network:apprunning', (d) => d.apps?.some((a) => a.name === appName), 90000)
       .catch((err) => { apprunningWait = err.message; });
-    const rows = await peerDb.getAppLocations(appName);
-    expect(rows.length, `peer must hold a location row before the reboot${apprunningWait ? ` [apprunning wait: ${apprunningWait}]` : ''}`).to.be.greaterThan(0);
+    const located = await env.clients[peerIdx].getAppLocations(appName);
+    expect(located.data.length, `peer must hold a location row before the reboot${apprunningWait ? ` [apprunning wait: ${apprunningWait}]` : ''}`).to.be.greaterThan(0);
   });
 
   after(async function () {
@@ -53,7 +51,6 @@ describe('first post-boot broadcast: complete, never empty, never destructive', 
   it('peer rows survive the reboot; the first broadcast is complete and never empty', async function () {
     this.timeout(300000);
     const peerClient = env.clients[peerIdx];
-    const peerDb = dbClient(peerIdx + 1);
     const afterId = peerClient.getLastEventId();
 
     // machine-reboot shape: the whole node container restarts (fluxos + dockerd
@@ -79,8 +76,8 @@ describe('first post-boot broadcast: complete, never empty, never destructive', 
     expect(empty, 'no empty fluxapprunning v2 snapshots').to.have.lengthOf(0);
 
     // (a): the peer's location rows for the app survived the whole sequence
-    const rows = await peerDb.getAppLocations(appName);
-    expect(rows.length, 'peer location rows survived the reboot broadcast').to.be.greaterThan(0);
+    const located = await peerClient.getAppLocations(appName);
+    expect(located.data.length, 'peer location rows survived the reboot broadcast').to.be.greaterThan(0);
 
     await waitForUp(client, appName, 'app running again after reboot');
   });

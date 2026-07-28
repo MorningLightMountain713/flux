@@ -46,7 +46,9 @@ describe('Boot: prerequisites', function () {
   });
 
   it('should prepare global app collections', async function () {
-    expect(env.nodeHasLog(0, 'Flux Apps locations prepared')).to.equal(true);
+    // Where an app runs is derived from this event log; there is no materialized
+    // locations collection to prepare.
+    expect(env.nodeHasLog(0, 'App state events collection prepared')).to.equal(true);
   });
 
   it('should wait for daemon RPC before proceeding', async function () {

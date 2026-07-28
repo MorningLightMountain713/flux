@@ -342,16 +342,12 @@ export async function buildSeedableIndexRefApp({
   return buildSeedableApp({ name, compose, ...rest });
 }
 
+// The running set is a derivation over the app state event log, so seeding a
+// location means asserting the event the derivation reads - there is no
+// materialized row to write, and writing one would be seeding a shape nothing
+// consults.
 export function buildRunningState({ appName, nodeIps, hash, broadcastedAt = null }) {
   const ts = broadcastedAt ?? Date.now();
-
-  const locations = nodeIps.map((ip) => ({
-    name: appName,
-    ip,
-    hash,
-    broadcastedAt: ts,
-    runningSince: ts - 60000,
-  }));
 
   const stateEvents = nodeIps.map((ip) => ({
     type: 'apprunning',
@@ -367,7 +363,7 @@ export function buildRunningState({ appName, nodeIps, hash, broadcastedAt = null
     },
   }));
 
-  return { locations, stateEvents };
+  return { stateEvents };
 }
 
 export async function seedAppOnAllNodes(dbClients, { name, compose, height, instances } = {}) {
@@ -387,17 +383,14 @@ export async function seedAppWithRunningState(dbClients, nodeIps, { name, compos
   const app = await seedAppOnAllNodes(dbClients, { name, compose, height, instances });
   const state = buildRunningState({ appName: name, nodeIps, hash: app.hash });
 
-  const seedPromises = dbClients.map(async (dbc, i) => {
-    for (const loc of state.locations) {
-      await dbc.seedAppLocation(loc);
-    }
+  const seedPromises = dbClients.map(async (dbc) => {
     for (const evt of state.stateEvents) {
       await dbc.seedAppStateEvent(evt);
     }
   });
   await Promise.all(seedPromises);
 
-  return { ...app, locations: state.locations, stateEvents: state.stateEvents };
+  return { ...app, stateEvents: state.stateEvents };
 }
 
 /**

@@ -253,6 +253,7 @@ export function nodeClient(nodeNum) {
     setDOSState: (dosState, dosMessage, zelidauth) =>
       post('/flux/dosstate', { dosState, dosMessage }, { zelidauth }),
     getAppLocations: (name) => get(`/apps/location/${name}`),
+    getAllAppLocations: () => get('/apps/locations'),
     getPermanentMessages: () => get('/apps/permanentmessages'),
     getTempMessages: (hash) => get(`/apps/temporarymessages/${hash}`),
     getAppSpecs: (name) => get(`/apps/appspecifications/${name}`),

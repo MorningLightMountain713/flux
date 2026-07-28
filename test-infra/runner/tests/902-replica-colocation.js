@@ -283,13 +283,13 @@ describe('replica co-location: two named replicas of one app on one node, separa
     const observer = env.clients.find((c, i) => i !== HOST_IDX);
     await waitFor(
       async () => {
-        const rows = (await dbClient(observer.num).getAppLocations(appName))
+        const rows = (await observer.getAppLocations(appName)).data
           .filter((r) => r.ip.startsWith(nodeIp(HOST_NODE)));
         return rows.length === 2 && rows.every((r) => r.replica);
       },
       { timeout: 90000, interval: 3000, label: `${appName} two per-identity location rows on a peer` },
     );
-    const rows = (await dbClient(observer.num).getAppLocations(appName))
+    const rows = (await observer.getAppLocations(appName)).data
       .filter((r) => r.ip.startsWith(nodeIp(HOST_NODE)));
     expect(rows.map((r) => r.replica).sort()).to.deep.equal(['s1', 's2']);
   });

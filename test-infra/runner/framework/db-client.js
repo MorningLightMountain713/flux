@@ -73,11 +73,6 @@ export function dbClient(nodeNum) {
       return globalDb.collection('zelappstemporarymessages').countDocuments({});
     },
 
-    async locationCount() {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappslocation').countDocuments({});
-    },
-
     async installingCount() {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('appsinstallinglocations').countDocuments({});
@@ -100,18 +95,6 @@ export function dbClient(nodeNum) {
     async localAppCount() {
       const localDb = await db('appsLocal');
       return localDb.collection('zelappsinformation').countDocuments({});
-    },
-
-    // This node's view of where an app runs (the rows fluxapprunning messages
-    // upsert and the empty-broadcast bug used to wipe).
-    async getAppLocations(appName) {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappslocation').find({ name: appName }).toArray();
-    },
-
-    async getAppLocationsByIp(ip) {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappslocation').find({ ip }).toArray();
     },
 
     // This node's installed-app row. Its `hash` is the spec message the node
@@ -323,16 +306,24 @@ export function dbClient(nodeNum) {
       await globalDb.collection('zelappsmessages').insertOne(msg);
     },
 
+    // Where an app runs is a derivation over the app state event log, so seeding a
+    // location means asserting the apprunning event the derivation reads. There is no
+    // materialized row to write; writing one would seed a shape nothing consults.
     async seedAppLocation({ name, ip, hash, broadcastedAt, runningSince }) {
       const globalDb = await db('appsGlobal');
       const ts = broadcastedAt ?? Date.now();
-      await globalDb.collection('zelappslocation').insertOne({
-        name,
+      await globalDb.collection('appstateevents').insertOne({
+        type: 'apprunning',
         ip,
-        hash,
+        dedupKey: 'v2',
         broadcastedAt: new Date(ts),
         expireAt: new Date(ts + 125 * 60 * 1000),
-        runningSince: runningSince ?? ts,
+        receivedAt: new Date(ts),
+        data: {
+          apps: [{ name, hash, runningSince: runningSince ?? ts }],
+          ip,
+          broadcastedAt: ts,
+        },
       });
     },
 
