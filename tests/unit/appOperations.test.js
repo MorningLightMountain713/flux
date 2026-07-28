@@ -24,6 +24,7 @@ const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper'
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
+const config = require('config');
 const proxyquire = require('proxyquire');
 
 describe('appOperations tests', () => {
@@ -516,28 +517,20 @@ describe('appOperations tests', () => {
     });
   });
 
-  // coordinateActiveStandbyApps is a recursive function that continuously runs in production.
-  // These tests use a counter to prevent infinite recursion after the first iteration.
+  // A pass is one call: the cadence lives in startActiveStandbyCoordinator's interval,
+  // so a test drives passes by calling coordinateActiveStandbyApps directly.
   describe('coordinateActiveStandbyApps tests', () => {
     let globalStateRef;
     let deploymentProviderStub;
 
     beforeEach(() => {
-      let recursionCounter = 0;
       globalStateRef = globalState;
       operationRegistry.clear();
       // the first-run mount-safety gate blocks election until the syncthing
       // monitor's first cycle completes; these tests model a settled node
       globalStateRef.syncthingAppsFirstRun = false;
       sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
-
-      sinon.stub(serviceHelper, 'delay').callsFake(async () => {
-        recursionCounter += 1;
-        if (recursionCounter > 1) {
-          return new Promise(() => {});
-        }
-        return Promise.resolve();
-      });
+      sinon.stub(serviceHelper, 'delay').resolves();
 
       sinon.stub(syncthingService, 'getHealth').resolves({
         status: 'success',
@@ -592,7 +585,8 @@ describe('appOperations tests', () => {
       // can't be sinon-stubbed on the module object; proxyquire (callThru) overrides just that
       // one dependency while every other dep (delay, axiosGet, getLocalSocketAddress, docker,
       // deploymentProvider) is object-accessed and so is controlled by the sinon stubs below.
-      const proxyquire = require('proxyquire');
+      const config = require('config');
+const proxyquire = require('proxyquire');
       const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
       // The active-standby component is currently running on THIS node.
       const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
@@ -636,7 +630,8 @@ describe('appOperations tests', () => {
       // IP-granular ipsMatch must still recognise this node as the primary, so it must NOT stop
       // its own running container. (Port-sensitive matching would wrongly stop it.)
       const identifier = 'n8n_n8napp';
-      const proxyquire = require('proxyquire');
+      const config = require('config');
+const proxyquire = require('proxyquire');
       const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
       const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
       const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
@@ -688,26 +683,6 @@ describe('appOperations tests', () => {
       }]],
     });
 
-    // The loop reschedules itself from its own finally, so passes after the first arrive
-    // via that reschedule rather than another call - a second direct call would hang on
-    // the stubbed delay. Let `passes` of them through, run `between` before each
-    // subsequent pass, and resolve once the last one has finished its body.
-    const runPasses = (passes, between = () => {}) => {
-      let seen = 0;
-      let settle;
-      const finished = new Promise((resolve) => { settle = resolve; });
-      serviceHelper.delay.callsFake(async () => {
-        seen += 1;
-        if (seen >= passes) {
-          settle();
-          return new Promise(() => {}); // park the chain; the pass we wanted is done
-        }
-        between(seen);
-        return undefined;
-      });
-      return finished;
-    };
-
     it('announces an operator-stopped component once, not on every pass', async () => {
       const identifier = 'opstopa_appa';
       deploymentProviderStub.resolves([gDeployment('appa', identifier)]);
@@ -718,9 +693,8 @@ describe('appOperations tests', () => {
       sinon.stub(dockerService, 'getAppIdentifier').returns(`flux${identifier}`);
       const publish = sinon.stub(fluxEventBus, 'publish');
 
-      const finished = runPasses(2);
-      appOperations.coordinateActiveStandbyApps();
-      await finished;
+      await appOperations.coordinateActiveStandbyApps();
+      await appOperations.coordinateActiveStandbyApps();
 
       // silence here is indistinguishable from a dead loop, but a line every 30s is noise
       expect(decisionsFor(publish, identifier, 'operatorStopExcluded')).to.have.lengthOf(1);
@@ -738,16 +712,55 @@ describe('appOperations tests', () => {
       sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: [] } } });
       const publish = sinon.stub(fluxEventBus, 'publish');
 
-      // pass 1 stopped, pass 2 lock lifted, pass 3 stopped again
-      const finished = runPasses(3, (seen) => {
-        appsRuntimeState.isOperatorStopped.resetBehavior();
-        appsRuntimeState.isOperatorStopped.resolves(seen !== 1);
-      });
-      appOperations.coordinateActiveStandbyApps();
-      await finished;
+      await appOperations.coordinateActiveStandbyApps();
+
+      appsRuntimeState.isOperatorStopped.resetBehavior();
+      appsRuntimeState.isOperatorStopped.resolves(false);
+      await appOperations.coordinateActiveStandbyApps();
+
+      appsRuntimeState.isOperatorStopped.resetBehavior();
+      appsRuntimeState.isOperatorStopped.resolves(true);
+      await appOperations.coordinateActiveStandbyApps();
 
       expect(decisionsFor(publish, identifier, 'operatorStopCleared')).to.have.lengthOf(1);
       expect(decisionsFor(publish, identifier, 'operatorStopExcluded')).to.have.lengthOf(2);
+    });
+
+    it('is driven by an interval at the configured cadence, not by re-arming itself', async () => {
+      // The loop used to re-arm only from its own finally, so a pass that never settled
+      // stopped election on the node permanently until FluxOS restarted.
+      const setIntervalStub = sinon.stub(global, 'setInterval').returns('handle');
+
+      const handle = appOperations.startActiveStandbyCoordinator();
+
+      expect(handle).to.equal('handle');
+      expect(setIntervalStub.calledOnce).to.be.true;
+      expect(setIntervalStub.firstCall.args[1]).to.equal(config.fluxapps.masterSlaveIntervalMs);
+    });
+
+    it('never runs two passes at once', async () => {
+      // The cadence is fixed, so a pass that outruns it would otherwise have a second one
+      // racing its own promotions.
+      let releaseFirstPass;
+      deploymentProviderStub.onFirstCall().returns(new Promise((resolve) => {
+        releaseFirstPass = () => resolve([]);
+      }));
+      deploymentProviderStub.resolves([]);
+      const setIntervalStub = sinon.stub(global, 'setInterval');
+
+      appOperations.startActiveStandbyCoordinator();
+      const tick = setIntervalStub.firstCall.args[0];
+
+      const firstPass = tick(); // starts and blocks in the middle of its work
+      await Promise.resolve();
+      await tick(); // must find the pass in flight and stand down
+      expect(deploymentProviderStub.callCount, 'a tick during a pass must not start another').to.equal(1);
+
+      releaseFirstPass();
+      await firstPass; // the callback settles only once the pass has finished
+
+      await tick();
+      expect(deploymentProviderStub.callCount, 'the next tick after a pass settles must run').to.equal(2);
     });
 
     it('clears its own stale primary record so a stopped last primary can be elected again', async () => {
@@ -781,10 +794,8 @@ describe('appOperations tests', () => {
 
       const publish = sinon.stub(fluxEventBus, 'publish');
 
-      // pass 1 records this node as primary; pass 2 finds it gone from FDM and not running here
-      const finished = runPasses(2);
-      appOps.coordinateActiveStandbyApps();
-      await finished;
+      await appOps.coordinateActiveStandbyApps(); // records this node as primary
+      await appOps.coordinateActiveStandbyApps(); // gone from FDM, and not running here
 
       expect(decisionsFor(publish, identifier, 'stalePrimaryEvicted')).to.have.lengthOf(1);
       globalStateRef.receiveOnlySyncthingAppsCache.delete(appId);
