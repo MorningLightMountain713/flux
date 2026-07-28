@@ -354,10 +354,18 @@ async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCent
           { upsert: true },
         );
       } else if (typeof bootContext === 'object') {
+        // Prefer downtimeMs: it is stamped HERE, so it excludes the env-build time a
+        // caller-computed lastAlive would already have accrued. Boot latency after this
+        // point still counts, and it only ever makes the observed downtime LONGER - so a
+        // fixture targeting a window must anchor near that window's lower bound, never
+        // its middle.
+        const lastAlive = bootContext.downtimeMs != null
+          ? Date.now() - bootContext.downtimeMs
+          : bootContext.lastAlive ?? Date.now();
         await localDb.collection('nodestartuptracker').updateOne(
           { _id: 'heartbeat' },
           { $set: {
-            lastAlive: bootContext.lastAlive ?? Date.now(),
+            lastAlive,
             machineBootId: bootContext.machineBootId ?? 'old-boot-id',
             shutdownReason: bootContext.shutdownReason ?? null,
           } },

@@ -150,15 +150,19 @@ describe('Boundary: clean shutdown within SIGTERM_EXPIRY', function () {
 
   before(async function () {
     this.timeout(120000);
-    // 350s ago with sigterm: past the 300s running-TTL (harness locationTtlS) but
-    // within the 420s SIGTERM window. A clean shutdown is governed by the SIGTERM
-    // window, so the app must NOT expire — sitting in the gap between the two TTLs
-    // is what distinguishes that from the running-TTL path (300s sat on the exact
-    // running-TTL boundary and only failed via boot latency).
+    // Sigterm downtime inside the gap between the two TTLs: past the 300s running-TTL
+    // (harness locationTtlS) but within the 420s SIGTERM window. A clean shutdown is
+    // governed by the SIGTERM window, so the app must NOT expire - sitting in that gap
+    // is what distinguishes it from the running-TTL path.
+    //
+    // Anchored just above the LOWER bound, not mid-gap: boot latency is counted in the
+    // downtime the node observes and only ever makes it longer, so the whole margin runs
+    // toward 420. Mid-gap (350s) left 70s of it and a loaded box spent 88s, which read as
+    // a product failure when the product had correctly expired a 438s downtime.
     env = await createTestEnv({ hookCtx: this,
       nodes: 1,
       tickerAutostart: false,
-      bootContext: { lastAlive: Date.now() - 350000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
+      bootContext: { downtimeMs: 310000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
     });
     await waitForDaemonReady(env.clients[0]);
   });
@@ -187,7 +191,7 @@ describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
     env = await createTestEnv({ hookCtx: this,
       nodes: 1,
       tickerAutostart: false,
-      bootContext: { lastAlive: Date.now() - 500000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
+      bootContext: { downtimeMs: 500000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
     });
   });
 
