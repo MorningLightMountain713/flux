@@ -12,7 +12,6 @@ import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
-import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 const subnet = getSubnetConfig();
 
@@ -48,7 +47,6 @@ async function isUp(client, appName) {
 
 describe('masterSlave recovery after an operator stop', function () {
   let env;
-  dumpLogsOnFailure(() => env);
   let holders;
   const appName = `e2eopstop${Date.now()}`;
   const identifier = `${appName}_${appName}`;
