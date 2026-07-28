@@ -1,0 +1,260 @@
+// weight: light
+import { describe, it, before, after, afterEach } from 'mocha';
+import { expect } from 'chai';
+import { createTestEnv } from '../framework/test-env.js';
+import {
+  waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
+  waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState,
+  waitForPeerThreshold, waitForPeersBelowThreshold,
+  waitForBootSettledAndLogged, waitForDosChanged,
+} from '../framework/wait.js';
+import {
+  advanceBlock, advanceBlocks, startTicker, stopTicker, getState,
+} from '../framework/daemon-control.js';
+import { fluxTeamKey } from '../framework/keys.js';
+import { authenticate } from '../auth.js';
+
+// Suite 1: Peer threshold boundaries
+
+describe('Boundary: peer thresholds', function () {
+  let env;
+
+  before(async function () {
+    this.timeout(180000);
+    env = await createTestEnv({ hookCtx: this, nodes: 3, tickerAutostart: false });
+    await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
+    await Promise.all(env.clients.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
+    await env.startDiscovery();
+  });
+
+  after(async function () {
+    this.timeout(30000);
+    await env?.teardown();
+  });
+
+  it('should fire peers:thresholdReached at exactly threshold (2)', async function () {
+    this.timeout(120000);
+    const event = await waitForPeerThreshold(env.clients[0], 90000);
+    expect(event.data.count).to.be.greaterThanOrEqual(2);
+  });
+
+  it('should NOT fire peers:belowThreshold at exactly degraded threshold (1 peer)', async function () {
+    // Covers the whole test, not just the READY wait below: the block wait and
+    // the ping-detection sleep account for 25s of it on their own. Reaching
+    // READY is setup here - the assertion is about the alarm - so the budget is
+    // deliberately clear of it, and a slow boot fails on the assertion rather
+    // than partway through the setup with the disconnect never run.
+    this.timeout(180000);
+    await waitForExplorerReady(env.clients[0]);
+    await waitForOrchestratorStarted(env.clients[0]);
+    await advanceBlock();
+    await waitForBlockProcessed(env.clients[0], () => true, 20000);
+    await startTicker();
+    await waitForOrchestratorState(env.clients[0], 'READY', 120000);
+    await stopTicker();
+
+    await env.disconnectNode(2);
+    // Wait for ping detection
+    await new Promise((r) => setTimeout(r, 5000));
+
+    const belowEvents = env.clients[0].getEventBuffer()
+      .filter((e) => e.event === 'peers:belowThreshold');
+    expect(belowEvents.length, 'peers:belowThreshold should NOT fire at exactly threshold').to.equal(0);
+  });
+
+  it('should fire peers:belowThreshold at zero peers', async function () {
+    this.timeout(30000);
+    await env.disconnectNode(1);
+    await waitForPeersBelowThreshold(env.clients[0], 20000);
+  });
+});
+
+// Suite 2: DOS boundaries
+
+describe('Boundary: DOS state', function () {
+  let env;
+  let fluxTeamAuth;
+
+  before(async function () {
+    this.timeout(120000);
+    env = await createTestEnv({ hookCtx: this, nodes: 1, tickerAutostart: false });
+    await waitForDaemonReady(env.clients[0]);
+    await waitForNodeStatus(env.clients[0], (d) => d.confirmed === true, 30000);
+    fluxTeamAuth = await authenticate(env.clients[0].url, fluxTeamKey());
+  });
+
+  afterEach(async function () {
+    this.timeout(10000);
+    await env.clients[0].setDOSState(0, null, fluxTeamAuth.zelidauth);
+  });
+
+  after(async function () {
+    this.timeout(30000);
+    await env?.teardown();
+  });
+
+  it('should allow loginPhrase at dosState=10 (boundary: > 10 not >= 10)', async function () {
+    this.timeout(15000);
+    await env.clients[0].setDOSState(10, null, fluxTeamAuth.zelidauth);
+    await waitForDosChanged(env.clients[0], (d) => d.dosState === 10, 10000);
+    const res = await env.clients[0].getLoginPhrase();
+    expect(res.status).to.equal('success');
+  });
+
+  it('should block loginPhrase at dosState=11', async function () {
+    this.timeout(15000);
+    await env.clients[0].setDOSState(11, null, fluxTeamAuth.zelidauth);
+    await waitForDosChanged(env.clients[0], (d) => d.dosState === 11, 10000);
+    const res = await env.clients[0].getLoginPhrase();
+    expect(res.status).to.equal('error');
+  });
+});
+
+// Suite 3: Block timer boundaries
+
+describe('Boundary: block timer', function () {
+  let env;
+
+  before(async function () {
+    this.timeout(180000);
+    env = await createTestEnv({
+      hookCtx: this,
+      // THREE, AND PEERED, because the budget this block measures now only runs
+      // while the peer threshold is met. On two nodes each one holds a single
+      // peer, short of appSyncPeerThreshold, so the counter never advances and
+      // the 250th block arrives to a node still in SYNCING - which is the
+      // invariant working, not the boundary failing. Two nodes could only ever
+      // measure the old behaviour, where a node with nobody to learn from
+      // reached readiness on elapsed time alone.
+      nodes: 3,
+      // Nobody authoritative, so no state sync can complete and the block budget
+      // is the only road to READY. Without this the fleet's own answerer would
+      // carry node 0 to READY before the 250th block and test one would fail for
+      // a reason that has nothing to do with the boundary.
+      syncedNodes: [],
+      tickerAutostart: false,
+      // THE PRODUCTION BUDGET, declared because this suite is the one testing
+      // it. The shared config runs a short fallback so that an ordinary fleet -
+      // where every node boots at once and none can answer another's state sync
+      // yet - is not held on a road no suite is asking about. The 249/250 below
+      // are that budget's own arithmetic, 125 minutes at 2 blocks a minute, so
+      // the number has to be set here or the boundary being measured is the
+      // harness's and not the product's.
+      configOverrides: { fluxapps: { appSyncFallbackMinutes: 125 } },
+    });
+    await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
+    await Promise.all(env.clients.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
+    await waitForExplorerReady(env.clients[0]);
+    await waitForOrchestratorStarted(env.clients[0]);
+    // BEFORE the first block, and that ordering is the arithmetic. The counter
+    // only advances while the peer set is up, so a block delivered before the
+    // threshold is met is a block that does not count - and the 249/250 boundary
+    // below would then be off by however many arrived early.
+    await env.startDiscovery();
+    await waitForPeerThreshold(env.clients[0], 120000);
+    await advanceBlock();
+    await waitForOrchestratorState(env.clients[0], 'SYNCING', 20000);
+  });
+
+  after(async function () {
+    this.timeout(30000);
+    await env?.teardown();
+  });
+
+  it('should NOT transition to READY at 249 blocks (just under threshold)', async function () {
+    this.timeout(120000);
+    // before hook advanced 1 block to enter SYNCING — that block counts toward the threshold
+    //
+    // The target is read off the chain, not written down. A literal encodes both
+    // the chain start AND how many blocks the before hook advanced; when the
+    // start moved it became a height the node was already past, so this wait
+    // returned on the FIRST processed block and the assertion below passed
+    // without the 248 blocks having been processed at all.
+    const tipBefore = (await getState()).currentHeight;
+    await advanceBlocks(248);
+    await waitForBlockProcessed(env.clients[0], (d) => d.height >= tipBefore + 248, 30000);
+    const stateEvents = env.clients[0].getEventBuffer()
+      .filter((e) => e.event === 'orchestrator:stateChanged' && e.data.to === 'READY');
+    expect(stateEvents.length, 'should not be READY at 249 blocks').to.equal(0);
+  });
+
+  it('should transition to READY at 250 blocks (exact threshold)', async function () {
+    this.timeout(30000);
+    await advanceBlock();
+    await waitForOrchestratorState(env.clients[0], 'READY', 20000);
+  });
+});
+
+// Suite 4: Boot expiry boundaries
+
+describe('Boundary: clean shutdown within SIGTERM_EXPIRY', function () {
+  let env;
+
+  before(async function () {
+    this.timeout(120000);
+    // 1s pinned, which the node reads as ~17s - within the harness's 30s
+    // sigtermExpiryS.
+    //
+    // The pin is not what the node measures. lastAlive is seeded just before
+    // the container starts and the downtime is computed when the node reads it
+    // at boot, so ONE BOOT lands inside the measurement: a 300s pin was read as
+    // 316s on cindy under a full gate. That 16s is why this window cannot be
+    // compressed at production's ratio - 420s at 120x is 3.5s, smaller than the
+    // drift, and nothing could ever land inside it. See coupled-knobs.js.
+    env = await createTestEnv({ hookCtx: this,
+      nodes: 1,
+      tickerAutostart: false,
+      bootContext: { lastAliveAgoMs: 1000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
+    });
+    await waitForDaemonReady(env.clients[0]);
+  });
+
+  after(async function () {
+    this.timeout(30000);
+    await env?.teardown();
+  });
+
+  it('should NOT remove apps when downtime within SIGTERM window', async function () {
+    this.timeout(60000);
+    // anchor on the settle LOG line, not just the event: 'Locations expired'
+    // is written before the settle line, so behind the anchor this absence
+    // assert is FIFO-race-free (the instant form could false-pass)
+    await waitForBootSettledAndLogged(env);
+    expect(env.nodeHasLog(0, 'Locations expired')).to.equal(false);
+  });
+});
+
+describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
+  let env;
+
+  before(async function () {
+    this.timeout(120000);
+    // 25s pinned, read as ~41s: past the 30s sigtermExpiryS, and deliberately
+    // still UNDER locationTtlS at 63s.
+    //
+    // That second bound is the one that matters. locationsExpired is
+    // `(cleanShutdown && downtime > sigterm) || downtime > running`, so a
+    // downtime past the running expiry expires on the second clause and this
+    // test passes without the sigterm window being involved at all. The old
+    // 500s pin did exactly that once locationTtlS became live - green, and
+    // proving nothing about the thing in its name.
+    env = await createTestEnv({ hookCtx: this,
+      nodes: 1,
+      tickerAutostart: false,
+      bootContext: { lastAliveAgoMs: 25000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
+    });
+  });
+
+  after(async function () {
+    this.timeout(30000);
+    await env?.teardown();
+  });
+
+  it('should remove apps when downtime exceeds SIGTERM window', async function () {
+    this.timeout(40000);
+    // anchor on the settle LOG line so the presence assert below cannot race
+    // the log pipeline ('Locations expired' is written before the settle line)
+    await waitForBootSettledAndLogged(env, 0, { timeout: 20000 });
+    expect(env.nodeHasLog(0, 'Locations expired')).to.equal(true);
+  });
+});
