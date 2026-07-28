@@ -23,7 +23,8 @@
 #
 # Usage (from anywhere):
 #   test-infra/runner/run-parallel.sh                 # all suites, heavy-first
-#   SUITES='28 37 35' test-infra/runner/run-parallel.sh   # a chosen subset
+#   SUITES='301 403 309' test-infra/runner/run-parallel.sh  # a chosen subset
+#   MAXN=6 test-infra/runner/run-parallel.sh                # 6 suites in flight
 #   MAXN=2 MIN_FREE_MB=20000 test-infra/runner/run-parallel.sh
 #
 # Per-suite TAP + run-all output land under $E2E_LOG_DIR (default /tmp/e2e-logs/<n>/);
