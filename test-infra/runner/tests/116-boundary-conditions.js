@@ -236,7 +236,7 @@ describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
     // 600s pinned: past the sigterm window however little the boot adds, and far
     // under the running expiry however much it adds.
     //
-    // That second bound is the one that matters. locationsExpired is
+    // That second bound is the one that matters. locationsExpired WAS
     // `(cleanShutdown && downtime > sigterm) || downtime > running`, so a
     // downtime past the running expiry expires on the second clause and this
     // test passes without the sigterm window being involved at all.
