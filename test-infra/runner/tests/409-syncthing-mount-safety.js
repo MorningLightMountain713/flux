@@ -136,25 +136,19 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     expect(await folderType(ip1, phantomFolder)).to.equal('sendreceive');
   });
 
-  // PENDING, and deliberately so - this is a known gap in the product, not a
-  // broken test. `checkDirectoryHasSyncScopedContent` walks with countDirs:true
-  // and reports hasContent when it finds ANY directory, so the emptied-but-
-  // present appdata/ below counts as content, the index/disk mismatch is never
-  // seen, and no demotion happens. That countDirs behaviour was added
-  // deliberately (2026-07-04) to stop an all-directory folder being misread as
-  // empty and wrongly demoted - a real production false positive.
+  // A stale index over an emptied volume must demote, or a sendreceive folder in
+  // that state broadcasts every missing file to its peers as a deletion.
   //
-  // So FluxOS currently cannot detect a stale index over an emptied volume:
-  // a sendreceive folder in that state will broadcast every missing file as a
-  // deletion. The resolution is the files-aware discriminator - use the index's
-  // globalFiles to tell "claims files" from "claims only directory entries",
-  // then count files rather than directories - at which point this test is the
-  // natural proof it worked. Un-skip it then.
-  //
-  // Left pending rather than deleted: deleting it destroys the only record that
-  // this gap exists. Left pending rather than failing: a permanently red suite
-  // trains everyone to skim past gate failures.
-  it.skip('demotes a sendreceive folder whose index claims data over an empty volume (phantom index)', async function () {
+  // Detecting it takes both halves of the phantom-index guard, which is why this
+  // is the case that proves them: the discriminator keys on the index's
+  // globalFiles to separate "claims files" from "claims only directory entries"
+  // (a folder legitimately holding nothing but empty directories must stay up -
+  // the 2026-07-04 false positive), and the sync-scoped walk applies its
+  // exclusions at the folder ROOT only, matching the root-anchored `/backup` line
+  // FluxOS writes to .stignore. With only the first, the emptied-but-present
+  // appdata/ below counts as content and the mismatch is never seen; with only
+  // the second, a nested backup/ still hides a wiped dataset.
+  it('demotes a sendreceive folder whose index claims data over an empty volume (phantom index)', async function () {
     this.timeout(120000);
     const client = env.clients[1];
     const afterId = client.getLastEventId();
