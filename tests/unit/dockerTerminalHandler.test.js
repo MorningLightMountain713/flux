@@ -9,7 +9,7 @@ const { expect } = chai;
 describe('dockerTerminalHandler tests', () => {
   let trackTerminalSession;
   let verifyPrivilege;
-  let getDockerContainerByIdOrName;
+  let getDockerContainer;
   let dockerTerminalHandler;
 
   // Minimal stand-in for a socket.io socket. `fire` returns the listener's own
@@ -39,11 +39,11 @@ describe('dockerTerminalHandler tests', () => {
   beforeEach(() => {
     trackTerminalSession = sinon.stub();
     verifyPrivilege = sinon.stub().resolves(true);
-    getDockerContainerByIdOrName = sinon.stub().resolves({ exec: sinon.stub() });
+    getDockerContainer = sinon.stub().resolves({ exec: sinon.stub() });
     dockerTerminalHandler = proxyquire('../../ZelBack/src/lib/socketIoHandlers/dockerTerminalHandler', {
       '../../services/analyticsService': { trackTerminalSession },
       '../../services/verificationHelper': { verifyPrivilege },
-      '../../services/dockerService': { getDockerContainerByIdOrName },
+      '../../services/dockerService': { getDockerContainer },
     });
   });
 
@@ -77,7 +77,7 @@ describe('dockerTerminalHandler tests', () => {
   it('pairs open with close for a session that did open', async () => {
     const stream = { on: sinon.stub(), destroy: sinon.stub(), write: sinon.stub() };
     const execInstance = { start: (options, cb) => cb(null, stream), resize: sinon.stub() };
-    getDockerContainerByIdOrName.resolves({ exec: (cmd, cb) => cb(null, execInstance) });
+    getDockerContainer.resolves({ exec: (cmd, cb) => cb(null, execInstance) });
 
     const socket = makeSocket();
     dockerTerminalHandler(socket);
@@ -136,7 +136,7 @@ describe('dockerTerminalHandler tests', () => {
     const workingShell = () => {
       const stream = { on: sinon.stub(), destroy: sinon.stub(), write: sinon.stub() };
       const execInstance = { start: (options, cb) => cb(null, stream), resize: sinon.stub() };
-      getDockerContainerByIdOrName.resolves({ exec: (cmd, cb) => cb(null, execInstance) });
+      getDockerContainer.resolves({ exec: (cmd, cb) => cb(null, execInstance) });
       return { stream, execInstance };
     };
 
@@ -181,7 +181,7 @@ describe('dockerTerminalHandler tests', () => {
     // attempted. A setup that failed left neither, and telling the next attempt
     // it already has a terminal would simply be untrue.
     it('lets the caller try again when the setup failed', async () => {
-      getDockerContainerByIdOrName.resolves(null);
+      getDockerContainer.resolves(null);
       const socket = makeSocket();
       dockerTerminalHandler(socket);
       await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
@@ -199,7 +199,7 @@ describe('dockerTerminalHandler tests', () => {
     // The open is recorded before the exec is created, so a setup that fails
     // after it has to pair it. It used to hang unpaired until the socket closed.
     it('pairs the session it recorded when the shell then fails to start', async () => {
-      getDockerContainerByIdOrName.resolves({ exec: (cmd, cb) => cb(new Error('container is not running'), null) });
+      getDockerContainer.resolves({ exec: (cmd, cb) => cb(new Error('container is not running'), null) });
       const socket = makeSocket();
       dockerTerminalHandler(socket);
 
@@ -266,7 +266,7 @@ describe('dockerTerminalHandler tests', () => {
         start: (options, cb) => { releaseStart = () => cb(null, stream); },
         resize: sinon.stub(),
       };
-      getDockerContainerByIdOrName.resolves({ exec: (cmd, cb) => cb(null, execInstance) });
+      getDockerContainer.resolves({ exec: (cmd, cb) => cb(null, execInstance) });
 
       const socket = makeSocket();
       dockerTerminalHandler(socket);
