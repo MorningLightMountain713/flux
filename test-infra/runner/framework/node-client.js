@@ -635,6 +635,7 @@ export function nodeClient(nodeNum) {
     getAppLocations: (name) => get(`/apps/location/${name}`),
     // The folders this node tells peers it holds writable: { ready, folders }.
     getPromotedFolders: () => get('/apps/promotedfolders'),
+    getAllAppLocations: () => get('/apps/locations'),
     getPermanentMessages: () => get('/apps/permanentmessages'),
     getTempMessages: (hash) => get(`/apps/temporarymessages/${hash}`),
     getAppSpecs: (name) => get(`/apps/appspecifications/${name}`),

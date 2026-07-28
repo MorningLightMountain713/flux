@@ -98,11 +98,6 @@ export function dbClient(nodeNum) {
       return globalDb.collection('zelappstemporarymessages').countDocuments({});
     },
 
-    async locationCount() {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappslocation').countDocuments({});
-    },
-
     async installingCount() {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('appsinstallinglocations').countDocuments({});
@@ -135,8 +130,6 @@ export function dbClient(nodeNum) {
       return rows.map((row) => row.name);
     },
 
-    // This node's view of where an app runs (the rows fluxapprunning messages
-    // upsert and the empty-broadcast bug used to wipe).
     // This node's rows for the app at that address stay unexpired for `ms` from now,
     // as a production record does across a restart the harness's compressed record
     // would not outlive. Resolves to how many rows were found.
@@ -146,16 +139,6 @@ export function dbClient(nodeNum) {
       const { matchedCount } = await globalDb.collection('zelappslocation')
         .updateMany({ name: appName, ip: { $regex: `^${host}(:\\d+)?$` } }, { $set: { expireAt: new Date(Date.now() + ms) } });
       return matchedCount;
-    },
-
-    async getAppLocations(appName) {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappslocation').find({ name: appName }).toArray();
-    },
-
-    async getAppLocationsByIp(ip) {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappslocation').find({ ip }).toArray();
     },
 
     // A location's expiry on this node: its rows for the app at that address are
@@ -505,17 +488,24 @@ export function dbClient(nodeNum) {
       const explorerDb = await db('explorer');
       await explorerDb.collection('zelappshashes').dropIndex(name);
     },
-
+    // Where an app runs is a derivation over the app state event log, so seeding a
+    // location means asserting the apprunning event the derivation reads. There is no
+    // materialized row to write; writing one would seed a shape nothing consults.
     async seedAppLocation({ name, ip, hash, broadcastedAt, runningSince }) {
       const globalDb = await db('appsGlobal');
       const ts = broadcastedAt ?? Date.now();
-      await globalDb.collection('zelappslocation').insertOne({
-        name,
+      await globalDb.collection('appstateevents').insertOne({
+        type: 'apprunning',
         ip,
-        hash,
+        dedupKey: 'v2',
         broadcastedAt: new Date(ts),
         expireAt: new Date(ts + 125 * 60 * 1000),
-        runningSince: runningSince ?? ts,
+        receivedAt: new Date(ts),
+        data: {
+          apps: [{ name, hash, runningSince: runningSince ?? ts }],
+          ip,
+          broadcastedAt: ts,
+        },
       });
     },
 
