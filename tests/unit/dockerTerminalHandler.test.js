@@ -78,16 +78,18 @@ describe('dockerTerminalHandler tests', () => {
     dockerTerminalHandler(socket);
     await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
 
+    // The container name IS the analytics target, replica segment and all - only
+    // the flux prefix comes off. Reporting a decomposed `${component}_${appName}`
+    // instead merged two co-located siblings' sessions under one target.
     expect(sessionsOfType('open')).to.have.lengthOf(1);
-    expect(sessionsOfType('open')[0].args[1]).to.equal('myapp');
-    expect(sessionsOfType('open')[0].args[4]).to.equal('comp');
+    expect(sessionsOfType('open')[0].args[1]).to.equal('comp_myapp');
     expect(sessionsOfType('close')).to.have.lengthOf(0);
 
     socket.connected = false;
     await socket.fire('disconnect');
 
     expect(sessionsOfType('close')).to.have.lengthOf(1);
-    expect(sessionsOfType('close')[0].args[1]).to.equal('myapp');
+    expect(sessionsOfType('close')[0].args[1]).to.equal('comp_myapp');
     expect(stream.destroy.calledOnce).to.be.true;
   });
 });
