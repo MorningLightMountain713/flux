@@ -493,13 +493,15 @@ describe('appQueryService tests', () => {
     });
   });
 
-  describe('listRunningAppsApi', () => {
+  // v9 folded the API handler into listRunningApps: called with a `res` it projects
+  // through publicContainerView, and without one it answers the internal callers.
+  describe('listRunningApps as a route handler', () => {
     it('answers with the public view rather than the container object', async () => {
       dockerServiceStub.dockerListContainers.resolves([dockerContainer]);
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
       const res = { json: sinon.stub() };
 
-      await appQueryService.listRunningAppsApi({}, res);
+      await appQueryService.listRunningApps({}, res);
 
       expect(res.json.calledOnce).to.be.true;
       expect(res.json.firstCall.args[0]).to.deep.equal({
@@ -517,8 +519,8 @@ describe('appQueryService tests', () => {
       const anonymous = { json: sinon.stub() };
       const authenticated = { json: sinon.stub() };
 
-      await appQueryService.listRunningAppsApi({ headers: {} }, anonymous);
-      await appQueryService.listRunningAppsApi({ headers: { zelidauth: 'zelid=x&signature=y' } }, authenticated);
+      await appQueryService.listRunningApps({ headers: {} }, anonymous);
+      await appQueryService.listRunningApps({ headers: { zelidauth: 'zelid=x&signature=y' } }, authenticated);
 
       expect(authenticated.json.firstCall.args[0]).to.deep.equal(anonymous.json.firstCall.args[0]);
     });
@@ -528,7 +530,7 @@ describe('appQueryService tests', () => {
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Docker error' } });
       const res = { json: sinon.stub() };
 
-      await appQueryService.listRunningAppsApi({}, res);
+      await appQueryService.listRunningApps({}, res);
 
       expect(res.json.calledOnceWith({ status: 'error', data: { message: 'Docker error' } })).to.be.true;
     });
