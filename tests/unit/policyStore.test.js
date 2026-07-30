@@ -6,6 +6,7 @@ describe('policyStore tests', () => {
   let store;
   let serviceHelperStub;
   let repositoryStub;
+  let artifactStub;
   let fsStub;
   let logStub;
 
@@ -24,6 +25,7 @@ describe('policyStore tests', () => {
       '../../lib/log': logStub,
       '../serviceHelper': serviceHelperStub,
       '../appDatabase/policyDocumentRepository': repositoryStub,
+      '../appDatabase/policyArtifactRepository': artifactStub,
     });
   }
 
@@ -37,6 +39,12 @@ describe('policyStore tests', () => {
 
   beforeEach(() => {
     serviceHelperStub = { axiosGet: sinon.stub().rejects(new Error('no network')) };
+    artifactStub = {
+      getArtifactRecord: sinon.stub().resolves(null),
+      readArtifactBytes: sinon.stub().resolves(null),
+      writeArtifactBytes: sinon.stub().resolves(true),
+      sweepOrphanedArtifacts: sinon.stub().resolves(0),
+    };
     repositoryStub = {
       getPolicyDocument: sinon.stub().resolves(null),
       setPolicyDocument: sinon.stub().resolves(true),
@@ -255,9 +263,13 @@ describe('policyStore tests', () => {
 
       await store.startSync();
 
-      Object.keys(store.DOCUMENTS).forEach((name) => {
-        expect(store.get(name), name).to.not.equal(null);
-      });
+      // Artifacts are excluded on purpose: they are never retained here, so get() reporting
+      // null for one is the contract rather than a load failure.
+      Object.entries(store.DOCUMENTS)
+        .filter(([, entry]) => entry.kind === 'document')
+        .forEach(([name]) => {
+          expect(store.get(name), name).to.not.equal(null);
+        });
     });
 
     it('is idempotent', async () => {
@@ -288,6 +300,203 @@ describe('policyStore tests', () => {
       } finally {
         clock.restore();
       }
+    });
+  });
+
+  describe('conditional requests', () => {
+    it('sends no If-None-Match before it holds an etag', async () => {
+      serviceHelperStub.axiosGet.resolves({ data: [] });
+
+      await store.refresh(NAME);
+
+      expect(serviceHelperStub.axiosGet.firstCall.args[1].headers).to.deep.equal({});
+    });
+
+    it('sends the etag it holds on the next fetch', async () => {
+      serviceHelperStub.axiosGet.resolves({ data: [], headers: { etag: 'W/"abc"' } });
+      await store.refresh(NAME);
+
+      await store.refresh(NAME);
+
+      expect(serviceHelperStub.axiosGet.secondCall.args[1].headers)
+        .to.deep.equal({ 'If-None-Match': 'W/"abc"' });
+    });
+
+    it('restores the etag from the cache, so a restart does not re-download', async () => {
+      repositoryStub.getPolicyDocument
+        .withArgs(NAME).resolves({ payload: ['cached'], fetchedAt: 1, etag: 'W/"from-cache"' });
+
+      await store.startSync();
+
+      const call = serviceHelperStub.axiosGet.getCalls()
+        .find((c) => c.args[0].endsWith(FILE));
+      expect(call.args[1].headers).to.deep.equal({ 'If-None-Match': 'W/"from-cache"' });
+    });
+
+    it('treats 304 as unchanged: nothing replaced, nothing rewritten', async () => {
+      seedFile(FILE, ['from-seed']);
+      await store.startSync();
+
+      serviceHelperStub.axiosGet.resolves({ status: 304, headers: {} });
+      repositoryStub.setPolicyDocument.resetHistory();
+      const replaced = await store.refresh(NAME);
+
+      expect(replaced).to.be.false;
+      expect(store.get(NAME)).to.deep.equal(['from-seed']);
+      sinon.assert.notCalled(repositoryStub.setPolicyDocument);
+    });
+
+    it('accepts 304 as a success rather than letting axios reject it', async () => {
+      serviceHelperStub.axiosGet.resolves({ data: [] });
+
+      await store.refresh(NAME);
+
+      const { validateStatus } = serviceHelperStub.axiosGet.firstCall.args[1];
+      expect(validateStatus(200)).to.be.true;
+      expect(validateStatus(304)).to.be.true;
+      expect(validateStatus(404)).to.be.false;
+      expect(validateStatus(500)).to.be.false;
+    });
+  });
+
+  describe('artifacts', () => {
+    const ARTIFACT = 'ipLocationTable';
+    const ARTIFACT_FILE = 'iplocation.json';
+
+    it('is not served by get(), even once loaded', async () => {
+      const receiver = sinon.stub();
+      store.onArtifact(ARTIFACT, receiver);
+      serviceHelperStub.axiosGet.resolves({ data: Buffer.from('{}'), headers: {} });
+
+      await store.refresh(ARTIFACT);
+
+      sinon.assert.called(receiver);
+      expect(store.get(ARTIFACT)).to.equal(null);
+    });
+
+    it('hands the receiver raw bytes, requested as such', async () => {
+      const receiver = sinon.stub();
+      store.onArtifact(ARTIFACT, receiver);
+      serviceHelperStub.axiosGet.resolves({ data: Buffer.from('payload'), headers: {} });
+
+      await store.refresh(ARTIFACT);
+
+      expect(serviceHelperStub.axiosGet.firstCall.args[1].responseType).to.equal('arraybuffer');
+      expect(Buffer.isBuffer(receiver.firstCall.args[0])).to.be.true;
+      expect(receiver.firstCall.args[0].toString()).to.equal('payload');
+    });
+
+    it('uses its own timeout, not the document default', async () => {
+      store.onArtifact(ARTIFACT, sinon.stub());
+      serviceHelperStub.axiosGet.resolves({ data: Buffer.from('{}'), headers: {} });
+
+      await store.refresh(ARTIFACT);
+
+      expect(serviceHelperStub.axiosGet.firstCall.args[1].timeout)
+        .to.equal(store.DOCUMENTS[ARTIFACT].timeoutMs);
+      expect(store.DOCUMENTS[ARTIFACT].timeoutMs).to.be.above(10 * 1000);
+    });
+
+    it('does not cache bytes the receiver rejected', async () => {
+      // The receiver is the validator, so its throw must leave the stored copy standing.
+      store.onArtifact(ARTIFACT, () => { throw new Error('truncated artifact'); });
+      serviceHelperStub.axiosGet.resolves({ data: Buffer.from('bad'), headers: {} });
+
+      const replaced = await store.refresh(ARTIFACT);
+
+      expect(replaced).to.be.false;
+      sinon.assert.notCalled(artifactStub.writeArtifactBytes);
+    });
+
+    it('caches bytes the receiver accepted, with the etag', async () => {
+      store.onArtifact(ARTIFACT, sinon.stub());
+      serviceHelperStub.axiosGet.resolves({ data: Buffer.from('good'), headers: { etag: 'W/"x"' } });
+
+      await store.refresh(ARTIFACT);
+
+      const [name, bytes, etag] = artifactStub.writeArtifactBytes.firstCall.args;
+      expect(name).to.equal(ARTIFACT);
+      expect(bytes.toString()).to.equal('good');
+      expect(etag).to.equal('W/"x"');
+    });
+
+    it('is not fetched at all without a receiver', async () => {
+      serviceHelperStub.axiosGet.resolves({ data: [] });
+
+      await store.startSync();
+
+      const fetched = serviceHelperStub.axiosGet.getCalls()
+        .some((c) => c.args[0].endsWith(ARTIFACT_FILE));
+      expect(fetched).to.be.false;
+    });
+
+    it('refuses a second receiver rather than silently replacing the first', () => {
+      const first = sinon.stub();
+      store.onArtifact(ARTIFACT, first);
+      store.onArtifact(ARTIFACT, sinon.stub());
+
+      sinon.assert.called(logStub.error);
+    });
+
+    describe('restore from storage', () => {
+      it('sweeps orphans, then feeds the stored bytes to the receiver', async () => {
+        const receiver = sinon.stub();
+        store.onArtifact(ARTIFACT, receiver);
+        artifactStub.getArtifactRecord.withArgs(ARTIFACT)
+          .resolves({ fileId: 'fid', etag: 'W/"stored"', fetchedAt: 1 });
+        artifactStub.readArtifactBytes.withArgs('fid').resolves(Buffer.from('stored'));
+
+        await store.startSync();
+
+        sinon.assert.calledWith(artifactStub.sweepOrphanedArtifacts, ARTIFACT);
+        expect(receiver.firstCall.args[0].toString()).to.equal('stored');
+      });
+
+      it('drops the etag when the stored bytes are rejected, so the refetch is not a 304', async () => {
+        // Keeping it would leave the receiver holding nothing while the store believed the
+        // remote copy was already applied.
+        store.onArtifact(ARTIFACT, () => { throw new Error('cannot read this build'); });
+        artifactStub.getArtifactRecord.withArgs(ARTIFACT)
+          .resolves({ fileId: 'fid', etag: 'W/"stored"', fetchedAt: 1 });
+        artifactStub.readArtifactBytes.withArgs('fid').resolves(Buffer.from('unreadable'));
+
+        await store.startSync();
+        await store.refresh(ARTIFACT);
+
+        const call = serviceHelperStub.axiosGet.getCalls()
+          .find((c) => c.args[0].endsWith(ARTIFACT_FILE));
+        expect(call.args[1].headers).to.deep.equal({});
+        sinon.assert.called(logStub.error);
+      });
+
+      it('survives a record whose stored file has gone', async () => {
+        const receiver = sinon.stub();
+        store.onArtifact(ARTIFACT, receiver);
+        artifactStub.getArtifactRecord.withArgs(ARTIFACT)
+          .resolves({ fileId: 'fid', etag: null, fetchedAt: 1 });
+        artifactStub.readArtifactBytes.withArgs('fid').resolves(null);
+
+        await store.startSync();
+
+        sinon.assert.notCalled(receiver);
+      });
+    });
+
+    it('does not gate startSync on the artifact fetch', async () => {
+      // A minutes-long timeout on a multi-megabyte fetch must not hold up boot, so the
+      // artifact refresh is detached and startSync resolves without it.
+      let releaseFetch;
+      const receiver = sinon.stub();
+      store.onArtifact(ARTIFACT, receiver);
+      serviceHelperStub.axiosGet
+        .withArgs(sinon.match((u) => u.endsWith(ARTIFACT_FILE)), sinon.match.any)
+        .returns(new Promise((resolve) => { releaseFetch = resolve; }));
+      serviceHelperStub.axiosGet.resolves({ data: [] });
+
+      await store.startSync();
+
+      sinon.assert.notCalled(receiver);
+      releaseFetch({ data: Buffer.from('{}'), headers: {} });
     });
   });
 });
