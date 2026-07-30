@@ -314,7 +314,7 @@ async function installApplication(instantiated, options = {}) {
         // Attach the freshly created container to every linked app's network.
         if (!test) {
           // eslint-disable-next-line no-await-in-loop
-          await appNetworkLinker.connectComponentToLinkedApps(component.identifier, instantiated);
+          await appNetworkLinker.connectComponentToLinkedApps(component.identifier, deployment);
         }
       }
 

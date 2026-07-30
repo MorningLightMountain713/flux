@@ -143,7 +143,7 @@ async function checkTargets(spec) {
 }
 
 // ── Resource checks ─────────────────────────────────────────────────
-// Accept a DeploymentSpec. Use deployment.totalResources() for resource
+// Accept a DeploymentSpec. Use deployment.resourceTotals() for resource
 // totals instead of reading legacy .compose fields.
 
 async function appsResources() {
@@ -152,59 +152,96 @@ async function appsResources() {
   return resourceQueryService.appsResources();
 }
 
-async function checkNodeResources(deployment) {
+/**
+ * What this node currently has free, measured once.
+ *
+ * Separated from the fit decision because the two have different costs and
+ * different callers. Reading capacity means querying locked resources and node
+ * specs; deciding whether one app fits is arithmetic. The spawner screens a
+ * whole candidate list per cycle, so it takes one reading and applies it many
+ * times rather than re-reading per candidate.
+ *
+ * @returns {Promise<Object>} the node's free capacity
+ */
+async function nodeCapacity() {
   const resourcesLocked = await appsResources();
   if (resourcesLocked.status !== 'success') {
     throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
   }
-
-  const { cpu, memory } = deployment.totalResources();
-  // Full host-disk footprint (storage + rootFsGb + swapGb), so the node
-  // won't admit an app whose image/swap overhead it can't actually hold.
-  const requiredHdd = deployment.reservableHostDiskGb();
   const specs = await getNodeSpecs();
 
   const totalSpaceOnNode = specs.ssdStorage;
-  if (totalSpaceOnNode === 0) {
-    throw new Error('Insufficient space on Flux Node to spawn an application');
-  }
-  const useableSpaceOnNode = totalSpaceOnNode * 0.95 - config.lockedSystemResources.hdd - config.lockedSystemResources.extrahdd;
-  const availableSpace = useableSpaceOnNode - resourcesLocked.data.appsHddLocked;
-  if (requiredHdd > availableSpace) {
-    throw new Error('Insufficient space on Flux Node to spawn an application');
-  }
-
-  const totalCpuOnNode = specs.cpuCores * 10;
-  const useableCpu = totalCpuOnNode - config.lockedSystemResources.cpu;
-  const availableCpu = useableCpu - (resourcesLocked.data.appsCpusLocked * 10);
-  if ((cpu * 10) > availableCpu) {
-    throw new Error('Insufficient CPU power on Flux Node to spawn an application');
-  }
-
+  const useableSpaceOnNode = totalSpaceOnNode * 0.95
+    - config.lockedSystemResources.hdd - config.lockedSystemResources.extrahdd;
+  const useableCpu = (specs.cpuCores * 10) - config.lockedSystemResources.cpu;
   const useableRam = specs.ram - config.lockedSystemResources.ram;
-  const availableRam = useableRam - resourcesLocked.data.appsRamLocked;
-  if (memory > availableRam) {
-    throw new Error('Insufficient RAM on Flux Node to spawn an application');
-  }
 
+  return {
+    totalSpaceOnNode,
+    availableSpace: useableSpaceOnNode - resourcesLocked.data.appsHddLocked,
+    availableCpu: useableCpu - (resourcesLocked.data.appsCpusLocked * 10),
+    availableRam: useableRam - resourcesLocked.data.appsRamLocked,
+    freeCores: specs.cpuCores
+      - (config.lockedSystemResources.cpu / 10)
+      - resourcesLocked.data.appsCpusLocked,
+  };
+}
+
+/**
+ * Why an app of this size does not fit, or null if it does.
+ *
+ * Takes ResourceTotals rather than a spec, so it answers from either vantage:
+ * a decrypted DeploymentSpec at install time, or an encrypted app's cleartext
+ * summary during selection. That is the whole point of the shared shape — the
+ * node applies one capacity rule regardless of whether it can read the app.
+ *
+ * @param {Object} capacity - from nodeCapacity()
+ * @param {import('@runonflux/flux-spec').ResourceTotals} totals
+ * @returns {string|null} the reason it does not fit, or null
+ */
+function capacityShortfall(capacity, totals) {
+  if (capacity.totalSpaceOnNode === 0) {
+    return 'Insufficient space on Flux Node to spawn an application';
+  }
+  // The full host-disk footprint (storage + rootFsGb + swapGb), so the node
+  // won't admit an app whose image/swap overhead it can't actually hold.
+  if (totals.hostDiskGb > capacity.availableSpace) {
+    return 'Insufficient space on Flux Node to spawn an application';
+  }
+  if ((totals.cpu * 10) > capacity.availableCpu) {
+    return 'Insufficient CPU power on Flux Node to spawn an application';
+  }
+  if (totals.memoryMb > capacity.availableRam) {
+    return 'Insufficient RAM on Flux Node to spawn an application';
+  }
+  return null;
+}
+
+/**
+ * Why installing an app of this size would leave too little burst headroom,
+ * or null if it would not. Separate from capacityShortfall because a node can
+ * have room for the app and still be left unable to absorb a spike.
+ *
+ * @param {Object} capacity - from nodeCapacity()
+ * @param {import('@runonflux/flux-spec').ResourceTotals} totals
+ * @returns {string|null}
+ */
+function burstHeadroomShortfall(capacity, totals) {
+  if (capacity.freeCores - totals.cpu <= 4) {
+    return 'Insufficient CPU burst headroom on Flux Node to spawn an application';
+  }
+  return null;
+}
+
+async function checkNodeResources(deployment) {
+  const shortfall = capacityShortfall(await nodeCapacity(), deployment.resourceTotals());
+  if (shortfall) throw new Error(shortfall);
   return true;
 }
 
 async function checkCpuBurstHeadroom(deployment) {
-  const resourcesLocked = await appsResources();
-  if (resourcesLocked.status !== 'success') {
-    throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
-  }
-  const { cpu } = deployment.totalResources();
-  const specs = await getNodeSpecs();
-  const systemReservedCores = config.lockedSystemResources.cpu / 10;
-  const freeCoresAfterInstall = specs.cpuCores
-    - systemReservedCores
-    - resourcesLocked.data.appsCpusLocked
-    - cpu;
-  if (freeCoresAfterInstall <= 4) {
-    throw new Error('Insufficient CPU burst headroom on Flux Node to spawn an application');
-  }
+  const shortfall = burstHeadroomShortfall(await nodeCapacity(), deployment.resourceTotals());
+  if (shortfall) throw new Error(shortfall);
   return true;
 }
 
@@ -216,5 +253,8 @@ module.exports = {
   checkPlacement,
   checkNodeResources,
   checkCpuBurstHeadroom,
+  nodeCapacity,
+  capacityShortfall,
+  burstHeadroomShortfall,
   appsResources,
 };

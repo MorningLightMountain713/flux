@@ -114,7 +114,7 @@ describe('appUninstaller tests', () => {
     };
 
     appNetworkLinkerStub = {
-      isPureFollower: sinon.stub().returns(false),
+      isPureFollowerApp: sinon.stub().resolves(false),
       findInstalledWorkloadsRequiring: sinon.stub().resolves([]),
       findUnrequiredInstalledDependencies: sinon.stub().resolves([]),
     };
@@ -531,7 +531,7 @@ describe('appUninstaller tests', () => {
     it('graceful removal of a follower uninstalls its requiring workload FIRST (teardown record order proves it)', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollower.callsFake((s) => s.name === 'collector');
+      appNetworkLinkerStub.isPureFollowerApp.callsFake(async (s) => s.name === 'collector');
       appNetworkLinkerStub.findInstalledWorkloadsRequiring.resolves([spec('workload')]);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true });
@@ -547,7 +547,7 @@ describe('appUninstaller tests', () => {
     it('defers the follower teardown when a requiring workload is mid-operation (DEFERRED)', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollower.callsFake((s) => s.name === 'collector');
+      appNetworkLinkerStub.isPureFollowerApp.callsFake(async (s) => s.name === 'collector');
       appNetworkLinkerStub.findInstalledWorkloadsRequiring.resolves([spec('workload')]);
       // the requiring workload holds a redeploy lease, so its removal DEFERS
       operationRegistry.acquire('workload', 'softRedeploy', 'the-redeploy');
@@ -564,7 +564,7 @@ describe('appUninstaller tests', () => {
     it('a force-kill of a follower does NOT cascade', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollower.returns(true);
+      appNetworkLinkerStub.isPureFollowerApp.resolves(true);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: true, background: true });
 
@@ -573,7 +573,7 @@ describe('appUninstaller tests', () => {
 
     it('does not cascade with the lifecycle toggle off (default)', async () => {
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollower.returns(true);
+      appNetworkLinkerStub.isPureFollowerApp.resolves(true);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true });
 
@@ -583,7 +583,7 @@ describe('appUninstaller tests', () => {
     it('a graceful workload removal triggers the deferred orphan sweep', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollower.returns(false);
+      appNetworkLinkerStub.isPureFollowerApp.resolves(false);
 
       const result = await appUninstaller.uninstallApplication('workload', { forceKill: false, background: true });
       expect(result.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
@@ -595,7 +595,7 @@ describe('appUninstaller tests', () => {
     it('a force-kill of a follower does NOT trigger the sweep', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollower.returns(true);
+      appNetworkLinkerStub.isPureFollowerApp.resolves(true);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: true, skipGuard: true, background: true });
       await tick();
@@ -604,10 +604,12 @@ describe('appUninstaller tests', () => {
     });
 
     it('removeUnrequiredDependencies unwinds a chain until no orphans remain, consumer-first', async () => {
-      const datadog = { ...spec('datadog'), linkedAppNames: () => ['alloy'] };
-      const alloy = { ...spec('alloy'), linkedAppNames: () => [] };
-      // Deliberately unsorted: the consumer (datadog links to alloy) must be removed first.
-      appNetworkLinkerStub.findUnrequiredInstalledDependencies.onCall(0).resolves([alloy, datadog]);
+      const datadog = spec('datadog');
+      const alloy = spec('alloy');
+      // The linker returns orphans already ordered consumer-first — it holds the
+      // resolved views the ordering depends on. This exercises the unwind loop;
+      // the ordering itself is covered in the linker's own suite.
+      appNetworkLinkerStub.findUnrequiredInstalledDependencies.onCall(0).resolves([datadog, alloy]);
       appNetworkLinkerStub.findUnrequiredInstalledDependencies.onCall(1).resolves([alloy]);
       appNetworkLinkerStub.findUnrequiredInstalledDependencies.onCall(2).resolves([]);
 

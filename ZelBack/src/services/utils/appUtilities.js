@@ -20,7 +20,7 @@ const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelf
  * FluxAppSpecBase instance, or a DecryptedCanonicalSpec for an encrypted app
  * (read through its delegates — DeploymentSpec.fromSpec projects readable
  * views without extracting the inner spec). The class owns aggregation via
- * DeploymentSpec.totalResources() + allHostPorts(); this function reduces to
+ * DeploymentSpec.resourceTotals() + allHostPorts(); this function reduces to
  * the version-specific pricing formula, nothing else.
  *
  * @param {import('@runonflux/flux-spec').FluxAppSpecBase} spec - Class instance (or DecryptedCanonicalSpec)
@@ -39,7 +39,7 @@ async function appPricePerMonth(spec, height, suppliedPrices) {
   // Declared view deliberately: price is a property of the submitted spec that
   // every node must agree on, never one node's replica view.
   const deployment = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null });
-  const { cpu, memory, storage } = deployment.totalResources();
+  const { cpu, memoryMb: memory, storageGb: storage } = deployment.resourceTotals();
   const premPortCount = deployment.allHostPorts()
     .filter((p) => classifyPort(p) === PORT_TIER.PREMIUM).length;
 

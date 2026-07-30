@@ -509,12 +509,12 @@ async function getApplicationSpecification(appname, opts = {}) {
   if (recipientPubkeyBase64) {
     // v9 transport layer: seal the canonical cleartext toward the caller's
     // ephemeral pubkey so the owner's frontend gets the full form to re-sign.
-    const { buildSpecViewAad, SPEC_VIEW_INFO } = await getSpec();
+    const { buildSpecViewAad, SPEC_VIEW_INFO, canonicalJson } = await getSpec();
     const viewSpec = decrypted.spec;
     const timestamp = Date.now();
     const aad = buildSpecViewAad({ appName: viewSpec.name, timestamp });
     const provider = await transportCryptoProvider.create(viewSpec.name, viewSpec.owner);
-    const plaintext = Buffer.from(JSON.stringify(viewSpec.toCanonical()), 'utf8');
+    const plaintext = Buffer.from(canonicalJson(viewSpec.toCanonical()), 'utf8');
     const peerPublicKey = Buffer.from(recipientPubkeyBase64, 'base64');
     const envelope = await provider.seal({
       plaintext, aad, peerPublicKey, info: SPEC_VIEW_INFO,

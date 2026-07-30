@@ -10,6 +10,7 @@ describe('appNetworkLinker tests', () => {
   let appNetworkLinker;
   let appsRepositoryStub;
   let deploymentProviderStub;
+  let specCutoverStub;
   let dockerServiceStub;
   let logStub;
 
@@ -22,6 +23,14 @@ describe('appNetworkLinker tests', () => {
     name, owner = 'owner1', shareWith, encrypted = false, activation, placement,
   } = {}) {
     const spec = {
+      // A real spec view carries identity as well as links — the resolved view
+      // is what callers read name/owner off once they hold one.
+      name,
+      owner,
+      // `sealed` is the readability question, and the held spec answers it:
+      // true on a raw EncryptedSpec, false on a cleartext one. Callers that
+      // must not decrypt branch on this, so the mock has to carry it.
+      sealed: encrypted,
       linkedAppNames: () => (Array.isArray(shareWith) ? [...shareWith] : []),
     };
     if (shareWith !== undefined) spec.network = { shareWith };
@@ -42,11 +51,13 @@ describe('appNetworkLinker tests', () => {
     return instSpec({ ...opts, activation: { standalone: false, stopWhenUnneeded: true } });
   }
 
-  // The resolved (decrypted) link map computeRequiredDependencyNames now takes as
-  // input; built here from the plaintext mocks the same way the async caller does.
-  function linksMap(apps) {
+  // The resolved readable views the graph functions take as input, built here
+  // the way the async caller builds them. A mock's `.spec` stands in for the
+  // resolved view — for an encrypted app that is what decryption yields, which
+  // is why an encrypted app's links and activation are visible through it.
+  function viewsMap(apps) {
     const m = new Map();
-    apps.forEach((a) => { if (a && a.name) m.set(a.name.toLowerCase(), a.linkedAppNames()); });
+    apps.forEach((a) => { if (a && a.name) m.set(a.name.toLowerCase(), a.spec); });
     return m;
   }
 
@@ -68,6 +79,7 @@ describe('appNetworkLinker tests', () => {
     const stubs = {
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
+      '../utils/specCutover': specCutoverStub,
       '../dockerService': dockerServiceStub,
       '../../lib/log': logStub,
     };
@@ -85,9 +97,12 @@ describe('appNetworkLinker tests', () => {
     };
     deploymentProviderStub = {
       getInstalledDeployment: sinon.stub(),
-      // The decrypt bridge: plaintext reads the sealed accessor, encrypted would
-      // decrypt (returns null here unless a test overrides for a specific app).
-      resolveLinkedAppNames: sinon.stub().callsFake(async (app) => (app.isEncrypted ? null : app.linkedAppNames())),
+    };
+    specCutoverStub = {
+      // Resolves an app to its readable view: a cleartext app is readable as
+      // itself, an encrypted one only once decrypted — null here unless a test
+      // says the node holds its key.
+      resolveInstantiatedSpec: sinon.stub().callsFake(async (app) => (app.isEncrypted ? null : app.spec)),
     };
     dockerServiceStub = {
       appDockerNetworkConnect: sinon.stub().resolves(),
@@ -140,6 +155,33 @@ describe('appNetworkLinker tests', () => {
       expect(result).to.equal(true);
       sinon.assert.notCalled(dockerServiceStub.getAppContainerObjects);
     });
+
+    it('checks an ENCRYPTED consumer\'s links, which the sealed accessor hides', async () => {
+      // Read off the sealed InstantiatedSpec these links are [], so the gate
+      // passed vacuously and the app installed with none of its dependencies
+      // verified. Resolved, the missing dependency is caught.
+      const enc = instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'], encrypted: true });
+      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(enc.spec);
+      appsRepositoryStub.getInstalledApp.resolves(null);
+      const error = await expect(appNetworkLinker.checkAppNetworkRequirements(enc))
+        .to.be.rejectedWith(/is not installed on this node/);
+      expect(error.code).to.equal('NETWORK_DEPENDENCY_NOT_READY');
+    });
+
+    it('passes an ENCRYPTED consumer whose links ARE satisfied', async () => {
+      const enc = instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'], encrypted: true });
+      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(enc.spec);
+      appsRepositoryStub.getInstalledApp.resolves(instSpec({ name: 'appA', owner: 'owner1' }));
+      expect(await appNetworkLinker.checkAppNetworkRequirements(enc)).to.equal(true);
+    });
+
+    it('defers rather than installing blind when the spec cannot be read here', async () => {
+      const enc = instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'], encrypted: true });
+      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(null);
+      const error = await expect(appNetworkLinker.checkAppNetworkRequirements(enc))
+        .to.be.rejectedWith(/could not be decrypted on this node/);
+      expect(error.code).to.equal('NETWORK_DEPENDENCY_NOT_READY');
+    });
   });
 
   describe('checkAppNetworkRequirements with manageCollectorLifecycle on', () => {
@@ -158,6 +200,72 @@ describe('appNetworkLinker tests', () => {
       dockerServiceStub.getAppContainerObjects.resolves([{ State: 'running' }, { State: 'running' }]);
       const result = await linker.checkAppNetworkRequirements(instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'] }));
       expect(result).to.equal(true);
+    });
+  });
+
+  describe('linksReadyForSelection (never decrypts)', () => {
+    it('true when the app declares no links', async () => {
+      expect(await appNetworkLinker.linksReadyForSelection(instSpec({ name: 'appB' }))).to.equal(true);
+      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+    });
+
+    it('true when a cleartext app\'s links are satisfied', async () => {
+      appsRepositoryStub.getInstalledApp.resolves(instSpec({ name: 'appA', owner: 'owner1' }));
+      const ok = await appNetworkLinker.linksReadyForSelection(instSpec({ name: 'appB', owner: 'owner1', shareWith: ['appA'] }));
+      expect(ok).to.equal(true);
+      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+    });
+
+    it('NOT_READY when a cleartext app\'s dependency is missing — general-pool ordering still works', async () => {
+      appsRepositoryStub.getInstalledApp.resolves(null);
+      const error = await expect(appNetworkLinker.linksReadyForSelection(instSpec({ name: 'appB', shareWith: ['appA'] })))
+        .to.be.rejectedWith(/is not installed on this node/);
+      expect(error.code).to.equal('NETWORK_DEPENDENCY_NOT_READY');
+      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+    });
+
+    it('treats an encrypted app as ready and does NOT decrypt it', async () => {
+      // The whole point: this runs over every candidate on every cycle, so it
+      // must never pay a decrypt. An encrypted app's links are invisible here
+      // and the install-time gate does the real check.
+      const enc = instSpec({ name: 'appB', shareWith: ['missing'], encrypted: true });
+      expect(await appNetworkLinker.linksReadyForSelection(enc)).to.equal(true);
+      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+      sinon.assert.notCalled(appsRepositoryStub.getInstalledApp);
+    });
+  });
+
+  describe('pureFollowerNames (resolve only where told)', () => {
+    it('detects an ENCRYPTED follower when told to resolve it', async () => {
+      const enc = follower({ name: 'collector', encrypted: true });
+      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(enc.spec);
+      const names = await appNetworkLinker.pureFollowerNames([enc], () => true);
+      expect([...names]).to.eql(['collector']);
+    });
+
+    it('detects a CLEARTEXT follower without resolving it — the sealed read answers fully', async () => {
+      const plain = follower({ name: 'collector' });
+      const names = await appNetworkLinker.pureFollowerNames([plain], () => false);
+      expect([...names]).to.eql(['collector']);
+      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+    });
+
+    it('reports an ENCRYPTED follower standalone when not told to resolve — the price of not decrypting', async () => {
+      const enc = follower({ name: 'collector', encrypted: true });
+      const names = await appNetworkLinker.pureFollowerNames([enc], () => false);
+      expect([...names]).to.eql([]);
+      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+    });
+
+    it('resolves only the apps the predicate names', async () => {
+      const pinned = follower({ name: 'pinned', encrypted: true });
+      const general = follower({ name: 'general', encrypted: true });
+      specCutoverStub.resolveInstantiatedSpec.withArgs(pinned).resolves(pinned.spec);
+      const names = await appNetworkLinker.pureFollowerNames(
+        [pinned, general], (app) => app.name === 'pinned',
+      );
+      expect([...names]).to.eql(['pinned']);
+      expect(specCutoverStub.resolveInstantiatedSpec.getCalls().map((c) => c.args[0].name)).to.eql(['pinned']);
     });
   });
 
@@ -180,12 +288,12 @@ describe('appNetworkLinker tests', () => {
 
   describe('connectComponentToLinkedApps', () => {
     it('does nothing when the app declares no network links', async () => {
-      await appNetworkLinker.connectComponentToLinkedApps('fluxweb_appB', instSpec({ name: 'appB' }));
+      await appNetworkLinker.connectComponentToLinkedApps('fluxweb_appB', deployment([]));
       sinon.assert.notCalled(dockerServiceStub.appDockerNetworkConnect);
     });
 
     it('connects the container to every linked app network', async () => {
-      await appNetworkLinker.connectComponentToLinkedApps('fluxweb_appB', instSpec({ name: 'appB', shareWith: ['appA', 'appC'] }));
+      await appNetworkLinker.connectComponentToLinkedApps('fluxweb_appB', deployment([], ['appA', 'appC']));
       sinon.assert.calledWith(dockerServiceStub.appDockerNetworkConnect, 'fluxweb_appB', 'fluxDockerNetwork_appA');
       sinon.assert.calledWith(dockerServiceStub.appDockerNetworkConnect, 'fluxweb_appB', 'fluxDockerNetwork_appC');
     });
@@ -193,7 +301,7 @@ describe('appNetworkLinker tests', () => {
     it('propagates a raw connection failure (network present) so the install is rolled back', async () => {
       dockerServiceStub.appDockerNetworkConnect.rejects(new Error('docker boom'));
       dockerServiceStub.fluxDockerNetworkExists.resolves(true);
-      await expect(appNetworkLinker.connectComponentToLinkedApps('c', instSpec({ name: 'appB', shareWith: ['appA'] })))
+      await expect(appNetworkLinker.connectComponentToLinkedApps('c', deployment([], ['appA'])))
         .to.be.rejectedWith('docker boom');
     });
 
@@ -201,7 +309,7 @@ describe('appNetworkLinker tests', () => {
       dockerServiceStub.appDockerNetworkConnect.rejects(new Error('network not found'));
       dockerServiceStub.fluxDockerNetworkExists.resolves(false); // the dependency was torn down
       try {
-        await appNetworkLinker.connectComponentToLinkedApps('c', instSpec({ name: 'appB', shareWith: ['appA'] }));
+        await appNetworkLinker.connectComponentToLinkedApps('c', deployment([], ['appA']));
         expect.fail('should have thrown');
       } catch (error) {
         expect(error.code).to.equal('NETWORK_DEPENDENCY_NOT_READY');
@@ -211,30 +319,41 @@ describe('appNetworkLinker tests', () => {
 
   describe('follower predicates (activation)', () => {
     it('isPureFollower is true only for activation.standalone === false', () => {
-      expect(appNetworkLinker.isPureFollower(follower({ name: 'c' }))).to.equal(true);
-      expect(appNetworkLinker.isPureFollower(instSpec({ name: 'c', activation: { standalone: false, stopWhenUnneeded: false } }))).to.equal(true);
-      expect(appNetworkLinker.isPureFollower(instSpec({ name: 'c', activation: { standalone: true, stopWhenUnneeded: true } }))).to.equal(false);
-      expect(appNetworkLinker.isPureFollower(instSpec({ name: 'c' }))).to.equal(false);
+      expect(appNetworkLinker.isPureFollower(follower({ name: 'c' }).spec)).to.equal(true);
+      expect(appNetworkLinker.isPureFollower(instSpec({ name: 'c', activation: { standalone: false, stopWhenUnneeded: false } }).spec)).to.equal(true);
+      expect(appNetworkLinker.isPureFollower(instSpec({ name: 'c', activation: { standalone: true, stopWhenUnneeded: true } }).spec)).to.equal(false);
+      expect(appNetworkLinker.isPureFollower(instSpec({ name: 'c' }).spec)).to.equal(false);
       expect(appNetworkLinker.isPureFollower(null)).to.equal(false);
     });
 
-    it('isPureFollower is false for an encrypted spec (activation unreadable here)', () => {
+    it('an encrypted app IS a follower once its spec is resolved', () => {
+      // The predicate takes a resolved view, so encryption is not its question:
+      // an encrypted app that declared itself a follower is one. Guarding this
+      // on isEncrypted is what made every encrypted app permanently standalone.
       const enc = instSpec({ name: 'c', encrypted: true, activation: { standalone: false, stopWhenUnneeded: true } });
-      expect(appNetworkLinker.isPureFollower(enc)).to.equal(false);
+      expect(appNetworkLinker.isPureFollower(enc.spec)).to.equal(true);
+    });
+
+    it('isPureFollower is false for a spec that could not be read here', () => {
+      // buildViewsByName maps an undecryptable app to null and flips `complete`
+      // false; standalone is the fail-toward-keeping answer for that case.
+      expect(appNetworkLinker.isPureFollower(null)).to.equal(false);
+      expect(appNetworkLinker.isPureFollower(undefined)).to.equal(false);
     });
 
     it('isReapableFollower requires BOTH standalone false and stopWhenUnneeded', () => {
-      expect(appNetworkLinker.isReapableFollower(follower({ name: 'c' }))).to.equal(true);
-      expect(appNetworkLinker.isReapableFollower(instSpec({ name: 'c', activation: { standalone: false, stopWhenUnneeded: false } }))).to.equal(false);
+      expect(appNetworkLinker.isReapableFollower(follower({ name: 'c' }).spec)).to.equal(true);
+      expect(appNetworkLinker.isReapableFollower(instSpec({ name: 'c', activation: { standalone: false, stopWhenUnneeded: false } }).spec)).to.equal(false);
       // a standalone app is never reaped - it justifies its own presence
-      expect(appNetworkLinker.isReapableFollower(instSpec({ name: 'c', activation: { standalone: true, stopWhenUnneeded: true } }))).to.equal(false);
+      expect(appNetworkLinker.isReapableFollower(instSpec({ name: 'c', activation: { standalone: true, stopWhenUnneeded: true } }).spec)).to.equal(false);
+      expect(appNetworkLinker.isReapableFollower(null)).to.equal(false);
     });
   });
 
   describe('computeRequiredDependencyNames', () => {
     it('marks a follower required when a workload links to it', () => {
       const apps = [instSpec({ name: 'game', shareWith: ['collector'] }), follower({ name: 'collector' })];
-      expect([...appNetworkLinker.computeRequiredDependencyNames(apps, linksMap(apps))]).to.eql(['collector']);
+      expect([...appNetworkLinker.computeRequiredDependencyNames(apps, viewsMap(apps))]).to.eql(['collector']);
     });
 
     it('follows the closure transitively through follower-to-follower links', () => {
@@ -243,19 +362,19 @@ describe('appNetworkLinker tests', () => {
         follower({ name: 'datadog', shareWith: ['alloy'] }),
         follower({ name: 'alloy' }),
       ];
-      const required = appNetworkLinker.computeRequiredDependencyNames(apps, linksMap(apps));
+      const required = appNetworkLinker.computeRequiredDependencyNames(apps, viewsMap(apps));
       expect(required.has('datadog')).to.equal(true);
       expect(required.has('alloy')).to.equal(true);
     });
 
     it('a follower cannot keep itself (or a sibling) alive - closure starts from standalone apps only', () => {
       const apps = [follower({ name: 'datadog', shareWith: ['alloy'] }), follower({ name: 'alloy' })];
-      expect(appNetworkLinker.computeRequiredDependencyNames(apps, linksMap(apps)).size).to.equal(0);
+      expect(appNetworkLinker.computeRequiredDependencyNames(apps, viewsMap(apps)).size).to.equal(0);
     });
 
     it('ignores cross-owner links', () => {
       const apps = [instSpec({ name: 'game', owner: 'owner1', shareWith: ['collector'] }), follower({ name: 'collector', owner: 'owner2' })];
-      expect(appNetworkLinker.computeRequiredDependencyNames(apps, linksMap(apps)).size).to.equal(0);
+      expect(appNetworkLinker.computeRequiredDependencyNames(apps, viewsMap(apps)).size).to.equal(0);
     });
   });
 
@@ -331,7 +450,7 @@ describe('appNetworkLinker tests', () => {
       const teardownHold = withHostMutationLock(() => teardownGate);
       await new Promise((resolve) => { setImmediate(resolve); });
 
-      const attach = appNetworkLinker.connectComponentToLinkedApps('fluxweb_appB', instSpec({ name: 'appB', shareWith: ['appA'] }));
+      const attach = appNetworkLinker.connectComponentToLinkedApps('fluxweb_appB', deployment([], ['appA']));
       await new Promise((resolve) => { setImmediate(resolve); });
       expect(dockerServiceStub.appDockerNetworkConnect.called, 'attach must wait for the held lock, never race the teardown').to.equal(false);
 
@@ -440,6 +559,30 @@ describe('appNetworkLinker tests', () => {
       sinon.assert.notCalled(dockerServiceStub.appDockerNetworkConnect);
     });
 
+    it('reconnects an ENCRYPTED consumer, whose links live in the ciphertext', async () => {
+      // Read off the sealed accessor an encrypted consumer declares no links,
+      // so it was never reattached when its dependency's network was recreated.
+      const enc = instSpec({ name: 'appB', shareWith: ['appA'], encrypted: true });
+      appsRepositoryStub.listInstalledApps.resolves([enc, instSpec({ name: 'appA' })]);
+      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(enc.spec);
+      dockerServiceStub.getAppContainerNames.withArgs('appB').resolves(['fluxweb_appB']);
+
+      await appNetworkLinker.reconnectLinkedApps('appA');
+
+      sinon.assert.calledWith(dockerServiceStub.appDockerNetworkConnect, 'fluxweb_appB', 'fluxDockerNetwork_appA');
+    });
+
+    it('leaves an undecryptable consumer alone rather than guessing', async () => {
+      const enc = instSpec({ name: 'appB', shareWith: ['appA'], encrypted: true });
+      appsRepositoryStub.listInstalledApps.resolves([enc, instSpec({ name: 'appA' })]);
+      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(null);
+      dockerServiceStub.getAppContainerNames.withArgs('appB').resolves(['fluxweb_appB']);
+
+      await appNetworkLinker.reconnectLinkedApps('appA');
+
+      sinon.assert.notCalled(dockerServiceStub.appDockerNetworkConnect);
+    });
+
     it('does not throw when the database read fails', async () => {
       appsRepositoryStub.listInstalledApps.rejects(new Error('db down'));
       await expect(appNetworkLinker.reconnectLinkedApps('appA')).to.not.be.rejected;
@@ -468,6 +611,18 @@ describe('appNetworkLinker tests', () => {
       await appNetworkLinker.reconcileAllAppNetworkLinks();
 
       sinon.assert.notCalled(dockerServiceStub.appDockerNetworkConnect);
+    });
+
+    it('bridges an ENCRYPTED app at boot, whose links live in the ciphertext', async () => {
+      const enc = instSpec({ name: 'appB', shareWith: ['appA'], encrypted: true });
+      appsRepositoryStub.listInstalledApps.resolves([enc]);
+      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(enc.spec);
+      appsRepositoryStub.getInstalledApp.withArgs('appA').resolves(instSpec({ name: 'appA', owner: 'owner1' }));
+      dockerServiceStub.getAppContainerNames.withArgs('appB').resolves(['fluxweb_appB']);
+
+      await appNetworkLinker.reconcileAllAppNetworkLinks();
+
+      sinon.assert.calledWith(dockerServiceStub.appDockerNetworkConnect, 'fluxweb_appB', 'fluxDockerNetwork_appA');
     });
 
     it('does not throw when the database read fails', async () => {
@@ -515,21 +670,45 @@ describe('appNetworkLinker tests', () => {
     });
   });
 
-  describe('resolver-4: graph reads the decrypted link view', () => {
+  describe('resolver-4: graph reads the decrypted spec view', () => {
     it('keeps a follower required by an ENCRYPTED consumer (sealed view would reap it)', async () => {
       const encWorkload = instSpec({ name: 'game', shareWith: ['collector'], encrypted: true });
       appsRepositoryStub.listInstalledApps.resolves([encWorkload, follower({ name: 'collector' })]);
-      // The bridge decrypts the encrypted consumer's real link to the collector;
-      // the sealed accessor (encWorkload.linkedAppNames()) reports none.
-      deploymentProviderStub.resolveLinkedAppNames.withArgs(encWorkload).resolves(['collector']);
+      // This node holds the key, so the encrypted consumer resolves to its real
+      // spec and its link to the collector is visible; the sealed accessor
+      // (encWorkload.linkedAppNames()) reports none.
+      specCutoverStub.resolveInstantiatedSpec.withArgs(encWorkload).resolves(encWorkload.spec);
       const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
       expect(orphans.map((a) => a.name)).to.eql([]);
     });
 
-    it('does not reap when link visibility is incomplete (undecryptable app)', async () => {
+    it('orders orphans consumer-first, including an ENCRYPTED consumer', async () => {
+      // The link deciding the order lives in the sealed body, so ordering on the
+      // sealed accessor put encrypted orphans in no particular order — and the
+      // consumer could be torn down after the app it consumes.
+      const datadog = follower({ name: 'datadog', shareWith: ['alloy'], encrypted: true });
+      const alloy = follower({ name: 'alloy' });
+      appsRepositoryStub.listInstalledApps.resolves([alloy, datadog]);
+      specCutoverStub.resolveInstantiatedSpec.withArgs(datadog).resolves(datadog.spec);
+      const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
+      expect(orphans.map((a) => a.name)).to.eql(['datadog', 'alloy']);
+    });
+
+    it('reaps an orphaned ENCRYPTED follower once its spec resolves', async () => {
+      // The follower's own activation is only readable through the resolved
+      // view. While it was read off the sealed container every encrypted app
+      // looked standalone, so an orphaned one was never reaped.
+      const encFollower = follower({ name: 'collector', encrypted: true });
+      appsRepositoryStub.listInstalledApps.resolves([encFollower]);
+      specCutoverStub.resolveInstantiatedSpec.withArgs(encFollower).resolves(encFollower.spec);
+      const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
+      expect(orphans.map((a) => a.name)).to.eql(['collector']);
+    });
+
+    it('does not reap when spec visibility is incomplete (undecryptable app)', async () => {
       const encWorkload = instSpec({ name: 'game', encrypted: true });
       appsRepositoryStub.listInstalledApps.resolves([encWorkload, follower({ name: 'orphaned' })]);
-      deploymentProviderStub.resolveLinkedAppNames.withArgs(encWorkload).resolves(null);
+      specCutoverStub.resolveInstantiatedSpec.withArgs(encWorkload).resolves(null);
       const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
       expect(orphans).to.eql([]);
     });
@@ -537,7 +716,7 @@ describe('appNetworkLinker tests', () => {
     it('refuses the required-set (falls back to not suppressing) when an assigned app is undecryptable', async () => {
       const enc = instSpec({ name: 'game', encrypted: true, placement: { hasTargets: () => true, matchesTarget: () => true, isPinnedTo: () => true } });
       appsRepositoryStub.listGlobalAppInfo.resolves([enc]);
-      deploymentProviderStub.resolveLinkedAppNames.withArgs(enc).resolves(null);
+      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(null);
       await expect(appNetworkLinker.getRequiredDependencyNamesForNode({ ip: '7.7.7.7:16127' })).to.be.rejected;
     });
   });

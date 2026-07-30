@@ -16,7 +16,7 @@ const log = require('../../lib/log');
  * resolveRuntimeSpec / resolveInstantiatedSpec). One physical node addressed
  * through both identity forms unions both entries.
  *
- * @param {object} spec - a DECRYPTED spec instance (exposes .assignment)
+ * @param {object} spec - a readable spec view (exposes .placement/.assignment)
  * @returns {Promise<string[]|null>} null = candidate/none placement (one
  *   unqualified instance); [] = pinned placement that does not target this
  *   node; [names...] = this node's assigned replicas (co-location when > 1)
@@ -36,20 +36,23 @@ async function resolveLocalReplicas(spec) {
 }
 
 /**
- * The DECRYPTED runtime spec for an InstantiatedSpec: the real FluxAppSpecV9
- * (an encrypted app resolves to a DecryptedCanonicalSpec whose `.spec` is the
- * decrypted instance; a cleartext app resolves to itself). Callers that need
- * the sealed body - the assignment (replica names), components, ports - go
- * through this rather than reading the wire spec, which no longer carries the
- * names.
+ * The READABLE spec view for an InstantiatedSpec: a cleartext spec instance as
+ * itself, an encrypted one as its DecryptedCanonicalSpec. Callers that need the
+ * sealed body - the assignment (replica names), components, ports - go through
+ * this rather than reading the wire spec, which no longer carries the names.
+ *
+ * The wrapper is returned as-is rather than unwrapped to its `.spec`: it
+ * read-through delegates every field a runtime caller asks for, and it is the
+ * type that guarantees cleartext is never persisted. Extracting the inner
+ * instance drops that guarantee for no gain.
  *
  * @param {object} instantiated - InstantiatedSpec
- * @returns {Promise<object>} the decrypted spec instance
+ * @returns {Promise<object>} readable spec view (FluxAppSpec* | DecryptedCanonicalSpec)
  */
 async function resolveRuntimeSpec(instantiated) {
   const resolved = await resolveInstantiatedSpec(instantiated);
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
-  return instantiated.isEncrypted ? resolved.spec : resolved;
+  return resolved;
 }
 
 /**
@@ -70,12 +73,8 @@ async function toDeployment(instantiated, opts = {}) {
   const resolved = await resolveInstantiatedSpec(instantiated);
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
 
-  // Encrypted apps resolve to a DecryptedCanonicalSpec; DeploymentSpec projects
-  // from the real spec instance it wraps (its guard rejects a still-sealed spec).
-  const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
-
   const { DeploymentSpec } = await getSpecBackend();
-  return DeploymentSpec.fromSpec(runtimeSpec, appsFolder, { replica: opts.replica });
+  return DeploymentSpec.fromSpec(resolved, appsFolder, { replica: opts.replica });
 }
 
 /**
@@ -91,8 +90,7 @@ async function toDeployment(instantiated, opts = {}) {
 async function resolveDeploymentIdentity(instantiated) {
   const resolved = await resolveInstantiatedSpec(instantiated);
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
-  const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
-  const names = await resolveLocalReplicas(runtimeSpec);
+  const names = await resolveLocalReplicas(resolved);
   if (names === null || names.length === 0) return null;
   if (names.length > 1) {
     throw new Error(`${instantiated.name} names ${names.length} replicas for this node (${names.join(', ')}) - a single-identity operation must say which replica it means`);
@@ -112,8 +110,7 @@ async function resolveDeploymentIdentity(instantiated) {
 async function assignedIdentities(instantiated) {
   const resolved = await resolveInstantiatedSpec(instantiated);
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
-  const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
-  const replicas = await resolveLocalReplicas(runtimeSpec);
+  const replicas = await resolveLocalReplicas(resolved);
   return replicas === null ? [null] : replicas;
 }
 
@@ -133,9 +130,7 @@ async function assignedIdentities(instantiated) {
 async function localIdentities(instantiated) {
   const resolved = await resolveInstantiatedSpec(instantiated);
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
-  const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
-
-  const assigned = await resolveLocalReplicas(runtimeSpec);
+  const assigned = await resolveLocalReplicas(resolved);
   const assignedIdentities = assigned === null ? [null] : assigned;
 
   const present = await dockerService.getAppContainerObjects(instantiated.name).catch(() => []);
@@ -155,15 +150,13 @@ async function localIdentities(instantiated) {
 async function toDeployments(instantiated) {
   const resolved = await resolveInstantiatedSpec(instantiated);
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
-  const runtimeSpec = instantiated.isEncrypted ? resolved.spec : resolved;
-
-  const replicas = await resolveLocalReplicas(runtimeSpec);
+  const replicas = await resolveLocalReplicas(resolved);
   const identities = replicas === null ? [null] : replicas;
 
   const { DeploymentSpec } = await getSpecBackend();
   const deployments = [];
   for (const replica of identities) {
-    deployments.push(DeploymentSpec.fromSpec(runtimeSpec, appsFolder, { replica }));
+    deployments.push(DeploymentSpec.fromSpec(resolved, appsFolder, { replica }));
   }
   return deployments;
 }
@@ -244,40 +237,10 @@ async function getInstalledDeployments(name) {
   }
 }
 
-/**
- * The DECRYPTED link view of an app — the bridge from the sealed vantage
- * (InstantiatedSpec.linkedAppNames() reports [] for an encrypted spec) to the
- * real links, so the network graph (reap/cascade/suppression) sees an encrypted
- * consumer's edges the convergence already acts on. Plaintext short-circuits to
- * the sealed accessor (no decryption needed). Encrypted crosses through the
- * decrypt provider and reads the SAME accessor on the cleartext spec — never the
- * heavy DeploymentSpec projection, since links are a spec-level fact.
- *
- * Returns null when an encrypted spec cannot be decrypted on this node (key not
- * loaded / not our app): callers MUST treat null as "links unknown" and fail
- * toward keeping (never reap/suppress on incomplete visibility).
- *
- * @param {object} instantiated - InstantiatedSpec
- * @returns {Promise<string[]|null>}
- */
-async function resolveLinkedAppNames(instantiated) {
-  if (!instantiated) return [];
-  if (!instantiated.isEncrypted) return instantiated.linkedAppNames();
-  try {
-    const resolved = await resolveInstantiatedSpec(instantiated);
-    if (!resolved || !resolved.spec) return null;
-    return resolved.spec.linkedAppNames();
-  } catch (err) {
-    log.warn(`deploymentProvider.resolveLinkedAppNames: cannot read links for encrypted ${instantiated.name}: ${err.message}`);
-    return null;
-  }
-}
-
 module.exports = {
   listInstalledDeployments,
   getInstalledDeployment,
   getInstalledDeployments,
-  resolveLinkedAppNames,
   resolveLocalReplicas,
   resolveRuntimeSpec,
   resolveDeploymentIdentity,

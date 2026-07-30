@@ -29,12 +29,16 @@ function mockSpec(overrides = {}) {
 }
 
 function mockDeployment(resources = {}) {
-  const defaults = { cpu: 1, memory: 500, storage: 10, swap: 0 };
+  const defaults = {
+    cpu: 1, memoryMb: 500, storageGb: 10, rootFsGb: 10, swapGb: 0, componentCount: 1,
+  };
   const r = { ...defaults, ...resources };
+  // Mirror the real shape: hostDiskGb is derived, never independently supplied,
+  // so a stub cannot claim a footprint its own parts do not add up to.
+  const totals = { ...r, hostDiskGb: r.storageGb + r.rootFsGb + r.swapGb };
   return {
-    totalResources: () => r,
-    // sizeGb + rootFsGb(10) + swapGb
-    reservableHostDiskGb: () => r.storage + 10 + r.swap,
+    resourceTotals: () => totals,
+    reservableHostDiskGb: () => totals.hostDiskGb,
   };
 }
 
@@ -315,13 +319,13 @@ describe('hwRequirements', () => {
   describe('checkNodeResources', () => {
     it('passes when node has enough resources', async () => {
       const hw = buildHw({ ssd: 500, cpucores: 16, ram: 32000 });
-      const deployment = mockDeployment({ cpu: 1, memory: 500, storage: 10 });
+      const deployment = mockDeployment({ cpu: 1, memoryMb: 500, storageGb: 10 });
       await hw.checkNodeResources(deployment);
     });
 
     it('throws when node has zero SSD', async () => {
       const hw = buildHw({ ssd: 0 });
-      const deployment = mockDeployment({ storage: 10 });
+      const deployment = mockDeployment({ storageGb: 10 });
       try {
         await hw.checkNodeResources(deployment);
         expect.fail('expected throw');
@@ -332,7 +336,7 @@ describe('hwRequirements', () => {
 
     it('throws when insufficient disk space', async () => {
       const hw = buildHw({ ssd: 20, appsHddLocked: 10 });
-      const deployment = mockDeployment({ storage: 100 });
+      const deployment = mockDeployment({ storageGb: 100 });
       try {
         await hw.checkNodeResources(deployment);
         expect.fail('expected throw');
@@ -354,7 +358,7 @@ describe('hwRequirements', () => {
 
     it('throws when insufficient RAM', async () => {
       const hw = buildHw({ ram: 4000, appsRamLocked: 3000 });
-      const deployment = mockDeployment({ memory: 2000 });
+      const deployment = mockDeployment({ memoryMb: 2000 });
       try {
         await hw.checkNodeResources(deployment);
         expect.fail('expected throw');

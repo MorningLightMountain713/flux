@@ -607,6 +607,66 @@ describe('appReconciler tests', () => {
       await appReconciler.reconcile('solo_App');
       expect(stubs.dockerService.appDockerStart.calledWith('solo_App')).to.be.true;
     });
+
+    // Depending on an active-standby component is how an owner asks to be placed with the
+    // active instance: the target runs on the elected node only, so the dependent starts
+    // there and nowhere else. On every other node the hold is permanent AND correct — so
+    // it must read as a settled decision, not as the wedge that the age-based warning
+    // exists to catch. A warning that is usually a false alarm gets skimmed past.
+    describe('depending on an active-standby target', () => {
+      // 'g:' marks activeStandby in legacy containerData, which is what the component
+      // stub reads to answer hasActiveStandbySyncthing().
+      const withStandbyDb = () => ({
+        name: 'App',
+        version: 9,
+        compose: [
+          { name: 'db', containerData: 'g:/data' },
+          { name: 'web', containerData: '/data', dependsOn: { db: { condition: 'started' } } },
+        ],
+      });
+
+      const settledFor = (spy, identifier) => spy.getCalls().filter(
+        (c) => c.args[0] === 'reconciler:actuated'
+          && c.args[1].action === 'settledStopped'
+          && c.args[1].identifier === identifier,
+      );
+
+      it('holds the dependent on a node where the target is not the elected instance', async () => {
+        localSpec = withStandbyDb();
+        stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
+        stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: false, Status: 'created', ExitCode: 0 } });
+
+        await appReconciler.reconcile('web_App');
+
+        expect(stubs.dockerService.appDockerStart.called, 'must not start without its database').to.be.false;
+        expect(stubs.dockerService.appDockerStop.called, 'a hold leaves the container alone').to.be.false;
+      });
+
+      it('reports that hold as a settled decision rather than a stall', async () => {
+        localSpec = withStandbyDb();
+        const publishSpy = sinon.spy(fluxEventBus, 'publish');
+        stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
+        stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: false, Status: 'created', ExitCode: 0 } });
+
+        await appReconciler.reconcile('web_App');
+        await appReconciler.reconcile('web_App');
+        await appReconciler.reconcile('web_App');
+
+        const stated = settledFor(publishSpy, 'web_App');
+        expect(stated, 'announced once, not per pass').to.have.lengthOf(1);
+        expect(stated[0].args[1].reason).to.equal('awaitingElectedPeer');
+      });
+
+      it('starts the dependent on the elected node, where the target is running', async () => {
+        localSpec = withStandbyDb();
+        stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
+        stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+
+        await appReconciler.reconcile('web_App');
+
+        expect(stubs.dockerService.appDockerStart.calledWith('web_App')).to.be.true;
+      });
+    });
   });
 
   describe('reconcile decisions', () => {

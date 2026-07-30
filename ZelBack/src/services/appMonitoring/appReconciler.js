@@ -614,7 +614,15 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
       const depActual = await dockerActual(depComp.identifier);
       // eslint-disable-next-line no-await-in-loop
       const met = await dependencyConditionMet(condition, depComp.identifier, depActual);
-      if (!met) return { desired: null, reason: 'awaitingDependency' };
+      if (!met) {
+        // An active-standby target runs on the elected node only, so on every other node
+        // this hold is the placement working, not a stall: the dependent belongs with the
+        // active instance and nowhere else, and it will never lift here. Report it as a
+        // settled state so the wedge detector below stays meaningful — warning by age on
+        // a hold that is correct forever trains people to skim past the warning that is not.
+        const settled = depComp.hasActiveStandbySyncthing() && !depActual.running;
+        return { desired: null, reason: settled ? 'awaitingElectedPeer' : 'awaitingDependency' };
+      }
     }
   }
   const desired = policyAllowsRun(getRestartPolicy(spec), exitCode);
@@ -1207,6 +1215,9 @@ async function reconcile(rawIdentifier) {
   // container as-is until the decider speaks / the dependency comes up (event-driven),
   // but surface the hold once it has outlived any plausible cycle.
   if (desired === null) {
+    // awaitingElectedPeer is deliberate and permanent on a non-elected node, so it is
+    // announced once like any settled state rather than warned about by age.
+    if (reason === 'awaitingElectedPeer') announceSettledStop(identifier, reason);
     if (reason === 'awaitingController' || reason === 'awaitingDependency') trackSilentHold(identifier, reason);
     return;
   }

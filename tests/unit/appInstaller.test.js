@@ -401,7 +401,7 @@ describe('appInstaller tests', () => {
         teardownOwedFor.resolves(teardownOwed);
       }
       const deployment = {
-        totalResources: () => ({ cpu: 1, memory: 500, storage: 10 }),
+        resourceTotals: () => ({ cpu: 1, memoryMb: 500, storageGb: 10 }),
         reservableHostDiskGb: () => 10,
         allHostPorts: () => [],
         allImages: () => [],

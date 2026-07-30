@@ -500,7 +500,7 @@ async function removeRequiringWorkloadsFirst(appName) {
     return true;
   }
   const spec = await appsRepository.getInstalledApp(appName);
-  if (!spec || !appNetworkLinker.isPureFollower(spec)) {
+  if (!spec || !await appNetworkLinker.isPureFollowerApp(spec)) {
     return true;
   }
   const workloads = await appNetworkLinker.findInstalledWorkloadsRequiring(appName);
@@ -551,14 +551,9 @@ async function removeUnrequiredDependencies() {
       // Bounded: each pass either removes one app or stops. The cap is a backstop.
       for (let pass = 0; pass < 50; pass += 1) {
         // eslint-disable-next-line no-await-in-loop
+        // Already ordered consumer-before-consumed by the linker, which holds the
+        // resolved views the ordering depends on.
         const orphans = await appNetworkLinker.findUnrequiredInstalledDependencies();
-        // Remove a consumer before the app it consumes so the network/log wiring
-        // tears down in dependency order.
-        orphans.sort((a, b) => {
-          if (a.linkedAppNames().some((n) => n.toLowerCase() === b.name.toLowerCase())) return -1;
-          if (b.linkedAppNames().some((n) => n.toLowerCase() === a.name.toLowerCase())) return 1;
-          return 0;
-        });
         const target = orphans.find((app) => !attempted.has(app.name.toLowerCase()));
         if (!target) {
           hitLimit = false;
@@ -706,7 +701,8 @@ async function uninstallApplication(appName, options = {}) {
     // teardown record exists, so each nested workload removal is an ordinary
     // standalone removal. Gated off in production: the flux console owns the
     // collector lifecycle.
-    if (config.fluxapps.manageCollectorLifecycle && !forceKill && appNetworkLinker.isPureFollower(spec)) {
+    if (config.fluxapps.manageCollectorLifecycle && !forceKill
+      && await appNetworkLinker.isPureFollowerApp(spec)) {
       const workloadsRemoved = await removeRequiringWorkloadsFirst(appName);
       if (!workloadsRemoved) {
         // A consumer that still requires this follower could not be removed yet
@@ -866,7 +862,7 @@ async function uninstallApplication(appName, options = {}) {
     // deferred direct call, not an event subscription (the event bus is
     // publish-only test observability). Gated off in production.
     if (config.fluxapps.manageCollectorLifecycle
-      && (!appNetworkLinker.isPureFollower(spec) || !forceKill)) {
+      && (!await appNetworkLinker.isPureFollowerApp(spec) || !forceKill)) {
       setImmediate(() => {
         removeUnrequiredDependencies().catch((error) => log.error(`Dependency cleanup trigger failed: ${error.message}`));
       });
@@ -1342,7 +1338,6 @@ module.exports = {
   driveOwedTeardown,
   recoverOwedTeardowns,
   clearSpawnThrottleForPinnedReinstall,
-  removeRequiringWorkloadsFirst,
   removeUnrequiredDependencies,
   // exposed for tests
   reclaimUnusedImages,

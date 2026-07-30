@@ -445,6 +445,25 @@ async function trySpawningGlobalApplication() {
         return true;
       });
 
+      // Whether a candidate is PINNED to this node, decided from cleartext
+      // placement metadata — readable on a sealed spec, so knowing this costs
+      // nothing and can be established before deciding whether to decrypt
+      // anything. The same three predicates build the selection tiers below, so
+      // "pinned here" means exactly one thing in both places.
+      const placementOf = (c) => c.instantiated.spec.placement;
+      const targetsThisNodeByIp = (c) => placementOf(c).targetIps.length > 0
+        && placementOf(c).matchesTarget({ ip: localSocketAddr, ipMatcher: socketAddressesMatch });
+      const targetsThisNodeByOutpoint = (c) => placementOf(c).targetOutpoints.length > 0
+        && placementOf(c).matchesTarget({ outpoint: nodeOutpoint });
+      const targetsThisNodeByOperator = (c) => placementOf(c).targetOperators.length > 0
+        && placementOf(c).matchesTarget({ operator: nodeOperator });
+      const targetsThisNode = (c) => targetsThisNodeByIp(c)
+        || targetsThisNodeByOutpoint(c)
+        || targetsThisNodeByOperator(c);
+      const pinnedHere = new Set(
+        globalAppNamesLocation.filter(targetsThisNode).map((c) => c.instantiated.name),
+      );
+
       // Suppress pure-follower apps (activation.standalone false — shared
       // collectors) that no app assigned to this node requires: they only
       // install while a workload here shareWith-links to them, and must not be
@@ -456,10 +475,62 @@ async function trySpawningGlobalApplication() {
           const requiredDependencyNames = await appNetworkLinker.getRequiredDependencyNamesForNode({
             ip: localSocketAddr, outpoint: nodeOutpoint, operator: nodeOperator,
           });
-          globalAppNamesLocation = globalAppNamesLocation.filter((c) => !appNetworkLinker.isPureFollower(c.instantiated)
+          // Resolved in one pass up front: reading activation means resolving
+          // each candidate's spec, which a synchronous filter cannot do. Only
+          // the pinned candidates are decrypted — same rule as the readiness
+          // filter below. Everything else is read sealed, which still answers
+          // fully for a cleartext app; an encrypted app in the general pool
+          // keeps its activation sealed and is treated as standalone.
+          const followerNames = await appNetworkLinker.pureFollowerNames(
+            globalAppNamesLocation.map((c) => c.instantiated),
+            (app) => pinnedHere.has(app.name),
+          );
+          globalAppNamesLocation = globalAppNamesLocation.filter((c) => !followerNames.has(c.instantiated.name)
             || requiredDependencyNames.has(c.instantiated.name));
         } catch (error) {
           log.error(`trySpawningGlobalApplication - could not compute required dependencies, not suppressing collectors this cycle: ${error.message}`);
+        }
+      }
+
+      // Drop candidates this node has no room for, before one is picked at
+      // random. Selection is a lottery over the surviving pool, so a candidate
+      // that cannot fit does not merely waste its own cycle — it can win the
+      // draw ahead of one that would have installed, and the node spawns
+      // nothing. The capacity check at install time still runs; it is the
+      // authority, and this only spares it candidates it would have rejected.
+      //
+      // Cleartext totals make this affordable for encrypted apps too: the
+      // summary is exactly what a node reads to judge fitness while sealed, so
+      // no candidate is decrypted to be screened. An app that cannot answer
+      // (a v8 encrypted spec, whose format carries no summary) is kept — the
+      // install-time gate decides it, which is the pre-existing behaviour.
+      if (globalAppNamesLocation.length > 0) {
+        try {
+          const capacity = await hwRequirements.nodeCapacity();
+          globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
+            let totals;
+            try {
+              totals = c.instantiated.resourceTotals();
+            } catch (error) {
+              // A spec whose resources cannot be computed at all (a malformed
+              // legacy containerData reaches this) must not take down the sweep
+              // for every other candidate.
+              log.warn(`trySpawningGlobalApplication - could not size ${c.instantiated.name}, leaving it to the install-time check: ${error.message}`);
+              return true;
+            }
+            if (!totals) return true;
+            const shortfall = hwRequirements.capacityShortfall(capacity, totals)
+              || hwRequirements.burstHeadroomShortfall(capacity, totals);
+            if (shortfall) {
+              log.info(`trySpawningGlobalApplication - Skipping ${c.instantiated.name} this cycle: ${shortfall}`);
+              return false;
+            }
+            return true;
+          });
+        } catch (error) {
+          // Capacity unreadable this cycle — screen nothing rather than
+          // everything, and let the install-time check hold the line.
+          log.warn(`trySpawningGlobalApplication - could not read node capacity, skipping the resource screen: ${error.message}`);
         }
       }
 
@@ -479,7 +550,19 @@ async function trySpawningGlobalApplication() {
             return false;
           }
           try {
-            await appNetworkLinker.checkAppNetworkRequirements(c.instantiated);
+            // A pinned app WILL be installed by this node, so reading its links
+            // through the decrypted view is the same decrypt the install performs
+            // moments later, moved a few lines earlier — and it is what lets a
+            // pinned consumer be held back until its dependency lands, instead of
+            // monopolising its targeting tier while it defers.
+            //
+            // The general pool is the opposite case: many candidates, at most one
+            // install, so its links stay sealed. That is what the cleartext
+            // placement metadata is for. An encrypted app there reports no links
+            // and is treated as ready; the install-time gate does the real check.
+            await (targetsThisNode(c)
+              ? appNetworkLinker.checkAppNetworkRequirements(c.instantiated)
+              : appNetworkLinker.linksReadyForSelection(c.instantiated));
             return true;
           } catch (error) {
             // Dependency not ready yet -> skip this cycle. Any other error (e.g.
@@ -499,12 +582,9 @@ async function trySpawningGlobalApplication() {
       }
       log.info(`trySpawningGlobalApplication - Found ${globalAppNamesLocation.length} apps that are missing instances on the network and can be selected to try to spawn on my node.`);
 
-      const ipTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetIps.length > 0
-        && c.instantiated.spec.placement.matchesTarget({ ip: localSocketAddr, ipMatcher: socketAddressesMatch }));
-      const outpointTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetOutpoints.length > 0
-        && c.instantiated.spec.placement.matchesTarget({ outpoint: nodeOutpoint }));
-      const operatorTargeted = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.targetOperators.length > 0
-        && c.instantiated.spec.placement.matchesTarget({ operator: nodeOperator }));
+      const ipTargeted = globalAppNamesLocation.filter(targetsThisNodeByIp);
+      const outpointTargeted = globalAppNamesLocation.filter(targetsThisNodeByOutpoint);
+      const operatorTargeted = globalAppNamesLocation.filter(targetsThisNodeByOperator);
 
       const pool = ipTargeted.length > 0 ? ipTargeted
         : outpointTargeted.length > 0 ? outpointTargeted
@@ -597,7 +677,8 @@ async function trySpawningGlobalApplication() {
     // path is covered too, and clear the spawn throttle set above so it is
     // reconsidered promptly once a workload that needs it arrives. Best-effort: a
     // registry-read failure falls back to allowing the spawn.
-    if (config.fluxapps.manageCollectorLifecycle && appNetworkLinker.isPureFollower(instantiated)) {
+    if (config.fluxapps.manageCollectorLifecycle
+      && await appNetworkLinker.isPureFollowerApp(instantiated)) {
       let requiredDeps = null;
       try {
         requiredDeps = await appNetworkLinker.getRequiredDependencyNamesForNode({
@@ -796,7 +877,7 @@ async function trySpawningGlobalApplication() {
 
     if (!isEnterpriseNode && !appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater) {
       const tier = await generalService.nodeTier();
-      const appHWrequirements = deployment.totalResources();
+      const appHWrequirements = deployment.resourceTotals();
       let delay = false;
       if (specPlacement.isPinnedTo(targetInfo)) {
         // The spec pinned this node (IP/outpoint/operator target): there is
@@ -840,7 +921,7 @@ async function trySpawningGlobalApplication() {
         globalState.appsToBeCheckedLater.push(appToCheck);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'datacenter', delayMs });
         delay = true;
-      } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
+      } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.memoryMb < 6000 && appHWrequirements.storageGb < 150) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.largeMs;
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
@@ -853,7 +934,7 @@ async function trySpawningGlobalApplication() {
         globalState.appsToBeCheckedLater.push(appToCheck);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_large', delayMs });
         delay = true;
-      } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memory < 29000 && appHWrequirements.storage < 370) {
+      } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memoryMb < 29000 && appHWrequirements.storageGb < 370) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.mediumMs;
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
@@ -866,7 +947,7 @@ async function trySpawningGlobalApplication() {
         globalState.appsToBeCheckedLater.push(appToCheck);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_medium', delayMs });
         delay = true;
-      } else if (!specPlacement.hasTargets() && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.memory < 6000 && appHWrequirements.storage < 150) {
+      } else if (!specPlacement.hasTargets() && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.memoryMb < 6000 && appHWrequirements.storageGb < 150) {
         const deferral = config.fluxapps.spawnDeferrals.capacityGap.smallMs;
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
