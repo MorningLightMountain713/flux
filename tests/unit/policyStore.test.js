@@ -430,6 +430,33 @@ describe('policyStore tests', () => {
       expect(fetched).to.be.false;
     });
 
+    it('logs loudly when cached bytes exist but nothing consumes them', async () => {
+      // The consumer ships before the store does, so at that rebase the only thing between
+      // a working table and one that silently stops refreshing is remembering onArtifact.
+      artifactStub.getArtifactRecord.withArgs(ARTIFACT)
+        .resolves({ fileId: 'fid', etag: 'W/"x"', fetchedAt: 1 });
+
+      await store.startSync();
+
+      sinon.assert.called(logStub.error);
+      const message = logStub.error.getCalls().map((c) => c.args[0]).join(' ');
+      expect(message).to.include(ARTIFACT);
+      expect(message).to.include('not wired up');
+    });
+
+    it('stays quiet when there is no receiver and nothing cached', async () => {
+      serviceHelperStub.axiosGet.resolves({ data: [] });
+
+      await store.startSync();
+
+      // Scoped to the wiring complaint: other documents log their own validation errors
+      // against this blanket stub, and those are correct.
+      const complaints = logStub.error.getCalls()
+        .map((c) => c.args[0])
+        .filter((m) => m.includes('not wired up'));
+      expect(complaints).to.be.empty;
+    });
+
     it('refuses a second receiver rather than silently replacing the first', () => {
       const first = sinon.stub();
       store.onArtifact(ARTIFACT, first);
