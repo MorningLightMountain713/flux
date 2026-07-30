@@ -189,7 +189,7 @@ describe('fluxos logging: pino NDJSON sink and the admin log endpoints (non-jour
     const provoked = records.find((r) => r.includes(PROVOKED_ERROR));
     expect(provoked, 'provoked error record').to.exist;
     expect(provoked, 'stack rides the rendered record').to.match(/\n\s+at /);
-    expect(provoked).to.include('adjustBlockedPorts');
+    expect(provoked).to.include('getApplicationOriginalOwner');
   });
 
   it('serves the info download as only INFO records, excluding error and debug lines', async function () {
