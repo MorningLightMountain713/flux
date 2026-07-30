@@ -26,10 +26,8 @@ describe('appHashSyncService tests', () => {
   let serviceHelperStub;
   let verificationHelperStub;
   let logStub;
-  let configStub;
   let messageVerifierStub;
   let appEventVerifierStub;
-  let messageStoreStub;
   let fluxBroadcastHelperStub;
   let peerManagerStub;
   let collectionStub;
@@ -54,22 +52,14 @@ describe('appHashSyncService tests', () => {
       '../serviceHelper': serviceHelperStub,
       '../verificationHelper': verificationHelperStub,
       '../../lib/log': logStub,
-      './messageStore': messageStoreStub,
       './messageVerifier': messageVerifierStub,
       './appEventVerifier': appEventVerifierStub,
-      '../appDatabase/registryManager': { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
-      '../utils/appSpecHelpers': { specificationFormatter: sinon.stub().returnsArg(0) },
       '../utils/specCutover': { deserializeSpec: deserializeSpecStub },
       '../utils/specLibs': { validateGossipSpec: validateGossipSpecStub, getSpec: sinon.stub().resolves({}), getSpecBackend: sinon.stub().resolves({ InstantiatedSpec: { fromEvent: (x) => x } }) },
-      '../providers/FluxOSLegacyCryptoProvider': { create: sinon.stub().resolves({}) },
-      '../utils/appUtilities': { appPricePerMonth: sinon.stub().returns(0.01) },
-      '../utils/chainUtilities': { getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01, cpu: 1, ram: 1, hdd: 1 }]) },
       '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
       '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
       '../invalidMessages': { invalidMessages: [] },
       '../utils/peerState': { peerManager: peerManagerStub },
-      '../nodeConfirmationService': { canSendMessages: sinon.stub().returns(true) },
-      '../utils/enterpriseHelper': { checkAndDecryptAppSpecs: sinon.stub().callsFake((spec) => Promise.resolve(spec)) },
       '../utils/FluxPeerSocket': { CLOSE_CODES: { EPHEMERAL_DONE: 4020 } },
       '../fluxCommunicationUtils': { deterministicFluxList: sinon.stub().resolves([]) },
       '../fluxCommunication': { openEphemeralConnection: sinon.stub().resolves(null) },
@@ -79,28 +69,6 @@ describe('appHashSyncService tests', () => {
   }
 
   beforeEach(() => {
-    configStub = {
-      database: {
-        daemon: {
-          collections: {
-            scannedHeight: 'scannedHeight',
-            appsHashes: 'appsHashes',
-          },
-          database: 'daemon',
-        },
-        appsglobal: {
-          collections: {
-            appsMessages: 'appsMessages',
-          },
-          database: 'globalapps',
-        },
-      },
-      fluxapps: {
-        blocksLasting: 22000,
-        daemonPONFork: 1670000,
-      },
-    };
-
     collectionStub = {
       bulkWrite: sinon.stub().resolves({ ok: 1 }),
       insertMany: sinon.stub().resolves({ insertedCount: 0 }),
@@ -145,10 +113,6 @@ describe('appHashSyncService tests', () => {
 
     deserializeSpecStub = makeDeserializeSpecStub();
     validateGossipSpecStub = sinon.stub().resolves();
-
-    messageStoreStub = {
-      storeAppTemporaryMessage: sinon.stub().resolves(true),
-    };
 
     fluxBroadcastHelperStub = {
       serialiseAndSignFluxBroadcast: sinon.stub().resolves('{"signed":"data"}'),
@@ -325,7 +289,7 @@ describe('appHashSyncService tests', () => {
 
       dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
 
-      const result = await appHashSyncService.syncMissingHashes();
+      await appHashSyncService.syncMissingHashes();
 
       // Should have attempted bulk fetch (axiosGet called for explorer sync check + permanent messages)
       expect(serviceHelperStub.axiosGet.called).to.be.true;
@@ -649,7 +613,7 @@ describe('appHashSyncService tests', () => {
       dbHelperStub.findInDatabase.resolves(missing);
       // getMissingHashes adds $or filter for nextRetryHeight, but since we stub findInDatabase
       // the filter is applied by the DB. For this test, verify the query includes the filter.
-      const result = await appHashSyncService.getMissingHashes();
+      await appHashSyncService.getMissingHashes();
       // All 3 returned because findInDatabase stub ignores the query — but verify the query was correct
       const query = dbHelperStub.findInDatabase.firstCall.args[2];
       expect(query.message).to.equal(false);
@@ -753,7 +717,6 @@ describe('appHashSyncService tests', () => {
     let localAppEventVerifierStub;
     let localDeserializeSpecStub;
     let localValidateGossipSpecStub;
-    let localLegacyCryptoProviderStub;
     let localLogStub;
 
     beforeEach(() => {
@@ -783,7 +746,6 @@ describe('appHashSyncService tests', () => {
 
       localDeserializeSpecStub = makeDeserializeSpecStub();
       localValidateGossipSpecStub = sinon.stub().resolves();
-      localLegacyCryptoProviderStub = { create: sinon.stub().resolves({}) };
 
       localLogStub = {
         error: sinon.stub(),
@@ -797,22 +759,14 @@ describe('appHashSyncService tests', () => {
         '../serviceHelper': serviceHelperStub,
         '../verificationHelper': verificationHelperStub,
         '../../lib/log': localLogStub,
-        './messageStore': messageStoreStub,
         './messageVerifier': messageVerifierStub,
         './appEventVerifier': localAppEventVerifierStub,
-          '../appDatabase/registryManager': { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
-        '../utils/appSpecHelpers': { specificationFormatter: sinon.stub().returnsArg(0) },
         '../utils/specCutover': { deserializeSpec: localDeserializeSpecStub },
         '../utils/specLibs': { validateGossipSpec: localValidateGossipSpecStub, getSpec: sinon.stub().resolves({}), getSpecBackend: sinon.stub().resolves({ InstantiatedSpec: { fromEvent: (x) => x } }) },
-        '../providers/FluxOSLegacyCryptoProvider': localLegacyCryptoProviderStub,
-        '../utils/appUtilities': { appPricePerMonth: sinon.stub().returns(0.01) },
-        '../utils/chainUtilities': { getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01, cpu: 1, ram: 1, hdd: 1 }]) },
         '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
         '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
         '../invalidMessages': { invalidMessages: [] },
         '../utils/peerState': { peerManager: peerManagerStub },
-        '../utils/enterpriseHelper': { checkAndDecryptAppSpecs: sinon.stub().callsFake((spec) => Promise.resolve(spec)) },
-        '../nodeConfirmationService': { canSendMessages: sinon.stub().returns(true) },
         '../fluxCommunicationUtils': { deterministicFluxList: sinon.stub().resolves([]) },
         '../fluxCommunication': { openEphemeralConnection: sinon.stub().resolves(null) },
         '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('10.0.0.99:16127') },
