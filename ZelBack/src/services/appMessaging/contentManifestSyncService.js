@@ -1,5 +1,4 @@
 const config = require('config');
-const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
@@ -141,7 +140,14 @@ async function reconcile(peers, deps = {}) {
     }
 
     const fetched = neededCount - remaining.length;
-    fluxEventBus.publish('content:manifestReconciled', { requested: neededCount, fetched });
+    // peers/indexesReceived ride the event, not just the return value: without them
+    // "asked nobody, heard nothing" and "compared against peers, already current" are the
+    // same {requested: 0, fetched: 0}. The boot path already refuses to latch on a round
+    // with no indexes for exactly that reason, so any observer of a round needs the same
+    // datum to tell a converged node from one that reconciled against silence.
+    fluxEventBus.publish('content:manifestReconciled', {
+      requested: neededCount, fetched, peers: peers.length, indexesReceived,
+    });
     return { peers: peers.length, indexesReceived, fetched };
   } finally {
     activeRound = null;
