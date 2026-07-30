@@ -1886,29 +1886,6 @@ async function _buildEnv(
       if (clients[index]) await clients[index].connectEventStream();
     },
 
-    // Split the fleet into two groups that stay internally connected but cannot reach
-    // each other, by dropping cross-group node-to-node packets inside each container
-    // (iptables; the image ships it and the nodes run privileged). Every node keeps its
-    // path to the daemon and to its same-group peers. A node held in the minority
-    // therefore stays daemon-confirmed (message capability intact) and above the peer
-    // floor, so it never degrades or resyncs. The host runner reaches nodes over the
-    // gateway, not a node IP, so its REST/SSE access to BOTH sides is unaffected — the
-    // minority is observable throughout.
-    //
-    // Returns only once the partition is REAL, which is a stronger guarantee than the
-    // rules alone give. iptables stops packets, but TCP retransmits across a DROP: the
-    // cross-group sockets stay up until ping/pong liveness gives up, and until then a
-    // message sent to the other group is QUEUED, not lost — healPartition then delivers
-    // the whole backlog, so a suite whose premise is "this node missed the gossip" gets
-    // the opposite of what it asked for, and finds out much later as an unrelated-looking
-    // timeout.
-    //
-    // So wait for both sides to actually drop the other group from their peer lists, and
-    // fail HERE, naming who is still connected. How long that takes is peer liveness —
-    // peers.wsPingIntervalMs x peers.wsMaxMissedPongs — so a suite that partitions should
-    // compress that interval in its configOverrides the same way it compresses every
-    // other cadence. Pass { awaitSever: false } for a caller that only wants packets
-    // dropped and is not asserting message loss.
     // Refuse a node that has NOT STARTED YET, from the side that already exists.
     //
     // partitionGroups needs both groups' containers, because it puts a rule inside each.
@@ -1956,6 +1933,32 @@ async function _buildEnv(
       )));
     },
 
+    // Split the fleet into two groups that stay internally connected but cannot reach
+    // each other, by dropping cross-group node-to-node packets inside each container
+    // (iptables; the image ships it and the nodes run privileged). Every node keeps its
+    // path to the daemon and to its same-group peers. A node held in the minority
+    // therefore stays daemon-confirmed (message capability intact) and above the peer
+    // floor, so it never degrades or resyncs: the "partial partition, stays above the
+    // floor, misses the fire-once gossip" case the steady-state backstop exists for. The
+    // host runner reaches nodes over the gateway, not a node IP, so its REST/SSE access
+    // to BOTH sides is unaffected — the minority is observable throughout.
+    //
+    // Returns only once the partition is REAL, which is a stronger guarantee than the
+    // rules alone give. iptables stops packets, but TCP retransmits across a DROP: the
+    // cross-group sockets stay up until ping/pong liveness gives up, and until then a
+    // message sent to the other group is QUEUED, not lost — healPartition then delivers
+    // the whole backlog. A suite whose premise is "this node missed the gossip" gets the
+    // opposite of what it asked for, and finds out much later as an unrelated-looking
+    // timeout (suite 511, 2026-07-30: the isolated node received the update it was
+    // supposed to have missed, seconds after the heal, and the assertion that waited for
+    // it to converge by reconcile could never fire because it had nothing left to fetch).
+    //
+    // So wait for both sides to actually drop the other group from their peer lists, and
+    // fail HERE, naming who is still connected. How long that takes is peer liveness —
+    // peers.wsPingIntervalMs x peers.wsMaxMissedPongs, 45s on production defaults — so a
+    // suite that partitions should compress the interval in its configOverrides the same
+    // way it compresses every other cadence. Pass { awaitSever: false } for a caller that
+    // only wants packets dropped and is not asserting message loss.
     async partitionGroups(groupA, groupB, { awaitSever = true, severTimeoutMs = 60000 } = {}) {
       const ops = [];
       for (const a of groupA) {
