@@ -89,7 +89,7 @@ async function appsResources() {
 
     // eslint-disable-next-line no-restricted-syntax
     for (const deployment of deployments) {
-      const { cpu, memory } = deployment.totalResources();
+      const { cpu, memoryMb: memory } = deployment.resourceTotals();
       appsCpusLocked += cpu;
       appsRamLocked += memory;
       // Full host-disk footprint per app: persistent storage + rootFsGb + swapGb

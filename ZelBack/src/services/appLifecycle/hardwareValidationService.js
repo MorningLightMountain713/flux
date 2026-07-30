@@ -122,8 +122,8 @@ async function validateAppsCumulatively(installedApps) {
           continue;
         }
 
-        const cpu = deployments.reduce((sum, d) => sum + d.totalResources().cpu, 0);
-        const memory = deployments.reduce((sum, d) => sum + d.totalResources().memory, 0);
+        const cpu = deployments.reduce((sum, d) => sum + d.resourceTotals().cpu, 0);
+        const memory = deployments.reduce((sum, d) => sum + d.resourceTotals().memoryMb, 0);
         const appCpu = cpu * 10;
         const appRam = memory;
         // Full host-disk footprint (storage + rootFsGb + swapGb across components).

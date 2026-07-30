@@ -47,7 +47,7 @@ async function withLock(fn) {
  * @param {object} deployment - a DeploymentSpec
  */
 function reserve(appName, deployment) {
-  const { cpu, memory } = deployment.totalResources();
+  const { cpu, memoryMb: memory } = deployment.resourceTotals();
   const hdd = deployment.reservableHostDiskGb();
   pending.set(appName, { cpu, memory, hdd });
 }

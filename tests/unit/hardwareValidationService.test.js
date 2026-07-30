@@ -80,9 +80,9 @@ describe('hardwareValidationService tests', () => {
 
   function fakeDeployment(resources) {
     return {
-      totalResources: () => resources,
+      resourceTotals: () => resources,
       // sizeGb + rootFsGb(10) + swapGb(2) for a legacy single-component app
-      reservableHostDiskGb: () => (resources.storage || 0) + 12,
+      reservableHostDiskGb: () => (resources.storageGb || 0) + 12,
     };
   }
 
@@ -113,7 +113,7 @@ describe('hardwareValidationService tests', () => {
       });
 
       appsRepositoryStub.listInstalledApps.resolves(installedApps);
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 5 }));
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 5 }));
 
       const result = await hardwareValidationService.performBootTimeHardwareValidation();
 
@@ -151,7 +151,7 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 5 }));
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -169,7 +169,7 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 5, memory: 1024, storage: 5 }));
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 5, memoryMb: 1024, storageGb: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -189,7 +189,7 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 7168, storage: 5 }));
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 7168, storageGb: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -209,7 +209,7 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 80 }));
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 80 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -230,7 +230,7 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 2, memory: 1024, storage: 5 }));
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 2, memoryMb: 1024, storageGb: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -251,7 +251,7 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 4096, storage: 5 }));
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 4096, storageGb: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -272,7 +272,7 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 40 }));
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 40 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -294,7 +294,7 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1.5, memory: 1024, storage: 5 }));
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1.5, memoryMb: 1024, storageGb: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -315,7 +315,7 @@ describe('hardwareValidationService tests', () => {
         ssdStorage: 100,
       });
 
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 5 }));
+      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
@@ -335,7 +335,7 @@ describe('hardwareValidationService tests', () => {
       });
 
       deploymentProviderStub.getInstalledDeployment.onFirstCall().resolves(null);
-      deploymentProviderStub.getInstalledDeployment.onSecondCall().resolves(fakeDeployment({ cpu: 1, memory: 1024, storage: 5 }));
+      deploymentProviderStub.getInstalledDeployment.onSecondCall().resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 5 }));
 
       const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
 
