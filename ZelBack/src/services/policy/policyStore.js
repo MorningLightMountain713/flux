@@ -308,9 +308,19 @@ async function startSync() {
   const documents = names.filter((name) => !isArtifact(name));
   const artifacts = names.filter(isArtifact);
 
-  artifacts.filter((name) => !receivers.has(name)).forEach((name) => {
-    log.info(`policyStore - ${name} has no receiver, not fetching it`);
-  });
+  // An artifact with no receiver is inert by design — it costs nothing before its consumer
+  // exists. But if bytes are already cached for one, something WAS consuming it and no longer
+  // is, which is a wiring mistake rather than a state we ever reach on purpose. It fails
+  // quietly otherwise: the stored copy is kept forever (there is no expiry) and its consumer
+  // runs on data that silently stops being refreshed.
+  await Promise.all(artifacts.filter((name) => !receivers.has(name)).map(async (name) => {
+    const stranded = await policyArtifactRepository.getArtifactRecord(name).catch(() => null);
+    if (stranded) {
+      log.error(`policyStore - ${name} has cached bytes but no receiver: its consumer is not wired up, so the stored copy will never be refreshed`);
+    } else {
+      log.info(`policyStore - ${name} has no receiver, not fetching it`);
+    }
+  }));
 
   await Promise.all(documents.map(restoreDocument));
   await Promise.all(artifacts.map(restoreArtifact));
