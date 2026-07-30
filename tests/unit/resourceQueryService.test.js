@@ -189,7 +189,7 @@ describe('resourceQueryService tests', () => {
       // An app that passed resource admission but is not yet in the DB - a concurrent
       // install must see its footprint or the node double-admits.
       admissionControl.reserve('PendingApp', {
-        totalResources: () => ({ cpu: 2, memory: 4000 }),
+        resourceTotals: () => ({ cpu: 2, memoryMb: 4000 }),
         reservableHostDiskGb: () => 50,
       });
 

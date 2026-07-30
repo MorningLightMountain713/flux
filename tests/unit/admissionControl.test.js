@@ -3,7 +3,7 @@ const admissionControl = require('../../ZelBack/src/services/utils/admissionCont
 
 // A minimal DeploymentSpec stand-in: reserve() only calls these two.
 const deploymentOf = (cpu, memory, hdd) => ({
-  totalResources: () => ({ cpu, memory }),
+  resourceTotals: () => ({ cpu, memoryMb: memory }),
   reservableHostDiskGb: () => hdd,
 });
 

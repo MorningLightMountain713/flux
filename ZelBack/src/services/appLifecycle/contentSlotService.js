@@ -102,7 +102,7 @@ async function verifyManifest(manifest, ctx, deps = {}) {
   }
 
   const signed = await canonicalManifest(manifest);
-  if (!verify(signed, owner, manifest.ownerSignature)) {
+  if (!await verify(signed, owner, manifest.ownerSignature)) {
     throw new Error('contentSlot: invalid owner signature on manifest');
   }
 

@@ -2,6 +2,12 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+// The real fit rule, not a restatement of it. capacityShortfall and
+// burstHeadroomShortfall are pure and synchronous, so a stub could only
+// re-implement them — and a re-implementation is free to drift from the rule
+// the spawner actually applies in production.
+const hwRequirementsActual = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+
 // Mirrors appInstaller.InstallStatus (proxyquire.noCallThru stubs the real module out).
 const InstallStatus = Object.freeze({
   INSTALLED: 'installed',
@@ -121,6 +127,20 @@ describe('appSpawner tests', () => {
       // feature (telemetry, content, shutdown, preStop) — forced in tests
       // with overrides.requiresArcane.
       requiresArcane: () => !!overrides.encrypted || !!overrides.requiresArcane,
+      // Mirrors InstantiatedSpec.resourceTotals(): a readable spec sums its
+      // components, a sealed v9 reads its cleartext summary, and a sealed v8
+      // cannot answer at all — null meaning "cannot tell", never zero.
+      // `resourceTotals: 'throws'` stands in for a spec whose resources cannot
+      // be computed (a malformed legacy containerData does this in production).
+      resourceTotals: () => {
+        if (overrides.resourceTotals === 'throws') throw new Error('unparseable containerData');
+        if (overrides.resourceTotals === null) return null;
+        const r = {
+          cpu: 1, memoryMb: 1000, storageGb: 10, rootFsGb: 2, swapGb: 0, componentCount: 1,
+          ...(overrides.resourceTotals || {}),
+        };
+        return { ...r, hostDiskGb: r.storageGb + r.rootFsGb + r.swapGb };
+      },
       serialize: () => overrides,
     };
   }
@@ -134,6 +154,9 @@ describe('appSpawner tests', () => {
   }
 
   function buildModule(opts = {}) {
+    // One source of truth for "is this app a follower", shared by both linker
+    // entry points below.
+    const isFollowerStub = opts.isPureFollower ?? sinon.stub().returns(false);
     configStub = createConfigStub(opts.configOverrides);
     globalStateStub = createGlobalStateStub();
     if (opts.globalStateOverrides) {
@@ -209,7 +232,7 @@ describe('appSpawner tests', () => {
               allHostPorts: sinon.stub().returns([]),
               allImages: sinon.stub().returns([]),
               componentEntries: sinon.stub().returns([]),
-              totalResources: sinon.stub().returns({ cpu: 1, memory: 1000, storage: 10 }),
+              resourceTotals: sinon.stub().returns({ cpu: 1, memoryMb: 1000, storageGb: 10 }),
             }),
           },
           // notifySpecStored hydrates the raw stored doc into an InstantiatedSpec at
@@ -239,6 +262,16 @@ describe('appSpawner tests', () => {
         checkNodeResources: sinon.stub().resolves(),
         checkCpuBurstHeadroom: sinon.stub().resolves(),
         systemArchitecture: sinon.stub().resolves('amd64'),
+        // The real pair: one reading of free capacity, applied per candidate.
+        // Defaults to a node with ample room so existing cases are unaffected;
+        // opts.nodeCapacity shrinks it to exercise the screen.
+        nodeCapacity: opts.nodeCapacityStub ?? sinon.stub().resolves(opts.nodeCapacity ?? {
+          totalSpaceOnNode: 1000, availableSpace: 500, availableCpu: 200,
+          availableRam: 100000, freeCores: 32,
+        }),
+        capacityShortfall: opts.capacityShortfall ?? hwRequirementsActual.capacityShortfall,
+        burstHeadroomShortfall: opts.burstHeadroomShortfall
+          ?? hwRequirementsActual.burstHeadroomShortfall,
       },
       '../appNetwork/portManager': {
         ensureApplicationPortsNotUsed: sinon.stub().resolves(),
@@ -296,8 +329,21 @@ describe('appSpawner tests', () => {
         // is a pure follower (matches the real module's behaviour for apps with no
         // shareWith/activation). Tests that exercise the readiness filter or the
         // follower suppression override these stubs.
+        // The readiness filter picks one of these per candidate: the resolving
+        // gate for a pinned app, the sealed check for the general pool. Tests
+        // state the intent once and both are wired from it, so a candidate
+        // answers the same either way regardless of how it is targeted.
         checkAppNetworkRequirements: opts.checkAppNetworkRequirements ?? sinon.stub().resolves(true),
-        isPureFollower: opts.isPureFollower ?? sinon.stub().returns(false),
+        linksReadyForSelection: opts.linksReadyForSelection
+          ?? opts.checkAppNetworkRequirements ?? sinon.stub().resolves(true),
+        // Answering "is this a follower" means resolving the app's spec, so the
+        // linker exposes an async predicate and a batch form for the candidate
+        // filter. Tests still state intent as one `isPureFollower` stub; both
+        // are derived from it so they cannot disagree.
+        isPureFollowerApp: sinon.stub().callsFake(async (app) => isFollowerStub(app)),
+        pureFollowerNames: sinon.stub().callsFake(
+          async (apps) => new Set((apps || []).filter((a) => a && isFollowerStub(a)).map((a) => a.name)),
+        ),
         getRequiredDependencyNamesForNode: opts.getRequiredDependencyNamesForNode ?? sinon.stub().resolves(new Set()),
       },
       './pendingTeardownStore': {
@@ -499,6 +545,48 @@ describe('appSpawner tests', () => {
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.false;
     });
 
+    it('a PINNED candidate is checked through the resolving gate, the general pool is not', async () => {
+      // The rule that keeps this off the hot path: a pinned app will be
+      // installed here, so reading its links through the decrypted view costs
+      // the same decrypt the install performs anyway. The general pool is many
+      // candidates for at most one install, so it is read sealed. Getting this
+      // backwards decrypts every candidate on every cycle.
+      const gate = sinon.stub().resolves(true);
+      const cheap = sinon.stub().resolves(true);
+      buildModule({
+        candidates: [
+          makeCandidate({ name: 'pinnedApp', hash: 'pin1', placement: { targetIps: ['7.7.7.7:16127'] } }),
+          makeCandidate({ name: 'generalApp', hash: 'gen1' }),
+        ],
+        checkAppNetworkRequirements: gate,
+        linksReadyForSelection: cheap,
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(gate.getCalls().map((c) => c.args[0].name)).to.eql(['pinnedApp']);
+      expect(cheap.getCalls().map((c) => c.args[0].name)).to.eql(['generalApp']);
+    });
+
+    it('outpoint- and operator-pinned candidates also take the resolving gate', async () => {
+      // targetsThisNode ORs three predicates; testing only the IP branch would
+      // leave two thirds of the rule unexercised.
+      const gate = sinon.stub().resolves(true);
+      const cheap = sinon.stub().resolves(true);
+      buildModule({
+        candidates: [
+          makeCandidate({ name: 'byOutpoint', hash: 'o1', placement: { targetOutpoints: ['abc:0'] } }),
+          makeCandidate({ name: 'byOperator', hash: 'r1', placement: { targetOperators: ['opkey'] } }),
+          makeCandidate({ name: 'generalApp', hash: 'g1' }),
+        ],
+        checkAppNetworkRequirements: gate,
+        linksReadyForSelection: cheap,
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(gate.getCalls().map((c) => c.args[0].name).sort()).to.eql(['byOperator', 'byOutpoint']);
+      expect(cheap.getCalls().map((c) => c.args[0].name)).to.eql(['generalApp']);
+    });
+
     it('does not error-cache a dropped candidate — it is reconsidered once the dependency appears', async () => {
       buildModule({
         candidates: [makeCandidate()],
@@ -571,6 +659,111 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       const selectedLog = logStub.info.args.find((args) => args[0]?.includes?.('selected to try to spawn'));
       expect(selectedLog).to.exist;
+    });
+  });
+
+  // Selection is a lottery over the surviving pool, so an app the node cannot
+  // host does not merely waste its own cycle — it can win the draw ahead of one
+  // that would have installed, and the node spawns nothing.
+  describe('resource screening before selection', () => {
+    const tightNode = {
+      totalSpaceOnNode: 1000, availableSpace: 20, availableCpu: 20,
+      availableRam: 2000, freeCores: 8,
+    };
+
+    // Anchored on the selection line specifically — the earlier "…can be
+    // selected to try to spawn on my node" count line also contains the phrase.
+    const selectedName = () => {
+      for (const [message] of logStub.info.args) {
+        const match = typeof message === 'string'
+          && message.match(/Application (\S+) selected to try to spawn/);
+        if (match) return match[1];
+      }
+      return null;
+    };
+
+    it('picks the app that fits over the one that does not', async () => {
+      // Selection draws at random from the surviving pool, so pin the draw to
+      // the first entry and put the oversized app there: without the screen
+      // this selects tooBig, with it tooBig is gone and the draw lands on fits.
+      // Left to chance the assertion would hold half the time either way.
+      sinon.stub(Math, 'random').returns(0);
+      const tooBig = makeCandidate({
+        name: 'tooBig', hash: 'h1', resourceTotals: { memoryMb: 64000 },
+      });
+      const fits = makeCandidate({
+        name: 'fits', hash: 'h2', resourceTotals: { cpu: 0.5, memoryMb: 500, storageGb: 5 },
+      });
+      buildModule({ candidates: [tooBig, fits], nodeCapacity: tightNode });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(selectedName()).to.equal('fits');
+    });
+
+    it('screens on RAM, CPU and host disk alike', async () => {
+      for (const [label, totals] of [
+        ['ram', { memoryMb: 64000 }],
+        ['cpu', { cpu: 100 }],
+        ['disk', { storageGb: 900 }],
+      ]) {
+        logStub.info.resetHistory();
+        buildModule({
+          candidates: [makeCandidate({ name: label, hash: `h-${label}`, resourceTotals: totals })],
+          nodeCapacity: tightNode,
+        });
+        // eslint-disable-next-line no-await-in-loop
+        await appSpawner.trySpawningGlobalApplication().catch(() => {});
+        expect(selectedName(), label).to.equal(null);
+      }
+    });
+
+    it('screens on burst headroom, not just whether the app fits', async () => {
+      // Room for the cores, but installing it leaves the node unable to absorb
+      // a spike — a distinct rule from "does it fit".
+      buildModule({
+        candidates: [makeCandidate({ name: 'burst', hash: 'hb', resourceTotals: { cpu: 5 } })],
+        nodeCapacity: {
+          totalSpaceOnNode: 1000, availableSpace: 500, availableCpu: 200,
+          availableRam: 100000, freeCores: 8,
+        },
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(selectedName()).to.equal(null);
+    });
+
+    it('keeps a candidate that cannot report its size — the install gate decides', async () => {
+      // A sealed v8 spec: its format carries no cleartext summary, so the
+      // sealed vantage answers null. Null is "cannot tell", never "needs
+      // nothing", and must not be screened out on a guess.
+      buildModule({
+        candidates: [makeCandidate({ name: 'sealedV8', hash: 'h8', resourceTotals: null })],
+        nodeCapacity: tightNode,
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(selectedName()).to.equal('sealedV8');
+    });
+
+    it('one unsizeable spec does not take down the sweep for the rest', async () => {
+      const broken = makeCandidate({ name: 'broken', hash: 'hx', resourceTotals: 'throws' });
+      const fits = makeCandidate({
+        name: 'fits', hash: 'h2', resourceTotals: { cpu: 0.5, memoryMb: 500, storageGb: 5 },
+      });
+      buildModule({ candidates: [broken, fits], nodeCapacity: tightNode });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      // Both survive: the broken one is left to the install-time check rather
+      // than guessed at, and the sweep still reaches the one that fits.
+      expect(selectedName()).to.be.oneOf(['broken', 'fits']);
+      expect(logStub.warn.args.some((a) => a[0]?.includes?.('could not size broken'))).to.be.true;
+    });
+
+    it('screens nothing when node capacity cannot be read', async () => {
+      buildModule({
+        candidates: [makeCandidate({ name: 'huge', hash: 'h1', resourceTotals: { memoryMb: 999999 } })],
+        nodeCapacityStub: sinon.stub().rejects(new Error('benchmark unavailable')),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      // Screening everything out on an unreadable reading would idle the node.
+      expect(selectedName()).to.equal('huge');
+      expect(logStub.warn.args.some((a) => a[0]?.includes?.('could not read node capacity'))).to.be.true;
     });
   });
 
