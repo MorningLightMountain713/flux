@@ -2,7 +2,9 @@ const config = require('config');
 const axios = require('axios');
 const dbHelper = require('../dbHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
-const { resolveSpec } = require('../utils/specCutover');
+const appsRepository = require('../appDatabase/appsRepository');
+const fluxNetworkHelper = require('../fluxNetworkHelper');
+const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -10,14 +12,168 @@ const { appsFolder } = require('../utils/appConstants');
 const cacheManager = require('../utils/cacheManager').default;
 const log = require('../../lib/log');
 
+/**
+ * The v1-v8 pricing regime — two numbers, on purpose.
+ *
+ * The on-chain fee these specs must pay is a near-zero floor, so what an owner
+ * is actually charged is the display price computed here (with the marketplace
+ * premium). "What the screen says" and "what the chain demands" are genuinely
+ * different figures, and the free-update question is answered locally by
+ * checkLegacyFreeUpdate. Nothing on chain consults that rule.
+ *
+ * Contrast v9PricingRegime, where the on-chain price was raised to equal the
+ * display price and there is only one figure.
+ *
+ * Subscriptions here are denominated in blocks: the app dies when the chain
+ * reaches height + expire, whatever wall clock that turns out to be. Nothing in
+ * this module converts blocks to seconds — the 30-second block is difficulty's
+ * target, not a guarantee, so a converted figure would be an estimate wearing
+ * the costume of an exact one.
+ */
+
 const globalAppsInformation = config.database.appsglobal.collections.appsInformation;
 
 const myShortCache = cacheManager.fluxRatesCache;
 const myLongCache = cacheManager.appPriceBlockedRepoCache;
 
-async function legacyGetAppFluxOnChainPrice(appSpecification) {
-  const spec = await resolveSpec(appSpecification);
+/**
+ * How much longer a free update may push the expiry out, in blocks.
+ */
+const MAX_FREE_EXTENSION_BLOCKS = 8;
 
+const SECONDS_PER_BLOCK = 30;
+
+/**
+ * How many free updates an owner may make in a given window. The same caps the
+ * v9 rule applies (freeUpdatePolicy.checkRateLimit), so an owner is bounded the
+ * same way whichever version they are on.
+ *
+ * Stated as durations, with the block counts derived. They were written out as
+ * block counts once — 3600/1440/720 — which are those durations only at the
+ * 120-second block time that preceded the PON fork. The fork quartered the
+ * block time and the literals stayed, leaving every window a quarter of its
+ * documented length and the cap four times more permissive than intended.
+ * Nothing here re-derives a block count by hand for that reason.
+ */
+const FREE_UPDATE_WINDOWS = [
+  { hours: 120, max: 10 },
+  { hours: 48, max: 8 },
+  { hours: 24, max: 5 },
+];
+
+/**
+ * The default subscription length in blocks at a given height. The PON fork
+ * quartered the block time, so the same wall-clock month costs four times as
+ * many blocks after it.
+ * @param {number} height
+ * @returns {number} blocks
+ */
+function getDefaultExpire(height) {
+  return height >= config.fluxapps.daemonPONFork
+    ? config.fluxapps.blocksLasting * 4
+    : config.fluxapps.blocksLasting;
+}
+
+function countEnterprisePortsOn(component) {
+  const hostPorts = new Set();
+  for (const p of Object.values(component.ports || {})) {
+    if (p && p.hostPort != null) hostPorts.add(p.hostPort);
+  }
+  return [...hostPorts].filter((p) => fluxNetworkHelper.isPortEnterprise(p)).length;
+}
+
+function hasResourceGrowth(spec, prevSpec) {
+  for (const [, compA] of spec.componentEntries()) {
+    const compB = prevSpec.getComponent(compA.name);
+    if (!compB) return true;
+    if (compA.cpu > compB.cpu) return true;
+    if (compA.memory > compB.memory) return true;
+    const aStorage = (compA.persistentStorage && compA.persistentStorage.sizeGb) || 0;
+    const bStorage = (compB.persistentStorage && compB.persistentStorage.sizeGb) || 0;
+    if (aStorage > bStorage) return true;
+    if (countEnterprisePortsOn(compA) > countEnterprisePortsOn(compB)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a v1-v8 update qualifies as free on the display price.
+ *
+ * A v9 spec must never be passed here. v9's on-chain price equals its display
+ * price, so free-or-not is decided once, inside PricingEngine.priceUpdate, and
+ * both the quote and consensus reach that same call. Answering here as well
+ * would put a second, older opinion in front of the authoritative one.
+ *
+ * @param {import('@runonflux/flux-spec').FluxAppSpecBase} spec - New spec (v1-v8)
+ * @param {number} daemonHeight
+ * @returns {Promise<boolean>}
+ */
+async function checkLegacyFreeUpdate(spec, daemonHeight) {
+  const instantiated = await appsRepository.getGlobalAppInfo(spec.name);
+  if (!instantiated) return false;
+
+  const prevSpec = await resolveInstantiatedSpec(instantiated);
+
+  // Both sides must be legacy. A v9 registration can only ever be updated by
+  // another v9 spec (UpdatePolicy.assertVersionTransition), so a legacy spec
+  // quoted against one is not an update this rule can price. The new spec is
+  // legacy by this function's contract.
+  if (prevSpec.version >= 9) return false;
+
+  if (!spec.expire || !prevSpec.expire) return false;
+
+  // A free update must not buy more subscription. expiresAtHeight carries the
+  // PON fork adjustment for a term bought when blocks were four times slower.
+  const blocksToExtend = (daemonHeight + spec.expire) - instantiated.expiresAtHeight;
+
+  const placementMatch = spec.placement.staticIp === prevSpec.placement.staticIp;
+  // The targeting fields are arrays of node identity; the free-update bar
+  // compares their lengths (the identity SET size).
+  const targetsMatch = spec.placement.targetIps.length === prevSpec.placement.targetIps.length
+    && spec.placement.targetOutpoints.length === prevSpec.placement.targetOutpoints.length
+    && spec.placement.targetOperators.length === prevSpec.placement.targetOperators.length;
+  const instancesMatch = spec.instances === prevSpec.instances;
+  const extensionOk = blocksToExtend <= MAX_FREE_EXTENSION_BLOCKS;
+
+  if (!(placementMatch && targetsMatch && instancesMatch && extensionOk)) {
+    log.info(`[checkLegacyFreeUpdate] App: ${spec.name}, RESULT: NOT FREE - basic conditions failed (placement: ${placementMatch}, targets: ${targetsMatch}, instances: ${instancesMatch}, extension: ${extensionOk})`);
+    return false;
+  }
+
+  if (hasResourceGrowth(spec, prevSpec)) {
+    log.info(`[checkLegacyFreeUpdate] App: ${spec.name}, RESULT: NOT FREE - resource changes detected`);
+    return false;
+  }
+
+  // The app's full message history (register + updates), via the repository —
+  // the free-update rate limit counts recent update messages.
+  const permanentAppMessage = await appsRepository.listAppMessagesByName(spec.name);
+
+  const updates = permanentAppMessage.filter(
+    (m) => m.type === 'fluxappupdate' || m.type === 'zelappupdate',
+  );
+
+  for (const { hours, max } of FREE_UPDATE_WINDOWS) {
+    const blocks = (hours * 3600) / SECONDS_PER_BLOCK;
+    const count = updates.filter((m) => m.height > daemonHeight - blocks).length;
+    if (count > max) {
+      log.info(`[checkLegacyFreeUpdate] App: ${spec.name}, RESULT: NOT FREE - rate limit exceeded (${count} updates in ${hours}h, max ${max})`);
+      return false;
+    }
+  }
+  log.info(`[checkLegacyFreeUpdate] App: ${spec.name}, RESULT: FREE UPDATE (within rate limits)`);
+  return true;
+}
+
+/**
+ * On-chain price in FLUX for display — the near-zero floor, not what the owner
+ * is charged. Returned as a fixed-2 string, which is what this path has always
+ * produced; every caller wraps it in Number().
+ *
+ * @param {object} spec - resolved v1-v8 spec
+ * @returns {Promise<string>} Price in FLUX
+ */
+async function onChainDisplayPrice(spec) {
   const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
   if (!syncStatus.data.synced) {
     throw new Error('Daemon not yet synced.');
@@ -80,7 +236,7 @@ async function legacyGetAppFluxOnChainPrice(appSpecification) {
 
   const { DeploymentSpec } = await getSpecBackend();
   // Declared view: display pricing must match what every node computes.
-  const { cpu, memory, storage } = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null }).totalResources();
+  const { cpu, memoryMb: memory, storageGb: storage } = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null }).resourceTotals();
   if (cpu < 3 && memory < 6000 && storage < 150) {
     actualPriceToPay *= 0.8;
   } else if (cpu < 7 && memory < 29000 && storage < 370) {
@@ -98,24 +254,24 @@ async function legacyGetAppFluxOnChainPrice(appSpecification) {
   return Number(actualPriceToPay).toFixed(2);
 }
 
-// Legacy (v1-v8) USD/FLUX display pricing. Pure business logic: takes the
-// parsed appSpecification, returns the price object ({ usd, flux, fluxDiscount }),
-// and throws on error so the *Api handler formats the response. The caller reads
-// the request body (version dispatch needs the spec version up front, so the body
-// can't be left for this function to read off the stream).
-async function legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn, checkFreeAppUpdateFn }) {
-  if (!appSpecification) {
-    throw new Error('Invalid application specification provided.');
-  }
-
+/**
+ * USD + FLUX quote for display — the figure an owner actually pays, waived
+ * entirely when checkLegacyFreeUpdate says the update is free.
+ *
+ * @param {object} spec - resolved v1-v8 spec
+ * @param {object} appSpecification - the raw submitted document. Needed for
+ *   priceUSD, a marketplace field carried on the request that exists on no spec
+ *   class.
+ * @returns {Promise<{usd: number, flux: number, fluxDiscount: number|string}>}
+ */
+async function fiatAndFluxDisplayPrice(spec, appSpecification) {
   const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
   if (!syncStatus.data.synced) {
     throw new Error('Daemon not yet synced.');
   }
   const daemonHeight = syncStatus.data.height;
-  const spec = await resolveSpecFn(appSpecification);
 
-  if (await checkFreeAppUpdateFn(spec, daemonHeight)) {
+  if (await checkLegacyFreeUpdate(spec, daemonHeight)) {
     return { usd: 0, flux: 0, fluxDiscount: 0 };
   }
 
@@ -149,7 +305,7 @@ async function legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn, c
     database, globalAppsInformation, { name: spec.name }, { projection: { _id: 0 } },
   );
   if (appInfoDoc) {
-    const prevSpec = await resolveSpecFn(appInfoDoc);
+    const prevSpec = await resolveSpec(appInfoDoc);
     let previousSpecsPrice = await appPricePerMonth(prevSpec, daemonHeight, appPrices);
 
     const previousBlockHeightMultiplier = appInfoDoc.height >= config.fluxapps.daemonPONFork ? 4 : 1;
@@ -186,9 +342,9 @@ async function legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn, c
     }
   }
 
-  const { DeploymentSpec: DS } = await getSpecBackend();
+  const { DeploymentSpec } = await getSpecBackend();
   // Declared view: display pricing must match what every node computes.
-  const { cpu, memory, storage } = DS.fromSpec(spec, appsFolder, { replica: null }).totalResources();
+  const { cpu, memoryMb: memory, storageGb: storage } = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null }).resourceTotals();
   const applyHWDiscount = spec.version <= 3 || spec.instances < 4;
   if (applyHWDiscount) {
     if (cpu < 3 && memory < 6000 && storage < 150) {
@@ -265,7 +421,7 @@ async function legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn, c
     }
   }
   const fluxPrice = Number((actualPriceToPay / fluxUSDRate) * appPrices[0].fluxmultiplier);
-  const fluxChainPrice = Number(await legacyGetAppFluxOnChainPrice(appSpecification));
+  const fluxChainPrice = Number(await onChainDisplayPrice(spec));
   const price = {
     usd: Number(actualPriceToPay),
     flux: fluxChainPrice > fluxPrice ? Number(fluxChainPrice.toFixed(2)) : Number(fluxPrice.toFixed(2)),
@@ -274,4 +430,69 @@ async function legacyGetAppFiatAndFluxPrice(appSpecification, { resolveSpecFn, c
   return price;
 }
 
-module.exports = { legacyGetAppFiatAndFluxPrice, legacyGetAppFluxOnChainPrice };
+/**
+ * Consensus registration fee in satoshis — the near-zero floor.
+ * @param {object} spec - resolved v1-v8 spec
+ * @param {number} height - confirming block height
+ * @returns {Promise<bigint>}
+ */
+async function registrationFee(spec, height) {
+  const appPrices = await getChainParamsPriceUpdates();
+  let appPrice = await appPricePerMonth(spec, height, appPrices);
+  const defaultExpire = getDefaultExpire(height);
+  const expireIn = spec.expire || defaultExpire;
+  appPrice *= expireIn / defaultExpire;
+  appPrice = Math.ceil(appPrice * 100) / 100;
+  const intervals = appPrices.filter((p) => p.height < height);
+  const priceSpec = intervals[intervals.length - 1];
+  if (appPrice < priceSpec.minPrice) appPrice = priceSpec.minPrice;
+  return BigInt(Math.round(appPrice * 1e8));
+}
+
+/**
+ * Consensus update fee in satoshis, crediting the unused portion of the prior
+ * subscription. prevRegisteredAt and nowBlockTime are part of the shared regime
+ * interface and unused here: legacy credits unused time by block count, not by
+ * wall clock.
+ *
+ * @param {object} spec - resolved new v1-v8 spec
+ * @param {object} prevSpec - resolved previous spec
+ * @param {number} height - confirming block height
+ * @param {number} prevHeight - height the previous spec registered at
+ * @returns {Promise<bigint>}
+ */
+async function updateFee(spec, prevSpec, height, prevHeight) {
+  const appPrices = await getChainParamsPriceUpdates();
+  let appPrice = await appPricePerMonth(spec, height, appPrices);
+  let previousSpecsPrice = await appPricePerMonth(prevSpec, prevHeight, appPrices);
+  const defaultExpireCurrent = getDefaultExpire(height);
+  const defaultExpirePrevious = getDefaultExpire(prevHeight);
+  const currentExpireIn = spec.expire || defaultExpireCurrent;
+  const previousExpireIn = prevSpec.expire || defaultExpirePrevious;
+  appPrice *= currentExpireIn / defaultExpireCurrent;
+  appPrice = Math.ceil(appPrice * 100) / 100;
+  previousSpecsPrice *= previousExpireIn / defaultExpirePrevious;
+  previousSpecsPrice = Math.ceil(previousSpecsPrice * 100) / 100;
+  const heightDifference = height - prevHeight;
+  const perc = (previousExpireIn - heightDifference) / previousExpireIn;
+  let actualPriceToPay = appPrice * 0.9;
+  if (perc > 0) {
+    actualPriceToPay = (appPrice - (perc * previousSpecsPrice)) * 0.9;
+  }
+  actualPriceToPay = Number(Math.ceil(actualPriceToPay * 100) / 100);
+  const intervals = appPrices.filter((p) => p.height < height);
+  const priceSpec = intervals[intervals.length - 1];
+  if (actualPriceToPay < priceSpec.minPrice) {
+    actualPriceToPay = priceSpec.minPrice;
+  }
+  return BigInt(Math.round(actualPriceToPay * 1e8));
+}
+
+module.exports = {
+  onChainDisplayPrice,
+  fiatAndFluxDisplayPrice,
+  registrationFee,
+  updateFee,
+  checkLegacyFreeUpdate,
+  getDefaultExpire,
+};
