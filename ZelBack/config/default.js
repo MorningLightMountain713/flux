@@ -372,6 +372,7 @@ module.exports = {
     cpuCheckIntervalMs: 900000,
     portRestoreIntervalMs: 600000,
     imageComplianceIntervalMs: 3600000,
+    tamperingCheckIntervalMs: 43200000, // 12h — how often a node re-checks whether it is on the tampering blocklist
     imageCacheEnabled: true, // master switch for the image-cache API + retention pin
     imageCachePerFluxIdQuotaGb: 20, // soft per-fluxId quota, accounted from real docker df() on-disk size
     imageCachePerImageBurstCapGb: 5, // per-image admission cap vs (compressed * 2); bounds the burst to ~one image
@@ -540,6 +541,19 @@ module.exports = {
     // default branch. Releases predating this still read RunOnFlux/flux helpers/, so both
     // copies are kept in step until minimumFluxOSAllowedVersion is above all of them.
     baseUrl: 'https://raw.githubusercontent.com/RunOnFlux/fluxos-network-policy/main',
+    // Keyed by the names policyStore registers.
+    refreshIntervalMs: {
+      blockedRepositories: 21600000, // 6h
+      tamperingBlocklist: 43200000, // 12h
+      enterpriseNodes: 21600000, // 6h
+      ipLocationTable: 86400000, // 24h
+    },
+    // The location table is megabytes where the rest are kilobytes, so ten seconds would
+    // time out on any node without a fast link.
+    fetchTimeoutMs: {
+      default: 10000,
+      ipLocationTable: 120000,
+    },
   },
   stats: {
     // Flux stats service (module minimum versions, marketplace listapps, app USD pricing).

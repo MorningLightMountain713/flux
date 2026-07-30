@@ -1,4 +1,5 @@
 const express = require('express');
+const { createHash } = require('crypto');
 
 const PORT = parseInt(process.env.STUB_PORT || '3000', 10);
 const CONTROL_PORT = parseInt(process.env.CONTROL_PORT || '3001', 10);
@@ -7,6 +8,9 @@ const state = {
   blockedRepositories: [],
   tamperingBlocklist: [],
   enterpriseNodes: {},
+  // Per-path 200/304 tallies, so a suite can prove a node revalidated conditionally rather
+  // than re-downloading. Reset with /reset or /policy-requests.
+  policyRequests: {},
   // Paths made to fail, so a suite can exercise what a node does when a policy document
   // is unreachable rather than only when it is empty. Path -> HTTP status.
   failingPaths: {},
@@ -53,17 +57,45 @@ app.use((req, res, next) => {
   next();
 });
 
+// Policy documents are served with an ETag and honour If-None-Match, because FluxOS sends
+// conditional requests and a stub that always answered 200 would leave that path untested —
+// a node that never gets a 304 re-downloads every document on every interval.
+//
+// The tag is derived from the body, so it changes exactly when the document does. Quoted and
+// weak-prefixed to match what GitHub raw serves, since the node stores whatever it is handed
+// and echoes it back verbatim.
+function countRequest(path, status) {
+  const counts = state.policyRequests[path] || { 200: 0, 304: 0 };
+  counts[status] += 1;
+  state.policyRequests[path] = counts;
+}
+
+function sendPolicyDocument(req, res, value) {
+  const body = JSON.stringify(value);
+  const etag = `W/"${createHash('sha1').update(body).digest('hex')}"`;
+  res.set('ETag', etag);
+
+  if (req.get('If-None-Match') === etag) {
+    countRequest(req.path, 304);
+    res.status(304).end();
+    return;
+  }
+
+  countRequest(req.path, 200);
+  res.type('application/json').send(body);
+}
+
 // GitHub raw content endpoints
 app.get('/helpers/blockedrepositories.json', (req, res) => {
-  res.json(state.blockedRepositories);
+  sendPolicyDocument(req, res, state.blockedRepositories);
 });
 
 app.get('/helpers/tamperingblockednodes.json', (req, res) => {
-  res.json(state.tamperingBlocklist);
+  sendPolicyDocument(req, res, state.tamperingBlocklist);
 });
 
 app.get('/helpers/enterprisenodes.json', (req, res) => {
-  res.json(state.enterpriseNodes);
+  sendPolicyDocument(req, res, state.enterpriseNodes);
 });
 
 // GitHub API endpoints
@@ -150,6 +182,13 @@ control.post('/enterprise-nodes', (req, res) => {
   res.json({ ok: true });
 });
 
+// Clear the 200/304 tallies without disturbing anything else, so a suite can count the
+// requests one restart makes rather than every request since boot.
+control.post('/policy-requests', (req, res) => {
+  state.policyRequests = {};
+  res.json({ ok: true });
+});
+
 // { "/helpers/blockedrepositories.json": 503 } — or {} to stop failing everything.
 control.post('/failing-paths', (req, res) => {
   state.failingPaths = req.body;
@@ -201,6 +240,7 @@ control.post('/reset', (req, res) => {
   state.tamperingBlocklist = [];
   state.enterpriseNodes = {};
   state.failingPaths = {};
+  state.policyRequests = {};
   state.latestRelease = { tag_name: 'v0.0.0', name: 'stub-release' };
   state.geolocation = {};
   state.moduleMinimumVersions = {};

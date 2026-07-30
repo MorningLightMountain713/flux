@@ -262,6 +262,38 @@ export function dbClient(nodeNum) {
       await globalDb.collection('zelappsinformation').insertOne(spec);
     },
 
+    // One deduplicated tampering incident, as appTamperingRepository.upsertIncident writes it.
+    // The enforcer sums `severity` over rows with schemaVersion >= 1, so this is how a suite
+    // puts a node over TAMPER_SCORE_THRESHOLD without having to actually tamper with it.
+    // detectedAt/lastSeen are real Dates because both carry a 30-day TTL index.
+    async seedTamperingIncident({ severity, appName = 'e2etamper', incidentKey } = {}) {
+      const localDb = await db('local');
+      const now = new Date();
+      await localDb.collection('apptamperingevents').insertOne({
+        schemaVersion: 1,
+        severity,
+        appName,
+        incidentKey: incidentKey || `e2e-${appName}-${now.getTime()}`,
+        detectedAt: now,
+        lastSeen: now,
+      });
+    },
+
+    // What policyStore cached: the payload for a document, or for an artifact the GridFS file
+    // id its bytes live under. Lets a suite prove last-known-good is real storage rather than
+    // a process-lifetime variable.
+    async policyDocument(name) {
+      const localDb = await db('local');
+      return localDb.collection('policydocuments').findOne({ _id: name });
+    },
+
+    // Make a node look like it has never successfully fetched a document, so the next boot
+    // falls through to the seed the release shipped.
+    async deletePolicyDocument(name) {
+      const localDb = await db('local');
+      await localDb.collection('policydocuments').deleteOne({ _id: name });
+    },
+
     // v9 content-slot manifest register (one row per app, version-monotonic). The
     // row shape is contentSlotService.storeManifest's: { appName, version, data, confirmed }.
     async contentManifestCount() {

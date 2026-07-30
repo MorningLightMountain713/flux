@@ -318,6 +318,7 @@ module.exports = {
     cpuCheckIntervalMs: 900000,
     portRestoreIntervalMs: 600000,
     imageComplianceIntervalMs: 3600000,
+    tamperingCheckIntervalMs: 43200000, // 12h — how often a node re-checks whether it is on the tampering blocklist
     imageCacheEnabled: true,
     imageCachePerFluxIdQuotaGb: 20,
     imageCachePerImageBurstCapGb: 5,
@@ -439,6 +440,16 @@ module.exports = {
   },
   policy: {
     baseUrl: 'https://raw.githubusercontent.com/RunOnFlux/fluxos-network-policy/main',
+    refreshIntervalMs: {
+      blockedRepositories: 21600000,
+      tamperingBlocklist: 43200000,
+      enterpriseNodes: 21600000,
+      ipLocationTable: 86400000,
+    },
+    fetchTimeoutMs: {
+      default: 10000,
+      ipLocationTable: 120000,
+    },
   },
   geolocation: {
     ipApiBaseUrl: 'http://ip-api.com',

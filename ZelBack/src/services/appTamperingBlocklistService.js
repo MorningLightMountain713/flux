@@ -1,3 +1,4 @@
+const config = require('config');
 const log = require('../lib/log');
 const appTamperingRepository = require('./appDatabase/appTamperingRepository');
 const nodeDosState = require('./nodeDosState');
@@ -6,7 +7,7 @@ const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const globalState = require('./utils/globalState');
 const policyStore = require('./policy/policyStore');
 
-const CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const CHECK_INTERVAL_MS = config.fluxapps.tamperingCheckIntervalMs ?? 12 * 60 * 60 * 1000;
 const SYNC_POLL_MS = 60 * 1000; // 60s while waiting for daemon sync
 const TAMPER_SCORE_THRESHOLD = 10;
 const DOS_MESSAGE_PREFIX = 'Node flagged via tampering blocklist';
