@@ -292,7 +292,7 @@ async function verifyLogin(req, res) {
           // Second verify that this address signed this message
           let valid = false;
           try {
-            valid = signatureVerifier.verifySignature(message, address, signature);
+            valid = await signatureVerifier.verifySignature(message, address, signature);
           } catch (error) {
             throw new Error('Invalid signature');
           }
@@ -308,7 +308,7 @@ async function verifyLogin(req, res) {
               createdAt,
               expireAt,
             };
-            const userconfig = globalThis.userconfig;
+            const { userconfig } = globalThis;
             let privilage = 'user';
             if (address === config.fluxTeamFluxID || address === config.fluxSupportTeamFluxID) {
               privilage = 'fluxteam';
@@ -693,7 +693,7 @@ async function wsRespondLoginPhrase(ws, loginphrase) {
       });
       if (result) {
         // user is logged, all ok
-        const userconfig = globalThis.userconfig;
+        const { userconfig } = globalThis;
         let privilage = 'user';
         if (result.zelid === config.fluxTeamFluxID || result.zelid === config.fluxSupportTeamFluxID) {
           privilage = 'fluxteam';

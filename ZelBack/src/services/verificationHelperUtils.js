@@ -60,7 +60,7 @@ async function verifyAdminSession(headers) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
@@ -97,7 +97,7 @@ async function verifyUserSession(headers) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
@@ -132,7 +132,7 @@ async function verifyFluxTeamSession(headers) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
@@ -166,7 +166,7 @@ async function verifyAdminAndFluxTeamSession(headers) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
@@ -207,7 +207,7 @@ async function verifyAppOwnerSession(headers, appName) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
@@ -250,7 +250,7 @@ async function verifyAppOwnerOrHigherSession(headers, appName) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
