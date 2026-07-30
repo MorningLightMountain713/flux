@@ -49,5 +49,6 @@ genuinely stopped using that dependency, in which case delete the key, or the
 test meant to stub something it is now missing, in which case fix the key. Read
 the module before deciding which.
 
-The repo is not clean under this check; it currently reports 54 keys across 22
-files, all pre-existing. `--strict` is there for the day that reaches zero.
+The repo is not clean under this check; it currently reports 53 keys across 21
+files, all pre-existing. Read each one before acting: a stub line can hold more
+than one key, and only some of them stale. `--strict` is there for the day that reaches zero.
