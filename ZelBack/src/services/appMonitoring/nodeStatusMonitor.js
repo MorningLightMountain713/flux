@@ -85,7 +85,7 @@ async function monitorNodeStatus() {
       if (!networkStateService.isReady()) {
         log.info('monitorNodeStatus - node list not known yet, deferring the location sweep');
         await serviceHelper.delay(config.fluxapps.nodeMonitorCheckIntervalMs ?? 120000);
-        return monitorNodeStatus(installedAppsFn, removeAppLocallyFn);
+        return monitorNodeStatus();
       }
       // lets remove from locations when nodes are no longer confirmed
       const appslocations = await appsRepository.listRunningAddresses();

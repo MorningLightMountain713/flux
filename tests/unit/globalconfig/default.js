@@ -61,6 +61,8 @@ module.exports = {
         benchmark: 'benchmark',
         nodeStartupTracker: 'nodestartuptracker',
         ownAddress: 'ownaddress', // the address this node last adopted as its own, and the one it moved from
+        nodeIdentity: 'nodeidentity',
+        policyDocuments: 'policydocuments',
       },
     },
     daemon: {

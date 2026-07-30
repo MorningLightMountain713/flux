@@ -2,11 +2,11 @@
 /* eslint-disable no-restricted-syntax */
 const chai = require('chai');
 const natUpnp = require('@runonflux/nat-upnp');
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 const log = require('../../ZelBack/src/lib/log');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
-const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const ufw = require('../../ZelBack/src/services/utils/ufw');
 const ufwHelper = require('../../ZelBack/src/services/utils/ufwHelper');
 
@@ -1811,6 +1811,19 @@ describe('upnpService tests', () => {
           name: 'Unauthorized',
           message: 'Unauthorized. Access denied.',
         },
+      });
+    });
+
+    // ensureNumber turns each of these into something the router would be asked to map
+    ['1e5', '0x10', '99999999', '0', '-5', 'abc'].forEach((bad) => {
+      it(`should refuse the port '${bad}' before asking the router`, async () => {
+        verifyPrivilegeStub.resolves(true);
+        const res = generateResponse();
+
+        await upnpService.mapPortApi({ params: { port: bad } }, res);
+
+        sinon.assert.notCalled(createMappingSpy);
+        sinon.assert.calledOnceWithMatch(res.json, { status: 'error' });
       });
     });
 

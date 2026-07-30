@@ -1,5 +1,3 @@
-const path = require('path');
-
 module.exports = {
   root: true,
   env: {
@@ -54,13 +52,6 @@ module.exports = {
           '.js',
           '.jsx',
         ],
-      },
-      alias: {
-        map: [
-          ['ZelBack', path.resolve(__dirname, './ZelBack')],
-          ['Config', path.resolve(__dirname, './config')],
-        ],
-        extensions: ['.js', '.jsx'],
       },
     },
   },

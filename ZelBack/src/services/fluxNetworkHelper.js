@@ -1,14 +1,12 @@
 /* eslint-disable no-underscore-dangle */
 const config = require('config');
 const { decodeWIF, privKeyToPubKey } = require('./utils/fluxCryptoUtils');
-const nodecmd = require('node-cmd');
 const fs = require('fs').promises;
+const path = require('path');
 const os = require('os');
 const dgram = require('dgram');
 const { EventEmitter, once } = require('events');
 const net = require('net');
-// eslint-disable-next-line import/no-extraneous-dependencies
-const util = require('util');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const messageHelper = require('./messageHelper');
@@ -1681,7 +1679,6 @@ async function setDOSStateApi(req, res) {
   return res.json(messageHelper.createSuccessMessage({ dosState: nodeDosState.getDosStateValue(), dosMessage: nodeDosState.getRawDosMessage() }));
 }
 
-
 /**
  * To allow a port.
  * @param {string} port Port.
@@ -1910,17 +1907,28 @@ async function allowPortApi(req, res) {
     const errMessage = messageHelper.createErrorMessage('No Port address specified.');
     return res.json(errMessage);
   }
+  if (!serviceHelper.validPort(port)) {
+    return res.json(messageHelper.createErrorMessage('Port must be a whole number between 1 and 65535'));
+  }
   const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
 
   let message;
 
   if (authorized === true) {
-    const portResponseOK = await allowPort(port);
-    if (portResponseOK.status === true) {
-      message = messageHelper.createSuccessMessage(portResponseOK.message, port, port);
-    } else if (portResponseOK.status === false) {
-      message = messageHelper.createErrorMessage(portResponseOK.message, port, port);
-    } else {
+    try {
+      const portResponseOK = await allowPort(port);
+      if (portResponseOK.status === true) {
+        message = messageHelper.createSuccessMessage(portResponseOK.message, port, port);
+      } else if (portResponseOK.status === false) {
+        message = messageHelper.createErrorMessage(portResponseOK.message, port, port);
+      } else {
+        message = messageHelper.createErrorMessage(`Unknown error while opening port ${port}`);
+      }
+    } catch (error) {
+      // allowPort reports its outcome on the returned status, but the ufw call beneath it
+      // throws — an uninstalled ufw or a refused sudo. Unhandled, that rejects out of an
+      // express handler, which ends the process rather than the request.
+      log.error(error);
       message = messageHelper.createErrorMessage(`Unknown error while opening port ${port}`);
     }
   } else {
@@ -2119,7 +2127,7 @@ async function purgeUFW() {
         const portsToDelete = [];
         deniedPorts.forEach((port) => {
           const adjPort = port.substring(0, port.indexOf(' '));
-          if (adjPort) { // last line is empty
+          if (adjPort) {
             if (!portsToDelete.includes(adjPort)) {
               portsToDelete.push(adjPort);
             }
@@ -2260,13 +2268,17 @@ async function applyContainerEgressRules(bridges) {
  * Allow Node to bind to privileged without sudo
  */
 async function allowNodeToBindPrivilegedPorts() {
-  try {
-    const cmdAsync = util.promisify(nodecmd.run);
-    const exec = "sudo setcap 'cap_net_bind_service=+ep' `which node`";
-    await cmdAsync(exec);
-  } catch (error) {
-    log.error(error);
-  }
+  // setcap needs the path to the binary, so node is located first
+  const { error, stdout: nodePath } = await serviceHelper.runCommand('which', {
+    params: ['node'],
+  });
+
+  if (error) return;
+
+  await serviceHelper.runCommand('setcap', {
+    runAsRoot: true,
+    params: ['cap_net_bind_service=+ep', nodePath.trim()],
+  });
 }
 
 /**
@@ -2279,54 +2291,56 @@ async function allowOnlyDockerNetworksToFluxNodeService() {
   if (!await ufw.ufwEnabled()) return;
 
   const { fluxNodeServiceAddress } = config.server;
-  const denyRule = `INPUT -i lo ! -s ${fluxAppDockerNetworks} -d ${fluxNodeServiceAddress}/32 -j DROP`;
-  const checkDenyRule = `LANG="en_US.UTF-8" && sudo iptables -C ${denyRule}`;
-  const denyAllElse = `LANG="en_US.UTF-8" && sudo iptables -I ${denyRule}`;
+  const denyRule = ['INPUT', '-i', 'lo', '!', '-s', fluxAppDockerNetworks, '-d', `${fluxNodeServiceAddress}/32`, '-j', 'DROP'];
 
-  const cmdAsync = util.promisify(nodecmd.run);
-
-  const denied = await cmdAsync(checkDenyRule).catch(async (err) => {
-    if (err.message.includes('Bad rule')) {
-      try {
-        await cmdAsync(denyAllElse);
-        log.info(`Firewall adjusted to deny access to: ${fluxNodeServiceAddress}/32`);
-      } catch (error) {
-        log.error(error);
-      }
-    }
+  // a matching rule makes -C exit zero without printing anything, so the exit status is what
+  // decides whether the rule is already in place
+  const { error: ruleCheckError } = await serviceHelper.runCommand('iptables', {
+    runAsRoot: true,
+    logError: false,
+    params: ['-C', ...denyRule],
   });
 
-  if (denied) log.info(`Fireall already denying access to ${fluxNodeServiceAddress}/32`);
+  if (!ruleCheckError) {
+    log.info(`Firewall already denying access to ${fluxNodeServiceAddress}/32`);
+    return;
+  }
+
+  // "Bad rule" means the rule simply isn't there yet; anything else is not fixed by inserting it
+  if (!ruleCheckError.message.includes('Bad rule')) return;
+
+  const { error: insertError } = await serviceHelper.runCommand('iptables', {
+    runAsRoot: true,
+    params: ['-I', ...denyRule],
+  });
+
+  if (!insertError) log.info(`Firewall adjusted to deny access to: ${fluxNodeServiceAddress}/32`);
 }
 
 /**
  * Adds the 169.254 adddress to the loopback interface for use with the flux node service.
  */
 async function addFluxNodeServiceIpToLoopback() {
-  const cmdAsync = util.promisify(nodecmd.run);
-
   // could also check exists first with:
   //   ip -f inet addr show lo | grep 169.254.43.43/32
   const ip = config.server.fluxNodeServiceAddress;
-  const addIp = `sudo ip addr add ${ip}/32 dev lo`;
 
-  let ok = false;
-  try {
-    await cmdAsync(addIp);
-    ok = true;
-  } catch (err) {
-    if (err.message.includes('File exists') || err.message.includes('Address already assigned')) {
-      ok = true;
-    } else {
-      log.error(err);
-    }
-  }
+  const { error } = await serviceHelper.runCommand('ip', {
+    runAsRoot: true,
+    logError: false,
+    params: ['addr', 'add', `${ip}/32`, 'dev', 'lo'],
+  });
+
+  // the address already being on the interface is the normal outcome on a restart
+  const ok = !error || error.message.includes('File exists') || error.message.includes('Address already assigned');
 
   if (ok) {
     log.info(`fluxNodeService IP: ${ip} added to loopback interface`);
-  } else {
-    log.warn(`Failed to add fluxNodeService IP ${ip} to loopback interface`);
+    return;
   }
+
+  log.error(error);
+  log.warn(`Failed to add fluxNodeService IP ${ip} to loopback interface`);
 }
 
 /**
@@ -2376,73 +2390,69 @@ function getNumberOfPeers() {
  * @returns  {Promise<Boolean>}
  */
 async function removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces) {
-  const cmdAsync = util.promisify(nodecmd.run);
+  // Arguments are passed as a list rather than interpolated into a shell string, so the
+  // interfaces and networks never reach a shell. Every call site below reports its own
+  // failure, so runCommand's own error logging is off.
+  const iptables = (params) => serviceHelper.runCommand('iptables', {
+    runAsRoot: true,
+    logError: false,
+    params,
+  });
 
-  const checkIptables = 'sudo iptables --version';
-  const iptablesInstalled = await cmdAsync(checkIptables).catch(() => {
+  const { error: iptablesMissing } = await iptables(['--version']);
+
+  if (iptablesMissing) {
     log.error('Unable to find iptables binary');
     return false;
-  });
-
-  if (!iptablesInstalled) return false;
+  }
 
   // check if rules have been created, as iptables is NOT idempotent.
-  const checkDockerUserChain = 'sudo iptables -L DOCKER-USER';
-  // iptables 1.8.4 doesn't return anything - so have updated command a little
-  const checkJumpChain = 'sudo iptables -C FORWARD -j DOCKER-USER && echo true';
+  const { error: dockerUserChainMissing } = await iptables(['-L', 'DOCKER-USER']);
 
-  const dockerUserChainExists = await cmdAsync(checkDockerUserChain).catch(async () => {
-    try {
-      await cmdAsync('sudo iptables -N DOCKER-USER');
-      log.info('IPTABLES: DOCKER-USER chain created');
-    } catch (err) {
+  if (dockerUserChainMissing) {
+    const { error: addChainError } = await iptables(['-N', 'DOCKER-USER']);
+    if (addChainError) {
       log.error('IPTABLES: Error adding DOCKER-USER chain');
       // if we can't add chain, we can't proceed
-      return new Error();
+      return false;
     }
-    return null;
-  });
+    log.info('IPTABLES: DOCKER-USER chain created');
+  } else {
+    log.info('IPTABLES: DOCKER-USER chain already created');
+  }
 
-  if (dockerUserChainExists instanceof Error) return false;
-  if (dockerUserChainExists) log.info('IPTABLES: DOCKER-USER chain already created');
+  // iptables 1.8.4 prints nothing on a successful check, so the exit status is what decides
+  const { error: jumpChainMissing } = await iptables(['-C', 'FORWARD', '-j', 'DOCKER-USER']);
 
-  const checkJumpToDockerChain = await cmdAsync(checkJumpChain).catch(async () => {
+  if (jumpChainMissing) {
     // Ubuntu 20.04 @ iptables 1.8.4 Error: "iptables: No chain/target/match by that name."
     // Ubuntu 22.04 @ iptables 1.8.7 Error: "iptables: Bad rule (does a matching rule exist in that chain?)."
-    const jumpToFluxChain = 'sudo iptables -I FORWARD -j DOCKER-USER';
-    try {
-      await cmdAsync(jumpToFluxChain);
-      log.info('IPTABLES: New rule in FORWARD inserted to jump to DOCKER-USER chain');
-    } catch (err) {
+    const { error: jumpChainError } = await iptables(['-I', 'FORWARD', '-j', 'DOCKER-USER']);
+    if (jumpChainError) {
       log.error('IPTABLES: Error inserting FORWARD jump to DOCKER-USER chain');
       // if we can't jump, we need to bail out
-      return new Error();
+      return false;
     }
-
-    return null;
-  });
-
-  if (checkJumpToDockerChain instanceof Error) return false;
-  if (checkJumpToDockerChain) log.info('IPTABLES: Jump to DOCKER-USER chain already enabled');
+    log.info('IPTABLES: New rule in FORWARD inserted to jump to DOCKER-USER chain');
+  } else {
+    log.info('IPTABLES: Jump to DOCKER-USER chain already enabled');
+  }
 
   const rfc1918Networks = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'];
   const fluxSrc = '172.23.0.0/16';
 
-  const baseDropCmd = `sudo iptables -A DOCKER-USER -s ${fluxSrc} -d #DST -j DROP`;
-  const baseAllowToFluxNetworksCmd = 'sudo iptables -I DOCKER-USER -i #INT -o #INT -j ACCEPT';
-  const baseAllowEstablishedCmd = `sudo iptables -I DOCKER-USER -s ${fluxSrc} -d #DST -m state --state RELATED,ESTABLISHED -j ACCEPT`;
-  const baseAllowDnsCmd = `sudo iptables -I DOCKER-USER -s ${fluxSrc} -d #DST -p udp --dport 53 -j ACCEPT`;
+  const dropParams = (dst) => ['-A', 'DOCKER-USER', '-s', fluxSrc, '-d', dst, '-j', 'DROP'];
+  const allowToFluxNetworksParams = (int) => ['-I', 'DOCKER-USER', '-i', int, '-o', int, '-j', 'ACCEPT'];
+  const allowEstablishedParams = (dst) => ['-I', 'DOCKER-USER', '-s', fluxSrc, '-d', dst, '-m', 'state', '--state', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'];
+  const allowDnsParams = (dst) => ['-I', 'DOCKER-USER', '-s', fluxSrc, '-d', dst, '-p', 'udp', '--dport', '53', '-j', 'ACCEPT'];
 
-  const addReturnCmd = 'sudo iptables -A DOCKER-USER -j RETURN';
-  const flushDockerUserCmd = 'sudo iptables -F DOCKER-USER';
+  const { error: flushError } = await iptables(['-F', 'DOCKER-USER']);
 
-  try {
-    await cmdAsync(flushDockerUserCmd);
-    log.info('IPTABLES: DOCKER-USER table flushed');
-  } catch (err) {
-    log.error(`IPTABLES: Error flushing DOCKER-USER table. ${err}`);
+  if (flushError) {
+    log.error(`IPTABLES: Error flushing DOCKER-USER table. ${flushError}`);
     return false;
   }
+  log.info('IPTABLES: DOCKER-USER table flushed');
 
   // add for legacy apps
   fluxNetworkInterfaces.push('docker0');
@@ -2450,60 +2460,53 @@ async function removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces) {
   // eslint-disable-next-line no-restricted-syntax
   for (const int of fluxNetworkInterfaces) {
     // if this errors, we need to bail, as if the deny succeedes, we may cut off access
-    const giveFluxNetworkAccess = baseAllowToFluxNetworksCmd.replace(/#INT/g, int);
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await cmdAsync(giveFluxNetworkAccess);
-      log.info(`IPTABLES: Traffic on Flux interface ${int} accepted`);
-    } catch (err) {
-      log.error(`IPTABLES: Error allowing traffic on Flux interface ${int}. ${err}`);
+    // eslint-disable-next-line no-await-in-loop
+    const { error: fluxNetworkError } = await iptables(allowToFluxNetworksParams(int));
+    if (fluxNetworkError) {
+      log.error(`IPTABLES: Error allowing traffic on Flux interface ${int}. ${fluxNetworkError}`);
       return false;
     }
+    log.info(`IPTABLES: Traffic on Flux interface ${int} accepted`);
   }
 
   // eslint-disable-next-line no-restricted-syntax
   for (const network of rfc1918Networks) {
     // if any of these error, we need to bail, as if the deny succeedes, we may cut off access
 
-    const giveHostAccessToDockerNetwork = baseAllowEstablishedCmd.replace('#DST', network);
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await cmdAsync(giveHostAccessToDockerNetwork);
-      log.info(`IPTABLES: Access to Flux containers from ${network} accepted`);
-    } catch (err) {
-      log.error(`IPTABLES: Error allowing access to Flux containers from ${network}. ${err}`);
+    // eslint-disable-next-line no-await-in-loop
+    const { error: establishedError } = await iptables(allowEstablishedParams(network));
+    if (establishedError) {
+      log.error(`IPTABLES: Error allowing access to Flux containers from ${network}. ${establishedError}`);
       return false;
     }
+    log.info(`IPTABLES: Access to Flux containers from ${network} accepted`);
 
-    const giveContainerAccessToDNS = baseAllowDnsCmd.replace('#DST', network);
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await cmdAsync(giveContainerAccessToDNS);
-      log.info(`IPTABLES: DNS access to ${network} from Flux containers accepted`);
-    } catch (err) {
-      log.error(`IPTABLES: Error allowing DNS access to ${network} from Flux containers. ${err}`);
+    // eslint-disable-next-line no-await-in-loop
+    const { error: dnsError } = await iptables(allowDnsParams(network));
+    if (dnsError) {
+      log.error(`IPTABLES: Error allowing DNS access to ${network} from Flux containers. ${dnsError}`);
       return false;
     }
+    log.info(`IPTABLES: DNS access to ${network} from Flux containers accepted`);
 
     // This always gets appended, so the drop is at the end
-    const dropAccessToHostNetwork = baseDropCmd.replace('#DST', network);
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await cmdAsync(dropAccessToHostNetwork);
-      log.info(`IPTABLES: Access to ${network} from Flux containers removed`);
-    } catch (err) {
-      log.error(`IPTABLES: Error denying access to ${network} from Flux containers. ${err}`);
+    // eslint-disable-next-line no-await-in-loop
+    const { error: dropError } = await iptables(dropParams(network));
+    if (dropError) {
+      log.error(`IPTABLES: Error denying access to ${network} from Flux containers. ${dropError}`);
       return false;
     }
+    log.info(`IPTABLES: Access to ${network} from Flux containers removed`);
   }
 
-  try {
-    await cmdAsync(addReturnCmd);
-    log.info('IPTABLES: DOCKER-USER explicit return to FORWARD chain added');
-  } catch (err) {
-    log.error(`IPTABLES: Error adding explicit return to Forward chain. ${err}`);
+  const { error: returnError } = await iptables(['-A', 'DOCKER-USER', '-j', 'RETURN']);
+
+  if (returnError) {
+    log.error(`IPTABLES: Error adding explicit return to Forward chain. ${returnError}`);
     return false;
   }
+  log.info('IPTABLES: DOCKER-USER explicit return to FORWARD chain added');
+
   return true;
 }
 

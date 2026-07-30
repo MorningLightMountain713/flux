@@ -1,13 +1,11 @@
-const config = require('config');
 const log = require('../lib/log');
-const serviceHelper = require('./serviceHelper');
 const appTamperingRepository = require('./appDatabase/appTamperingRepository');
 const nodeDosState = require('./nodeDosState');
 const generalService = require('./generalService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const globalState = require('./utils/globalState');
+const policyStore = require('./policy/policyStore');
 
-const BLOCKLIST_URL = `${config.policy.baseUrl}/tamperingblockednodes.json`;
 const CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours
 // How often to look at the DOS slot while waiting for another owner to let go
 // of it. Purely local - it reads the slot and nothing else, so it costs no
@@ -63,20 +61,15 @@ function releaseOurDos(reason) {
 }
 
 /**
- * Fetch the manually-curated txhash blocklist from the policy repo.
- * Returns null on any failure - could-not-fetch is not an empty list, and the
- * enforcer must distinguish them or an outage clears an active DOS.
+ * The manually-curated txhash blocklist.
+ *
+ * Returns null when no copy could be obtained, which is NOT the same answer as an empty
+ * list: an empty list means the document was read and nobody is blocked, while null means
+ * the question went unanswered. The caller must not treat the second as the first — doing
+ * so let an unreadable list clear the DOS on a node that was on it.
  */
-async function fetchBlocklist() {
-  try {
-    const res = await serviceHelper.axiosGet(BLOCKLIST_URL);
-    if (res && Array.isArray(res.data)) return res.data;
-    log.warn('appTamperingBlocklist - unexpected response shape from blocklist URL');
-    return null;
-  } catch (error) {
-    log.warn(`appTamperingBlocklist - failed to fetch blocklist: ${error.message}`);
-    return null;
-  }
+function fetchBlocklist() {
+  return policyStore.get('tamperingBlocklist');
 }
 
 /**
@@ -164,11 +157,11 @@ async function enforceBlocklist() {
     return;
   }
 
-  const [myTxhash, blocklist, tamperScore] = await Promise.all([
+  const [myTxhash, tamperScore] = await Promise.all([
     getMyTxhash(),
-    fetchBlocklist(),
     computeTamperScore(),
   ]);
+  const blocklist = fetchBlocklist();
 
   if (!myTxhash) {
     log.warn('appTamperingBlocklist - own txhash unavailable, skipping this tick');

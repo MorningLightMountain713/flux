@@ -19,10 +19,6 @@ const DOCUMENT = 'enterprisenodes';
 let ownersUnionCache = null;
 let ownersUnionCacheKey = null;
 
-function isPlainObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /**
  * A valid node->owners map is a plain object whose every value is an array of strings.
  *
@@ -87,10 +83,23 @@ function getEnterpriseAppOwners() {
   return ownersUnionCache;
 }
 
+/**
+ * Register a handler fired after each refresh that changes the owner map, so consumers
+ * can react to a membership change (e.g. reclaiming resources owned by a now-de-authorized
+ * owner) without policyStore knowing anything about them.
+ * @param {function} [onOwnerMapRefreshed]
+ */
+function onOwnerMapChange(onOwnerMapRefreshed) {
+  if (!onOwnerMapRefreshed) return;
+  policyStore.onChange(DOCUMENT, onOwnerMapRefreshed);
+  log.info('enterpriseConfig - subscribed to enterprise owner map refreshes');
+}
+
 module.exports = {
   getAllowedOwnersForNode,
   getEnterpriseAppOwners,
   getEnterpriseNodeOwnerMap,
   getEnterpriseNodesPublicKeys,
   isPolicyKnown,
+  onOwnerMapChange,
 };

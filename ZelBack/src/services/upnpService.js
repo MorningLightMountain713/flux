@@ -4,7 +4,6 @@ const natUpnp = require('@runonflux/nat-upnp');
 const serviceHelper = require('./serviceHelper');
 const messageHelper = require('./messageHelper');
 const verificationHelper = require('./verificationHelper');
-// eslint-disable-next-line import/no-extraneous-dependencies
 
 const log = require('../lib/log');
 const ufw = require('./utils/ufw');
@@ -240,14 +239,34 @@ async function mapProtocol(port, protocol, description, { counted = true } = {})
   }
 }
 
-let upnpMachine = false;
+let upnpHealthy = false;
 
 /**
- * To quickly check if node has UPnP (Universal Plug and Play) support.
- * @returns {boolean} True if port mappings can be set. Otherwise false.
+ * Whether this node is configured to map its ports via UPnP.
+ *
+ * The operator's declaration, not the result of a probe. Deriving it from a probe
+ * meant any node behind a UPnP-capable router silently became a UPnP node — and then
+ * every app install depended on the router accepting a mapping for each app port.
+ *
+ * Legacy configs predating the `upnp` key fall back to the old inference. That is not
+ * a rare path: FluxOS's own config template had no `upnp` key, so every rewrite it
+ * ever did deleted the one flux-configd wrote.
+ * @returns {boolean} True when this node should map ports via UPnP.
  */
 function isUPNP() {
-  return upnpMachine;
+  const { initial } = globalThis.userconfig;
+  if (typeof initial.upnp === 'boolean') return initial.upnp;
+  return Boolean(
+    (initial.apiport && Number(initial.apiport) !== config.server.apiport) || initial.routerIP,
+  );
+}
+
+/**
+ * Whether UPnP was working as of the last verify or refresh.
+ * @returns {boolean}
+ */
+function isUPNPHealthy() {
+  return upnpHealthy;
 }
 
 /**
@@ -302,7 +321,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
   } catch (error) {
     log.error(error);
     log.error('VerifyUPNPsupport - Failed get public ip');
-    upnpMachine = false;
+    upnpHealthy = false;
     return false;
   }
   try {
@@ -312,7 +331,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
   } catch (error) {
     log.error(error);
     log.error('VerifyUPNPsupport - Failed get Gateway');
-    upnpMachine = false;
+    upnpHealthy = false;
     return false;
   }
   // held while the test runs: a cleanup pass taking it between the create and
@@ -342,14 +361,14 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
       if (mapsHere(apiMapping, +apiport)) {
         log.warn(`VerifyUPNPsupport - ${testMapping.reason}, but the router maps this node's api port to it`);
         mappedHere.delete(+apiport + 3);
-        upnpMachine = true;
+        upnpHealthy = true;
         return true;
       }
     }
   }
   if (!testMapping.mapped) {
     log.error(`VerifyUPNPsupport - Failed Create Mapping: ${testMapping.reason}`);
-    upnpMachine = false;
+    upnpHealthy = false;
     return false;
   }
   recordMapped(+apiport + 3, 'TCP', true);
@@ -362,14 +381,14 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
   } catch (error) {
     log.error(error);
     log.error('VerifyUPNPsupport - Failed get Mapping');
-    upnpMachine = false;
+    upnpHealthy = false;
     return false;
   }
   // UPnP works once the router has taken the mapping and shows it: a removal it
   // refuses is asked again until it goes, and fails nothing here.
   await removeMapUpnpPort(+apiport + 3, 'Flux_UPNP_Mapping_Test');
 
-  upnpMachine = true;
+  upnpHealthy = true;
   return true;
 }
 
@@ -793,6 +812,9 @@ async function mapPortApi(req, res) {
       if (port === undefined || port === null) {
         throw new Error('No Port address specified.');
       }
+      if (!serviceHelper.validPort(port)) {
+        throw new Error('Port must be a whole number between 1 and 65535');
+      }
       port = serviceHelper.ensureNumber(port);
       await getClient().createMapping({
         public: port,
@@ -839,6 +861,9 @@ async function removeMapPortApi(req, res) {
       port = port || req.query.port;
       if (port === undefined || port === null) {
         throw new Error('No Port address specified.');
+      }
+      if (!serviceHelper.validPort(port)) {
+        throw new Error('Port must be a whole number between 1 and 65535');
       }
       port = serviceHelper.ensureNumber(port);
       await getClient().removeMapping({
@@ -953,6 +978,7 @@ async function getGatewayApi(req, res) {
 
 module.exports = {
   isUPNP,
+  isUPNPHealthy,
   verifyUPNPsupport,
   setupUPNP,
   mapUpnpPort,

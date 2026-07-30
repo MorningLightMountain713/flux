@@ -1,18 +1,29 @@
-process.env.NODE_CONFIG_DIR = `${process.cwd()}/ZelBack/config/`;
 const chai = require('chai');
 const sinon = require('sinon');
-const fsPromises = require('fs').promises;
-
-globalThis.userconfig = require('../../config/userconfig');
 
 const { expect } = chai;
 
 const pgpService = require('../../ZelBack/src/services/pgpService');
 const workerRunner = require('../../ZelBack/src/services/utils/workerRunner');
 const generalService = require('../../ZelBack/src/services/generalService');
-const configManager = require('../../ZelBack/src/services/utils/configManager');
+const nodeIdentityRepository = require('../../ZelBack/src/services/appDatabase/nodeIdentityRepository');
 
 describe('pgpService tests', () => {
+  let originalUserconfig;
+
+  // Scoped to this suite and restored afterwards. Assigning globalThis.userconfig at
+  // module load leaked into every suite mocha loaded after this one, which changed the
+  // answers other suites got from their own config.
+  before(() => {
+    originalUserconfig = globalThis.userconfig;
+    // eslint-disable-next-line global-require
+    globalThis.userconfig = require('../../config/userconfig');
+  });
+
+  after(() => {
+    globalThis.userconfig = originalUserconfig;
+  });
+
   describe('encryptMessage decryptMessage tests', async () => {
     it('should encrypt, decrypt a message', async () => {
       const message = 'Hello, my message';
@@ -90,141 +101,102 @@ BIscsJYafHuBDymkCDcQ0KPIgFPLHt4qSDBtDg==
   });
 
   describe('identity tests', () => {
+    // Rewritten for the model this commit installs: the keypair lives in
+    // zelfluxlocal through nodeIdentityRepository, not in config/userconfig.js, so
+    // the fixtures stub the repository rather than the global and the file writer.
+    // The behaviours development's versions pinned are the same ones asserted here -
+    // do nothing when the pair is good, replace it when the public half does not
+    // belong to the private one, and never derive when the caller supplies a key.
     let runInWorkerStub;
-    let originalInitial;
+    let getIdentityStub;
+    let setIdentityStub;
 
     beforeEach(() => {
-      originalInitial = { ...globalThis.userconfig.initial };
       runInWorkerStub = sinon.stub(workerRunner, 'runInWorker');
+      getIdentityStub = sinon.stub(nodeIdentityRepository, 'getPgpIdentity');
+      setIdentityStub = sinon.stub(nodeIdentityRepository, 'setPgpIdentity').resolves(true);
     });
 
     afterEach(() => {
-      globalThis.userconfig.initial = originalInitial;
       sinon.restore();
     });
 
-    it('should not run any pgp operation on a node that already has a keypair', async () => {
-      globalThis.userconfig.initial.pgpPrivateKey = 'storedPrivateKey';
-      globalThis.userconfig.initial.pgpPublicKey = 'storedPublicKey';
+    it('generates nothing on a node whose stored keypair verifies', async () => {
+      getIdentityStub.resolves({ privateKey: 'aPrivateKey', publicKey: 'itsPublicKey' });
+      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'derivePublicKey' })).resolves('itsPublicKey');
 
       await pgpService.generateIdentity();
 
-      sinon.assert.notCalled(runInWorkerStub);
+      const generations = runInWorkerStub.getCalls().filter((call) => call.args[1].operation === 'generateKey');
+      expect(generations.length).to.be.eql(0);
+      sinon.assert.notCalled(setIdentityStub);
     });
 
-    it('should generate and store a keypair on a node that has none', async () => {
+    it('generates and stores a keypair on a node that has none', async () => {
+      getIdentityStub.resolves(null);
       globalThis.userconfig.initial.pgpPrivateKey = '';
       globalThis.userconfig.initial.pgpPublicKey = '';
       sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'abcd', txindex: 0 });
-      const writeStub = sinon.stub(fsPromises, 'writeFile').resolves();
-      runInWorkerStub.resolves({ privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });
+      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'generateKey' }))
+        .resolves({ privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });
 
       await pgpService.generateIdentity();
 
-      sinon.assert.calledOnceWithMatch(runInWorkerStub, 'pgpWorker', { operation: 'generateKey' });
-      sinon.assert.calledOnce(writeStub);
+      sinon.assert.calledWithMatch(runInWorkerStub, 'pgpWorker', { operation: 'generateKey' });
+      sinon.assert.calledOnceWithExactly(setIdentityStub, { privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });
     });
 
-    it('should verify its own keypair before first use of the private key, and only once', async () => {
-      globalThis.userconfig.initial.pgpPrivateKey = 'aPrivateKey';
-      globalThis.userconfig.initial.pgpPublicKey = 'itsPublicKey';
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'derivePublicKey' })).resolves('itsPublicKey');
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'decrypt' })).resolves('plaintext');
-
-      const first = await pgpService.decryptMessage('encrypted');
-      const second = await pgpService.decryptMessage('encrypted');
-
-      expect(first).to.be.eql('plaintext');
-      expect(second).to.be.eql('plaintext');
-
-      const derivations = runInWorkerStub.getCalls().filter((call) => call.args[1].operation === 'derivePublicKey');
-      expect(derivations.length).to.be.eql(1);
-    });
-
-    it('should replace a keypair whose public key does not belong to its private key', async () => {
-      globalThis.userconfig.initial.pgpPrivateKey = 'aCorruptPrivateKey';
-      globalThis.userconfig.initial.pgpPublicKey = 'someoneElsesPublicKey';
+    it('replaces a stored keypair whose public key does not belong to its private key', async () => {
+      getIdentityStub.resolves({ privateKey: 'aCorruptPrivateKey', publicKey: 'someoneElsesPublicKey' });
+      globalThis.userconfig.initial.pgpPrivateKey = '';
+      globalThis.userconfig.initial.pgpPublicKey = '';
       sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'abcd', txindex: 0 });
-      sinon.stub(fsPromises, 'writeFile').resolves();
       runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'derivePublicKey' })).resolves('aDifferentPublicKey');
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'generateKey' })).resolves({ privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'decrypt' })).resolves('plaintext');
+      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'generateKey' }))
+        .resolves({ privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });
 
-      await pgpService.decryptMessage('encrypted');
+      await pgpService.generateIdentity();
 
       sinon.assert.calledWithMatch(runInWorkerStub, 'pgpWorker', { operation: 'generateKey' });
+      sinon.assert.calledOnceWithExactly(setIdentityStub, { privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });
     });
 
-    it('should not verify its own keypair when the caller supplies a key', async () => {
-      globalThis.userconfig.initial.pgpPrivateKey = 'anUncheckedPrivateKey';
-      globalThis.userconfig.initial.pgpPublicKey = 'itsPublicKey';
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'decrypt' })).resolves('plaintext');
+    it('adopts an intact keypair still held in the config file rather than generating over it', async () => {
+      getIdentityStub.resolves(null);
+      globalThis.userconfig.initial.pgpPrivateKey = 'operatorsPrivateKey';
+      globalThis.userconfig.initial.pgpPublicKey = 'operatorsPublicKey';
+      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'keypairMatches' })).resolves(true);
 
-      await pgpService.decryptMessage('encrypted', 'aCallerSuppliedKey');
-
-      const derivations = runInWorkerStub.getCalls().filter((call) => call.args[1].operation === 'derivePublicKey');
-      expect(derivations.length).to.be.eql(0);
-    });
-
-    it('should repair a corrupt keypair once, however many callers find it at the same time', async () => {
-      globalThis.userconfig.initial.pgpPrivateKey = 'aCorruptPrivateKey';
-      globalThis.userconfig.initial.pgpPublicKey = 'someoneElsesPublicKey';
-      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'abcd', txindex: 0 });
-      const writeStub = sinon.stub(fsPromises, 'writeFile').resolves();
-      sinon.stub(configManager, 'reloadConfig');
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'derivePublicKey' })).resolves('aDifferentPublicKey');
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'generateKey' })).resolves({ privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'decrypt' })).resolves('plaintext');
-
-      await Promise.all([
-        pgpService.decryptMessage('encrypted'),
-        pgpService.decryptMessage('encrypted'),
-        pgpService.decryptMessage('encrypted'),
-      ]);
+      await pgpService.generateIdentity();
 
       const generations = runInWorkerStub.getCalls().filter((call) => call.args[1].operation === 'generateKey');
-      expect(generations.length).to.be.eql(1);
-      sinon.assert.calledOnce(writeStub);
+      expect(generations.length).to.be.eql(0);
+      sinon.assert.calledOnceWithExactly(setIdentityStub, {
+        privateKey: 'operatorsPrivateKey',
+        publicKey: 'operatorsPublicKey',
+      });
     });
 
-    it('should not derive or replace again once the new identity is in place', async () => {
-      function applyWrittenIdentity() {
-        globalThis.userconfig.initial.pgpPrivateKey = 'newPrivateKey';
-        globalThis.userconfig.initial.pgpPublicKey = 'newPublicKey';
-      }
-      globalThis.userconfig.initial.pgpPrivateKey = 'aCorruptPrivateKey';
-      globalThis.userconfig.initial.pgpPublicKey = 'someoneElsesPublicKey';
-      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'abcd', txindex: 0 });
-      sinon.stub(fsPromises, 'writeFile').resolves();
-      sinon.stub(configManager, 'reloadConfig').callsFake(applyWrittenIdentity);
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'derivePublicKey' })).resolves('aDifferentPublicKey');
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'generateKey' })).resolves({ privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });
+    it('decrypts with a caller-supplied key without reading the stored identity', async () => {
       runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'decrypt' })).resolves('plaintext');
 
-      await pgpService.decryptMessage('encrypted');
-      await pgpService.decryptMessage('encrypted');
+      const result = await pgpService.decryptMessage('encrypted', 'aCallerSuppliedKey');
 
-      const generations = runInWorkerStub.getCalls().filter((call) => call.args[1].operation === 'generateKey');
-      const derivations = runInWorkerStub.getCalls().filter((call) => call.args[1].operation === 'derivePublicKey');
-      expect(generations.length).to.be.eql(1);
-      expect(derivations.length).to.be.eql(1);
+      expect(result).to.be.eql('plaintext');
+      sinon.assert.notCalled(getIdentityStub);
     });
 
-    it('should leave the repair to be attempted again when the new identity could not be stored', async () => {
-      globalThis.userconfig.initial.pgpPrivateKey = 'aCorruptPrivateKey';
-      globalThis.userconfig.initial.pgpPublicKey = 'someoneElsesPublicKey';
-      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'abcd', txindex: 0 });
-      sinon.stub(fsPromises, 'writeFile').rejects(new Error('read-only filesystem'));
-      sinon.stub(configManager, 'reloadConfig');
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'derivePublicKey' })).resolves('aDifferentPublicKey');
-      runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'generateKey' })).resolves({ privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });
+    it('decrypts with the stored key when the caller supplies none', async () => {
+      getIdentityStub.resolves({ privateKey: 'aPrivateKey', publicKey: 'itsPublicKey' });
       runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'decrypt' })).resolves('plaintext');
 
-      await pgpService.decryptMessage('encrypted');
-      await pgpService.decryptMessage('encrypted');
+      const result = await pgpService.decryptMessage('encrypted');
 
-      const generations = runInWorkerStub.getCalls().filter((call) => call.args[1].operation === 'generateKey');
-      expect(generations.length).to.be.eql(2);
+      expect(result).to.be.eql('plaintext');
+      sinon.assert.calledWithMatch(runInWorkerStub, 'pgpWorker', {
+        operation: 'decrypt',
+        params: { decryptionKey: 'aPrivateKey' },
+      });
     });
   });
 });

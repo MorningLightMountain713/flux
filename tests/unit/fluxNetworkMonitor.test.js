@@ -3,8 +3,6 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
-const fs = require('node:fs/promises');
-const path = require('node:path');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const daemonServiceWalletRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceWalletRpcs');
@@ -16,6 +14,7 @@ const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper'
 const geolocationService = require('../../ZelBack/src/services/geolocationService');
 const fluxNetworkMonitor = require('../../ZelBack/src/services/fluxNetworkMonitor');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
+const nodeIdentityRepository = require('../../ZelBack/src/services/appDatabase/nodeIdentityRepository');
 const { requireMongo } = require('./dbTestHelper');
 
 chai.use(chaiAsPromised);
@@ -35,11 +34,6 @@ describe('fluxNetworkMonitor tests', () => {
     before(requireMongo);
 
     beforeEach(() => {
-      // checkMyFluxAvailability calls adjustExternalIP when the benchmark reports
-      // a different public IP, and adjustExternalIP rewrites the node's real
-      // config/userconfig.js. Unstubbed, these tests overwrite the developer's
-      // own node configuration with fixture values.
-      sinon.stub(fs, 'writeFile').resolves();
       fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
       const deterministicFluxnodeListResponse = [
@@ -192,94 +186,63 @@ describe('fluxNetworkMonitor tests', () => {
   });
 
   describe('adjustExternalIP tests', () => {
-    let writeFileStub;
-    let originalUserConfig;
+    let setLastKnownIpStub;
+    let getLastKnownIpStub;
 
     beforeEach(() => {
-      writeFileStub = sinon.stub(fs, 'writeFile').resolves();
-      // Writing a new IP also announces it on chain; unstubbed that is a real
+      // The previously-observed address is node runtime state and lives in the local
+      // database; the operator's config file is no longer written by this path.
+      getLastKnownIpStub = sinon.stub(nodeIdentityRepository, 'getLastKnownIp').resolves('127.0.0.1');
+      setLastKnownIpStub = sinon.stub(nodeIdentityRepository, 'setLastKnownIp').resolves(true);
+      // Recording a new IP also announces it on chain; unstubbed that is a real
       // RPC to the daemon port.
       sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').returns(true);
-      // Backup original userconfig
-      originalUserConfig = globalThis.userconfig;
-      // Mock userconfig with expected test values
-      globalThis.userconfig = {
-        initial: {
-          ipaddress: '127.0.0.1',
-          zelid: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-          kadena: 'kadena:3a2e6166907d0c2fb28a16cd6966a705de129e8358b9872d9cefe694e910d5b2?chainid=0',
-          testnet: false,
-          development: false,
-          apiport: 16127,
-          routerIP: '',
-          pgpPrivateKey: '',
-          pgpPublicKey: '',
-          blockedPorts: [],
-          blockedRepositories: [],
-        },
-      };
     });
+
     afterEach(() => {
       sinon.restore();
-      // Restore original userconfig
-      globalThis.userconfig = originalUserConfig;
     });
 
-    it('should properly write a new ip to the config', async () => {
-      const newIp = '127.0.0.66';
-      const callPath = path.join(__dirname, '../../config/userconfig.js');
+    it('should record a new ip in the database', async () => {
+      await fluxNetworkMonitor.adjustExternalIP('127.0.0.66');
 
-      await fluxNetworkMonitor.adjustExternalIP(newIp);
-
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/module.exports = {/gm));
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/initial: {/gm));
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/ipaddress: '127.0.0.66',/gm));
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/zelid: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',/gm));
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/kadena: 'kadena:3a2e6166907d0c2fb28a16cd6966a705de129e8358b9872d9cefe694e910d5b2\?chainid=0',/gm));
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/testnet: false,/gm));
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/development: false,/gm));
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/apiport: 16127,/gm));
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/routerIP: '',/gm));
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/pgpPrivateKey: ``,/gm));
-      sinon.assert.calledOnceWithMatch(writeFileStub, callPath, sinon.match(/pgpPublicKey: ``,/gm));
+      sinon.assert.calledOnceWithExactly(setLastKnownIpStub, '127.0.0.66');
     });
 
-    it('should not write to file if the config already has same exact ip', async () => {
-      const newIp = userconfig.initial.ipaddress;
+    it('should not record anything if the stored ip is already the same', async () => {
+      await fluxNetworkMonitor.adjustExternalIP('127.0.0.1');
 
-      await fluxNetworkMonitor.adjustExternalIP(newIp);
-
-      sinon.assert.notCalled(writeFileStub);
+      sinon.assert.notCalled(setLastKnownIpStub);
     });
 
-    it('should not write to file if ip does not have a proper format', async () => {
-      const newIp = '127111111';
+    it('should record the address on a node that has never stored one', async () => {
+      getLastKnownIpStub.resolves(null);
 
-      await fluxNetworkMonitor.adjustExternalIP(newIp);
+      await fluxNetworkMonitor.adjustExternalIP('127.0.0.66');
 
-      sinon.assert.notCalled(writeFileStub);
+      sinon.assert.calledOnceWithExactly(setLastKnownIpStub, '127.0.0.66');
     });
 
-    it('should not write to file if ip is not a string', async () => {
-      const newIp = 121;
+    it('should not record an ip that does not have a proper format', async () => {
+      await fluxNetworkMonitor.adjustExternalIP('127111111');
 
-      await fluxNetworkMonitor.adjustExternalIP(newIp);
-
-      sinon.assert.notCalled(writeFileStub);
+      sinon.assert.notCalled(setLastKnownIpStub);
     });
 
-    it('should not write to file if ip is empty', async () => {
-      const newIp = '';
+    it('should not record an ip that is not a string', async () => {
+      await fluxNetworkMonitor.adjustExternalIP(121);
 
-      await fluxNetworkMonitor.adjustExternalIP(newIp);
+      sinon.assert.notCalled(setLastKnownIpStub);
+    });
 
-      sinon.assert.notCalled(writeFileStub);
+    it('should not record an empty ip', async () => {
+      await fluxNetworkMonitor.adjustExternalIP('');
+
+      sinon.assert.notCalled(setLastKnownIpStub);
     });
   });
 
   describe('adjustExternalIP static IP app handling tests', () => {
-    let writeFileStub;
-    let originalUserConfig;
     let appQueryServiceStub;
     let registryManagerStub;
     let appUninstallerStub;
@@ -289,27 +252,10 @@ describe('fluxNetworkMonitor tests', () => {
     let fluxCommunicationMessagesSenderStub;
 
     beforeEach(() => {
-      writeFileStub = sinon.stub(fs, 'writeFile').resolves();
-
-      // Backup original userconfig
-      originalUserConfig = globalThis.userconfig;
-
-      // Mock userconfig with expected test values
-      globalThis.userconfig = {
-        initial: {
-          ipaddress: '127.0.0.1',
-          zelid: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-          kadena: '',
-          testnet: false,
-          development: false,
-          apiport: 16127,
-          routerIP: '',
-          pgpPrivateKey: '',
-          pgpPublicKey: '',
-          blockedPorts: [],
-          blockedRepositories: [],
-        },
-      };
+      // The address the node last observed about itself; a change from this is what
+      // gates the static-IP uninstall below.
+      sinon.stub(nodeIdentityRepository, 'getLastKnownIp').resolves('127.0.0.1');
+      sinon.stub(nodeIdentityRepository, 'setLastKnownIp').resolves(true);
 
       // Stub daemonServiceWalletRpcs
       sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').resolves({ status: 'success' });
@@ -324,7 +270,6 @@ describe('fluxNetworkMonitor tests', () => {
 
     afterEach(() => {
       sinon.restore();
-      globalThis.userconfig = originalUserConfig;
     });
 
     it('should uninstall apps requiring static IP when IP changes', async () => {
@@ -386,7 +331,6 @@ describe('fluxNetworkMonitor tests', () => {
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
-        'node:fs/promises': { writeFile: writeFileStub },
       });
 
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
@@ -459,7 +403,6 @@ describe('fluxNetworkMonitor tests', () => {
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
-        'node:fs/promises': { writeFile: writeFileStub },
       });
 
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
@@ -522,7 +465,6 @@ describe('fluxNetworkMonitor tests', () => {
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
-        'node:fs/promises': { writeFile: writeFileStub },
       });
 
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
@@ -581,7 +523,6 @@ describe('fluxNetworkMonitor tests', () => {
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
-        'node:fs/promises': { writeFile: writeFileStub },
       });
 
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);

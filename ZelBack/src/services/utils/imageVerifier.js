@@ -29,6 +29,7 @@ class ImageVerifier {
     'application/vnd.docker.distribution.manifest.list.v2+json',
   ];
 
+
   /**
    * Parse www-authenticate header
    * @param {string} authHeader # www-auth header
@@ -724,6 +725,7 @@ class ImageVerifier {
   abort() {
     this.#abortController.abort();
   }
+
 
   /**
    * Checks that the image is available for the provided architecture set, and that the image's size
