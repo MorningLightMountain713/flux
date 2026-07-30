@@ -113,7 +113,7 @@ async function verifyNodeOperatorSession(zelidauth) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
@@ -150,7 +150,7 @@ async function verifyUserSession(zelidauth) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
@@ -185,7 +185,7 @@ async function verifyFluxTeamSession(zelidauth) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
@@ -218,7 +218,7 @@ async function verifyNodeOperatorOrFluxTeamSession(zelidauth) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
@@ -259,7 +259,7 @@ async function verifyAppOwnerSession(zelidauth, appName) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }
@@ -329,7 +329,7 @@ async function verifyAppOwnerOrFluxTeamSession(zelidauth, appName) {
   // check if signature corresponds to message with that zelid
   let valid = false;
   try {
-    valid = signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
   } catch (error) {
     return false;
   }

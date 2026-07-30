@@ -40,6 +40,14 @@ const idService = proxyquire(
 chai.use(chaiAsPromised);
 const { expect } = chai;
 
+// A structurally CANONICAL signature: 65 bytes, P2PKH header 31, low-S. These
+// tests stub the underlying bitcoinjs-message verify, so the value never has to
+// be a real signature — but it does have to be well-formed, because signature
+// verification now rejects a non-canonical encoding before reaching that stub.
+// A malformed placeholder here would only pass by virtue of the stub, which is
+// the phantom-stub trap: it would assert that garbage verifies.
+const CANONICAL_SIG = Buffer.concat([Buffer.from([0x1f]), Buffer.alloc(32, 1), Buffer.alloc(32, 1)]).toString('base64');
+
 const generateResponse = () => {
   const res = { test: 'testing' };
   res.status = sinon.stub().returns(res);
@@ -50,6 +58,15 @@ const generateResponse = () => {
 
 describe('idService tests', () => {
   before(requireMongo);
+
+  // Signature verification now consults the canonical-form rule in flux-spec,
+  // reached through the CJS bridge. The bridge's first call dynamically imports
+  // the ESM packages (~250ms); every call after that is served from its cache.
+  // Warm it here so a test measuring a response is not also measuring a
+  // one-time module load.
+  before(async () => {
+    await require('../../ZelBack/src/services/utils/specLibs').getSpecBackend();
+  });
 
   describe('confirmNodeTierHardware tests', () => {
     let osTotalmemStub;
@@ -771,7 +788,7 @@ describe('idService tests', () => {
 
     it('should return error if neither zelId nor address are specified', async () => {
       const req = {
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         loginPhrase: 'loginphrase',
         message: 'message',
       };
@@ -796,7 +813,7 @@ describe('idService tests', () => {
     it('should return error if zelID does not start with 1', async () => {
       const req = {
         zelid: '2Z123434',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         loginPhrase: 'loginphrase',
         message: 'message',
       };
@@ -821,7 +838,7 @@ describe('idService tests', () => {
     it('should return error if zelID is less than 25 chars long', async () => {
       const req = {
         zelid: '1Z123434',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         loginPhrase: 'loginphrase',
         message: 'message',
       };
@@ -846,7 +863,7 @@ describe('idService tests', () => {
     it('should return error if zelID is more than 34 chars long', async () => {
       const req = {
         zelid: '1Z1234341Z1234341Z1234341Z1234341Z12',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         loginPhrase: 'loginphrase',
         message: 'message',
       };
@@ -871,7 +888,7 @@ describe('idService tests', () => {
     it('should return error if the message is empty', async () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: '',
       };
       const mockStream = new PassThrough();
@@ -895,7 +912,7 @@ describe('idService tests', () => {
     it('should return error if message is undefined', async () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
       };
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(req));
@@ -918,7 +935,7 @@ describe('idService tests', () => {
     it('should return error if message is less than 40 chars', async () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: '1234',
       };
       const mockStream = new PassThrough();
@@ -942,7 +959,7 @@ describe('idService tests', () => {
     it('should return error if message first 13 chars timestamp is too low', async () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: '111111111111111111111111111111111111111111111',
       };
       const mockStream = new PassThrough();
@@ -966,7 +983,7 @@ describe('idService tests', () => {
     it('should return error if message first 13 chars timestamp is too high', async () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: '999999999999911111111111111111111111111111111',
       };
       const mockStream = new PassThrough();
@@ -994,7 +1011,7 @@ describe('idService tests', () => {
       dbHelper.databaseConnection();
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: `${timestamp - 300000}11111111111111111111111111111`,
       };
       const mockStream = new PassThrough();
@@ -1025,7 +1042,7 @@ describe('idService tests', () => {
       dbHelper.databaseConnection();
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: `${timestamp - 300000}11111111111111111111111111111`,
       };
       const mockStream = new PassThrough();
@@ -1057,7 +1074,7 @@ describe('idService tests', () => {
       dbHelper.databaseConnection();
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: `${timestamp - 300000}11111111111111111111111111111`,
       };
       const mockStream = new PassThrough();
@@ -1090,7 +1107,7 @@ describe('idService tests', () => {
       dbHelper.databaseConnection();
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: `${timestamp - 300000}11111111111111111111111111111`,
       };
       const mockStream = new PassThrough();
@@ -1103,7 +1120,7 @@ describe('idService tests', () => {
           message: 'Successfully logged in',
           zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
           loginPhrase: sinon.match.string,
-          signature: '1234356asdf',
+          signature: CANONICAL_SIG,
           privilage: 'user',
         },
       };
@@ -1128,7 +1145,7 @@ describe('idService tests', () => {
 
     it('should return error if neither zelId nor address are specified', async () => {
       const req = {
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         loginPhrase: 'loginphrase',
         message: 'message',
       };
@@ -1153,7 +1170,7 @@ describe('idService tests', () => {
     it('should return error if zelID does not start with 1', async () => {
       const req = {
         zelid: '2Z123434',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         loginPhrase: 'loginphrase',
         message: 'message',
       };
@@ -1178,7 +1195,7 @@ describe('idService tests', () => {
     it('should return error if zelID is less than 25 chars long', async () => {
       const req = {
         zelid: '1Z123434',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         loginPhrase: 'loginphrase',
         message: 'message',
       };
@@ -1203,7 +1220,7 @@ describe('idService tests', () => {
     it('should return error if zelID is more than 34 chars long', async () => {
       const req = {
         zelid: '1Z1234341Z1234341Z1234341Z1234341Z12',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         loginPhrase: 'loginphrase',
         message: 'message',
       };
@@ -1228,7 +1245,7 @@ describe('idService tests', () => {
     it('should return error if the message is empty', async () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: '',
       };
       const mockStream = new PassThrough();
@@ -1252,7 +1269,7 @@ describe('idService tests', () => {
     it('should return error if message is undefined', async () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
       };
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(req));
@@ -1275,7 +1292,7 @@ describe('idService tests', () => {
     it('should return error if message is less than 40 chars', async () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: '1234',
       };
       const mockStream = new PassThrough();
@@ -1307,7 +1324,7 @@ describe('idService tests', () => {
       dbHelper.databaseConnection();
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
-        signature: '1234356asdf',
+        signature: CANONICAL_SIG,
         message: `${timestamp - 300000}11111111111111111111111111111`,
       };
       const mockStream = new PassThrough();
@@ -1318,7 +1335,7 @@ describe('idService tests', () => {
         status: 'success',
         data: {
           identifier: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg1111111111111',
-          signature: '1234356asdf',
+          signature: CANONICAL_SIG,
         },
       };
 

@@ -405,7 +405,7 @@ async function verifyLogin(req, res) {
           // Second verify that this address signed this message
           let valid = false;
           try {
-            valid = signatureVerifier.verifySignature(message, address, signature);
+            valid = await signatureVerifier.verifySignature(message, address, signature);
           } catch (error) {
             throw new Error('Invalid signature');
           }
