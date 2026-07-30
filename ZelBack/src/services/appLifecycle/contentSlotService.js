@@ -915,6 +915,7 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
     getDeployment = deploymentProvider.getInstalledDeployment,
     getPeers = listAppPeers,
     apply = applyManifest,
+    componentsRunning = contentComponentsRunning,
     now = Date.now,
     setTimer = setTimeout,
     computeDelay = computeStaggerDelayMs,
@@ -923,10 +924,17 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
   const { appName } = manifest;
   const rollout = manifest.rollout || { strategy: 'immediate' };
 
-  // Apply now, re-checking the app is still installed here (discard if it expired mid-window).
+  // Apply now, re-checking the app is still installed here (discard if it expired mid-window)
+  // and that it is actually up. An installed record says only that this node owns the app —
+  // during an install it exists while the component's volume is still being made, so writing
+  // the slot then lands on a path that isn't mounted yet. Whatever we skip here is delivered
+  // by the two paths that own content for a not-running app: the installer stages it once the
+  // volume exists and before the container starts, and the steady-state catch-up sweep
+  // (applyBehindContentApps) re-applies anything left behind appliedVersion.
   const runApply = async () => {
     const deployment = await getDeployment(appName);
     if (!deployment) return;
+    if (!(await componentsRunning(deployment, applyDeps))) return;
     const peers = await getPeers(appName);
     await apply(deployment, manifest, { appName, owner: spec.owner, peers }, applyDeps);
   };
@@ -1421,9 +1429,14 @@ async function submitContentUpdate(body, deps = {}) {
     appName, owner, version: ver, reconcileSig,
   }, { benchmark });
 
-  // The submitter applies locally if it runs the app — gossip doesn't loop back.
+  // The submitter applies locally if it runs the app — gossip doesn't loop back. Detached,
+  // the way every peer applies it: by here the submission has done all it promised (stored,
+  // broadcast, backstopped, reconciled), so a local rollout problem is a warn line here as it
+  // is on any other node, not the answer to a submission that succeeded.
   const installed = await isInstalledHere(appName);
-  if (installed && schedule) await schedule(manifest, spec);
+  if (installed && schedule) {
+    schedule(manifest, spec).catch((error) => log.warn(`contentSlot: local apply of ${appName} v${ver} failed - ${error.message ?? error}`));
+  }
 
   return gossipManifest;
 }
