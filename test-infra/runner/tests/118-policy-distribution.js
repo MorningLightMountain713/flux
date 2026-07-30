@@ -84,6 +84,13 @@ describe('Policy distribution: enforcement survives an unreachable source', func
       hookCtx: this,
       nodes: 5,
       tickerAutostart: false,
+      // Nodes 2-5 legacy (0-based indices). An attested Arcane node is exempt from tampering
+      // enforcement by design, and the harness default is arcane — so on the default every
+      // tampering scenario below is vacuous, the enforcer logging "node is ArcaneOS, enforcer
+      // will not start" and never ticking. The two that assert NO DOS would pass because
+      // nothing was ever going to set one. Node 1 stays Arcane; the enterprise map is not
+      // Arcane-gated, and the positive DOS cases below are what keep the negatives honest.
+      legacyNodes: [1, 2, 3, 4],
       // Submission-door sizing for a 5-node mesh: minOutgoing is what the mesh actually
       // yields (~2), and minIncoming drops to 1 because every scenario here restarts FluxOS
       // on a node, and a freshly re-peered node sits at a single inbound for a moment.
@@ -175,9 +182,14 @@ describe('Policy distribution: enforcement survives an unreachable source', func
 
       await restartFluxos(env.clients[nodeNum - 1].container);
 
-      const res = await env.clients[nodeNum - 1].getDOSState();
-      expect(res.data.dosMessage).to.include(DOS_PREFIX);
-      expect(res.data.dosState).to.equal(100);
+      // The enforcer's first tick runs at start, after daemon sync, so give it the tick
+      // rather than reading immediately.
+      await waitFor(
+        async () => (await dosMessageOn(env.clients[nodeNum - 1])).includes(DOS_PREFIX),
+        { timeout: 60000, interval: 1000, label: 'the tampering DOS to be set' },
+      );
+
+      expect((await env.clients[nodeNum - 1].getDOSState()).data.dosState).to.equal(100);
     });
 
     it('does not DOS a node when the blocklist cannot be read', async function () {
