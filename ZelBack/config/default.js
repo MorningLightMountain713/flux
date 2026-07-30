@@ -43,6 +43,7 @@ module.exports = {
         benchmark: 'benchmark',
         appTamperingEvents: 'apptamperingevents',
         nodeStartupTracker: 'nodestartuptracker',
+        nodeIdentity: 'nodeidentity', // node runtime state generated/discovered by FluxOS: the PGP keypair and the last-known external IP
         policyDocuments: 'policydocuments', // last-known-good network policy documents, so an unreachable source does not drop enforcement
         ipRanges: 'ipranges', // the IP location baseline, one document per allocated range, rebuilt and swapped in whole
         nodeLocations: 'nodelocations', // per-node view derived from the baseline, invalidated when a new baseline lands

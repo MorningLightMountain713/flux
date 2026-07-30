@@ -727,9 +727,8 @@ module.exports = (app) => {
     return idService.logoutAllUsers(req, res);
   }));
 
-  app.get('/flux/adjustkadena/:account?/:chainid?', asyncRoute((req, res) => { // note this essentially rebuilds flux use with caution!
-    return fluxService.adjustKadenaAccount(req, res);
-  }));
+  // Withdrawn settings: kept so callers get a reasoned error rather than a 404.
+  // Remove at the next major version.
   app.get('/flux/adjustrouterip/:routerip?', asyncRoute((req, res) => { // note this essentially rebuilds flux use with caution!
     return fluxService.adjustRouterIP(req, res);
   }));

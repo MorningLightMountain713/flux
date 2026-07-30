@@ -2,6 +2,7 @@
 /* eslint-disable no-restricted-syntax */
 const chai = require('chai');
 const natUpnp = require('@runonflux/nat-upnp');
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 const log = require('../../ZelBack/src/lib/log');
@@ -30,6 +31,15 @@ const upnpService = proxyquire(
 );
 
 describe('upnpService tests', () => {
+  // No unit test may shell out. The firewall helpers run `sudo ufw ...`, and
+  // verifyUPNPsupport reaches them whenever the node config carries a routerIP — on a
+  // machine without passwordless sudo that call never returns, so the test times out
+  // with nothing to show for it. Stubbed suite-wide rather than per case: the
+  // reachable paths are easy to add to and the failure mode is a hang.
+  beforeEach(() => {
+    sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: '', stderr: '' });
+  });
+
   // The configured-gateway override replaces getGateway on the CLIENT INSTANCE, so
   // it has to be applied wherever the instance is built. The client is constructed
   // lazily (constructing at import opened a UDP socket per address in every process
@@ -395,6 +405,19 @@ describe('upnpService tests', () => {
           name: 'Unauthorized',
           message: 'Unauthorized. Access denied.',
         },
+      });
+    });
+
+    // ensureNumber turns each of these into something the router would be asked to map
+    ['1e5', '0x10', '99999999', '0', '-5', 'abc'].forEach((bad) => {
+      it(`should refuse the port '${bad}' before asking the router`, async () => {
+        verifyPrivilegeStub.resolves(true);
+        const res = generateResponse();
+
+        await upnpService.mapPortApi({ params: { port: bad } }, res);
+
+        sinon.assert.notCalled(createMappingSpy);
+        sinon.assert.calledOnceWithMatch(res.json, { status: 'error' });
       });
     });
 

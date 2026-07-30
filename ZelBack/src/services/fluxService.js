@@ -13,6 +13,7 @@ const verificationHelper = require('./verificationHelper');
 const verificationHelperUtils = require('./verificationHelperUtils');
 const messageHelper = require('./messageHelper');
 const dbHelper = require('./dbHelper');
+const nodeIdentityRepository = require('./appDatabase/nodeIdentityRepository');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const daemonServiceBlockchainRpcs = require('./daemonService/daemonServiceBlockchainRpcs');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
@@ -872,23 +873,9 @@ async function getFluxGeolocation(req, res) {
  * @param {object} res Response.
  * @returns {object} Message.
  */
-function getFluxPGPidentity(req, res) {
-  const { userconfig } = globalThis;
-  const pgp = userconfig.initial.pgpPublicKey;
-  const message = messageHelper.createDataMessage(pgp);
-  return res ? res.json(message) : message;
-}
-
-/**
- * To show the current user's Kadena address (public key) that is being used with FluxOS.
- * @param {object} req Request.
- * @param {object} res Response.
- * @returns {object} Message.
- */
-function getFluxKadena(req, res) {
-  const { userconfig } = globalThis;
-  const kadena = userconfig.initial.kadena || null;
-  const message = messageHelper.createDataMessage(kadena);
+async function getFluxPGPidentity(req, res) {
+  const identity = await nodeIdentityRepository.getPgpIdentity();
+  const message = messageHelper.createDataMessage(identity ? identity.publicKey : '');
   return res ? res.json(message) : message;
 }
 
@@ -913,8 +900,8 @@ function getRouterIP(req, res) {
  */
 function getAPIPort(req, res) {
   const { userconfig } = globalThis;
-  const routerIP = userconfig.initial.apiport || '16127';
-  const message = messageHelper.createDataMessage(routerIP);
+  const apiport = userconfig.initial.apiport || config.server.apiport;
+  const message = messageHelper.createDataMessage(apiport);
   return res ? res.json(message) : message;
 }
 
@@ -1632,150 +1619,47 @@ async function getFluxInfo(req, res) {
 }
 
 /**
- * To update the current Kadena account (address/public key and chain ID) that is being used with FluxOS. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * Reports that a withdrawn setting can no longer be changed here.
+ *
+ * An error rather than a success no-op: every one of these endpoints exists to make
+ * something take effect, so a caller told `status: success` believes it did. Most
+ * clients branch on that, which makes an error the only reply that actually informs
+ * them. The routes stay until the next major version so callers get this rather than a
+ * 404. Their privilege checks do not: the reply is a fixed string, and there is no
+ * longer any state behind it to protect.
+ *
+ * @param {string} detail What replaced it.
+ * @returns {Function} Express handler
  */
-async function adjustKadenaAccount(req, res) {
-  try {
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req));
-    if (authorized === true) {
-      let { account } = req.params;
-      account = account || req.query.account;
-      let { chainid } = req.params;
-      chainid = chainid || req.query.chainid;
-      if (!account) {
-        throw new Error('No Kadena Account provided');
-      }
-      if (!chainid) {
-        throw new Error('No Kadena Chain ID provided');
-      }
-      const chainIDNumber = serviceHelper.ensureNumber(chainid);
-      if (chainIDNumber > 20 || chainIDNumber < 0 || Number.isNaN(chainIDNumber)) {
-        throw new Error(`Invalid Chain ID ${chainid} provided.`);
-      }
-      const kadenaURI = `kadena:${account}?chainid=${chainid}`;
-      const { userconfig } = globalThis;
-      const fluxDirPath = path.join(__dirname, '../../../config/userconfig.js');
-      const dataToWrite = `module.exports = {
-  initial: {
-    ipaddress: '${userconfig.initial.ipaddress || '127.0.0.1'}',
-    zelid: '${userconfig.initial.zelid || config.fluxTeamFluxID}',
-    kadena: '${kadenaURI}',
-    testnet: ${userconfig.initial.testnet || false},
-    development: ${userconfig.initial.development || false},
-    apiport: ${Number(userconfig.initial.apiport || config.server.apiport)},
-    routerIP: '${userconfig.initial.routerIP || ''}',
-    pgpPrivateKey: \`${userconfig.initial.pgpPrivateKey || ''}\`,
-    pgpPublicKey: \`${userconfig.initial.pgpPublicKey || ''}\`,
-  }
-}`;
-
-      await fs.writeFile(fluxDirPath, dataToWrite);
-
-      const successMessage = messageHelper.createSuccessMessage('Kadena account adjusted');
-      res.json(successMessage);
-    } else {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-    }
-  } catch (error) {
-    log.error(error);
-    const errMessage = messageHelper.createErrorMessage(error.message, error.name, error.code);
+function withdrawnSetting(detail) {
+  return async (req, res) => {
+    const errMessage = messageHelper.createErrorMessage(detail, 'Gone', 410);
     res.json(errMessage);
-  }
+  };
 }
 
 /**
- * To update the current routerIP that is being used with FluxOS. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * The API port also lives in fluxbench's own config, which FluxOS cannot write, and
+ * fluxbench's copy is the one the network resolves this node by — so changing it here
+ * only ever produced a node listening on one port and announcing another.
  */
-async function adjustRouterIP(req, res) {
-  try {
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req));
-    if (authorized === true) {
-      let { routerip } = req.params;
-      routerip = routerip || req.query.routerip || '';
-
-      const { userconfig } = globalThis;
-      const dataToWrite = `module.exports = {
-        initial: {
-          ipaddress: '${userconfig.initial.ipaddress || '127.0.0.1'}',
-          zelid: '${userconfig.initial.zelid || config.fluxTeamFluxID}',
-          kadena: '${userconfig.initial.kadena || ''}',
-          testnet: ${userconfig.initial.testnet || false},
-          development: ${userconfig.initial.development || false},
-          apiport: ${Number(userconfig.initial.apiport || config.server.apiport)},
-          routerIP: '${routerip}',
-          pgpPrivateKey: \`${userconfig.initial.pgpPrivateKey || ''}\`,
-          pgpPublicKey: \`${userconfig.initial.pgpPublicKey || ''}\`,
-        }
-      }`;
-      const fluxDirPath = path.join(__dirname, '../../../config/userconfig.js');
-      await fs.writeFile(fluxDirPath, dataToWrite);
-
-      const successMessage = messageHelper.createSuccessMessage('Router IP adjusted');
-      res.json(successMessage);
-    } else {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-    }
-  } catch (error) {
-    log.error(error);
-    const errMessage = messageHelper.createErrorMessage(error.message, error.name, error.code);
-    res.json(errMessage);
-  }
-}
+const adjustAPIPort = withdrawnSetting(
+  'The API port is set by the node installer, not FluxOS. Change it in the ArcaneOS '
+  + 'configuration TUI, or in fluxbench.conf on a legacy node, so FluxOS and fluxbench agree.',
+);
 
 /**
- * To update the current api port that is being used with FluxOS. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * The router address is installer-recorded network topology, and it is one field of a
+ * set the rest of the network config is derived from — changing it alone was rarely the
+ * fix an operator needed. On ArcaneOS flux-configd owns the file and re-renders it from
+ * the installer yaml, so FluxOS was a second front door to a setting it does not own;
+ * elsewhere it was the last thing FluxOS wrote to config/userconfig.js, which is now
+ * operator input with no runtime writer at all.
  */
-async function adjustAPIPort(req, res) {
-  try {
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req));
-    if (authorized === true) {
-      let { apiport } = req.params;
-      apiport = apiport || req.query.apiport || '';
-
-      const allowedAPIPorts = [16127, 16137, 16147, 16157, 16167, 16177, 16187, 16197];
-      if (!allowedAPIPorts.includes(+apiport)) {
-        const errMessage = messageHelper.createErrorMessage('API Port not valid');
-        res.json(errMessage);
-        return;
-      }
-
-      const { userconfig } = globalThis;
-      const dataToWrite = `module.exports = {
-        initial: {
-          ipaddress: '${userconfig.initial.ipaddress || '127.0.0.1'}',
-          zelid: '${userconfig.initial.zelid || config.fluxTeamFluxID}',
-          kadena: '${userconfig.initial.kadena || ''}',
-          testnet: ${userconfig.initial.testnet || false},
-          development: ${userconfig.initial.development || false},
-          apiport: ${Number(+apiport)},
-          routerIP: '${userconfig.initial.routerIP || ''}',
-          pgpPrivateKey: \`${userconfig.initial.pgpPrivateKey || ''}\`,
-          pgpPublicKey: \`${userconfig.initial.pgpPublicKey || ''}\`,
-        }
-      }`;
-      const fluxDirPath = path.join(__dirname, '../../../config/userconfig.js');
-      await fs.writeFile(fluxDirPath, dataToWrite);
-
-      const successMessage = messageHelper.createSuccessMessage('API Port adjusted. A restart of FluxOS is necessary');
-      res.json(successMessage);
-    } else {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-    }
-  } catch (error) {
-    log.error(error);
-    const errMessage = messageHelper.createErrorMessage(error.message, error.name, error.code);
-    res.json(errMessage);
-  }
-}
+const adjustRouterIP = withdrawnSetting(
+  'The router address is set by the node installer, not FluxOS. Change it in the ArcaneOS '
+  + 'configuration TUI, or in config/userconfig.js on a legacy node, and restart FluxOS.',
+);
 
 /**
  * To get the tier of the FluxNode (Cumulus, Nimbus or Stratus). Checks the node tier against the node collateral.
@@ -2228,7 +2112,6 @@ async function isArcaneOs(req, res) {
 
 module.exports = {
   adjustAPIPort,
-  adjustKadenaAccount,
   adjustRouterIP,
   benchmarkDebug,
   checkoutBranch,
@@ -2251,7 +2134,6 @@ module.exports = {
   getFluxGeolocation,
   getFluxInfo,
   getFluxIP,
-  getFluxKadena,
   getFluxPGPidentity,
   getFluxTimezone,
   getFluxVersion,

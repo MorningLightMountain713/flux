@@ -403,6 +403,9 @@ const state = {
   // enterprise node, which is what every suite that is not about enterprise placement wants.
   // Absent would be a different thing entirely - see the policy block below.
   enterpriseNodes: {},
+  // Paths made to fail, so a suite can exercise what a node does when a policy document
+  // is unreachable rather than only when it is empty. Path -> HTTP status.
+  failingPaths: {},
   latestRelease: { tag_name: 'v0.0.0', name: 'stub-release' },
   geolocation: {},
   // The syncthing the node image ships, read from the repository the image was built
@@ -593,6 +596,16 @@ function defaultGeoResponse(ip) {
 
 const app = express();
 app.use(express.json());
+
+// Fail any path the control plane has been told to break, before its handler runs.
+app.use((req, res, next) => {
+  const status = state.failingPaths[req.path];
+  if (status) {
+    res.status(status).send(`stub: ${req.path} forced to fail`);
+    return;
+  }
+  next();
+});
 
 // Policy documents, served at the repo root - the fluxos-network-policy layout that
 // config.policy.baseUrl names. The /helpers/ paths went with the version floor: they
@@ -932,6 +945,12 @@ control.post('/vetted-repos', (req, res) => {
   res.json({ ok: true, seq: resignPolicy() });
 });
 
+// { "/blocklist.json": 503 } — or {} to stop failing everything.
+control.post('/failing-paths', (req, res) => {
+  state.failingPaths = req.body;
+  res.json({ ok: true });
+});
+
 control.post('/tampering-blocklist', (req, res) => {
   state.tamperingBlocklist = req.body;
   res.json({ ok: true, seq: resignPolicy() });
@@ -1131,6 +1150,7 @@ control.post('/reset', (req, res) => {
   state.vettedRepositories = [];
   state.tamperingBlocklist = [];
   state.enterpriseNodes = {};
+  state.failingPaths = {};
   state.latestRelease = { tag_name: 'v0.0.0', name: 'stub-release' };
   state.geolocation = {};
   artifacts.clear();

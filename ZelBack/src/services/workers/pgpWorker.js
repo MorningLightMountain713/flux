@@ -18,6 +18,20 @@ const operations = {
     return privateKey.toPublic().armor();
   },
 
+  /**
+   * Whether an armored keypair is two halves of one key.
+   *
+   * Compared on FINGERPRINT, not on armored text: the armoring is not a stable
+   * encoding, so two encodings of the same key differ as strings. Used by the
+   * migration that adopts a keypair still held in config/userconfig.js, where
+   * generating over the operator's key would be unrecoverable.
+   */
+  async keypairMatches({ armoredPrivateKey, armoredPublicKey }) {
+    const privateKey = await openpgp.readPrivateKey({ armoredKey: armoredPrivateKey });
+    const publicKey = await openpgp.readKey({ armoredKey: armoredPublicKey });
+    return privateKey.toPublic().getFingerprint() === publicKey.getFingerprint();
+  },
+
   async generateKey({ name, email }) {
     const keypair = await openpgp.generateKey({
       type: 'ecc',

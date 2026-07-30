@@ -1,15 +1,8 @@
 const util = require('util');
-const nodecmd = require('node-cmd');
 const systemcrontab = require('crontab');
 const log = require('../lib/log');
-// eslint-disable-next-line no-unused-vars
-const fluxNetworkHelper = require('./fluxNetworkHelper');
-// eslint-disable-next-line no-unused-vars
-const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
-// eslint-disable-next-line no-unused-vars
 const serviceHelper = require('./serviceHelper');
 
-const cmdAsync = util.promisify(nodecmd.run);
 const crontabLoad = util.promisify(systemcrontab.load);
 
 /**
@@ -118,17 +111,22 @@ async function getAppsWithIncorrectVolumeMounts() {
  * @returns {Promise<boolean>} - True if unmount was successful
  */
 async function unmountIncorrectVolume(mountPoint) {
-  try {
-    log.info(`Attempting to unmount incorrect volume at: ${mountPoint}`);
-    const execUnmount = `sudo umount ${mountPoint}`;
-    await cmdAsync(execUnmount);
-    log.info(`Successfully unmounted volume at: ${mountPoint}`);
-    return true;
-  } catch (error) {
+  log.info(`Attempting to unmount incorrect volume at: ${mountPoint}`);
+
+  const { error } = await serviceHelper.runCommand('umount', {
+    runAsRoot: true,
+    logError: false,
+    params: [mountPoint],
+  });
+
+  if (error) {
     log.warn(`Failed to unmount volume at ${mountPoint}: ${error.message}`);
     // Continue even if unmount fails - the volume might not be mounted
     return false;
   }
+
+  log.info(`Successfully unmounted volume at: ${mountPoint}`);
+  return true;
 }
 
 /**

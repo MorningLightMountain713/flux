@@ -1,9 +1,8 @@
 const config = require('config');
-const fs = require('node:fs/promises');
-const path = require('node:path');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
+const nodeIdentityRepository = require('./appDatabase/nodeIdentityRepository');
 const nodeDosState = require('./nodeDosState');
 const benchmarkService = require('./benchmarkService');
 const networkStateService = require('./networkStateService');
@@ -96,8 +95,7 @@ function getMaxNumberOfIpChanges() {
  */
 async function adjustExternalIP(ip) {
   try {
-    const userconfig = globalThis.userconfig;
-    const fluxDirPath = path.join(__dirname, '../../../config/userconfig.js');
+    const { userconfig } = globalThis;
     // https://github.com/sindresorhus/ip-regex/blob/master/index.js#L8
     const v4 = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)){3}';
     const v4exact = new RegExp(`^${v4}$`);
@@ -105,7 +103,11 @@ async function adjustExternalIP(ip) {
       log.warn(`Gathered IP ${ip} is not a valid format`);
       return;
     }
-    if (ip === userconfig.initial.ipaddress) {
+    // The address this node last observed about itself: node runtime state, so it
+    // is remembered in the local database rather than written back into the
+    // operator's config file.
+    const oldUserConfigIp = await nodeIdentityRepository.getLastKnownIp();
+    if (ip === oldUserConfigIp) {
       return;
     }
     // Everything below needs to know which node this is: whose registration among
@@ -115,9 +117,10 @@ async function adjustExternalIP(ip) {
     // against nothing matches nothing - so acting here would read our own rows as
     // strangers' and uninstall the apps they belong to.
     //
-    // Return BEFORE the userconfig write, which is what makes this a deferral
-    // rather than a silent drop: the write is what marks the change handled, so
-    // leaving it unwritten leaves the change pending. checkMyFluxAvailability
+    // Return BEFORE the last-known-IP write (the operator's config file until this
+    // commit, the local database now), which is what makes this a deferral rather
+    // than a silent drop: the write is what marks the change handled, so leaving it
+    // unwritten leaves the change pending. checkMyFluxAvailability
     // already refuses to run while the address is unknown, so nothing reaches here
     // again until benchmark answers - and then this runs with the node knowing
     // itself, exactly once, as designed.
@@ -125,23 +128,8 @@ async function adjustExternalIP(ip) {
       log.warn(`adjustExternalIP - own address unknown, deferring the change to ${ip} until benchmark answers`);
       return;
     }
-    const oldUserConfigIp = userconfig.initial.ipaddress;
-    log.info(`Adjusting External IP from ${userconfig.initial.ipaddress} to ${ip}`);
-    const dataToWrite = `module.exports = {
-  initial: {
-    ipaddress: '${ip}',
-    zelid: '${userconfig.initial.zelid || config.fluxTeamFluxID}',
-    kadena: '${userconfig.initial.kadena || ''}',
-    testnet: ${userconfig.initial.testnet || false},
-    development: ${userconfig.initial.development || false},
-    apiport: ${Number(userconfig.initial.apiport || config.server.apiport)},
-    routerIP: '${userconfig.initial.routerIP || ''}',
-    pgpPrivateKey: \`${userconfig.initial.pgpPrivateKey || ''}\`,
-    pgpPublicKey: \`${userconfig.initial.pgpPublicKey || ''}\`,
-  }
-}`;
-
-    await fs.writeFile(fluxDirPath, dataToWrite);
+    log.info(`Adjusting External IP from ${oldUserConfigIp} to ${ip}`);
+    await nodeIdentityRepository.setLastKnownIp(ip);
 
     if (oldUserConfigIp && v4exact.test(oldUserConfigIp) && !myCache.has(ip)) {
       myCache.set(ip, '');
@@ -267,7 +255,6 @@ async function checkMyFluxAvailability(retryNumber = 0) {
   const localSocketAddress = fluxNetworkHelper.getCachedLocalSocketAddress();
   if (localSocketAddress === null) return false;
 
-  const userconfig = globalThis.userconfig;
   const fluxBenchVersionAllowed = await fluxNetworkHelper.checkFluxbenchVersionAllowed();
   if (!fluxBenchVersionAllowed) {
     return false;

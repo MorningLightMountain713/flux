@@ -7,7 +7,6 @@ const logCursor = require('../utils/logCursor');
 const globalState = require('../utils/globalState');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const hostStorageCapability = require('../utils/hostStorageCapability');
-const appsRepository = require('../appDatabase/appsRepository');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');

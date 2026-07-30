@@ -3,7 +3,6 @@ const sinon = require('sinon');
 const chaiAsPromised = require('chai-as-promised');
 const generalService = require('../../ZelBack/src/services/generalService');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
-const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const daemonServiceTransactionRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceTransactionRpcs');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
@@ -11,13 +10,6 @@ const { requireMongo } = require('./dbTestHelper');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
-
-const generateResponse = () => {
-  const res = { test: 'testing' };
-  res.status = sinon.stub().returns(res);
-  res.json = sinon.fake((param) => `Response: ${param}`);
-  return res;
-};
 
 describe('generalService tests', () => {
   before(requireMongo);
@@ -778,21 +770,18 @@ describe('generalService tests', () => {
   });
 
   describe('whitelistedRepositories tests', () => {
-    afterEach(() => {
-      sinon.restore();
-    });
+    it('reports the restriction as withdrawn rather than returning a list', () => {
+      // A list would imply deployment is restricted to it, and a 404 would say nothing. The
+      // caller is asking which images are permitted; the answer is that all of them are.
+      const res = { json: sinon.fake() };
 
-    it('should answer the deprecated endpoint with an empty list and no fetch', async () => {
-      const axiosStub = sinon.stub(serviceHelper, 'axiosGet');
-      const res = generateResponse();
+      generalService.whitelistedRepositories(undefined, res);
 
-      await generalService.whitelistedRepositories(undefined, res);
-
-      sinon.assert.notCalled(axiosStub);
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'success',
-        data: [],
-      });
+      const response = res.json.firstCall.args[0];
+      expect(response.status).to.equal('error');
+      expect(response.data.name).to.equal('Gone');
+      expect(response.data.code).to.equal(410);
+      expect(response.data.message).to.include('withdrawn');
     });
   });
 

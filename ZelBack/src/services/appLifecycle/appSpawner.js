@@ -825,7 +825,7 @@ async function trySpawningGlobalApplication() {
     const deployments = (identitiesToInstall.length ? identitiesToInstall : [null])
       .map((replica) => DeploymentSpec.fromSpec(spec, appsFolder, { replica }));
     // Images are spec-level — identical across identities — so any view answers
-    // for vetting and the blocklist.
+    // for the blocklist.
     const deployment = deployments[0];
     const appSpecifications = spec.serialize();
     const appPorts = [...new Set(deployments.flatMap((d) => d.allHostPorts()))];

@@ -212,17 +212,21 @@ async function checkSynced() {
   }
 }
 
+
 /**
- * @deprecated The image whitelist is retired - nothing has enforced it since
- * July 2024 and the network accepts any image (the blocklist still governs).
- * Kept returning an empty list so existing callers get a valid answer instead
- * of a 404. Remove once no supported release could still call it.
+ * Image whitelisting is withdrawn.
+ *
+ * Nothing enforced it: the check that read the list was written without a caller and never
+ * gained one, and the list itself stopped being maintained shortly after. The route is kept
+ * so a caller asking which images are permitted is told the restriction no longer exists,
+ * rather than being handed a list that governs nothing or a 404 that says nothing.
  * @param {object} req Request.
  * @param {object} res Response.
  */
-async function whitelistedRepositories(req, res) {
-  const resultsResponse = messageHelper.createDataMessage([]);
-  res.json(resultsResponse);
+function whitelistedRepositories(req, res) {
+  const message = 'Image whitelisting has been withdrawn - it was not enforced. '
+    + 'The blocked repository list is the only image policy FluxOS applies.';
+  res.json(messageHelper.createErrorMessage(message, 'Gone', 410));
 }
 
 /**
@@ -273,8 +277,8 @@ module.exports = {
   getNewNodeTier,
   isNodeStatusConfirmed,
   checkSynced,
-  whitelistedRepositories,
   messageHash,
+  whitelistedRepositories,
   nodeCollateral,
   obtainNodeCollateralInformation,
 

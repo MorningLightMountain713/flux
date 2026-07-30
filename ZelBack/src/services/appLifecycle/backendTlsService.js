@@ -124,8 +124,13 @@ async function provisionCert(appName, tlsPaths) {
 async function certExpiry(tlsPaths) {
   try {
     const pem = await fsp.readFile(tlsPaths.certPath, 'utf8');
-    const { validToDate } = new crypto.X509Certificate(pem);
-    return Number.isNaN(validToDate.getTime()) ? null : validToDate;
+    // Parsed from `validTo` rather than read from `validToDate`: the Date accessor
+    // arrived in Node 22.10, and no Node 20 release has it. On the versions the fleet
+    // runs it reads as undefined, which threw in here and made every certificate look
+    // unreadable — so every cert was permanently due for renewal.
+    const { validTo } = new crypto.X509Certificate(pem);
+    const expiry = new Date(validTo);
+    return Number.isNaN(expiry.getTime()) ? null : expiry;
   } catch (error) {
     return null;
   }

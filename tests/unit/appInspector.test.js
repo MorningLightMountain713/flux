@@ -77,6 +77,7 @@ describe('appInspector tests', () => {
       },
       '../serviceHelper': {
         ensureString: sinon.stub().returnsArg(0),
+        runCommand: sinon.stub().resolves({ error: null, stdout: 'data', stderr: '' }),
       },
       '../dbHelper': {
         databaseConnection: sinon.stub(),
@@ -620,7 +621,6 @@ describe('appInspector tests', () => {
         '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
         '../utils/appConstants': { appConstants: {} },
         '../utils/appUtilities': { getContainerStorage: sinon.stub().returns(0) },
-        'node-cmd': { run: (cmd, callback) => callback(null, 'data', 'stderr') },
       });
     }
 
@@ -752,9 +752,6 @@ describe('appInspector tests', () => {
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
         },
-        'node-cmd': {
-          run: (cmd, callback) => callback(null, 'data', 'stderr'),
-        },
       });
 
       const req = {
@@ -806,9 +803,6 @@ describe('appInspector tests', () => {
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
-        },
-        'node-cmd': {
-          run: (cmd, callback) => callback(null, 'data', 'stderr'),
         },
       });
 
@@ -947,9 +941,6 @@ describe('appInspector tests', () => {
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
         },
-        'node-cmd': {
-          run: (cmd, callback) => callback(null, 'data', 'stderr'),
-        },
       });
 
       const req = {
@@ -1003,9 +994,6 @@ describe('appInspector tests', () => {
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
         },
-        'node-cmd': {
-          run: (cmd, callback) => callback(null, 'data', 'stderr'),
-        },
       });
 
       const req = {
@@ -1056,9 +1044,6 @@ describe('appInspector tests', () => {
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
         },
-        'node-cmd': {
-          run: (cmd, callback) => callback(null, 'data', 'stderr'),
-        },
       });
 
       const req = {
@@ -1108,9 +1093,6 @@ describe('appInspector tests', () => {
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
-        },
-        'node-cmd': {
-          run: (cmd, callback) => callback(null, 'data', 'stderr'),
         },
       });
 
@@ -1189,9 +1171,6 @@ describe('appInspector tests', () => {
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
-        },
-        'node-cmd': {
-          run: (cmd, callback) => callback(null, 'data', 'stderr'),
         },
       });
 
@@ -1705,9 +1684,6 @@ describe('appInspector tests', () => {
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
         },
-        'node-cmd': {
-          run: (cmd, callback) => callback(null, 'data', 'stderr'),
-        },
       });
 
       const req = {
@@ -1870,9 +1846,6 @@ describe('appInspector tests', () => {
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
-        },
-        'node-cmd': {
-          run: (cmd, callback) => callback(null, 'data', 'stderr'),
         },
       });
 

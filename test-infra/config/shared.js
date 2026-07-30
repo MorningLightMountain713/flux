@@ -57,6 +57,9 @@ module.exports = {
   github: {
     apiBaseUrl: 'http://198.18.0.6:3000',
   },
+  policy: {
+    baseUrl: 'http://198.18.0.6:3000/helpers',
+  },
   geolocation: {
     ipApiBaseUrl: 'http://198.18.0.6:3000',
   },

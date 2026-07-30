@@ -806,11 +806,9 @@ describe('imageVerifier tests', () => {
 
   describe('errorMeta tests', () => {
     let axiosInstanceStub;
-    // eslint-disable-next-line no-unused-vars
-    let axiosGetStub;
 
     beforeEach(() => {
-      axiosGetStub = sinon.stub(serviceHelper, 'axiosGet').resolves({ data: [] });
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: [] });
       axiosInstanceStub = sinon.stub(serviceHelper, 'axiosInstance');
     });
 
