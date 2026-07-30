@@ -59,6 +59,17 @@ function isPolicyKnown() {
   return getEnterpriseNodeOwnerMap() !== null;
 }
 
+/**
+ * Whether the owner map has been loaded at all. The same fact as isPolicyKnown, under the
+ * name v9's callers use: false only while the policy is unknown, which on a restart is a
+ * real window - the API listens well before the boot sequence has a bundle - and serving an
+ * empty union then would be indistinguishable from a network that has no enterprise nodes.
+ * @returns {boolean}
+ */
+function isOwnerMapLoaded() {
+  return isPolicyKnown();
+}
+
 /** Every enterprise node pubkey, or null when the policy is unknown. */
 function getEnterpriseNodesPublicKeys() {
   const map = getEnterpriseNodeOwnerMap();
@@ -105,5 +116,6 @@ module.exports = {
   getEnterpriseNodeOwnerMap,
   getEnterpriseNodesPublicKeys,
   isPolicyKnown,
+  isOwnerMapLoaded,
   onOwnerMapChange,
 };
