@@ -2,13 +2,14 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-function load() {
+// Pass a publish stub to assert on what a round reports; the default discards it.
+function load(publish = sinon.stub()) {
   return proxyquire('../../ZelBack/src/services/appMessaging/contentManifestSyncService', {
     config: { fluxapps: {} },
-    '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     '../serviceHelper': { delay: sinon.stub().resolves() },
     '../appDatabase/appsRepository': { listConfirmedContentManifestVersions: sinon.stub().resolves([]) },
     '../utils/fluxBroadcastHelper': { serialiseAndSignFluxBroadcast: sinon.stub().callsFake(async (m) => m) },
+    '../utils/fluxEventBus': { publish },
   });
 }
 
@@ -134,6 +135,40 @@ describe('contentManifestSyncService', () => {
       expect(result.fetched).to.equal(2); // a from p1, b from p2
       const p2Fetch = p2.send.getCalls().find((c) => c.args[0].type === 'fluxappcontentmanifestrequest');
       expect(p2Fetch.args[0].appNames).to.deep.equal(['b']); // only the still-missing one
+    });
+
+    // A node that reconciled against silence and a node that was already current both end
+    // a round having fetched nothing. Only indexesReceived separates them, so it has to be
+    // on the event and not merely in the return value — an observer watching the bus (the
+    // gate suites, an operator) sees the event, never the return.
+    describe('what a round reports', () => {
+      it('carries the peers asked and the indexes heard, not just the fetch count', async () => {
+        const publish = sinon.stub();
+        const svc = load(publish);
+        const store = new Map([['a', 4]]);
+        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([appName, version]) => ({ appName, version })));
+        const p1 = makePeer(svc, 'p1', [{ appName: 'a', version: 4 }], store);
+
+        await svc.reconcile([p1], { getLocalVersions });
+
+        sinon.assert.calledOnceWithExactly(publish, 'content:manifestReconciled', {
+          requested: 0, fetched: 0, peers: 1, indexesReceived: 1,
+        });
+      });
+
+      it('distinguishes a silent round from an already-current one', async () => {
+        const publish = sinon.stub();
+        const svc = load(publish);
+        // A peer that never answers the index request: the round hears nothing, so the
+        // union is empty and nothing is requested — same requested/fetched as above.
+        const silent = { key: 'p1', send: sinon.stub() };
+
+        await svc.reconcile([silent], { getLocalVersions: sinon.stub().resolves([]) });
+
+        const payload = publish.firstCall.args[1];
+        expect(payload).to.include({ requested: 0, fetched: 0 });
+        expect(payload.indexesReceived, 'heard from nobody').to.equal(0);
+      });
     });
   });
 });

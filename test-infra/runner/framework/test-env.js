@@ -1061,15 +1061,31 @@ async function _buildEnv(
 
     // Split the fleet into two groups that stay internally connected but cannot reach
     // each other, by dropping cross-group node-to-node packets inside each container
-    // (iptables; the image ships it and the nodes run privileged). Faithful to a real
-    // partition — the cross-group peer sockets go half-open and die — but every node
-    // keeps its path to the daemon and to its same-group peers. A node held in the
-    // minority therefore stays daemon-confirmed (message capability intact) and above
-    // the peer floor, so it never degrades or resyncs: the "partial partition, stays
-    // above the floor, misses the fire-once gossip" case the steady-state backstop
-    // exists for. The host runner reaches nodes over the gateway, not a node IP, so its
-    // REST/SSE access to BOTH sides is unaffected — the minority is observable throughout.
-    async partitionGroups(groupA, groupB) {
+    // (iptables; the image ships it and the nodes run privileged). Every node keeps its
+    // path to the daemon and to its same-group peers. A node held in the minority
+    // therefore stays daemon-confirmed (message capability intact) and above the peer
+    // floor, so it never degrades or resyncs: the "partial partition, stays above the
+    // floor, misses the fire-once gossip" case the steady-state backstop exists for. The
+    // host runner reaches nodes over the gateway, not a node IP, so its REST/SSE access
+    // to BOTH sides is unaffected — the minority is observable throughout.
+    //
+    // Returns only once the partition is REAL, which is a stronger guarantee than the
+    // rules alone give. iptables stops packets, but TCP retransmits across a DROP: the
+    // cross-group sockets stay up until ping/pong liveness gives up, and until then a
+    // message sent to the other group is QUEUED, not lost — healPartition then delivers
+    // the whole backlog. A suite whose premise is "this node missed the gossip" gets the
+    // opposite of what it asked for, and finds out much later as an unrelated-looking
+    // timeout (suite 511, 2026-07-30: the isolated node received the update it was
+    // supposed to have missed, seconds after the heal, and the assertion that waited for
+    // it to converge by reconcile could never fire because it had nothing left to fetch).
+    //
+    // So wait for both sides to actually drop the other group from their peer lists, and
+    // fail HERE, naming who is still connected. How long that takes is peer liveness —
+    // peers.wsPingIntervalMs x peers.wsMaxMissedPongs, 45s on production defaults — so a
+    // suite that partitions should compress the interval in its configOverrides the same
+    // way it compresses every other cadence. Pass { awaitSever: false } for a caller that
+    // only wants packets dropped and is not asserting message loss.
+    async partitionGroups(groupA, groupB, { awaitSever = true, severTimeoutMs = 60000 } = {}) {
       const ops = [];
       for (const a of groupA) {
         for (const b of groupB) {
@@ -1083,6 +1099,39 @@ async function _buildEnv(
           throw new Error(`partitionGroups: drop on node ${node} for ${otherIp} failed (exit ${res.exitCode}): ${res.output}`);
         }
       }));
+      if (!awaitSever) return;
+
+      // Each node paired with the cross-group IPs that must disappear from its peers.
+      const crossGroup = [
+        ...groupA.map((a) => [a, groupB.map((b) => fluxNodes[b].ip)]),
+        ...groupB.map((b) => [b, groupA.map((a) => fluxNodes[a].ip)]),
+      ];
+      const stillConnected = async () => {
+        const held = await Promise.all(crossGroup.map(async ([node, ips]) => {
+          const client = clients[node];
+          if (!client) return [];
+          const [outbound, inbound] = await Promise.all([client.getPeers(), client.getIncomingPeers()]);
+          const peers = new Set([...(outbound.data || []), ...(inbound.data || [])]);
+          return ips.filter((ip) => peers.has(ip)).map((ip) => `node ${node} -> ${ip}`);
+        }));
+        return held.flat();
+      };
+
+      let remaining = await stillConnected();
+      const deadline = Date.now() + severTimeoutMs;
+      while (remaining.length > 0 && Date.now() < deadline) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => { setTimeout(resolve, 1000); });
+        // eslint-disable-next-line no-await-in-loop
+        remaining = await stillConnected();
+      }
+      if (remaining.length > 0) {
+        throw new Error(
+          `partitionGroups: sockets survived the partition after ${severTimeoutMs}ms (${remaining.join(', ')}). `
+          + 'Messages sent now would be queued and delivered on heal, not lost. Compress '
+          + 'peers.wsPingIntervalMs in the suite configOverrides, or raise severTimeoutMs.',
+        );
+      }
     },
 
     // Remove the cross-group drops added by partitionGroups(groupA, groupB). Per-rule
