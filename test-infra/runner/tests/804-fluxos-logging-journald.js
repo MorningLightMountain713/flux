@@ -27,12 +27,14 @@ import {
 // boots, and the config-stack TUI journal panes. Those remain live-node
 // validation on a real Arcane image.
 //
-// Provocations are identical to suite 71 (they are sink-agnostic):
-// adjustblockedports yields a unique info marker plus a stack-carrying
-// error; tailbenchmarkdebug yields a guaranteed `Run Cmd:` debug line.
+// Provocations are identical to suite 71 (they are sink-agnostic): asking for the original
+// owner of an app nobody registered yields a unique info marker plus a stack-carrying error;
+// tailbenchmarkdebug yields a guaranteed `Run Cmd:` debug line. That replaced POSTing a bad
+// value to /flux/adjustblockedports — the setting is withdrawn and answers 410 silently.
 
 const MARKER = 'E2E-72-LOG-GREP-MARKER';
-const PROVOKED_ERROR = 'Blocked Ports is not a valid array';
+const PROVOKED_INFO = `Searching register permanent messages for ${MARKER}`;
+const PROVOKED_ERROR = `No registration message found for ${MARKER}`;
 
 describe('fluxos logging: journald sink under a real systemd unit', function () {
   let env;
@@ -74,7 +76,7 @@ describe('fluxos logging: journald sink under a real systemd unit', function () 
 
     // Provocations (see the header).
     await client.getAuthed('/flux/tailbenchmarkdebug', zelidauth);
-    const res = await client.post('/flux/adjustblockedports', { blockedPorts: MARKER }, { zelidauth });
+    const res = await client.get(`/apps/apporiginalowner/${MARKER}`, { noCache: true });
     expect(res.status).to.equal('error');
     expect(res.data.message).to.equal(PROVOKED_ERROR);
 
@@ -130,7 +132,7 @@ describe('fluxos logging: journald sink under a real systemd unit', function () 
   it('honors logLevel debug and stamps exact numeric levels; errors carry err.stack', async function () {
     const records = await journalNdjson();
 
-    const info = records.find((r) => r.msg === `blockedPorts: ${JSON.stringify(MARKER)}`);
+    const info = records.find((r) => r.msg === PROVOKED_INFO);
     expect(info, 'provoked info marker line').to.exist;
     expect(info.level).to.equal(30);
 

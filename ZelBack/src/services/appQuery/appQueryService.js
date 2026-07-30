@@ -5,7 +5,6 @@ const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
-const appConstants = require('../utils/appConstants');
 const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');
 
@@ -203,6 +202,12 @@ async function getApplicationOriginalOwner(req, res) {
     };
     const permanentAppMessage = await dbHelper.findInDatabase(database, globalAppsMessages, appsQuery, projection);
     const lastAppRegistration = permanentAppMessage[permanentAppMessage.length - 1];
+    // An app nobody has registered is an ordinary answer, not a fault. Reading through the
+    // empty result threw "Cannot read properties of undefined", which reached the caller as
+    // the error message and said nothing about the app it was asked for.
+    if (!lastAppRegistration) {
+      throw new Error(`No registration message found for ${appname}`);
+    }
     const ownerResponse = messageHelper.createDataMessage(lastAppRegistration.appSpecifications.owner);
     res.json(ownerResponse);
   } catch (error) {
