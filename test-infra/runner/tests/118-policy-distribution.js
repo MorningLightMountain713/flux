@@ -77,16 +77,17 @@ async function ownersOn(client) {
 
 // restartFluxos returns as soon as /flux/version answers, but the API listens well before
 // the boot sequence reaches policyStore.startSync() — that sits behind waitForMongo and
-// waitForDocker (serviceManager.js). So the owner map is legitimately empty for a window
-// after every restart here, and reading it once races boot: this suite passed standalone and
-// failed in the parallel gate, where a loaded box widens that window. Converge on the
-// endpoint instead — the observable this suite is built around. A map that never arrives
-// still fails, and it fails with the diff rather than a bare timeout.
+// waitForDocker (serviceManager.js). Through that window the endpoint answers 503 with an
+// error envelope rather than an owner array, so reading it once races boot: this suite
+// passed standalone and failed in the parallel gate, where a loaded box widens the window.
+// Converge on the endpoint instead — the observable this suite is built around. A map that
+// never arrives still fails, and it fails with the diff rather than a bare timeout.
 async function expectOwnersOn(client, expected, label) {
   let last = null;
   await waitFor(async () => {
     last = await ownersOn(client);
-    return last.length === expected.length && expected.every((owner) => last.includes(owner));
+    return Array.isArray(last) && last.length === expected.length
+      && expected.every((owner) => last.includes(owner));
   }, { timeout: 60000, interval: 500, label }).catch((error) => {
     if (last === null) throw error; // never got an answer at all — that, not a members diff
   });
