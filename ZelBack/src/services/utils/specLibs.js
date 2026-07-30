@@ -1,5 +1,29 @@
 const config = require('config');
-const { load } = require('@runonflux/flux-spec-cjs');
+const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
+
+// The lowest flux-spec surface this FluxOS can run against. Raise it in the same change
+// that starts calling a newly added export, and bump the bridge's CONTRACT_VERSION there
+// too — that pair is what turns a mismatch into a startup error instead of a runtime
+// mystery.
+//
+// FluxOS runs against a PINNED flux-spec (`file:../flux-spec/packages/*`, vendored into
+// the node image), so the deployed copy can be older than the code reading it while every
+// dev checkout is current. Destructuring an absent export then yields undefined and fails
+// far away as "<name> is not a function": verifySignature did exactly that, its TypeError
+// caught and handed to callers as "Invalid signature", so the network refused every login
+// while the real cause sat in a per-request log line naming a missing function.
+//
+// Checked at require rather than at first use. A node whose spec library is too old to
+// verify a signature cannot do its job, and refusing to start says so far more plainly
+// than serving traffic that is rejected for a reason nobody can see.
+const REQUIRED_CONTRACT_VERSION = 1;
+
+if (!(CONTRACT_VERSION >= REQUIRED_CONTRACT_VERSION)) {
+  throw new Error(
+    `flux-spec is too old for this FluxOS: contract ${CONTRACT_VERSION ?? '(none - predates the marker)'}, `
+    + `requires ${REQUIRED_CONTRACT_VERSION}. Re-pin and re-vendor flux-spec.`,
+  );
+}
 
 // The flux-spec ESM packages are consumed through the shared CJS bridge
 // (@runonflux/flux-spec-cjs), which imports spec + spec-backend + spec-policy
