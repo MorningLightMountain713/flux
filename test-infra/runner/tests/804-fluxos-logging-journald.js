@@ -140,7 +140,7 @@ describe('fluxos logging: journald sink under a real systemd unit', function () 
     expect(error, 'provoked error line').to.exist;
     expect(error.level).to.equal(50);
     expect(error.err, 'the err serializer keeps the Error structured').to.be.an('object');
-    expect(error.err.stack).to.be.a('string').and.include('adjustBlockedPorts');
+    expect(error.err.stack).to.be.a('string').and.include('getApplicationOriginalOwner');
 
     const debug = records.find((r) => typeof r.msg === 'string' && r.msg.startsWith('Run Cmd: tail -n 100'));
     expect(debug, 'provoked debug line').to.exist;
