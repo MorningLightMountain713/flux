@@ -700,7 +700,7 @@ describe('contentSlotService', () => {
         isInstalledHere: async () => null,
         openEnvelope: async () => sealedPayload(),
         broadcast: sinon.spy(),
-        schedule: sinon.spy(),
+        schedule: sinon.stub().resolves(),
         uploader: makeUploader(),
         benchmark: makeBenchmark(),
         now,
@@ -759,6 +759,20 @@ describe('contentSlotService', () => {
       await service.submitContentUpdate(subBody(), deps);
       sinon.assert.calledOnce(deps.schedule);
       expect(deps.schedule.firstCall.args[0].appName).to.equal('app'); // plaintext manifest
+    });
+
+    // The submitter is the one node that applies its own update without gossip, so it is
+    // also the only one where a local rollout failure could surface as the submission's
+    // answer. By the time schedule runs, everything the submission promised has been done.
+    it('answers success when the local application fails (the submission itself succeeded)', async () => {
+      const { service } = loadSub();
+      const deps = subDeps({
+        isInstalledHere: async () => ({ name: 'app' }),
+        schedule: sinon.stub().rejects(new Error('ENOENT: no such file or directory')),
+      });
+      const out = await service.submitContentUpdate(subBody(), deps);
+      expect(out.slots).to.have.property('sealed');
+      sinon.assert.calledOnce(deps.broadcast);
     });
 
     it('PUTs the manifest to the FluxDrive backstop with the owner PUT-sig from the sealed payload', async () => {
@@ -1055,13 +1069,19 @@ describe('contentSlotService', () => {
   });
 
   describe('scheduleContentApplication', () => {
+    // An installed, content-bearing deployment whose container is up — this path only ever
+    // applies to a RUNNING app, so the fixture has to be able to say it isn't one.
+    const dep = { componentEntries: () => [['web', { hasContentSlots: () => true, identifier: 'web_app' }]] };
+    const up = async () => ({ State: { Running: true } });
+
     it('applies via the installed deployment and the app\'s running peers', async () => {
       const { service } = load();
       const apply = sinon.spy();
-      const dep = { componentEntries: () => [] };
       await service.scheduleContentApplication(
         { appName: 'app', slots: {} }, { owner: '1id' },
-        { getDeployment: async () => dep, getPeers: async () => ['1.2.3.4:16127'], apply },
+        {
+          getDeployment: async () => dep, getPeers: async () => ['1.2.3.4:16127'], apply, inspect: up,
+        },
       );
       sinon.assert.calledOnce(apply);
       expect(apply.firstCall.args[0]).to.equal(dep);
@@ -1073,7 +1093,41 @@ describe('contentSlotService', () => {
       const apply = sinon.spy();
       await service.scheduleContentApplication(
         { appName: 'app', slots: {} }, { owner: '1id' },
-        { getDeployment: async () => null, apply },
+        { getDeployment: async () => null, apply, inspect: up },
+      );
+      sinon.assert.notCalled(apply);
+    });
+
+    // An install has an installed record long before it has a mounted volume: the container
+    // doesn't exist while the component's filesystem is still being made, and writing a slot
+    // then lands on an unmounted path. The installer stages the content itself once the
+    // volume is there, so skipping costs nothing.
+    it('does not apply while the app is installed but not yet up (mid-install)', async () => {
+      const { service } = load();
+      const apply = sinon.spy();
+      await service.scheduleContentApplication(
+        { appName: 'app', slots: {} }, { owner: '1id' },
+        {
+          getDeployment: async () => dep,
+          getPeers: async () => [],
+          apply,
+          inspect: async () => { throw new Error('No such container: web_app'); },
+        },
+      );
+      sinon.assert.notCalled(apply);
+    });
+
+    it('does not apply when the container exists but is stopped (the start path stages it)', async () => {
+      const { service } = load();
+      const apply = sinon.spy();
+      await service.scheduleContentApplication(
+        { appName: 'app', slots: {} }, { owner: '1id' },
+        {
+          getDeployment: async () => dep,
+          getPeers: async () => [],
+          apply,
+          inspect: async () => ({ State: { Running: false } }),
+        },
       );
       sinon.assert.notCalled(apply);
     });
@@ -1098,9 +1152,13 @@ describe('contentSlotService', () => {
         },
       };
     }
-    const dep = { componentEntries: () => [] };
     const schedDeps = (sched, over = {}) => ({
-      getDeployment: async () => dep, getPeers: async () => [], now: sched.now, setTimer: sched.setTimer, ...over,
+      getDeployment: async () => dep,
+      getPeers: async () => [],
+      inspect: up,
+      now: sched.now,
+      setTimer: sched.setTimer,
+      ...over,
     });
 
     it('immediate rollout applies now, no timer', async () => {
@@ -1160,6 +1218,21 @@ describe('contentSlotService', () => {
       sinon.assert.calledOnce(apply);
       sinon.assert.notCalled(computeDelay);
       expect(sched.timers.length).to.equal(0);
+    });
+
+    // The running check is inside runApply, so it also covers a deferred rollout arriving
+    // at a moment the app happens to be down; the catch-up sweep re-applies it once it is up.
+    it('a deferred rollout whose moment arrives while the app is down does not apply', async () => {
+      const { service } = load();
+      const apply = sinon.spy();
+      const sched = fakeScheduler(1000);
+      const m = manifest({ rollout: { strategy: 'scheduled', activateAt: 2000 } });
+      await service.scheduleContentApplication(m, { owner: '1id' }, schedDeps(sched, {
+        apply, inspect: async () => ({ State: { Running: false } }),
+      }));
+      expect(sched.timers.length).to.equal(1);
+      await sched.run();
+      sinon.assert.notCalled(apply);
     });
   });
 
