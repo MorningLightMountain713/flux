@@ -1,141 +1,49 @@
-const config = require('config');
-const fs = require('fs');
-const path = require('path');
 const log = require('../../lib/log');
-const serviceHelper = require('../serviceHelper');
+const policyStore = require('../policy/policyStore');
 
-// helpers/ lives at the repo root, four levels up from this file.
-const HELPERS_DIR = path.join(__dirname, '..', '..', '..', '..', 'helpers');
-const FILE = 'enterprisenodes.json';
-const URL = `${config.github.rawBaseUrl}/helpers/${FILE}`;
+// Maps each enterprise node pubkey to the app-owner addresses allowed to install on it
+// (many-to-many: an owner may appear under several nodes). The map itself is one of the
+// network policy documents — policyStore owns fetching, validating, caching and holding
+// last-known-good; this module is the shape-aware view over it.
+const DOCUMENT = 'enterpriseNodes';
 
-const SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
-const FETCH_TIMEOUT_MS = 10 * 1000; // bound the github fetch so boot is never stuck on it
-
-// Maps each enterprise node pubkey to the app-owner addresses allowed to install
-// on it (many-to-many: an owner may appear under several nodes). `nodeOwnerMap`
-// is the in-memory copy served to callers: seeded from helpers/enterprisenodes.json
-// on disk by startSync(), then replaced only when a GitHub fetch succeeds with a
-// valid payload. A failed or invalid fetch leaves the previous map in place (disk
-// on the first run, last-good thereafter), so the relationships can be edited live
-// on GitHub with no release.
-let nodeOwnerMap = {};
-
-let syncInterval = null;
-
-// Memoized union of all owners (finding #6). Rebuilt only when nodeOwnerMap is
-// replaced, keyed by reference: the map is always reassigned wholesale, never
-// mutated in place, so reference identity is a sound invalidation signal.
+// Memoized union of all owners. Rebuilt only when the underlying map changes, keyed by
+// reference: policyStore always replaces the payload wholesale, never mutates it in
+// place, so reference identity is a sound invalidation signal.
 let ownersUnionCache = null;
 let ownersUnionCacheKey = null;
 
-function isPlainObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /**
- * A valid node->owners map is a plain object whose every value is an array of
- * strings. Anything else (a non-array value, a non-string entry) is rejected
- * wholesale rather than silently coerced — a single malformed value would
- * otherwise make a node host nothing and uninstall everything (finding #2).
- */
-function isValidNodeOwnerMap(value) {
-  if (!isPlainObject(value)) return false;
-  return Object.values(value).every(
-    (owners) => Array.isArray(owners) && owners.every((owner) => typeof owner === 'string'),
-  );
-}
-
-async function readMapFromDisk() {
-  try {
-    const raw = await fs.promises.readFile(path.join(HELPERS_DIR, FILE), 'utf8');
-    const parsed = JSON.parse(raw);
-    if (isValidNodeOwnerMap(parsed)) return parsed;
-    log.error(`enterpriseConfig - ${FILE} on disk is not a valid node->owners map, ignoring`);
-  } catch (error) {
-    log.warn(`enterpriseConfig - failed to read ${FILE} from disk: ${error.message}`);
-  }
-  return null;
-}
-
-async function syncFromGithub() {
-  try {
-    const res = await serviceHelper.axiosGet(URL, { timeout: FETCH_TIMEOUT_MS });
-    if (res && isValidNodeOwnerMap(res.data)) {
-      nodeOwnerMap = res.data;
-      return true;
-    }
-    log.error(`enterpriseConfig - invalid ${FILE} payload from ${URL}, keeping current value`);
-  } catch (error) {
-    log.warn(`enterpriseConfig - failed to fetch ${FILE} from github, keeping current value: ${error.message}`);
-  }
-  return false;
-}
-
-/**
- * Seed the map from disk, run an immediate GitHub sync, then refresh every 6h.
- * Safe to call multiple times (no-ops if already started). The disk read and the
- * github fetch are both async and bounded, so awaiting this in startFluxFunctions
- * never blocks boot for more than the fetch timeout. Initialization is performed
- * here (not as a side effect of require) so module loading stays pure.
+ * The node-pubkey -> [ownerAddress] map.
  *
- * @param {function} [onSyncSuccess] - fired after every SUCCESSFUL owner-map
- *   refresh, so consumers can react to a membership change (e.g. reclaiming
- *   resources owned by a now-de-authorized owner) without this module knowing
- *   anything about them. Its errors are isolated.
+ * An empty map when policyStore has nothing is deliberate. Every caller asks an
+ * allow-list question ("may this owner install here?"), and the answer under an
+ * unreadable document has to be no — a node cannot admit an enterprise owner it
+ * cannot confirm. That only happens with no cache and no readable seed.
+ * @returns {object}
  */
-async function startSync(onSyncSuccess) {
-  if (syncInterval) return;
-  const notify = () => {
-    if (!onSyncSuccess) return;
-    try {
-      onSyncSuccess();
-    } catch (error) {
-      log.error(`enterpriseConfig - onSyncSuccess handler error: ${error.message}`);
-    }
-  };
-  const onDisk = await readMapFromDisk();
-  if (onDisk) nodeOwnerMap = onDisk;
-  if (await syncFromGithub()) notify();
-  syncInterval = setInterval(async () => {
-    const refreshed = await syncFromGithub().catch((error) => {
-      log.error(`enterpriseConfig - sync error: ${error.message}`);
-      return false;
-    });
-    if (refreshed) notify();
-  }, SYNC_INTERVAL_MS);
-}
-
-function stopSync() {
-  if (syncInterval) {
-    clearInterval(syncInterval);
-    syncInterval = null;
-  }
-}
-
-/** The raw node-pubkey -> [ownerAddress] map. */
 function getEnterpriseNodeOwnerMap() {
-  return nodeOwnerMap;
+  return policyStore.get(DOCUMENT) ?? {};
 }
 
 /** Every enterprise node pubkey (the map keys). */
 function getEnterpriseNodesPublicKeys() {
-  return Object.keys(nodeOwnerMap);
+  return Object.keys(getEnterpriseNodeOwnerMap());
 }
 
 /** Owner addresses allowed to install on a specific node pubkey. */
 function getAllowedOwnersForNode(pubKey) {
-  const owners = nodeOwnerMap[pubKey];
+  const owners = getEnterpriseNodeOwnerMap()[pubKey];
   return Array.isArray(owners) ? owners : [];
 }
 
 /**
- * The global set of enterprise app owners: the deduped union of every node's
- * allowed owners. Used for node-agnostic checks (datacenter validation, CPU
- * burst eligibility, excluding enterprise apps from public nodes). Memoized and
- * invalidated whenever nodeOwnerMap is replaced (finding #6).
+ * The global set of enterprise app owners: the deduped union of every node's allowed
+ * owners. Used for node-agnostic checks (datacenter validation, CPU burst eligibility,
+ * excluding enterprise apps from public nodes).
  */
 function getEnterpriseAppOwners() {
+  const nodeOwnerMap = getEnterpriseNodeOwnerMap();
   if (ownersUnionCacheKey === nodeOwnerMap) return ownersUnionCache;
   const all = Object.values(nodeOwnerMap).filter(Array.isArray).flat();
   ownersUnionCache = [...new Set(all)];
@@ -143,12 +51,22 @@ function getEnterpriseAppOwners() {
   return ownersUnionCache;
 }
 
+/**
+ * Register a handler fired after each refresh that changes the owner map, so consumers
+ * can react to a membership change (e.g. reclaiming resources owned by a now-de-authorized
+ * owner) without policyStore knowing anything about them.
+ * @param {function} [onOwnerMapRefreshed]
+ */
+function onOwnerMapChange(onOwnerMapRefreshed) {
+  if (!onOwnerMapRefreshed) return;
+  policyStore.onChange(DOCUMENT, onOwnerMapRefreshed);
+  log.info('enterpriseConfig - subscribed to enterprise owner map refreshes');
+}
+
 module.exports = {
   getAllowedOwnersForNode,
   getEnterpriseAppOwners,
   getEnterpriseNodeOwnerMap,
   getEnterpriseNodesPublicKeys,
-  startSync,
-  stopSync,
-  syncFromGithub,
+  onOwnerMapChange,
 };

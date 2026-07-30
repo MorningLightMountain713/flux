@@ -9,26 +9,27 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 // Stubs for util.promisify
-const cmdAsyncStub = sinon.stub();
 const crontabLoadStub = sinon.stub();
 const utilFake = {
   promisify: (fn) => {
-    if (fn.name === 'runCommand' || fn.name === 'run') return cmdAsyncStub;
     if (fn.name === 'load') return crontabLoadStub;
     return sinon.stub();
   },
 };
 
+const runCommandStub = sinon.stub();
+
 // Module under test with proxyquire
 const volumeValidationService = proxyquire('../../ZelBack/src/services/volumeValidationService', {
   util: utilFake,
+  './serviceHelper': { runCommand: runCommandStub },
 });
 
 describe('volumeValidationService tests', () => {
   afterEach(() => {
     // Only reset global stubs, don't call sinon.restore() as it will restore
     // all stubs including those in nested beforeEach blocks
-    cmdAsyncStub.reset();
+    runCommandStub.reset();
     crontabLoadStub.reset();
   });
 
@@ -261,17 +262,20 @@ describe('volumeValidationService tests', () => {
   describe('unmountIncorrectVolume tests', () => {
     it('should successfully unmount a volume', async () => {
       const mountPoint = '/root/flux/ZelApps/myapp';
-      cmdAsyncStub.resolves({ stdout: '', stderr: '' });
+      runCommandStub.resolves({ error: null, stdout: '', stderr: '' });
 
       const result = await volumeValidationService.unmountIncorrectVolume(mountPoint);
 
       expect(result).to.be.true;
-      sinon.assert.calledWith(cmdAsyncStub, `sudo umount ${mountPoint}`);
+      sinon.assert.calledWith(runCommandStub, 'umount', sinon.match({
+        runAsRoot: true,
+        params: [mountPoint],
+      }));
     });
 
     it('should handle unmount failure gracefully', async () => {
       const mountPoint = '/root/flux/ZelApps/myapp';
-      cmdAsyncStub.rejects(new Error('Not mounted'));
+      runCommandStub.resolves({ error: new Error('Not mounted'), stdout: '', stderr: '' });
 
       const result = await volumeValidationService.unmountIncorrectVolume(mountPoint);
 

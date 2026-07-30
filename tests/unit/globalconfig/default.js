@@ -36,6 +36,8 @@ module.exports = {
         completedPayments: 'completedpayments',
         geolocation: 'geolocation',
         benchmark: 'benchmark',
+        nodeIdentity: 'nodeidentity',
+        policyDocuments: 'policydocuments',
       },
     },
     daemon: {
@@ -433,8 +435,10 @@ module.exports = {
     '042ebcb3a94fe66b9ded6e456871346d6984502bbadf14ed07644e0eb91f8cc0b1f07632c428e1e6793f372d9c303d680de80ae0499d51095676cabf68599e9591',
   ],
   github: {
-    rawBaseUrl: 'https://raw.githubusercontent.com/RunOnFlux/flux/master',
     apiBaseUrl: 'https://api.github.com',
+  },
+  policy: {
+    baseUrl: 'https://raw.githubusercontent.com/RunOnFlux/fluxos-network-policy/main',
   },
   geolocation: {
     ipApiBaseUrl: 'http://ip-api.com',

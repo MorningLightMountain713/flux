@@ -1,13 +1,11 @@
-const config = require('config');
 const log = require('../lib/log');
-const serviceHelper = require('./serviceHelper');
 const appTamperingRepository = require('./appDatabase/appTamperingRepository');
 const nodeDosState = require('./nodeDosState');
 const generalService = require('./generalService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const globalState = require('./utils/globalState');
+const policyStore = require('./policy/policyStore');
 
-const BLOCKLIST_URL = `${config.github.rawBaseUrl}/helpers/tamperingblockednodes.json`;
 const CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours
 const SYNC_POLL_MS = 60 * 1000; // 60s while waiting for daemon sync
 const TAMPER_SCORE_THRESHOLD = 10;
@@ -29,19 +27,15 @@ function isOurStickyDos() {
 }
 
 /**
- * Fetch the manually-curated txhash blocklist from the RunOnFlux repo.
- * Returns [] on any failure so the caller never crashes the enforcer loop.
+ * The manually-curated txhash blocklist.
+ *
+ * Returns null when no copy could be obtained, which is NOT the same answer as an empty
+ * list: an empty list means the document was read and nobody is blocked, while null means
+ * the question went unanswered. The caller must not treat the second as the first — doing
+ * so let an unreadable list clear the DOS on a node that was on it.
  */
-async function fetchBlocklist() {
-  try {
-    const res = await serviceHelper.axiosGet(BLOCKLIST_URL);
-    if (res && Array.isArray(res.data)) return res.data;
-    log.warn('appTamperingBlocklist - unexpected response shape from blocklist URL');
-    return [];
-  } catch (error) {
-    log.warn(`appTamperingBlocklist - failed to fetch blocklist: ${error.message}`);
-    return [];
-  }
+function fetchBlocklist() {
+  return policyStore.get('tamperingBlocklist');
 }
 
 /**
@@ -123,18 +117,26 @@ async function enforceBlocklist() {
     return;
   }
 
-  const [myTxhash, blocklist, tamperScore] = await Promise.all([
+  const [myTxhash, tamperScore] = await Promise.all([
     getMyTxhash(),
-    fetchBlocklist(),
     computeTamperScore(),
   ]);
+  const blocklist = fetchBlocklist();
 
   if (!myTxhash) {
     log.warn('appTamperingBlocklist - own txhash unavailable, skipping this tick');
     return;
   }
 
-  const listed = Array.isArray(blocklist) && blocklist.includes(myTxhash);
+  // An unreadable blocklist is not an empty one. Falling through on null would take the
+  // clear branch below and release a node this service had already DOSed, so a github
+  // outage would undo enforcement rather than postpone it.
+  if (!blocklist) {
+    log.warn('appTamperingBlocklist - blocklist unavailable, skipping this tick');
+    return;
+  }
+
+  const listed = blocklist.includes(myTxhash);
   const exceedsThreshold = tamperScore > TAMPER_SCORE_THRESHOLD;
   const shouldDos = listed && exceedsThreshold;
 

@@ -1,4 +1,22 @@
+// Set before anything is required: the `config` package resolves its directory on first
+// require and caches it, and configManager below reads config.server while validating the
+// operator's apiport. Set after that first require, it resolves to <cwd>/config, which
+// holds userconfig.js and no defaults — so config.server was undefined and any node with
+// an apiport died here at require time.
+process.env.NODE_CONFIG_DIR = `${__dirname}/ZelBack/config/`;
+
 const configManager = require('./ZelBack/src/services/utils/configManager');
+
+// Refuse to start on a config that could not be read or did not validate, rather than
+// running on defaults. A node with no zelid cannot authenticate its own operator, so it
+// would come up looking healthy while being unable to do anything or to be fixed through
+// its own API. Exiting non-zero instead means systemd retries, and the node recovers on
+// its own once the file is corrected.
+const configError = configManager.getLastLoadError();
+if (configError) {
+  console.error(`FluxOS cannot start - config/userconfig.js ${configError}`);
+  process.exit(1);
+}
 
 if (typeof AbortController === 'undefined') {
   // polyfill for nodeJS 14.18.1 - without having to use experimental features
@@ -6,8 +24,6 @@ if (typeof AbortController === 'undefined') {
   const abortControler = require('node-abort-controller');
   globalThis.AbortController = abortControler.AbortController;
 }
-
-process.env.NODE_CONFIG_DIR = `${__dirname}/ZelBack/config/`;
 
 const fs = require('node:fs');
 const http = require('node:http');
@@ -23,6 +39,7 @@ const log = require('./ZelBack/src/lib/log');
 
 const serviceHelper = require('./ZelBack/src/services/serviceHelper');
 const upnpService = require('./ZelBack/src/services/upnpService');
+const nodeDosState = require('./ZelBack/src/services/nodeDosState');
 const requestHistoryStore = require('./ZelBack/src/services/utils/requestHistory');
 const globalState = require('./ZelBack/src/services/utils/globalState');
 const fluxNetworkHelper = require('./ZelBack/src/services/fluxNetworkHelper');
@@ -34,7 +51,9 @@ const { AppSyncOrchestrator } = require('./ZelBack/src/services/appMessaging/app
 const { SIGTERM_EXPIRY_MS } = require('./ZelBack/src/services/utils/appConstants');
 const verifyPool = require('./ZelBack/src/services/utils/verifyPool');
 
-const apiPort = globalThis.userconfig.initial.apiport || config.server.apiport;
+// Read through the manager rather than off globalThis: the dependency on the config
+// having been loaded is then a real one, not an ordering convention between requires.
+const apiPort = configManager.getConfigValue('initial.apiport') || config.server.apiport;
 const apiPortHttps = +apiPort + 1;
 
 let requestHistory = null;
@@ -178,43 +197,45 @@ async function logErrorAndExit(msg, options = {}) {
   process.exit(exitCode);
 }
 
+/**
+ * Map this node's ports via UPnP when it is configured to.
+ *
+ * Probes only when the operator asked for UPnP, so a node behind a UPnP-capable
+ * router is not opportunistically switched into a mode it never requested.
+ *
+ * Failure marks the node DOS rather than exiting. Exiting looked decisive but is
+ * a permanent crash loop under `Restart=on-failure`/`RestartSec=30` — with the API
+ * down throughout, so the operator has nothing to diagnose from. DOS has the same
+ * practical effect (the node takes no app assignments) and stays inspectable, and
+ * the refresh interval clears it once the mapping succeeds.
+ */
 async function loadUpnpIfRequired() {
   try {
-    let verifyUpnp = false;
-    let setupUpnp = false;
-    if (globalThis.userconfig.initial.apiport) {
-      verifyUpnp = await upnpService.verifyUPNPsupport(apiPort);
-      if (verifyUpnp) {
-        setupUpnp = await upnpService.setupUPNP(apiPort);
-      }
+    if (!upnpService.isUPNP()) return;
+
+    const verifyUpnp = await upnpService.verifyUPNPsupport(apiPort);
+    const setupUpnp = verifyUpnp ? await upnpService.setupUPNP(apiPort) : false;
+
+    if (verifyUpnp !== true) {
+      const message = `UPnP is enabled for this node but the router did not answer on port ${apiPort}`;
+      log.error(message);
+      nodeDosState.addDosState(11);
+      nodeDosState.setDosMessage(message);
+      return;
     }
-    if ((globalThis.userconfig.initial.apiport && globalThis.userconfig.initial.apiport !== config.server.apiport) || globalThis.userconfig.initial.routerIP) {
-      if (verifyUpnp !== true) {
-        await logErrorAndExit(
-          `Flux port ${globalThis.userconfig.initial.apiport} specified but UPnP failed to verify support. Shutting down.`,
-          { exitCode: 1, delay: 120_000 },
-        );
-      }
-      if (setupUpnp !== true) {
-        await logErrorAndExit(
-          `Flux port ${globalThis.userconfig.initial.apiport} specified but UPnP failed to map to api or home port. Shutting down.`,
-          { exitCode: 1, delay: 120_000 },
-        );
-      }
+    if (setupUpnp !== true) {
+      const message = `UPnP is enabled for this node but mapping port ${apiPort} failed`;
+      log.error(message);
+      nodeDosState.addDosState(11);
+      nodeDosState.setDosMessage(message);
+      return;
     }
+    nodeDosState.setDosMessage(null);
   } catch (error) {
     log.error(error);
   }
 }
 
-async function configReload() {
-  // Config watching is now handled by configManager
-  await configManager.startWatching(log, async (newConfig) => {
-    if (newConfig?.initial?.apiport) {
-      await loadUpnpIfRequired();
-    }
-  });
-}
 
 /**
  * Main entrypoint
@@ -240,8 +261,6 @@ async function initiate() {
   await createDnsCache();
 
   await loadUpnpIfRequired();
-
-  setImmediate(configReload);
 
   const appRoot = process.cwd();
   // ToDo: move this to async

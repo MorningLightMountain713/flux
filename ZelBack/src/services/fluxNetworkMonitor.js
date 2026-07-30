@@ -1,9 +1,8 @@
 const config = require('config');
-const fs = require('node:fs/promises');
-const path = require('node:path');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
+const nodeIdentityRepository = require('./appDatabase/nodeIdentityRepository');
 const nodeDosState = require('./nodeDosState');
 const benchmarkService = require('./benchmarkService');
 const networkStateService = require('./networkStateService');
@@ -89,8 +88,7 @@ function getMaxNumberOfIpChanges() {
  */
 async function adjustExternalIP(ip) {
   try {
-    const userconfig = globalThis.userconfig;
-    const fluxDirPath = path.join(__dirname, '../../../config/userconfig.js');
+    const { userconfig } = globalThis;
     // https://github.com/sindresorhus/ip-regex/blob/master/index.js#L8
     const v4 = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)){3}';
     const v4exact = new RegExp(`^${v4}$`);
@@ -98,28 +96,15 @@ async function adjustExternalIP(ip) {
       log.warn(`Gathered IP ${ip} is not a valid format`);
       return;
     }
-    if (ip === userconfig.initial.ipaddress) {
+    // The address this node last observed about itself: node runtime state, so it
+    // is remembered in the local database rather than written back into the
+    // operator's config file.
+    const oldUserConfigIp = await nodeIdentityRepository.getLastKnownIp();
+    if (ip === oldUserConfigIp) {
       return;
     }
-    const oldUserConfigIp = userconfig.initial.ipaddress;
-    log.info(`Adjusting External IP from ${userconfig.initial.ipaddress} to ${ip}`);
-    const dataToWrite = `module.exports = {
-  initial: {
-    ipaddress: '${ip}',
-    zelid: '${userconfig.initial.zelid || config.fluxTeamFluxID}',
-    kadena: '${userconfig.initial.kadena || ''}',
-    testnet: ${userconfig.initial.testnet || false},
-    development: ${userconfig.initial.development || false},
-    apiport: ${Number(userconfig.initial.apiport || config.server.apiport)},
-    routerIP: '${userconfig.initial.routerIP || ''}',
-    pgpPrivateKey: \`${userconfig.initial.pgpPrivateKey || ''}\`,
-    pgpPublicKey: \`${userconfig.initial.pgpPublicKey || ''}\`,
-    blockedPorts: [${userconfig.initial.blockedPorts || ''}],
-    blockedRepositories: ${JSON.stringify(userconfig.initial.blockedRepositories || []).replace(/"/g, "'")},
-  }
-}`;
-
-    await fs.writeFile(fluxDirPath, dataToWrite);
+    log.info(`Adjusting External IP from ${oldUserConfigIp} to ${ip}`);
+    await nodeIdentityRepository.setLastKnownIp(ip);
 
     if (oldUserConfigIp && v4exact.test(oldUserConfigIp) && !myCache.has(ip)) {
       myCache.set(ip, '');
@@ -219,25 +204,6 @@ async function checkMyFluxAvailability(retryNumber = 0) {
   const localSocketAddress = fluxNetworkHelper.getCachedLocalSocketAddress();
   if (localSocketAddress === null) return false;
 
-  const userconfig = globalThis.userconfig;
-  let userBlockedPorts = userconfig.initial.blockedPorts || [];
-  userBlockedPorts = serviceHelper.ensureObject(userBlockedPorts);
-  if (Array.isArray(userBlockedPorts)) {
-    if (userBlockedPorts.length > 100) {
-      nodeDosState.addDosState(11);
-      nodeDosState.setDosMessage('User blocked ports above 100 limit');
-      return false;
-    }
-  }
-  let userBlockedRepositories = userconfig.initial.blockedRepositories || [];
-  userBlockedRepositories = serviceHelper.ensureObject(userBlockedRepositories);
-  if (Array.isArray(userBlockedRepositories)) {
-    if (userBlockedRepositories.length > 10) {
-      nodeDosState.addDosState(11);
-      nodeDosState.setDosMessage('User blocked repositories above 10 limit');
-      return false;
-    }
-  }
   const fluxBenchVersionAllowed = await fluxNetworkHelper.checkFluxbenchVersionAllowed();
   if (!fluxBenchVersionAllowed) {
     return false;

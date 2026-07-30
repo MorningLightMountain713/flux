@@ -9,7 +9,10 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-22.04]
-        node-version: [20.x]
+        # Pinned to the oldest Node in the fleet rather than a floating 20.x, which
+        # resolves to the newest 20 release. The two drift, and an API the fleet does
+        # not have then passes here and fails on every node.
+        node-version: [20.8.0]
         mongodb-version: ['7.0']
 
     services:

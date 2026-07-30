@@ -4,9 +4,6 @@ const { Device } = require('@runonflux/nat-upnp/build/src/nat-upnp/device');
 const serviceHelper = require('./serviceHelper');
 const messageHelper = require('./messageHelper');
 const verificationHelper = require('./verificationHelper');
-const nodecmd = require('node-cmd');
-// eslint-disable-next-line import/no-extraneous-dependencies
-const util = require('util');
 
 const log = require('../lib/log');
 
@@ -43,14 +40,36 @@ function getClient() {
   return client;
 }
 
-let upnpMachine = false;
+// Whether the last verify/refresh succeeded. Diagnostics only — it answers "is UPnP
+// working right now", never "should this node use UPnP", which is a declared setting.
+let upnpHealthy = false;
 
 /**
- * To quickly check if node has UPnP (Universal Plug and Play) support.
- * @returns {boolean} True if port mappings can be set. Otherwise false.
+ * Whether this node is configured to map its ports via UPnP.
+ *
+ * The operator's declaration, not the result of a probe. Deriving it from a probe
+ * meant any node behind a UPnP-capable router silently became a UPnP node — and then
+ * every app install depended on the router accepting a mapping for each app port.
+ *
+ * Legacy configs predating the `upnp` key fall back to the old inference. That is not
+ * a rare path: FluxOS's own config template had no `upnp` key, so every rewrite it
+ * ever did deleted the one flux-configd wrote.
+ * @returns {boolean} True when this node should map ports via UPnP.
  */
 function isUPNP() {
-  return upnpMachine;
+  const { initial } = globalThis.userconfig;
+  if (typeof initial.upnp === 'boolean') return initial.upnp;
+  return Boolean(
+    (initial.apiport && Number(initial.apiport) !== config.server.apiport) || initial.routerIP,
+  );
+}
+
+/**
+ * Whether UPnP was working as of the last verify or refresh.
+ * @returns {boolean}
+ */
+function isUPNPHealthy() {
+  return upnpHealthy;
 }
 
 /**
@@ -58,19 +77,14 @@ function isUPNP() {
  * @returns {Promise<boolean>} True if a firewall is active. Otherwise false.
  */
 async function isFirewallActive() {
-  try {
-    const cmdAsync = util.promisify(nodecmd.run);
-    const execA = 'LANG="en_US.UTF-8" && sudo ufw status | grep Status';
-    const cmdresA = await cmdAsync(execA);
-    if (serviceHelper.ensureString(cmdresA).includes('Status: active')) {
-      return true;
-    }
-    return false;
-  } catch (error) {
-    // command ufw not found is the most likely reason
-    log.error(error);
-    return false;
-  }
+  // ufw not being installed is the most likely failure, so it is not logged as an error
+  const { error, stdout } = await serviceHelper.runCommand('ufw', {
+    runAsRoot: true,
+    logError: false,
+    params: ['status'],
+  });
+  if (error) return false;
+  return serviceHelper.ensureString(stdout).includes('Status: active');
 }
 
 /**
@@ -81,35 +95,31 @@ async function adjustFirewallForUPNP() {
     let { routerIP } = userconfig.initial;
     routerIP = serviceHelper.ensureString(routerIP);
     if (routerIP) {
-      const cmdAsync = util.promisify(nodecmd.run);
       const firewallActive = await isFirewallActive();
       if (firewallActive) {
+        // Arguments are passed as a list rather than interpolated into a shell string:
+        // routerIP comes from the node config, so building a command line out of it put
+        // an operator-supplied value through a shell.
+        const ufw = (params) => serviceHelper.runCommand('ufw', { runAsRoot: true, params });
+
         // standard rules for upnp
-        const execA = 'LANG="en_US.UTF-8" && sudo ufw insert 1 allow out from any to 239.255.255.250 port 1900 proto udp > /dev/null 2>&1';
-        const execB = `LANG="en_US.UTF-8" && sudo ufw insert 1 allow from ${routerIP} port 1900 to any proto udp > /dev/null 2>&1`;
-        const execC = `LANG="en_US.UTF-8" && sudo ufw insert 1 allow out from any to ${routerIP} proto tcp > /dev/null 2>&1`;
-        const execD = `LANG="en_US.UTF-8" && sudo ufw insert 1 allow from ${routerIP} to any proto udp > /dev/null 2>&1`;
-        await cmdAsync(execA);
-        await cmdAsync(execB);
-        await cmdAsync(execC);
-        await cmdAsync(execD);
+        await ufw(['insert', '1', 'allow', 'out', 'from', 'any', 'to', '239.255.255.250', 'port', '1900', 'proto', 'udp']);
+        await ufw(['insert', '1', 'allow', 'from', routerIP, 'port', '1900', 'to', 'any', 'proto', 'udp']);
+        await ufw(['insert', '1', 'allow', 'out', 'from', 'any', 'to', routerIP, 'proto', 'tcp']);
+        await ufw(['insert', '1', 'allow', 'from', routerIP, 'to', 'any', 'proto', 'udp']);
 
         const fluxCommunicationPorts = config.server.allowedPorts;
         // eslint-disable-next-line no-restricted-syntax
         for (const port of fluxCommunicationPorts) {
           // create rule for hone nodes ws connections
-          const execAllowHomeComsA = `LANG="en_US.UTF-8" && sudo ufw insert 1 allow in proto tcp from any to ${routerIP} port ${port} > /dev/null 2>&1`;
-          const execAllowHomeComsB = `LANG="en_US.UTF-8" && sudo ufw insert 1 allow out proto tcp to ${routerIP} port ${port} > /dev/null 2>&1`;
-          const execAllowHomeComsC = `LANG="en_US.UTF-8" && sudo ufw insert 1 allow in proto udp from any to ${routerIP} port ${port} > /dev/null 2>&1`;
-          const execAllowHomeComsD = `LANG="en_US.UTF-8" && sudo ufw insert 1 allow out proto udp to ${routerIP} port ${port} > /dev/null 2>&1`;
           // eslint-disable-next-line no-await-in-loop
-          await cmdAsync(execAllowHomeComsA);
+          await ufw(['insert', '1', 'allow', 'in', 'proto', 'tcp', 'from', 'any', 'to', routerIP, 'port', `${port}`]);
           // eslint-disable-next-line no-await-in-loop
-          await cmdAsync(execAllowHomeComsB);
+          await ufw(['insert', '1', 'allow', 'out', 'proto', 'tcp', 'to', routerIP, 'port', `${port}`]);
           // eslint-disable-next-line no-await-in-loop
-          await cmdAsync(execAllowHomeComsC);
+          await ufw(['insert', '1', 'allow', 'in', 'proto', 'udp', 'from', 'any', 'to', routerIP, 'port', `${port}`]);
           // eslint-disable-next-line no-await-in-loop
-          await cmdAsync(execAllowHomeComsD);
+          await ufw(['insert', '1', 'allow', 'out', 'proto', 'udp', 'to', routerIP, 'port', `${port}`]);
           log.info(`Firewall adjusted for UPNP local connections on port ${port}`);
         }
         // delete and recreate deny rule at end
@@ -127,8 +137,7 @@ async function adjustFirewallForUPNP() {
         } else if (routerIpNetwork === '169.254.0.0') {
           routerIpNetwork += '/16';
         }
-        const execDelete = `LANG="en_US.UTF-8" && sudo ufw delete deny out from any to ${routerIpNetwork}`;
-        await cmdAsync(execDelete);
+        await ufw(['delete', 'deny', 'out', 'from', 'any', 'to', routerIpNetwork]);
         log.info('Firewall adjusted for UPNP');
       } else {
         log.info('RouterIP is set but firewall is not active. Adjusting not applied for UPNP');
@@ -156,7 +165,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
   } catch (error) {
     log.error(error);
     log.error('VerifyUPNPsupport - Failed get public ip');
-    upnpMachine = false;
+    upnpHealthy = false;
     return false;
   }
   try {
@@ -166,7 +175,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
   } catch (error) {
     log.error(error);
     log.error('VerifyUPNPsupport - Failed get Gateway');
-    upnpMachine = false;
+    upnpHealthy = false;
     return false;
   }
   try {
@@ -181,7 +190,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
   } catch (error) {
     log.error(error);
     log.error('VerifyUPNPsupport - Failed Create Mapping');
-    upnpMachine = false;
+    upnpHealthy = false;
     return false;
   }
   try {
@@ -191,7 +200,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
   } catch (error) {
     log.error(error);
     log.error('VerifyUPNPsupport - Failed get Mappings');
-    upnpMachine = false;
+    upnpHealthy = false;
     return false;
   }
   try {
@@ -203,11 +212,11 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
   } catch (error) {
     log.error(error);
     log.error('VerifyUPNPsupport - Failed Remove Mapping');
-    upnpMachine = false;
+    upnpHealthy = false;
     return false;
   }
 
-  upnpMachine = true;
+  upnpHealthy = true;
   return true;
 }
 
@@ -338,6 +347,9 @@ async function mapPortApi(req, res) {
       if (port === undefined || port === null) {
         throw new Error('No Port address specified.');
       }
+      if (!serviceHelper.validPort(port)) {
+        throw new Error('Port must be a whole number between 1 and 65535');
+      }
       port = serviceHelper.ensureNumber(port);
       await getClient().createMapping({
         public: port,
@@ -384,6 +396,9 @@ async function removeMapPortApi(req, res) {
       port = port || req.query.port;
       if (port === undefined || port === null) {
         throw new Error('No Port address specified.');
+      }
+      if (!serviceHelper.validPort(port)) {
+        throw new Error('Port must be a whole number between 1 and 65535');
       }
       port = serviceHelper.ensureNumber(port);
       await getClient().removeMapping({
@@ -494,6 +509,7 @@ async function getGatewayApi(req, res) {
 
 module.exports = {
   isUPNP,
+  isUPNPHealthy,
   verifyUPNPsupport,
   setupUPNP,
   mapUpnpPort,

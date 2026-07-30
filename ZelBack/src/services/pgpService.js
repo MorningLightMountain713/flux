@@ -1,58 +1,20 @@
-const config = require('config');
-const path = require('path');
-const fs = require('fs').promises;
 const openpgp = require('openpgp');
 const generalService = require('./generalService');
+const nodeIdentityRepository = require('./appDatabase/nodeIdentityRepository');
 const log = require('../lib/log');
-
-/**
- * To adjust PGP identity
- * @param {string} privateKey Armored version of private key
- * @param {string} publicKey Armored version of public key
- * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
- */
-async function adjustPGPidentity(privateKey, publicKey) {
-  try {
-    const fluxDirPath = path.join(__dirname, '../../../config/userconfig.js');
-    if (publicKey === userconfig.initial.pgpPublicKey && privateKey === userconfig.initial.pgpPrivateKey) {
-      return;
-    }
-    log.info(`Adjusting Identity to ${publicKey}`);
-    const dataToWrite = `module.exports = {
-  initial: {
-    ipaddress: '${userconfig.initial.ipaddress || '127.0.0.1'}',
-    zelid: '${userconfig.initial.zelid || config.fluxTeamFluxID}',
-    kadena: '${userconfig.initial.kadena || ''}',
-    testnet: ${userconfig.initial.testnet || false},
-    development: ${userconfig.initial.development || false},
-    apiport: ${Number(userconfig.initial.apiport || config.server.apiport)},
-    routerIP: '${userconfig.initial.routerIP || ''}',
-    pgpPrivateKey: \`${privateKey}\`,
-    pgpPublicKey: \`${publicKey}\`,
-    blockedPorts: ${JSON.stringify(userconfig.initial.blockedPorts || [])},
-    blockedRepositories: ${JSON.stringify(userconfig.initial.blockedRepositories || []).replace(/"/g, "'")},
-  }
-}`;
-
-    await fs.writeFile(fluxDirPath, dataToWrite);
-  } catch (error) {
-    log.error(error);
-  }
-}
 
 /**
  * To check if correct pgp identity exists
  */
 async function identityExists() {
   try {
-    // only generate new identity if private key or public key is missing, do not match
-    const existingPrivateKey = userconfig.initial.pgpPrivateKey;
-    const existingPublicKey = userconfig.initial.pgpPublicKey;
-    if (existingPrivateKey && existingPublicKey) {
+    // only generate new identity if the keypair is missing, or does not match
+    const stored = await nodeIdentityRepository.getPgpIdentity();
+    if (stored) {
       // check if public key belongs to our private key
-      const privateKey = await openpgp.readPrivateKey({ armoredKey: existingPrivateKey });
+      const privateKey = await openpgp.readPrivateKey({ armoredKey: stored.privateKey });
       const publicKey = privateKey.toPublic().armor();
-      if (publicKey !== existingPublicKey) {
+      if (publicKey !== stored.publicKey) {
         log.warn('Existing PGP identity is corrupted. Generating new identity');
         return false;
       }
@@ -68,12 +30,55 @@ async function identityExists() {
 }
 
 /**
+ * The keypair still held in config/userconfig.js, when it is intact.
+ *
+ * Nodes upgrading from a FluxOS that kept the keypair in that file can reach identity
+ * generation before the migration has adopted it: the migration only logs its failures,
+ * and the config it read may have been the fallback configManager publishes when
+ * config/userconfig.js is unreadable, which carries no keypair. Generating over the
+ * operator's keypair is unrecoverable — it is the key their apps' registry credentials
+ * are encrypted to — so the file is consulted before generating, and only when the
+ * database holds nothing.
+ *
+ * The halves are matched on fingerprint rather than armored text, which is not a stable
+ * encoding of a key.
+ * @returns {Promise<{privateKey: string, publicKey: string}|null>}
+ */
+async function configFileIdentity() {
+  const initial = globalThis.userconfig ? globalThis.userconfig.initial : null;
+  if (!initial || !initial.pgpPrivateKey || !initial.pgpPublicKey) return null;
+
+  try {
+    const privateKey = await openpgp.readPrivateKey({ armoredKey: initial.pgpPrivateKey });
+    const publicKey = await openpgp.readKey({ armoredKey: initial.pgpPublicKey });
+    if (privateKey.toPublic().getFingerprint() !== publicKey.getFingerprint()) {
+      log.warn('PGP keypair in the config file does not match itself. Ignoring it');
+      return null;
+    }
+    return { privateKey: initial.pgpPrivateKey, publicKey: initial.pgpPublicKey };
+  } catch (error) {
+    log.warn(`PGP keypair in the config file is unreadable. Ignoring it: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * To generate and store new identity
  */
 async function generateIdentity() {
   try {
     const currentIdentityExists = await identityExists();
     if (currentIdentityExists) {
+      return;
+    }
+    const fromConfigFile = await configFileIdentity();
+    if (fromConfigFile) {
+      const adopted = await nodeIdentityRepository.setPgpIdentity(fromConfigFile);
+      if (!adopted) {
+        log.error('PGP identity found in the config file but could not be stored - database unavailable');
+        return;
+      }
+      log.info('Adopted the PGP keypair from the config file');
       return;
     }
     const collateralInfo = await generalService.obtainNodeCollateralInformation();
@@ -88,7 +93,17 @@ async function generateIdentity() {
       passphrase: '', // no password
       format: 'armored', // output key format, defaults to 'armored' (other options: 'binary' or 'object')
     });
-    await adjustPGPidentity(keypair.privateKey, keypair.publicKey);
+    // Fail loudly rather than leave the node believing it has an identity it never
+    // persisted: the next boot would generate a different keypair, and anything
+    // encrypted to the first one in between becomes undecryptable.
+    const persisted = await nodeIdentityRepository.setPgpIdentity({
+      privateKey: keypair.privateKey,
+      publicKey: keypair.publicKey,
+    });
+    if (!persisted) {
+      log.error('PGP identity generated but could not be stored - database unavailable');
+      return;
+    }
     log.info('PGP identity generated');
   } catch (error) {
     log.error('Identity generation error');
@@ -122,15 +137,23 @@ async function encryptMessage(message, encryptionKeys) {
 /**
  * To decrypt a message with an armored private key
  * @param {string} encryptedMessage Message to encrypt
- * @param {string} decryptionKey Armored version of private key
+ * @param {string} [decryptionKey] Armored private key; defaults to this node's own
  * @returns {Promise<string>} Return plain text message
  */
-async function decryptMessage(encryptedMessage, decryptionKey = userconfig.initial.pgpPrivateKey) {
+async function decryptMessage(encryptedMessage, decryptionKey = null) {
   try {
+    // Resolved per call rather than as a default parameter: the node's own key
+    // comes from the database, which a default expression cannot await.
+    const armoredKey = decryptionKey
+      ?? (await nodeIdentityRepository.getPgpIdentity())?.privateKey;
+    if (!armoredKey) {
+      log.error('No PGP private key available to decrypt with');
+      return null;
+    }
     const messageEncrypted = await openpgp.readMessage({
       armoredMessage: encryptedMessage, // parse armored message
     });
-    const privateKey = await openpgp.readPrivateKey({ armoredKey: decryptionKey });
+    const privateKey = await openpgp.readPrivateKey({ armoredKey });
     const decryptedMessage = await openpgp.decrypt({
       message: messageEncrypted,
       decryptionKeys: privateKey,

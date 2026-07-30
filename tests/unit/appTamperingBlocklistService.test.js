@@ -4,7 +4,7 @@ const proxyquire = require('proxyquire').noCallThru();
 
 describe('appTamperingBlocklistService tests', () => {
   let service;
-  let serviceHelperStub;
+  let policyStoreStub;
   let tamperingRepositoryStub;
   let nodeDosStateStub;
   let generalServiceStub;
@@ -14,32 +14,27 @@ describe('appTamperingBlocklistService tests', () => {
 
   function loadService(arcane = false) {
     return proxyquire('../../ZelBack/src/services/appTamperingBlocklistService', {
-      config: {
-        database: {
-          local: {
-            database: 'zelfluxlocal',
-            collections: { appTamperingEvents: 'apptamperingevents' },
-          },
-        },
-        github: {
-          rawBaseUrl: 'https://raw.githubusercontent.com/RunOnFlux/flux/master',
-        },
-      },
       '../lib/log': {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),
       },
-      './serviceHelper': serviceHelperStub,
       './appDatabase/appTamperingRepository': tamperingRepositoryStub,
       './nodeDosState': nodeDosStateStub,
       './generalService': generalServiceStub,
       './daemonService/daemonServiceMiscRpcs': daemonMiscStub,
       './utils/globalState': { isArcane: () => arcane },
+      './policy/policyStore': policyStoreStub,
     });
   }
 
+  // policyStore holds the document; null is its "no copy from any layer" answer, which is
+  // deliberately not the same as an empty list.
+  function setBlocklist(value) {
+    policyStoreStub.get.withArgs('tamperingBlocklist').returns(value);
+  }
+
   beforeEach(() => {
-    serviceHelperStub = {
-      axiosGet: sinon.stub(),
+    policyStoreStub = {
+      get: sinon.stub().returns(null),
     };
 
     tamperingRepositoryStub = {
@@ -74,29 +69,26 @@ describe('appTamperingBlocklistService tests', () => {
   }
 
   describe('fetchBlocklist', () => {
-    it('fetches blocklist from URL', async () => {
-      serviceHelperStub.axiosGet.resolves({ data: ['tx1', 'tx2'] });
+    // Fetching, validating and caching belong to policyStore and are covered in
+    // policyStore.test.js. Here the service is only responsible for reading the right
+    // document and passing its two distinct answers through unchanged.
+    it('reads the tamperingBlocklist document', () => {
+      setBlocklist(['tx1', 'tx2']);
 
-      const result = await service.fetchBlocklist();
-
-      expect(result).to.deep.equal(['tx1', 'tx2']);
-      sinon.assert.calledOnce(serviceHelperStub.axiosGet);
+      expect(service.fetchBlocklist()).to.deep.equal(['tx1', 'tx2']);
+      sinon.assert.calledWith(policyStoreStub.get, 'tamperingBlocklist');
     });
 
-    it('returns [] on axios failure', async () => {
-      serviceHelperStub.axiosGet.rejects(new Error('network timeout'));
+    it('passes an empty list through as an empty list', () => {
+      setBlocklist([]);
 
-      const result = await service.fetchBlocklist();
-
-      expect(result).to.deep.equal([]);
+      expect(service.fetchBlocklist()).to.deep.equal([]);
     });
 
-    it('returns [] when response shape is unexpected', async () => {
-      serviceHelperStub.axiosGet.resolves({ data: { notAnArray: true } });
+    it('passes "no copy available" through as null, not an empty list', () => {
+      setBlocklist(null);
 
-      const result = await service.fetchBlocklist();
-
-      expect(result).to.deep.equal([]);
+      expect(service.fetchBlocklist()).to.equal(null);
     });
   });
 
@@ -173,7 +165,7 @@ describe('appTamperingBlocklistService tests', () => {
     });
 
     it('does nothing when txhash is not on the blocklist', async () => {
-      serviceHelperStub.axiosGet.resolves({ data: ['otherhash'] });
+      setBlocklist(['otherhash']);
       setTamperScore(100);
 
       await service.enforceBlocklist();
@@ -182,7 +174,7 @@ describe('appTamperingBlocklistService tests', () => {
     });
 
     it('does nothing when listed but score <= threshold', async () => {
-      serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
+      setBlocklist([MOCK_TXHASH]);
       setTamperScore(10); // threshold is >10, so exactly 10 should NOT trigger
 
       await service.enforceBlocklist();
@@ -191,7 +183,7 @@ describe('appTamperingBlocklistService tests', () => {
     });
 
     it('sets sticky DOS when listed AND score > threshold', async () => {
-      serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
+      setBlocklist([MOCK_TXHASH]);
       setTamperScore(11);
 
       await service.enforceBlocklist();
@@ -207,21 +199,45 @@ describe('appTamperingBlocklistService tests', () => {
 
     it('clears sticky DOS on next tick when condition no longer holds', async () => {
       // First tick: set DOS
-      serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
+      setBlocklist([MOCK_TXHASH]);
       setTamperScore(15);
       await service.enforceBlocklist();
       expect(service.isDosActive()).to.be.true;
 
       // Second tick: txhash removed from list
-      serviceHelperStub.axiosGet.resolves({ data: [] });
+      setBlocklist([]);
       await service.enforceBlocklist();
 
       sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
       expect(service.isDosActive()).to.be.false;
     });
 
+    it('does NOT clear a sticky DOS when the blocklist cannot be fetched', async () => {
+      setBlocklist([MOCK_TXHASH]);
+      setTamperScore(15);
+      await service.enforceBlocklist();
+      expect(service.isDosActive()).to.be.true;
+
+      // An unreadable list must not read as "nobody is listed" — that would release a
+      // node the network had deliberately blocked, on nothing worse than a github blip.
+      setBlocklist(null);
+      await service.enforceBlocklist();
+
+      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
+      expect(service.isDosActive()).to.be.true;
+    });
+
+    it('does NOT set a DOS when the blocklist cannot be fetched', async () => {
+      setBlocklist(null);
+      setTamperScore(100);
+
+      await service.enforceBlocklist();
+
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+    });
+
     it('clears sticky DOS when the score drops to <= threshold', async () => {
-      serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
+      setBlocklist([MOCK_TXHASH]);
       setTamperScore(15);
       await service.enforceBlocklist();
       expect(service.isDosActive()).to.be.true;
@@ -237,7 +253,7 @@ describe('appTamperingBlocklistService tests', () => {
       // ourDosActive is false, but sticky owned by us (prefix match) from prior run
       const ours = `${service.DOS_MESSAGE_PREFIX}: 42 events, txhash xyz`;
       nodeDosStateStub.getStickyDosMessage = sinon.stub().returns(ours);
-      serviceHelperStub.axiosGet.resolves({ data: [] });
+      setBlocklist([]);
       setTamperScore(0);
 
       await service.enforceBlocklist();
@@ -248,7 +264,7 @@ describe('appTamperingBlocklistService tests', () => {
     it('does NOT clear a sticky DOS set by a different module', async () => {
       // Some other module set sticky for an unrelated reason
       nodeDosStateStub.getStickyDosMessage = sinon.stub().returns('some other module sticky reason');
-      serviceHelperStub.axiosGet.resolves({ data: [] });
+      setBlocklist([]);
       setTamperScore(0);
 
       await service.enforceBlocklist();
@@ -298,7 +314,7 @@ describe('appTamperingBlocklistService tests', () => {
 
     it('enforceBlocklist is a no-op when bench reports systemsecure=true', async () => {
       const arcaneService = makeArcaneService();
-      serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
+      setBlocklist([MOCK_TXHASH]);
       setTamperScore(100);
 
       await arcaneService.enforceBlocklist();
@@ -313,7 +329,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await arcaneService.enforceBlocklist();
 
-      expect(serviceHelperStub.axiosGet.called).to.be.false;
+      expect(policyStoreStub.get.called).to.be.false;
       expect(generalServiceStub.obtainNodeCollateralInformation.called).to.be.false;
     });
 
@@ -334,7 +350,7 @@ describe('appTamperingBlocklistService tests', () => {
       const originalFluxOSPath = process.env.FLUXOS_PATH;
       process.env.FLUXOS_PATH = '/fake/arcane/path';
       try {
-        serviceHelperStub.axiosGet.resolves({ data: [MOCK_TXHASH] });
+        setBlocklist([MOCK_TXHASH]);
         setTamperScore(100);
         const svc = loadService();
 

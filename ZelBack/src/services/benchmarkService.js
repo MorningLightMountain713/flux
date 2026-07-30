@@ -496,8 +496,10 @@ async function executeUpnpBench() {
     log.info('executeUpnpBench - Flux not yet synced');
     return;
   }
-  const isUPNP = upnpService.isUPNP();
-  if ((globalThis.userconfig.initial.apiport && globalThis.userconfig.initial.apiport !== config.server.apiport) || isUPNP) {
+  // The multi-port bench is for nodes sharing one address, which is what UPnP on a
+  // non-default port means. The declared setting answers that on its own — the
+  // apiport comparison was a second copy of the same inference.
+  if (upnpService.isUPNP()) {
     log.info('Calling FluxBench startMultiPortBench');
     log.info(await startMultiPortBench());
   }

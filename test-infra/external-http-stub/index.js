@@ -5,9 +5,11 @@ const CONTROL_PORT = parseInt(process.env.CONTROL_PORT || '3001', 10);
 
 const state = {
   blockedRepositories: [],
-  vettedRepositories: [],
-  whitelistedRepositories: [],
   tamperingBlocklist: [],
+  enterpriseNodes: {},
+  // Paths made to fail, so a suite can exercise what a node does when a policy document
+  // is unreachable rather than only when it is empty. Path -> HTTP status.
+  failingPaths: {},
   latestRelease: { tag_name: 'v0.0.0', name: 'stub-release' },
   geolocation: {},
   moduleMinimumVersions: {},
@@ -41,21 +43,27 @@ function defaultGeoResponse(ip) {
 const app = express();
 app.use(express.json());
 
+// Fail any path the control plane has been told to break, before its handler runs.
+app.use((req, res, next) => {
+  const status = state.failingPaths[req.path];
+  if (status) {
+    res.status(status).send(`stub: ${req.path} forced to fail`);
+    return;
+  }
+  next();
+});
+
 // GitHub raw content endpoints
 app.get('/helpers/blockedrepositories.json', (req, res) => {
   res.json(state.blockedRepositories);
 });
 
-app.get('/helpers/vettedrepositories.json', (req, res) => {
-  res.json(state.vettedRepositories);
-});
-
-app.get('/helpers/repositories.json', (req, res) => {
-  res.json(state.whitelistedRepositories);
-});
-
 app.get('/helpers/tamperingblockednodes.json', (req, res) => {
   res.json(state.tamperingBlocklist);
+});
+
+app.get('/helpers/enterprisenodes.json', (req, res) => {
+  res.json(state.enterpriseNodes);
 });
 
 // GitHub API endpoints
@@ -75,7 +83,7 @@ app.get('/json/:ip', (req, res) => {
 
 // Geolocation: stats.runonflux.io format (fallback)
 app.get('/fluxlocation/:ip', (req, res) => {
-  const ip = req.params.ip;
+  const { ip } = req.params;
   const custom = state.geolocation[ip];
   const geo = { ...defaultGeoResponse(ip), ...custom };
   res.json({
@@ -137,13 +145,14 @@ control.post('/blocked-repos', (req, res) => {
   res.json({ ok: true });
 });
 
-control.post('/vetted-repos', (req, res) => {
-  state.vettedRepositories = req.body;
+control.post('/enterprise-nodes', (req, res) => {
+  state.enterpriseNodes = req.body;
   res.json({ ok: true });
 });
 
-control.post('/whitelisted-repos', (req, res) => {
-  state.whitelistedRepositories = req.body;
+// { "/helpers/blockedrepositories.json": 503 } — or {} to stop failing everything.
+control.post('/failing-paths', (req, res) => {
+  state.failingPaths = req.body;
   res.json({ ok: true });
 });
 
@@ -189,9 +198,9 @@ control.post('/fiat-rates', (req, res) => {
 
 control.post('/reset', (req, res) => {
   state.blockedRepositories = [];
-  state.vettedRepositories = [];
-  state.whitelistedRepositories = [];
   state.tamperingBlocklist = [];
+  state.enterpriseNodes = {};
+  state.failingPaths = {};
   state.latestRelease = { tag_name: 'v0.0.0', name: 'stub-release' };
   state.geolocation = {};
   state.moduleMinimumVersions = {};

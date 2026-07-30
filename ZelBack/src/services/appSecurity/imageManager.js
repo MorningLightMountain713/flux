@@ -1,5 +1,4 @@
 const config = require('config');
-const axios = require('axios');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
@@ -8,9 +7,7 @@ const verificationHelper = require('../verificationHelper');
 const log = require('../../lib/log');
 const { supportedArchitectures } = require('../utils/appConstants');
 const fluxCaching = require('../utils/cacheManager').default;
-
-// Cache for blocked repositories
-let cacheUserBlockedRepos = null;
+const policyStore = require('../policy/policyStore');
 
 /**
  * Classify error type and determine appropriate cache TTL
@@ -54,11 +51,9 @@ function classifyVerificationError(error, errorMeta) {
         return { ttlMs: 5 * registryTransientBackoffMs(), reason: 'Rate limiting (429)' };
       case 'server_error':
         return { ttlMs: 2.5 * registryTransientBackoffMs(), reason: 'Server error (5xx)' };
-      case 'whitelist_fetch_error':
       case 'auth_unavailable':
         return { ttlMs: 2 * FluxCacheManager.oneHour, reason: 'Temporary service issue' };
       // Permanent errors - longer cache
-      case 'not_whitelisted':
       case 'invalid_format':
       case 'unsupported_architecture':
       case 'unsupported_media_type':
@@ -190,48 +185,14 @@ async function verifyRepository(repotag, options = {}) {
 }
 
 /**
- * Get blocked repositories from official source
- * @returns {Promise<Array|null>} List of blocked repositories
+ * The official blocked-repository list, or null when no copy could be obtained.
+ *
+ * policyStore owns fetching, validating, caching and holding last-known-good, so null
+ * here means it has nothing from any layer — not that the most recent fetch failed.
+ * @returns {Array|null} List of blocked repositories
  */
-async function getBlockedRepositories() {
-  try {
-    const cachedResponse = fluxCaching.blockedRepositoriesCache.get('blockedRepositories');
-    if (cachedResponse) {
-      return cachedResponse;
-    }
-    const resBlockedRepo = await serviceHelper.axiosGet(`${config.github.rawBaseUrl}/helpers/blockedrepositories.json`);
-    if (resBlockedRepo.data) {
-      fluxCaching.blockedRepositoriesCache.set('blockedRepositories', resBlockedRepo.data);
-      return resBlockedRepo.data;
-    }
-    return null;
-  } catch (error) {
-    log.error(error);
-    return null;
-  }
-}
-
-/**
- * Get vetted repositories from official source
- * These apps bypass user-defined blocked repositories and ports
- * @returns {Promise<Array|null>} List of vetted repositories
- */
-async function getVettedRepositories() {
-  try {
-    const cachedResponse = fluxCaching.blockedRepositoriesCache.get('vettedRepositories');
-    if (cachedResponse) {
-      return cachedResponse;
-    }
-    const resVettedRepo = await serviceHelper.axiosGet(`${config.github.rawBaseUrl}/helpers/vettedrepositories.json`);
-    if (resVettedRepo.data) {
-      fluxCaching.blockedRepositoriesCache.set('vettedRepositories', resVettedRepo.data);
-      return resVettedRepo.data;
-    }
-    return null;
-  } catch (error) {
-    log.error(error);
-    return null;
-  }
+function getBlockedRepositories() {
+  return policyStore.get('blockedRepositories');
 }
 
 // The repository name with any :tag / @digest removed, via the shared parser.
@@ -246,87 +207,21 @@ function extractNamespace(repository) {
   return lastSlash > -1 ? repository.substring(0, lastSlash) : repository;
 }
 
-async function isAppVetted(options = {}) {
-  const { owner = null, hash = null, images = [] } = options;
-
-  const vettedRepos = await getVettedRepositories();
-  if (!vettedRepos || vettedRepos.length === 0) return false;
-
-  const vetted = vettedRepos.map(stripTag);
-
-  if (owner && vetted.includes(owner)) return true;
-  if (hash && vetted.includes(hash)) return true;
-
-  for (const imageRef of images) {
-    const repo = stripTag(imageRef);
-    if (vetted.includes(repo) || vetted.includes(repo.toLowerCase())) return true;
-    const ns = extractNamespace(repo);
-    if (vetted.includes(ns) || vetted.includes(ns.toLowerCase())) return true;
-  }
-
-  return false;
-}
-
-/**
- * Get user-defined blocked repositories from configuration
- * @returns {Promise<Array>} List of user blocked repositories
- */
-async function getUserBlockedRepositories() {
-  try {
-    if (cacheUserBlockedRepos) {
-      return cacheUserBlockedRepos;
-    }
-
-    const { userconfig } = globalThis;
-    // Normalise case up front: image references are lowercase, but operators
-    // type blockedRepositories config in any case. Stored entries are the
-    // tag/digest-stripped name, which is what isImageBlocked compares against.
-    const userBlockedRepos = (userconfig.initial.blockedRepositories || []).map((repo) => repo.toLowerCase());
-    if (userBlockedRepos.length === 0) {
-      return userBlockedRepos;
-    }
-    const usableUserBlockedRepos = [];
-    const marketPlaceUrl = `${config.stats.apiBaseUrl}/marketplace/listapps`;
-    const response = await axios.get(marketPlaceUrl);
-    if (response && response.data && response.data.status === 'success') {
-      const visibleApps = response.data.data.filter((val) => val.visible);
-      for (const userRepo of userBlockedRepos) {
-        const userRepoName = stripTag(userRepo);
-        const isMarketplaceImage = visibleApps.some(
-          (app) => app.compose.some((component) => stripTag(component.repotag).toLowerCase() === userRepoName),
-        );
-        if (isMarketplaceImage) {
-          log.info(`${userRepo} is part of a marketplace offer; despite being on blockedRepositories it will not be taken into consideration`);
-        } else {
-          usableUserBlockedRepos.push(userRepoName);
-        }
-      }
-      cacheUserBlockedRepos = usableUserBlockedRepos;
-      return cacheUserBlockedRepos;
-    }
-    return [];
-  } catch (error) {
-    log.error(error);
-    return [];
-  }
-}
-
 async function isImageBlocked(appName, images, options = {}) {
   const { owner = null, hash = null } = options;
 
-  const repos = await getBlockedRepositories();
-  const userBlockedRepos = await getUserBlockedRepositories();
+  const repos = getBlockedRepositories();
 
-  // A null official list means the fetch failed (network / cold cache), not "nothing
-  // is blocked" - flag it so install gates can defer instead of admitting an
-  // image they could not check. An empty list ([]) is a real "fetched, nothing blocked".
+  // A null list means no copy could be obtained from any layer — not "nothing is
+  // blocked" — so install gates defer rather than admit an image they could not check.
+  // An empty list ([]) is a real "obtained, nothing blocked".
   const undetermined = repos === null;
 
-  if (!repos && !userBlockedRepos) {
+  if (!repos) {
     return { blocked: false, reason: null, undetermined };
   }
 
-  const blocked = repos ? repos.map(stripTag) : [];
+  const blocked = repos.map(stripTag);
 
   if (owner && blocked.includes(owner)) {
     return { blocked: true, reason: `${owner} is not allowed to run applications` };
@@ -343,25 +238,6 @@ async function isImageBlocked(appName, images, options = {}) {
     const ns = extractNamespace(repo);
     if (blocked.includes(ns)) {
       return { blocked: true, reason: `Organisation ${ns} is blocked. Application ${appName} cannot be spawned.` };
-    }
-  }
-
-  const vetted = await isAppVetted({ owner, hash, images });
-  if (vetted) {
-    log.info(`Application ${appName} is vetted. Bypassing user-blocked repositories check.`);
-    return { blocked: false, reason: null };
-  }
-
-  if (userBlockedRepos) {
-    for (const imageRef of images) {
-      const repo = stripTag(imageRef);
-      const ns = extractNamespace(repo);
-      if (userBlockedRepos.includes(ns.toLowerCase())) {
-        return { blocked: true, reason: `Organisation ${ns} is user blocked. Application ${appName} cannot be spawned.` };
-      }
-      if (userBlockedRepos.includes(repo.toLowerCase())) {
-        return { blocked: true, reason: `Image ${repo} is user blocked. Application ${appName} cannot be spawned.` };
-      }
     }
   }
 
@@ -413,9 +289,6 @@ module.exports = {
   classifyVerificationError,
   verifyRepository,
   getBlockedRepositories,
-  getUserBlockedRepositories,
-  getVettedRepositories,
-  isAppVetted,
   isImageBlocked,
   checkDockerAccessibility,
 };

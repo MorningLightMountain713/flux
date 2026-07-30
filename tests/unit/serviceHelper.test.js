@@ -881,4 +881,37 @@ describe('serviceHelper tests', () => {
       expect(serviceHelper.isNonRoutableAddress('1.1.1')).to.equal(false);
     });
   });
+
+  describe('validPort tests', () => {
+    it('should accept ports at and inside the boundaries', () => {
+      expect(serviceHelper.validPort(1)).to.equal(true);
+      expect(serviceHelper.validPort(16127)).to.equal(true);
+      expect(serviceHelper.validPort('16127')).to.equal(true);
+      expect(serviceHelper.validPort(65535)).to.equal(true);
+    });
+
+    it('should reject ports outside the boundaries', () => {
+      expect(serviceHelper.validPort(0)).to.equal(false);
+      expect(serviceHelper.validPort(65536)).to.equal(false);
+      expect(serviceHelper.validPort(99999999)).to.equal(false);
+      expect(serviceHelper.validPort(-5)).to.equal(false);
+    });
+
+    // Every one of these coerces to a number, so the Number.isNaN(+port) test that
+    // guarded the API boundary accepted them all
+    it('should reject numeric-looking strings a coercion would accept', () => {
+      expect(serviceHelper.validPort('1e5')).to.equal(false);
+      expect(serviceHelper.validPort('0x10')).to.equal(false);
+      expect(serviceHelper.validPort(' 80 ')).to.equal(false);
+      expect(serviceHelper.validPort('')).to.equal(false);
+      expect(serviceHelper.validPort('80.5')).to.equal(false);
+    });
+
+    it('should reject values that are not numbers at all', () => {
+      expect(serviceHelper.validPort('abc')).to.equal(false);
+      expect(serviceHelper.validPort(undefined)).to.equal(false);
+      expect(serviceHelper.validPort(null)).to.equal(false);
+      expect(serviceHelper.validPort('80; id')).to.equal(false);
+    });
+  });
 });

@@ -212,21 +212,21 @@ async function checkSynced() {
   }
 }
 
+
 /**
- * To create a JSON response showing a list of whitelisted Github repositories.
+ * Image whitelisting is withdrawn.
+ *
+ * Nothing enforced it: the check that read the list was written without a caller and never
+ * gained one, and the list itself stopped being maintained shortly after. The route is kept
+ * so a caller asking which images are permitted is told the restriction no longer exists,
+ * rather than being handed a list that governs nothing or a 404 that says nothing.
  * @param {object} req Request.
  * @param {object} res Response.
  */
-async function whitelistedRepositories(req, res) {
-  try {
-    const whitelisted = await serviceHelper.axiosGet(`${config.github.rawBaseUrl}/helpers/repositories.json`);
-    const resultsResponse = messageHelper.createDataMessage(whitelisted.data);
-    res.json(resultsResponse);
-  } catch (error) {
-    log.error(error);
-    const errMessage = messageHelper.createErrorMessage(error.message, error.name, error.code);
-    res.json(errMessage);
-  }
+function whitelistedRepositories(req, res) {
+  const message = 'Image whitelisting has been withdrawn - it was not enforced. '
+    + 'The blocked repository list is the only image policy FluxOS applies.';
+  res.json(messageHelper.createErrorMessage(message, 'Gone', 410));
 }
 
 /**
@@ -277,8 +277,8 @@ module.exports = {
   getNewNodeTier,
   isNodeStatusConfirmed,
   checkSynced,
-  whitelistedRepositories,
   messageHash,
+  whitelistedRepositories,
   nodeCollateral,
   obtainNodeCollateralInformation,
 

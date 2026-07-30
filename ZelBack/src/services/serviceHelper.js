@@ -456,6 +456,22 @@ function isPrivateAddress(ip) {
 }
 
 /**
+ * Whether a value names a usable TCP/UDP port.
+ *
+ * Strict about the string form on purpose. The `Number.isNaN(+port)` test this replaces
+ * at the API boundary accepts '1e5', '0x10', '-5' and '', all of which coerce to a number
+ * and none of which any firewall or router will take.
+ * @param {string|number} port Target port
+ * @returns {Boolean}
+ */
+function validPort(port) {
+  if (!/^\d+$/.test(String(port))) return false;
+
+  const asNumber = Number(port);
+  return asNumber >= 1 && asNumber <= 65535;
+}
+
+/**
  * Check if an IPv4 address is non-routable on the public internet.
  * This includes RFC1918 private ranges, loopback, link-local, and CGN ranges.
  * @param {string} ip Target IP
@@ -712,4 +728,5 @@ module.exports = {
   randomDelayMs,
   runCommand,
   validIpv4Address,
+  validPort,
 };

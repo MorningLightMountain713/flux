@@ -185,13 +185,6 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
       }
     }
 
-    const isPortUserBlocked = fluxNetworkHelper.isPortUserBlocked(dosState.testingPort);
-    if (isPortUserBlocked) {
-      log.info(`checkMyAppsAvailability - Testing port ${dosState.testingPort} is user blocked`);
-      setNextPort();
-      return timeouts.failure;
-    }
-
     if (appPorts.includes(dosState.testingPort)) {
       log.info(`checkMyAppsAvailability - Skipped checking ${dosState.testingPort} - in use`);
       setNextPort();

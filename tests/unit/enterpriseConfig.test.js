@@ -4,255 +4,119 @@ const proxyquire = require('proxyquire').noCallThru();
 
 const MODULE_PATH = '../../ZelBack/src/services/utils/enterpriseConfig';
 
-const DISK_MAP = {
+const OWNER_MAP = {
   nodeA: ['ownerA', 'ownerB'],
   nodeB: ['ownerB'],
 };
-const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 
-function makeLog() {
-  return { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() };
-}
-
-// Each load runs the module top-level fresh. Initialization no longer happens as
-// a side effect of require(): callers must startSync() (which seeds from disk and
-// then syncs from github) before the getters return data.
-function loadModule(overrides = {}) {
-  const log = overrides.log || makeLog();
-
-  const fsStub = overrides.fs || {
-    promises: { readFile: sinon.stub().resolves(JSON.stringify(DISK_MAP)) },
+// Fetching the document, validating its shape, caching it and holding last-known-good all
+// belong to policyStore and are covered in policyStore.test.js. What is left here is the
+// shape-aware view over it: the accessors and the owner-union memoization.
+function loadModule(payload = OWNER_MAP) {
+  const log = { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() };
+  const policyStore = {
+    get: sinon.stub(),
+    onChange: sinon.stub(),
   };
-
-  // Default to a failing fetch so disk-seeding tests keep the disk value.
-  const serviceHelperStub = overrides.serviceHelper
-    || { axiosGet: sinon.stub().rejects(new Error('no network')) };
-
-  const configStub = overrides.config || {
-    github: { rawBaseUrl: 'https://raw.example/RunOnFlux/flux/master' },
-  };
-
-  const stubs = {
-    config: configStub,
-    fs: fsStub,
-    '../serviceHelper': serviceHelperStub,
-    '../../lib/log': log,
-  };
+  policyStore.get.withArgs('enterpriseNodes').returns(payload);
 
   return {
-    module: proxyquire(MODULE_PATH, stubs), fs: fsStub, serviceHelper: serviceHelperStub, log,
+    module: proxyquire(MODULE_PATH, {
+      '../policy/policyStore': policyStore,
+      '../../lib/log': log,
+    }),
+    policyStore,
+    log,
   };
 }
 
 describe('enterpriseConfig', () => {
   afterEach(() => sinon.restore());
 
-  describe('disk seeding via startSync', () => {
-    it('seeds the node->owners map from the on-disk helper file', async () => {
+  describe('accessors', () => {
+    it('serves the node->owners map policyStore holds', () => {
       const { module: m } = loadModule();
-      await m.startSync();
-      expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal(DISK_MAP);
-      m.stopSync();
+
+      expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal(OWNER_MAP);
     });
 
-    it('derives node pubkeys (keys) and the global owner union (deduped values)', async () => {
+    it('reads the enterpriseNodes document, not another one', () => {
+      const { module: m, policyStore } = loadModule();
+
+      m.getEnterpriseNodeOwnerMap();
+
+      sinon.assert.calledWith(policyStore.get, 'enterpriseNodes');
+    });
+
+    it('derives node pubkeys (keys) and the global owner union (deduped values)', () => {
       const { module: m } = loadModule();
-      await m.startSync();
+
       expect(m.getEnterpriseNodesPublicKeys()).to.deep.equal(['nodeA', 'nodeB']);
       expect(m.getEnterpriseAppOwners()).to.deep.equal(['ownerA', 'ownerB']);
-      m.stopSync();
     });
 
-    it('returns a specific node\'s allowed owners, or [] for an unknown node', async () => {
+    it("returns a specific node's allowed owners, or [] for an unknown node", () => {
       const { module: m } = loadModule();
-      await m.startSync();
+
       expect(m.getAllowedOwnersForNode('nodeA')).to.deep.equal(['ownerA', 'ownerB']);
-      expect(m.getAllowedOwnersForNode('nodeB')).to.deep.equal(['ownerB']);
-      expect(m.getAllowedOwnersForNode('unknown')).to.deep.equal([]);
-      m.stopSync();
+      expect(m.getAllowedOwnersForNode('nobody')).to.deep.equal([]);
     });
+  });
 
-    it('does the disk read asynchronously (fs.promises.readFile)', async () => {
-      const readFile = sinon.stub().resolves(JSON.stringify(DISK_MAP));
-      const { module: m } = loadModule({ fs: { promises: { readFile } } });
-      await m.startSync();
-      expect(readFile.calledOnce).to.equal(true);
-      m.stopSync();
-    });
+  describe('when policyStore has no copy', () => {
+    // Every caller asks an allow-list question, so the answer under an unreadable document
+    // has to be no: a node cannot admit an enterprise owner it cannot confirm.
+    it('presents an empty map rather than throwing', () => {
+      const { module: m } = loadModule(null);
 
-    it('falls back to an empty map when the disk read throws', async () => {
-      const fs = { promises: { readFile: sinon.stub().rejects(new Error('ENOENT')) } };
-      const { module: m } = loadModule({ fs });
-      await m.startSync();
       expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal({});
       expect(m.getEnterpriseNodesPublicKeys()).to.deep.equal([]);
       expect(m.getEnterpriseAppOwners()).to.deep.equal([]);
-      m.stopSync();
-    });
-
-    it('ignores disk content that is not a JSON object', async () => {
-      const fs = { promises: { readFile: sinon.stub().resolves('["not","an","object"]') } };
-      const { module: m } = loadModule({ fs });
-      await m.startSync();
-      expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal({});
-      m.stopSync();
-    });
-
-    it('rejects disk content whose values are not arrays of strings (finding #2/#10)', async () => {
-      const fs = { promises: { readFile: sinon.stub().resolves(JSON.stringify({ nodeA: null })) } };
-      const { module: m, log } = loadModule({ fs });
-      await m.startSync();
-      expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal({});
-      expect(log.error.called).to.equal(true);
-      m.stopSync();
+      expect(m.getAllowedOwnersForNode('nodeA')).to.deep.equal([]);
     });
   });
 
-  describe('syncFromGithub', () => {
-    it('replaces the in-memory map when github returns a valid object', async () => {
-      const axiosGet = sinon.stub().resolves({ data: { nodeC: ['ownerC'] } });
-      const { module: m } = loadModule({ serviceHelper: { axiosGet } });
+  describe('getEnterpriseAppOwners memoization', () => {
+    it('returns the same array instance while the underlying map is unchanged', () => {
+      const { module: m } = loadModule();
 
-      await m.syncFromGithub();
-
-      expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal({ nodeC: ['ownerC'] });
-      expect(m.getEnterpriseAppOwners()).to.deep.equal(['ownerC']);
+      expect(m.getEnterpriseAppOwners()).to.equal(m.getEnterpriseAppOwners());
     });
 
-    it('uses a bounded request timeout', async () => {
-      const axiosGet = sinon.stub().resolves({ data: { nodeC: ['ownerC'] } });
-      const { module: m } = loadModule({ serviceHelper: { axiosGet } });
+    it('rebuilds when policyStore replaces the map', () => {
+      const { module: m, policyStore } = loadModule();
+      const before = m.getEnterpriseAppOwners();
 
-      await m.syncFromGithub();
+      policyStore.get.withArgs('enterpriseNodes').returns({ nodeC: ['ownerC'] });
+      const after = m.getEnterpriseAppOwners();
 
-      expect(axiosGet.firstCall.args[1]).to.have.property('timeout');
-      expect(axiosGet.firstCall.args[1].timeout).to.be.a('number');
+      expect(after).to.not.equal(before);
+      expect(after).to.deep.equal(['ownerC']);
     });
 
-    it('keeps the last-good map when the github fetch fails', async () => {
-      const axiosGet = sinon.stub();
-      axiosGet.onFirstCall().resolves({ data: { nodeC: ['ownerC'] } }); // seed via startSync
-      const { module: m } = loadModule({ serviceHelper: { axiosGet } });
-      await m.startSync();
-      m.stopSync();
-      expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal({ nodeC: ['ownerC'] });
+    it('skips non-array values rather than failing the union', () => {
+      const { module: m } = loadModule({ nodeA: ['ownerA'], nodeB: 'notAnArray' });
 
-      axiosGet.rejects(new Error('network down'));
-      await m.syncFromGithub();
-
-      expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal({ nodeC: ['ownerC'] });
-    });
-
-    it('rejects a non-object payload and keeps the current map', async () => {
-      const axiosGet = sinon.stub();
-      axiosGet.onFirstCall().resolves({ data: { nodeC: ['ownerC'] } });
-      const { module: m, log } = loadModule({ serviceHelper: { axiosGet } });
-      await m.startSync();
-      m.stopSync();
-
-      axiosGet.resolves({ data: ['unexpected'] });
-      await m.syncFromGithub();
-
-      expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal({ nodeC: ['ownerC'] });
-      expect(log.error.called).to.equal(true);
-    });
-
-    it('rejects a payload with non-array values and keeps the last-good map (finding #2/#10)', async () => {
-      const axiosGet = sinon.stub();
-      axiosGet.onFirstCall().resolves({ data: { nodeC: ['ownerC'] } });
-      const { module: m, log } = loadModule({ serviceHelper: { axiosGet } });
-      await m.startSync();
-      m.stopSync();
-
-      axiosGet.resolves({ data: { nodeC: null } });
-      await m.syncFromGithub();
-
-      expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal({ nodeC: ['ownerC'] });
-      expect(log.error.called).to.equal(true);
-    });
-
-    it('rejects a payload whose array contains non-string entries (finding #2/#10)', async () => {
-      const axiosGet = sinon.stub();
-      axiosGet.onFirstCall().resolves({ data: { nodeC: ['ownerC'] } });
-      const { module: m } = loadModule({ serviceHelper: { axiosGet } });
-      await m.startSync();
-      m.stopSync();
-
-      axiosGet.resolves({ data: { nodeC: [123] } });
-      await m.syncFromGithub();
-
-      expect(m.getEnterpriseNodeOwnerMap()).to.deep.equal({ nodeC: ['ownerC'] });
+      expect(m.getEnterpriseAppOwners()).to.deep.equal(['ownerA']);
     });
   });
 
-  describe('startSync / stopSync', () => {
-    it('runs an immediate sync then refreshes every 6h, and stops on stopSync', async () => {
-      const axiosGet = sinon.stub().resolves({ data: { nodeC: ['ownerC'] } });
-      // Capture the interval registration rather than advancing a clock. No fake
-      // timers means nothing for a loaded CI event loop to starve and nothing to
-      // leak into sibling tests. The contract is asserted directly: scheduled at
-      // 6h, the callback performs a sync, and stopSync clears the interval.
-      let intervalCb = null;
-      let intervalMs = null;
-      const intervalId = Symbol('enterpriseConfig-interval');
-      sinon.stub(global, 'setInterval').callsFake((cb, ms) => {
-        intervalCb = cb;
-        intervalMs = ms;
-        return intervalId;
-      });
-      const clearIntervalStub = sinon.stub(global, 'clearInterval');
-      const { module: m } = loadModule({ serviceHelper: { axiosGet } });
+  describe('onOwnerMapChange', () => {
+    it('subscribes the handler to enterpriseNodes refreshes', () => {
+      const { module: m, policyStore } = loadModule();
+      const handler = sinon.stub();
 
-      await m.startSync();
-      expect(axiosGet.callCount).to.equal(1); // immediate sync
-      expect(intervalMs).to.equal(SIX_HOURS_MS); // refresh scheduled at 6h
+      m.onOwnerMapChange(handler);
 
-      await intervalCb(); // simulate one refresh tick (axiosGet is invoked synchronously)
-      expect(axiosGet.callCount).to.equal(2); // refreshed once
-
-      m.stopSync();
-      expect(clearIntervalStub.calledOnceWithExactly(intervalId)).to.equal(true); // interval cleared
+      sinon.assert.calledWith(policyStore.onChange, 'enterpriseNodes', handler);
     });
 
-    it('is idempotent — a second startSync does not schedule a second interval', async () => {
-      const axiosGet = sinon.stub().resolves({ data: { nodeC: ['ownerC'] } });
-      let intervalCb = null;
-      const setIntervalStub = sinon.stub(global, 'setInterval').callsFake((cb) => {
-        intervalCb = cb;
-        return Symbol('enterpriseConfig-interval');
-      });
-      sinon.stub(global, 'clearInterval');
-      const { module: m } = loadModule({ serviceHelper: { axiosGet } });
+    it('is a no-op without a handler', () => {
+      const { module: m, policyStore } = loadModule();
 
-      await m.startSync();
-      await m.startSync();
-      expect(axiosGet.callCount).to.equal(1); // second startSync no-ops
-      expect(setIntervalStub.callCount).to.equal(1); // only one interval scheduled
+      m.onOwnerMapChange(undefined);
 
-      await intervalCb(); // the single scheduled interval still refreshes
-      expect(axiosGet.callCount).to.equal(2);
-
-      m.stopSync();
-    });
-  });
-
-  describe('getEnterpriseAppOwners memoization (finding #6)', () => {
-    it('returns the same array instance until the map is replaced', async () => {
-      const axiosGet = sinon.stub();
-      axiosGet.onFirstCall().resolves({ data: { nodeC: ['ownerC'] } });
-      const { module: m } = loadModule({ serviceHelper: { axiosGet } });
-      await m.startSync();
-      m.stopSync();
-
-      const first = m.getEnterpriseAppOwners();
-      const second = m.getEnterpriseAppOwners();
-      expect(second).to.equal(first); // same reference, not rebuilt
-
-      axiosGet.resolves({ data: { nodeD: ['ownerD'] } });
-      await m.syncFromGithub();
-      const third = m.getEnterpriseAppOwners();
-      expect(third).to.not.equal(first); // rebuilt after map replacement
-      expect(third).to.deep.equal(['ownerD']);
+      sinon.assert.notCalled(policyStore.onChange);
     });
   });
 });

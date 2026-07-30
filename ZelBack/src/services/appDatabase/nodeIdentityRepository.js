@@ -1,0 +1,100 @@
+const config = require('config');
+const dbHelper = require('../dbHelper');
+
+// Node runtime state that FluxOS generates or discovers about itself: the PGP
+// keypair it creates on first boot, and the last external address it observed.
+// Both are keyed by _id in nodeIdentity, the same singleton-document shape
+// geolocation and benchmark use in this database.
+//
+// These used to live in config/userconfig.js, which is operator input owned by the
+// installer — so every rewrite of that file by its owner destroyed them.
+const nodeIdentityCollection = config.database.local.collections.nodeIdentity;
+
+const PGP_IDENTITY_KEY = 'pgpIdentity';
+const LAST_KNOWN_IP_KEY = 'lastKnownIp';
+
+function db() {
+  const connection = dbHelper.databaseConnection();
+  return connection ? connection.db(config.database.local.database) : null;
+}
+
+/**
+ * The node's PGP keypair, or null when unset / the DB is not up.
+ * @returns {Promise<{privateKey: string, publicKey: string}|null>}
+ */
+async function getPgpIdentity() {
+  const database = db();
+  if (!database) return null;
+  const doc = await dbHelper.findOneInDatabase(
+    database,
+    nodeIdentityCollection,
+    { _id: PGP_IDENTITY_KEY },
+  );
+  if (!doc || !doc.privateKey || !doc.publicKey) return null;
+  return { privateKey: doc.privateKey, publicKey: doc.publicKey };
+}
+
+/**
+ * Store the node's PGP keypair.
+ * @param {{privateKey: string, publicKey: string}} keypair
+ * @returns {Promise<boolean>} true when persisted
+ */
+async function setPgpIdentity(keypair) {
+  const database = db();
+  if (!database) return false;
+  await dbHelper.findOneAndUpdateInDatabase(
+    database,
+    nodeIdentityCollection,
+    { _id: PGP_IDENTITY_KEY },
+    { $set: { privateKey: keypair.privateKey, publicKey: keypair.publicKey, updatedAt: Date.now() } },
+    { upsert: true },
+  );
+  return true;
+}
+
+/**
+ * The last external address this node observed, or null when unset.
+ *
+ * Read by the IP-change detector to decide whether the address moved since the
+ * previous observation — the change is what gates the DOS counter and the removal
+ * of apps that require a static IP, so an absent value must read as "unknown"
+ * rather than as a change.
+ * @returns {Promise<string|null>}
+ */
+async function getLastKnownIp() {
+  const database = db();
+  if (!database) return null;
+  const doc = await dbHelper.findOneInDatabase(
+    database,
+    nodeIdentityCollection,
+    { _id: LAST_KNOWN_IP_KEY },
+  );
+  return doc && doc.ip ? doc.ip : null;
+}
+
+/**
+ * Record the external address this node is now reachable on.
+ * @param {string} ip
+ * @returns {Promise<boolean>} true when persisted
+ */
+async function setLastKnownIp(ip) {
+  const database = db();
+  if (!database) return false;
+  await dbHelper.findOneAndUpdateInDatabase(
+    database,
+    nodeIdentityCollection,
+    { _id: LAST_KNOWN_IP_KEY },
+    { $set: { ip, updatedAt: Date.now() } },
+    { upsert: true },
+  );
+  return true;
+}
+
+module.exports = {
+  getPgpIdentity,
+  setPgpIdentity,
+  getLastKnownIp,
+  setLastKnownIp,
+  PGP_IDENTITY_KEY,
+  LAST_KNOWN_IP_KEY,
+};

@@ -296,20 +296,11 @@ module.exports = (app) => {
   app.get('/flux/pgp', cache('30 seconds'), (req, res) => {
     fluxService.getFluxPGPidentity(req, res);
   });
-  app.get('/flux/kadena', cache('30 seconds'), (req, res) => {
-    fluxService.getFluxKadena(req, res);
-  });
   app.get('/flux/routerip', cache('1 day'), (req, res) => {
     fluxService.getRouterIP(req, res);
   });
-  app.get('/flux/blockedports', cache('1 day'), (req, res) => {
-    fluxService.getBlockedPorts(req, res);
-  });
   app.get('/flux/apiport', cache('1 day'), (req, res) => {
     fluxService.getAPIPort(req, res);
-  });
-  app.get('/flux/blockedrepositories', cache('1 day'), (req, res) => {
-    fluxService.getBlockedRepositories(req, res);
   });
   app.get('/flux/enterpriseappowners', cache('1 hour'), (req, res) => {
     fluxService.getEnterpriseAppOwners(req, res);
@@ -456,7 +447,9 @@ module.exports = (app) => {
   app.post('/apps/calculatefiatandfluxprice', (req, res) => { // returns price in usd and flux for both new registration of app and update of app
     appSpecHelpers.getAppFiatAndFluxPriceApi(req, res);
   });
-  app.get('/apps/whitelistedrepositories', cache('30 seconds'), (req, res) => {
+  // Withdrawn: image whitelisting was never enforced. Kept so a caller is told the restriction
+  // is gone rather than getting a 404. Remove at the next major version.
+  app.get('/apps/whitelistedrepositories', (req, res) => {
     generalService.whitelistedRepositories(req, res);
   });
   app.post('/apps/verifyappregistrationspecifications', (req, res) => { // returns formatted app specifications
@@ -997,19 +990,18 @@ module.exports = (app) => {
     idService.logoutAllUsers(req, res);
   });
 
-  app.get('/flux/adjustkadena/:account?/:chainid?', (req, res) => { // note this essentially rebuilds flux use with caution!
-    fluxService.adjustKadenaAccount(req, res);
-  });
-  app.get('/flux/adjustrouterip/:routerip?', (req, res) => { // note this essentially rebuilds flux use with caution!
+  // Withdrawn settings: kept so callers get a reasoned error rather than a 404.
+  // Remove at the next major version.
+  app.get('/flux/adjustrouterip/:routerip?', (req, res) => {
     fluxService.adjustRouterIP(req, res);
   });
-  app.post('/flux/adjustblockedports', (req, res) => { // note this essentially rebuilds flux use with caution!
+  app.post('/flux/adjustblockedports', (req, res) => {
     fluxService.adjustBlockedPorts(req, res);
   });
-  app.get('/flux/adjustapiport/:apiport?', (req, res) => { // note this essentially rebuilds flux use with caution!
+  app.get('/flux/adjustapiport/:apiport?', (req, res) => {
     fluxService.adjustAPIPort(req, res);
   });
-  app.post('/flux/adjustblockedrepositories', (req, res) => { // note this essentially rebuilds flux use with caution!
+  app.post('/flux/adjustblockedrepositories', (req, res) => {
     fluxService.adjustBlockedRepositories(req, res);
   });
   app.get('/flux/reindexdaemon', (req, res) => {

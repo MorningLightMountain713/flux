@@ -1,6 +1,3 @@
-const path = require('path');
-const util = require('util');
-const nodecmd = require('node-cmd');
 const config = require('config');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
@@ -10,8 +7,6 @@ const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const { getSpecBackend, getSpecPolicy } = require('./specLibs');
 const { appsFolder } = require('./appConstants');
 
-const cmdAsync = util.promisify(nodecmd.run);
-const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 
 /**
  * Calculate app price per month.
@@ -90,25 +85,6 @@ async function appPricePerMonth(spec, height, suppliedPrices) {
 
 
 /**
- * Get app folder size
- * @param {string} appName - Application name
- * @returns {Promise<number>} Folder size in bytes
- */
-async function getAppFolderSize(appName) {
-  try {
-    const appsDirPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
-    const directoryPath = path.join(appsDirPath, appName);
-    const exec = `sudo du -s --block-size=1 ${directoryPath}`;
-    const cmdres = await cmdAsync(exec);
-    const size = serviceHelper.ensureString(cmdres).split('\t')[0] || 0;
-    return size;
-  } catch (error) {
-    log.error(`Error getting app folder size: ${error.message}`);
-    return 0;
-  }
-}
-
-/**
  * Get container storage usage
  * @param {string} appName - Application name
  * @returns {Promise<object>} Storage usage information
@@ -144,30 +120,32 @@ async function getContainerStorage(appName) {
         const source = mount.Source;
         const mountType = mount.Type;
         if (mountType === 'bind') {
-          const exec = `sudo du -sb ${source}`;
-          try {
-            const mountInfo = await cmdAsync(exec);
-            if (mountInfo) {
-              const sizeNum = serviceHelper.ensureNumber(mountInfo.split('\t')[0]) || 0;
-              bindMountsSize += sizeNum;
-            } else {
-              log.warn(`No mount info returned for source: ${source}`);
-            }
-          } catch (error) {
+          const { error, stdout } = await serviceHelper.runCommand('du', {
+            runAsRoot: true,
+            logError: false,
+            params: ['-sb', source],
+          });
+          if (error) {
             log.warn(`Failed to get size for bind mount ${source}: ${error.message}`);
+          } else if (stdout) {
+            const sizeNum = serviceHelper.ensureNumber(stdout.split('\t')[0]) || 0;
+            bindMountsSize += sizeNum;
+          } else {
+            log.warn(`No mount info returned for source: ${source}`);
           }
         } else if (mountType === 'volume') {
-          const exec = `sudo du -sb ${source}`;
-          try {
-            const mountInfo = await cmdAsync(exec);
-            if (mountInfo) {
-              const sizeNum = serviceHelper.ensureNumber(mountInfo.split('\t')[0]) || 0;
-              volumeMountsSize += sizeNum;
-            } else {
-              log.warn(`No mount info returned for source: ${source}`);
-            }
-          } catch (error) {
+          const { error, stdout } = await serviceHelper.runCommand('du', {
+            runAsRoot: true,
+            logError: false,
+            params: ['-sb', source],
+          });
+          if (error) {
             log.warn(`Failed to get size for volume mount ${source}: ${error.message}`);
+          } else if (stdout) {
+            const sizeNum = serviceHelper.ensureNumber(stdout.split('\t')[0]) || 0;
+            volumeMountsSize += sizeNum;
+          } else {
+            log.warn(`No mount info returned for source: ${source}`);
           }
         } else {
           log.warn(`Unsupported mount type or source: Type: ${mountType}, Source: ${source}`);
@@ -273,7 +251,6 @@ module.exports = {
   appHasValidLocationOnNode,
   appPricePerMonth,
   findCommonArchitectures,
-  getAppFolderSize,
   getContainerStorage,
   parseContainerName,
   isNewestInstance,

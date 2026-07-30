@@ -717,26 +717,9 @@ async function trySpawningGlobalApplication() {
     const deployments = (identitiesToInstall.length ? identitiesToInstall : [null])
       .map((replica) => DeploymentSpec.fromSpec(spec, appsFolder, { replica }));
     // Images are spec-level — identical across identities — so any view answers
-    // for vetting and the blocklist.
+    // for the blocklist.
     const deployment = deployments[0];
     const appPorts = [...new Set(deployments.flatMap((d) => d.allHostPorts()))];
-
-    const appIsVetted = await imageManager.isAppVetted({ owner: instantiated.owner, hash: instantiated.hash, images: deployment.allImages() });
-    if (!appIsVetted) {
-      // eslint-disable-next-line no-restricted-syntax
-      for (let i = 0; i < appPorts.length; i += 1) {
-        const port = appPorts[i];
-        const isUserBlocked = fluxNetworkHelper.isPortUserBlocked(port);
-        if (isUserBlocked) {
-          log.info(`trySpawningGlobalApplication - App ${instantiated.name} uses user-blocked port ${port}. Adding to error cache.`);
-          globalState.spawnErrorsLongerAppCache.set(appHash, '');
-          // eslint-disable-next-line no-await-in-loop
-          return shortDelayTime;
-        }
-      }
-    } else {
-      log.info(`trySpawningGlobalApplication - App ${instantiated.name} is vetted. Bypassing user-blocked ports check.`);
-    }
 
     // verify app compliance
     const blockResult = await imageManager.isImageBlocked(instantiated.name, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });

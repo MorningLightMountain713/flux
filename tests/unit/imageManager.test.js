@@ -1,11 +1,11 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
-const axios = require('axios');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const imageVerifier = require('../../ZelBack/src/services/utils/imageVerifier');
 const registryCredentialHelper = require('../../ZelBack/src/services/utils/registryCredentialHelper');
+const policyStore = require('../../ZelBack/src/services/policy/policyStore');
 describe('imageManager tests', () => {
   let imageManager;
 
@@ -21,9 +21,6 @@ describe('imageManager tests', () => {
     const fluxCaching = require('../../ZelBack/src/services/utils/cacheManager').default;
     if (fluxCaching.dockerHubVerificationCache) {
       fluxCaching.dockerHubVerificationCache.clear();
-    }
-    if (fluxCaching.blockedRepositoriesCache) {
-      fluxCaching.blockedRepositoriesCache.clear();
     }
   });
 
@@ -279,13 +276,13 @@ describe('imageManager tests', () => {
     });
 
     it('should classify permanent errors with 7 day TTL', async () => {
-      const permanentError = new Error('Repository is not whitelisted');
+      const permanentError = new Error('Unsupported schemaVersion');
 
       ImageVerifierStub.returns({
         verifyImage: sinon.stub().resolves(),
         throwIfError: sinon.stub().throws(permanentError),
         errorMeta: {
-          errorType: 'not_whitelisted',
+          errorType: 'unsupported_schema',
           errorCode: null,
           httpStatus: null,
         },
@@ -303,141 +300,28 @@ describe('imageManager tests', () => {
     });
   });
 
+  // Fetching, validating and caching the document belong to policyStore
+  // (tests/unit/policyStore.test.js). imageManager only reads it.
   describe('getBlockedRepositories tests', () => {
-    it('should return cached blocked repositories', async () => {
-      const cachedData = ['blocked/repo1', 'blocked/repo2'];
-
-      // First call to populate cache
-      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: cachedData });
-      const result1 = await imageManager.getBlockedRepositories();
-
-      // Second call should use cache
-      const result2 = await imageManager.getBlockedRepositories();
-
-      expect(result1).to.deep.equal(cachedData);
-      expect(result2).to.deep.equal(cachedData);
-      sinon.assert.calledOnce(serviceHelper.axiosGet);
-    });
-
-    it('should fetch blocked repositories from GitHub', async () => {
+    it('should return the blockedRepositories document policyStore holds', () => {
       const blockedRepos = ['blocked/repo1', 'blocked/repo2'];
-      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: blockedRepos });
+      sinon.stub(policyStore, 'get').withArgs('blockedRepositories').returns(blockedRepos);
 
-      const result = await imageManager.getBlockedRepositories();
-
-      expect(result).to.deep.equal(blockedRepos);
-      sinon.assert.calledWith(
-        serviceHelper.axiosGet,
-        'https://raw.githubusercontent.com/RunOnFlux/flux/master/helpers/blockedrepositories.json',
-      );
+      expect(imageManager.getBlockedRepositories()).to.deep.equal(blockedRepos);
     });
 
-    it('should return null on error', async () => {
-      sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('Network error'));
+    it('should return null when policyStore has no copy', () => {
+      sinon.stub(policyStore, 'get').returns(null);
 
-      const result = await imageManager.getBlockedRepositories();
-
-      expect(result).to.be.null;
-    });
-
-    it('should return null if no data returned', async () => {
-      sinon.stub(serviceHelper, 'axiosGet').resolves({});
-
-      const result = await imageManager.getBlockedRepositories();
-
-      expect(result).to.be.null;
-    });
-  });
-
-  describe('getUserBlockedRepositories tests', () => {
-    let originalUserconfig;
-
-    beforeEach(() => {
-      originalUserconfig = globalThis.userconfig;
-    });
-
-    afterEach(() => {
-      globalThis.userconfig = originalUserconfig;
-    });
-
-    it('should return an empty array when no repositories are blocked', async () => {
-      globalThis.userconfig = { initial: { blockedRepositories: [] } };
-      const axiosGet = sinon.stub(axios, 'get');
-
-      const result = await imageManager.getUserBlockedRepositories();
-
-      expect(result).to.deep.equal([]);
-      sinon.assert.notCalled(axiosGet);
-    });
-
-    it('should keep blocked repos that are not marketplace offerings and drop those that are', async () => {
-      globalThis.userconfig = { initial: { blockedRepositories: ['evil/repo', 'marketplaceapp/img'] } };
-      sinon.stub(axios, 'get').resolves({
-        data: {
-          status: 'success',
-          data: [{ visible: true, compose: [{ repotag: 'marketplaceapp/img:v1' }] }],
-        },
-      });
-
-      const result = await imageManager.getUserBlockedRepositories();
-
-      expect(result).to.deep.equal(['evil/repo']);
-    });
-
-    it('exempts a marketplace offering even when the config entry has a tag and mixed case', async () => {
-      globalThis.userconfig = { initial: { blockedRepositories: ['Evil/Repo:latest', 'MarketplaceApp/Img:1.2.3'] } };
-      sinon.stub(axios, 'get').resolves({
-        data: {
-          status: 'success',
-          data: [{ visible: true, compose: [{ repotag: 'marketplaceapp/img:v1' }] }],
-        },
-      });
-
-      const result = await imageManager.getUserBlockedRepositories();
-
-      // tag + case are normalised; the marketplace entry is dropped, the other
-      // is stored as its tag-stripped, lowercased name.
-      expect(result).to.deep.equal(['evil/repo']);
-    });
-
-    it('should cache the result across calls', async () => {
-      globalThis.userconfig = { initial: { blockedRepositories: ['evil/repo'] } };
-      const axiosGet = sinon.stub(axios, 'get').resolves({
-        data: { status: 'success', data: [] },
-      });
-
-      const first = await imageManager.getUserBlockedRepositories();
-      const second = await imageManager.getUserBlockedRepositories();
-
-      expect(first).to.deep.equal(['evil/repo']);
-      expect(second).to.deep.equal(first);
-      sinon.assert.calledOnce(axiosGet);
-    });
-
-    it('should return an empty array when the marketplace response is not successful', async () => {
-      globalThis.userconfig = { initial: { blockedRepositories: ['evil/repo'] } };
-      sinon.stub(axios, 'get').resolves({ data: { status: 'error' } });
-
-      const result = await imageManager.getUserBlockedRepositories();
-
-      expect(result).to.deep.equal([]);
-    });
-
-    it('should return an empty array when the marketplace request fails', async () => {
-      globalThis.userconfig = { initial: { blockedRepositories: ['evil/repo'] } };
-      sinon.stub(axios, 'get').rejects(new Error('Network error'));
-
-      const result = await imageManager.getUserBlockedRepositories();
-
-      expect(result).to.deep.equal([]);
+      expect(imageManager.getBlockedRepositories()).to.be.null;
     });
   });
 
   describe('isImageBlocked tests', () => {
     beforeEach(() => {
-      sinon.stub(serviceHelper, 'axiosGet').resolves({
-        data: ['blocked/repo', 'blocked-org', 'blockedowner'],
-      });
+      sinon.stub(policyStore, 'get')
+        .withArgs('blockedRepositories')
+        .returns(['blocked/repo', 'blocked-org', 'blockedowner']);
 
       // eslint-disable-next-line global-require
       const axios = require('axios');
@@ -462,9 +346,9 @@ describe('imageManager tests', () => {
     });
 
     it('returns undetermined (not blocked) when the official blocklist is unreachable', async () => {
-      // A fetch failure must be distinguishable from "fetched, nothing blocked" so the
-      // install gates can defer rather than admit an image they could not check.
-      serviceHelper.axiosGet.rejects(new Error('network unreachable'));
+      // "No copy from any layer" must be distinguishable from "obtained, nothing blocked"
+      // so the install gates can defer rather than admit an image they could not check.
+      policyStore.get.withArgs('blockedRepositories').returns(null);
 
       const result = await imageManager.isImageBlocked(
         'TestApp',
@@ -480,7 +364,7 @@ describe('imageManager tests', () => {
       // Blocklists are a flat mix of repos, owners and 64-char hashes; every
       // entry is run through stripTag. A 64-char hash once hung the event loop.
       const hash = '6d691f2c09e08e9b6acf046a46566132bcf8dc6c0fbd2042e8faf087d5504e09';
-      serviceHelper.axiosGet.resolves({ data: ['blocked/repo', hash] });
+      policyStore.get.withArgs('blockedRepositories').returns(['blocked/repo', hash]);
 
       const start = process.hrtime.bigint();
       const result = await imageManager.isImageBlocked(
@@ -551,13 +435,7 @@ describe('imageManager tests', () => {
     });
 
     it('should return not blocked if no repos available', async () => {
-      serviceHelper.axiosGet.restore();
-      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: null });
-
-      // eslint-disable-next-line global-require
-      const axios = require('axios');
-      axios.get.restore();
-      sinon.stub(axios, 'get').rejects(new Error('Network error'));
+      policyStore.get.withArgs('blockedRepositories').returns(null);
 
       const result = await imageManager.isImageBlocked(
         'TestApp',

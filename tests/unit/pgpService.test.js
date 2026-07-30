@@ -1,12 +1,25 @@
-process.env.NODE_CONFIG_DIR = `${process.cwd()}/ZelBack/config/`;
 const chai = require('chai');
-globalThis.userconfig = require('../../config/userconfig');
 
 const { expect } = chai;
 
 const pgpService = require('../../ZelBack/src/services/pgpService');
 
 describe('pgpService tests', () => {
+  let originalUserconfig;
+
+  // Scoped to this suite and restored afterwards. Assigning globalThis.userconfig at
+  // module load leaked into every suite mocha loaded after this one, which changed the
+  // answers other suites got from their own config.
+  before(() => {
+    originalUserconfig = globalThis.userconfig;
+    // eslint-disable-next-line global-require
+    globalThis.userconfig = require('../../config/userconfig');
+  });
+
+  after(() => {
+    globalThis.userconfig = originalUserconfig;
+  });
+
   describe('encryptMessage decryptMessage tests', async () => {
     it('should encrypt, decrypt a message', async () => {
       const message = 'Hello, my message';

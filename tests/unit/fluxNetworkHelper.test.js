@@ -19,7 +19,6 @@ const chai = require('chai');
 const sinon = require('sinon');
 const WebSocket = require('ws');
 const chaiAsPromised = require('chai-as-promised');
-const util = require('util');
 const log = require('../../ZelBack/src/lib/log');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
@@ -1038,33 +1037,37 @@ describe('fluxNetworkHelper tests', () => {
 
   describe('allowPort tests', () => {
     const port = '12345';
+    // ufw is invoked once for the in rule and once for the out rule, and the status is
+    // matched against the output of both
+    const ufwRuleAdded = { error: null, stdout: 'Rules updated\nRules updated (v6)\n' };
+
     afterEach(() => {
       sinon.restore();
     });
 
     it('should properly enable a new port in string format', async () => {
-      // Mock util.promisify to return a function that simulates UFW command success
-      sinon.stub(util, 'promisify').returns(() => Promise.resolve('Rules updated\nRules updated (v6)\nRules updated\nRules updated (v6)\n'));
+      const runCommandStub = sinon.stub(serviceHelper, 'runCommand').resolves(ufwRuleAdded);
 
       const result = await fluxNetworkHelper.allowPort(port);
 
       expect(result.status).to.eql(true);
       expect(result.message).to.eql('Rules updated\nRules updated (v6)\nRules updated\nRules updated (v6)\n');
+      sinon.assert.calledWithMatch(runCommandStub, 'ufw', { runAsRoot: true, params: ['allow', port] });
+      sinon.assert.calledWithMatch(runCommandStub, 'ufw', { runAsRoot: true, params: ['allow', 'out', port] });
     }).timeout(5000);
 
     it('should properly enable a new port in number format', async () => {
-      // Mock util.promisify to return a function that simulates UFW command success
-      sinon.stub(util, 'promisify').returns(() => Promise.resolve('Rules updated\nRules updated (v6)\nRules updated\nRules updated (v6)\n'));
+      const runCommandStub = sinon.stub(serviceHelper, 'runCommand').resolves(ufwRuleAdded);
 
       const result = await fluxNetworkHelper.allowPort(+port);
 
       expect(result.status).to.eql(true);
       expect(result.message).to.eql('Rules updated\nRules updated (v6)\nRules updated\nRules updated (v6)\n');
+      sinon.assert.calledWithMatch(runCommandStub, 'ufw', { runAsRoot: true, params: ['allow', port] });
     }).timeout(5000);
 
     it('should skip updating if policy already exists', async () => {
-      // Mock util.promisify to return a function that simulates UFW command "existing"
-      sinon.stub(util, 'promisify').returns(() => Promise.resolve('existing'));
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: 'existing' });
 
       const result = await fluxNetworkHelper.allowPort(port);
 
@@ -1079,7 +1082,7 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should return status: false if the command response does not include words "udpdated", "existing" or "added"', async () => {
-      sinon.stub(util, 'promisify').returns(() => 'testing');
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: 'testing' });
 
       const result = await fluxNetworkHelper.allowPort(12345);
 
@@ -1089,10 +1092,10 @@ describe('fluxNetworkHelper tests', () => {
 
   describe('denyPort tests', () => {
     const port = '32111';
+    const ufwRuleAdded = { error: null, stdout: 'Rules updated\nRules updated (v6)\n' };
 
     beforeEach(async () => {
-      // Mock util.promisify for beforeEach setup
-      sinon.stub(util, 'promisify').returns(() => Promise.resolve('Rules updated\nRules updated (v6)\nRules updated\nRules updated (v6)\n'));
+      sinon.stub(serviceHelper, 'runCommand').resolves(ufwRuleAdded);
     });
 
     afterEach(() => {
@@ -1104,6 +1107,8 @@ describe('fluxNetworkHelper tests', () => {
 
       expect(result.status).to.eql(true);
       expect(result.message).to.eql('Rules updated\nRules updated (v6)\nRules updated\nRules updated (v6)\n');
+      sinon.assert.calledWithMatch(serviceHelper.runCommand, 'ufw', { runAsRoot: true, params: ['deny', port] });
+      sinon.assert.calledWithMatch(serviceHelper.runCommand, 'ufw', { runAsRoot: true, params: ['deny', 'out', port] });
     }).timeout(5000);
 
     it('should deny port given in a number format', async () => {
@@ -1116,7 +1121,7 @@ describe('fluxNetworkHelper tests', () => {
     it('should skip updating if policy already exists', async () => {
       // Restore and re-stub to return "existing" for this test
       sinon.restore();
-      sinon.stub(util, 'promisify').returns(() => Promise.resolve('existing'));
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: 'existing' });
 
       const result = await fluxNetworkHelper.denyPort(port);
 
@@ -1133,7 +1138,7 @@ describe('fluxNetworkHelper tests', () => {
     it('should return status: false if the command response does not include words "udpdated", "existing" or "added"', async () => {
       // Restore and re-stub to return a different value for this test
       sinon.restore();
-      sinon.stub(util, 'promisify').returns(() => 'testing');
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: 'testing' });
 
       const result = await fluxNetworkHelper.denyPort(12345);
 
@@ -1153,8 +1158,8 @@ describe('fluxNetworkHelper tests', () => {
 
     beforeEach(async () => {
       verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
-      // Mock util.promisify for beforeEach setup
-      sinon.stub(util, 'promisify').returns(() => Promise.resolve('Rules updated\nRules updated (v6)\nRules updated\nRules updated (v6)\n'));
+      // one ufw invocation per rule, so allowPort reports both outputs concatenated
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: 'Rules updated\nRules updated (v6)\n' });
     });
 
     afterEach(() => {
@@ -1182,6 +1187,30 @@ describe('fluxNetworkHelper tests', () => {
 
       expect(result).to.eql(expectedResult);
       sinon.assert.calledOnceWithExactly(verifyPrivilegeStub, 'adminandfluxteam', req);
+    });
+
+    // These all coerce to a number, so the Number.isNaN(+port) check inside allowPort
+    // passed them straight to ufw
+    ['1e5', '0x10', '99999999', '0', '-5', 'abc', '80; id'].forEach((bad) => {
+      it(`should refuse the port '${bad}' before reaching ufw`, async () => {
+        verifyPrivilegeStub.returns(true);
+        const res = generateResponse();
+
+        const result = await fluxNetworkHelper.allowPortApi({ params: { port: bad } }, res);
+
+        expect(result.status).to.equal('error');
+        sinon.assert.notCalled(serviceHelper.runCommand);
+      });
+    });
+
+    it('should answer with an error rather than reject when ufw throws', async () => {
+      verifyPrivilegeStub.returns(true);
+      serviceHelper.runCommand.resolves({ error: new Error('ufw: command not found'), stdout: '' });
+      const res = generateResponse();
+
+      const result = await fluxNetworkHelper.allowPortApi({ params: { port } }, res);
+
+      expect(result.status).to.equal('error');
     });
 
     it('should return a success message if the port number is properly passed in query', async () => {
@@ -1237,7 +1266,9 @@ describe('fluxNetworkHelper tests', () => {
       const errorMessage = 'This is error message';
       // Restore and re-stub to return error message for this test
       sinon.restore();
-      sinon.stub(util, 'promisify').returns(() => errorMessage);
+      const runCommandStub = sinon.stub(serviceHelper, 'runCommand');
+      runCommandStub.onFirstCall().resolves({ error: null, stdout: errorMessage });
+      runCommandStub.onSecondCall().resolves({ error: null, stdout: '' });
       verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
       verifyPrivilegeStub.returns(true);
       const res = generateResponse();
@@ -1263,10 +1294,9 @@ describe('fluxNetworkHelper tests', () => {
   });
 
   describe('isFirewallActive tests', () => {
-    let utilStub;
-    let funcStub;
+    let runCommandStub;
     beforeEach(() => {
-      utilStub = sinon.stub(util, 'promisify');
+      runCommandStub = sinon.stub(serviceHelper, 'runCommand');
     });
 
     afterEach(() => {
@@ -1274,45 +1304,56 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should return true if firewall is active', async () => {
-      funcStub = sinon.fake(() => 'Status: active');
-      utilStub.returns(funcStub);
+      runCommandStub.resolves({ error: null, stdout: 'Status: active' });
 
       const isFirewallActive = await fluxNetworkHelper.isFirewallActive();
 
       expect(isFirewallActive).to.be.true;
-      sinon.assert.calledOnceWithExactly(funcStub, 'LANG="en_US.UTF-8" && sudo ufw status | grep Status');
+      sinon.assert.calledOnceWithMatch(runCommandStub, 'ufw', { runAsRoot: true, params: ['status'] });
     });
 
     it('should return false if firewall is not active', async () => {
-      funcStub = sinon.fake(() => 'Status: not active');
-      utilStub.returns(funcStub);
+      runCommandStub.resolves({ error: null, stdout: 'Status: not active' });
 
       const isFirewallActive = await fluxNetworkHelper.isFirewallActive();
 
       expect(isFirewallActive).to.be.false;
-      sinon.assert.calledOnceWithExactly(funcStub, 'LANG="en_US.UTF-8" && sudo ufw status | grep Status');
+      sinon.assert.calledOnceWithMatch(runCommandStub, 'ufw', { runAsRoot: true, params: ['status'] });
     });
 
-    it('should return false command execution throws error', async () => {
-      funcStub = sinon.fake.throws();
-      utilStub.returns(funcStub);
+    it('should return false if the command fails', async () => {
+      sinon.stub(log, 'error');
+      runCommandStub.resolves({ error: new Error('ufw: command not found'), stdout: '' });
 
       const isFirewallActive = await fluxNetworkHelper.isFirewallActive();
 
       expect(isFirewallActive).to.be.false;
-      sinon.assert.calledOnceWithExactly(funcStub, 'LANG="en_US.UTF-8" && sudo ufw status | grep Status');
+      sinon.assert.calledOnceWithMatch(runCommandStub, 'ufw', { runAsRoot: true, params: ['status'] });
     });
   });
 
   describe('adjustFirewall tests', () => {
-    before(function () { if (process.platform !== 'linux') this.skip(); });
 
-    let utilStub;
-    let funcStub;
+    let runCommandStub;
     let logSpy;
     const ports = [16127, 16126, 16128, 16129, 80, 443, 16125, 11, 13];
+
+    // ufw status decides whether any rules are applied at all, and `ip route` supplies the
+    // router address, so both are given their own behaviour
+    const stubUfw = (statusStdout, ruleStdout) => {
+      runCommandStub.resolves({ error: null, stdout: ruleStdout });
+      runCommandStub.withArgs('ufw', sinon.match({ params: ['status'] })).resolves({ error: null, stdout: statusStdout });
+      runCommandStub.withArgs('ip', sinon.match.any).resolves({ error: null, stdout: '' });
+      return runCommandStub;
+    };
+
     beforeEach(() => {
-      utilStub = sinon.stub(util, 'promisify');
+      // Installed for every test, not left to each one to remember: these rules are
+      // `sudo ufw ...`, so a case that forgot to stub would run them for real against
+      // the developer's own firewall. A test that wants specific output calls stubUfw
+      // to configure this same stub.
+      runCommandStub = sinon.stub(serviceHelper, 'runCommand')
+        .resolves({ error: null, stdout: '' });
       logSpy = sinon.spy(log, 'info');
     });
 
@@ -1321,57 +1362,94 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should adjust firewall ports for the whole list of ports - all are active', async () => {
-      funcStub = sinon.fake(async (command) => (command.includes('grep Status') ? 'Status: active' : 'updated'));
-      utilStub.returns(funcStub);
+      stubUfw('Status: active', 'updated');
 
       await fluxNetworkHelper.adjustFirewall();
 
-      sinon.assert.calledWith(funcStub, 'LANG="en_US.UTF-8" && sudo ufw status | grep Status');
+      sinon.assert.calledWithMatch(runCommandStub, 'ufw', { runAsRoot: true, params: ['status'] });
       // eslint-disable-next-line no-restricted-syntax
       for (const port of ports) {
-        sinon.assert.calledWith(funcStub, `LANG="en_US.UTF-8" && sudo ufw allow ${port}`);
+        sinon.assert.calledWithMatch(runCommandStub, 'ufw', { params: ['allow', `${port}`] });
         sinon.assert.calledWith(logSpy, `Firewall adjusted for port ${port}`);
       }
       // eslint-disable-next-line no-restricted-syntax
       for (const port of ports) {
-        sinon.assert.calledWith(funcStub, `LANG="en_US.UTF-8" && sudo ufw allow out ${port}`);
+        sinon.assert.calledWithMatch(runCommandStub, 'ufw', { params: ['allow', 'out', `${port}`] });
+        sinon.assert.calledWith(logSpy, `Firewall out adjusted for port ${port}`);
+      }
+    });
+
+    it('should still open every port when an earlier rule fails', async () => {
+      // ufw exits non-zero for ordinary conditions - an app profile that is not
+      // installed, or deleting a rule that was never added. Those rules are
+      // independent of the port rules, so one failing must not skip the rest.
+      stubUfw('Status: active', 'updated');
+      runCommandStub
+        .withArgs('ufw', sinon.match({ params: ['insert', '1', 'limit', 'to', 'any', 'app', 'OpenSSH'] }))
+        .resolves({ error: new Error('ERROR: Could not find a profile matching \'OpenSSH\''), stdout: '' });
+
+      await fluxNetworkHelper.adjustFirewall();
+
+      // eslint-disable-next-line no-restricted-syntax
+      for (const port of ports) {
+        sinon.assert.calledWithMatch(runCommandStub, 'ufw', { params: ['allow', `${port}`] });
         sinon.assert.calledWith(logSpy, `Firewall adjusted for port ${port}`);
       }
     });
 
-    it('should log info if ports were not able to be adjusted', async () => {
-      funcStub = sinon.fake(async (command) => (command.includes('grep Status') ? 'Status: active' : 'failure'));
-      utilStub.returns(funcStub);
+    it('should name the rule that failed in the error log', async () => {
+      // runCommand prepends the binary to the params array it is handed, mutating its
+      // caller's argument. The stub reproduces that here, or the assertion cannot fail.
+      stubUfw('Status: active', 'updated');
+      const openSshRule = ['insert', '1', 'limit', 'to', 'any', 'app', 'OpenSSH'];
+      runCommandStub
+        .withArgs('ufw', sinon.match({ params: openSshRule }))
+        .callsFake(async (cmd, options) => {
+          options.params.unshift(cmd);
+          return { error: new Error('ERROR: Could not find a profile matching \'OpenSSH\''), stdout: '' };
+        });
+      const logErrorSpy = sinon.spy(log, 'error');
 
       await fluxNetworkHelper.adjustFirewall();
 
-      sinon.assert.calledWith(funcStub, 'LANG="en_US.UTF-8" && sudo ufw status | grep Status');
-      // eslint-disable-next-line no-restricted-syntax
-      for (const port of ports) {
-        sinon.assert.calledWith(funcStub, `LANG="en_US.UTF-8" && sudo ufw allow ${port}`);
-        sinon.assert.calledWith(logSpy, `Failed to adjust Firewall for port ${port}`);
-      }
-      // eslint-disable-next-line no-restricted-syntax
-      for (const port of ports) {
-        sinon.assert.calledWith(funcStub, `LANG="en_US.UTF-8" && sudo ufw allow out ${port}`);
-        sinon.assert.calledWith(logSpy, `Failed to adjust Firewall for port ${port}`);
-      }
+      // Anchored: a substring match would also accept the doubled binary this guards against
+      const logged = logErrorSpy.getCalls()
+        .map((call) => call.args[0])
+        .find((message) => typeof message === 'string' && message.includes('OpenSSH'));
+      expect(logged).to.match(new RegExp(`^ufw ${openSshRule.join(' ')} failed`));
     });
 
     it('should log info if ports were not able to be adjusted', async () => {
-      funcStub = sinon.fake(async (command) => (command.includes('grep Status') ? 'Status: not active' : 'failure'));
-      utilStub.returns(funcStub);
+      stubUfw('Status: active', 'failure');
 
       await fluxNetworkHelper.adjustFirewall();
 
-      sinon.assert.calledWith(funcStub, 'LANG="en_US.UTF-8" && sudo ufw status | grep Status');
+      sinon.assert.calledWithMatch(runCommandStub, 'ufw', { runAsRoot: true, params: ['status'] });
       // eslint-disable-next-line no-restricted-syntax
       for (const port of ports) {
-        sinon.assert.neverCalledWith(funcStub, `LANG="en_US.UTF-8" && sudo ufw allow ${port}`);
+        sinon.assert.calledWithMatch(runCommandStub, 'ufw', { params: ['allow', `${port}`] });
+        sinon.assert.calledWith(logSpy, `Failed to adjust Firewall for port ${port}`);
       }
       // eslint-disable-next-line no-restricted-syntax
       for (const port of ports) {
-        sinon.assert.neverCalledWith(funcStub, `LANG="en_US.UTF-8" && sudo ufw allow out ${port}`);
+        sinon.assert.calledWithMatch(runCommandStub, 'ufw', { params: ['allow', 'out', `${port}`] });
+        sinon.assert.calledWith(logSpy, `Failed to adjust Firewall out for port ${port}`);
+      }
+    });
+
+    it('should not adjust any ports if the firewall is not active', async () => {
+      stubUfw('Status: not active', 'failure');
+
+      await fluxNetworkHelper.adjustFirewall();
+
+      sinon.assert.calledWithMatch(runCommandStub, 'ufw', { runAsRoot: true, params: ['status'] });
+      // eslint-disable-next-line no-restricted-syntax
+      for (const port of ports) {
+        sinon.assert.neverCalledWithMatch(runCommandStub, 'ufw', { params: ['allow', `${port}`] });
+      }
+      // eslint-disable-next-line no-restricted-syntax
+      for (const port of ports) {
+        sinon.assert.neverCalledWithMatch(runCommandStub, 'ufw', { params: ['allow', 'out', `${port}`] });
       }
       sinon.assert.calledWith(logSpy, 'Firewall is not active. Adjusting not applied');
     });
@@ -1668,14 +1746,22 @@ describe('fluxNetworkHelper tests', () => {
   });
 
   describe('remove flux container access to private address space tests', () => {
-    let utilStub;
-    let funcStub;
+    let runCommandStub;
     let infoLogSpy;
     let errorLogSpy;
+
+    // iptables is invoked with an argv list, so the cases below rebuild the readable command
+    // they match on
+    const invocation = (cmd, options) => `${cmd} ${options.params.join(' ')}`;
+    const ok = (stdout = '') => ({ error: null, stdout });
+    const failed = () => ({ error: new Error(), stdout: '' });
+    const chainListing = `Chain DOCKER-USER (0 references)
+          target     prot opt source               destination`;
+
     beforeEach(() => {
       // hide console output from logs, but still get logging spy
       sinon.stub(console, 'log');
-      utilStub = sinon.stub(util, 'promisify');
+      runCommandStub = sinon.stub(serviceHelper, 'runCommand');
       infoLogSpy = sinon.spy(log, 'info');
       errorLogSpy = sinon.spy(log, 'error');
     });
@@ -1685,150 +1771,121 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should return false if the iptables binary does not exist', async () => {
-      funcStub = sinon.fake(async (cmd) => {
-        // chain doesn't exists
-        if (cmd.includes('sudo iptables --version')) {
-          throw new Error();
-        }
-      });
-      utilStub.returns(funcStub);
+      runCommandStub.callsFake(async (cmd, options) => (
+        invocation(cmd, options) === 'iptables --version' ? failed() : ok()));
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
       expect(result).to.eql(false);
-      sinon.assert.calledOnceWithExactly(funcStub, 'sudo iptables --version');
+      sinon.assert.calledOnceWithMatch(runCommandStub, 'iptables', { runAsRoot: true, params: ['--version'] });
       sinon.assert.calledWith(errorLogSpy, 'Unable to find iptables binary');
     });
 
     it('should add the DOCKER-USER chain to iptables if it is missing', async () => {
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        }
-        if (cmd.includes('-L')) {
-          // chain doesn't exists
-          throw new Error();
-        }
-        return null;
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        // chain doesn't exist
+        if (command === 'iptables -L DOCKER-USER') return failed();
+        return ok();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
       expect(result).to.eql(true);
 
-      sinon.assert.calledWith(funcStub, 'sudo iptables -L DOCKER-USER');
-      sinon.assert.calledWith(funcStub, 'sudo iptables -N DOCKER-USER');
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-L', 'DOCKER-USER'] });
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-N', 'DOCKER-USER'] });
       sinon.assert.calledWith(infoLogSpy, 'IPTABLES: DOCKER-USER chain created');
       sinon.assert.notCalled(errorLogSpy);
     });
 
     it('should skip addding the DOCKER-USER chain to iptables if it already exists', async () => {
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        }
-        if (cmd.includes('-L')) {
-          return `Chain DOCKER-USER (0 references)
-          target     prot opt source               destination`;
-        }
-        return undefined;
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
+        return ok();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
 
       expect(result).to.eql(true);
-      sinon.assert.calledWith(funcStub, 'sudo iptables -L DOCKER-USER');
-      sinon.assert.neverCalledWith(funcStub, 'sudo iptables -N DOCKER-USER');
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-L', 'DOCKER-USER'] });
+      sinon.assert.neverCalledWithMatch(runCommandStub, 'iptables', { params: ['-N', 'DOCKER-USER'] });
       sinon.assert.calledWith(infoLogSpy, 'IPTABLES: DOCKER-USER chain already created');
       sinon.assert.notCalled(errorLogSpy);
     });
 
     it('should bail out if there is an error addding the DOCKER-USER chain to iptables', async () => {
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        }
-        // throw for both -L and -N (throwing on -L is normal)
-        throw new Error();
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        // fail for both -L and -N (failing on -L is normal)
+        return failed();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
 
       expect(result).to.eql(false);
-      sinon.assert.calledWith(funcStub, 'sudo iptables -L DOCKER-USER');
-      sinon.assert.calledWith(funcStub, 'sudo iptables -N DOCKER-USER');
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-L', 'DOCKER-USER'] });
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-N', 'DOCKER-USER'] });
       sinon.assert.notCalled(infoLogSpy);
       sinon.assert.calledOnceWithExactly(errorLogSpy, 'IPTABLES: Error adding DOCKER-USER chain');
     });
 
     it('should add the jump to DOCKER-USER chain from FORWARD chain to iptables if it is missing', async () => {
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        } if (cmd.includes('sudo iptables -L DOCKER-USER')) {
-          // chain doesn't exists
-          return `Chain DOCKER-USER (0 references)
-          target     prot opt source               destination`;
-        } if (cmd.includes('sudo iptables -C FORWARD -j DOCKER-USER && echo true')) {
-          throw new Error('iptables: Bad rule (does a matching rule exist in that chain?).');
-        } else {
-          return 'DOCKER-USER  all opt -- in * out *  0.0.0.0/0  -> 0.0.0.0/0';
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
+        if (command === 'iptables -C FORWARD -j DOCKER-USER') {
+          return { error: new Error('iptables: Bad rule (does a matching rule exist in that chain?).'), stdout: '' };
         }
+        return ok();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
 
       expect(result).to.eql(true);
-      sinon.assert.calledWith(funcStub, 'sudo iptables -C FORWARD -j DOCKER-USER && echo true');
-      sinon.assert.calledWith(funcStub, 'sudo iptables -I FORWARD -j DOCKER-USER');
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-C', 'FORWARD', '-j', 'DOCKER-USER'] });
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'FORWARD', '-j', 'DOCKER-USER'] });
 
       sinon.assert.calledWith(infoLogSpy, 'IPTABLES: New rule in FORWARD inserted to jump to DOCKER-USER chain');
       sinon.assert.notCalled(errorLogSpy);
     });
 
     it('should skip adding the jump to DOCKER-USER chain from FORWARD chain to iptables if it already exists', async () => {
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        } if (cmd.includes('sudo iptables -L DOCKER-USER')) {
-          return `Chain DOCKER-USER (0 references)
-          target     prot opt source               destination`;
-        }
-        return 'DOCKER-USER  all opt -- in * out *  0.0.0.0/0  -> 0.0.0.0/0';
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
+        return ok();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
 
       expect(result).to.eql(true);
-      sinon.assert.neverCalledWith(funcStub, 'sudo iptables -I FORWARD -j DOCKER-USER');
+      sinon.assert.neverCalledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'FORWARD', '-j', 'DOCKER-USER'] });
 
       sinon.assert.calledWith(infoLogSpy, 'IPTABLES: Jump to DOCKER-USER chain already enabled');
       sinon.assert.notCalled(errorLogSpy);
     });
 
-    it('should bail out if there is an error addding the DOCKER-USER chain to iptables', async () => {
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        } if (cmd.includes('sudo iptables -L DOCKER-USER')) {
-          return `Chain DOCKER-USER (0 references)
-          target     prot opt source               destination`;
-        } if (cmd.includes('sudo iptables -C FORWARD -j DOCKER-USER')) {
-          throw new Error('iptables: Bad rule (does a matching rule exist in that chain?).');
-        } else {
-          throw new Error();
+    it('should bail out if there is an error adding the jump to the DOCKER-USER chain', async () => {
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
+        if (command === 'iptables -C FORWARD -j DOCKER-USER') {
+          return { error: new Error('iptables: Bad rule (does a matching rule exist in that chain?).'), stdout: '' };
         }
+        return failed();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
 
       expect(result).to.eql(false);
-      sinon.assert.calledWith(funcStub, 'sudo iptables -C FORWARD -j DOCKER-USER && echo true');
-      sinon.assert.calledWith(funcStub, 'sudo iptables -I FORWARD -j DOCKER-USER');
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-C', 'FORWARD', '-j', 'DOCKER-USER'] });
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'FORWARD', '-j', 'DOCKER-USER'] });
 
       sinon.assert.neverCalledWith(infoLogSpy, 'IPTABLES: New rule in FORWARD inserted to jump to DOCKER-USER chain');
       expect(infoLogSpy.callCount).to.eql(1);
@@ -1836,59 +1893,46 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should flush the DOCKER-USER chain', async () => {
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        } if (cmd.includes('sudo iptables -L DOCKER-USER')) {
-          return `Chain DOCKER-USER (0 references)
-          target     prot opt source               destination`;
-        }
-        return undefined;
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
+        return ok();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
 
       expect(result).to.eql(true);
-      sinon.assert.calledWith(funcStub, 'sudo iptables -F DOCKER-USER');
-      sinon.assert.neverCalledWith(errorLogSpy);
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-F', 'DOCKER-USER'] });
+      sinon.assert.notCalled(errorLogSpy);
     });
 
     it('should bail out if there is an error flushing the DOCKER-USER chain', async () => {
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        } if (cmd.includes('sudo iptables -L DOCKER-USER')) {
-          return `Chain DOCKER-USER (0 references)
-          target     prot opt source               destination`;
-        } if (cmd.includes('sudo iptables -C FORWARD -j DOCKER-USER && echo true')) {
-          return 'DOCKER-USER  all opt -- in * out *  0.0.0.0/0  -> 0.0.0.0/0';
-        }
-        throw new Error();
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
+        if (command === 'iptables -C FORWARD -j DOCKER-USER') return ok();
+        return failed();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
 
       expect(result).to.eql(false);
-      sinon.assert.calledWith(funcStub, 'sudo iptables -F DOCKER-USER');
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-F', 'DOCKER-USER'] });
       sinon.assert.calledOnceWithExactly(errorLogSpy, 'IPTABLES: Error flushing DOCKER-USER table. Error');
-      expect(funcStub.callCount).to.eql(4);
+      expect(runCommandStub.callCount).to.eql(4);
     });
 
     it('should add two allow and one drop rule for each private network', async () => {
       const networks = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'];
 
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        } if (cmd.includes('sudo iptables -L DOCKER-USER')) {
-          return `Chain DOCKER-USER (0 references)
-          target     prot opt source               destination`;
-        }
-        return null;
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
+        return ok();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
 
@@ -1896,29 +1940,25 @@ describe('fluxNetworkHelper tests', () => {
 
       // eslint-disable-next-line no-restricted-syntax
       for (const network of networks) {
-        sinon.assert.calledWith(funcStub, `sudo iptables -I DOCKER-USER -s 172.23.0.0/16 -d ${network} -p udp --dport 53 -j ACCEPT`);
-        sinon.assert.calledWith(funcStub, `sudo iptables -I DOCKER-USER -s 172.23.0.0/16 -d ${network} -m state --state RELATED,ESTABLISHED -j ACCEPT`);
-        sinon.assert.calledWith(funcStub, `sudo iptables -A DOCKER-USER -s 172.23.0.0/16 -d ${network} -j DROP`);
+        sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'DOCKER-USER', '-s', '172.23.0.0/16', '-d', network, '-p', 'udp', '--dport', '53', '-j', 'ACCEPT'] });
+        sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'DOCKER-USER', '-s', '172.23.0.0/16', '-d', network, '-m', 'state', '--state', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'] });
+        sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-A', 'DOCKER-USER', '-s', '172.23.0.0/16', '-d', network, '-j', 'DROP'] });
       }
 
-      // 1 for the CHAIN rules, 1 FLUSH, 1 docker0 allow, 9 for the adds and 1 for the RETURN
-      expect(infoLogSpy.callCount).to.eql(13);
+      // 2 for the CHAIN rules, 1 FLUSH, 1 docker0 allow, 9 for the adds and 1 for the RETURN
+      expect(infoLogSpy.callCount).to.eql(14);
       sinon.assert.notCalled(errorLogSpy);
     });
 
     it('should add an allow for intra-network traffic per docker network', async () => {
       const interfaces = ['br-aaf87aa57b20', 'br-098bac43a7f1'];
 
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        } if (cmd.includes('sudo iptables -L DOCKER-USER')) {
-          return `Chain DOCKER-USER (0 references)
-          target     prot opt source               destination`;
-        }
-        return null;
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
+        return ok();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable(interfaces);
 
@@ -1926,38 +1966,30 @@ describe('fluxNetworkHelper tests', () => {
 
       // eslint-disable-next-line no-restricted-syntax
       for (const int of interfaces) {
-        sinon.assert.calledWith(funcStub, `sudo iptables -I DOCKER-USER -i ${int} -o ${int} -j ACCEPT`);
+        sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'DOCKER-USER', '-i', int, '-o', int, '-j', 'ACCEPT'] });
       }
-      sinon.assert.calledWith(funcStub, 'sudo iptables -I DOCKER-USER -i docker0 -o docker0 -j ACCEPT');
+      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'DOCKER-USER', '-i', 'docker0', '-o', 'docker0', '-j', 'ACCEPT'] });
 
-      // 1 for the CHAIN rules, 1 FLUSH, 1 docker0 allow 2 interface allows, 9 for the adds and 1 for the RETURN
-      expect(infoLogSpy.callCount).to.eql(15);
+      // 2 for the CHAIN rules, 1 FLUSH, 1 docker0 allow, 2 interface allows, 9 for the adds and 1 for the RETURN
+      expect(infoLogSpy.callCount).to.eql(16);
       sinon.assert.notCalled(errorLogSpy);
     });
 
     it('should bail out as soon as a rule errors out', async () => {
-      funcStub = sinon.fake(async (cmd) => {
-        if (cmd.includes('sudo iptables --version')) {
-          return 'iptables v1.8.7 (nf_tables)';
-        } if (cmd.includes('sudo iptables -L DOCKER-USER')) {
-          return `Chain DOCKER-USER (0 references)
-          target     prot opt source               destination`;
-        } if (cmd.includes('sudo iptables -C FORWARD -j DOCKER-USER')) {
-          return 'DOCKER-USER  all opt -- in * out *  0.0.0.0/0  -> 0.0.0.0/0';
-        } if (cmd.includes('sudo iptables -F DOCKER-USER')) {
-          // this is the rule under test
-          return undefined;
-        } if (cmd.includes('sudo iptables -I DOCKER-USER -i docker0 -o docker0 -j ACCEPT')) {
-          throw new Error();
-        }
-        return undefined;
+      runCommandStub.callsFake(async (cmd, options) => {
+        const command = invocation(cmd, options);
+        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
+        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
+        if (command === 'iptables -C FORWARD -j DOCKER-USER') return ok();
+        // this is the rule under test
+        if (command === 'iptables -I DOCKER-USER -i docker0 -o docker0 -j ACCEPT') return failed();
+        return ok();
       });
-      utilStub.returns(funcStub);
 
       const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
 
       expect(result).to.eql(false);
-      expect(funcStub.callCount).to.eql(5);
+      expect(runCommandStub.callCount).to.eql(5);
 
       sinon.assert.calledOnceWithExactly(errorLogSpy, 'IPTABLES: Error allowing traffic on Flux interface docker0. Error');
     });

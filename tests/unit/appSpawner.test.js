@@ -256,7 +256,6 @@ describe('appSpawner tests', () => {
       '../appSecurity/imageManager': {
         isImageBlocked: opts.imageBlockedStub ?? sinon.stub().resolves({ blocked: false }),
         verifyRepository: sinon.stub().resolves(),
-        isAppVetted: sinon.stub().resolves(false),
       },
       '../appRequirements/hwRequirements': {
         checkNodeResources: sinon.stub().resolves(),

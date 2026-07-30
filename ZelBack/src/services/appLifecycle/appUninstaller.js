@@ -24,7 +24,6 @@ const { stopAppMonitoring } = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const globalCommand = require('../appManagement/globalCommand');
 const volumeService = require('../utils/volumeService');
-const imageManager = require('../appSecurity/imageManager');
 const fluxEventBus = require('../utils/fluxEventBus');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const pendingTeardownStore = require('./pendingTeardownStore');
@@ -1272,25 +1271,6 @@ async function removeAppLocallyApi(req, res) {
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
       return res.json(errMessage);
-    }
-
-    const instForVettedCheck = await appsRepository.getInstalledApp(appname)
-      || await appsRepository.getGlobalAppInfo(appname);
-
-    if (instForVettedCheck) {
-      const deployment = await deploymentProvider.getInstalledDeployment(appname);
-      const images = deployment ? deployment.allImages() : [];
-      const appIsVetted = await imageManager.isAppVetted({ owner: instForVettedCheck.owner, hash: instForVettedCheck.hash, images });
-      if (appIsVetted) {
-        // Check if user is specifically the app owner or Flux Team
-        const isAppOwner = await verificationHelper.verifyPrivilege('appowner', req, appname);
-        const isFluxTeam = await verificationHelper.verifyPrivilege('fluxteam', req);
-
-        if (!isAppOwner && !isFluxTeam) {
-          const errMessage = messageHelper.createErrorMessage('This is a vetted application. Only the app owner or InFlux Support Team are allowed to uninstall it.');
-          return res.json(errMessage);
-        }
-      }
     }
 
     if (global) {

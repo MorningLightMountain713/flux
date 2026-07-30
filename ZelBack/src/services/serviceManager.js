@@ -44,6 +44,7 @@ const nodeCapabilities = require('./utils/nodeCapabilities');
 const { peerManager } = require('./utils/peerState');
 const enterpriseNetwork = require('./utils/enterpriseNetwork');
 const enterpriseConfig = require('./utils/enterpriseConfig');
+const policyStore = require('./policy/policyStore');
 const appQueryService = require('./appQuery/appQueryService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
@@ -65,6 +66,7 @@ const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
 const appsRepository = require('./appDatabase/appsRepository');
+const nodeIdentityMigration = require('./appDatabase/nodeIdentityMigration');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
 const imageUpdateService = require('./imageUpdateService');
@@ -121,31 +123,44 @@ async function startFluxFunctions() {
     // the latch window (usually already latched by now). Depends only on the benchmark
     // channel, not the daemon/db.
     await nodeCapabilities.resolveNodeCapability();
-    // Seed the enterprise node->owners map from helpers/enterprisenodes.json on disk
-    // and sync it from github (every 6h thereafter). Awaited so consumers (identity
-    // resolution, the spawn loop, app-spec validation) have data before they run; the
-    // disk read and github fetch are both bounded (10s fetch timeout) so boot is never
-    // stuck on this. A failed/invalid sync keeps the last-good value.
-    // De-auth hook: after each successful owner-map refresh, drop image-cache pins owned by a
-    // FluxId no longer allowed on this node. Tied to the refresh (not a blind timer) because the
-    // owner list is the only input and it changes only here. Enterprise-only via imageCacheEnabled;
-    // a no-op elsewhere. (On a node whose github sync is disabled this never fires — boot covers it.)
-    const onOwnerMapRefreshed = imageCacheEnabled
-      ? () => imageCacheMaintenance.cleanupDeauthorizedOwners()
-        .catch((err) => log.error(`imageCache - de-auth cleanup error: ${err.message}`))
-      : undefined;
-    await enterpriseConfig.startSync(onOwnerMapRefreshed).catch((err) => log.error(`enterpriseConfig sync start error: ${err.message}`));
+    // De-auth hook: after each refresh that changes the enterprise owner map, drop
+    // image-cache pins owned by a FluxId no longer allowed on this node. Tied to the
+    // refresh (not a blind timer) because the owner list is the only input and it changes
+    // only there. Enterprise-only via imageCacheEnabled; a no-op elsewhere. Registered
+    // before the store starts so the boot refresh is not missed.
+    if (imageCacheEnabled) {
+      enterpriseConfig.onOwnerMapChange(() => imageCacheMaintenance.cleanupDeauthorizedOwners()
+        .catch((err) => log.error(`imageCache - de-auth cleanup error: ${err.message}`)));
+    }
     // Hard dependencies — nothing starts until these are confirmed.
     await dbHelper.waitForMongo();
     await dockerService.waitForDocker();
+
+    // The network's enforcement documents: blocked repositories, the enterprise
+    // node->owners map, the tampering blocklist and the image whitelist. Awaited so
+    // consumers (identity resolution, the spawn loop, app-spec validation, image
+    // verification) have data before they run; the cache read is local and each fetch is
+    // capped at 10s, so boot is never stuck on this. Placed after waitForMongo because
+    // last-known-good lives in the database — started earlier, a node that boots while the
+    // source is unreachable would fall all the way back to the release-time seed.
+    await policyStore.startSync().catch((err) => log.error(`policyStore start error: ${err.message}`));
+
+    // Adopt node runtime state that older versions kept in config/userconfig.js.
+    // Awaited and placed first: pgpService and the IP monitor both read these from
+    // the database, and a node that generated a fresh keypair because the migration
+    // had not run yet would lose the ability to decrypt its own apps' credentials.
+    await nodeIdentityMigration.migrateNodeIdentity()
+      .catch((error) => log.error(`Node identity migration error: ${error.message}`));
 
     // Check and update CloudUI if needed (for legacy nodes without watchdog; Arcane
     // delegates to the watchdog). Detached: a UI-asset download must never gate boot —
     // nothing downstream reads it, and a slow/unreachable GitHub would stall the node.
     log.info('Checking CloudUI installation...');
     cloudUIUpdateService.checkAndUpdateCloudUI().catch((err) => log.error(`CloudUI update check failed: ${err.message}`));
-    // User configured UPnP node with routerIP, UPnP has already been verified and setup
-    if (userconfig.initial.routerIP) {
+    // Gated on the declared UPnP setting, not on routerIP being populated: the
+    // installer records a router address on non-UPnP nodes too (the default gateway),
+    // so its presence never meant the operator wanted UPnP.
+    if (upnpService.isUPNP()) {
       setInterval(() => {
         // this is only used as a protection against node operators removing rules
         // on legacy nodes.

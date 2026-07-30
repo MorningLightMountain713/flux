@@ -69,7 +69,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # The oldest Node in the fleet, matching the unit workflow
+          node-version: 20.8.0
 
       - name: Install runner dependencies
         run: npm install --no-audit --no-fund

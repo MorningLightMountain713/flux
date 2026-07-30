@@ -1,32 +1,21 @@
-const path = require('path');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const hostStorageCapability = require('../utils/hostStorageCapability');
-const appsRepository = require('../appDatabase/appsRepository');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');
-// eslint-disable-next-line no-unused-vars
-const { appConstants } = require('../utils/appConstants');
 const { getContainerStorage } = require('../utils/appUtilities');
 
 // eslint-disable-next-line import/no-extraneous-dependencies
 const util = require('util');
-// eslint-disable-next-line import/no-extraneous-dependencies
-const nodecmd = require('node-cmd');
 
-// eslint-disable-next-line no-unused-vars
-const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
-// eslint-disable-next-line no-unused-vars
-const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
 
 const dosState = 0;
 const dosMessage = null;
 
-const cmdAsync = util.promisify(nodecmd.run);
 const dockerStatsStreamPromise = util.promisify(dockerService.dockerContainerStatsStream);
 
 /**
@@ -392,25 +381,6 @@ async function appMonitorStream(req, res) {
       error.code,
     );
     res.json(errMessage);
-  }
-}
-
-/**
- * Get application folder size
- * @param {string} appName - Application name
- * @returns {Promise<number>} Folder size in bytes
- */
-async function getAppFolderSize(appName) {
-  try {
-    const appsDirPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
-    const directoryPath = path.join(appsDirPath, appName);
-    const exec = `sudo du -s --block-size=1 ${directoryPath}`;
-    const cmdres = await cmdAsync(exec);
-    const size = serviceHelper.ensureString(cmdres).split('\t')[0] || 0;
-    return size;
-  } catch (error) {
-    log.error(error);
-    return 0;
   }
 }
 
@@ -901,7 +871,6 @@ module.exports = {
   appMonitorStream,
   appExec,
   appChanges,
-  getAppFolderSize,
   startAppMonitoring,
   stopAppMonitoring,
   listAppsImages,
