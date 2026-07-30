@@ -16,6 +16,7 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
+const enterpriseConfig = require('../../ZelBack/src/services/utils/enterpriseConfig');
 
 const packageJson = require('../../package.json');
 
@@ -125,6 +126,28 @@ describe('loading express', () => {
         return done();
       });
   });
+  // apicache caches every status code by default, and this route holds its answer for an
+  // hour. Before the route carried a success-only toggle, one poll landing in the window
+  // between the API listening and policyStore starting would memoize an empty enterprise
+  // allow-list for that hour — long after the node had the real map, and with nothing on
+  // the node looking wrong. Only the real server exercises that; the throwaway express
+  // apps elsewhere in this tier never mount apicache.
+  it('http /flux/enterpriseappowners serves 503 before load and is not poisoned by it', async () => {
+    const loaded = sinon.stub(enterpriseConfig, 'isOwnerMapLoaded').returns(false);
+    const owners = sinon.stub(enterpriseConfig, 'getEnterpriseAppOwners').returns(['ownerA', 'ownerB']);
+    try {
+      await request(serverHttp).get('/flux/enterpriseappowners').expect(503);
+
+      loaded.returns(true);
+
+      const res = await request(serverHttp).get('/flux/enterpriseappowners').expect(200);
+      expect(JSON.parse(res.text).data).to.deep.equal(['ownerA', 'ownerB']);
+    } finally {
+      loaded.restore();
+      owners.restore();
+    }
+  });
+
   it('http non-existing-path', (done) => {
     request(serverHttp)
       .get('/foo/bar')

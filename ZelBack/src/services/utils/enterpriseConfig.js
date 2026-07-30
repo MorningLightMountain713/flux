@@ -26,6 +26,20 @@ function getEnterpriseNodeOwnerMap() {
   return policyStore.get(DOCUMENT) ?? {};
 }
 
+/**
+ * Whether the owner map has been loaded at all — from the cache, the seed, or a fetch.
+ *
+ * False only before policyStore has started, which on a restart is a real window: the API
+ * listens well before the boot sequence reaches startSync. The allow-list callers above are
+ * ordered after it and are right to fail closed regardless, but a caller that can tell the
+ * difference should: serving an empty union as though it were the answer is indistinguishable
+ * from a network that has no enterprise nodes.
+ * @returns {boolean}
+ */
+function isOwnerMapLoaded() {
+  return policyStore.get(DOCUMENT) !== null;
+}
+
 /** Every enterprise node pubkey (the map keys). */
 function getEnterpriseNodesPublicKeys() {
   return Object.keys(getEnterpriseNodeOwnerMap());
@@ -68,5 +82,6 @@ module.exports = {
   getEnterpriseAppOwners,
   getEnterpriseNodeOwnerMap,
   getEnterpriseNodesPublicKeys,
+  isOwnerMapLoaded,
   onOwnerMapChange,
 };

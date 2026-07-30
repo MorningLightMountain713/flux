@@ -74,6 +74,21 @@ describe('enterpriseConfig', () => {
       expect(m.getEnterpriseAppOwners()).to.deep.equal([]);
       expect(m.getAllowedOwnersForNode('nodeA')).to.deep.equal([]);
     });
+
+    // The accessors above deliberately collapse "no copy" into "no owners", because every
+    // one of them answers an allow-list question. A caller that can distinguish must still
+    // be able to, or the collapse leaks out of the module as a fact about the network.
+    it('reports the map as not loaded, keeping "could not ask" separate from "nobody"', () => {
+      expect(loadModule(null).module.isOwnerMapLoaded()).to.equal(false);
+    });
+
+    it('reports a genuinely empty document as loaded', () => {
+      expect(loadModule({}).module.isOwnerMapLoaded()).to.equal(true);
+    });
+
+    it('reports a populated document as loaded', () => {
+      expect(loadModule().module.isOwnerMapLoaded()).to.equal(true);
+    });
   });
 
   describe('getEnterpriseAppOwners memoization', () => {

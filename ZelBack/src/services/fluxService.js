@@ -758,12 +758,23 @@ function getAPIPort(req, res) {
 }
 
 /**
- * To show the list of enterprise app owners from configuration.
+ * To show the list of enterprise app owners the network authorizes.
+ *
+ * Answers 503 while the owner map has not been loaded — the window between the API
+ * accepting traffic and the boot sequence reaching policyStore. Serving the empty union
+ * then would be a lie a caller cannot detect: it is byte-identical to a network with no
+ * enterprise nodes, and the route caches success for an hour, so one poll landing in that
+ * window would publish it long after the node had the real map. The route's cache toggle
+ * keeps this response out of the cache; the next poll re-asks.
  * @param {object} req Request.
  * @param {object} res Response.
  * @returns {object} Message.
  */
 function getEnterpriseAppOwners(req, res) {
+  if (!enterpriseConfig.isOwnerMapLoaded()) {
+    const errMessage = messageHelper.createErrorMessage('Enterprise owner map is not loaded yet', 'NotReady', 503);
+    return res ? res.status(503).json(errMessage) : errMessage;
+  }
   const enterpriseAppOwners = enterpriseConfig.getEnterpriseAppOwners();
   const message = messageHelper.createDataMessage(enterpriseAppOwners);
   return res ? res.json(message) : message;

@@ -73,6 +73,12 @@ function requireHttps(req, res, next) {
 
 const cache = apicache.middleware;
 
+// apicache caches every status code by default (its statusCodes include/exclude lists are
+// both empty), so a route whose handler can answer "not ready yet" needs this toggle or that
+// answer is memoized for the route's whole duration. Pass it as the middleware's second
+// argument alongside the duration.
+const onlySuccess = (req, res) => res.statusCode === 200;
+
 module.exports = (app) => {
   // GET PUBLIC methods
   app.get('/daemon/help/:command?', cache('1 hour'), (req, res) => { // accept both help/command and ?command=getinfo. If ommited, default help will be displayed. Other calls works in similar way
@@ -302,7 +308,7 @@ module.exports = (app) => {
   app.get('/flux/apiport', cache('1 day'), (req, res) => {
     fluxService.getAPIPort(req, res);
   });
-  app.get('/flux/enterpriseappowners', cache('1 hour'), (req, res) => {
+  app.get('/flux/enterpriseappowners', cache('1 hour', onlySuccess), (req, res) => {
     fluxService.getEnterpriseAppOwners(req, res);
   });
   app.get('/flux/marketplaceurl', cache('1 day'), (req, res) => {
