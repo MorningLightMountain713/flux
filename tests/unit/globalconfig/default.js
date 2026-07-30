@@ -319,6 +319,7 @@ module.exports = {
     complianceRetryBaseMs: 60000,
     complianceRetryMaxMs: 3600000,
     imageComplianceIntervalMs: 3600000,
+    tamperingCheckIntervalMs: 43200000, // 12h — how often a node re-checks whether it is on the tampering blocklist
     imageCacheEnabled: true,
     imageCachePerFluxIdQuotaGb: 20,
     imageCachePerImageBurstCapGb: 5,
@@ -472,9 +473,17 @@ module.exports = {
       'c31930ec386a49f31321851766d93bcb90bf269cd15bec7a329155a4d79ea380',
       '739ca41408f66c75d6cb4bc1d5c044ca5a118de190081da68e5a7d6839fb69f8',
     ],
-    refreshIntervalMs: 24 * 60 * 60 * 1000,
+    refreshIntervalMs: {
+      blockedRepositories: 21600000,
+      tamperingBlocklist: 43200000,
+      enterpriseNodes: 21600000,
+      ipLocationTable: 86400000,
+    },
     peerWindowMs: 3 * 1000,
-    fetchTimeoutMs: 10 * 1000,
+    fetchTimeoutMs: {
+      default: 10000,
+      ipLocationTable: 120000,
+    },
     minConfirmingPeers: 4,
     backstopRetryIntervalMs: 60 * 1000,
   },

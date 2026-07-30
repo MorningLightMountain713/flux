@@ -14,19 +14,11 @@ describe('appTamperingBlocklistService tests', () => {
 
   function loadService(arcane = false) {
     return proxyquire('../../ZelBack/src/services/appTamperingBlocklistService', {
+      // Everything this module reads from config, and nothing else: the document
+      // URL moved to policyStore, which is stubbed below. noCallThru means an
+      // absent key is a TypeError at require time rather than a fallback.
       config: {
-        database: {
-          local: {
-            database: 'zelfluxlocal',
-            collections: { appTamperingEvents: 'apptamperingevents' },
-          },
-        },
-        // development's key (040499fd2: every endpoint a node reaches is
-        // configuration). The service reads config.policy.baseUrl; the stale
-        // github.rawBaseUrl stub made the whole file fail to load.
-        policy: {
-          baseUrl: 'https://raw.githubusercontent.com/RunOnFlux/fluxos-network-policy/main',
-        },
+        fluxapps: { tamperingCheckIntervalMs: 43200000 },
       },
       '../lib/log': {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),

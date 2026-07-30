@@ -625,6 +625,7 @@ module.exports = {
     complianceRetryBaseMs: 60000,
     complianceRetryMaxMs: 3600000,
     imageComplianceIntervalMs: 3600000,
+    tamperingCheckIntervalMs: 43200000, // 12h — how often a node re-checks whether it is on the tampering blocklist
     imageCacheEnabled: true, // master switch for the image-cache API + retention pin
     imageCachePerFluxIdQuotaGb: 20, // soft per-fluxId quota, accounted from real docker df() on-disk size
     imageCachePerImageBurstCapGb: 5, // per-image admission cap vs (compressed * 2); bounds the burst to ~one image
@@ -901,7 +902,12 @@ module.exports = {
     // unobservable in a test, and a suite that cannot watch the backstop fire has to
     // restart a node to approximate it - which tests the boot path instead, and leaves
     // the periodic one with no coverage at all.
-    refreshIntervalMs: 24 * 60 * 60 * 1000,
+    refreshIntervalMs: {
+      blockedRepositories: 21600000, // 6h
+      tamperingBlocklist: 43200000, // 12h
+      enterpriseNodes: 21600000, // 6h
+      ipLocationTable: 86400000, // 24h
+    },
     // How long a refresh waits for a peer to answer before falling through to the
     // source. Peers are on the local network and answer in milliseconds; this bounds how
     // long a refresh is prepared to sit doing nothing, so it is an ABSOLUTE latency
@@ -909,7 +915,10 @@ module.exports = {
     peerWindowMs: 3 * 1000,
     // Bound on a single backstop fetch, so a boot is never stuck on one source. Absolute,
     // for the same reason as above.
-    fetchTimeoutMs: 10 * 1000,
+    fetchTimeoutMs: {
+      default: 10000,
+      ipLocationTable: 120000,
+    },
     // How long a FAILED backstop fetch stands as the answer before the source is asked
     // again. The decision to ask is derived from the peer picture and re-evaluated
     // whenever it changes, which is right - but a peer connecting says nothing about

@@ -11,6 +11,18 @@ describe('policyStore tests', () => {
   let logStub;
 
   const BASE_URL = 'https://policy.example/documents';
+  // Timings live in config now, so the suite declares them rather than reading production's.
+  const ARTIFACT_TIMEOUT_MS = 120000;
+  const POLICY_CONFIG = {
+    baseUrl: BASE_URL,
+    refreshIntervalMs: {
+      blockedRepositories: 6 * 3600000,
+      tamperingBlocklist: 12 * 3600000,
+      enterpriseNodes: 6 * 3600000,
+      ipLocationTable: 24 * 3600000,
+    },
+    fetchTimeoutMs: { default: 10000, ipLocationTable: ARTIFACT_TIMEOUT_MS },
+  };
 
   // Every document is loaded and refreshed by the same code path, so the layer tests use
   // one of them; the per-document differences are the filename and the validator, which
@@ -20,7 +32,7 @@ describe('policyStore tests', () => {
 
   function loadStore() {
     return proxyquire('../../ZelBack/src/services/policy/policyStore', {
-      config: { policy: { baseUrl: BASE_URL } },
+      config: { policy: POLICY_CONFIG },
       fs: { promises: fsStub },
       '../../lib/log': logStub,
       '../serviceHelper': serviceHelperStub,
@@ -392,9 +404,8 @@ describe('policyStore tests', () => {
 
       await store.refresh(ARTIFACT);
 
-      expect(serviceHelperStub.axiosGet.firstCall.args[1].timeout)
-        .to.equal(store.DOCUMENTS[ARTIFACT].timeoutMs);
-      expect(store.DOCUMENTS[ARTIFACT].timeoutMs).to.be.above(10 * 1000);
+      expect(serviceHelperStub.axiosGet.firstCall.args[1].timeout).to.equal(ARTIFACT_TIMEOUT_MS);
+      expect(ARTIFACT_TIMEOUT_MS).to.be.above(POLICY_CONFIG.fetchTimeoutMs.default);
     });
 
     it('does not cache bytes the receiver rejected', async () => {
