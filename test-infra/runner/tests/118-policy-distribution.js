@@ -75,6 +75,24 @@ async function ownersOn(client) {
   return res.data;
 }
 
+// restartFluxos returns as soon as /flux/version answers, but the API listens well before
+// the boot sequence reaches policyStore.startSync() — that sits behind waitForMongo and
+// waitForDocker (serviceManager.js). So the owner map is legitimately empty for a window
+// after every restart here, and reading it once races boot: this suite passed standalone and
+// failed in the parallel gate, where a loaded box widens that window. Converge on the
+// endpoint instead — the observable this suite is built around. A map that never arrives
+// still fails, and it fails with the diff rather than a bare timeout.
+async function expectOwnersOn(client, expected, label) {
+  let last = null;
+  await waitFor(async () => {
+    last = await ownersOn(client);
+    return last.length === expected.length && expected.every((owner) => last.includes(owner));
+  }, { timeout: 60000, interval: 500, label }).catch((error) => {
+    if (last === null) throw error; // never got an answer at all — that, not a members diff
+  });
+  expect(last, label).to.have.members(expected);
+}
+
 describe('Policy distribution: enforcement survives an unreachable source', function () {
   let env;
 
@@ -118,7 +136,7 @@ describe('Policy distribution: enforcement survives an unreachable source', func
 
       await restartFluxos(env.clients[0].container);
 
-      expect(await ownersOn(env.clients[0])).to.have.members(PUBLISHED_OWNERS);
+      await expectOwnersOn(env.clients[0], PUBLISHED_OWNERS, 'the published owner map after a restart');
 
       const cached = await dbClient(1).policyDocument('enterpriseNodes');
       expect(cached, 'the fetched document must be persisted, not just held in memory').to.not.be.null;
@@ -135,7 +153,7 @@ describe('Policy distribution: enforcement survives an unreachable source', func
 
       await restartFluxos(env.clients[0].container);
 
-      expect(await ownersOn(env.clients[0])).to.have.members(PUBLISHED_OWNERS);
+      await expectOwnersOn(env.clients[0], PUBLISHED_OWNERS, 'the cached owner map with the source down');
     });
 
     it('revalidates conditionally instead of re-downloading', async function () {
@@ -147,11 +165,16 @@ describe('Policy distribution: enforcement survives an unreachable source', func
 
       await restartFluxos(env.clients[0].container);
 
-      const counts = await policyRequestCounts();
-      const enterprise = counts[POLICY_PATHS.enterpriseNodes] || { 200: 0, 304: 0 };
+      // Same boot race as above: the revalidation is issued when the store starts, not when
+      // the API answers, so wait for the request to land rather than tallying immediately.
+      let enterprise = { 200: 0, 304: 0 };
+      await waitFor(async () => {
+        enterprise = (await policyRequestCounts())[POLICY_PATHS.enterpriseNodes] || { 200: 0, 304: 0 };
+        return Number(enterprise['304']) >= 1;
+      }, { timeout: 60000, interval: 500, label: 'the restarted node revalidated the enterprise map' }).catch(() => {});
       expect(enterprise['304'], 'an unchanged document must revalidate, not re-download').to.be.at.least(1);
       expect(enterprise['200']).to.equal(0);
-      expect(await ownersOn(env.clients[0])).to.have.members(PUBLISHED_OWNERS);
+      await expectOwnersOn(env.clients[0], PUBLISHED_OWNERS, 'the owner map after a conditional revalidation');
     });
 
     it('falls back to the shipped seed when it has no cache and no source', async function () {
@@ -165,7 +188,7 @@ describe('Policy distribution: enforcement survives an unreachable source', func
 
       await restartFluxos(node.container);
 
-      expect(await ownersOn(node)).to.have.members(SEEDED_OWNERS);
+      await expectOwnersOn(node, SEEDED_OWNERS, 'the shipped seed with no cache and no source');
       await healPaths();
     });
   });
