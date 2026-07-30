@@ -19,6 +19,10 @@ const DOCUMENT = 'enterprisenodes';
 let ownersUnionCache = null;
 let ownersUnionCacheKey = null;
 
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * A valid node->owners map is a plain object whose every value is an array of strings.
  *

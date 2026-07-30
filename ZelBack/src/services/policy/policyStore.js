@@ -34,10 +34,6 @@ const policyArtifactRepository = require('../appDatabase/policyArtifactRepositor
 
 // helpers/ lives at the repo root, four levels up from this file.
 const HELPERS_DIR = path.join(__dirname, '..', '..', '..', '..', 'helpers');
-const DEFAULT_TIMEOUT_MS = 10 * 1000;
-
-const MINUTE = 60 * 1000;
-const HOUR = 60 * MINUTE;
 
 function isStringArray(value) {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
@@ -56,26 +52,20 @@ function isValidNodeOwnerMap(value) {
   );
 }
 
+// Identity and shape. Refresh intervals and fetch timeouts are config.policy, keyed by these
+// same names.
+//
 // No entry for repositories.json — the image whitelist. Nothing has enforced it since
 // isWhitelisted() was written in July 2024 without a caller, and the document itself has not
 // been edited since September 2024. An entry here means every node polls for it, so a document
 // earns one only when something demonstrably reads it and acts on what it says.
 const DOCUMENTS = {
-  blockedRepositories: {
-    kind: 'document', file: 'blockedrepositories.json', validate: isStringArray, intervalMs: 6 * HOUR,
-  },
-  tamperingBlocklist: {
-    kind: 'document', file: 'tamperingblockednodes.json', validate: isStringArray, intervalMs: 12 * HOUR,
-  },
-  enterpriseNodes: {
-    kind: 'document', file: 'enterprisenodes.json', validate: isValidNodeOwnerMap, intervalMs: 6 * HOUR,
-  },
+  blockedRepositories: { kind: 'document', file: 'blockedrepositories.json', validate: isStringArray },
+  tamperingBlocklist: { kind: 'document', file: 'tamperingblockednodes.json', validate: isStringArray },
+  enterpriseNodes: { kind: 'document', file: 'enterprisenodes.json', validate: isValidNodeOwnerMap },
   // The IP -> (org, country) table placement uses to count fault domains. Inert until its
-  // consumer registers a receiver, so the entry costs nothing before that lands. The timeout is
-  // an order above the documents' because the artifact is megabytes, not kilobytes.
-  ipLocationTable: {
-    kind: 'artifact', file: 'iplocation.json', intervalMs: 24 * HOUR, timeoutMs: 120 * 1000,
-  },
+  // consumer registers a receiver, so the entry costs nothing before that lands.
+  ipLocationTable: { kind: 'artifact', file: 'iplocation.json' },
 };
 
 // Documents only. Artifacts are never retained: an absent key here is what get() reports.
@@ -98,7 +88,11 @@ function documentUrl(name) {
 }
 
 function timeoutFor(name) {
-  return DOCUMENTS[name].timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  return config.policy.fetchTimeoutMs[name] ?? config.policy.fetchTimeoutMs.default;
+}
+
+function intervalFor(name) {
+  return config.policy.refreshIntervalMs[name];
 }
 
 /**
@@ -336,7 +330,7 @@ async function startSync() {
   names.filter((name) => !isArtifact(name) || receivers.has(name)).forEach((name) => {
     intervals.set(name, setInterval(async () => {
       if (await refresh(name)) notify(name);
-    }, DOCUMENTS[name].intervalMs));
+    }, intervalFor(name)));
   });
 }
 

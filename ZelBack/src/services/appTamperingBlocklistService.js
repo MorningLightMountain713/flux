@@ -1,3 +1,4 @@
+const config = require('config');
 const log = require('../lib/log');
 const appTamperingRepository = require('./appDatabase/appTamperingRepository');
 const nodeDosState = require('./nodeDosState');
@@ -6,7 +7,7 @@ const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const globalState = require('./utils/globalState');
 const policyStore = require('./policy/policyStore');
 
-const CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const CHECK_INTERVAL_MS = config.fluxapps.tamperingCheckIntervalMs ?? 12 * 60 * 60 * 1000;
 // How often to look at the DOS slot while waiting for another owner to let go
 // of it. Purely local - it reads the slot and nothing else, so it costs no
 // blocklist fetch and no benchmark call, which is why it can run this often
@@ -255,7 +256,8 @@ function stopSlotWatch() {
 
 /**
  * Start the enforcer. Waits for daemon sync, performs the first check, then
- * runs every 12h. Safe to call multiple times (no-ops if already started).
+ * runs every config.fluxapps.tamperingCheckIntervalMs (12h by default). Safe to
+ * call multiple times (no-ops if already started).
  */
 async function start() {
   if (intervalHandle) return;
