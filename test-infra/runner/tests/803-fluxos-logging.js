@@ -29,17 +29,22 @@ import {
 // belongs to the live stage-2 validation on a real Arcane node.
 //
 // Every content assertion is against self-provoked lines:
-//   - POST /flux/adjustblockedports logs the submitted value at info
-//     (`blockedPorts: <json>`) BEFORE validating, then throws a real Error
-//     on a non-array — one call yields a unique info marker AND an error
-//     record carrying a stack.
+//   - GET /apps/apporiginalowner/<name> logs the name it is searching for at
+//     info BEFORE querying, then throws a real Error when nothing registered
+//     it — one call yields a unique info marker AND an error record carrying
+//     a stack.
 //   - GET /flux/tailbenchmarkdebug always shells out through
 //     serviceHelper.runCommand, which logs `Run Cmd: ...` at debug before
 //     executing — a guaranteed debug-level line (absent at the production
 //     'info' level; the harness runs logLevel 'debug').
 
 const MARKER = 'E2E-71-LOG-GREP-MARKER';
-const PROVOKED_ERROR = 'Blocked Ports is not a valid array';
+// Asking for the original owner of an app nobody registered logs the name it searched for at
+// info, then throws — one marked info line and one stack-carrying error from a single call,
+// which is exactly what the assertions below need. This replaced POSTing a bad value to
+// /flux/adjustblockedports: that setting is withdrawn and now answers 410 without logging.
+const PROVOKED_INFO = `Searching register permanent messages for ${MARKER}`;
+const PROVOKED_ERROR = `No registration message found for ${MARKER}`;
 
 // Docker's json-file logger stores one entry per written line, splitting
 // only lines that exceed its 16KB frame buffer — the head fragment of such a
@@ -97,7 +102,7 @@ describe('fluxos logging: pino NDJSON sink and the admin log endpoints (non-jour
     // Provocations (see the header): one guaranteed debug line...
     await client.getAuthed('/flux/tailbenchmarkdebug', zelidauth);
     // ...and one info marker + one stack-carrying error from a single call.
-    const res = await client.post('/flux/adjustblockedports', { blockedPorts: MARKER }, { zelidauth });
+    const res = await client.get(`/apps/apporiginalowner/${MARKER}`, { noCache: true });
     expect(res.status).to.equal('error');
     expect(res.data.message).to.equal(PROVOKED_ERROR);
 
@@ -143,7 +148,7 @@ describe('fluxos logging: pino NDJSON sink and the admin log endpoints (non-jour
   it('honors logLevel debug and stamps exact numeric levels; errors carry err.stack on the line', function () {
     const records = parsedNdjson();
 
-    const info = records.find((r) => r.msg === `blockedPorts: ${JSON.stringify(MARKER)}`);
+    const info = records.find((r) => r.msg === PROVOKED_INFO);
     expect(info, 'provoked info marker line').to.exist;
     expect(info.level).to.equal(30);
 
@@ -151,7 +156,7 @@ describe('fluxos logging: pino NDJSON sink and the admin log endpoints (non-jour
     expect(error, 'provoked error line').to.exist;
     expect(error.level).to.equal(50);
     expect(error.err, 'the err serializer keeps the Error structured').to.be.an('object');
-    expect(error.err.stack).to.be.a('string').and.include('adjustBlockedPorts');
+    expect(error.err.stack).to.be.a('string').and.include('getApplicationOriginalOwner');
 
     // Present only because the harness runs logLevel 'debug' — at the
     // production 'info' default this line would not exist.
