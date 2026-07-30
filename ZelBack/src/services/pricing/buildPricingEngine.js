@@ -32,15 +32,16 @@ function uuidToBytes(uuid) {
  * default cascade) or by a per-tier fixed USD price; the two are mutually
  * exclusive, so this sets at most one of marketplaceMultiplier /
  * marketplaceFixedPriceMicrodollars. configId (the deployed tier) selects the
- * most-specific entry. Non-v9 or non-marketplace specs return an empty fragment
- * (pure resource pricing, 1.0x).
+ * most-specific entry. Non-marketplace specs return an empty fragment (pure
+ * resource pricing, 1.0x) — which covers every v1-v8 spec, since marketplace is
+ * a v9 field and the legacy classes all report it as undefined.
  *
- * @param {object} spec - v9 spec instance (exposes .version and .marketplace)
+ * @param {object} spec - spec instance (exposes .marketplace)
  * @param {number} height - chain height to resolve at
  * @returns {{marketplaceMultiplier?: number, marketplaceFixedPriceMicrodollars?: number}}
  */
 function resolveMarketplacePricingCtx(spec, height) {
-  if (!spec || spec.version < 9) return {};
+  if (!spec) return {};
   const { marketplace } = spec;
   if (!marketplace || !marketplace.templateId) return {};
 

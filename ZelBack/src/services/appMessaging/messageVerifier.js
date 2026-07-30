@@ -8,12 +8,9 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
-const { appPricePerMonth } = require('../utils/appUtilities');
-const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
-const { buildPricingEngine, resolveMarketplacePricingCtx } = require('../pricing/buildPricingEngine');
-const priceOracleState = require('../pricing/priceOracleState');
-const { getSpecBackend, getSpecPolicy } = require('../utils/specLibs');
+const { getSpecBackend } = require('../utils/specLibs');
 const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
+const { regimeFor } = require('../pricing/pricingRegime');
 const appsRepository = require('../appDatabase/appsRepository');
 const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
 const { getPreviousSpec } = require('../appDatabase/appSpecHistory');
@@ -275,12 +272,6 @@ function getDaemonHeight() {
   return daemonServiceMiscRpcs.isDaemonSynced().data.height;
 }
 
-function getDefaultExpire(height) {
-  return height >= config.fluxapps.daemonPONFork
-    ? config.fluxapps.blocksLasting * 4
-    : config.fluxapps.blocksLasting;
-}
-
 /**
  * Timestamp of the block at a given height. Fallback for v9 confirmations
  * driven by an appshashes row that predates the stored blockTime field.
@@ -337,103 +328,33 @@ async function constructConfirmedEvent(tempMessage, txid, height, valueSat, bloc
   });
 }
 
+/**
+ * Consensus registration fee in satoshis, from the spec's pricing regime.
+ * @param {object} spec - resolved spec
+ * @param {number} height - confirming block height
+ * @returns {Promise<bigint>}
+ */
 async function computeRegistrationFee(spec, height) {
-  if (spec.version >= 9) {
-    const engine = await buildPricingEngine(height);
-    const breakdown = await engine.price(spec, {
-      height,
-      duration: spec.ttl || 0,
-      // Real encryption bit drives the encryptedSpec fee: a cleartext spec reports
-      // false, a DecryptedCanonicalSpec (decrypted-from-encrypted) reports true.
-      isEncrypted: spec.isEncrypted,
-      ...resolveMarketplacePricingCtx(spec, height),
-    });
-    return BigInt(breakdown.total);
-  }
-  const appPrices = await getChainParamsPriceUpdates();
-  let appPrice = await appPricePerMonth(spec, height, appPrices);
-  const defaultExpire = getDefaultExpire(height);
-  const expireIn = spec.expire || defaultExpire;
-  appPrice *= expireIn / defaultExpire;
-  appPrice = Math.ceil(appPrice * 100) / 100;
-  const intervals = appPrices.filter((p) => p.height < height);
-  const priceSpec = intervals[intervals.length - 1];
-  if (appPrice < priceSpec.minPrice) appPrice = priceSpec.minPrice;
-  return BigInt(Math.round(appPrice * 1e8));
+  return regimeFor(spec).registrationFee(spec, height);
 }
 
+/**
+ * Consensus update fee in satoshis, from the spec's pricing regime. The regime
+ * is chosen by the incoming spec, so an update priced under v9 rules is one
+ * that arrived as a v9 spec.
+ *
+ * @param {object} spec - resolved new spec
+ * @param {object} prevSpec - resolved previous spec
+ * @param {number} height - confirming block height
+ * @param {number} prevHeight - height the previous spec registered at
+ * @param {number} prevRegisteredAt - unix seconds the previous spec registered at
+ * @param {number} nowBlockTime - unix seconds of the confirming block
+ * @returns {Promise<bigint>}
+ */
 async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime) {
-  if (spec.version >= 9) {
-    const engine = await buildPricingEngine(height);
-
-    // Price the previous spec at its OWN registration-height rates, scaled to
-    // its ttl: the basis for the unused-time credit refunds what was paid, at
-    // the rates in force then. The pre-floor figure (marketplaceAdjusted) is
-    // used so the credit is never itself raised to minPrice.
-    const oldEngine = await buildPricingEngine(prevHeight);
-    const oldBreakdown = await oldEngine.price(prevSpec, {
-      height: prevHeight,
-      duration: prevSpec.ttl || 0,
-      isEncrypted: prevSpec.isEncrypted,
-      ...resolveMarketplacePricingCtx(prevSpec, prevHeight),
-    });
-    const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
-
-    // Old spec's feature set, off the breakdown just priced at the old rates
-    // (with the old spec's encryption bit). priceUpdate derives the new set from
-    // the new breakdown; the free-update rule compares the two, so a feature
-    // newly added on this update — including turning encryption on — blocks it.
-    const { usedFeatureKeys } = await getSpecPolicy();
-    const oldFeatures = usedFeatureKeys(oldBreakdown.features);
-
-    // Unused wall-clock seconds left on the prior registration.
-    const remainingSeconds = Math.max(0, (prevRegisteredAt + (prevSpec.ttl || 0)) - nowBlockTime);
-
-    // Flat update discount (0x04 tag 9) resolved at the current height; absent => 0.
-    const modifierHistory = priceOracleState.getPriceModifierHistory();
-    const modParams = modifierHistory ? modifierHistory.resolveAt(height) : null;
-    const updateDiscountBp = (modParams && modParams.updateDiscountBp) || 0;
-
-    const result = await engine.priceUpdate(prevSpec, spec, {
-      height,
-      duration: spec.ttl || 0,
-      now: Date.now(),
-      recentEvents: [],
-      oldScaledPriceMicrodollars,
-      oldFeatures,
-      remainingSeconds,
-      oldTtl: prevSpec.ttl || 0,
-      updateDiscountBp,
-      // priceUpdate prices the new spec internally, so this is the new spec's bit.
-      isEncrypted: spec.isEncrypted,
-      ...resolveMarketplacePricingCtx(spec, height),
-    });
-    return (result && result.free) ? 0n : BigInt(result.total);
-  }
-  const appPrices = await getChainParamsPriceUpdates();
-  let appPrice = await appPricePerMonth(spec, height, appPrices);
-  let previousSpecsPrice = await appPricePerMonth(prevSpec, prevHeight, appPrices);
-  const defaultExpireCurrent = getDefaultExpire(height);
-  const defaultExpirePrevious = getDefaultExpire(prevHeight);
-  const currentExpireIn = spec.expire || defaultExpireCurrent;
-  const previousExpireIn = prevSpec.expire || defaultExpirePrevious;
-  appPrice *= currentExpireIn / defaultExpireCurrent;
-  appPrice = Math.ceil(appPrice * 100) / 100;
-  previousSpecsPrice *= previousExpireIn / defaultExpirePrevious;
-  previousSpecsPrice = Math.ceil(previousSpecsPrice * 100) / 100;
-  const heightDifference = height - prevHeight;
-  const perc = (previousExpireIn - heightDifference) / previousExpireIn;
-  let actualPriceToPay = appPrice * 0.9;
-  if (perc > 0) {
-    actualPriceToPay = (appPrice - (perc * previousSpecsPrice)) * 0.9;
-  }
-  actualPriceToPay = Number(Math.ceil(actualPriceToPay * 100) / 100);
-  const intervals = appPrices.filter((p) => p.height < height);
-  const priceSpec = intervals[intervals.length - 1];
-  if (actualPriceToPay < priceSpec.minPrice) {
-    actualPriceToPay = priceSpec.minPrice;
-  }
-  return BigInt(Math.round(actualPriceToPay * 1e8));
+  return regimeFor(spec).updateFee(
+    spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime,
+  );
 }
 
 async function handleExpiredApp(name) {
@@ -807,6 +728,8 @@ module.exports = {
   getIngressAttestationsByApp,
   checkAndRequestApp,
   checkAndRequestMultipleApps,
+  computeRegistrationFee,
+  computeUpdateFee,
   continuousFluxAppHashesCheck,
   triggerAppHashesCheckAPI,
 };

@@ -32,6 +32,15 @@ function makeBaseStubs(overrides = {}) {
     broadcastMessageToRandomOutgoing: sinon.stub().resolves(),
   };
 
+  // messageVerifier asks a pricing regime for a fee and does not know how one is
+  // computed, so this is the whole pricing surface it can see.
+  const regimeStub = {
+    onChainDisplayPrice: sinon.stub().resolves(1),
+    fiatAndFluxDisplayPrice: sinon.stub().resolves({ usd: 1, flux: 1, fluxDiscount: 0 }),
+    registrationFee: sinon.stub().resolves(100000000n),
+    updateFee: sinon.stub().resolves(100000000n),
+  };
+
   const stubs = {
     config: {
       database: {
@@ -72,19 +81,7 @@ function makeBaseStubs(overrides = {}) {
     '../daemonService/daemonServiceBlockchainRpcs': {
       getBlock: sinon.stub().resolves({ status: 'success', data: { time: 1750000000 } }),
     },
-    '../utils/appUtilities': {
-      appPricePerMonth: sinon.stub().resolves(1),
-    },
-    '../utils/chainUtilities': {
-      getChainParamsPriceUpdates: sinon.stub().resolves([{ height: 0, minPrice: 0.01 }]),
-    },
-    '../pricing/buildPricingEngine': {
-      buildPricingEngine: sinon.stub().resolves({
-        price: sinon.stub().resolves({ total: 100000000 }),
-        priceUpdate: sinon.stub().resolves({ total: 100000000, free: false }),
-      }),
-      resolveMarketplacePricingCtx: sinon.stub().returns({}),
-    },
+    '../pricing/pricingRegime': { regimeFor: sinon.stub().returns(regimeStub) },
     '../utils/specLibs': {
       getSpec: sinon.stub().resolves({}),
       getSpecBackend: sinon.stub().resolves({
@@ -149,7 +146,7 @@ function makeBaseStubs(overrides = {}) {
     }
   }
 
-  return { stubs, dbStub, logStub, messageHelperStub, broadcastStub };
+  return { stubs, dbStub, logStub, messageHelperStub, broadcastStub, regimeStub };
 }
 
 describe('messageVerifier tests', () => {
@@ -504,11 +501,6 @@ describe('messageVerifier tests', () => {
         InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
         deserializeSpec: sinon.stub().returnsArg(0),
       });
-      stubs['../pricing/buildPricingEngine'].buildPricingEngine = sinon.stub().resolves({
-        price: sinon.stub().resolves({ total: 100000000 }),
-      });
-      stubs['../utils/chainUtilities'].getChainParamsPriceUpdates = sinon.stub().resolves([{ height: 0, minPrice: 0.01 }]);
-      stubs['../utils/appUtilities'].appPricePerMonth = sinon.stub().resolves(1);
 
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
@@ -538,7 +530,7 @@ describe('messageVerifier tests', () => {
         serialize: sinon.stub().returns(serializedEvent),
       };
 
-      const { stubs } = makeBaseStubs();
+      const { stubs, regimeStub } = makeBaseStubs();
       stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
         type: 'fluxappregister',
         version: 2,
@@ -554,11 +546,11 @@ describe('messageVerifier tests', () => {
         InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
         deserializeSpec: sinon.stub().returnsArg(0),
       });
-      stubs['../pricing/buildPricingEngine'].buildPricingEngine = sinon.stub().resolves({
-        price: sinon.stub().resolves({ total: 0 }),
-      });
 
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      // A zero fee means pricing is not in force yet, not that the app is free.
+      regimeStub.registrationFee = sinon.stub().resolves(0n);
 
       // valueSat 0 would satisfy the old `valueSat >= 0` check and mint a free app.
       const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 0, null, 2);
@@ -674,10 +666,10 @@ describe('messageVerifier tests', () => {
         isExpired: sinon.stub().returns(false),
         serialize: sinon.stub().returns(wireForm),
       };
-      // The decrypted view appPricePerMonth can price.
+      // The decrypted view the pricing regime can price.
       const decryptedSpec = { name: 'encapp', version: 8, expire: 88000 };
 
-      const { stubs } = makeBaseStubs();
+      const { stubs, regimeStub } = makeBaseStubs();
       const resolveInstantiatedStub = sinon.stub().resolves(decryptedSpec);
       stubs['../utils/specCutover'].resolveInstantiatedSpec = resolveInstantiatedStub;
       stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
@@ -690,9 +682,6 @@ describe('messageVerifier tests', () => {
         InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
         deserializeSpec: sinon.stub().returnsArg(0),
       });
-      const appPriceStub = sinon.stub().resolves(1);
-      stubs['../utils/appUtilities'].appPricePerMonth = appPriceStub;
-
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
       const result = await mv.checkAndRequestApp('encReg', 'txid', 2000000, 200000000, null, 2);
 
@@ -700,8 +689,8 @@ describe('messageVerifier tests', () => {
       // the held encrypted instance is decrypted to its cleartext pricing view
       expect(resolveInstantiatedStub.calledOnceWith(mockInstantiated)).to.be.true;
       // pricing ran against the decrypted spec, never the encrypted wrapper
-      expect(appPriceStub.calledOnce).to.be.true;
-      expect(appPriceStub.firstCall.args[0]).to.equal(decryptedSpec);
+      expect(regimeStub.registrationFee.calledOnce).to.be.true;
+      expect(regimeStub.registrationFee.firstCall.args[0]).to.equal(decryptedSpec);
     });
   });
 
