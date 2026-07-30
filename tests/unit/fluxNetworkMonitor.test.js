@@ -35,6 +35,11 @@ describe('fluxNetworkMonitor tests', () => {
     before(requireMongo);
 
     beforeEach(() => {
+      // checkMyFluxAvailability calls adjustExternalIP when the benchmark reports
+      // a different public IP, and adjustExternalIP rewrites the node's real
+      // config/userconfig.js. Unstubbed, these tests overwrite the developer's
+      // own node configuration with fixture values.
+      sinon.stub(fs, 'writeFile').resolves();
       fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
       const deterministicFluxnodeListResponse = [
@@ -381,7 +386,7 @@ describe('fluxNetworkMonitor tests', () => {
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
-        'fs/promises': { writeFile: writeFileStub },
+        'node:fs/promises': { writeFile: writeFileStub },
       });
 
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
@@ -454,7 +459,7 @@ describe('fluxNetworkMonitor tests', () => {
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
-        'fs/promises': { writeFile: writeFileStub },
+        'node:fs/promises': { writeFile: writeFileStub },
       });
 
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
@@ -517,7 +522,7 @@ describe('fluxNetworkMonitor tests', () => {
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
-        'fs/promises': { writeFile: writeFileStub },
+        'node:fs/promises': { writeFile: writeFileStub },
       });
 
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
@@ -576,7 +581,7 @@ describe('fluxNetworkMonitor tests', () => {
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
-        'fs/promises': { writeFile: writeFileStub },
+        'node:fs/promises': { writeFile: writeFileStub },
       });
 
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
