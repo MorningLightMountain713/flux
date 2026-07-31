@@ -157,6 +157,100 @@ describe('geolocationService tests', () => {
     });
   });
 
+  describe('getPlacementLocation tests', () => {
+    // Against development's ipLocationStore, which is the tree's only location
+    // table: v9's parallel in-memory ipLocationTable was refused at the rebase
+    // rather than run a second copy of the same artifact. lookup() is async and
+    // can reject with a store-unavailable error, which is not an abstention.
+    let ipLocationStoreStub;
+
+    function reload() {
+      return proxyquire('../../ZelBack/src/services/geolocationService', {
+        'node:dns': dnsStub,
+        config: configStub,
+        '../lib/log': logStub,
+        './dbHelper': dbHelperStub,
+        './serviceHelper': serviceHelperStub,
+        './fluxNetworkHelper': fluxNetworkHelperStub,
+        './appPlacement/ipLocationStore': ipLocationStoreStub,
+      });
+    }
+
+    beforeEach(() => {
+      ipLocationStoreStub = {
+        lookup: sinon.stub().resolves(null),
+        status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2000000 }),
+      };
+    });
+
+    it('resolves from the iplocation table with a full ISO region', async () => {
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('62.171.1.5:16127');
+      ipLocationStoreStub.lookup.resolves({
+        org: 'ripencc:hetzner', countryCode: 'DE', continentCode: 'EU', region: 'DE-HE',
+      });
+
+      const result = await reload().getPlacementLocation();
+
+      expect(result).to.deep.equal({ continent: 'EU', country: 'DE', region: 'DE-HE' });
+      sinon.assert.calledOnceWithExactly(ipLocationStoreStub.lookup, '62.171.1.5');
+    });
+
+    it('omits region when the table row carries none', async () => {
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('62.171.1.5:16127');
+      ipLocationStoreStub.lookup.resolves({
+        org: null, countryCode: 'DE', continentCode: 'EU', region: null,
+      });
+
+      const result = await reload().getPlacementLocation();
+
+      expect(result).to.deep.equal({ continent: 'EU', country: 'DE' });
+    });
+
+    it('falls back to self-reported geolocation at country granularity only', async () => {
+      // the table holds no row for this address; the self-report carries a
+      // regionName, which is a display name rather than an ISO code and must
+      // not appear in the location
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('9.9.9.9:16127');
+      dbHelperStub.findOneInDatabase.resolves(mockDbResult);
+
+      const result = await reload().getPlacementLocation();
+
+      expect(result).to.deep.equal({ continent: 'EU', country: 'DE' });
+    });
+
+    it('falls back rather than throwing when the store cannot be read', async () => {
+      // A table that cannot be read is a table that was not asked. Rejecting
+      // here would take down the spawn filter and the install-time check with it.
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('62.171.1.5:16127');
+      ipLocationStoreStub.lookup.rejects(new Error('no database connection'));
+      dbHelperStub.findOneInDatabase.resolves(mockDbResult);
+
+      const result = await reload().getPlacementLocation();
+
+      expect(result).to.deep.equal({ continent: 'EU', country: 'DE' });
+    });
+
+    it('does not ask a store that has ingested no table', async () => {
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('62.171.1.5:16127');
+      ipLocationStoreStub.status.returns({ ready: false, generated: null, rowCount: 0 });
+      dbHelperStub.findOneInDatabase.resolves(mockDbResult);
+
+      const result = await reload().getPlacementLocation();
+
+      expect(result).to.deep.equal({ continent: 'EU', country: 'DE' });
+      sinon.assert.notCalled(ipLocationStoreStub.lookup);
+    });
+
+    it('returns null when neither the table nor self-report can answer', async () => {
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves(null);
+      dbHelperStub.findOneInDatabase.resolves(null);
+
+      const result = await reload().getPlacementLocation();
+
+      expect(result).to.equal(null);
+    });
+  });
+
   describe('getNodeGeolocation tests', () => {
     it('should return null when no geolocation is stored and db is empty', async () => {
       dbHelperStub.findOneInDatabase.resolves(null);

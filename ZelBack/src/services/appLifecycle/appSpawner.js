@@ -472,15 +472,11 @@ async function trySpawningGlobalApplication() {
       appFromAppsSyncthingToBeCheckedLater = true;
       appsCountAvailableToInstallOnMyNode = Math.max(0, appsCountAvailableToInstallOnMyNode - 1);
     } else {
-      const nodeGeo = await geolocationService.getNodeGeolocation();
+      const placementLocation = await geolocationService.getPlacementLocation();
       const nodeInfo = {
         hasStaticIp: geolocationService.isStaticIP(),
         isDataCenter: geolocationService.isDataCenter(),
-        location: nodeGeo ? {
-          continent: nodeGeo.continentCode,
-          country: nodeGeo.countryCode,
-          region: nodeGeo.regionName,
-        } : undefined,
+        location: placementLocation ?? undefined,
       };
       // Where the candidates went. Every filter below removes apps for a
       // different and entirely reasonable reason, and none of them says so - the

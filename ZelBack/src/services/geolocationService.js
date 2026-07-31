@@ -590,6 +590,51 @@ async function getNodeGeolocation() {
 }
 
 /**
+ * The node's own location in the placement vocabulary - the
+ * { continent, country, region } object Placement geo entries match against.
+ * Resolved from the published iplocation table when it covers this node's IP
+ * (full ISO 3166-2 region, identical on every node), and from the
+ * self-reported geolocation otherwise at country granularity only: ip-api's
+ * regionName is a display name, not an ISO code, and a region value that
+ * cannot match a spec entry must not be present at all. flux-spec's Placement
+ * says the same thing from the other side - "never ip-api regionName strings,
+ * those are display names, not codes, and match nothing".
+ *
+ * The table is the one the candidate count reads for every other node, so the
+ * two cannot disagree about where this node is. A table that cannot be read is
+ * a table that was not asked: the answer falls back to the self-report, which
+ * can only be stricter than the count, never looser.
+ * @returns {Promise<{continent: string, country: string, region?: string} | null>}
+ */
+async function getPlacementLocation() {
+  const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
+  const localIp = localSocketAddr ? extractIp(localSocketAddr) : null;
+  let hit = null;
+  if (localIp) {
+    // Lazily required for the reason publishedClassification gives above: the
+    // location store pulls in the database layer, and geolocation is read on
+    // paths that must not depend on it being up.
+    // eslint-disable-next-line global-require
+    const ipLocationStore = require('./appPlacement/ipLocationStore');
+    if (ipLocationStore.status().ready) {
+      try {
+        hit = await ipLocationStore.lookup(localIp);
+      } catch (error) {
+        log.info(`Location table could not place this node (${localIp}): ${error.message}`);
+      }
+    }
+  }
+  if (hit?.continentCode && hit.countryCode) {
+    const location = { continent: hit.continentCode, country: hit.countryCode };
+    if (hit.region) location.region = hit.region;
+    return location;
+  }
+  const nodeGeo = await getNodeGeolocation();
+  if (!nodeGeo?.continentCode || !nodeGeo.countryCode) return null;
+  return { continent: nodeGeo.continentCode, country: nodeGeo.countryCode };
+}
+
+/**
  * Whether this node's address is known to stay put. True only when the address
  * is bound to a local interface and has been held for the stability window; an
  * address not yet observed that long is not static, so apps that require one are
@@ -720,6 +765,7 @@ module.exports = {
   setNodeGeolocation,
   stopNodeGeolocation,
   getNodeGeolocation,
+  getPlacementLocation,
   isStaticIP,
   getStaticIpState,
   isDataCenter,
