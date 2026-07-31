@@ -21,8 +21,6 @@ const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpec } = require('../utils/specLibs');
 
-const { sha256Hex } = contentBlobService;
-
 const MANIFEST_GOSSIP_TYPE = 'fluxappcontentmanifest';
 
 // A manifest received before its app's spec is locally available can't be
@@ -1254,11 +1252,13 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
 /**
  * Best-effort PUT of the latest owner-signed manifest to the FluxDrive backstop, so a
  * cold-starting node with no running peer can still provision the app (the first
- * instance has no peers — FluxDrive is its source, not a fallback). The node mints the
- * arcane sig over sha256(appName:version:timestamp); the OWNER PUT-sig is produced by
- * the frontend at submission and carried in the sealed content payload (the owner is
- * offline at backup time). A failed PUT is logged, not fatal — gossip + boot-sync are
- * the primary path and the next content-update re-establishes the backstop.
+ * instance has no peers — FluxDrive is its source, not a fallback). The node takes the
+ * arcane sig over the benchmark channel, which builds the signed bytes itself from
+ * (appName, version, timestamp); the OWNER PUT-sig is produced by the frontend at
+ * submission over sha256(appName:version:timestamp) and carried in the sealed content
+ * payload (the owner is offline at backup time). A failed PUT is logged, not fatal —
+ * gossip + boot-sync are the primary path and the next content-update re-establishes
+ * the backstop.
  *
  * @param {object} gossipManifest - the stored gossip-form manifest (sealed slots)
  * @param {object} ctx - { appName, version, timestamp, manifestPutSig }
@@ -1270,14 +1270,13 @@ async function backstopManifest(gossipManifest, ctx, deps = {}) {
     appName, version, timestamp, manifestPutSig,
   } = ctx;
   const {
-    sign = contentBlobService.signUploadMessage, put = fluxDriveClient.putManifest, benchmark,
+    sign = contentBlobService.signManifestPut, put = fluxDriveClient.putManifest, benchmark,
   } = deps;
   // No operational owner sig (frontend didn't supply it) -> can't authenticate the
   // PUT. Skip; gossip + peers still carry the manifest.
   if (!manifestPutSig) return false;
   try {
-    const message = sha256Hex(`${appName}:${version}:${timestamp}`);
-    const arcaneSig = await sign(message, { benchmark });
+    const arcaneSig = await sign({ appName, version, timestamp }, { benchmark });
     await put(appName, {
       version, timestamp, arcaneSig, ownerSig: manifestPutSig, manifest: gossipManifest,
     });
@@ -1294,7 +1293,8 @@ async function backstopManifest(gossipManifest, ctx, deps = {}) {
  * tombstones the now-superseded slot blobs (CONTENT_SLOTS §11; security scan N2/N4/F1).
  * The owner reconcile-sig over sha256(appName:slot:version) rides the sealed content
  * payload (frontend-produced at submission — the owner is online only then); the node
- * mints the arcane sig over the same token. liveLocators are the current manifest's slot
+ * takes the arcane sig over the benchmark channel, which builds its own domain-prefixed
+ * form of the same token. liveLocators are the current manifest's slot
  * locators, derived over the benchmark channel exactly as resolveBlob/serveBlob derive
  * them — the manifest carries every declared slot, so this is the FULL live set, not a
  * delta. FluxDrive ADDS new locators + tombstones this app's other slot locators with
@@ -1317,7 +1317,7 @@ async function reconcileSlots(plaintextManifest, ctx, deps = {}) {
   const {
     benchmark,
     deriveLocator = contentBlobService.deriveLocator,
-    sign = contentBlobService.signUploadMessage,
+    sign = contentBlobService.signReconcile,
     reconcile = fluxDriveClient.reconcile,
   } = deps;
   // No owner reconcile-sig (frontend didn't supply one) → can't authenticate the push; and
@@ -1333,8 +1333,7 @@ async function reconcileSlots(plaintextManifest, ctx, deps = {}) {
     // Never push an empty live set — it would tombstone every slot blob. A slot app always
     // declares at least one slot, so this only guards a malformed manifest.
     if (!liveLocators.length) return false;
-    const token = sha256Hex(`${appName}:slot:${version}`);
-    const arcaneSig = await sign(token, { benchmark });
+    const arcaneSig = await sign({ appName, source: 'slot', version }, { benchmark });
     await reconcile(appName, {
       source: 'slot', version, arcaneSig, ownerSig: reconcileSig, liveLocators,
     });

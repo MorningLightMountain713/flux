@@ -831,7 +831,7 @@ describe('contentSlotService', () => {
   });
 
   describe('reconcileSlots', () => {
-    it('derives the live slot locators, mints the arcane sig over the token, and POSTs the reconcile', async () => {
+    it('derives the live slot locators, sends the typed reconcile fields to the signer, and POSTs the reconcile', async () => {
       const { service } = load();
       const reconcile = sinon.spy();
       const sign = sinon.stub().resolves('arcane-sig');
@@ -843,8 +843,7 @@ describe('contentSlotService', () => {
       );
       expect(ok).to.equal(true);
       sinon.assert.calledWithMatch(deriveLocator, sinon.match.any, { appName: 'app', fluxID: '1id', contentHash: CFG_HASH });
-      const token = crypto.createHash('sha256').update('app:slot:3').digest('hex');
-      sinon.assert.calledWith(sign, token);
+      sinon.assert.calledWithMatch(sign, { appName: 'app', source: 'slot', version: 3 });
       sinon.assert.calledOnce(reconcile);
       const [appName, body] = reconcile.firstCall.args;
       expect(appName).to.equal('app');
