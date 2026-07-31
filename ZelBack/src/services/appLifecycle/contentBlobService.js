@@ -85,8 +85,9 @@ async function encryptAndUploadBlob(blob, deps) {
   const key = Buffer.from(benchmarkField(await benchmark.contentKey({ appName, fluxID, contentHash }), 'key'), 'base64');
   const framed = aeadEncrypt(key, bytes, Buffer.from(contentHash));
 
-  const message = sha256Hex(`${locator}:${appName}:${timestamp}`);
-  const arcaneSig = benchmarkField(await benchmark.signBlobUpload({ message }), 'signature');
+  const arcaneSig = benchmarkField(await benchmark.signBlobUpload({
+    kind: 'upload', locator, appName, timestamp,
+  }), 'signature');
 
   await uploader.uploadBlob(framed, {
     locator, appName, timestamp, arcaneSig, ownerSig, source,
@@ -96,18 +97,36 @@ async function encryptAndUploadBlob(blob, deps) {
 }
 
 /**
- * Take the arcane (fleet anti-abuse) signature over an arbitrary message via the
- * benchmark channel — the message-agnostic signer the blob upload already uses (the
- * channel neither knows nor cares whether the message is a blob or a manifest token).
- * Used by the manifest backstop PUT to sign sha256(appName:version:timestamp).
+ * Take the arcane (fleet anti-abuse) signature for a manifest-backstop PUT. The
+ * benchmark channel builds the signed bytes itself from these fields (a
+ * domain-prefixed sha256(appName:version:timestamp)) and refuses a timestamp
+ * outside the freshness window — it no longer signs caller-supplied bytes.
  *
- * @param {string} message - the message to sign (a sha256 hex digest)
+ * @param {object} fields - { appName, version, timestamp }
  * @param {object} [deps] - { benchmark? }
  * @returns {Promise<string>} the base64 arcane signature
  */
-async function signUploadMessage(message, deps = {}) {
+async function signManifestPut({ appName, version, timestamp }, deps = {}) {
   const { benchmark = benchmarkService } = deps || {};
-  return benchmarkField(await benchmark.signBlobUpload({ message }), 'signature');
+  return benchmarkField(await benchmark.signBlobUpload({
+    kind: 'manifest', appName, version, timestamp,
+  }), 'signature');
+}
+
+/**
+ * Take the arcane signature for a reconcile push — channel-built bytes (a
+ * domain-prefixed sha256(appName:source:version)); no timestamp, the verifier's
+ * per-(appName, source) monotonic version floor bounds replay instead.
+ *
+ * @param {object} fields - { appName, source, version }
+ * @param {object} [deps] - { benchmark? }
+ * @returns {Promise<string>} the base64 arcane signature
+ */
+async function signReconcile({ appName, source, version }, deps = {}) {
+  const { benchmark = benchmarkService } = deps || {};
+  return benchmarkField(await benchmark.signBlobUpload({
+    kind: 'reconcile', appName, source, version,
+  }), 'signature');
 }
 
 /**
@@ -394,7 +413,8 @@ module.exports = {
   encryptAndUploadBlobs,
   assertBlobStored,
   deriveLocator,
-  signUploadMessage,
+  signManifestPut,
+  signReconcile,
   decryptAndVerifyBlob,
   resolveBlob,
   provisionContentBlobs,
