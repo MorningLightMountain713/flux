@@ -45,6 +45,7 @@ const { peerManager } = require('./utils/peerState');
 const enterpriseNetwork = require('./utils/enterpriseNetwork');
 const enterpriseConfig = require('./utils/enterpriseConfig');
 const policyStore = require('./policy/policyStore');
+const ipLocationTable = require('./appPlacement/ipLocationTable');
 const appQueryService = require('./appQuery/appQueryService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
@@ -136,6 +137,11 @@ async function startFluxFunctions() {
     await dbHelper.waitForMongo();
     await dockerService.waitForDocker();
 
+    // The iplocation artifact's receiver, registered before startSync so the
+    // store's restore of the cached copy has somewhere to go. A malformed
+    // artifact must throw out of setArtifact so the store rejects it and keeps
+    // the previous copy - no try/catch.
+    policyStore.onArtifact('ipLocationTable', (bytes) => ipLocationTable.setArtifact(bytes));
     // The network's enforcement documents: blocked repositories, the enterprise
     // node->owners map, the tampering blocklist and the image whitelist. Awaited so
     // consumers (identity resolution, the spawn loop, app-spec validation, image

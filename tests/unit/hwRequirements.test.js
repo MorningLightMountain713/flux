@@ -80,7 +80,9 @@ function buildHw(opts = {}) {
     '../geolocationService': {
       isStaticIP: sinon.stub().returns(isStaticIP),
       isDataCenter: sinon.stub().returns(isDataCenter),
-      getNodeGeolocation: sinon.stub().resolves(nodeGeo),
+      getPlacementLocation: sinon.stub().resolves(nodeGeo
+        ? { continent: nodeGeo.continentCode, country: nodeGeo.countryCode }
+        : null),
     },
     '../fluxNetworkHelper': {
       getLocalSocketAddress: sinon.stub().resolves(localSocketAddr),

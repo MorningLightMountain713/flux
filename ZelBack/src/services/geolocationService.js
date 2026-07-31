@@ -4,6 +4,7 @@ const fluxNetworkHelper = require('./fluxNetworkHelper');
 const { extractIp } = require('./utils/socketAddressUtils');
 const serviceHelper = require('./serviceHelper');
 const dbHelper = require('./dbHelper');
+const ipLocationTable = require('./appPlacement/ipLocationTable');
 
 const { geolocation: geolocationCollection } = config.database.local.collections;
 
@@ -259,6 +260,30 @@ async function getNodeGeolocation() {
 }
 
 /**
+ * The node's own location in the placement vocabulary - the
+ * { continent, country, region } object Placement geo entries match against.
+ * Resolved from the published iplocation table when it covers this node's IP
+ * (full ISO 3166-2 region, identical on every node), and from the
+ * self-reported geolocation otherwise at country granularity only: ip-api's
+ * regionName is a display name, not an ISO code, and a region value that
+ * cannot match a spec entry must not be present at all.
+ * @returns {Promise<{continent: string, country: string, region?: string} | null>}
+ */
+async function getPlacementLocation() {
+  const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
+  const localIp = localSocketAddr ? extractIp(localSocketAddr) : null;
+  const hit = localIp ? ipLocationTable.lookup(localIp) : null;
+  if (hit?.continentCode && hit.countryCode) {
+    const location = { continent: hit.continentCode, country: hit.countryCode };
+    if (hit.region) location.region = hit.region;
+    return location;
+  }
+  const nodeGeo = await getNodeGeolocation();
+  if (!nodeGeo?.continentCode || !nodeGeo.countryCode) return null;
+  return { continent: nodeGeo.continentCode, country: nodeGeo.countryCode };
+}
+
+/**
  * Method responsible for returning if node ip is static based on IP org.
  */
 function isStaticIP() {
@@ -291,6 +316,7 @@ async function hasPublicIp() {
 module.exports = {
   setNodeGeolocation,
   getNodeGeolocation,
+  getPlacementLocation,
   isStaticIP,
   isDataCenter,
   getLastIpChangeDate,

@@ -97,15 +97,10 @@ async function checkGeolocation(spec) {
   const { placement } = spec;
   if (!placement.hasGeoRestrictions()) return true;
 
-  const nodeGeo = await geolocationService.getNodeGeolocation();
-  if (!nodeGeo) {
+  const location = await geolocationService.getPlacementLocation();
+  if (!location) {
     throw new Error('Node Geolocation not set. Aborting.');
   }
-  const location = {
-    continent: nodeGeo.continentCode,
-    country: nodeGeo.countryCode,
-    region: nodeGeo.regionName,
-  };
   if (placement.isDeniedIn(location)) {
     throw new Error('App specs of geolocation set is forbidden to run on node geolocation. Aborting.');
   }

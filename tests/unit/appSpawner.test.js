@@ -280,7 +280,7 @@ describe('appSpawner tests', () => {
       '../geolocationService': {
         isStaticIP: sinon.stub().returns(opts.nodeHasStaticIp ?? false),
         isDataCenter: sinon.stub().returns(false),
-        getNodeGeolocation: sinon.stub().returns({ continentCode: 'NA', countryCode: 'US', regionName: 'NY' }),
+        getPlacementLocation: sinon.stub().resolves({ continent: 'NA', country: 'US', region: 'US-NY' }),
       },
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),

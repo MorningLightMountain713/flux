@@ -391,15 +391,11 @@ async function trySpawningGlobalApplication() {
       appFromAppsSyncthingToBeCheckedLater = true;
       appsCountAvailableToInstallOnMyNode = Math.max(0, appsCountAvailableToInstallOnMyNode - 1);
     } else {
-      const nodeGeo = await geolocationService.getNodeGeolocation();
+      const placementLocation = await geolocationService.getPlacementLocation();
       const nodeInfo = {
         hasStaticIp: geolocationService.isStaticIP(),
         isDataCenter: geolocationService.isDataCenter(),
-        location: nodeGeo ? {
-          continent: nodeGeo.continentCode,
-          country: nodeGeo.countryCode,
-          region: nodeGeo.regionName,
-        } : undefined,
+        location: placementLocation ?? undefined,
       };
       // Being installed here does not mean this node owes nothing: a node
       // already running one replica can be assigned another, and dropping the

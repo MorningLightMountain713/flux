@@ -128,6 +128,64 @@ describe('geolocationService tests', () => {
     });
   });
 
+  describe('getPlacementLocation tests', () => {
+    const ipLocationTable = require('../../ZelBack/src/services/appPlacement/ipLocationTable');
+    const cidrUtils = require('../../ZelBack/src/services/utils/cidrUtils');
+    const v4Int = (ip) => Number(cidrUtils.parseIp(ip).value);
+
+    const tableArtifact = (regions, regionIdx) => ({
+      format: 1,
+      generated: '2026-07-31T00:00:00Z',
+      sources: { ripencc: 'test' },
+      countries: ['DE'],
+      continents: { DE: 'EU' },
+      orgs: ['ripencc:hetzner'],
+      regions,
+      v4: [[v4Int('62.171.0.0'), v4Int('62.171.255.255'), 0, 0, regionIdx]],
+      v6: [],
+    });
+
+    afterEach(() => ipLocationTable.clear());
+
+    it('resolves from the iplocation table with a full ISO region', async () => {
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('62.171.1.5:16127');
+      ipLocationTable.setArtifact(tableArtifact(['DE-HE'], 0));
+
+      const result = await geolocationService.getPlacementLocation();
+
+      expect(result).to.deep.equal({ continent: 'EU', country: 'DE', region: 'DE-HE' });
+    });
+
+    it('omits region when the table row carries none', async () => {
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('62.171.1.5:16127');
+      ipLocationTable.setArtifact(tableArtifact([], null));
+
+      const result = await geolocationService.getPlacementLocation();
+
+      expect(result).to.deep.equal({ continent: 'EU', country: 'DE' });
+    });
+
+    it('falls back to self-reported geolocation at country granularity only', async () => {
+      // no table loaded; self-report carries a regionName, which is a display
+      // name rather than an ISO code and must not appear in the location
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('9.9.9.9:16127');
+      dbHelperStub.findOneInDatabase.resolves(mockDbResult);
+
+      const result = await geolocationService.getPlacementLocation();
+
+      expect(result).to.deep.equal({ continent: 'EU', country: 'DE' });
+    });
+
+    it('returns null when neither the table nor self-report can answer', async () => {
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves(null);
+      dbHelperStub.findOneInDatabase.resolves(null);
+
+      const result = await geolocationService.getPlacementLocation();
+
+      expect(result).to.equal(null);
+    });
+  });
+
   describe('getNodeGeolocation tests', () => {
     it('should return null when no geolocation is stored and db is empty', async () => {
       dbHelperStub.findOneInDatabase.resolves(null);
