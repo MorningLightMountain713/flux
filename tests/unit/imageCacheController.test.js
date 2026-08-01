@@ -10,6 +10,7 @@ describe('imageCacheController tests', () => {
     const res = {};
     res.status = sinon.stub().returns(res);
     res.json = sinon.stub().returns(res);
+    res.setHeader = sinon.stub().returns(res);
     return res;
   }
 
@@ -29,7 +30,7 @@ describe('imageCacheController tests', () => {
       verifyPrivilege: sinon.stub().resolves(true),
       getCachedEnterpriseIdentity: sinon.stub().returns(true),
       getCachedAllowedOwnersForNode: sinon.stub().returns(['F1']),
-      submitEncrypted: sinon.stub().resolves({ jobId: 'J1' }),
+      submitEncrypted: sinon.stub().resolves({ jobId: 'op_J1', statusUrl: '/apps/operations/op_J1' }),
       getJob: sinon.stub(),
       listImages: sinon.stub(),
       getImageDetail: sinon.stub(),
@@ -98,7 +99,10 @@ describe('imageCacheController tests', () => {
       await c.postImageCache(mkReq({ body: { data: 'BLOB' } }), res);
       expect(stubs.submitEncrypted.calledOnceWith('F1', 'BLOB')).to.equal(true);
       expect(res.status.calledWith(202)).to.equal(true);
-      expect(res.json.firstCall.args[0].data).to.include({ jobId: 'J1', statusUrl: '/apps/imagecache/status/J1' });
+      // Points at the shared operation resource, not a per-feature status URL.
+      expect(res.json.firstCall.args[0].data).to.include({ jobId: 'op_J1', statusUrl: '/apps/operations/op_J1' });
+      expect(res.setHeader.calledWith('Location', '/apps/operations/op_J1')).to.equal(true);
+      expect(res.setHeader.calledWith('Operation-Id', 'op_J1')).to.equal(true);
     });
 
     it('400 when the encrypted data payload is missing', async () => {
@@ -121,21 +125,6 @@ describe('imageCacheController tests', () => {
       res = mkRes();
       await c.postImageCache(mkReq({ body: { data: 'BLOB' } }), res);
       expect(res.status.calledWith(507)).to.equal(true);
-    });
-  });
-
-  describe('getImageCacheStatus', () => {
-    it('200 with the job when found, 404 when not', async () => {
-      const c = build();
-      stubs.getJob.returns({ jobId: 'J1', images: [] });
-      let res = mkRes();
-      await c.getImageCacheStatus(mkReq({ params: { jobId: 'J1' } }), res);
-      expect(res.json.firstCall.args[0].data.jobId).to.equal('J1');
-
-      stubs.getJob.returns(null);
-      res = mkRes();
-      await c.getImageCacheStatus(mkReq({ params: { jobId: 'X' } }), res);
-      expect(res.status.calledWith(404)).to.equal(true);
     });
   });
 

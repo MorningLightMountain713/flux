@@ -518,9 +518,6 @@ module.exports = (app) => {
   app.post('/apps/imagepreflight', asyncRoute((req, res) => {
     return imagePreflight.submitPreflightAPI(req, res);
   }));
-  app.get('/apps/imagepreflight/status/:jobId', asyncRoute((req, res) => {
-    return imagePreflight.getPreflightAPI(req, res);
-  }));
   app.post('/apps/placementfeasibility', asyncRoute((req, res) => { // fault domains and per-domain instance share for a prospective spec
     return placementFeasibility.placementFeasibilityAPI(req, res);
   }));
@@ -579,9 +576,6 @@ module.exports = (app) => {
   // Enterprise image cache (owner-scoped; gated to allowed owners on this enterprise node)
   app.get('/apps/imagecache', asyncRoute((req, res) => {
     return imageCacheController.getImageCacheList(req, res);
-  }));
-  app.get('/apps/imagecache/status/:jobId', asyncRoute((req, res) => {
-    return imageCacheController.getImageCacheStatus(req, res);
   }));
   app.get('/apps/imagecache/item', asyncRoute((req, res) => {
     return imageCacheController.getImageCacheItem(req, res);
