@@ -5,6 +5,104 @@ const serviceHelper = require('../serviceHelper');
  * @typedef {"amd64" | "arm64"} Architecture
  */
 
+const gzipLayerMediaTypes = [
+  'application/vnd.docker.image.rootfs.diff.tar.gzip',
+  'application/vnd.oci.image.layer.v1.tar+gzip',
+];
+
+const zstdLayerMediaTypes = [
+  'application/vnd.oci.image.layer.v1.tar+zstd',
+];
+
+// RFC 1952 stores the decompressed length in the final four bytes of a gzip
+// stream, modulo 2^32.
+const gzipIsizeBytes = 4;
+const gzipIsizeModulus = 2 ** 32;
+// deflate cannot expand more than 1032:1, so a layer compressed below
+// modulus/1032 (~4.16 MB) cannot have reached the modulus and its trailer is exact.
+const maxDeflateExpansion = 1032;
+// A decompressed layer smaller than its compressed form is implausible for a tar
+// of file contents; below this ratio the trailer must have wrapped.
+const minPlausibleExpansion = 0.98;
+// Above this ratio the next wrap candidate stops being a realistic layer, so the
+// measurement is unambiguous. Within it, both candidates are possible.
+const maxPlausibleExpansion = 6;
+
+// RFC 8878: magic, Frame_Header_Descriptor, Window_Descriptor, up to a 4-byte
+// Dictionary_ID and up to an 8-byte Frame_Content_Size.
+const zstdMagic = 0xfd2fb528;
+const zstdFrameHeaderBytes = 18;
+
+// A registry that ignores Range answers 200 with the whole layer. Cap the read so
+// such a response is aborted after a few bytes instead of pulling a blob.
+const maxBlobRangeBytes = 64;
+
+/**
+ * Resolve a gzip ISIZE trailer into a decompressed byte count, correcting for the
+ * modulus. The true size is `raw + k * 2^32`; the smallest k giving a plausible
+ * expansion is a safe lower bound, never below the raw trailer. When the candidate
+ * after it is also plausible the layer is ambiguous and both are returned — the
+ * lower bound to report, the next candidate as the figure a declaration must clear.
+ *
+ * @param {number} rawIsize value read from the trailer
+ * @param {number} compressedBytes the layer's size as the manifest reports it
+ * @returns {{bytes: number, nextCandidateBytes: number}}
+ */
+function resolveGzipIsize(rawIsize, compressedBytes) {
+  if (compressedBytes < gzipIsizeModulus / maxDeflateExpansion) {
+    return { bytes: rawIsize, nextCandidateBytes: rawIsize };
+  }
+
+  let bytes = rawIsize;
+  while (bytes / compressedBytes < minPlausibleExpansion) {
+    bytes += gzipIsizeModulus;
+  }
+
+  const nextCandidate = bytes + gzipIsizeModulus;
+  const ambiguous = nextCandidate / compressedBytes <= maxPlausibleExpansion;
+
+  return { bytes, nextCandidateBytes: ambiguous ? nextCandidate : bytes };
+}
+
+/**
+ * Read Frame_Content_Size from a zstd frame header (RFC 8878). The value is a
+ * 64-bit exact count — no modulus, so none of the gzip wrap arithmetic applies —
+ * but the field is optional: a streaming compressor may omit it, and a blob that
+ * does not open with a zstd frame cannot be read at all. Both read as unmeasured.
+ *
+ * @param {Buffer} header the first bytes of the blob
+ * @returns {number|null} null when the size is absent or the header is unreadable
+ */
+function parseZstdFrameContentSize(header) {
+  if (header.length < 5 || header.readUInt32LE(0) !== zstdMagic) return null;
+
+  const descriptor = header.readUInt8(4);
+  const contentSizeFlag = descriptor >> 6;
+  const singleSegment = Boolean(descriptor & 0x20);
+  const dictionaryIdFlag = descriptor & 0x03;
+
+  // Flag 0 means one byte for a single-segment frame and no field otherwise;
+  // flags 1-3 mean 2, 4 and 8 bytes.
+  const fieldBytes = contentSizeFlag === 0 ? Number(singleSegment) : 2 ** contentSizeFlag;
+  if (!fieldBytes) return null;
+
+  const dictionaryIdBytes = dictionaryIdFlag === 3 ? 4 : dictionaryIdFlag;
+  const offset = 5 + (singleSegment ? 0 : 1) + dictionaryIdBytes;
+  if (header.length < offset + fieldBytes) return null;
+
+  switch (fieldBytes) {
+    case 1:
+      return header.readUInt8(offset);
+    // The 2-byte form stores the size minus 256.
+    case 2:
+      return header.readUInt16LE(offset) + 256;
+    case 4:
+      return header.readUInt32LE(offset);
+    default:
+      return Number(header.readBigUInt64LE(offset));
+  }
+}
+
 class ImageVerifier {
   static defaultDockerRegistry = 'registry-1.docker.io';
 
@@ -59,6 +157,12 @@ class ImageVerifier {
   #supportedArchitectures = [];
 
   #imageSizeBytes = 0;
+
+  #decompressedSizeBytes = 0;
+
+  #decompressedSizeClearanceBytes = 0;
+
+  #decompressedSizeMeasured = true;
 
   authConfigured = false;
 
@@ -183,6 +287,42 @@ class ImageVerifier {
    */
   get imageSizeBytes() {
     return this.#imageSizeBytes;
+  }
+
+  /**
+   * Largest decompressed image size across the evaluated architectures, in bytes,
+   * read from the layers' own size records (gzip trailer / zstd frame header) for
+   * a handful of bytes per layer. This is the on-disk figure `rootFsGb` budgets,
+   * and it is a lower bound: the tar padding it counts is real disk, and a wrapped
+   * gzip trailer resolves downwards.
+   *
+   * 0 means unmeasured — one layer whose size cannot be read (unknown media type,
+   * a registry that refuses Range, a zstd frame with no Frame_Content_Size) leaves
+   * the whole image unmeasured rather than partly counted.
+   * @returns {number}
+   */
+  get decompressedSizeBytes() {
+    return this.#decompressedSizeMeasured ? this.#decompressedSizeBytes : 0;
+  }
+
+  /**
+   * The decompressed figure a rootFs declaration has to clear. Equal to
+   * decompressedSizeBytes unless a gzip trailer wrapped ambiguously, in which case
+   * it is the next candidate up — the image is either that size or the lower bound,
+   * and only clearing the larger of the two is safe. 0 when unmeasured.
+   * @returns {number}
+   */
+  get decompressedSizeClearanceBytes() {
+    return this.#decompressedSizeMeasured ? this.#decompressedSizeClearanceBytes : 0;
+  }
+
+  /**
+   * Whether any measured layer's gzip trailer wrapped with more than one plausible
+   * answer, making decompressedSizeBytes a lower bound rather than the size.
+   * @returns {boolean}
+   */
+  get decompressedSizeAmbiguous() {
+    return this.decompressedSizeClearanceBytes > this.decompressedSizeBytes;
   }
 
   #createAxiosInstance() {
@@ -486,6 +626,9 @@ class ImageVerifier {
           errorCode: null,
           errorType: 'size_limit',
         };
+      } else {
+        // An image already refused on its compressed size needs no size records read.
+        await this.#measureLayers(manifest.layers);
       }
 
       // Store architecture for single image manifests (if not already stored)
@@ -563,6 +706,110 @@ class ImageVerifier {
       .catch((error) => this.#handleAxiosError(manifestEndpoint, error));
 
     return imageManifest;
+  }
+
+  /**
+   * Ranged GET of a blob's first or last few bytes. Deliberately silent: a
+   * registry that refuses Range, a redirect that drops it, or a request that
+   * fails leaves the layer unmeasured - it is never a verdict on the image, so it
+   * must not reach the error state that decides whether the image is usable.
+   *
+   * @param {string} digest
+   * @param {number} start first byte offset
+   * @param {number} end last byte offset, inclusive
+   * @returns {Promise<Buffer|null>} null unless the registry answered 206
+   */
+  async #fetchBlobRange(digest, start, end) {
+    const blobsEndpoint = this.namespace
+      ? `${this.namespace}/${this.repository}/blobs/${digest}`
+      : `${this.repository}/blobs/${digest}`;
+
+    const response = await this.#axiosInstance
+      .get(blobsEndpoint, {
+        headers: { Range: `bytes=${start}-${end}`, Accept: '*/*' },
+        responseType: 'arraybuffer',
+        decompress: false,
+        maxContentLength: maxBlobRangeBytes,
+      })
+      .catch(() => null);
+
+    // 200 means the range was ignored and the body is the whole layer, not the
+    // bytes asked for - unmeasured rather than misread.
+    if (!response || response.status !== 206 || !response.data) return null;
+
+    return Buffer.from(response.data);
+  }
+
+  /**
+   * Walk one architecture's layers for their decompressed sizes and fold the totals
+   * into the largest seen so far - each figure independently, because whichever
+   * architecture this node runs, a rootFs declaration has to cover it. One layer
+   * that cannot be read leaves the whole image unmeasured, and there is nothing
+   * left to learn from the layers after it.
+   *
+   * @param {Array<{mediaType: string, digest: string, size: number}>} layers
+   */
+  async #measureLayers(layers) {
+    let decompressedSize = 0;
+    let clearanceSize = 0;
+
+    for (const layer of layers) {
+      const measurement = await this.#measureLayer(layer);
+
+      if (!measurement) {
+        this.#decompressedSizeMeasured = false;
+        return;
+      }
+
+      decompressedSize += measurement.bytes;
+      clearanceSize += measurement.nextCandidateBytes;
+    }
+
+    if (decompressedSize > this.#decompressedSizeBytes) this.#decompressedSizeBytes = decompressedSize;
+    if (clearanceSize > this.#decompressedSizeClearanceBytes) this.#decompressedSizeClearanceBytes = clearanceSize;
+  }
+
+  /**
+   * Decompressed size of a single layer, read from the layer's own size record:
+   * gzip keeps it in the last four bytes of the stream, zstd in its frame header.
+   * A layer of any other media type, or one whose record cannot be read, is
+   * unmeasured.
+   *
+   * @param {{mediaType: string, digest: string, size: number}} layer
+   * @returns {Promise<{bytes: number, nextCandidateBytes: number}|null>}
+   */
+  async #measureLayer(layer) {
+    const compressedBytes = layer?.size;
+
+    if (!layer?.digest || !Number.isFinite(compressedBytes) || compressedBytes <= 0) return null;
+
+    if (gzipLayerMediaTypes.includes(layer.mediaType)) {
+      if (compressedBytes <= gzipIsizeBytes) return null;
+
+      const trailer = await this.#fetchBlobRange(
+        layer.digest,
+        compressedBytes - gzipIsizeBytes,
+        compressedBytes - 1,
+      );
+
+      if (!trailer || trailer.length < gzipIsizeBytes) return null;
+
+      return resolveGzipIsize(trailer.readUInt32LE(0), compressedBytes);
+    }
+
+    if (zstdLayerMediaTypes.includes(layer.mediaType)) {
+      const header = await this.#fetchBlobRange(layer.digest, 0, zstdFrameHeaderBytes - 1);
+
+      if (!header) return null;
+
+      const contentSize = parseZstdFrameContentSize(header);
+
+      if (contentSize === null) return null;
+
+      return { bytes: contentSize, nextCandidateBytes: contentSize };
+    }
+
+    return null;
   }
 
   async #fetchConfig(digest) {

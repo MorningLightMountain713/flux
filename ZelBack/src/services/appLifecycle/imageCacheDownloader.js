@@ -36,14 +36,16 @@ async function resolveCredentials(repotag, repoauth, fluxId) {
 }
 
 /**
- * Read the remote manifest (no layers pulled) to learn the COMPRESSED download size
- * and digest for this node's architecture, and whether the image is usable here.
- * Resilient: returns a structured result instead of throwing, so the job manager can
- * record a per-image disposition without failing the whole submission.
+ * Read the remote manifest (no layers pulled) to learn the COMPRESSED download size,
+ * the DECOMPRESSED on-disk size and the digest for this node's architecture, and
+ * whether the image is usable here. Resilient: returns a structured result instead of
+ * throwing, so the job manager can record a per-image disposition without failing the
+ * whole submission.
  * @param {string} repotag
  * @param {string} repoauth - plaintext registry auth (already decrypted), or falsy
  * @param {object} [opts] - { fluxId }
- * @returns {Promise<{ok:boolean, compressedBytes:number, digest:(string|null), supported:boolean, supportedArchitectures:string[], error:(string|null)}>}
+ * @returns {Promise<{ok:boolean, compressedBytes:number, decompressedBytes:number, digest:(string|null), supported:boolean, supportedArchitectures:string[], error:(string|null)}>}
+ *   decompressedBytes is 0 when a layer's size record could not be read.
  */
 async function inspectImage(repotag, repoauth, opts = {}) {
   try {
@@ -60,6 +62,7 @@ async function inspectImage(repotag, repoauth, opts = {}) {
       return {
         ok: false,
         compressedBytes: 0,
+        decompressedBytes: 0,
         digest: null,
         supported: false,
         supportedArchitectures: verifier.supportedArchitectures,
@@ -70,6 +73,7 @@ async function inspectImage(repotag, repoauth, opts = {}) {
     return {
       ok: true,
       compressedBytes: verifier.imageSizeBytes,
+      decompressedBytes: verifier.decompressedSizeBytes,
       digest,
       supported: verifier.supported,
       supportedArchitectures: verifier.supportedArchitectures,
@@ -79,6 +83,7 @@ async function inspectImage(repotag, repoauth, opts = {}) {
     return {
       ok: false,
       compressedBytes: 0,
+      decompressedBytes: 0,
       digest: null,
       supported: false,
       supportedArchitectures: [],

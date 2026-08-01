@@ -39,6 +39,8 @@ describe('imageManager tests', () => {
         supported: true,
         supportedArchitectures: ['amd64', 'arm64'],
         imageSizeBytes: 12345,
+        decompressedSizeBytes: 45678,
+        decompressedSizeClearanceBytes: 45678,
         errorMeta: null,
       });
     });
@@ -52,6 +54,32 @@ describe('imageManager tests', () => {
       sinon.assert.calledOnce(instance.throwIfError);
       // compressed image size surfaced for the early rootFs-fit reject
       expect(result.imageSizeBytes).to.equal(12345);
+    });
+
+    it('should surface the measured decompressed size and its clearance figure', async () => {
+      ImageVerifierStub.returns({
+        verifyImage: sinon.stub().resolves(),
+        throwIfError: sinon.stub(),
+        addCredentials: sinon.stub(),
+        supported: true,
+        supportedArchitectures: ['amd64'],
+        imageSizeBytes: 3_620_000_000,
+        decompressedSizeBytes: 7_564_967_296,
+        decompressedSizeClearanceBytes: 11_859_934_592,
+        errorMeta: null,
+      });
+
+      const result = await imageManager.verifyRepository('test/app:latest');
+
+      expect(result.decompressedSizeBytes).to.equal(7_564_967_296);
+      expect(result.decompressedSizeClearanceBytes).to.equal(11_859_934_592);
+
+      // and the cached entry carries them, so a cache hit gates identically
+      // eslint-disable-next-line global-require
+      const fluxCaching = require('../../ZelBack/src/services/utils/cacheManager').default;
+      const cached = fluxCaching.dockerHubVerificationCache.get('test/app:latest:any:noauth');
+      expect(cached.result.decompressedSizeBytes).to.equal(7_564_967_296);
+      expect(cached.result.decompressedSizeClearanceBytes).to.equal(11_859_934_592);
     });
 
     it('should verify repository with authentication', async () => {
