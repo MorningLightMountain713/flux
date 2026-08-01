@@ -27,11 +27,34 @@ async function verifyImageRegistryAndArchitectures(spec, options = {}) {
       architectures: result.supportedArchitectures,
     });
 
-    // Early rootFs-fit reject: if even the compressed image already exceeds the
-    // component's rootFs budget it cannot fit decompressed. Gated on a known size
-    // (private/encrypted images may be unmeasured here — the install-time inspect
-    // is authoritative). Version-blind: legacy components are never charged.
-    if (result.imageSizeBytes && !comp.imageFitsRootFs(result.imageSizeBytes)) {
+    // Authoritative rootFs-fit reject: the decompressed image is what lands on
+    // disk, and it is read from the layers' own size records at verification. When
+    // a gzip trailer wrapped with more than one plausible answer the declaration
+    // has to clear the larger candidate — refusing into safety, because the
+    // alternative is a spec that is paid for and then fails to install everywhere.
+    // Version-blind: legacy components are never charged.
+    if (result.decompressedSizeBytes) {
+      const requiredBytes = result.decompressedSizeClearanceBytes;
+      const ambiguous = requiredBytes > result.decompressedSizeBytes;
+
+      if (!comp.imageFitsRootFs(requiredBytes)) {
+        const measured = `${(result.decompressedSizeBytes / 1e9).toFixed(2)}GB`;
+        const sizeDetail = ambiguous
+          ? `decompresses to at least ${measured}, and its gzip size record wrapped, so it may be as `
+            + `large as ${(requiredBytes / 1e9).toFixed(2)}GB`
+          : `decompresses to ${measured}`;
+
+        throw new Error(
+          `Component '${comp.name}' image (${comp.image}) ${sizeDetail}, `
+          + `which exceeds its rootFsGb budget of ${comp.rootFsGb}GB. `
+          + `Declare a rootFsGb of at least ${Math.ceil(requiredBytes / 1e9)}, or rebuild the image with `
+          + 'zstd compression (which records an exact decompressed size), or split the oversized layer.',
+        );
+      }
+    } else if (result.imageSizeBytes && !comp.imageFitsRootFs(result.imageSizeBytes)) {
+      // Unmeasured (a private image with no readable manifest, a registry that
+      // refuses Range): the compressed sum is still a lower bound worth rejecting
+      // on, and the install-time inspect stays authoritative.
       throw new Error(
         `Component '${comp.name}' image (${comp.image}) is ${(result.imageSizeBytes / 1e9).toFixed(2)}GB compressed, `
         + `which already exceeds its rootFsGb budget of ${comp.rootFsGb}GB. `

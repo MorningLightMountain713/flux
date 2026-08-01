@@ -95,6 +95,9 @@ async function ensureInspected(job, image) {
     return;
   }
   image.compressedBytes = info.compressedBytes;
+  // 0 when a layer's size record could not be read; admission then falls back to
+  // its compressed estimate.
+  image.decompressedBytes = info.decompressedBytes ?? 0;
   image.digest = info.digest;
 }
 
@@ -250,7 +253,12 @@ async function pumpOnce() {
         continue; // inspect rejected it
       }
       // eslint-disable-next-line no-await-in-loop
-      const decision = await imageCacheQuota.tryAdmit(job.fluxId, image.repotag, image.compressedBytes);
+      const decision = await imageCacheQuota.tryAdmit(
+        job.fluxId,
+        image.repotag,
+        image.compressedBytes,
+        image.decompressedBytes,
+      );
       if (decision.decision === 'admit') {
         image.state = 'pulling';
         job.reservations.set(image.repotag, decision.token);
@@ -338,6 +346,7 @@ function submit(fluxId, images) {
       reason: null,
       inspected: false,
       compressedBytes: undefined,
+      decompressedBytes: undefined,
       digest: null,
       sizeOnDiskBytes: 0,
       pulledBytes: 0,

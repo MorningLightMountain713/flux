@@ -9,7 +9,7 @@ describe('imageCacheService tests', () => {
     stubs = {
       compliance: sinon.stub().resolves(),
       inspectImage: sinon.stub().resolves({
-        ok: true, supported: true, compressedBytes: 1000, digest: 'sha256:abc', supportedArchitectures: ['amd64'], error: null,
+        ok: true, supported: true, compressedBytes: 1000, decompressedBytes: 2500, digest: 'sha256:abc', supportedArchitectures: ['amd64'], error: null,
       }),
       pullImage: sinon.stub().resolves(),
       tryAdmit: sinon.stub().resolves({ decision: 'admit', token: 't1', estimateBytes: 2000 }),
@@ -89,6 +89,25 @@ describe('imageCacheService tests', () => {
       expect(patch).to.include({ state: 'pinned', sizeOnDiskBytes: 4242, imageId: 'sha256:img' });
       // reservation released
       expect(stubs.release.calledOnceWith('t1')).to.equal(true);
+    });
+
+    it('hands admission both the compressed and the measured decompressed size', async () => {
+      const svc = build();
+      const { settled } = svc.submit('F1', [{ repotag: 'repo:1' }]);
+      await settled;
+
+      expect(stubs.tryAdmit.firstCall.args).to.eql(['F1', 'repo:1', 1000, 2500]);
+    });
+
+    it('hands admission a decompressed size of 0 when the image is unmeasured', async () => {
+      const svc = build();
+      stubs.inspectImage.resolves({
+        ok: true, supported: true, compressedBytes: 1000, decompressedBytes: 0, digest: 'sha256:abc', supportedArchitectures: ['amd64'], error: null,
+      });
+      const { settled } = svc.submit('F1', [{ repotag: 'repo:1' }]);
+      await settled;
+
+      expect(stubs.tryAdmit.firstCall.args).to.eql(['F1', 'repo:1', 1000, 0]);
     });
   });
 

@@ -66,6 +66,27 @@ describe('imageCacheQuota tests', () => {
       });
       expect(r).to.include({ decision: 'queue', reason: 'node-reserved' });
     });
+
+    it('uses the measured decompressed size in place of the compressed estimate', () => {
+      const q = build();
+      // 1GB compressed estimates 2GB, but this image really unpacks to 3.3GB.
+      const r = q.decide({ ...base, decompressedBytes: 3.3 * GB });
+      expect(r.estimateBytes).to.equal(3.3 * GB);
+      expect(r.decision).to.equal('admit');
+    });
+
+    it('rejects too-big on a measured size the compressed estimate would have admitted', () => {
+      const q = build();
+      // compressed*2 is 4GB and fits under the 5GB burst cap; the real 5.5GB does not.
+      const r = q.decide({ ...base, compressedBytes: 2 * GB, decompressedBytes: 5.5 * GB });
+      expect(r).to.include({ decision: 'reject', reason: 'too-big' });
+    });
+
+    it('falls back to compressed*2 when the image is unmeasured', () => {
+      const q = build();
+      expect(q.decide({ ...base, decompressedBytes: 0 }).estimateBytes).to.equal(2 * GB);
+      expect(q.decide(base).estimateBytes).to.equal(2 * GB);
+    });
   });
 
   describe('tryAdmit (store-backed, with reservations)', () => {
@@ -84,6 +105,19 @@ describe('imageCacheQuota tests', () => {
       q.release(first.token);
       const third = await q.tryAdmit('F1', 'rB', 1 * GB);
       expect(third.decision).to.equal('admit');
+    });
+
+    it('reserves the measured decompressed size, not the compressed estimate', async () => {
+      const q = build();
+      storeStub.listImagesForFluxId.resolves([]);
+      storeStub.listAllImages.resolves([]);
+
+      const admitted = await q.tryAdmit('F1', 'rA', 1 * GB, 4 * GB);
+      expect(admitted.decision).to.equal('admit');
+      expect(admitted.estimateBytes).to.equal(4 * GB);
+      expect(q.reservedForFluxId('F1')).to.equal(4 * GB);
+
+      q.release(admitted.token);
     });
 
     it('FAILS CLOSED (reject accounting-unavailable) when the store read errors', async () => {

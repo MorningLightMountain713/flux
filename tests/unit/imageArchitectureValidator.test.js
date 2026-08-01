@@ -133,7 +133,95 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
     });
   });
 
-  describe('rootFs fit (early compressed-size reject)', () => {
+  describe('rootFs fit (measured decompressed size)', () => {
+    it('checks the fit against the decompressed size, not the compressed one', async () => {
+      verifyRepositoryStub.resolves({
+        verified: true,
+        supportedArchitectures: ['amd64'],
+        imageSizeBytes: 2e9,
+        decompressedSizeBytes: 5.4e9,
+        decompressedSizeClearanceBytes: 5.4e9,
+      });
+      const fits = sinon.stub().returns(true);
+      const spec = makeSpec({ compose: [{ name: 'c', rootFsGb: 6, imageFitsRootFs: fits }] });
+
+      await verifyImageRegistryAndArchitectures(spec);
+
+      expect(fits.calledOnceWithExactly(5.4e9)).to.be.true;
+    });
+
+    it('rejects an image whose compressed size fits but whose decompressed size does not', async () => {
+      verifyRepositoryStub.resolves({
+        verified: true,
+        supportedArchitectures: ['amd64'],
+        imageSizeBytes: 1.5e9,
+        decompressedSizeBytes: 4.2e9,
+        decompressedSizeClearanceBytes: 4.2e9,
+      });
+      const spec = makeSpec({
+        compose: [{
+          name: 'c', image: 'big:latest', rootFsGb: 2, imageFitsRootFs: (bytes) => bytes <= 2e9,
+        }],
+      });
+
+      try {
+        await verifyImageRegistryAndArchitectures(spec);
+        expect.fail('Should have thrown');
+      } catch (err) {
+        expect(err.message).to.include('decompresses to 4.20GB');
+        expect(err.message).to.include('rootFsGb budget of 2GB');
+        expect(err.message).to.include('Declare a rootFsGb of at least 5');
+        expect(err.message).to.include('zstd');
+        expect(err.message).to.include('split the oversized layer');
+      }
+    });
+
+    it('requires the next candidate up when the measurement was ambiguous', async () => {
+      // pytorch-shaped: 7.56GB measured, 11.86GB if the trailer wrapped twice.
+      verifyRepositoryStub.resolves({
+        verified: true,
+        supportedArchitectures: ['amd64'],
+        imageSizeBytes: 3.62e9,
+        decompressedSizeBytes: 7_564_967_296,
+        decompressedSizeClearanceBytes: 11_859_934_592,
+      });
+      const fits = sinon.stub().returns(false);
+      const spec = makeSpec({
+        compose: [{
+          name: 'c', image: 'pytorch:latest', rootFsGb: 8, imageFitsRootFs: fits,
+        }],
+      });
+
+      try {
+        await verifyImageRegistryAndArchitectures(spec);
+        expect.fail('Should have thrown');
+      } catch (err) {
+        expect(fits.calledOnceWithExactly(11_859_934_592)).to.be.true;
+        expect(err.message).to.include('at least 7.56GB');
+        expect(err.message).to.include('may be as large as 11.86GB');
+        expect(err.message).to.include('Declare a rootFsGb of at least 12');
+      }
+    });
+
+    it('accepts an ambiguous measurement whose next candidate still fits', async () => {
+      verifyRepositoryStub.resolves({
+        verified: true,
+        supportedArchitectures: ['amd64'],
+        imageSizeBytes: 3.62e9,
+        decompressedSizeBytes: 7_564_967_296,
+        decompressedSizeClearanceBytes: 11_859_934_592,
+      });
+      const spec = makeSpec({
+        compose: [{
+          name: 'c', rootFsGb: 12, imageFitsRootFs: (bytes) => bytes <= 12e9,
+        }],
+      });
+
+      await verifyImageRegistryAndArchitectures(spec);
+    });
+  });
+
+  describe('rootFs fit (unmeasured, compressed-size fallback)', () => {
     it('rejects when the component reports the image does not fit its rootFs budget', async () => {
       verifyRepositoryStub.resolves({
         verified: true, supportedArchitectures: ['amd64'], imageSizeBytes: 5e9,
