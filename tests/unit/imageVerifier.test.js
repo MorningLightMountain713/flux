@@ -9,10 +9,14 @@ const registryResponses = require('./data/registryResponses');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 
 const { ImageVerifier } = require('../../ZelBack/src/services/utils/imageVerifier');
+const registryGovernor = require('../../ZelBack/src/services/utils/registryGovernor');
 
 describe('imageVerifier tests', () => {
   afterEach(() => {
     sinon.restore();
+    // The governor is a process-level singleton keyed by registry host, so its
+    // rate budget and cooldowns would otherwise carry from one test to the next.
+    registryGovernor.reset();
   });
 
   describe('parse repoTag tests', () => {
@@ -620,8 +624,6 @@ describe('imageVerifier tests', () => {
     });
 
     it('should not throw if valid distribution list and manifests received', async () => {
-      const clock = sinon.useFakeTimers();
-
       const repotag = 'megachips/ipshow:web';
 
       const amd64Sha = 'sha256:2c62993fdc4eef2077030894893391a8d1b4b785106f25495af734e474c7c019';
@@ -644,17 +646,13 @@ describe('imageVerifier tests', () => {
       });
 
       const verifier = new ImageVerifier(repotag);
-      const promise = verifier.verifyImage();
+      const result = await verifier.verifyImage();
 
-      // because of aws ratelimiting, we send one per second. Each architecture's
-      // manifest is followed by one layer size read, which this stub answers
-      // without a 206 - so the layer is unmeasured and the rest are not asked for.
-      await clock.tickAsync(1000);
-      expect(axiosGetStub.callCount).to.equal(3);
-      await clock.tickAsync(1000);
-
-      const result = await promise;
-
+      // Docker Hub is count-capped, not rate-capped, so the governor paces
+      // nothing here and the architectures are walked back to back - this used
+      // to cost a second of sleep each. Per architecture: one manifest plus one
+      // layer size read, which this stub answers without a 206, so the layer is
+      // unmeasured and the remaining layers are not asked for.
       expect(result).to.equal(true);
       expect(axiosGetStub.callCount).to.equal(5);
       expect(verifier.decompressedSizeBytes).to.equal(0);
@@ -662,8 +660,6 @@ describe('imageVerifier tests', () => {
     });
 
     it('should not throw if valid oci index and manifests received', async () => {
-      const clock = sinon.useFakeTimers();
-
       const repotag = 'megachips/ipshow:web';
 
       const amd64Sha = 'sha256:d4990507327f4d08aaf57d9c7e2e0250260e9f6ef7fa0e0bfe822c37ad2e1b2f';
@@ -686,17 +682,13 @@ describe('imageVerifier tests', () => {
       });
 
       const verifier = new ImageVerifier(repotag);
-      const promise = verifier.verifyImage();
+      const result = await verifier.verifyImage();
 
-      // because of aws ratelimiting, we send one per second. Each architecture's
-      // manifest is followed by one layer size read, which this stub answers
-      // without a 206 - so the layer is unmeasured and the rest are not asked for.
-      await clock.tickAsync(1000);
-      expect(axiosGetStub.callCount).to.equal(3);
-      await clock.tickAsync(1000);
-
-      const result = await promise;
-
+      // Docker Hub is count-capped, not rate-capped, so the governor paces
+      // nothing here and the architectures are walked back to back - this used
+      // to cost a second of sleep each. Per architecture: one manifest plus one
+      // layer size read, which this stub answers without a 206, so the layer is
+      // unmeasured and the remaining layers are not asked for.
       expect(result).to.equal(true);
       expect(axiosGetStub.callCount).to.equal(5);
       expect(verifier.decompressedSizeBytes).to.equal(0);

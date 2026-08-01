@@ -1,4 +1,5 @@
 const serviceHelper = require('../serviceHelper');
+const registryGovernor = require('./registryGovernor');
 
 /**
  * Docker Architecture
@@ -140,6 +141,34 @@ class ImageVerifier {
     return { ...match.groups };
   }
 
+  /**
+   * The rate-limit facts a registry attaches to a response, normalized to the
+   * few names the registries actually use. Absent fields stay absent rather
+   * than becoming nulls, so a caller can tell "the registry said nothing" from
+   * "the registry said zero".
+   *
+   * @param {object} headers
+   * @returns {object} zero or more of retryAfter, rateLimitReset, rateLimitRemaining, rateLimitSource
+   */
+  static rateLimitMeta(headers = {}) {
+    const meta = {};
+    if (!headers) return meta;
+
+    const retryAfter = Number(headers['retry-after']);
+    if (Number.isFinite(retryAfter)) meta.retryAfter = retryAfter;
+
+    const reset = Number(headers['ratelimit-reset'] ?? headers['x-ratelimit-reset']);
+    if (Number.isFinite(reset)) meta.rateLimitReset = reset;
+
+    const remaining = headers['ratelimit-remaining'] ?? headers['x-ratelimit-remaining'];
+    if (remaining !== undefined) meta.rateLimitRemaining = String(remaining);
+
+    const source = headers['docker-ratelimit-source'];
+    if (source !== undefined) meta.rateLimitSource = String(source);
+
+    return meta;
+  }
+
   #abortController = new AbortController();
 
   #axiosInstance = null;
@@ -197,6 +226,11 @@ class ImageVerifier {
     this.architecture = options.architecture || 'amd64';
     this.architectureSet = options.architectureSet || ['amd64', 'arm64'];
     this.maxImageSize = options.maxImageSize || 2_000_000_000; // 2Gb
+    // How long this verifier will wait on the governor before giving up. null
+    // (the default) waits: background work - the spawner, the installer, a
+    // preflight job - has nowhere better to be. A caller holding an HTTP request
+    // open must set it, or a cooling registry becomes a hung request.
+    this.governorTimeoutMs = options.governorTimeoutMs ?? null;
 
     if (options.credentials) this.addCredentials(options.credentials);
 
@@ -546,6 +580,9 @@ class ImageVerifier {
         errorCode: null,
         // eslint-disable-next-line no-nested-ternary
         errorType: httpStatus === 429 ? 'rate_limit' : (httpStatus >= 500 ? 'server_error' : 'http_error'),
+        // What the registry said about its own limit, carried so a caller can
+        // pace a retry off the registry's number instead of a fixed guess.
+        ...ImageVerifier.rateLimitMeta(error.response.headers),
       };
       return { data: null };
     }
@@ -655,13 +692,13 @@ class ImageVerifier {
       // Store all supported architectures from the manifest
       this.#supportedArchitectures = images.map((img) => img.platform.architecture);
 
-      // Can't remember 100% but think it's AWS that rate limits to 1/s if not authed.
+      // The one-second wait that used to sit here was ECR Public's 1 req/s rule
+      // charged to every registry, including Docker Hub and GHCR which are
+      // count-capped and uncapped respectively - two seconds of pure latency per
+      // multi-architecture component. The governor now paces per provider, so
+      // ECR Public is still spaced correctly and nobody else pays for it.
       // eslint-disable-next-line no-restricted-syntax
       for (const image of images) {
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((r) => {
-          setTimeout(r, 1_000);
-        });
         // eslint-disable-next-line no-await-in-loop
         const singleManifest = await this.#fetchManifest(image.digest);
 
@@ -696,13 +733,53 @@ class ImageVerifier {
     }
   }
 
+  /**
+   * Run one registry round-trip under the governor: wait for this provider's
+   * concurrency slot, rate budget and any cooldown, make the request, then feed
+   * the answer back so a 429 becomes a cooldown the next caller respects.
+   *
+   * Every request to a registry goes through here. That is what lets the pacing
+   * be per-provider rather than a fixed sleep charged to all of them, and it is
+   * why the caller-side sleep this replaced could be deleted.
+   *
+   * @param {() => Promise<any>} request
+   * @returns {Promise<any>} whatever request resolves to
+   */
+  async #guardedRequest(request) {
+    const release = await registryGovernor.acquire(this.provider, {
+      authed: this.authConfigured,
+      timeoutMs: this.governorTimeoutMs,
+    });
+
+    try {
+      const response = await request();
+      if (response && response.headers) {
+        registryGovernor.recordResponse(this.provider, {
+          status: response.status,
+          headers: response.headers,
+        });
+      }
+      return response;
+    } catch (error) {
+      if (error.response) {
+        registryGovernor.recordResponse(this.provider, {
+          status: error.response.status,
+          headers: error.response.headers,
+        });
+      }
+      throw error;
+    } finally {
+      release();
+    }
+  }
+
   async #fetchManifest(digest) {
     const manifestEndpoint = this.namespace
       ? `${this.namespace}/${this.repository}/manifests/${digest}`
       : `${this.repository}/manifests/${digest}`;
 
-    const { data: imageManifest } = await this.#axiosInstance
-      .get(manifestEndpoint)
+    const { data: imageManifest } = await this
+      .#guardedRequest(() => this.#axiosInstance.get(manifestEndpoint))
       .catch((error) => this.#handleAxiosError(manifestEndpoint, error));
 
     return imageManifest;
@@ -724,13 +801,18 @@ class ImageVerifier {
       ? `${this.namespace}/${this.repository}/blobs/${digest}`
       : `${this.repository}/blobs/${digest}`;
 
-    const response = await this.#axiosInstance
-      .get(blobsEndpoint, {
+    // Governed like every other registry request - these are ranged GETs on
+    // blobs, so they do not count against a manifest cap, but they are still
+    // requests to the provider. The catch stays all-encompassing: a governor
+    // refusal leaves the layer unmeasured exactly as a refused Range does, and
+    // must not become a verdict on the image.
+    const response = await this
+      .#guardedRequest(() => this.#axiosInstance.get(blobsEndpoint, {
         headers: { Range: `bytes=${start}-${end}`, Accept: '*/*' },
         responseType: 'arraybuffer',
         decompress: false,
         maxContentLength: maxBlobRangeBytes,
-      })
+      }))
       .catch(() => null);
 
     // 200 means the range was ignored and the body is the whole layer, not the
@@ -817,8 +899,8 @@ class ImageVerifier {
       ? `${this.namespace}/${this.repository}/blobs/${digest}`
       : `${this.repository}/blobs/${digest}`;
 
-    const { data: imageConfig } = await this.#axiosInstance
-      .get(blobsEndpoint)
+    const { data: imageConfig } = await this
+      .#guardedRequest(() => this.#axiosInstance.get(blobsEndpoint))
       .catch((error) => this.#handleAxiosError(blobsEndpoint, error));
 
     return imageConfig;
@@ -835,8 +917,8 @@ class ImageVerifier {
       ? `${this.namespace}/${this.repository}/manifests/${this.tag}`
       : `${this.repository}/manifests/${this.tag}`;
 
-    const response = await this.#axiosInstance
-      .head(manifestEndpoint)
+    const response = await this
+      .#guardedRequest(() => this.#axiosInstance.head(manifestEndpoint))
       .catch((error) => this.#handleAxiosError(manifestEndpoint, error));
 
     if (!response || !response.headers) return null;
