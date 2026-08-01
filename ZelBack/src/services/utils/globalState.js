@@ -76,7 +76,9 @@ const testInstallingApps = new Set();
 // peerNotification because a removal has to wait on it too, and peerNotification
 // already reaches appUninstaller through the reconciler - so the uninstaller
 // cannot reach back without a require cycle.
-const announceCycle = new AsyncLock();
+// maxHoldMs: 0 - an announce cycle has no 60s bound; peerNotification measures each
+// cycle against its interval and reports an overrun there.
+const announceCycle = new AsyncLock(1, { maxHoldMs: 0 });
 
 const departingApps = {
   /**

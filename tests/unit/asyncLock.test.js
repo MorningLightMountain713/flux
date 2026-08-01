@@ -1,547 +1,438 @@
-const { expect } = require('chai');
+const chai = require('chai');
+const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
+
+chai.use(chaiAsPromised);
+const { expect } = chai;
 
 const { AsyncLock } = require('../../ZelBack/src/services/utils/asyncLock');
 
 describe('asyncLock tests', () => {
-  beforeEach(async () => { });
-
   afterEach(() => {
     sinon.restore();
   });
 
-  it('should instantiate and not be locked', () => {
-    const asyncLock = new AsyncLock();
+  describe('acquisition', () => {
+    it('should instantiate and not be locked', () => {
+      const asyncLock = new AsyncLock();
 
-    expect(asyncLock.locked).to.be.false;
-  });
+      expect(asyncLock.locked).to.be.false;
+    });
 
-  it('should set locked when enabled', async () => {
-    const asyncLock = new AsyncLock();
+    it('should set locked when acquired', async () => {
+      const asyncLock = new AsyncLock();
 
-    await asyncLock.enable();
+      await asyncLock.acquire();
 
-    expect(asyncLock.locked).to.be.true;
-  });
+      expect(asyncLock.locked).to.be.true;
+    });
 
-  it('should resolve immediately when ready awaited and not locked', async () => {
-    const asyncLock = new AsyncLock();
-    await asyncLock.waitReady();
-  });
+    it('should unlock when the release is called', async () => {
+      const asyncLock = new AsyncLock();
 
-  it('should resolve eventually when ready awaited and locked', async () => {
-    const clock = sinon.useFakeTimers();
+      const release = await asyncLock.acquire();
+      release();
 
-    const asyncLock = new AsyncLock();
-    let testVar = false;
-
-    const tester = async () => {
+      expect(asyncLock.locked).to.be.false;
       await asyncLock.waitReady();
-      testVar = true;
-    };
+    });
 
-    await asyncLock.enable();
-    setTimeout(() => asyncLock.disable(), 5000);
-    const promise = tester();
-    expect(testVar).to.be.false;
-    await clock.tickAsync(4000);
-    expect(testVar).to.be.false;
-    await clock.tickAsync(1000);
-    expect(testVar).to.be.true;
-    await promise;
+    it('should block a second acquire on a mutex until the first releases', async () => {
+      const asyncLock = new AsyncLock();
+      let secondAcquired = false;
+
+      const release = await asyncLock.acquire();
+
+      const second = (async () => {
+        await asyncLock.acquire();
+        secondAcquired = true;
+      })();
+
+      await new Promise((r) => { setTimeout(r, 0); });
+      expect(secondAcquired).to.be.false;
+
+      release();
+      await second;
+      expect(secondAcquired).to.be.true;
+    });
+
+    it('should allow maxConcurrent holders at once and block the next', async () => {
+      const asyncLock = new AsyncLock(3);
+      const acquired = [false, false, false, false];
+      const releases = [];
+
+      const take = async (index) => {
+        releases[index] = await asyncLock.acquire();
+        acquired[index] = true;
+      };
+
+      await Promise.all([take(0), take(1), take(2)]);
+      expect(acquired.slice(0, 3)).to.deep.equal([true, true, true]);
+
+      const fourth = take(3);
+      await new Promise((r) => { setTimeout(r, 0); });
+      expect(acquired[3]).to.be.false;
+
+      releases[0]();
+      await fourth;
+      expect(acquired[3]).to.be.true;
+    });
+
+    it('should serve waiters first-in first-out', async () => {
+      const clock = sinon.useFakeTimers();
+      const asyncLock = new AsyncLock();
+      const order = [];
+
+      const take = async (id) => {
+        const release = await asyncLock.acquire();
+        await new Promise((r) => { setTimeout(r, 1000); });
+        order.push(id);
+        release();
+      };
+
+      const running = [take(1), take(2), take(3)];
+      expect(asyncLock.waiterCount).to.equal(2);
+
+      await clock.tickAsync(3000);
+      await Promise.all(running);
+
+      expect(order).to.deep.equal([1, 2, 3]);
+    });
   });
 
-  it('should wait if enable called and already locked', async () => {
-    const clock = sinon.useFakeTimers();
+  describe('the release is bound to its own acquisition', () => {
+    // The reason this class owns the guarantee rather than its callers: both of
+    // these failures are silent, and both leave the semaphore reporting a limit
+    // it has stopped enforcing.
+    it('should not free another holder when a release is called twice', async () => {
+      const asyncLock = new AsyncLock(2);
 
-    const asyncLock = new AsyncLock();
-    let testVar = false;
+      const releaseFirst = await asyncLock.acquire();
+      await asyncLock.acquire();
 
-    const tester = async () => {
-      await asyncLock.enable();
-      testVar = true;
-    };
+      let thirdAcquired = false;
+      const third = (async () => {
+        await asyncLock.acquire();
+        thirdAcquired = true;
+      })();
 
-    await asyncLock.enable();
-    setTimeout(() => asyncLock.disable(), 5000);
-    tester();
-    expect(testVar).to.be.false;
-    await clock.tickAsync(4000);
-    expect(testVar).to.be.false;
-    await clock.tickAsync(1000);
-    expect(testVar).to.be.true;
+      releaseFirst();
+      await new Promise((r) => { setTimeout(r, 0); });
+      expect(thirdAcquired).to.be.true;
+
+      // The double call must be a no-op: the second holder still has its slot,
+      // so a fourth caller has to wait for it.
+      releaseFirst();
+      let fourthAcquired = false;
+      (async () => {
+        await asyncLock.acquire();
+        fourthAcquired = true;
+      })();
+
+      await new Promise((r) => { setTimeout(r, 0); });
+      expect(fourthAcquired).to.be.false;
+      await third;
+    });
+
+    it('should attribute a leak to the holder that leaked it, not to whoever released next', async () => {
+      const clock = sinon.useFakeTimers();
+      // eslint-disable-next-line global-require
+      const log = require('../../ZelBack/src/lib/log');
+      const errorStub = sinon.stub(log, 'error');
+
+      const asyncLock = new AsyncLock(2, { maxHoldMs: 1000 });
+
+      // With acquire and release strictly paired, a release that frees the
+      // wrong slot is only a permutation — the free-slot COUNT stays right, so
+      // nothing observable changes. It takes an unpaired release to expose it.
+      // Here the first holder leaks and the second releases normally: if the
+      // second's release freed the first's slot, it would also cancel the
+      // first's watchdog, and the leak would go unreported forever while the
+      // second's slot was never returned.
+      await asyncLock.acquire({ label: 'leaker' });
+      const releaseTidy = await asyncLock.acquire({ label: 'tidy' });
+
+      await clock.tickAsync(500);
+      releaseTidy();
+
+      await clock.tickAsync(500);
+
+      expect(errorStub.calledOnce).to.be.true;
+      expect(errorStub.firstCall.args[0]).to.include('leaker');
+      expect(errorStub.firstCall.args[0]).to.not.include('tidy');
+      // Both slots are back: the tidy holder returned its own, and the
+      // watchdog reclaimed the leaked one.
+      expect(asyncLock.locked).to.be.false;
+    });
   });
 
-  it('should run waiters in order if multiple waiters on the lock', async () => {
-    const clock = sinon.useFakeTimers();
+  describe('acquisition timeout', () => {
+    it('should wait indefinitely by default', async () => {
+      const clock = sinon.useFakeTimers();
+      // Watchdog off: with it on, a wait past maxHoldMs is not observable —
+      // the holder gets force-released and the waiter is handed the slot.
+      const asyncLock = new AsyncLock(1, { maxHoldMs: 0 });
+      let acquired = false;
 
-    const asyncLock = new AsyncLock();
-    const results = { 1: false, 2: false, 3: false };
+      const release = await asyncLock.acquire();
+      const waiter = (async () => {
+        await asyncLock.acquire();
+        acquired = true;
+      })();
 
-    const tester = async (id) => {
-      await asyncLock.enable();
+      await clock.tickAsync(600000);
+      expect(acquired).to.be.false;
 
-      await new Promise((r) => { setTimeout(r, 1000); });
-      results[id] = true;
-      asyncLock.disable();
-    };
+      release();
+      await waiter;
+      expect(acquired).to.be.true;
+    });
 
-    expect(results[1]).to.be.false;
-    expect(results[2]).to.be.false;
-    expect(results[3]).to.be.false;
-    expect(asyncLock.waiterCount).to.be.equal(0);
+    it('should reject with LOCK_TIMEOUT when a slot does not free up in time', async () => {
+      const clock = sinon.useFakeTimers();
+      const asyncLock = new AsyncLock();
 
-    const promise1 = tester(1);
-    const promise2 = tester(2);
-    const promise3 = tester(3);
+      await asyncLock.acquire();
+      const waiter = asyncLock.acquire({ timeoutMs: 5000 });
 
-    expect(asyncLock.waiterCount).to.be.equal(2);
+      await clock.tickAsync(5000);
 
-    await clock.tickAsync(1000);
+      const error = await waiter.catch((err) => err);
+      // Consumers must class this retryable: it says the node was busy, never
+      // that the operation was invalid.
+      expect(error.code).to.equal('LOCK_TIMEOUT');
+      expect(error.message).to.match(/Timed out after 5000ms/);
+    });
 
-    expect(results[1]).to.be.true;
-    expect(results[2]).to.be.false;
-    expect(results[3]).to.be.false;
+    it('should stop counting a timed-out waiter, so it cannot be handed a slot later', async () => {
+      const clock = sinon.useFakeTimers();
+      const asyncLock = new AsyncLock();
 
-    await promise1;
+      const release = await asyncLock.acquire();
+      const doomed = asyncLock.acquire({ timeoutMs: 1000 });
+      expect(asyncLock.waiterCount).to.equal(1);
 
-    expect(asyncLock.waiterCount).to.be.equal(1);
+      await clock.tickAsync(1000);
+      await doomed.catch(() => {});
+      expect(asyncLock.waiterCount).to.equal(0);
 
-    await clock.tickAsync(1000);
+      // Releasing must not resurrect the abandoned waiter into a held slot.
+      release();
+      expect(asyncLock.locked).to.be.false;
+    });
 
-    expect(results[1]).to.be.true;
-    expect(results[2]).to.be.true;
-    expect(results[3]).to.be.false;
+    it('should not time out an acquisition that was granted first', async () => {
+      const clock = sinon.useFakeTimers();
+      const asyncLock = new AsyncLock();
 
-    await promise2;
+      const release = await asyncLock.acquire();
+      const waiter = asyncLock.acquire({ timeoutMs: 5000 });
 
-    expect(asyncLock.waiterCount).to.be.equal(0);
+      await clock.tickAsync(1000);
+      release();
 
-    await clock.tickAsync(1000);
+      const secondRelease = await waiter;
+      await clock.tickAsync(10000);
 
-    expect(results[1]).to.be.true;
-    expect(results[2]).to.be.true;
-    expect(results[3]).to.be.true;
-
-    await promise3;
+      expect(asyncLock.locked).to.be.true;
+      secondRelease();
+      expect(asyncLock.locked).to.be.false;
+    });
   });
 
-  it('should resolve when waitReady called and existing enables have cleared', async () => {
-    const clock = sinon.useFakeTimers();
+  describe('max-hold watchdog', () => {
+    it('should force-release a slot held past the limit and log the leak', async () => {
+      const clock = sinon.useFakeTimers();
+      // eslint-disable-next-line global-require
+      const log = require('../../ZelBack/src/lib/log');
+      const errorStub = sinon.stub(log, 'error');
 
-    const asyncLock = new AsyncLock();
+      const asyncLock = new AsyncLock(1, { maxHoldMs: 1000 });
 
-    const tester = async () => {
-      await asyncLock.enable();
+      await asyncLock.acquire({ label: 'leaky' });
+      expect(asyncLock.locked).to.be.true;
 
-      await new Promise((r) => { setTimeout(r, 1000); });
-      asyncLock.disable();
-    };
+      await clock.tickAsync(1000);
 
-    let waiterSet = false;
+      expect(asyncLock.locked).to.be.false;
+      expect(errorStub.calledOnce).to.be.true;
+      expect(errorStub.firstCall.args[0]).to.match(/force-releasing a slot held over/);
+      expect(errorStub.firstCall.args[0]).to.include('leaky');
+    });
 
-    const waiter = async () => {
-      await asyncLock.waitReady({ waitAll: false });
-      waiterSet = true;
-    };
+    it('should hand the reclaimed slot to a waiter', async () => {
+      const clock = sinon.useFakeTimers();
+      // eslint-disable-next-line global-require
+      const log = require('../../ZelBack/src/lib/log');
+      sinon.stub(log, 'error');
 
-    const promise1 = tester();
-    const promise2 = tester();
-    const promise3 = tester();
-    const waiterPromise = waiter();
-    const promise4 = tester();
+      const asyncLock = new AsyncLock(1, { maxHoldMs: 1000 });
+      let acquired = false;
 
-    expect(asyncLock.locked).to.be.true;
-    expect(asyncLock.waiterCount).to.be.equal(3);
+      await asyncLock.acquire();
+      (async () => {
+        await asyncLock.acquire();
+        acquired = true;
+      })();
 
-    await clock.tickAsync(1000);
-    await promise1;
+      await clock.tickAsync(1000);
+      expect(acquired).to.be.true;
+    });
 
-    expect(waiterSet).to.be.false;
+    it('should make the real holder\'s later release a no-op after a force-release', async () => {
+      const clock = sinon.useFakeTimers();
+      // eslint-disable-next-line global-require
+      const log = require('../../ZelBack/src/lib/log');
+      sinon.stub(log, 'error');
 
-    await clock.tickAsync(1000);
-    await promise2;
+      const asyncLock = new AsyncLock(1, { maxHoldMs: 1000 });
 
-    expect(waiterSet).to.be.false;
+      const release = await asyncLock.acquire();
+      await clock.tickAsync(1000);
 
-    await clock.tickAsync(1000);
-    await promise3;
+      // Another caller has the slot now; the leaked holder returning must not
+      // take it away from them.
+      await asyncLock.acquire();
+      release();
 
-    await waiterPromise;
-    expect(waiterSet).to.be.true;
+      expect(asyncLock.locked).to.be.true;
+    });
 
-    // cleanup
-    await clock.tickAsync(1000);
-    await promise4;
+    it('should not fire for a holder that releases in time', async () => {
+      const clock = sinon.useFakeTimers();
+      // eslint-disable-next-line global-require
+      const log = require('../../ZelBack/src/lib/log');
+      const errorStub = sinon.stub(log, 'error');
+
+      const asyncLock = new AsyncLock(1, { maxHoldMs: 1000 });
+
+      const release = await asyncLock.acquire();
+      await clock.tickAsync(500);
+      release();
+      await clock.tickAsync(5000);
+
+      expect(errorStub.called).to.be.false;
+    });
+
+    it('should be disabled by maxHoldMs 0', async () => {
+      const clock = sinon.useFakeTimers();
+      // eslint-disable-next-line global-require
+      const log = require('../../ZelBack/src/lib/log');
+      const errorStub = sinon.stub(log, 'error');
+
+      const asyncLock = new AsyncLock(1, { maxHoldMs: 0 });
+
+      await asyncLock.acquire();
+      await clock.tickAsync(600000);
+
+      expect(asyncLock.locked).to.be.true;
+      expect(errorStub.called).to.be.false;
+    });
   });
 
-  it('should only resolve waitReady when all enabled have cleared', async () => {
-    const clock = sinon.useFakeTimers();
+  describe('waitReady', () => {
+    it('should resolve immediately when nothing is outstanding', async () => {
+      const asyncLock = new AsyncLock();
+      await asyncLock.waitReady();
+    });
 
-    const asyncLock = new AsyncLock();
+    it('should resolve once the holder releases', async () => {
+      const clock = sinon.useFakeTimers();
+      const asyncLock = new AsyncLock();
+      let ready = false;
 
-    const tester = async () => {
-      await asyncLock.enable();
+      const release = await asyncLock.acquire();
+      const waiter = (async () => {
+        await asyncLock.waitReady();
+        ready = true;
+      })();
 
-      await new Promise((r) => { setTimeout(r, 1000); });
-      asyncLock.disable();
-    };
+      setTimeout(() => release(), 5000);
 
-    let waiterSet = false;
+      await clock.tickAsync(4000);
+      expect(ready).to.be.false;
+      await clock.tickAsync(1000);
+      expect(ready).to.be.true;
+      await waiter;
+    });
 
-    const waiter = async () => {
-      await asyncLock.waitReady({ waitAll: true });
-      waiterSet = true;
-    };
+    it('should wait only for what was outstanding at the call when waitAll is false', async () => {
+      const clock = sinon.useFakeTimers();
+      const asyncLock = new AsyncLock();
+      let ready = false;
 
-    const promise1 = tester();
-    const promise2 = tester();
-    const promise3 = tester();
-    const waiterPromise = waiter();
-    const promise4 = tester();
+      const take = async () => {
+        const release = await asyncLock.acquire();
+        await new Promise((r) => { setTimeout(r, 1000); });
+        release();
+      };
 
-    expect(asyncLock.locked).to.be.true;
-    expect(asyncLock.waiterCount).to.be.equal(3);
+      const first = take();
+      const second = take();
+      const third = take();
+      const waiter = (async () => {
+        await asyncLock.waitReady({ waitAll: false });
+        ready = true;
+      })();
+      const fourth = take();
 
-    await clock.tickAsync(1000);
-    await promise1;
+      await clock.tickAsync(3000);
+      await Promise.all([first, second, third]);
+      await waiter;
+      expect(ready).to.be.true;
 
-    expect(waiterSet).to.be.false;
+      await clock.tickAsync(1000);
+      await fourth;
+    });
 
-    await clock.tickAsync(1000);
-    await promise2;
+    it('should also wait for work that arrives while waiting when waitAll is true', async () => {
+      const clock = sinon.useFakeTimers();
+      const asyncLock = new AsyncLock();
+      let ready = false;
 
-    expect(waiterSet).to.be.false;
+      const take = async () => {
+        const release = await asyncLock.acquire();
+        await new Promise((r) => { setTimeout(r, 1000); });
+        release();
+      };
 
-    await clock.tickAsync(1000);
-    await promise3;
+      const first = take();
+      const second = take();
+      const third = take();
+      const waiter = (async () => {
+        await asyncLock.waitReady({ waitAll: true });
+        ready = true;
+      })();
+      const fourth = take();
 
-    expect(waiterSet).to.be.false;
+      await clock.tickAsync(3000);
+      await Promise.all([first, second, third]);
+      expect(ready).to.be.false;
 
-    await clock.tickAsync(1000);
-    await promise4;
-
-    expect(waiterSet).to.be.true;
-    await waiterPromise;
+      await clock.tickAsync(1000);
+      await fourth;
+      await waiter;
+      expect(ready).to.be.true;
+    });
   });
 
-  it('should set unlocked and resolve immediately if lock disabled', async () => {
-    const asyncLock = new AsyncLock();
-    await asyncLock.enable();
-    asyncLock.disable();
-
-    expect(asyncLock.locked).to.be.false;
-    await asyncLock.waitReady();
-  });
-
-  it('should wait and unlock lock after timeout if not unlocked prior', async () => {
-    const clock = sinon.useFakeTimers();
-    const timeout = 3_000;
-    const asyncLock = new AsyncLock();
-
-    let testVar = false;
-
-    const tester = async () => {
-      await asyncLock.enable();
-      await asyncLock.unlockTimeout(timeout);
-      testVar = true;
-    };
-
-    expect(asyncLock.locked).to.be.false;
-
-    const promise = tester();
-
-    await clock.tickAsync(2_900);
-    expect(asyncLock.locked).to.be.true;
-    expect(testVar).to.be.false;
-
-    await clock.tickAsync(100);
-    await promise;
-    expect(asyncLock.locked).to.be.false;
-    expect(testVar).to.be.true;
-  });
-
-  it('should wait for lock with timeout and not unlock lock', async () => {
-    const clock = sinon.useFakeTimers();
-    const timeout = 3_000;
-    const asyncLock = new AsyncLock();
-
-    let testVar = false;
-
-    const tester = async () => {
-      await asyncLock.enable();
-      await asyncLock.readyTimeout(timeout);
-      testVar = true;
-    };
-
-    expect(asyncLock.locked).to.be.false;
-
-    const promise = tester();
-
-    await clock.tickAsync(2_900);
-    expect(asyncLock.locked).to.be.true;
-    expect(testVar).to.be.false;
-
-    await clock.tickAsync(100);
-    await promise;
-    expect(asyncLock.locked).to.be.true;
-    expect(testVar).to.be.true;
-  });
-
-  it('should default to maxConcurrent=1 (backward compat)', async () => {
-    const asyncLock = new AsyncLock();
-    let secondEnabled = false;
-
-    await asyncLock.enable();
-
-    const p = (async () => {
-      await asyncLock.enable();
-      secondEnabled = true;
-    })();
-
-    // Second enable should be blocked (mutex behavior)
-    await new Promise((r) => { setTimeout(r, 0); });
-    expect(secondEnabled).to.be.false;
-
-    asyncLock.disable();
-    await p;
-    expect(secondEnabled).to.be.true;
-    asyncLock.disable();
-  });
-
-  it('should allow N concurrent holders with maxConcurrent', async () => {
-    const asyncLock = new AsyncLock(3);
-    const enabled = [false, false, false, false];
-
-    const enableAndMark = async (index) => {
-      await asyncLock.enable();
-      enabled[index] = true;
-    };
-
-    const p1 = enableAndMark(0);
-    const p2 = enableAndMark(1);
-    const p3 = enableAndMark(2);
-
-    // Let microtasks flush
-    await new Promise((r) => { setTimeout(r, 0); });
-
-    // First 3 should all proceed without blocking
-    expect(enabled[0]).to.be.true;
-    expect(enabled[1]).to.be.true;
-    expect(enabled[2]).to.be.true;
-
-    // 4th should block
-    const p4 = enableAndMark(3);
-    await new Promise((r) => { setTimeout(r, 0); });
-    expect(enabled[3]).to.be.false;
-
-    // Free a slot
-    asyncLock.disable();
-    await new Promise((r) => { setTimeout(r, 0); });
-    expect(enabled[3]).to.be.true;
-
-    // Cleanup
-    asyncLock.disable();
-    asyncLock.disable();
-    asyncLock.disable();
-    await Promise.all([p1, p2, p3, p4]);
-  });
-
-  it('should unblock waiters in order with maxConcurrent', async () => {
-    const clock = sinon.useFakeTimers();
-    const asyncLock = new AsyncLock(2);
-    const results = { 1: false, 2: false, 3: false, 4: false, 5: false };
-
-    const tester = async (id) => {
-      await asyncLock.enable();
-      await new Promise((r) => { setTimeout(r, 1000); });
-      results[id] = true;
-      asyncLock.disable();
-    };
-
-    // Holders 1 and 2 get slots immediately
-    const p1 = tester(1);
-    const p2 = tester(2);
-    // Holders 3, 4, 5 must wait
-    const p3 = tester(3);
-    const p4 = tester(4);
-    const p5 = tester(5);
-
-    expect(asyncLock.waiterCount).to.equal(3);
-
-    // After 1s, holders 1 and 2 complete, freeing slots for 3 and 4
-    await clock.tickAsync(1000);
-    await p1;
-    await p2;
-    expect(results[1]).to.be.true;
-    expect(results[2]).to.be.true;
-    expect(results[3]).to.be.false;
-    expect(results[4]).to.be.false;
-    expect(results[5]).to.be.false;
-
-    // Holder 3 unblocked when holder 1 disabled, holder 4 when holder 2 disabled
-    // After another 1s, holders 3 and 4 complete, freeing slot for 5
-    await clock.tickAsync(1000);
-    await p3;
-    await p4;
-    expect(results[3]).to.be.true;
-    expect(results[4]).to.be.true;
-    expect(results[5]).to.be.false;
-
-    // After another 1s, holder 5 completes
-    await clock.tickAsync(1000);
-    await p5;
-    expect(results[5]).to.be.true;
-  });
-
-  it('should track waiterCount correctly with maxConcurrent', async () => {
-    const asyncLock = new AsyncLock(2);
-
-    // First two don't wait
-    await asyncLock.enable();
-    expect(asyncLock.waiterCount).to.equal(0);
-    await asyncLock.enable();
-    expect(asyncLock.waiterCount).to.equal(0);
-
-    // Third and fourth will wait
-    const p3 = asyncLock.enable();
-    expect(asyncLock.waiterCount).to.equal(1);
-    const p4 = asyncLock.enable();
-    expect(asyncLock.waiterCount).to.equal(2);
-
-    // Free slots
-    asyncLock.disable();
-    await new Promise((r) => { setTimeout(r, 0); });
-    expect(asyncLock.waiterCount).to.equal(1);
-
-    asyncLock.disable();
-    await new Promise((r) => { setTimeout(r, 0); });
-    expect(asyncLock.waiterCount).to.equal(0);
-
-    await p3;
-    await p4;
-
-    // Cleanup
-    asyncLock.disable();
-    asyncLock.disable();
-  });
-
-  it('should add lock user without waiting when register() called', async () => {
-    const asyncLock = new AsyncLock();
-
-    asyncLock.register();
-    expect(asyncLock.locked).to.be.true;
-
-    // enable() on a mutex should block since register() took the slot
-    let secondEnabled = false;
-    const p = (async () => {
-      await asyncLock.enable();
-      secondEnabled = true;
-    })();
-
-    await new Promise((r) => { setTimeout(r, 0); });
-    expect(secondEnabled).to.be.false;
-
-    asyncLock.disable(); // free the register() slot
-    await new Promise((r) => { setTimeout(r, 0); });
-    expect(secondEnabled).to.be.true;
-
-    asyncLock.disable(); // free the enable() slot
-    await p;
-  });
-
-  it('should have register() occupy a semaphore slot', async () => {
-    const asyncLock = new AsyncLock(2);
-
-    // register() takes one slot, enable() takes the second
-    asyncLock.register();
-    await asyncLock.enable();
-
-    // Third caller should block (both slots occupied)
-    let thirdEnabled = false;
-    const p = (async () => {
-      await asyncLock.enable();
-      thirdEnabled = true;
-    })();
-
-    await new Promise((r) => { setTimeout(r, 0); });
-    expect(thirdEnabled).to.be.false;
-
-    // Free the register() slot
-    asyncLock.disable();
-    await new Promise((r) => { setTimeout(r, 0); });
-    expect(thirdEnabled).to.be.true;
-
-    // Cleanup
-    asyncLock.disable();
-    asyncLock.disable();
-    await p;
-  });
-
-  it('should correctly propagate unblocking when holders finish out of order', async () => {
-    const clock = sinon.useFakeTimers();
-    const asyncLock = new AsyncLock(2);
-    const results = [];
-
-    // A is slow (5s), B is fast (1s). C and D are waiters.
-    // disable() always shifts the front entry, so B finishing first
-    // shifts A's entry and resolves A's promise, unblocking C.
-    // When C finishes, it shifts B's entry, resolving B's promise, unblocking D.
-    const holderA = async () => {
-      await asyncLock.enable();
-      await new Promise((r) => { setTimeout(r, 5000); });
-      results.push('A');
-      asyncLock.disable();
-    };
-
-    const holderB = async () => {
-      await asyncLock.enable();
-      await new Promise((r) => { setTimeout(r, 1000); });
-      results.push('B');
-      asyncLock.disable();
-    };
-
-    const holderC = async () => {
-      await asyncLock.enable();
-      await new Promise((r) => { setTimeout(r, 1000); });
-      results.push('C');
-      asyncLock.disable();
-    };
-
-    const holderD = async () => {
-      await asyncLock.enable();
-      await new Promise((r) => { setTimeout(r, 1000); });
-      results.push('D');
-      asyncLock.disable();
-    };
-
-    const pA = holderA();
-    const pB = holderB();
-    const pC = holderC();
-    const pD = holderD();
-
-    expect(asyncLock.waiterCount).to.equal(2);
-
-    // t=1s: B finishes. disable() shifts A's entry, resolves A's promise.
-    // C was waiting on A's promise -> C unblocks and starts running.
-    await clock.tickAsync(1000);
-    expect(results).to.deep.equal(['B']);
-
-    // t=2s: C finishes. disable() shifts B's entry, resolves B's promise.
-    // D was waiting on B's promise -> D unblocks and starts running.
-    await clock.tickAsync(1000);
-    expect(results).to.deep.equal(['B', 'C']);
-    expect(asyncLock.waiterCount).to.equal(0);
-
-    // t=3s: D finishes. A still running (2s left).
-    await clock.tickAsync(1000);
-    expect(results).to.deep.equal(['B', 'C', 'D']);
-
-    // t=5s: A finally finishes.
-    await clock.tickAsync(2000);
-    expect(results).to.deep.equal(['B', 'C', 'D', 'A']);
-    expect(asyncLock.locked).to.be.false;
-
-    await Promise.all([pA, pB, pC, pD]);
+  describe('counters', () => {
+    it('should count only blocked acquisitions as waiters', async () => {
+      const asyncLock = new AsyncLock(2);
+
+      const first = await asyncLock.acquire();
+      expect(asyncLock.waiterCount).to.equal(0);
+      await asyncLock.acquire();
+      expect(asyncLock.waiterCount).to.equal(0);
+
+      asyncLock.acquire();
+      expect(asyncLock.waiterCount).to.equal(1);
+      asyncLock.acquire();
+      expect(asyncLock.waiterCount).to.equal(2);
+
+      first();
+      await new Promise((r) => { setTimeout(r, 0); });
+      expect(asyncLock.waiterCount).to.equal(1);
+    });
   });
 });

@@ -1438,7 +1438,7 @@ async function getEvents({
  */
 async function probeSyncthing() {
   // Serialised so concurrent callers do not each open three requests at once.
-  await asyncLock.enable();
+  const release = await asyncLock.acquire({ label: 'syncthingDeviceId' });
 
   let meta = null;
   let healthy = null;
@@ -1460,7 +1460,7 @@ async function probeSyncthing() {
   } catch {
     // do nothing
   } finally {
-    asyncLock.disable();
+    release();
   }
 
   if (stc.aborted) return { ok: false, deviceId: null };
@@ -1852,14 +1852,16 @@ async function ensureSyncthingRunning(installed) {
  * @returns {number} ms until next iteration
  */
 async function runSyncthingSentinel() {
-  await stc.lock.enable();
-
-  let installed = axiosCache.axiosInstance;
-  if (!installed) {
-    installed = await axiosCache.createInstance();
-  }
+  const release = await stc.lock.acquire({ label: 'syncthingSentinel' });
 
   try {
+    // Inside the try: creating the axios instance can throw, and this lock has
+    // one slot, so a throw here used to strand it and the sentinel never ran again.
+    let installed = axiosCache.axiosInstance;
+    if (!installed) {
+      installed = await axiosCache.createInstance();
+    }
+
     if (fluxosSupervisesSyncthing) {
       await ensureSyncthingRunning(installed);
     }
@@ -1884,7 +1886,7 @@ async function runSyncthingSentinel() {
     log.error(error);
     return 2 * SYNCTHING_SENTINEL_INTERVAL_MS;
   } finally {
-    stc.lock.disable();
+    release();
   }
 }
 

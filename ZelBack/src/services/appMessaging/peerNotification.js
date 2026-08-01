@@ -34,7 +34,9 @@ let broadcasting = false;
 // Held for the whole of a cycle, so a stop can wait for the cycle in flight
 // rather than returning while it is still running. A teardown that returns
 // before the thing is torn down is the same lie as a stop that does not stop.
-// A removal waits on it too, which is why it lives in globalState.
+// A removal waits on it too, which is why it lives in globalState. It has no max-hold
+// bound: scheduleNextBroadcast already measures every cycle and warns when one outruns
+// ANNOUNCE_INTERVAL_MS, so an overrun is detected where it means something.
 const cycleLock = globalState.announceCycle;
 
 /**
@@ -133,7 +135,9 @@ async function checkAndNotifyPeersOfRunningApps() {
   // Taken before any work, so the schedule below subtracts the WHOLE cycle -
   // including the paths that give up early, which cost time too.
   const startedAt = process.hrtime.bigint();
-  await cycleLock.enable();
+  // The release is bound to THIS acquisition, so the finally below can only
+  // hand back the slot this cycle took.
+  const releaseCycle = await cycleLock.acquire();
   try {
     // Observation only. The lock above is what a caller waiting on a cycle in
     // flight actually waits for.
@@ -267,7 +271,7 @@ async function checkAndNotifyPeersOfRunningApps() {
     log.error(error);
   } finally {
     broadcastInProgress = false;
-    cycleLock.disable();
+    releaseCycle();
     if (rebroadcastNeeded) {
       rebroadcastNeeded = false;
       setImmediate(() => checkAndNotifyPeersOfRunningApps());
