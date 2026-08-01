@@ -814,7 +814,7 @@ async function enforceWritableLayerLimit(appsStorageViolations) {
       let maxAllowedSize = 0;
       // eslint-disable-next-line no-restricted-syntax
       for (const [, comp] of deployment.componentEntries()) {
-        maxAllowedSize += (comp.rootFsGb + comp.swapGb) * GB;
+        maxAllowedSize += comp.containerDiskGb() * GB;
         const contId = dockerService.getAppDockerNameIdentifier(comp.identifier);
         const contExists = dockerSystemDF.Containers.find((cont) => cont.Names[0] === contId);
         if (contExists) {

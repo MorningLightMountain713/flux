@@ -91,7 +91,8 @@ function classifyVerificationError(error, errorMeta) {
  * @param {string} [options.repoauth] - Repository authentication credentials
  * @param {string} [options.architecture] - Specific architecture to validate support for
  * @param {string} [options.appName] - Application name (for logging)
- * @returns {Promise<{verified: boolean, supportedArchitectures: string[]}>} Verification result with supported architectures
+ * @returns {Promise<{verified: boolean, supportedArchitectures: string[], imageSizeBytes: number,
+ *   decompressedSizeBytes: number, decompressedSizeClearanceBytes: number}>} Verification result
  */
 async function verifyRepository(repotag, options = {}) {
   const repoauth = options.repoauth || null;
@@ -153,6 +154,12 @@ async function verifyRepository(repotag, options = {}) {
       // Compressed manifest size (lower bound on decompressed) for an early
       // rootFs-fit reject at ingestion; the install-time inspect is authoritative.
       imageSizeBytes: imgVerifier.imageSizeBytes,
+      // Decompressed on-disk size read from the layers' own size records - the
+      // figure rootFsGb budgets. 0 when a layer could not be read, and the
+      // clearance figure is what a declaration must cover when a gzip trailer
+      // wrapped with more than one plausible answer.
+      decompressedSizeBytes: imgVerifier.decompressedSizeBytes,
+      decompressedSizeClearanceBytes: imgVerifier.decompressedSizeClearanceBytes,
     };
 
     // Cache successful verification (uses default TTL from FluxCacheManager: 1 hour)

@@ -9,11 +9,14 @@ const imageCacheStore = require('./imageCacheStore');
 // over-counts shared base layers — conservative for a quota, never under-charged.
 // No estimate is ever stored.
 //
-// The compressed->on-disk estimate (compressed * 2) is used ONLY transiently: to gate
-// a single image's burst and to reserve space for an in-flight pull so concurrent
-// pulls can't collectively overshoot. Reservations live in memory only (recomputed
-// from the df-backed records on restart) and are released the moment a pull finishes
-// and its real size lands in the store.
+// Admission works off the pre-pull figure: the decompressed size the verifier read
+// from the layers' own size records, or - when a layer could not be read - the
+// compressed*2 estimate, which under-estimates every image measured against Docker
+// Hub (real expansion runs 1.98x to 3.58x). It is used ONLY transiently: to gate a
+// single image's burst and to reserve space for an in-flight pull so concurrent pulls
+// can't collectively overshoot. Reservations live in memory only (recomputed from the
+// df-backed records on restart) and are released the moment a pull finishes and its
+// real size lands in the store.
 
 const GB = 1_000_000_000; // decimal GB, matching config.fluxapps.maxImageSize
 const ESTIMATE_MULTIPLIER = 2; // compressed -> on-disk admission/reservation estimate
@@ -42,9 +45,17 @@ function usageFromRecords(records) {
 }
 
 /**
+ * What this image is expected to cost on disk. The measured decompressed size when
+ * the verifier could read it (0 means it could not), else compressed * 2.
+ */
+function expectedOnDiskBytes(compressedBytes, decompressedBytes) {
+  return decompressedBytes > 0 ? decompressedBytes : compressedBytes * ESTIMATE_MULTIPLIER;
+}
+
+/**
  * Pure admission decision over already-resolved numbers. Returns
  * { decision: 'admit'|'queue'|'reject', reason, estimateBytes }.
- *   - reject 'too-big'        : compressed*2 alone exceeds the per-image burst cap.
+ *   - reject 'too-big'        : the expected on-disk size alone exceeds the per-image burst cap.
  *   - reject 'over-quota'     : the owner's committed real usage already fills 20GB.
  *   - reject 'over-node-cap'  : the node's committed real usage already fills the cap.
  *   - queue  'quota-reserved' : would fit but in-flight reservations hold the room;
@@ -52,9 +63,9 @@ function usageFromRecords(records) {
  *   - admit                   : committed + reserved leaves a byte of headroom.
  */
 function decide({
-  compressedBytes, committedFluxId, reservedFluxId, committedNode, reservedNode,
+  compressedBytes, decompressedBytes, committedFluxId, reservedFluxId, committedNode, reservedNode,
 }) {
-  const estimateBytes = compressedBytes * ESTIMATE_MULTIPLIER;
+  const estimateBytes = expectedOnDiskBytes(compressedBytes, decompressedBytes);
   if (estimateBytes >= perImageBurstCapBytes()) {
     return { decision: 'reject', reason: 'too-big', estimateBytes };
   }
@@ -83,15 +94,23 @@ function decide({
  * Fail-closed: a store read error rejects with 'accounting-unavailable' (never admit
  * a download we cannot account for).
  *
+ * @param {string} fluxId
+ * @param {string} repotag
+ * @param {number} compressedBytes summed compressed layer sizes
+ * @param {number} [decompressedBytes] measured decompressed size; 0/absent = unmeasured
  * @returns {Promise<{decision, reason, estimateBytes, token?:string}>}
  */
-async function tryAdmit(fluxId, repotag, compressedBytes) {
+async function tryAdmit(fluxId, repotag, compressedBytes, decompressedBytes = 0) {
   const [fluxRecords, allRecords] = await Promise.all([
     imageCacheStore.listImagesForFluxId(fluxId),
     imageCacheStore.listAllImages(),
   ]);
   if (fluxRecords === null || allRecords === null) {
-    return { decision: 'reject', reason: 'accounting-unavailable', estimateBytes: compressedBytes * ESTIMATE_MULTIPLIER };
+    return {
+      decision: 'reject',
+      reason: 'accounting-unavailable',
+      estimateBytes: expectedOnDiskBytes(compressedBytes, decompressedBytes),
+    };
   }
   // Exclude the candidate's own prior record (a refresh of the same repotag replaces
   // it) so its old size is not counted against the new pull.
@@ -99,6 +118,7 @@ async function tryAdmit(fluxId, repotag, compressedBytes) {
   const committedNode = usageFromRecords(allRecords.filter((r) => !(r.fluxId === fluxId && r.repotag === repotag)));
   const result = decide({
     compressedBytes,
+    decompressedBytes,
     committedFluxId,
     reservedFluxId: reservedForFluxId(fluxId),
     committedNode,

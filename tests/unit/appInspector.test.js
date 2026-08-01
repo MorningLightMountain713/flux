@@ -109,7 +109,7 @@ describe('appInspector tests', () => {
       const inspector = load();
       listInstalledDeploymentsStub.resolves([{
         appName: 'big',
-        componentEntries: () => [['web', { identifier: 'web_big', rootFsGb: 2, swapGb: 1 }]],
+        componentEntries: () => [['web', { identifier: 'web_big', containerDiskGb: () => 3 }]],
       }]);
       // budget = (2 + 1) * 1e9 = 3e9; the container reports 5e9 on disk → violation
       dockerGetUsageStub.resolves({ Containers: [{ Names: ['/web_big'], SizeRootFs: 5e9 }] });
@@ -122,7 +122,7 @@ describe('appInspector tests', () => {
       const inspector = load();
       listInstalledDeploymentsStub.resolves([{
         appName: 'small',
-        componentEntries: () => [['web', { identifier: 'web_small', rootFsGb: 10, swapGb: 2 }]],
+        componentEntries: () => [['web', { identifier: 'web_small', containerDiskGb: () => 12 }]],
       }]);
       // budget = (10 + 2) * 1e9 = 12e9; the container reports 4e9 on disk → fits
       dockerGetUsageStub.resolves({ Containers: [{ Names: ['/web_small'], SizeRootFs: 4e9 }] });

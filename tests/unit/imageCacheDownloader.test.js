@@ -16,6 +16,9 @@ describe('imageCacheDownloader tests', () => {
       this.error = verifierState.error;
       this.errorDetail = verifierState.errorDetail;
       this.imageSizeBytes = 0;
+      // Sizes are only known once a manifest has been evaluated, as on the real
+      // verifier - 0 for the decompressed figure means unmeasured.
+      this.decompressedSizeBytes = 0;
       this.supported = verifierState.supported;
       this.supportedArchitectures = verifierState.supportedArchitectures || [];
     }
@@ -23,6 +26,7 @@ describe('imageCacheDownloader tests', () => {
     // eslint-disable-next-line class-methods-use-this
     async verifyImage() {
       this.imageSizeBytes = verifierState.compressedSize || 0;
+      this.decompressedSizeBytes = verifierState.decompressedSize || 0;
       return !this.error;
     }
 
@@ -38,7 +42,13 @@ describe('imageCacheDownloader tests', () => {
     dockerPullStreamStub = sinon.stub().callsFake((pullConfig, res, cb) => cb(null));
     systemArchitectureStub = sinon.stub().resolves('amd64');
     verifierState = {
-      error: false, errorDetail: null, supported: true, compressedSize: 1000, digest: 'sha256:abc', supportedArchitectures: ['amd64'],
+      error: false,
+      errorDetail: null,
+      supported: true,
+      compressedSize: 1000,
+      decompressedSize: 2500,
+      digest: 'sha256:abc',
+      supportedArchitectures: ['amd64'],
     };
     return proxyquire('../../ZelBack/src/services/appLifecycle/imageCacheDownloader', {
       config: { fluxapps: { maxImageSize: 5_000_000_000 } },
@@ -62,6 +72,7 @@ describe('imageCacheDownloader tests', () => {
       expect(result).to.deep.equal({
         ok: true,
         compressedBytes: 1000,
+        decompressedBytes: 2500,
         digest: 'sha256:abc',
         supported: true,
         supportedArchitectures: ['amd64'],
@@ -69,6 +80,15 @@ describe('imageCacheDownloader tests', () => {
       });
       expect(getCredentialsStub.calledOnceWith('repo:tag', 'authstr', 'imagecache:F1')).to.equal(true);
       expect(capturedVerifierArgs.options.credentials).to.deep.equal({ username: 'u', password: 'p' });
+    });
+
+    it('reports the decompressed size as 0 when the verifier could not measure it', async () => {
+      const dl = build();
+      verifierState.decompressedSize = 0;
+      const result = await dl.inspectImage('repo:tag', '', {});
+      expect(result.ok).to.equal(true);
+      expect(result.compressedBytes).to.equal(1000);
+      expect(result.decompressedBytes).to.equal(0);
     });
 
     it('does not resolve credentials for a public image (no repoauth)', async () => {

@@ -1,5 +1,7 @@
+const http = require('node:http');
 const { expect } = require('chai');
 const sinon = require('sinon');
+const axios = require('axios');
 
 const registryResponses = require('./data/registryResponses');
 
@@ -644,15 +646,18 @@ describe('imageVerifier tests', () => {
       const verifier = new ImageVerifier(repotag);
       const promise = verifier.verifyImage();
 
-      // because of aws ratelimiting, we send one per second
+      // because of aws ratelimiting, we send one per second. Each architecture's
+      // manifest is followed by one layer size read, which this stub answers
+      // without a 206 - so the layer is unmeasured and the rest are not asked for.
       await clock.tickAsync(1000);
-      sinon.assert.calledTwice(axiosGetStub);
+      expect(axiosGetStub.callCount).to.equal(3);
       await clock.tickAsync(1000);
 
       const result = await promise;
 
       expect(result).to.equal(true);
-      sinon.assert.calledThrice(axiosGetStub);
+      expect(axiosGetStub.callCount).to.equal(5);
+      expect(verifier.decompressedSizeBytes).to.equal(0);
       expect(() => verifier.throwIfError()).to.not.throw();
     });
 
@@ -683,15 +688,18 @@ describe('imageVerifier tests', () => {
       const verifier = new ImageVerifier(repotag);
       const promise = verifier.verifyImage();
 
-      // because of aws ratelimiting, we send one per second
+      // because of aws ratelimiting, we send one per second. Each architecture's
+      // manifest is followed by one layer size read, which this stub answers
+      // without a 206 - so the layer is unmeasured and the rest are not asked for.
       await clock.tickAsync(1000);
-      sinon.assert.calledTwice(axiosGetStub);
+      expect(axiosGetStub.callCount).to.equal(3);
       await clock.tickAsync(1000);
 
       const result = await promise;
 
       expect(result).to.equal(true);
-      sinon.assert.calledThrice(axiosGetStub);
+      expect(axiosGetStub.callCount).to.equal(5);
+      expect(verifier.decompressedSizeBytes).to.equal(0);
       expect(() => verifier.throwIfError()).to.not.throw();
     });
 
@@ -767,6 +775,385 @@ describe('imageVerifier tests', () => {
       expect(result).to.equal(true);
       expect(() => verifier.throwIfError()).to.not.throw();
       expect(verifier.supported).to.equal(false);
+    });
+  });
+
+  describe('decompressed size measurement tests', () => {
+    const repotag = 'megachips/ipshow:web';
+    const configDigest = 'sha256:c0f1900000000000000000000000000000000000000000000000000000000000';
+    const layerDigest = 'sha256:1a4e000000000000000000000000000000000000000000000000000000000000';
+    const secondLayerDigest = 'sha256:2b5f000000000000000000000000000000000000000000000000000000000000';
+    const gzipMediaType = 'application/vnd.docker.image.rootfs.diff.tar.gzip';
+    const zstdMediaType = 'application/vnd.oci.image.layer.v1.tar+zstd';
+    const ISIZE_MODULUS = 2 ** 32;
+    // what every production caller passes (config.fluxapps.maxImageSize)
+    const maxImageSize = 5_000_000_000;
+
+    let axiosGetStub;
+
+    const manifestOf = (layers) => ({
+      schemaVersion: 2,
+      mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
+      config: { mediaType: 'application/vnd.docker.container.image.v1+json', size: 4096, digest: configDigest },
+      layers,
+    });
+
+    const gzipTrailer = (isize) => {
+      const buffer = Buffer.alloc(4);
+      buffer.writeUInt32LE(isize);
+      return buffer;
+    };
+
+    // RFC 8878 frame header: magic, a descriptor asking for the 8-byte
+    // Frame_Content_Size with no dictionary, the window descriptor, then the size.
+    const zstdFrameHeader = (contentSize) => {
+      const buffer = Buffer.alloc(14);
+      buffer.writeUInt32LE(0xfd2fb528, 0);
+      buffer.writeUInt8(0xc0, 4);
+      buffer.writeUInt8(0x73, 5);
+      buffer.writeBigUInt64LE(BigInt(contentSize), 6);
+      return buffer;
+    };
+
+    // Answers the manifest and the image config, and hands every blob range read
+    // to `blobs` - a digest -> axios response map. Anything else reads as a
+    // registry that did not answer the range.
+    const serveManifest = (manifest, blobs) => {
+      axiosGetStub.callsFake(async (url, requestConfig) => {
+        if (url === 'megachips/ipshow/manifests/web') return { data: manifest };
+        if (url === `megachips/ipshow/blobs/${configDigest}`) return { data: registryResponses.imageConfigAmd64 };
+
+        const digest = url.replace('megachips/ipshow/blobs/', '');
+        const blob = blobs[digest];
+        if (blob) return typeof blob === 'function' ? blob(requestConfig) : blob;
+
+        return { data: null };
+      });
+    };
+
+    beforeEach(() => {
+      axiosGetStub = sinon.stub(serviceHelper, 'axiosGet');
+      sinon.stub(serviceHelper, 'axiosInstance').returns({
+        get: axiosGetStub,
+        interceptors: { request: { use: sinon.stub() } },
+      });
+    });
+
+    it('reads a single gzip member exactly and asks only for the trailer', async () => {
+      // alpine:3.20 as measured against Docker Hub: one layer, no wrap possible.
+      const compressed = 3_630_321;
+      let requestedRange = null;
+
+      serveManifest(
+        manifestOf([{ mediaType: gzipMediaType, size: compressed, digest: layerDigest }]),
+        {
+          [layerDigest]: (requestConfig) => {
+            requestedRange = requestConfig.headers.Range;
+            return { status: 206, data: gzipTrailer(8_092_160) };
+          },
+        },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      await verifier.verifyImage();
+
+      expect(requestedRange).to.equal(`bytes=${compressed - 4}-${compressed - 1}`);
+      expect(verifier.decompressedSizeBytes).to.equal(8_092_160);
+      expect(verifier.decompressedSizeClearanceBytes).to.equal(8_092_160);
+      expect(verifier.decompressedSizeAmbiguous).to.equal(false);
+      expect(verifier.imageSizeBytes).to.equal(compressed);
+    });
+
+    it('sums the layers of a multi-layer image', async () => {
+      serveManifest(
+        manifestOf([
+          { mediaType: gzipMediaType, size: 3_630_321, digest: layerDigest },
+          { mediaType: gzipMediaType, size: 2_206_402, digest: secondLayerDigest },
+        ]),
+        {
+          [layerDigest]: { status: 206, data: gzipTrailer(8_092_160) },
+          [secondLayerDigest]: { status: 206, data: gzipTrailer(4_648_960) },
+        },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      await verifier.verifyImage();
+
+      expect(verifier.decompressedSizeBytes).to.equal(8_092_160 + 4_648_960);
+    });
+
+    it('corrects a wrapped trailer upwards to the smallest plausible candidate', async () => {
+      // pytorch-shaped: a 3.62 GB compressed layer whose trailer reads 3.27 GB,
+      // which is less than the compressed form - it wrapped once.
+      const compressed = 3_620_000_000;
+      const rawTrailer = 3_270_000_000;
+
+      serveManifest(
+        manifestOf([{ mediaType: gzipMediaType, size: compressed, digest: layerDigest }]),
+        { [layerDigest]: { status: 206, data: gzipTrailer(rawTrailer) } },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      await verifier.verifyImage();
+
+      expect(verifier.decompressedSizeBytes).to.equal(rawTrailer + ISIZE_MODULUS);
+      expect(verifier.decompressedSizeBytes).to.be.above(7.5e9);
+      expect(verifier.decompressedSizeBytes).to.be.below(7.6e9);
+    });
+
+    it('carries the next candidate when the wrapped trailer is ambiguous', async () => {
+      const compressed = 3_620_000_000;
+      const rawTrailer = 3_270_000_000;
+
+      serveManifest(
+        manifestOf([{ mediaType: gzipMediaType, size: compressed, digest: layerDigest }]),
+        { [layerDigest]: { status: 206, data: gzipTrailer(rawTrailer) } },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      await verifier.verifyImage();
+
+      // 7.56 GB at 2.09x and 11.86 GB at 3.28x are both realistic for one layer,
+      // so the larger is what a declaration has to clear.
+      expect(verifier.decompressedSizeAmbiguous).to.equal(true);
+      expect(verifier.decompressedSizeClearanceBytes)
+        .to.equal(rawTrailer + ISIZE_MODULUS * 2);
+      expect(Math.ceil(verifier.decompressedSizeClearanceBytes / 1e9)).to.equal(12);
+    });
+
+    it('leaves a wrapped trailer unambiguous when the next candidate is implausible', async () => {
+      // 1 GB compressed: 4.79 GB is plausible, the 9.09 GB after it is not.
+      const compressed = 1_000_000_000;
+      const rawTrailer = 500_000_000;
+
+      serveManifest(
+        manifestOf([{ mediaType: gzipMediaType, size: compressed, digest: layerDigest }]),
+        { [layerDigest]: { status: 206, data: gzipTrailer(rawTrailer) } },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      await verifier.verifyImage();
+
+      expect(verifier.decompressedSizeBytes).to.equal(rawTrailer + ISIZE_MODULUS);
+      expect(verifier.decompressedSizeAmbiguous).to.equal(false);
+      expect(verifier.decompressedSizeClearanceBytes).to.equal(rawTrailer + ISIZE_MODULUS);
+    });
+
+    it('trusts a small layer trailer that reads below its compressed size', async () => {
+      // Under 2^32/1032 no amount of deflate can reach the modulus, so a low ratio
+      // is just an incompressible layer, not a wrap.
+      serveManifest(
+        manifestOf([{ mediaType: gzipMediaType, size: 4_000_000, digest: layerDigest }]),
+        { [layerDigest]: { status: 206, data: gzipTrailer(3_900_000) } },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      await verifier.verifyImage();
+
+      expect(verifier.decompressedSizeBytes).to.equal(3_900_000);
+      expect(verifier.decompressedSizeAmbiguous).to.equal(false);
+    });
+
+    it('reads Frame_Content_Size from a zstd layer and asks only for the header', async () => {
+      let requestedRange = null;
+
+      serveManifest(
+        manifestOf([{ mediaType: zstdMediaType, size: 4_000_000_000, digest: layerDigest }]),
+        {
+          [layerDigest]: (requestConfig) => {
+            requestedRange = requestConfig.headers.Range;
+            return { status: 206, data: zstdFrameHeader(12_000_000_000) };
+          },
+        },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      await verifier.verifyImage();
+
+      expect(requestedRange).to.equal('bytes=0-17');
+      // 64-bit and exact - no modulus, so a zstd layer is never ambiguous.
+      expect(verifier.decompressedSizeBytes).to.equal(12_000_000_000);
+      expect(verifier.decompressedSizeAmbiguous).to.equal(false);
+    });
+
+    it('leaves the image unmeasured when a zstd layer omits Frame_Content_Size', async () => {
+      // Descriptor 0x00: no Frame_Content_Size, which a streaming compressor is
+      // entitled to omit. The readable layer alongside it must not be reported as
+      // if it were the whole image.
+      const header = Buffer.alloc(14);
+      header.writeUInt32LE(0xfd2fb528, 0);
+      header.writeUInt8(0x00, 4);
+      header.writeUInt8(0x73, 5);
+
+      serveManifest(
+        manifestOf([
+          { mediaType: gzipMediaType, size: 3_630_321, digest: layerDigest },
+          { mediaType: zstdMediaType, size: 4_000_000_000, digest: secondLayerDigest },
+        ]),
+        {
+          [layerDigest]: { status: 206, data: gzipTrailer(8_092_160) },
+          [secondLayerDigest]: { status: 206, data: header },
+        },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      await verifier.verifyImage();
+
+      expect(verifier.decompressedSizeBytes).to.equal(0);
+      expect(verifier.decompressedSizeClearanceBytes).to.equal(0);
+    });
+
+    it('leaves the layer unmeasured when the range is answered 200 rather than 206', async () => {
+      serveManifest(
+        manifestOf([{ mediaType: gzipMediaType, size: 3_630_321, digest: layerDigest }]),
+        { [layerDigest]: { status: 200, data: gzipTrailer(8_092_160) } },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      const result = await verifier.verifyImage();
+
+      expect(result).to.equal(true);
+      expect(verifier.decompressedSizeBytes).to.equal(0);
+      expect(() => verifier.throwIfError()).to.not.throw();
+    });
+
+    it('leaves the layer unmeasured when the blob request fails', async () => {
+      serveManifest(
+        manifestOf([{ mediaType: gzipMediaType, size: 3_630_321, digest: layerDigest }]),
+        { [layerDigest]: () => { throw new Error('CDN unavailable'); } },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      const result = await verifier.verifyImage();
+
+      // A blob that cannot be read is not a verdict on the image.
+      expect(result).to.equal(true);
+      expect(verifier.decompressedSizeBytes).to.equal(0);
+      expect(() => verifier.throwIfError()).to.not.throw();
+    });
+
+    it('leaves the image unmeasured on an unknown layer media type, and stops reading', async () => {
+      serveManifest(
+        manifestOf([
+          { mediaType: 'application/vnd.oci.image.layer.v1.tar', size: 1_000, digest: layerDigest },
+          { mediaType: gzipMediaType, size: 3_630_321, digest: secondLayerDigest },
+        ]),
+        { [secondLayerDigest]: { status: 206, data: gzipTrailer(8_092_160) } },
+      );
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      await verifier.verifyImage();
+
+      expect(verifier.decompressedSizeBytes).to.equal(0);
+      const blobReads = axiosGetStub.getCalls()
+        .filter((call) => call.args[0].includes('/blobs/') && call.args[1]);
+      expect(blobReads).to.have.lengthOf(0);
+    });
+
+    it('leaves the image unmeasured when one architecture cannot be read', async () => {
+      const clock = sinon.useFakeTimers();
+      const amd64Sha = 'sha256:2c62993fdc4eef2077030894893391a8d1b4b785106f25495af734e474c7c019';
+      const arm64Sha = 'sha256:fe983a72f65856381bbf5376f5bd1f3a6961ee83bfd7f0d35e087ac655b3688a';
+
+      axiosGetStub.callsFake(async (url) => {
+        if (url === 'megachips/ipshow/manifests/web') return { data: registryResponses.distributionManifestList };
+        if (url === `megachips/ipshow/manifests/${amd64Sha}`) {
+          return { data: manifestOf([{ mediaType: gzipMediaType, size: 3_630_321, digest: layerDigest }]) };
+        }
+        if (url === `megachips/ipshow/manifests/${arm64Sha}`) {
+          return { data: manifestOf([{ mediaType: gzipMediaType, size: 2_206_402, digest: secondLayerDigest }]) };
+        }
+        if (url === `megachips/ipshow/blobs/${layerDigest}`) return { status: 206, data: gzipTrailer(8_092_160) };
+
+        return { data: null };
+      });
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      const promise = verifier.verifyImage();
+      await clock.tickAsync(2000);
+      await promise;
+
+      // amd64 measured, arm64 not - the image runs on either, so nothing is known.
+      expect(verifier.decompressedSizeBytes).to.equal(0);
+    });
+  });
+
+  describe('decompressed size measurement over a redirect', () => {
+    const trailerIsize = 8_092_160;
+    const compressed = 3_630_321;
+    const configDigest = 'sha256:c0f1900000000000000000000000000000000000000000000000000000000000';
+    const layerDigest = 'sha256:1a4e000000000000000000000000000000000000000000000000000000000000';
+
+    let registry;
+    let cdn;
+    let cdnRequest;
+
+    // Blob GETs are redirected to object storage in practice, so the Range header
+    // has to survive the hop follow-redirects makes. Two real servers on different
+    // ports, so the redirect is cross-origin as it is against a real registry.
+    beforeEach(async () => {
+      cdnRequest = null;
+
+      cdn = http.createServer((req, res) => {
+        cdnRequest = { url: req.url, range: req.headers.range };
+        if (!req.headers.range) {
+          res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+          res.end(Buffer.alloc(1024));
+          return;
+        }
+        const trailer = Buffer.alloc(4);
+        trailer.writeUInt32LE(trailerIsize);
+        res.writeHead(206, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Range': `bytes ${compressed - 4}-${compressed - 1}/${compressed}`,
+        });
+        res.end(trailer);
+      });
+      await new Promise((resolve) => { cdn.listen(0, '127.0.0.1', resolve); });
+
+      registry = http.createServer((req, res) => {
+        if (req.url === '/v2/megachips/ipshow/manifests/web') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            schemaVersion: 2,
+            mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
+            config: { mediaType: 'application/vnd.docker.container.image.v1+json', size: 4096, digest: configDigest },
+            layers: [{ mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip', size: compressed, digest: layerDigest }],
+          }));
+          return;
+        }
+        if (req.url === `/v2/megachips/ipshow/blobs/${configDigest}`) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ architecture: 'amd64' }));
+          return;
+        }
+        if (req.url === `/v2/megachips/ipshow/blobs/${layerDigest}`) {
+          res.writeHead(302, { Location: `http://127.0.0.1:${cdn.address().port}/storage/layer` });
+          res.end();
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+      });
+      await new Promise((resolve) => { registry.listen(0, '127.0.0.1', resolve); });
+    });
+
+    afterEach(async () => {
+      await new Promise((resolve) => { registry.close(resolve); });
+      await new Promise((resolve) => { cdn.close(resolve); });
+    });
+
+    it('keeps the Range header across the redirect to object storage', async () => {
+      sinon.stub(serviceHelper, 'axiosInstance').returns(axios.create({
+        baseURL: `http://127.0.0.1:${registry.address().port}/v2/`,
+        timeout: 5_000,
+      }));
+
+      const verifier = new ImageVerifier('megachips/ipshow:web');
+      await verifier.verifyImage();
+
+      expect(cdnRequest).to.eql({ url: '/storage/layer', range: `bytes=${compressed - 4}-${compressed - 1}` });
+      expect(verifier.decompressedSizeBytes).to.equal(trailerIsize);
     });
   });
 

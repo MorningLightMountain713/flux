@@ -220,6 +220,9 @@ describe('componentProvisioner tests', () => {
       } catch (err) {
         expect(err.message).to.include('rootFsGb');
         expect(err.message).to.include('exceeds');
+        // registration measures the decompressed size now, so reaching this is
+        // an invariant breach rather than the primary gate
+        expect(err.message).to.include('should not have passed registration');
       }
       expect(appDockerStartStub.called).to.be.false;
     });
