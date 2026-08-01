@@ -8,7 +8,9 @@ const proxyquire = require('proxyquire');
 
 const useStub = sinon.stub();
 const noop = () => { };
-const expressApp = { use: useStub, get: noop, post: noop };
+const expressApp = {
+  use: useStub, get: noop, post: noop, delete: noop,
+};
 const expressFunc = sinon.stub().returns(expressApp);
 
 // we have to use proxyquire here as the default export for express is a function
@@ -81,7 +83,9 @@ describe('FluxServer tests', () => {
     const testMiddleware = noop;
     const middlewares = [testMiddleware];
 
-    const localExpressApp = { use: useStub, get: noop, post: noop };
+    const localExpressApp = {
+      use: useStub, get: noop, post: noop, delete: noop,
+    };
 
     const options = { routeBuilder, middlewares, expressApp: localExpressApp };
 

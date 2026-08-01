@@ -1,0 +1,235 @@
+const crypto = require('crypto');
+const config = require('config');
+const log = require('../../lib/log');
+
+// One registry for every long-running operation a node accepts, so a client
+// polls one URL family, reads one status field and gets one error shape no
+// matter which endpoint started the work. Before this, each feature invented
+// its own: one said `settled: true`, another `state: 'done'`, neither sent a
+// Retry-After, and a client had to know which endpoint it had called to know
+// how to read the answer.
+//
+// Deliberately in-memory and node-local. The work these track is node-local
+// too, so a job lost to a restart costs a re-ask and nothing else - the same
+// call the client makes when a poll 404s.
+
+const NS_PER_MS = 1_000_000n;
+
+const JobStatus = Object.freeze({
+  RUNNING: 'Running',
+  SUCCEEDED: 'Succeeded',
+  FAILED: 'Failed',
+  CANCELED: 'Canceled',
+});
+
+const TERMINAL = Object.freeze([JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELED]);
+
+const jobs = new Map();
+
+function retentionMs() {
+  return config.fluxapps.operationRetentionMs ?? 60 * 60 * 1000;
+}
+
+/** How long a client should wait before polling again, while a job is running. */
+function retryAfterSeconds() {
+  return config.fluxapps.operationRetryAfterSeconds ?? 2;
+}
+
+function isTerminal(status) {
+  return TERMINAL.includes(status);
+}
+
+function pruneExpired() {
+  const now = process.hrtime.bigint();
+  for (const [id, job] of jobs) {
+    if (job.expiresAtNs !== null && now >= job.expiresAtNs) jobs.delete(id);
+  }
+}
+
+function scheduleExpiry(job) {
+  job.expiresAtNs = process.hrtime.bigint() + BigInt(retentionMs()) * NS_PER_MS;
+}
+
+/**
+ * Normalize a failure to RFC 9457 problem+json. Accepts an Error or an already
+ * shaped problem, so a caller can hand over whatever it has.
+ *
+ * Credentials are scrubbed rather than trusted not to appear: a registry auth
+ * failure can carry a repoauth string in its message, and this ends up in a
+ * response body.
+ */
+function toProblem(failure, jobId) {
+  const problem = failure instanceof Error
+    ? { title: failure.name || 'Error', detail: failure.message, status: 500 }
+    : { title: 'Error', status: 500, ...failure };
+
+  return {
+    type: problem.type ?? 'about:blank',
+    title: problem.title,
+    status: problem.status,
+    detail: scrubCredentials(problem.detail ?? ''),
+    instance: `/apps/operations/${jobId}`,
+    ...(problem.code ? { code: problem.code } : {}),
+    ...(problem.retryAfterMs ? { retryAfterMs: problem.retryAfterMs } : {}),
+  };
+}
+
+// Registry credentials reach error messages as "user:password" or as a
+// provider:// config string. Neither belongs in a status response.
+function scrubCredentials(detail) {
+  if (typeof detail !== 'string' || !detail) return '';
+  return detail
+    .replace(/\b[\w.-]+:[^\s@/]{4,}@/g, '<credentials>@')
+    .replace(/\b(?:aws|azure|gcp|gar|acr|ecr):\/\/\S+/gi, '<credentials>');
+}
+
+/**
+ * Register a new operation.
+ *
+ * @param {object} params
+ * @param {string} params.kind what the operation is, e.g. 'imagepreflight'
+ * @param {string|null} [params.owner] the FluxID allowed to read it; null means
+ *   the jobId alone is the capability
+ * @param {() => object} [params.detail] called at read time for the operation's
+ *   own payload, so a service keeps its domain state where it already lives
+ *   instead of copying it in here on every transition
+ * @returns {{jobId: string, statusUrl: string}}
+ */
+function start(params) {
+  pruneExpired();
+
+  const { kind, owner = null, detail = null } = params;
+  const jobId = `op_${crypto.randomUUID()}`;
+  const now = Date.now();
+
+  jobs.set(jobId, {
+    jobId,
+    kind,
+    owner,
+    detail,
+    status: JobStatus.RUNNING,
+    createdAt: now,
+    lastUpdatedAt: now,
+    progress: [],
+    error: null,
+    canceled: false,
+    expiresAtNs: null,
+  });
+
+  return { jobId, statusUrl: statusUrlFor(jobId) };
+}
+
+function statusUrlFor(jobId) {
+  return `/apps/operations/${jobId}`;
+}
+
+function touch(jobId) {
+  const job = jobs.get(jobId);
+  if (job) job.lastUpdatedAt = Date.now();
+}
+
+/**
+ * Append one human-readable step. Progress is append-only and polls return the
+ * whole array, so a client that missed a poll loses nothing and can diff by
+ * index rather than parsing a stream.
+ */
+function progress(jobId, message) {
+  const job = jobs.get(jobId);
+  if (!job || isTerminal(job.status)) return;
+  job.progress.push({ at: Date.now(), message });
+  job.lastUpdatedAt = Date.now();
+}
+
+function succeed(jobId) {
+  const job = jobs.get(jobId);
+  if (!job || isTerminal(job.status)) return;
+  job.status = JobStatus.SUCCEEDED;
+  job.lastUpdatedAt = Date.now();
+  scheduleExpiry(job);
+}
+
+function fail(jobId, failure) {
+  const job = jobs.get(jobId);
+  if (!job || isTerminal(job.status)) return;
+  job.status = JobStatus.FAILED;
+  job.error = toProblem(failure, jobId);
+  job.lastUpdatedAt = Date.now();
+  scheduleExpiry(job);
+  log.warn(`Operation ${jobId} (${job.kind}) failed: ${job.error.detail}`);
+}
+
+/**
+ * Best-effort cancel: the flag is raised here and the worker is expected to
+ * notice at its next checkpoint, so a job is only Canceled once it has actually
+ * stopped.
+ */
+function requestCancel(jobId) {
+  const job = jobs.get(jobId);
+  if (!job || isTerminal(job.status)) return false;
+  job.canceled = true;
+  job.lastUpdatedAt = Date.now();
+  return true;
+}
+
+function isCanceled(jobId) {
+  const job = jobs.get(jobId);
+  return Boolean(job && job.canceled);
+}
+
+function cancelled(jobId) {
+  const job = jobs.get(jobId);
+  if (!job || isTerminal(job.status)) return;
+  job.status = JobStatus.CANCELED;
+  job.lastUpdatedAt = Date.now();
+  scheduleExpiry(job);
+}
+
+/**
+ * The public view of an operation, or null when it is unknown, has aged out, or
+ * belongs to someone else. Unknown and not-yours are the same answer on
+ * purpose: a jobId must not be a probe for whether other people have jobs.
+ *
+ * @param {string} jobId
+ * @param {string|null} [owner] the authenticated caller, when the job has one
+ * @returns {object|null}
+ */
+function get(jobId, owner = null) {
+  pruneExpired();
+
+  const job = jobs.get(jobId);
+  if (!job) return null;
+  if (job.owner !== null && job.owner !== owner) return null;
+
+  return {
+    jobId: job.jobId,
+    kind: job.kind,
+    status: job.status,
+    createdAt: job.createdAt,
+    lastUpdatedAt: job.lastUpdatedAt,
+    progress: job.progress,
+    error: job.error,
+    detail: job.detail ? job.detail() : null,
+  };
+}
+
+/** Test seam: drop every operation. */
+function reset() {
+  jobs.clear();
+}
+
+module.exports = {
+  JobStatus,
+  isTerminal,
+  retryAfterSeconds,
+  statusUrlFor,
+  start,
+  touch,
+  progress,
+  succeed,
+  fail,
+  requestCancel,
+  isCanceled,
+  cancelled,
+  get,
+  reset,
+};

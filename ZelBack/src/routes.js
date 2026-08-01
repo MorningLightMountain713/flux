@@ -38,6 +38,7 @@ const appOperations = require('./services/appLifecycle/appOperations');
 const contentSlotService = require('./services/appLifecycle/contentSlotService');
 const imageManager = require('./services/appSecurity/imageManager');
 const imagePreflight = require('./services/appSecurity/imagePreflight');
+const operationsController = require('./services/appManagement/operationsController');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
@@ -472,8 +473,14 @@ module.exports = (app) => {
   app.post('/apps/imagepreflight', (req, res) => {
     imagePreflight.submitPreflightAPI(req, res);
   });
-  app.get('/apps/imagepreflight/status/:jobId', (req, res) => {
-    imagePreflight.getPreflightAPI(req, res);
+  // Every endpoint that answers 202 points here: one status resource, one
+  // status enum, one error shape, so a client polls the same way whatever it
+  // started.
+  app.get('/apps/operations/:jobId', (req, res) => {
+    operationsController.getOperation(req, res);
+  });
+  app.delete('/apps/operations/:jobId', (req, res) => {
+    operationsController.cancelOperation(req, res);
   });
   app.get('/apps/deploymentinformation', cache('30 seconds'), (req, res) => {
     deploymentInfoService.deploymentInformation(req, res);
@@ -521,9 +528,6 @@ module.exports = (app) => {
   // Enterprise image cache (owner-scoped; gated to allowed owners on this enterprise node)
   app.get('/apps/imagecache', (req, res) => {
     imageCacheController.getImageCacheList(req, res);
-  });
-  app.get('/apps/imagecache/status/:jobId', (req, res) => {
-    imageCacheController.getImageCacheStatus(req, res);
   });
   app.get('/apps/imagecache/item', (req, res) => {
     imageCacheController.getImageCacheItem(req, res);

@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const config = require('config');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
@@ -9,6 +8,7 @@ const imageCacheQuota = require('./imageCacheQuota');
 const imageCacheDownloader = require('./imageCacheDownloader');
 const enterpriseHelper = require('../utils/enterpriseHelper');
 const { ImageProgress } = require('./imageCacheProgress');
+const jobRegistry = require('../utils/jobRegistry');
 
 // Synthetic per-owner RSA keypair label (blockHeight is not part of fluxbench's
 // derivation, so 0 is fine): the client fetches the pubkey for (owner, this label)
@@ -57,6 +57,22 @@ function resolveSettledJobs() {
     if (!job.settledResolved && jobSettled(job)) {
       job.settledResolved = true;
       job.expiresAtNs = nowNs() + jobTtlNs(); // retain the terminal result for the TTL
+      // A download job carries per-image outcomes, so the operation's own status
+      // is the roll-up: it succeeded if every image reached a good terminal
+      // state, and failed if any did not. The per-image detail says which.
+      const anyBad = job.images.some((image) => image.state === 'failed' || image.state === 'rejected');
+      if (anyBad) {
+        jobRegistry.fail(job.id, {
+          title: 'Image cache download incomplete',
+          status: 502,
+          detail: job.images
+            .filter((image) => image.error)
+            .map((image) => `${image.repotag}: ${image.error}`)
+            .join('; ') || 'one or more images did not download',
+        });
+      } else {
+        jobRegistry.succeed(job.id);
+      }
       job.resolveSettled();
     }
   });
@@ -329,7 +345,7 @@ function jobView(job) {
  * outcomes (queued/pulling/pinned/failed/rejected) are observed via getJob.
  * @param {string} fluxId
  * @param {Array<{repotag:string, repoauth?:string}>} images
- * @returns {{jobId:string, settled:Promise<void>}} settled resolves when every image is terminal
+ * @returns {{jobId:string, statusUrl:string, settled:Promise<void>}} settled resolves when every image is terminal
  */
 function submit(fluxId, images) {
   if (!Array.isArray(images) || images.length === 0) {
@@ -356,9 +372,18 @@ function submit(fluxId, images) {
     };
   });
 
-  const id = crypto.randomUUID();
   let resolveSettled;
   const settled = new Promise((resolve) => { resolveSettled = resolve; });
+  // The registry owns the polling envelope; this service keeps owning the
+  // per-image state and hands over a reader for it.
+  const record = { id: null };
+  const handle = jobRegistry.start({
+    kind: 'imagecache',
+    owner: fluxId,
+    detail: () => jobView(jobs.get(record.id)),
+  });
+  const id = handle.jobId;
+  record.id = id;
   jobs.set(id, {
     id,
     fluxId,
@@ -371,18 +396,20 @@ function submit(fluxId, images) {
     settled,
   });
   pumpAll();
-  return { jobId: id, settled };
+  return { jobId: id, statusUrl: handle.statusUrl, settled };
 }
 
 /**
  * Owner-scoped job view (per-image progress for the whole submission), or null if the
  * job is unknown or belongs to another owner.
  */
+/**
+ * Owner-scoped job view, through the shared operation registry so a download is
+ * polled exactly like every other operation on the node.
+ */
 function getJob(jobId, fluxId) {
   pruneExpiredJobs();
-  const job = jobs.get(jobId);
-  if (!job || job.fluxId !== fluxId) return null;
-  return jobView(job);
+  return jobRegistry.get(jobId, fluxId);
 }
 
 function recordView(record) {
@@ -437,7 +464,7 @@ async function assertHasCapacity(fluxId) {
 
 /**
  * Decrypt an owner's encrypted submission and start a download job for it.
- * @returns {Promise<{jobId:string}>}
+ * @returns {Promise<{jobId:string, statusUrl:string}>}
  * @throws {Error} with .kind 'bad-request' (malformed) or 'over-capacity' (no room)
  */
 async function submitEncrypted(fluxId, encryptedData) {
@@ -448,8 +475,8 @@ async function submitEncrypted(fluxId, encryptedData) {
     }
   });
   await assertHasCapacity(fluxId);
-  const { jobId } = submit(fluxId, images);
-  return { jobId };
+  const { jobId, statusUrl } = submit(fluxId, images);
+  return { jobId, statusUrl };
 }
 
 /** One owner's cached images + their allocation summary. */

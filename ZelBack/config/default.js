@@ -319,7 +319,10 @@ module.exports = {
     preflightMaxComponents: 10,
     preflightMaxQueuedJobs: 4,
     preflightEnvelopeMaxAgeMs: 300000,
-    preflightJobRetentionMs: 600000,
+    // Shared by every endpoint that answers 202: how long a finished operation
+    // stays pollable, and the poll cadence handed to clients as Retry-After.
+    operationRetentionMs: 3600000,
+    operationRetryAfterSeconds: 2,
     minimumInstances: 3,
     minimumInstancesV8: 1,
     minimumInstancesV8Block: 2176519, // block height where v8+ apps can have 1 instance - expected around December 19th 2025
