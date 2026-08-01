@@ -91,8 +91,9 @@ function classifyVerificationError(error, errorMeta) {
  * @param {string} [options.repoauth] - Repository authentication credentials
  * @param {string} [options.architecture] - Specific architecture to validate support for
  * @param {string} [options.appName] - Application name (for logging)
- * @returns {Promise<{verified: boolean, supportedArchitectures: string[], imageSizeBytes: number,
- *   decompressedSizeBytes: number, decompressedSizeClearanceBytes: number}>} Verification result
+ * @returns {Promise<{verified: boolean, supportedArchitectures: string[], provider: string,
+ *   imageSizeBytes: number, decompressedSizeBytes: number,
+ *   decompressedSizeClearanceBytes: number}>} Verification result
  */
 async function verifyRepository(repotag, options = {}) {
   const repoauth = options.repoauth || null;
@@ -151,6 +152,11 @@ async function verifyRepository(repotag, options = {}) {
     const result = {
       verified: true,
       supportedArchitectures: supportedArchs,
+      // The registry host the reference resolved to. Derived purely from the
+      // repotag, which is part of the cache key, so a cached answer names the
+      // same host a fresh one would. The pull path needs it and used to run a
+      // second full verification just to learn it.
+      provider: imgVerifier.provider,
       // Compressed manifest size (lower bound on decompressed) for an early
       // rootFs-fit reject at ingestion; the install-time inspect is authoritative.
       imageSizeBytes: imgVerifier.imageSizeBytes,

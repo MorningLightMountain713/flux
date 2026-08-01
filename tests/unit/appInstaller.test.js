@@ -162,15 +162,6 @@ describe('appInstaller tests', () => {
       '../appManagement/appInspector': {
         startAppMonitoring: sinon.stub(),
       },
-      '../utils/imageVerifier': {
-        ImageVerifier: sinon.stub().returns({
-          addCredentials: sinon.stub(),
-          verifyImage: sinon.stub().resolves(),
-          throwIfError: sinon.stub(),
-          supported: true,
-          provider: 'docker.io',
-        }),
-      },
       '../pgpService': {
         decryptMessage: sinon.stub().resolves('user:token'),
       },
@@ -460,7 +451,6 @@ describe('appInstaller tests', () => {
         '../appMessaging/messageStore': { storeAppInstallingErrorMessage, storeAppRunningMessage: sinon.stub().resolves() },
         '../appSecurity/imageManager': { isImageBlocked: sinon.stub().resolves(false), verifyRepository: sinon.stub().resolves({ verified: true, supportedArchitectures: ['amd64'] }) },
         '../appManagement/appInspector': { startAppMonitoring: sinon.stub() },
-        '../utils/imageVerifier': { ImageVerifier: sinon.stub().returns({ addCredentials: sinon.stub(), verifyImage: sinon.stub().resolves(), throwIfError: sinon.stub(), supported: true, provider: 'docker.io' }) },
         '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
         '../upnpService': { isUPNP: sinon.stub().returns(false), mapUpnpPort: sinon.stub().resolves(true) },
         '../../lib/log': logStub,
