@@ -139,8 +139,8 @@ async function storeBenchmarkToDb(benchmarkData, tierStatus) {
 
 /**
  * Retrieves stored benchmark data from the database via API
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getStoredBenchmark(req, res) {
@@ -184,8 +184,8 @@ async function getBenchmarkFromDb() {
 // == Benchmarks ==
 /**
  * To get benchmark status.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getStatus(req, res) {
@@ -201,8 +201,8 @@ async function getStatus(req, res) {
  * `{ nodetype: 'pending' | 'arcane' | 'legacy' }`. Reads a latch decided once at
  * benchmark-daemon boot, so a definitive `arcane`/`legacy` is stable for the
  * process lifetime; `pending` means the latch has not settled yet (retry).
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getNodeType(req, res) {
@@ -215,8 +215,8 @@ async function getNodeType(req, res) {
 
 /**
  * To restart node benchmarks. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function restartNodeBenchmarks(req, res) {
@@ -237,8 +237,8 @@ async function restartNodeBenchmarks(req, res) {
 
 /**
  * To sign Flux transaction. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function signFluxTransaction(req, res) {
@@ -265,8 +265,8 @@ async function signFluxTransaction(req, res) {
 
 /**
  * To ensure that a request is an object and sign Flux transaction. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function signFluxTransactionPost(req, res) {
   let body = '';
@@ -431,8 +431,8 @@ async function transportDecap(params) {
 // == Control ==
 /**
  * To request help message.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function help(req, res) {
@@ -449,8 +449,8 @@ async function help(req, res) {
 
 /**
  * To stop node benchmarks. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function stop(req, res) {
@@ -472,8 +472,8 @@ async function stop(req, res) {
 // == Fluxnode ==
 /**
  * To show status of benchmarks.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBenchmarks(req, res) {
@@ -494,8 +494,8 @@ async function getBenchmarks(req, res) {
 
 /**
  * To get info on benchmark version and RCP port.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getInfo(req, res) {
@@ -508,8 +508,8 @@ async function getInfo(req, res) {
 
 /**
  * To show public IP address.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getPublicIp(req, res) {
@@ -522,8 +522,8 @@ async function getPublicIp(req, res) {
 
 /**
  * To execute benchmark at the same time on all upnp nodes.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function startMultiPortBench(req, res) {

@@ -49,8 +49,8 @@ async function getAppFiatAndFluxPrice(appSpecification) {
 /**
  * Express handler for the fiat+flux price quote. Reads/parses the request body
  * and formats the response; delegates pricing to getAppFiatAndFluxPrice.
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function getAppFiatAndFluxPriceApi(req, res) {
@@ -77,8 +77,8 @@ async function getAppFiatAndFluxPriceApi(req, res) {
 
 /**
  * Express handler alias for the price quote.
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function getAppPriceApi(req, res) {

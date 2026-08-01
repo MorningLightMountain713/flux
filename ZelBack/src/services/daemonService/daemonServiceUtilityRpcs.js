@@ -8,8 +8,8 @@ let response = messageHelper.createErrorMessage();
 
 /**
  * To create a multi-signature scheme (to require multiple keys to authorize a transaction). Number of signatures and keys object required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function createMultiSig(req, res) {
@@ -31,8 +31,8 @@ async function createMultiSig(req, res) {
 
 /**
  * To create a multi-signature scheme (to require multiple keys to authorize a transaction) after data is processed. Number of signatures and keys object required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function createMultiSigPost(req, res) {
@@ -59,8 +59,8 @@ async function createMultiSigPost(req, res) {
 
 /**
  * To estimate a transaction fee. Number of blocks required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function estimateFee(req, res) {
@@ -80,8 +80,8 @@ async function estimateFee(req, res) {
 
 /**
  * To estimate transaction priority. Number of blocks required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function estimatePriority(req, res) {
@@ -101,8 +101,8 @@ async function estimatePriority(req, res) {
 
 /**
  * To validate an address. Address required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function validateAddress(req, res) {
@@ -134,8 +134,8 @@ async function validateAddress(req, res) {
 
 /**
  * To verify a message. Address, signature and message required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function verifyMessage(req, res) {
@@ -156,8 +156,8 @@ async function verifyMessage(req, res) {
 
 /**
  * To verify a message after data is processed. Address, signature and message required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function verifyMessagePost(req, res) {
@@ -182,8 +182,8 @@ async function verifyMessagePost(req, res) {
 
 /**
  * To validate a Z address. Z address required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zValidateAddress(req, res) {

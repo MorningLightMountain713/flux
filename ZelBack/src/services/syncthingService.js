@@ -434,8 +434,8 @@ async function request(method, urlpath, data, config) {
 
 /**
  * To get meta
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getMeta() {
@@ -471,8 +471,8 @@ async function systemPause(device) {
 
 /**
  * Returns a {"ping": "pong"} object.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemPing() {
@@ -628,8 +628,8 @@ async function adjustConfigDevices(method, newConfig, id) {
 
 /**
  * Returns a template folder configuration object with all default values, which only needs a unique ID to be applied
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigDefaultsFolder() {
@@ -651,8 +651,8 @@ async function adjustConfigDefaultsFolder(method, newConfig) {
 
 /**
  * Returns the options object
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigOptions() {
@@ -1197,8 +1197,8 @@ async function refreshSyncthingHealth() {
 
 /**
  * Returns device id, also checks that syncthing is installed and running and we have the api key.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDeviceIdApi(_, res) {
@@ -2257,8 +2257,8 @@ function saveMetricsSnapshot(metrics) {
 
 /**
  * Gets current syncthing metrics
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Current metrics
  */
 async function getSyncthingMetrics(req, res) {
@@ -2281,8 +2281,8 @@ async function getSyncthingMetrics(req, res) {
 
 /**
  * Gets syncthing health summary
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Health summary
  */
 async function getSyncthingHealthSummary(req, res) {
@@ -2333,8 +2333,8 @@ async function getSyncthingHealthSummary(req, res) {
 
 /**
  * Gets syncthing metrics history
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Metrics history
  */
 async function getSyncthingMetricsHistory(req, res) {
@@ -2691,8 +2691,8 @@ async function getPeerSyncDiagnostics() {
 
 /**
  * API endpoint for peer sync diagnostics
- * @param {object} req Request
- * @param {object} res Response
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Peer sync diagnostics
  */
 async function getPeerSyncDiagnosticsApi(req, res) {

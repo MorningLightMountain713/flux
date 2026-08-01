@@ -26,8 +26,8 @@ async function getFluxNodeStatusApi(req, res) {
  * also allow a `limit` query parameter, so the node list response can be limited
  * in size. The full list is currently 6.9MiB. Sometimes, you might just want the
  * first x ranked nodes etc.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function listFluxNodes(req, res) {
@@ -59,8 +59,8 @@ async function listFluxNodes(req, res) {
 
 /**
  * To list node configuration. Optional filter can be included as a parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function listFluxNodeConf(req, res) { // practically useless
@@ -84,8 +84,8 @@ async function listFluxNodeConf(req, res) { // practically useless
 
 /**
  * To create node key. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function createFluxNodeKey(req, res) { // practically useless
@@ -103,8 +103,8 @@ async function createFluxNodeKey(req, res) { // practically useless
 
 /**
  * To get node count.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getFluxNodeCount(req, res) {
@@ -117,8 +117,8 @@ async function getFluxNodeCount(req, res) {
 
 /**
  * To get DOS list.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getDOSList(req, res) {
@@ -131,8 +131,8 @@ async function getDOSList(req, res) {
 
 /**
  * To get start list.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getStartList(req, res) {
@@ -145,8 +145,8 @@ async function getStartList(req, res) {
 
 /**
  * To get node outputs. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getFluxNodeOutputs(req, res) {
@@ -163,8 +163,8 @@ async function getFluxNodeOutputs(req, res) {
 
 /**
  * To start deterministic node. Alias required as a parameter for RPC call if not already specified. Optional lock wallet configuration can be included as a parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function startDeterministicFluxNode(req, res) {
@@ -189,8 +189,8 @@ async function startDeterministicFluxNode(req, res) {
 
 /**
  * To start node. Set and lock wallet configurations required as parameters for RPC call if not already specified. Optional alias can be included as a parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function startFluxNode(req, res) {
@@ -218,8 +218,8 @@ async function startFluxNode(req, res) {
 
 /**
  * To view list of deterministic nodes. Optional filter can be included as a parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function viewDeterministicFluxNodeList(req, res) {
@@ -240,8 +240,8 @@ async function viewDeterministicFluxNodeList(req, res) {
 
 /**
  * To show current node winner.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function fluxNodeCurrentWinner(req, res) {

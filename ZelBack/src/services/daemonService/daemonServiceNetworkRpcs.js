@@ -8,8 +8,8 @@ let response = messageHelper.createErrorMessage();
 
 /**
  * To add a node. Node and command required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function addNode(req, res) {
@@ -34,8 +34,8 @@ async function addNode(req, res) {
 
 /**
  * To clear banned IP addresses. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function clearBanned(req, res) {
@@ -52,8 +52,8 @@ async function clearBanned(req, res) {
 
 /**
  * To disconnect a node. Node required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function disconnectNode(req, res) {
@@ -77,8 +77,8 @@ async function disconnectNode(req, res) {
 
 /**
  * To get node info. DNS and node required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getAddedNodeInfo(req, res) {
@@ -107,8 +107,8 @@ async function getAddedNodeInfo(req, res) {
 
 /**
  * To get connection count.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getConnectionCount(req, res) {
@@ -121,8 +121,8 @@ async function getConnectionCount(req, res) {
 
 /**
  * To get deprecation info.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getDeprecationInfo(req, res) {
@@ -135,8 +135,8 @@ async function getDeprecationInfo(req, res) {
 
 /**
  * To get net totals.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getNetTotals(req, res) {
@@ -149,8 +149,8 @@ async function getNetTotals(req, res) {
 
 /**
  * To get network info.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getNetworkInfo(req, res) {
@@ -163,8 +163,8 @@ async function getNetworkInfo(req, res) {
 
 /**
  * To get node peer info.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getPeerInfo(req, res) {
@@ -177,8 +177,8 @@ async function getPeerInfo(req, res) {
 
 /**
  * To list banned IP addresses.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function listBanned(req, res) {
@@ -191,8 +191,8 @@ async function listBanned(req, res) {
 
 /**
  * To send a ping to peers. Only accessible by admins and flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function ping(req, res) {
@@ -209,8 +209,8 @@ async function ping(req, res) {
 
 /**
  * To set a ban on an IP address. IP, command, ban time and if absolute required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function setBan(req, res) {

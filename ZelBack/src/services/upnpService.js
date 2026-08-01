@@ -800,7 +800,7 @@ async function removeLeftoverTestMappings() {
 
 /**
  * To map a specified port and show a message if successfully mapped. Only accessible by admins and Flux team members.
- * @param {object} req Request.
+ * @param {import('express').Request} req
  * @param {Promise<object>} res Response.
  */
 async function mapPortApi(req, res) {
@@ -850,7 +850,7 @@ async function mapPortApi(req, res) {
 
 /**
  * To unmap a specified port and show a message if successfully unmapped. Only accessible by admins and Flux team members.
- * @param {object} req Request.
+ * @param {import('express').Request} req
  * @param {Promise<object>} res Response.
  */
 async function removeMapPortApi(req, res) {
@@ -893,7 +893,7 @@ async function removeMapPortApi(req, res) {
 
 /**
  * To show a message with mappings. Only accessible by admins and Flux team members.
- * @param {object} req Request.
+ * @param {import('express').Request} req
  * @param {Promise<object>} res Response.
  */
 async function getMapApi(req, res) {
@@ -920,7 +920,7 @@ async function getMapApi(req, res) {
 
 /**
  * To show a message with IP address. Only accessible by admins and Flux team members.
- * @param {object} req Request.
+ * @param {import('express').Request} req
  * @param {Promise<object>} res Response.
  */
 async function getIpApi(req, res) {
@@ -947,7 +947,7 @@ async function getIpApi(req, res) {
 
 /**
  * To show a message with gateway address. Only accessible by admins and Flux team members.
- * @param {object} req Request.
+ * @param {import('express').Request} req
  * @param {Promise<object>} res Response.
  */
 async function getGatewayApi(req, res) {
