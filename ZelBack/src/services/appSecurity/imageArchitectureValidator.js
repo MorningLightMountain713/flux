@@ -10,16 +10,39 @@ async function verifyImageRegistryAndArchitectures(spec, options = {}) {
     throw new Error(blockResult.reason);
   }
 
+  // A v7 component carrying imageAuth ends the check early — its credentials
+  // cannot be opened here, so the spec passes on the strength of whatever came
+  // before it. Kept exactly: the earlier components are still verified, and one
+  // of them failing still fails the spec.
+  const components = [];
+  let stoppedAtV7Auth = false;
+  for (const [, comp] of spec.componentEntries()) {
+    if (spec.version === 7 && comp.imageAuth) {
+      stoppedAtV7Auth = true;
+      break;
+    }
+    components.push(comp);
+  }
+
+  // Fanned out. Components used to wait on each other because the verifier paced
+  // itself with a fixed sleep; the governor now paces per registry, so this costs
+  // the slowest component instead of the sum of them. Results are consumed in
+  // spec order, so which component a spec is refused for does not depend on which
+  // registry answered first — the same spec fails the same way on every node.
+  const settled = await Promise.allSettled(components.map((comp) => imageManager.verifyRepository(
+    comp.image,
+    { repoauth: comp.imageAuth || null, appName: spec.name },
+  )));
+
   const componentArchitectures = [];
 
-  for (const [, comp] of spec.componentEntries()) {
-    if (spec.version === 7 && comp.imageAuth) return true;
+  for (let index = 0; index < components.length; index += 1) {
+    const comp = components[index];
+    const outcome = settled[index];
 
-    // eslint-disable-next-line no-await-in-loop
-    const result = await imageManager.verifyRepository(comp.image, {
-      repoauth: comp.imageAuth || null,
-      appName: spec.name,
-    });
+    if (outcome.status === 'rejected') throw outcome.reason;
+
+    const result = outcome.value;
 
     componentArchitectures.push({
       name: comp.name,
