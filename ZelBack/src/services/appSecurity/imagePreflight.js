@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const config = require('config');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
@@ -6,6 +5,8 @@ const transportHelper = require('../utils/transportHelper');
 const { ImageVerifier } = require('../utils/imageVerifier');
 const { getSpec } = require('../utils/specLibs');
 const imageManager = require('./imageManager');
+const jobRegistry = require('../utils/jobRegistry');
+const operationsController = require('../appManagement/operationsController');
 const log = require('../../lib/log');
 
 // Mirrors flux-spec's imageFit BYTES_PER_GB (decimal GB, matching registry
@@ -20,11 +21,6 @@ const BYTES_PER_GB = 1e9;
 // stops a captured envelope of one being replayed as another.
 const PREFLIGHT_AAD_TYPE = 'fluxapppreflight';
 
-const NS_PER_MS = 1_000_000n;
-
-// jobId -> job. In-memory and node-local by design: a preflight is a question
-// this node answers about itself, and a lost job on restart costs a re-ask.
-const jobs = new Map();
 const queue = [];
 let running = null;
 
@@ -38,10 +34,6 @@ function preflightEnvelopeMaxAgeMs() {
 
 function preflightMaxQueuedJobs() {
   return config.fluxapps.preflightMaxQueuedJobs ?? 4;
-}
-
-function preflightJobRetentionMs() {
-  return config.fluxapps.preflightJobRetentionMs ?? 10 * 60 * 1000;
 }
 
 /**
@@ -256,13 +248,6 @@ async function measureComponent(component) {
   }
 }
 
-function pruneExpiredJobs() {
-  const now = process.hrtime.bigint();
-  for (const [id, job] of jobs) {
-    if (job.expiresAtNs !== null && now >= job.expiresAtNs) jobs.delete(id);
-  }
-}
-
 /**
  * Measure a job's components.
  *
@@ -276,15 +261,14 @@ function pruneExpiredJobs() {
  * measureComponent never rejects, so every component lands a result.
  */
 async function runJob(job) {
-  job.state = 'running';
   await Promise.all(job.components.map(async (component) => {
     const result = await measureComponent(component);
     job.results[component.name] = result;
     job.completed += 1;
+    jobRegistry.touch(job.id);
   }));
-  job.state = 'done';
   job.measuredAt = Date.now();
-  job.expiresAtNs = process.hrtime.bigint() + BigInt(preflightJobRetentionMs()) * NS_PER_MS;
+  jobRegistry.succeed(job.id);
 }
 
 /**
@@ -299,10 +283,7 @@ async function pump() {
   try {
     await runJob(running);
   } catch (error) {
-    running.state = 'failed';
-    running.error = error.message || String(error);
-    running.expiresAtNs = process.hrtime.bigint() + BigInt(preflightJobRetentionMs()) * NS_PER_MS;
-    log.error(`imagePreflight job ${running.id}: ${running.error}`);
+    jobRegistry.fail(running.id, error);
   } finally {
     running = null;
     pump();
@@ -323,11 +304,9 @@ function jobsFor(sourceIp) {
  *
  * @param {object} body - parsed request body (cleartext or sealed form)
  * @param {string|null} sourceIp - the OBSERVED socket peer, never a header
- * @returns {Promise<{jobId: string}>}
+ * @returns {Promise<{jobId: string, statusUrl: string}>}
  */
 async function submitPreflight(body, sourceIp) {
-  pruneExpiredJobs();
-
   const parsed = serviceHelper.ensureObject(body);
   const components = validateComponents(await resolveComponents(parsed));
 
@@ -346,43 +325,52 @@ async function submitPreflight(body, sourceIp) {
   }
 
   const job = {
-    id: crypto.randomUUID(),
     sourceIp,
-    state: 'queued',
     components,
     results: {},
     completed: 0,
     measuredAt: null,
-    error: null,
-    expiresAtNs: null,
   };
-  jobs.set(job.id, job);
+  // The registry owns the envelope - status, timing, retention, the error shape
+  // and the poll URL - so a preflight is polled exactly like every other
+  // operation. This module keeps only what is specific to measuring images, and
+  // hands the registry a reader for it.
+  const handle = jobRegistry.start({
+    kind: 'imagepreflight',
+    detail: () => preflightDetail(job),
+  });
+  job.id = handle.jobId;
+
   queue.push(job);
   pump();
 
-  return { jobId: job.id };
+  return handle;
 }
 
 /**
- * A job's public view. The image reference is never echoed — results are keyed
- * by component name, so a sealed request's images stay inside the envelope.
+ * The measuring-specific half of an operation's status: how far through the
+ * components it is, and what each one answered. The registry supplies
+ * everything around it - status, timing, errors, retention.
  *
- * @returns {object|null} null when the job is unknown or has aged out
+ * The image reference is never echoed — results are keyed by component name, so
+ * a sealed request's images stay inside the envelope.
  */
-function getPreflight(jobId) {
-  pruneExpiredJobs();
-  if (typeof jobId !== 'string' || !jobId) throw new Error('Missing jobId');
-  const job = jobs.get(jobId);
-  if (!job) return null;
+function preflightDetail(job) {
   return {
-    jobId: job.id,
-    state: job.state,
     completed: job.completed,
     total: job.components.length,
     measuredAt: job.measuredAt,
-    error: job.error,
     components: job.results,
   };
+}
+
+/**
+ * A job's public view, through the shared operation registry.
+ * @returns {object|null} null when the job is unknown or has aged out
+ */
+function getPreflight(jobId) {
+  if (typeof jobId !== 'string' || !jobId) throw new Error('Missing jobId');
+  return jobRegistry.get(jobId);
 }
 
 /**
@@ -394,11 +382,8 @@ async function submitPreflightAPI(req, res) {
     const sourceIp = (req.socket && req.socket.remoteAddress)
       ? req.socket.remoteAddress.replace(/^::ffff:/, '')
       : null;
-    const { jobId } = await submitPreflight(req.body ?? {}, sourceIp);
-    return res.status(202).json(messageHelper.createDataMessage({
-      jobId,
-      statusUrl: `/apps/imagepreflight/status/${jobId}`,
-    }));
+    const handle = await submitPreflight(req.body ?? {}, sourceIp);
+    return operationsController.accepted(res, handle);
   } catch (error) {
     if (error.kind === 'busy') {
       return res.status(503).json(messageHelper.createErrorMessage(error.message));
@@ -413,32 +398,8 @@ async function submitPreflightAPI(req, res) {
   }
 }
 
-/**
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- */
-async function getPreflightAPI(req, res) {
-  try {
-    const jobId = req.params.jobId || (req.query && req.query.jobId);
-    const view = getPreflight(jobId);
-    if (!view) {
-      return res.status(404).json(messageHelper.createErrorMessage('No such preflight'));
-    }
-    return res.json(messageHelper.createDataMessage(view));
-  } catch (error) {
-    log.warn(`imagePreflight status: ${error.message}`);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    return res.json(errorResponse);
-  }
-}
-
 module.exports = {
   submitPreflight,
   submitPreflightAPI,
   getPreflight,
-  getPreflightAPI,
 };

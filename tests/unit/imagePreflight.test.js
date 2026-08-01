@@ -6,6 +6,8 @@ const proxyquire = require('proxyquire').noCallThru();
 chai.use(chaiAsPromised);
 const { expect } = chai;
 
+const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+
 describe('imagePreflight tests', () => {
   let verifyRepositoryStub;
   let openTransportEnvelopeStub;
@@ -56,7 +58,7 @@ describe('imagePreflight tests', () => {
   async function settle(preflight, jobId) {
     for (let i = 0; i < 200; i += 1) {
       const view = preflight.getPreflight(jobId);
-      if (view && (view.state === 'done' || view.state === 'failed')) return view;
+      if (view && view.status !== 'Running') return view;
       // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve) => { setImmediate(resolve); });
     }
@@ -70,6 +72,9 @@ describe('imagePreflight tests', () => {
 
   afterEach(() => {
     sinon.restore();
+    // The operation registry is a process-level singleton shared by every
+    // endpoint that answers 202, so jobs would otherwise leak between tests.
+    jobRegistry.reset();
   });
 
   describe('measurement results', () => {
@@ -84,7 +89,7 @@ describe('imagePreflight tests', () => {
         components: [{ name: 'web', image: 'library/nginx:1.27', rootFsGb: 20 }],
       });
 
-      const { web } = view.components;
+      const { web } = view.detail.components;
       expect(web.status).to.equal('ok');
       expect(web.measured).to.equal(true);
       expect(web.decompressedBytes).to.equal(3_200_000_000);
@@ -103,8 +108,8 @@ describe('imagePreflight tests', () => {
         components: [{ name: 'ml', image: 'library/pytorch:latest', rootFsGb: 5 }],
       });
 
-      expect(view.components.ml.fits).to.equal(false);
-      expect(view.components.ml.minimumRootFsGb).to.equal(8);
+      expect(view.detail.components.ml.fits).to.equal(false);
+      expect(view.detail.components.ml.minimumRootFsGb).to.equal(8);
     });
 
     it('judges the fit on the clearance figure, not the lower bound, when a size record wrapped', async () => {
@@ -120,9 +125,9 @@ describe('imagePreflight tests', () => {
         components: [{ name: 'ml', image: 'library/pytorch:latest', rootFsGb: 5 }],
       });
 
-      expect(view.components.ml.ambiguous).to.equal(true);
-      expect(view.components.ml.fits).to.equal(false);
-      expect(view.components.ml.minimumRootFsGb).to.equal(8);
+      expect(view.detail.components.ml.ambiguous).to.equal(true);
+      expect(view.detail.components.ml.fits).to.equal(false);
+      expect(view.detail.components.ml.minimumRootFsGb).to.equal(8);
     });
 
     it('leaves every verdict null for an unmeasured image rather than reading absence as a pass', async () => {
@@ -136,7 +141,7 @@ describe('imagePreflight tests', () => {
         components: [{ name: 'legacy', image: 'didstopia/ark-server:latest', rootFsGb: 5 }],
       });
 
-      const { legacy } = view.components;
+      const { legacy } = view.detail.components;
       expect(legacy.status).to.equal('ok');
       expect(legacy.measured).to.equal(false);
       expect(legacy.fits).to.equal(null);
@@ -159,9 +164,9 @@ describe('imagePreflight tests', () => {
         components: [{ name: 'private', image: 'mycorp/big:1', rootFsGb: 5 }],
       });
 
-      expect(view.components.private.measured).to.equal(false);
-      expect(view.components.private.fits).to.equal(false);
-      expect(view.components.private.minimumRootFsGb).to.equal(8);
+      expect(view.detail.components.private.measured).to.equal(false);
+      expect(view.detail.components.private.fits).to.equal(false);
+      expect(view.detail.components.private.minimumRootFsGb).to.equal(8);
     });
 
     it('gives an unmeasured image that clears its compressed sum no verdict, not a pass', async () => {
@@ -178,8 +183,8 @@ describe('imagePreflight tests', () => {
 
       // Compressed fitting proves nothing about decompressed; the install-time
       // inspect stays the authority, so this must not read as approval.
-      expect(view.components.private.fits).to.equal(null);
-      expect(view.components.private.minimumRootFsGb).to.equal(null);
+      expect(view.detail.components.private.fits).to.equal(null);
+      expect(view.detail.components.private.minimumRootFsGb).to.equal(null);
     });
 
     it('reports the minimum even when no rootFsGb was declared', async () => {
@@ -190,9 +195,9 @@ describe('imagePreflight tests', () => {
         components: [{ name: 'web', image: 'library/nginx:1.27' }],
       });
 
-      expect(view.components.web.rootFsGb).to.equal(null);
-      expect(view.components.web.fits).to.equal(null);
-      expect(view.components.web.minimumRootFsGb).to.equal(8);
+      expect(view.detail.components.web.rootFsGb).to.equal(null);
+      expect(view.detail.components.web.fits).to.equal(null);
+      expect(view.detail.components.web.minimumRootFsGb).to.equal(8);
     });
   });
 
@@ -211,13 +216,13 @@ describe('imagePreflight tests', () => {
         ],
       });
 
-      expect(view.state).to.equal('done');
-      expect(view.components.broken.status).to.equal('error');
-      expect(view.components.broken.errorClass).to.equal('transient');
+      expect(view.status).to.equal('Succeeded');
+      expect(view.detail.components.broken.status).to.equal('error');
+      expect(view.detail.components.broken.errorClass).to.equal('transient');
       // The whole reason this is not the registration verify: one dead registry
       // must not blank the facts for every other component.
-      expect(view.components.web.status).to.equal('ok');
-      expect(view.components.web.fits).to.equal(true);
+      expect(view.detail.components.web.status).to.equal('ok');
+      expect(view.detail.components.web.fits).to.equal(true);
     });
 
     it('classes an unlabelled failure permanent so it is not read as retryable', async () => {
@@ -228,7 +233,7 @@ describe('imagePreflight tests', () => {
         components: [{ name: 'private', image: 'mycorp/thing:1' }],
       });
 
-      expect(view.components.private.errorClass).to.equal('permanent');
+      expect(view.detail.components.private.errorClass).to.equal('permanent');
     });
   });
 
@@ -241,7 +246,7 @@ describe('imagePreflight tests', () => {
         components: [{ name: 'web', image: 'mycorp/internal-secret:1' }],
       });
 
-      expect(Object.keys(view.components)).to.deep.equal(['web']);
+      expect(Object.keys(view.detail.components)).to.deep.equal(['web']);
       expect(JSON.stringify(view)).to.not.include('internal-secret');
     });
   });
@@ -318,7 +323,7 @@ describe('imagePreflight tests', () => {
       // Binding the type stops a captured registration envelope being replayed
       // here, and vice versa.
       expect(meta.type).to.equal('fluxapppreflight');
-      expect(view.components.web.status).to.equal('ok');
+      expect(view.detail.components.web.status).to.equal('ok');
       expect(verifyRepositoryStub.firstCall.args[1].repoauth).to.equal('user:pass');
     });
 
@@ -379,7 +384,7 @@ describe('imagePreflight tests', () => {
       // registry host - not this job's. Serialising here would only make a
       // preflight cost the sum of its components instead of the slowest one.
       expect(maxInFlight).to.equal(3);
-      expect(Object.keys(view.components)).to.have.members(['a', 'b', 'c']);
+      expect(Object.keys(view.detail.components)).to.have.members(['a', 'b', 'c']);
     });
 
     it('refuses a second concurrent job from the same address', async () => {
@@ -434,20 +439,20 @@ describe('imagePreflight tests', () => {
       }, '203.0.113.5');
 
       // Let the first component land.
-      for (let i = 0; i < 50 && preflight.getPreflight(jobId).completed === 0; i += 1) {
+      for (let i = 0; i < 50 && preflight.getPreflight(jobId).detail.completed === 0; i += 1) {
         // eslint-disable-next-line no-await-in-loop
         await new Promise((resolve) => { setImmediate(resolve); });
       }
 
       const midway = preflight.getPreflight(jobId);
-      expect(midway.state).to.equal('running');
-      expect(midway.completed).to.equal(1);
-      expect(midway.total).to.equal(2);
-      expect(midway.components.a.status).to.equal('ok');
+      expect(midway.status).to.equal('Running');
+      expect(midway.detail.completed).to.equal(1);
+      expect(midway.detail.total).to.equal(2);
+      expect(midway.detail.components.a.status).to.equal('ok');
 
       release();
       const view = await settle(preflight, jobId);
-      expect(view.completed).to.equal(2);
+      expect(view.detail.completed).to.equal(2);
     });
   });
 

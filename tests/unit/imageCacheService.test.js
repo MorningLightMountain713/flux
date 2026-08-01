@@ -2,6 +2,8 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+
 describe('imageCacheService tests', () => {
   let stubs;
 
@@ -58,6 +60,7 @@ describe('imageCacheService tests', () => {
 
   afterEach(() => {
     sinon.restore();
+    jobRegistry.reset();
   });
 
   describe('submit validation', () => {
@@ -79,9 +82,9 @@ describe('imageCacheService tests', () => {
       await settled;
 
       const view = svc.getJob(jobId, 'F1');
-      expect(view.images).to.have.length(1);
-      expect(view.images[0]).to.include({ repotag: 'repo:1', state: 'pinned', sizeOnDiskBytes: 4242 });
-      expect(view.settled).to.equal(true);
+      expect(view.detail.images).to.have.length(1);
+      expect(view.detail.images[0]).to.include({ repotag: 'repo:1', state: 'pinned', sizeOnDiskBytes: 4242 });
+      expect(view.status).to.equal('Succeeded');
 
       // wrote a 'pulling' record up front, then patched to 'pinned' with the real size
       expect(stubs.upsertImage.firstCall.args[0]).to.include({ fluxId: 'F1', repotag: 'repo:1', state: 'pulling' });
@@ -119,7 +122,7 @@ describe('imageCacheService tests', () => {
       await settled;
 
       const view = svc.getJob(jobId, 'F1');
-      expect(view.images[0]).to.include({ state: 'rejected', reason: 'over-quota' });
+      expect(view.detail.images[0]).to.include({ state: 'rejected', reason: 'over-quota' });
       expect(stubs.pullImage.called).to.equal(false);
     });
   });
@@ -132,7 +135,7 @@ describe('imageCacheService tests', () => {
       await settled;
 
       const view = svc.getJob(jobId, 'F1');
-      expect(view.images[0]).to.include({ state: 'rejected', reason: 'non-compliant' });
+      expect(view.detail.images[0]).to.include({ state: 'rejected', reason: 'non-compliant' });
       expect(stubs.inspectImage.called).to.equal(false);
       expect(stubs.pullImage.called).to.equal(false);
     });
@@ -146,8 +149,8 @@ describe('imageCacheService tests', () => {
       await settled;
 
       const view = svc.getJob(jobId, 'F1');
-      expect(view.images[0]).to.include({ state: 'failed' });
-      expect(view.images[0].error).to.equal('boom');
+      expect(view.detail.images[0]).to.include({ state: 'failed' });
+      expect(view.detail.images[0].error).to.equal('boom');
       expect(stubs.pullImage.callCount).to.equal(2); // initial + 1 retry (maxRetries=1)
       expect(stubs.patchImage.lastCall.args[2]).to.include({ state: 'failed' });
       expect(stubs.release.calledOnceWith('t1')).to.equal(true);
@@ -165,8 +168,8 @@ describe('imageCacheService tests', () => {
       await settled;
 
       const view = svc.getJob(jobId, 'F1');
-      expect(view.images[0].state).to.equal('failed');
-      expect(view.images[0].error).to.equal('pull completed but image is not present');
+      expect(view.detail.images[0].state).to.equal('failed');
+      expect(view.detail.images[0].error).to.equal('pull completed but image is not present');
       expect(stubs.patchImage.lastCall.args[2]).to.include({ state: 'failed' });
       // never pinned an unconfirmed image
       expect(stubs.patchImage.getCalls().some((c) => c.args[2] && c.args[2].state === 'pinned')).to.equal(false);
@@ -180,8 +183,8 @@ describe('imageCacheService tests', () => {
       await settled;
 
       const view = svc.getJob(jobId, 'F1');
-      expect(view.images[0].state).to.equal('failed');
-      expect(view.images[0].error).to.equal('docker daemon busy');
+      expect(view.detail.images[0].state).to.equal('failed');
+      expect(view.detail.images[0].error).to.equal('docker daemon busy');
       expect(stubs.patchImage.getCalls().some((c) => c.args[2] && c.args[2].state === 'pinned')).to.equal(false);
       expect(stubs.release.calledOnceWith('t1')).to.equal(true);
     });
