@@ -22,13 +22,10 @@ function emitStatus(res, status) {
   }
 }
 
-async function createAppVolume(deployComp, res, test = false) {
+async function createAppVolume(deployComp, res) {
   const { identifier } = deployComp;
   const appId = dockerService.getAppIdentifier(identifier);
-  // Harness nodes cap volumes at 2G to keep suites fast — but a stateless
-  // component must stay stateless there too, or no suite could ever exercise
-  // the no-volume path.
-  const effectiveHdd = test && !deployComp.isStateless ? 2 : deployComp.storage;
+  const requiredGb = deployComp.storage;
 
   // Defensive: the provisioner already skips stateless components. Returning
   // here rather than allocating means a future caller cannot accidentally
@@ -50,12 +47,12 @@ async function createAppVolume(deployComp, res, test = false) {
   // system off a disk with no headroom). mkdir the apps base first so findmnt can resolve
   // its mountpoint on a fresh node.
   const bytesPerGb = 1024 ** 3;
-  const needBytes = effectiveHdd * bytesPerGb;
+  const needBytes = requiredGb * bytesPerGb;
   const reserveBytes = config.lockedSystemResources.extrahdd * bytesPerGb;
   await serviceHelper.runCommand('mkdir', { params: ['-p', appsFolderPath], runAsRoot: true });
   const useThisVolume = await deviceHelper.mountForTarget(appsFolderPath);
   if (useThisVolume.availableBytes < needBytes + reserveBytes) {
-    throw new Error(`Insufficient space on ${useThisVolume.target} for ${identifier}: needs ${effectiveHdd}GB + reserve, ${Math.floor(useThisVolume.availableBytes / bytesPerGb)}GB free`);
+    throw new Error(`Insufficient space on ${useThisVolume.target} for ${identifier}: needs ${requiredGb}GB + reserve, ${Math.floor(useThisVolume.availableBytes / bytesPerGb)}GB free`);
   }
 
   emitStatus(res, { status: 'Space found' });
@@ -84,7 +81,7 @@ async function createAppVolume(deployComp, res, test = false) {
       if (await appsRuntimeState.isCondemned(identifier) || await pendingTeardownStore.teardownOwedFor(deployComp.appName)) {
         throw new Error(`createAppVolume of ${identifier} aborted: a removal/cancel of ${deployComp.appName} arrived before volume creation`);
       }
-      await serviceHelper.runCommand('fallocate', { params: ['-l', `${effectiveHdd}G`, volumeFile], runAsRoot: true });
+      await serviceHelper.runCommand('fallocate', { params: ['-l', `${requiredGb}G`, volumeFile], runAsRoot: true });
       emitStatus(res, { status: 'Space allocated' });
 
       emitStatus(res, { status: 'Creating filesystem...' });

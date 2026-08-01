@@ -946,7 +946,6 @@ function componentIdentityLabels(appName, componentName, owner) {
  * @returns {object}
  */
 async function appDockerCreate(deployComp, options = {}) {
-  const test = options.test || false;
   const burstEligible = options.burstEligible || false;
   const restartPolicyOverride = options.restartPolicy || null;
   const extraEnv = options.extraEnv || [];
@@ -957,7 +956,7 @@ async function appDockerCreate(deployComp, options = {}) {
   const { appName } = deployComp;
   const { identifier } = deployComp;
 
-  const effectiveCpu = test ? 0.2 : deployComp.cpu;
+  const effectiveCpu = deployComp.cpu;
 
   const portBindings = deployComp.toDockerPortBindings();
   const exposedPorts = deployComp.toDockerExposedPorts();
@@ -1024,11 +1023,9 @@ async function appDockerCreate(deployComp, options = {}) {
 
   const restartPolicy = restartPolicyOverride || 'no';
 
-  const nanoCpus = test ? Math.round(0.2 * 1e9) : deployComp.toDockerNanoCpus();
-  const memoryBytes = test ? Math.round(300 * 1024 * 1024) : deployComp.toDockerMemoryBytes();
-  const memorySwapBytes = test
-    ? Math.round(300 * 1024 * 1024)
-    : deployComp.toDockerMemorySwapBytes();
+  const nanoCpus = deployComp.toDockerNanoCpus();
+  const memoryBytes = deployComp.toDockerMemoryBytes();
+  const memorySwapBytes = deployComp.toDockerMemorySwapBytes();
 
   const containerConfig = {
     Image: deployComp.image,

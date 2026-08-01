@@ -239,7 +239,11 @@ describe('appInstaller tests', () => {
       await appInstaller.installApplicationAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
-      expect(verificationHelperStub.verifyPrivilege.calledWith('adminandfluxteam', req)).to.be.true;
+      // #1791 narrowed this to the app's owner, and verifyPrivilege takes the
+      // zelidauth header value rather than the request - it throws on anything else.
+      expect(verificationHelperStub.verifyPrivilege.calledWith(
+        'appownerorfluxteam', null, { appName: 'testapp' },
+      )).to.be.true;
     });
 
     it('should handle missing appname parameter', async () => {
@@ -280,40 +284,33 @@ describe('appInstaller tests', () => {
     });
   });
 
-  describe('testInstallApplicationAPI', () => {
-    it('should reject unauthorized users', async () => {
-      const req = {
-        params: { appname: 'testapp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.stub(),
-      };
-
-      verificationHelperStub.verifyPrivilege.resolves(false);
-      messageHelperStub.errUnauthorizedMessage.returns({ status: 'error', data: { message: 'Unauthorized' } });
+  describe('testInstallApplicationAPI (withdrawn)', () => {
+    it('refuses with 410 and points at what replaced it', async () => {
+      // An error, never a success no-op: a caller who believes they have tested
+      // their app and have not is worse off than one told the endpoint is gone.
+      const req = { params: { appname: 'testapp' }, query: {} };
+      const res = { status: sinon.stub().returnsThis(), json: sinon.stub() };
+      messageHelperStub.createErrorMessage.callsFake((message) => ({ status: 'error', data: { message } }));
 
       await appInstaller.testInstallApplicationAPI(req, res);
 
-      expect(res.json.calledOnce).to.be.true;
-      expect(verificationHelperStub.verifyPrivilege.calledWith('user', req)).to.be.true;
+      expect(res.status.calledWith(410)).to.be.true;
+      const { message } = res.json.firstCall.args[0].data;
+      expect(message).to.include('/apps/imagepreflight');
+      expect(message).to.include('playground');
+      // Says WHY, so the reason the old answer was worthless travels with it.
+      expect(message).to.include('0.2 CPU / 300MB');
     });
 
-    it('should handle missing appname parameter', async () => {
-      const req = {
-        params: {},
-        query: {},
-      };
-      const res = {
-        json: sinon.stub(),
-      };
-
-      messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'No Flux App specified' } });
+    it('does not consult privilege - it is gone for everyone', async () => {
+      const req = { params: {}, query: {} };
+      const res = { status: sinon.stub().returnsThis(), json: sinon.stub() };
+      messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'withdrawn' } });
 
       await appInstaller.testInstallApplicationAPI(req, res);
 
-      expect(res.json.calledOnce).to.be.true;
-      expect(logStub.error.called).to.be.true;
+      expect(verificationHelperStub.verifyPrivilege.called).to.be.false;
+      expect(res.status.calledWith(410)).to.be.true;
     });
   });
 

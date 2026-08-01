@@ -1007,7 +1007,12 @@ module.exports = (app) => {
   app.get('/apps/installapplocally/:appname?', requireBootSettled, requirePolicyReady, asyncRoute((req, res) => {
     return appInstaller.installApplicationAPI(req, res);
   }));
-  app.get('/apps/testappinstall/:appname?', requireBootSettled, requirePolicyReady, asyncRoute((req, res) => {
+  // Withdrawn: it ran apps at fabricated resource limits, so a pass meant nothing.
+  // Kept so a caller is told where to go rather than getting a 404. Remove at the
+  // next major version. No requireBootSettled any more - the handler installs
+  // nothing, and gating it would answer a boot-time caller "not ready" instead of
+  // the explanation this route now exists to give.
+  app.get('/apps/testappinstall/:appname?', asyncRoute((req, res) => {
     return appInstaller.testInstallApplicationAPI(req, res);
   }));
   app.get('/apps/createfluxnetwork', asyncRoute((req, res) => {
