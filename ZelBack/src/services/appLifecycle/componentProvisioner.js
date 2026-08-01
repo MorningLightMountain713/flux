@@ -9,14 +9,13 @@
 // to the reconciler directly. installComponent is a pure provisioner: it knows
 // nothing of the reconciler or the operation registry.
 const util = require('util');
-const config = require('config');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const upnpService = require('../upnpService');
 const { systemArchitecture } = require('../appRequirements/hwRequirements');
-const imageVerifier = require('../utils/imageVerifier');
+const { verifyRepository } = require('../appSecurity/imageManager');
 const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const appVolumeService = require('./appVolumeService');
 const appSwapPoolService = require('./appSwapPoolService');
@@ -136,11 +135,6 @@ async function verifyComponentImage(component) {
     throw new Error(`Invalid architecture ${architecture} detected.`);
   }
 
-  const imgVerifier = new imageVerifier.ImageVerifier(
-    component.image,
-    { maxImageSize: config.fluxapps.maxImageSize, architecture, architectureSet: supportedArchitectures },
-  );
-
   const pullConfig = { repoTag: component.image };
 
   if (component.imageAuth) {
@@ -152,18 +146,23 @@ async function verifyComponentImage(component) {
     if (!credentials) {
       throw new Error('Unable to get credentials');
     }
-    imgVerifier.addCredentials(credentials);
+    // The daemon does its own pull, so it needs the credentials regardless of
+    // what the verification below does with them.
     pullConfig.authToken = `${credentials.username}:${credentials.password}`;
   }
 
-  await imgVerifier.verifyImage();
-  imgVerifier.throwIfError();
+  // Through verifyRepository rather than a verifier of our own: this used to
+  // stand up a second ImageVerifier and repeat every registry round-trip the
+  // submission gate had already made, cache and all. On a multi-component app
+  // that was the whole verification pass a second time, for an answer already
+  // held. The architecture argument keeps the "runs on THIS node" check.
+  const result = await verifyRepository(component.image, {
+    repoauth: component.imageAuth || null,
+    appName: component.appName,
+    architecture,
+  });
 
-  if (!imgVerifier.supported) {
-    throw new Error(`Architecture ${architecture} not supported by ${component.image}`);
-  }
-
-  pullConfig.provider = imgVerifier.provider;
+  pullConfig.provider = result.provider;
   return pullConfig;
 }
 
