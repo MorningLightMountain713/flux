@@ -41,6 +41,7 @@ const appUninstaller = require('./services/appLifecycle/appUninstaller');
 const appOperations = require('./services/appLifecycle/appOperations');
 const contentSlotService = require('./services/appLifecycle/contentSlotService');
 const imageManager = require('./services/appSecurity/imageManager');
+const imagePreflight = require('./services/appSecurity/imagePreflight');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
@@ -288,9 +289,6 @@ module.exports = (app) => {
   app.get('/flux/pgp', cache('30 seconds'), asyncRoute((req, res) => {
     return fluxService.getFluxPGPidentity(req, res);
   }));
-  app.get('/flux/kadena', cache('30 seconds'), asyncRoute((req, res) => {
-    return fluxService.getFluxKadena(req, res);
-  }));
   app.get('/flux/routerip', cache('1 day'), asyncRoute((req, res) => {
     return fluxService.getRouterIP(req, res);
   }));
@@ -386,7 +384,7 @@ module.exports = (app) => {
   // checkAppRunning reads it for every app and matches on Names[0] alone, so dropping a
   // container from here takes that app out of routing.
   app.get('/apps/listrunningapps', cache('15 seconds'), asyncRoute((req, res) => {
-    return appQueryService.listRunningAppsApi(req, res);
+    return appQueryService.listRunningApps(req, res);
   }));
   // Read by peers mid-election. Both are unauthenticated, and the API has no rate
   // limiting, so neither may do unbounded backend work per request.
@@ -468,12 +466,6 @@ module.exports = (app) => {
   app.get('/apps/appspecifications/:appname/:decrypt?', asyncRoute((req, res) => {
     return registryManager.getApplicationSpecificationAPI(req, res);
   }));
-  // Component names and their election mode, for the flux team. Not cached: the
-  // answer depends on who is asking, and a shared cache in front of a
-  // privilege-checked route serves one caller's answer to the next.
-  app.get('/apps/appcomponentnames/:appname?', asyncRoute((req, res) => {
-    return registryManager.getApplicationComponentNamesAPI(req, res);
-  }));
   app.get('/apps/appowner/:appname?', cache('30 seconds'), asyncRoute((req, res) => {
     return registryManager.getApplicationOwnerAPI(req, res);
   }));
@@ -518,6 +510,16 @@ module.exports = (app) => {
   }));
   app.post('/apps/verifyappupdatespecifications', asyncRoute((req, res) => { // returns formatted app specifications
     return appSubmission.verifyAppUpdateApi(req, res);
+  }));
+  // Per-component image facts (sizes, architectures, rootFs fit) before a spec is
+  // registered. Reports where the registration verify above refuses, so an owner
+  // can size rootFsGb from a measurement instead of from a rejection. Measuring is
+  // serial and registry-paced, so it answers 202 + jobId and the client polls.
+  app.post('/apps/imagepreflight', asyncRoute((req, res) => {
+    return imagePreflight.submitPreflightAPI(req, res);
+  }));
+  app.get('/apps/imagepreflight/status/:jobId', asyncRoute((req, res) => {
+    return imagePreflight.getPreflightAPI(req, res);
   }));
   app.post('/apps/placementfeasibility', asyncRoute((req, res) => { // fault domains and per-domain instance share for a prospective spec
     return placementFeasibility.placementFeasibilityAPI(req, res);
