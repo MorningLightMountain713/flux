@@ -50,10 +50,20 @@ describe('reconciler run-authority guard', () => {
     // ForceRemove counts: destroying a (possibly running) container is the strongest
     // run-state mutation there is.
     const owners = {
-      'appMonitoring/appReconciler.js': 8, // the sole authority: volume-unavailable pending stop, data-clear stop, force kill, graceful stop, restart-gen bounce, unhealthy restart, start, network-detach heal force-remove
+      // The sole authority, all ten enumerated so a new one has to be justified here:
+      // network-detach heal force-remove (1082); volume-unavailable pending stop, which
+      // is TWO calls, kill and stop, on the forceKill branch (1221, 1223); paused-container
+      // stop (1293); data-clear stop (1332); force kill (1393); graceful stop (1398);
+      // restart-generation bounce (1463); unhealthy restart (1511); start (1768).
+      'appMonitoring/appReconciler.js': 10,
       'appLifecycle/appUninstaller.js': 7, // terminal teardown: uninstallComponent (redeploy) kill+stop+force-remove, runTeardown worker kill+stop + 2 paced force-removes
-      'appLifecycle/componentProvisioner.js': 1, // test-install inline start (synchronous fail-fast)
       'appManagement/appController.js': 1, // stopAllNonFluxRunningApps janitor (foreign, non-Flux containers)
+      // Boot recovery of file-operation containers left by a PREVIOUS process. Not an
+      // app container and never one: the executor creates its own throwaway container
+      // per operation and owns it for that operation's life, so the reconciler has
+      // nothing to arbitrate here. Same class of exception as the watchtower cleanup
+      // in the second test.
+      'appSystem/volumeExecutor.js': 1, // recoverOrphaned: force-remove a previous process's executor container
       // Owner-declared reload reactions. Both take the primitive as an injected
       // dependency rather than calling it inline, so each shows up as one
       // reference, not one call. Restarting is the owner's own choice of reaction
@@ -88,6 +98,12 @@ describe('reconciler run-authority guard', () => {
     const allowed = new Set([
       'dockerService.js',
       'imageUpdateService.js',
+      // Its own throwaway container, started and stopped inside one file operation.
+      // Raw dockerode on purpose: the appDocker* primitives are about MANAGED app
+      // containers - they resolve identities, record removals and answer to the
+      // reconciler - and none of that is true of a container this module created
+      // seconds earlier and will destroy when the operation ends.
+      'appSystem/volumeExecutor.js',
     ]);
     const raw = /\b(container|dockerContainer)\.(start|stop|restart|kill)\(/;
     const offenders = [];
