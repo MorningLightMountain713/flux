@@ -264,23 +264,24 @@ function pruneExpiredJobs() {
 }
 
 /**
- * Measure a job's components one at a time.
+ * Measure a job's components.
  *
- * Serial on purpose, and the single most important safeguard here: the verifier
- * already paces itself (a one-second wait before each architecture's manifest)
- * because registries rate-limit manifest fetches, and a 429 is cached as a
- * transient failure in the SAME cache the registration path reads. Measuring
- * components concurrently would trip that limit and poison registration for the
- * very images being asked about.
+ * Fanned out, because pacing is the registry governor's job and not this
+ * function's: it holds a concurrency slot per registry host and a rate budget
+ * only where one is actually published, so components no longer have to queue
+ * behind each other to stay polite. A preflight costs the slowest component
+ * rather than the sum of them, and a component whose registry is cooling is
+ * refused with a number instead of blocking the rest of the job.
+ *
+ * measureComponent never rejects, so every component lands a result.
  */
 async function runJob(job) {
   job.state = 'running';
-  for (const component of job.components) {
-    // eslint-disable-next-line no-await-in-loop
+  await Promise.all(job.components.map(async (component) => {
     const result = await measureComponent(component);
     job.results[component.name] = result;
     job.completed += 1;
-  }
+  }));
   job.state = 'done';
   job.measuredAt = Date.now();
   job.expiresAtNs = process.hrtime.bigint() + BigInt(preflightJobRetentionMs()) * NS_PER_MS;

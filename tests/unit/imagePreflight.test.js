@@ -355,7 +355,7 @@ describe('imagePreflight tests', () => {
   });
 
   describe('admission', () => {
-    it('measures components one at a time, never concurrently', async () => {
+    it('measures components concurrently and leaves the pacing to the governor', async () => {
       const preflight = build();
       let inFlight = 0;
       let maxInFlight = 0;
@@ -367,7 +367,7 @@ describe('imagePreflight tests', () => {
         return measurement();
       });
 
-      await run(preflight, {
+      const view = await run(preflight, {
         components: [
           { name: 'a', image: 'library/nginx:1.27' },
           { name: 'b', image: 'library/redis:7' },
@@ -375,9 +375,11 @@ describe('imagePreflight tests', () => {
         ],
       });
 
-      // Concurrency here would trip registry rate limits, and a 429 is cached in
-      // the same cache registration reads.
-      expect(maxInFlight).to.equal(1);
+      // Politeness is the registry governor's concern - a concurrency slot per
+      // registry host - not this job's. Serialising here would only make a
+      // preflight cost the sum of its components instead of the slowest one.
+      expect(maxInFlight).to.equal(3);
+      expect(Object.keys(view.components)).to.have.members(['a', 'b', 'c']);
     });
 
     it('refuses a second concurrent job from the same address', async () => {
