@@ -14,10 +14,10 @@ const { AsyncLock } = require('./asyncLock');
 // port cleanup, install port-open, prelaunch port-probe, port-support restore, image prune) is
 // the one serialization point.
 //
-// Usage rules (load-bearing -- see asyncLock.js disable() == shift-the-head):
-//   - Acquire ONLY via withHostMutationLock; one enable() is paired with exactly one disable()
-//     in its finally. maxConcurrent = 1 keeps acquisition strictly serial FIFO so disable()
-//     always resolves the calling holder. NEVER raise maxConcurrent.
+// Usage rules (load-bearing):
+//   - Acquire ONLY via withHostMutationLock, which pairs one acquire with exactly one release
+//     in its finally. maxConcurrent = 1 is the point of this lock: these mutations must be
+//     serial, so NEVER raise it.
 //   - Wrap ONLY the leaf host-mutation call(s). NEVER hold the lock across an UNBOUNDED wait:
 //     no test-bind, no peer-reachability probe, no image pull, no container graceful drain, no
 //     serviceHelper.delay. In a multi-port loop, acquire/release PER PORT (each UPnP call
@@ -36,11 +36,11 @@ const hostMutationLock = new AsyncLock(1);
  * @returns {Promise<any>}
  */
 async function withHostMutationLock(fn) {
-  await hostMutationLock.enable();
+  const release = await hostMutationLock.acquire({ label: 'hostMutation' });
   try {
     return await fn();
   } finally {
-    hostMutationLock.disable();
+    release();
   }
 }
 

@@ -346,7 +346,7 @@ describe('syncthingService tests', () => {
       // we lock the controller first, so that when we call abort, it doesn't immediately resolve
       // and create a new abortController, in this test it isn't strictly necessary but in real world,
       // it would be
-      await stc.lock.enable();
+      const release = await stc.lock.acquire();
 
       const promise = stc.abort();
 
@@ -355,7 +355,7 @@ describe('syncthingService tests', () => {
       expect(stc.aborted).to.be.true;
       sinon.assert.notCalled(runCmdStub);
 
-      stc.lock.disable();
+      release();
       await promise;
     });
 

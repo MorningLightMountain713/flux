@@ -6,7 +6,6 @@ const fs = require('node:fs/promises');
 const execFile = util.promisify(require('node:child_process').execFile);
 
 const axios = require('axios').default;
-const config = require('config');
 const qs = require('qs');
 
 const asyncLock = require('./utils/asyncLock');
@@ -564,32 +563,39 @@ async function runCommand(userCmd, options = {}) {
   log.debug(`Run Cmd: ${cmd} ${params.join(' ')}`);
 
   // delete the locks after no waiters?
+  let release = null;
   if (exclusive) {
     if (!locks.has(userCmd)) {
       locks.set(userCmd, new asyncLock.AsyncLock());
     }
-    await locks.get(userCmd).enable();
+    release = await locks.get(userCmd).acquire({ label: `runCommand:${userCmd}` });
 
     log.info(`Exclusive lock enabled for command: ${userCmd}`);
   }
 
-  const { stdout, stderr } = await execFile(cmd, params, execOptions).catch((err) => {
-    // do this so we can standardize the return value for errors vs non errors
-    const { stdout: errStdout, stderr: errStderr } = err;
+  let stdout;
+  let stderr;
+  try {
+    ({ stdout, stderr } = await execFile(cmd, params, execOptions).catch((err) => {
+      // do this so we can standardize the return value for errors vs non errors
+      const { stdout: errStdout, stderr: errStderr } = err;
 
-    // eslint-disable-next-line no-param-reassign
-    delete err.stdout;
-    // eslint-disable-next-line no-param-reassign
-    delete err.stderr;
+      // eslint-disable-next-line no-param-reassign
+      delete err.stdout;
+      // eslint-disable-next-line no-param-reassign
+      delete err.stderr;
 
-    res.error = err;
-    if (logError !== false) log.error(err);
-    return { stdout: errStdout, stderr: errStderr };
-  });
-
-  if (exclusive) {
-    locks.get(userCmd).disable();
-    log.info(`Exclusive lock disabled for command: ${userCmd}`);
+      res.error = err;
+      if (logError !== false) log.error(err);
+      return { stdout: errStdout, stderr: errStderr };
+    }));
+  } finally {
+    // In a finally so the command failing in a way the catch above does not
+    // model cannot strand the lock for the life of the process.
+    if (release) {
+      release();
+      log.info(`Exclusive lock disabled for command: ${userCmd}`);
+    }
   }
 
   res.stdout = stdout;

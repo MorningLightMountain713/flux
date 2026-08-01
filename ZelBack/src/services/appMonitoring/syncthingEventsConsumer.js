@@ -120,7 +120,7 @@ async function runLoop() {
   while (!controller.aborted) {
     const startedAt = Date.now();
     // eslint-disable-next-line no-await-in-loop
-    await controller.lock.enable();
+    const release = await controller.lock.acquire({ label: 'syncthingEvents' });
     try {
       // eslint-disable-next-line no-await-in-loop
       await pollOnce();
@@ -142,7 +142,7 @@ async function runLoop() {
       // eslint-disable-next-line no-await-in-loop
       await controller.sleep(EVENTS_RETRY_DELAY_MS).catch(() => {});
     } finally {
-      controller.lock.disable();
+      release();
     }
   }
 }

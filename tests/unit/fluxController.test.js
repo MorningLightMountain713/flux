@@ -50,10 +50,10 @@ describe('fluxController tests', () => {
     const fc = new FluxController();
 
     const dummy = async () => {
-      await fc.lock.enable();
+      const release = await fc.lock.acquire();
       await new Promise((r) => { setTimeout(r, 5000); });
       dummyVar = true;
-      fc.lock.disable();
+      release();
     };
 
     const waiter = async () => {

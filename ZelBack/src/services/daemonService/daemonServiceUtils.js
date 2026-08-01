@@ -63,7 +63,7 @@ async function executeCall(rpc, params, options = {}) {
 
   if (!fluxdClient) await buildFluxdClient();
 
-  await lock.enable();
+  const release = await lock.acquire({ label: 'daemonRpc' });
 
   try {
     let data;
@@ -92,7 +92,7 @@ async function executeCall(rpc, params, options = {}) {
     const daemonError = messageHelper.createErrorMessage(error.message, error.name, error.code);
     return daemonError;
   } finally {
-    lock.disable();
+    release();
   }
 }
 

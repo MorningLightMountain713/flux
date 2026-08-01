@@ -2201,7 +2201,7 @@ async function getSvcReport(req, res) {
  */
 async function getDeviceId() {
   // not sure why this is necessary. If we only want one at a time, should implement a cache too.
-  await asyncLock.enable();
+  const release = await asyncLock.acquire({ label: 'syncthingDeviceId' });
 
   let meta = {};
   let healthy = {};
@@ -2216,7 +2216,7 @@ async function getDeviceId() {
   } catch {
     // do nothing
   } finally {
-    asyncLock.disable();
+    release();
   }
 
   if (stc.aborted) return null;
@@ -2535,14 +2535,16 @@ async function ensureSyncthingRunning(installed) {
  * @returns {number} ms until next iteration
  */
 async function runSyncthingSentinel() {
-  await stc.lock.enable();
-
-  let installed = axiosCache.axiosInstance;
-  if (!installed) {
-    installed = await axiosCache.createInstance();
-  }
+  const release = await stc.lock.acquire({ label: 'syncthingSentinel' });
 
   try {
+    // Inside the try: creating the axios instance can throw, and this lock has
+    // one slot, so a throw here used to strand it and the sentinel never ran again.
+    let installed = axiosCache.axiosInstance;
+    if (!installed) {
+      installed = await axiosCache.createInstance();
+    }
+
     if (!isArcane) {
       await ensureSyncthingRunning(installed);
     }
@@ -2563,7 +2565,7 @@ async function runSyncthingSentinel() {
     log.error(error);
     return 2 * 60 * 1000;
   } finally {
-    stc.lock.disable();
+    release();
   }
 }
 

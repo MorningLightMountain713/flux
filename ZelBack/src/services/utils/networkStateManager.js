@@ -223,7 +223,7 @@ class NetworkStateManager extends EventEmitter {
   async #buildIndexes(nodes) {
     // if we are building an index already, just wait for it to finish.
     // maybe look at cancelling it in future.
-    await this.#controller.lock.enable();
+    const release = await this.#controller.lock.acquire({ label: 'networkState:buildIndexes' });
 
     const nodeCount = nodes.length;
 
@@ -262,7 +262,7 @@ class NetworkStateManager extends EventEmitter {
     return new Promise((resolve) => {
       iterIndexes(0, () => {
         this.#setIndexes(pubkeyIndex, socketAddressIndex);
-        this.#controller.lock.disable();
+        release();
         resolve();
       });
     });
@@ -414,13 +414,16 @@ class NetworkStateManager extends EventEmitter {
       const fetchLock = this.#controller.getLock('fetcher');
 
       // eslint-disable-next-line no-await-in-loop
-      await fetchLock.enable();
-      // eslint-disable-next-line no-await-in-loop
-      state = await this.#stateFetcher().catch((err) => {
-        log.warn(`Network state fetcher error: ${err.message}`);
-        return [];
-      });
-      fetchLock.disable();
+      const releaseFetch = await fetchLock.acquire({ label: 'networkState:fetcher' });
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        state = await this.#stateFetcher().catch((err) => {
+          log.warn(`Network state fetcher error: ${err.message}`);
+          return [];
+        });
+      } finally {
+        releaseFetch();
+      }
 
       const fetchEnd = process.hrtime.bigint();
 
