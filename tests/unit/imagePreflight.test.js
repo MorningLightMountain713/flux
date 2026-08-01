@@ -57,7 +57,7 @@ describe('imagePreflight tests', () => {
   // The job runs off the request, so tests wait for it rather than sleeping.
   async function settle(preflight, jobId) {
     for (let i = 0; i < 200; i += 1) {
-      const view = preflight.getPreflight(jobId);
+      const view = preflight.getPreflight(jobId, 'F1');
       if (view && view.status !== 'Running') return view;
       // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve) => { setImmediate(resolve); });
@@ -65,8 +65,10 @@ describe('imagePreflight tests', () => {
     throw new Error('preflight job did not settle');
   }
 
-  async function run(preflight, body, ip = '203.0.113.5') {
-    const { jobId } = await preflight.submitPreflight(body, ip);
+  const CALLER = { fluxId: 'F1', sourceIp: '203.0.113.5' };
+
+  async function run(preflight, body, caller = CALLER) {
+    const { jobId } = await preflight.submitPreflight(body, caller);
     return settle(preflight, jobId);
   }
 
@@ -256,7 +258,7 @@ describe('imagePreflight tests', () => {
       const preflight = build();
       await expect(preflight.submitPreflight({
         components: [{ image: 'library/nginx:1.27' }],
-      }, '203.0.113.5')).to.be.rejectedWith(/needs a name/);
+      }, CALLER)).to.be.rejectedWith(/needs a name/);
     });
 
     it('rejects duplicate component names', async () => {
@@ -266,39 +268,39 @@ describe('imagePreflight tests', () => {
           { name: 'web', image: 'library/nginx:1.27' },
           { name: 'web', image: 'library/redis:7' },
         ],
-      }, '203.0.113.5')).to.be.rejectedWith(/Duplicate component name: web/);
+      }, CALLER)).to.be.rejectedWith(/Duplicate component name: web/);
     });
 
     it('rejects an unparseable image reference', async () => {
       const preflight = build();
       await expect(preflight.submitPreflight({
         components: [{ name: 'web', image: 'not a tag' }],
-      }, '203.0.113.5')).to.be.rejectedWith(/is not in valid format/);
+      }, CALLER)).to.be.rejectedWith(/is not in valid format/);
     });
 
     it('rejects a non-positive rootFsGb', async () => {
       const preflight = build();
       await expect(preflight.submitPreflight({
         components: [{ name: 'web', image: 'library/nginx:1.27', rootFsGb: 0 }],
-      }, '203.0.113.5')).to.be.rejectedWith(/rootFsGb must be a positive number/);
+      }, CALLER)).to.be.rejectedWith(/rootFsGb must be a positive number/);
     });
 
     it('rejects more components than the cap allows', async () => {
       const preflight = build();
       const components = [1, 2, 3, 4].map((n) => ({ name: `c${n}`, image: 'library/nginx:1.27' }));
-      await expect(preflight.submitPreflight({ components }, '203.0.113.5'))
+      await expect(preflight.submitPreflight({ components }, CALLER))
         .to.be.rejectedWith(/Too many components to preflight: 4, maximum 3/);
     });
 
     it('rejects an empty component list', async () => {
       const preflight = build();
-      await expect(preflight.submitPreflight({ components: [] }, '203.0.113.5'))
+      await expect(preflight.submitPreflight({ components: [] }, CALLER))
         .to.be.rejectedWith(/No components to preflight/);
     });
 
     it('refuses a job before creating it, so a bad request never becomes a poll', async () => {
       const preflight = build();
-      await expect(preflight.submitPreflight({ components: [] }, '203.0.113.5')).to.be.rejected;
+      await expect(preflight.submitPreflight({ components: [] }, CALLER)).to.be.rejected;
       expect(verifyRepositoryStub.called).to.equal(false);
     });
   });
@@ -335,7 +337,7 @@ describe('imagePreflight tests', () => {
         contentHash: 'abc123',
         timestamp: Date.now() - 400000,
         transportEncrypted: { algorithm: 'x', ciphertext: 'y' },
-      }, '203.0.113.5')).to.be.rejectedWith(/outside the accepted window/);
+      }, CALLER)).to.be.rejectedWith(/outside the accepted window/);
       expect(openTransportEnvelopeStub.called).to.equal(false);
     });
 
@@ -346,7 +348,7 @@ describe('imagePreflight tests', () => {
         owner: '1FluxOwner',
         timestamp: Date.now(),
         transportEncrypted: { algorithm: 'x', ciphertext: 'y' },
-      }, '203.0.113.5')).to.be.rejectedWith(/non-empty contentHash/);
+      }, CALLER)).to.be.rejectedWith(/non-empty contentHash/);
     });
 
     it('refuses envelope metadata sent without an envelope', async () => {
@@ -355,7 +357,7 @@ describe('imagePreflight tests', () => {
         name: 'myapp',
         owner: '1FluxOwner',
         components: [{ name: 'web', image: 'library/nginx:1.27' }],
-      }, '203.0.113.5')).to.be.rejectedWith(/belong to a sealed preflight/);
+      }, CALLER)).to.be.rejectedWith(/belong to a sealed preflight/);
     });
   });
 
@@ -396,11 +398,11 @@ describe('imagePreflight tests', () => {
 
       await preflight.submitPreflight({
         components: [{ name: 'web', image: 'library/nginx:1.27' }],
-      }, '203.0.113.5');
+      }, CALLER);
 
       await expect(preflight.submitPreflight({
         components: [{ name: 'web', image: 'library/redis:7' }],
-      }, '203.0.113.5')).to.be.rejectedWith(/already in progress/);
+      }, CALLER)).to.be.rejectedWith(/already in progress/);
     });
 
     it('refuses once the queue is full, with a busy kind the handler can map to 503', async () => {
@@ -410,11 +412,11 @@ describe('imagePreflight tests', () => {
         return measurement();
       });
 
-      await preflight.submitPreflight({ components: [{ name: 'a', image: 'library/a:1' }] }, '198.51.100.1');
-      await preflight.submitPreflight({ components: [{ name: 'b', image: 'library/b:1' }] }, '198.51.100.2');
+      await preflight.submitPreflight({ components: [{ name: 'a', image: 'library/a:1' }] }, { fluxId: 'A', sourceIp: '198.51.100.1' });
+      await preflight.submitPreflight({ components: [{ name: 'b', image: 'library/b:1' }] }, { fluxId: 'B', sourceIp: '198.51.100.2' });
 
       const err = await preflight.submitPreflight(
-        { components: [{ name: 'c', image: 'library/c:1' }] }, '198.51.100.3',
+        { components: [{ name: 'c', image: 'library/c:1' }] }, { fluxId: 'C', sourceIp: '198.51.100.3' },
       ).catch((e) => e);
 
       expect(err.kind).to.equal('busy');
@@ -436,15 +438,15 @@ describe('imagePreflight tests', () => {
           { name: 'a', image: 'library/nginx:1.27' },
           { name: 'b', image: 'library/redis:7' },
         ],
-      }, '203.0.113.5');
+      }, CALLER);
 
       // Let the first component land.
-      for (let i = 0; i < 50 && preflight.getPreflight(jobId).detail.completed === 0; i += 1) {
+      for (let i = 0; i < 50 && preflight.getPreflight(jobId, 'F1').detail.completed === 0; i += 1) {
         // eslint-disable-next-line no-await-in-loop
         await new Promise((resolve) => { setImmediate(resolve); });
       }
 
-      const midway = preflight.getPreflight(jobId);
+      const midway = preflight.getPreflight(jobId, 'F1');
       expect(midway.status).to.equal('Running');
       expect(midway.detail.completed).to.equal(1);
       expect(midway.detail.total).to.equal(2);
@@ -456,10 +458,67 @@ describe('imagePreflight tests', () => {
     });
   });
 
+  describe('authentication and ownership', () => {
+    it('refuses a submission with no authenticated FluxID', async () => {
+      const preflight = build();
+      await expect(preflight.submitPreflight({
+        components: [{ name: 'web', image: 'library/nginx:1.27' }],
+      }, { sourceIp: '203.0.113.5' })).to.be.rejectedWith(/authenticated FluxID/);
+    });
+
+    it('hides a preflight from another identity', async () => {
+      // A preflight names the images an owner is considering, so it is readable
+      // only by whoever asked for it - and an unknown job and someone else's give
+      // the same answer, or a jobId becomes a probe.
+      const preflight = build();
+      verifyRepositoryStub.resolves(measurement());
+
+      const { jobId } = await preflight.submitPreflight({
+        components: [{ name: 'web', image: 'mycorp/private:1' }],
+      }, CALLER);
+
+      expect(preflight.getPreflight(jobId, 'SOMEONE_ELSE')).to.equal(null);
+      expect(preflight.getPreflight(jobId, null)).to.equal(null);
+      expect(preflight.getPreflight(jobId, 'F1')).to.not.equal(null);
+    });
+
+    it('separates callers by identity as well as address', async () => {
+      // Neither half is enough alone: FluxIDs are free to mint, and an address is
+      // one request from elsewhere away from looking like a different caller.
+      // A roomier queue than the default fixture, so the per-caller check is what
+      // refuses rather than the node-busy one.
+      const preflight = build({
+        fluxapps: { ...preflightConfig.fluxapps, preflightMaxQueuedJobs: 6 },
+      });
+      verifyRepositoryStub.callsFake(async () => {
+        await new Promise((resolve) => { setTimeout(resolve, 20); });
+        return measurement();
+      });
+
+      await preflight.submitPreflight(
+        { components: [{ name: 'a', image: 'library/a:1' }] },
+        { fluxId: 'F1', sourceIp: '203.0.113.5' },
+      );
+
+      // Same address, different signer - not the same caller.
+      const other = await preflight.submitPreflight(
+        { components: [{ name: 'b', image: 'library/b:1' }] },
+        { fluxId: 'F2', sourceIp: '203.0.113.5' },
+      );
+      expect(other.jobId).to.be.a('string');
+
+      // Same signer AND address - refused.
+      await expect(preflight.submitPreflight(
+        { components: [{ name: 'c', image: 'library/c:1' }] },
+        { fluxId: 'F1', sourceIp: '203.0.113.5' },
+      )).to.be.rejectedWith(/already in progress/);
+    });
+  });
+
   describe('job lookup', () => {
     it('returns null for an unknown job', () => {
       const preflight = build();
-      expect(preflight.getPreflight('11111111-2222-3333-4444-555555555555')).to.equal(null);
+      expect(preflight.getPreflight('op_11111111-2222-3333-4444-555555555555', 'F1')).to.equal(null);
     });
 
     it('throws when no jobId is supplied at all', () => {

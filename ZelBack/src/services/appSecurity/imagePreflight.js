@@ -1,6 +1,7 @@
 const config = require('config');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
+const verificationHelper = require('../verificationHelper');
 const transportHelper = require('../utils/transportHelper');
 const { ImageVerifier } = require('../utils/imageVerifier');
 const { getSpec } = require('../utils/specLibs');
@@ -290,9 +291,18 @@ async function pump() {
   }
 }
 
-function jobsFor(sourceIp) {
-  let count = queue.filter((job) => job.sourceIp === sourceIp).length;
-  if (running && running.sourceIp === sourceIp) count += 1;
+/**
+ * Requests already in flight for a caller. Keyed on the FluxID AND the observed
+ * socket peer, because each is weak alone: FluxIDs are free to mint, and an
+ * address is one `curl` from elsewhere away from being a different caller.
+ */
+function callerKey(fluxId, sourceIp) {
+  return `${fluxId}|${sourceIp ?? ''}`;
+}
+
+function jobsFor(key) {
+  let count = queue.filter((job) => job.callerKey === key).length;
+  if (running && running.callerKey === key) count += 1;
   return count;
 }
 
@@ -303,10 +313,15 @@ function jobsFor(sourceIp) {
  * outright rather than becoming a job that fails a poll later.
  *
  * @param {object} body - parsed request body (cleartext or sealed form)
- * @param {string|null} sourceIp - the OBSERVED socket peer, never a header
+ * @param {object} caller
+ * @param {string} caller.fluxId - the authenticated signer
+ * @param {string|null} caller.sourceIp - the OBSERVED socket peer, never a header
  * @returns {Promise<{jobId: string, statusUrl: string}>}
  */
-async function submitPreflight(body, sourceIp) {
+async function submitPreflight(body, caller = {}) {
+  const { fluxId, sourceIp = null } = caller;
+  if (!fluxId) throw new Error('A preflight requires an authenticated FluxID');
+
   const parsed = serviceHelper.ensureObject(body);
   const components = validateComponents(await resolveComponents(parsed));
 
@@ -315,17 +330,19 @@ async function submitPreflight(body, sourceIp) {
     busy.kind = 'busy';
     throw busy;
   }
-  // One in flight per caller. Identity here is fairness, not defence — the
-  // node-wide serialisation above is what bounds the work — so the observed
-  // socket peer is enough and no header is consulted.
-  if (sourceIp && jobsFor(sourceIp) > 0) {
-    const busy = new Error('A preflight from this address is already in progress');
+  // One in flight per caller. Identity here is fairness and attribution, not
+  // defence: what bounds the node's outbound work is the registry governor,
+  // which paces per provider however many callers there are. This keeps one
+  // caller from queueing the node solid, and puts a name on the traffic.
+  const key = callerKey(fluxId, sourceIp);
+  if (jobsFor(key) > 0) {
+    const busy = new Error('A preflight from this caller is already in progress');
     busy.kind = 'busy';
     throw busy;
   }
 
   const job = {
-    sourceIp,
+    callerKey: key,
     components,
     results: {},
     completed: 0,
@@ -337,6 +354,9 @@ async function submitPreflight(body, sourceIp) {
   // hands the registry a reader for it.
   const handle = jobRegistry.start({
     kind: 'imagepreflight',
+    // Owner-scoped: a preflight names the images an owner is considering, so it
+    // is readable only by the identity that asked for it.
+    owner: fluxId,
     detail: () => preflightDetail(job),
   });
   job.id = handle.jobId;
@@ -366,11 +386,14 @@ function preflightDetail(job) {
 
 /**
  * A job's public view, through the shared operation registry.
- * @returns {object|null} null when the job is unknown or has aged out
+ * @param {string} jobId
+ * @param {string|null} [fluxId] the authenticated caller; a preflight is
+ *   owner-scoped, so another identity gets the same answer as an unknown job
+ * @returns {object|null} null when unknown, aged out, or someone else's
  */
-function getPreflight(jobId) {
+function getPreflight(jobId, fluxId = null) {
   if (typeof jobId !== 'string' || !jobId) throw new Error('Missing jobId');
-  return jobRegistry.get(jobId);
+  return jobRegistry.get(jobId, fluxId);
 }
 
 /**
@@ -379,10 +402,20 @@ function getPreflight(jobId) {
  */
 async function submitPreflightAPI(req, res) {
   try {
+    const authorized = await verificationHelper.verifyPrivilege('user', req);
+    if (!authorized) {
+      return res.status(401).json(messageHelper.errUnauthorizedMessage());
+    }
+    const auth = serviceHelper.ensureObject(req.headers.zelidauth);
+    const fluxId = auth ? auth.zelid : null;
+
+    // The OBSERVED socket peer. Never x-forwarded-for: that is client-controlled,
+    // so keying a limit on it would let a caller reset their own.
     const sourceIp = (req.socket && req.socket.remoteAddress)
       ? req.socket.remoteAddress.replace(/^::ffff:/, '')
       : null;
-    const handle = await submitPreflight(req.body ?? {}, sourceIp);
+
+    const handle = await submitPreflight(req.body ?? {}, { fluxId, sourceIp });
     return operationsController.accepted(res, handle);
   } catch (error) {
     if (error.kind === 'busy') {
