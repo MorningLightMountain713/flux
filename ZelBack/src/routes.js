@@ -37,6 +37,7 @@ const appUninstaller = require('./services/appLifecycle/appUninstaller');
 const appOperations = require('./services/appLifecycle/appOperations');
 const contentSlotService = require('./services/appLifecycle/contentSlotService');
 const imageManager = require('./services/appSecurity/imageManager');
+const imagePreflight = require('./services/appSecurity/imagePreflight');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
@@ -463,6 +464,16 @@ module.exports = (app) => {
   });
   app.post('/apps/verifyappupdatespecifications', (req, res) => { // returns formatted app specifications
     appSubmission.verifyAppUpdateApi(req, res);
+  });
+  // Per-component image facts (sizes, architectures, rootFs fit) before a spec is
+  // registered. Reports where the registration verify above refuses, so an owner
+  // can size rootFsGb from a measurement instead of from a rejection. Measuring is
+  // serial and registry-paced, so it answers 202 + jobId and the client polls.
+  app.post('/apps/imagepreflight', (req, res) => {
+    imagePreflight.submitPreflightAPI(req, res);
+  });
+  app.get('/apps/imagepreflight/status/:jobId', (req, res) => {
+    imagePreflight.getPreflightAPI(req, res);
   });
   app.get('/apps/deploymentinformation', cache('30 seconds'), (req, res) => {
     deploymentInfoService.deploymentInformation(req, res);

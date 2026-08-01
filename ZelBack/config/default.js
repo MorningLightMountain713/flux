@@ -310,6 +310,16 @@ module.exports = {
     enterprisePorts: ['0-1023', 8080, 8081, 8443, 6667],
     upnpBannedPorts: [],
     maxImageSize: 5000000000, // 5000mb
+    // Image preflight. The component count bounds what a single call can ask the
+    // node to fetch from registries and the queue depth bounds how many callers
+    // can commit it at once - together with running one job at a time, that is
+    // what keeps an unauthenticated endpoint from becoming an amplifier. The
+    // envelope window bounds how long a captured sealed request stays replayable;
+    // the retention window is how long a finished job stays pollable.
+    preflightMaxComponents: 10,
+    preflightMaxQueuedJobs: 4,
+    preflightEnvelopeMaxAgeMs: 300000,
+    preflightJobRetentionMs: 600000,
     minimumInstances: 3,
     minimumInstancesV8: 1,
     minimumInstancesV8Block: 2176519, // block height where v8+ apps can have 1 instance - expected around December 19th 2025
