@@ -6,8 +6,8 @@ let response = messageHelper.createErrorMessage();
 
 /**
  * To get benchmarks.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBenchmarks(req, res) {
@@ -20,8 +20,8 @@ async function getBenchmarks(req, res) {
 
 /**
  * To get benchmark status.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBenchStatus(req, res) {
@@ -34,8 +34,8 @@ async function getBenchStatus(req, res) {
 
 /**
  * To start benchmark daemon. Only accessible by admins and flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function startBenchmarkD(req, res) {
@@ -52,8 +52,8 @@ async function startBenchmarkD(req, res) {
 
 /**
  * To stop benchmark daemon. Only accessible by admins and flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function stopBenchmarkD(req, res) {

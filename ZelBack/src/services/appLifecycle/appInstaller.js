@@ -528,8 +528,8 @@ async function installApplication(instantiated, options = {}) {
 
 /**
  * Install application locally - Main API entry point
- * @param {object} req - Request object containing appname in params or query
- * @param {object} res - Response object
+ * @param {import('express').Request} req - Request object containing appname in params or query
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function installApplicationAPI(req, res) {

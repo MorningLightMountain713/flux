@@ -9,7 +9,7 @@ const verificationHelperUtils = require('./verificationHelperUtils');
 /**
  * Verifies a specific privilege based on request headers.
  * @param {string} privilege - 'admin, 'fluxteam', 'adminandfluxteam', 'appownerabove', 'appowner', 'user'
- * @param {object} req
+ * @param {import('express').Request} req
  * @param {string} appName
  *
  * @returns {Promise<boolean>} authorized

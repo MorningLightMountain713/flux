@@ -127,8 +127,8 @@ async function getEnterpriseList() {
 
 /**
  * To get list of enterprise nodes via API request.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getEnterpriseNodesAPI(req, res) {
   try {

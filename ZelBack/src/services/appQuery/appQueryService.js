@@ -13,8 +13,8 @@ const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
 
 /**
  * To list installed apps. Returns apps from local database.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function installedApps(req, res) {
@@ -130,8 +130,8 @@ async function listRunningApps(req, res) {
 
 /**
  * List all apps (both running and installed)
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function listAllApps(req, res) {
@@ -165,8 +165,8 @@ async function listAllApps(req, res) {
 
 /**
  * To get latest application specification API version.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getlatestApplicationSpecificationAPI(req, res) {
   const latestSpec = config.fluxapps.latestAppSpecification || 1;
@@ -178,8 +178,8 @@ async function getlatestApplicationSpecificationAPI(req, res) {
 
 /**
  * To get application original owner.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getApplicationOriginalOwner(req, res) {
   try {
@@ -223,8 +223,8 @@ async function getApplicationOriginalOwner(req, res) {
 
 /**
  * To get apps installing locations.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppsInstallingLocations(req, res) {
   try {
@@ -244,8 +244,8 @@ async function getAppsInstallingLocations(req, res) {
 
 /**
  * To get count of app messages by owner.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppsMessagesCount(req, res) {
   try {

@@ -11,8 +11,8 @@ const appQueryService = require('./appQueryService');
 
 /**
  * Get application usage statistics
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function fluxUsage(req, res) {
@@ -46,8 +46,8 @@ async function fluxUsage(req, res) {
 
 /**
  * Get apps resource usage
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function appsResources(req, res) {

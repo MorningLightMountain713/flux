@@ -10,8 +10,8 @@ let response = messageHelper.createErrorMessage();
 /**
  * To create raw transaction. Transactions, addresses, lock time (defaults to value of 0) and
  * expiry height (defaults to block count + 20) required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function createRawTransaction(req, res) {
@@ -49,8 +49,8 @@ async function createRawTransaction(req, res) {
 /**
  * To create raw transaction after data is processed. Transactions, addresses,
  * lock time (defaults to value of 0) and expiry height (defaults to block count + 20) required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function createRawTransactionPost(req, res) {
@@ -92,8 +92,8 @@ async function createRawTransactionPost(req, res) {
 
 /**
  * To decode raw transaction. Hex string required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function decodeRawTransaction(req, res) {
@@ -112,8 +112,8 @@ async function decodeRawTransaction(req, res) {
 
 /**
  * To decode raw transaction after data is processed. Hex string required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function decodeRawTransactionPost(req, res) {
@@ -138,8 +138,8 @@ async function decodeRawTransactionPost(req, res) {
 
 /**
  * To decode script. Hex required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function decodeScript(req, res) {
@@ -158,8 +158,8 @@ async function decodeScript(req, res) {
 
 /**
  * To decode script after data is processed. Hex required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function decodeScriptPost(req, res) {
@@ -184,8 +184,8 @@ async function decodeScriptPost(req, res) {
 
 /**
  * To fund raw transaction. Hex string required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function fundRawTransaction(req, res) {
@@ -204,8 +204,8 @@ async function fundRawTransaction(req, res) {
 
 /**
  * To fund raw transaction after data is processed. Hex string required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function fundRawTransactionPost(req, res) {
@@ -230,8 +230,8 @@ async function fundRawTransactionPost(req, res) {
 
 /**
  * To get raw transaction. Transaction ID and verbose (defaults to value of 0) required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getRawTransaction(req, res) {
@@ -253,8 +253,8 @@ async function getRawTransaction(req, res) {
 
 /**
  * To send raw transaction. Hex string and whether to allow high fees (defaults to false) required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function sendRawTransaction(req, res) {
@@ -276,8 +276,8 @@ async function sendRawTransaction(req, res) {
 
 /**
  * To send raw transaction after data is processed. Hex string and whether to allow high fees (defaults to false) required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function sendRawTransactionPost(req, res) {
@@ -306,8 +306,8 @@ async function sendRawTransactionPost(req, res) {
 /**
  * To sign raw transaction. Hex string, previous transactions, private keys,
  * signature hash type (defaults to ALL) and branch ID required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function signRawTransaction(req, res) {
@@ -349,8 +349,8 @@ async function signRawTransaction(req, res) {
 /**
  * To sign raw transaction after data is processed. Hex string, previous transactions, private keys,
  *  signature hash type (defaults to all) and branch ID required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function signRawTransactionPost(req, res) {

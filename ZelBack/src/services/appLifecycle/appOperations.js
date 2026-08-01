@@ -431,8 +431,8 @@ async function redeployApplication(appName, options = {}) {
 
 /**
  * Redeploy component via API
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function redeployComponentAPI(req, res) {
   try {
@@ -498,8 +498,8 @@ async function redeployComponentAPI(req, res) {
 
 /**
  * Redeploy application via API
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function redeployApplicationAPI(req, res) {
   try {
@@ -773,8 +773,8 @@ async function promoteApplicationToPrimary(appname, appId) {
 
 /**
  * Append backup task to queue
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 /**
  * The volumes one backup/restore task item addresses.
@@ -937,8 +937,8 @@ async function appendBackupTask(req, res) {
 /**
  * Append a restore task based on the provided parameters.
  * @async
- * @param {object} req - Request object.
- * @param {object} res - Response object.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {boolean} - True if the restore task is successfully appended, otherwise false.
  * @throws {object} - JSON error response if an error occurs.
  */
@@ -1408,8 +1408,8 @@ async function updateAppGlobaly(params) {
 
 /**
  * API endpoint to update application globally
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>} Update result
  */
 /**
@@ -1509,8 +1509,8 @@ let activeContentServes = 0;
  * live mount, which the app may legitimately have mutated. fluxID is the
  * installed app's owner — the same identity the locator was derived from at
  * upload/provision time, so the served artifact matches the requested locator.
- * @param {object} req - Request object (params: appName, locator)
- * @param {object} res - Response object
+ * @param {import('express').Request} req - Request object (params: appName, locator)
+ * @param {import('express').Response} res
  */
 async function contentBlobServeApi(req, res) {
   try {

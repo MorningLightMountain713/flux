@@ -20,8 +20,8 @@ const dockerStatsStreamPromise = util.promisify(dockerService.dockerContainerSta
 
 /**
  * Get top processes running in an application container
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appTop(req, res) {
@@ -57,8 +57,8 @@ async function appTop(req, res) {
 
 /**
  * Get application logs
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appLog(req, res) {
@@ -98,8 +98,8 @@ async function appLog(req, res) {
 
 /**
  * Stream application logs
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appLogStream(req, res) {
@@ -147,8 +147,8 @@ async function appLogStream(req, res) {
 
 /**
  * Poll application logs with filtering
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appLogPolling(req, res) {
@@ -213,8 +213,8 @@ async function appLogPolling(req, res) {
 
 /**
  * Inspect application container
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appInspect(req, res) {
@@ -250,8 +250,8 @@ async function appInspect(req, res) {
 
 /**
  * Get application statistics
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appStats(req, res) {
@@ -291,8 +291,8 @@ async function appStats(req, res) {
 
 /**
  * Get application monitoring data
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @param {object} appsMonitored - Apps monitoring data
  * @returns {Promise<void>}
  */
@@ -350,8 +350,8 @@ async function appMonitor(req, res, appsMonitored) {
 
 /**
  * Stream application monitoring data
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appMonitorStream(req, res) {
@@ -509,8 +509,8 @@ function stopAppMonitoring(appName, deleteData, appsMonitored) {
 
 /**
  * Execute command in application container
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appExec(req, res) {
@@ -578,8 +578,8 @@ async function appExec(req, res) {
 
 /**
  * Get application changes/diff
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appChanges(req, res) {
@@ -615,8 +615,8 @@ async function appChanges(req, res) {
 
 /**
  * List Docker images used by apps
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} List of Docker images
  */
 async function listAppsImages(req, res) {
@@ -637,8 +637,8 @@ async function listAppsImages(req, res) {
 
 /**
  * Get Apps DOS (Denial of Service) State
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} DOS state information
  */
 function getAppsDOSState(req, res) {

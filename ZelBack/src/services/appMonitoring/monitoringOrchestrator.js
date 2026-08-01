@@ -81,8 +81,8 @@ async function stopMonitoringOfApps(appSpecsToMonitor, deleteData = false, appsM
 
 /**
  * Start monitoring API endpoint
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @param {object} appsMonitored - Apps monitored structure from appsService
  * @param {Function} installedAppsFn - Function to get installed apps
  * @returns {object} Message.
@@ -141,8 +141,8 @@ async function startAppMonitoringAPI(req, res, appsMonitored, installedAppsFn) {
 
 /**
  * Stop monitoring API endpoint
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @param {object} appsMonitored - Apps monitored structure from appsService
  * @param {Function} installedAppsFn - Function to get installed apps
  * @returns {object} Message.
@@ -214,8 +214,8 @@ async function stopAppMonitoringAPI(req, res, appsMonitored, installedAppsFn) {
 
 /**
  * Enhanced appMonitor function that uses the inspector module but adds the monitored data
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @param {object} appsMonitored - Apps monitored structure from appsService
  * @returns {object} Monitoring data.
  */

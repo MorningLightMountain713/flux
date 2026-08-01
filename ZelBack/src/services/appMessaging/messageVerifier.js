@@ -70,8 +70,8 @@ async function requestAppsMessage(apps, incoming) {
 
 /**
  * Request app message via API
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function requestAppMessageAPI(req, res) {
@@ -133,8 +133,8 @@ async function appHashHasMessageNotFound(hash) {
 
 /**
  * Get temporary app messages via API
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppsTemporaryMessages(req, res) {
   try {
@@ -164,8 +164,8 @@ async function getAppsTemporaryMessages(req, res) {
 
 /**
  * Get permanent app messages via API
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppsPermanentMessages(req, res) {
   try {
@@ -206,8 +206,8 @@ async function getAppsPermanentMessages(req, res) {
  * Get ingress attestations for an app-message hash. fluxteam-only: this exposes
  * the source address a registration/update was submitted from, which must never
  * reach the public API.
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getIngressAttestations(req, res) {
   try {
@@ -692,8 +692,8 @@ async function continuousFluxAppHashesCheck(force = false) {
 
 /**
  * API endpoint to manually trigger app hashes check
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function triggerAppHashesCheckAPI(req, res) {

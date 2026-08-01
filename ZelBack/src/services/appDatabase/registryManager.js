@@ -74,7 +74,7 @@ async function storeGlobalSpec(specDoc, options) {
 /**
  * Get all app hashes from the blockchain
  * @param {object} _req - Request object (unused)
- * @param {object} res - Response object
+ * @param {import('express').Response} res
  * @returns {Promise<object>} List of app hashes
  */
 async function getAppHashes(_req, res) {
@@ -201,8 +201,8 @@ async function appInstallingErrorsLocation(appname) {
 
 /**
  * Get app installing errors locations API endpoint
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppsInstallingErrorsLocations(req, res) {
   try {
@@ -222,8 +222,8 @@ async function getAppsInstallingErrorsLocations(req, res) {
 
 /**
  * Get a specific app's installing error locations API endpoint
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppInstallingErrorsLocation(req, res) {
   try {
@@ -396,7 +396,7 @@ async function getApplicationOwner(appName) {
 /**
  * Get all app locations via API
  * @param {object} _req - Request object (unused)
- * @param {object} res - Response object
+ * @param {import('express').Response} res
  */
 async function getAppsLocations(_req, res) {
   try {
@@ -416,8 +416,8 @@ async function getAppsLocations(_req, res) {
 
 /**
  * Get specific app location via API
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppsLocation(req, res) {
   try {
@@ -442,8 +442,8 @@ async function getAppsLocation(req, res) {
 
 /**
  * Get specific app installing location via API
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppInstallingLocation(req, res) {
   try {
@@ -680,8 +680,8 @@ async function convertApplicationSpecification(appname, opts = {}) {
 
 /**
  * API endpoint: convert an existing app's spec to v9 for owner review.
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function appConvertApi(req, res) {
   try {
@@ -727,8 +727,8 @@ async function appConvertApi(req, res) {
 
 /**
  * Get application owner via API
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getApplicationOwnerAPI(req, res) {
   try {
@@ -757,8 +757,8 @@ async function getApplicationOwnerAPI(req, res) {
 
 /**
  * Get global apps specifications via API
- * @param {object} req - Request object with optional params/query for hash, owner, appname
- * @param {object} res - Response object
+ * @param {import('express').Request} req - Request object with optional params/query for hash, owner, appname
+ * @param {import('express').Response} res
  */
 async function getGlobalAppsSpecifications(req, res) {
   try {
@@ -796,7 +796,7 @@ async function getGlobalAppsSpecifications(req, res) {
 /**
  * Get available apps (both global and local)
  * @param {object} _req - Request object (unused)
- * @param {object} res - Response object
+ * @param {import('express').Response} res
  */
 async function availableApps(_req, res) {
   try {
@@ -942,7 +942,7 @@ async function getRunningAppIpList(ip) {
 /**
  * Get registration information for Flux apps
  * @param {object} _req - Request object (unused)
- * @param {object} res - Response object
+ * @param {import('express').Response} res
  * @returns {void} Registration information
  */
 function registrationInformation(_req, res) {
@@ -1056,8 +1056,8 @@ async function reconstructAppMessagesHashCollection() {
 
 /**
  * API endpoint to reconstruct app messages hash collection
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Reconstruction result message
  */
 async function reconstructAppMessagesHashCollectionAPI(req, res) {
@@ -1091,8 +1091,8 @@ async function reconstructAppMessagesHashCollectionAPI(req, res) {
  * current and there is nothing to reindex. The route and its response envelope are
  * kept so existing operator tooling neither breaks nor has to special-case a
  * version, and the privilege check still applies.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function reindexGlobalAppsLocationAPI(req, res) {
   try {
@@ -1116,8 +1116,8 @@ async function reindexGlobalAppsLocationAPI(req, res) {
 
 /**
  * To reindex global apps information via API. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function reindexGlobalAppsInformationAPI(req, res) {
   try {
@@ -1183,8 +1183,8 @@ async function rescanGlobalAppsInformation(height = 0, removeLastInformation = f
 
 /**
  * To rescan global apps information via API. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function rescanGlobalAppsInformationAPI(req, res) {
   try {

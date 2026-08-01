@@ -125,8 +125,8 @@ function enableStreaming() {
 
 /**
  * To show the directory on the node machine where FluxOS files are stored.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 async function fluxBackendFolder(req, res) {
@@ -142,8 +142,8 @@ async function fluxBackendFolder(req, res) {
 
 /**
  * To show the current short commit id.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 async function getCurrentCommitId(req, res) {
@@ -175,8 +175,8 @@ async function getCurrentCommitId(req, res) {
 
 /**
  * To show the currently selected branch.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 async function getCurrentBranch(req, res) {
@@ -236,8 +236,8 @@ async function checkoutBranch(branch, options = {}) {
 
 /**
  * To switch to master branch of FluxOS. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -265,8 +265,8 @@ async function enterMaster(req, res) {
 
 /**
  * To switch to development branch of FluxOS. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -293,8 +293,8 @@ async function enterDevelopment(req, res) {
 
 /**
  * To update FluxOS version (executes the command `npm run updateflux` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Proimse<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -320,8 +320,8 @@ async function updateFlux(req, res) {
 
 /**
  * To soft update FluxOS version (executes the command `npm run softupdate` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -349,8 +349,8 @@ async function softUpdateFlux(req, res) {
 
 /**
  * To install the soft update of FluxOS (executes the command `npm run softupdateinstall` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -378,8 +378,8 @@ async function softUpdateFluxInstall(req, res) {
 
 /**
  * To hard update FluxOS version (executes the command `npm run hardupdateflux` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -405,8 +405,8 @@ async function hardUpdateFlux(req, res) {
 
 /**
  * To rebuild FluxOS (executes the command `npm run homebuild` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -432,8 +432,8 @@ async function rebuildHome(req, res) {
 
 /**
  * To update Flux daemon version (executes the command `bash updateDaemon.sh` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -460,8 +460,8 @@ async function updateDaemon(req, res) {
 
 /**
  * To update Flux benchmark version (executes the command `bash updateBenchmark.sh` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -488,8 +488,8 @@ async function updateBenchmark(req, res) {
 
 /**
  * To start Flux benchmark (executes the command `fluxbenchd -daemon` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -518,8 +518,8 @@ async function startBenchmark(req, res) {
 
 /**
  * To restart Flux benchmark (executes the command `bash restartBenchmark.sh` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -546,8 +546,8 @@ async function restartBenchmark(req, res) {
 
 /**
  * To start Flux daemon (executes the command `fluxd` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -576,8 +576,8 @@ async function startDaemon(req, res) {
 
 /**
  * To restart Flux daemon (executes the command `bash restartDaemon.sh` on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -604,8 +604,8 @@ async function restartDaemon(req, res) {
 
 /**
  * To reindex Flux daemon database (executes the command `bash reindexDaemon.sh` on the node machine). Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Proise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
@@ -632,8 +632,8 @@ async function reindexDaemon(req, res) {
 
 /**
  * To show FluxOS version.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function getFluxVersion(req, res) {
@@ -644,8 +644,8 @@ function getFluxVersion(req, res) {
 
 /**
  * To show NodeJS version.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function getNodeJsVersions(req, res) {
@@ -656,8 +656,8 @@ function getNodeJsVersions(req, res) {
 
 /**
  * To show FluxOS IP address.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 async function getFluxIP(req, res) {
@@ -668,8 +668,8 @@ async function getFluxIP(req, res) {
 
 /**
  * To show the current user's Flux ID that is being used to access FluxOS.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function getFluxZelID(req, res) {
@@ -681,8 +681,8 @@ function getFluxZelID(req, res) {
 
 /**
  * Returns Flux Team and Support Team Flux IDs.
- * @param {object} req Request object
- * @param {object} res Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} JSON response with team IDs
  */
 function getFluxIds(req, res) {
@@ -697,8 +697,8 @@ function getFluxIds(req, res) {
 
 /**
  * To show the if FluxNode is running under a known static ip ISP/Org.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function isStaticIPapi(req, res) {
@@ -709,8 +709,8 @@ function isStaticIPapi(req, res) {
 
 /**
  * Returns FluxNode IP information/geolocation.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getFluxGeolocation(req, res) {
@@ -721,8 +721,8 @@ async function getFluxGeolocation(req, res) {
 
 /**
  * To show the node pgp public key
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getFluxPGPidentity(req, res) {
@@ -733,8 +733,8 @@ async function getFluxPGPidentity(req, res) {
 
 /**
  * To show the current user's Router IP setup in configuration file that is being used with FluxOS.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function getRouterIP(req, res) {
@@ -746,8 +746,8 @@ function getRouterIP(req, res) {
 
 /**
  * To show the current user's Api Port setup in configuration file that is being used with FluxOS.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function getAPIPort(req, res) {
@@ -766,8 +766,8 @@ function getAPIPort(req, res) {
  * enterprise nodes, and the route caches success for an hour, so one poll landing in that
  * window would publish it long after the node had the real map. The route's cache toggle
  * keeps this response out of the cache; the next poll re-asks.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function getEnterpriseAppOwners(req, res) {
@@ -782,8 +782,8 @@ function getEnterpriseAppOwners(req, res) {
 
 /**
  * To marketplace URL to show based on current development flag setup in configuration file that is being used with FluxOS.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function getMarketplaceURL(req, res) {
@@ -799,8 +799,8 @@ function getMarketplaceURL(req, res) {
 
 /**
  * To download Flux daemon debug logs. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Debug.log file for Flux daemon.
  */
 async function daemonDebug(req, res) {
@@ -819,8 +819,8 @@ async function daemonDebug(req, res) {
 
 /**
  * To download Flux benchmark debug logs. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Debug.log file for Flux benchmark.
  */
 async function benchmarkDebug(req, res) {
@@ -844,8 +844,8 @@ async function benchmarkDebug(req, res) {
 
 /**
  * To get Flux daemon tail debug logs (executes the command `tail -n 100 debug.log` in the relevent daemon directory on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function tailDaemonDebug(req, res) {
   const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
@@ -875,8 +875,8 @@ async function tailDaemonDebug(req, res) {
 
 /**
  * To get Flux benchmark tail debug logs (executes the command `tail -n 100 debug.log` in the relevent benchmark directory on the node machine). Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function tailBenchmarkDebug(req, res) {
   const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
@@ -1035,8 +1035,8 @@ async function readFluxLog(level, { tail = null, since = null, grep = null } = {
 /**
  * To download a specified FluxOS log level as a .log file, honoring the
  * optional lines/since/grep query filters.
- * @param {object} req Request (may be undefined for legacy callers).
- * @param {object} res Response.
+ * @param {import('express').Request} req Request (may be undefined for legacy callers).
+ * @param {import('express').Response} res
  * @param {string} filelog Log level (error | warn | info | debug).
  * @returns {Promise<void>}
  */
@@ -1048,8 +1048,8 @@ async function fluxLog(req, res, filelog) {
 
 /**
  * To download FluxOS error log. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function fluxErrorLog(req, res) {
@@ -1068,8 +1068,8 @@ async function fluxErrorLog(req, res) {
 
 /**
  * To download FluxOS warn log. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function fluxWarnLog(req, res) {
@@ -1088,8 +1088,8 @@ async function fluxWarnLog(req, res) {
 
 /**
  * To download FluxOS info log. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function fluxInfoLog(req, res) {
@@ -1108,8 +1108,8 @@ async function fluxInfoLog(req, res) {
 
 /**
  * To download FluxOS debug log. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function fluxDebugLog(req, res) {
@@ -1129,8 +1129,8 @@ async function fluxDebugLog(req, res) {
 /**
  * To get the last 100 lines of a FluxOS log level. Only accessible by admins
  * and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @param {Promise<string>} logfile Log level (error | warn | info | debug).
  */
 async function tailFluxLog(req, res, logfile) {
@@ -1153,8 +1153,8 @@ async function tailFluxLog(req, res, logfile) {
 
 /**
  * To get FluxOS tail error logs. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function tailFluxErrorLog(req, res) {
   try {
@@ -1172,8 +1172,8 @@ async function tailFluxErrorLog(req, res) {
 
 /**
  * To get FluxOS tail warn logs. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function tailFluxWarnLog(req, res) {
   try {
@@ -1191,8 +1191,8 @@ async function tailFluxWarnLog(req, res) {
 
 /**
  * To get FluxOS tail info logs. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function tailFluxInfoLog(req, res) {
   try {
@@ -1210,8 +1210,8 @@ async function tailFluxInfoLog(req, res) {
 
 /**
  * To get FluxOS tail debug logs. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function tailFluxDebugLog(req, res) {
   try {
@@ -1229,8 +1229,8 @@ async function tailFluxDebugLog(req, res) {
 
 /**
  * To get FluxOS time zone.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 function getFluxTimezone(req, res) {
@@ -1295,8 +1295,8 @@ async function getOSDistributionInfo() {
 
 /**
  * To get info (version, status etc.) for daemon, node, benchmark, FluxOS and apps.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<object>} Message.
  */
 async function getFluxInfo(req, res) {
@@ -1514,8 +1514,8 @@ const adjustRouterIP = withdrawnSetting(
 
 /**
  * To get the tier of the FluxNode (Cumulus, Nimbus or Stratus). Checks the node tier against the node collateral.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getNodeTier(req, res) {
   try {
@@ -1548,8 +1548,8 @@ async function getNodeTier(req, res) {
 
 /**
  * Restart FluxOS via nodemon (executes the command `touch ` on package.json).
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function restartFluxOS(req, res) {
   const authorized = await verificationHelper.verifyPrivilege('admin', req);
@@ -1953,8 +1953,8 @@ async function streamChain(req, res) {
 
 /**
  * Returns information if node is running ArcaneOS
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function isArcaneOs(req, res) {
   const response = messageHelper.createDataMessage(globalState.isArcane());

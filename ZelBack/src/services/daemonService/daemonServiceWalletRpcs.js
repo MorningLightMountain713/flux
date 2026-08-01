@@ -8,8 +8,8 @@ let response = messageHelper.createErrorMessage();
 // == Wallet == Admin Privilage. Benchmark fluxteam privilage
 /**
  * To add a multi-signature address (requires multiple keys to authorize a transaction). Number of addresses/keys and keys object required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function addMultiSigAddress(req, res) {
@@ -35,8 +35,8 @@ async function addMultiSigAddress(req, res) {
 
 /**
  * To add a multi-signature address (requires multiple keys to authorize a transaction) after data is processed. Number of addresses/keys and keys object required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function addMultiSigAddressPost(req, res) {
@@ -68,8 +68,8 @@ async function addMultiSigAddressPost(req, res) {
 
 /**
  * To backup wallet. Backup destination/directory required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function backupWallet(req, res) {
@@ -92,8 +92,8 @@ async function backupWallet(req, res) {
 
 /**
  * To dump private key. Address required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function dumpPrivKey(req, res) {
@@ -116,8 +116,8 @@ async function dumpPrivKey(req, res) {
 
 /**
  * To get balance. Min conf (defaults to value of 1) and whether to include watch only (defaults to false) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBalance(req, res) {
@@ -140,8 +140,8 @@ async function getBalance(req, res) {
 
 /**
  * To get a new address. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getNewAddress(req, res) {
@@ -158,8 +158,8 @@ async function getNewAddress(req, res) {
 
 /**
  * To get raw change address. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getRawChangeAddress(req, res) {
@@ -176,8 +176,8 @@ async function getRawChangeAddress(req, res) {
 
 /**
  * To get received by address. Address and min conf (defaults to value of 1) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getReceivedByAddress(req, res) {
@@ -202,8 +202,8 @@ async function getReceivedByAddress(req, res) {
 
 /**
  * To get a transaction. Transaction ID and whether to include watch only (defaults to false) required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getTransaction(req, res) {
@@ -224,8 +224,8 @@ async function getTransaction(req, res) {
 
 /**
  * To get unconfirmed balance. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getUnconfirmedBalance(req, res) {
@@ -242,8 +242,8 @@ async function getUnconfirmedBalance(req, res) {
 
 /**
  * To get wallet info. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getWalletInfo(req, res) {
@@ -260,8 +260,8 @@ async function getWalletInfo(req, res) {
 
 /**
  * To import address. Address, label and whether to rescan (defaults to true) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function importAddress(req, res) {
@@ -288,8 +288,8 @@ async function importAddress(req, res) {
 
 /**
  * To import private key. Private key, label and whether to rescan (defaults to true) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function importPrivKey(req, res) {
@@ -315,8 +315,8 @@ async function importPrivKey(req, res) {
 
 /**
  * To import wallet. File name required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function importWallet(req, res) {
@@ -339,8 +339,8 @@ async function importWallet(req, res) {
 
 /**
  * To refill key pool. New size (defaults to value of 100) required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function keyPoolRefill(req, res) {
@@ -361,8 +361,8 @@ async function keyPoolRefill(req, res) {
 
 /**
  * To list address groupings. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function listAddressGroupings(req, res) {
@@ -379,8 +379,8 @@ async function listAddressGroupings(req, res) {
 
 /**
  * To list lock unspent. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function listLockUnspent(req, res) {
@@ -397,8 +397,8 @@ async function listLockUnspent(req, res) {
 
 /**
  * To rescan the blockchain. Start height (defaults to value of 0) required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function rescanBlockchain(req, res) {
@@ -419,8 +419,8 @@ async function rescanBlockchain(req, res) {
 
 /**
  * To list received transactions by address. Min conf (defaults to value of 1), whether to include empty (defaults to false) and whether to include watch only (defaults to false) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function listReceivedByAddress(req, res) {
@@ -445,8 +445,8 @@ async function listReceivedByAddress(req, res) {
 
 /**
  * To list since a specified block. Block hash, target confirmations (defaults to value of 1) and whether to include watch only (defaults to false) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function listSinceBlock(req, res) {
@@ -470,8 +470,8 @@ async function listSinceBlock(req, res) {
 
 /**
  * To list transactions. Account, count (defaults to value of 10), from (defaults to value of 0) and whether to include watch only (defaults to false) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function listTransactions(req, res) {
@@ -497,8 +497,8 @@ async function listTransactions(req, res) {
 
 /**
  * To list unspent. Min conf (defaults to value of 1), max conf (defaults to value of 9999999) and address required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function listUnspent(req, res) {
@@ -527,8 +527,8 @@ async function listUnspent(req, res) {
 
 /**
  * To lock unspent. Whether unlocked and transactions required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function lockUnspent(req, res) {
@@ -555,8 +555,8 @@ async function lockUnspent(req, res) {
 
 /**
  * To send transaction from address. Sender account, recipient address, amount, min conf (defaults to value of 1), comment and comment for recipient required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function sendFrom(req, res) {
@@ -589,8 +589,8 @@ async function sendFrom(req, res) {
 
 /**
  * To send transaction from address after data is processed. Sender account, recipient address, amount, min conf (defaults to value of 1), comment and comment for recipient required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function sendFromPost(req, res) {
@@ -629,8 +629,8 @@ async function sendFromPost(req, res) {
 
 /**
  * To send multiple transactions. Sender account, amounts, min conf (defaults to value of 1), comment and fee to substract from amount required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function sendMany(req, res) {
@@ -668,8 +668,8 @@ async function sendMany(req, res) {
 
 /**
  * To send multiple transactions after data is processed. Sender account, amounts, min conf (defaults to value of 1), comment and fee to substract from amount required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function sendManyPost(req, res) {
@@ -712,8 +712,8 @@ async function sendManyPost(req, res) {
 
 /**
  * To send transaction to address. Recipient address, amount, comment, comment for recipient and fee to substract from amount (defaults to false) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function sendToAddress(req, res) {
@@ -745,8 +745,8 @@ async function sendToAddress(req, res) {
 
 /**
  * To send transaction to address after data is processed. Recipient address, amount, comment, comment for recipient and fee to substract from amount (defaults to false) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function sendToAddressPost(req, res) {
@@ -785,8 +785,8 @@ async function sendToAddressPost(req, res) {
 
 /**
  * To set transaction fee. Amount required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function setTxFee(req, res) {
@@ -811,8 +811,8 @@ async function setTxFee(req, res) {
 
 /**
  * To sign message. Address and message required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function signMessage(req, res) {
@@ -837,8 +837,8 @@ async function signMessage(req, res) {
 
 /**
  * To sign message after data is processed. Address and message required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function signMessagePost(req, res) {
@@ -870,8 +870,8 @@ async function signMessagePost(req, res) {
 
 /**
  * To create confirmation transaction.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function createConfirmationTransaction(req, res) {

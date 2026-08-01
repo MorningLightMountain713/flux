@@ -102,8 +102,8 @@ async function confirmNodeTierHardware() {
 
 /**
  * To return a JSON response with the user's login phrase.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
 let firstLoginPhraseExecution = true;
@@ -194,8 +194,8 @@ async function loginPhrase(req, res) {
 
 /**
  * To return a JSON response with the user's emergency login phrase.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 // loginPhrase without status checks
 async function emergencyPhrase(req, res) {
@@ -225,8 +225,8 @@ async function emergencyPhrase(req, res) {
 
 /**
  * To return a JSON response to show the user if they have logged in successfully or not. In order to successfully log in, a series of checks are performed on the Flux ID and signature.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function verifyLogin(req, res) {
   // Phase 2 - check that request is valid
@@ -360,8 +360,8 @@ async function verifyLogin(req, res) {
 
 /**
  * To return a JSON response with a new signature for the user. A series of checks are performed on the Flux ID and signature.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function provideSign(req, res) {
   let body = '';
@@ -433,8 +433,8 @@ async function provideSign(req, res) {
 
 /**
  * To return a JSON response with a list of active login phrases. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function activeLoginPhrases(req, res) {
   try {
@@ -466,8 +466,8 @@ async function activeLoginPhrases(req, res) {
 
 /**
  * To return a JSON response with a list of logged in users. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function loggedUsers(req, res) {
   try {
@@ -498,8 +498,8 @@ async function loggedUsers(req, res) {
 
 /**
  * To return a JSON response with a list of logged sessions. Only accessible by the Flux ID owner.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function loggedSessions(req, res) {
   try {
@@ -533,8 +533,8 @@ async function loggedSessions(req, res) {
 
 /**
  * To return a JSON response to show the user if they have logged out of the current session successfully or not. Only accessible by the Flux ID owner.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function logoutCurrentSession(req, res) {
   try {
@@ -563,8 +563,8 @@ async function logoutCurrentSession(req, res) {
 
 /**
  * To return a JSON response to show the user if they have logged out of a specific session successfully or not. Only accessible by the Flux ID owner.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function logoutSpecificSession(req, res) {
   let body = '';
@@ -603,8 +603,8 @@ async function logoutSpecificSession(req, res) {
 
 /**
  * To return a JSON response to show the user if they have logged out from all sessions successfully or not. Only accessible by the Flux ID owner.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function logoutAllSessions(req, res) {
   try {
@@ -632,8 +632,8 @@ async function logoutAllSessions(req, res) {
 
 /**
  * To return a JSON response to show the admin user if they have logged out all users successfully or not. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function logoutAllUsers(req, res) {
   try {
@@ -814,8 +814,8 @@ async function wsRespondSignature(ws, message) {
 
 /**
  * To check the privilege level a user (Flux ID). The privilege level is either admin, flux team or user.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function checkLoggedUser(req, res) {
   let body = '';

@@ -7,8 +7,8 @@ let response = messageHelper.createErrorMessage();
 
 /**
  * To export key. Address required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zExportKey(req, res) {
@@ -32,8 +32,8 @@ async function zExportKey(req, res) {
 
 /**
  * To export viewing key. Address required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zExportViewingKey(req, res) {
@@ -57,8 +57,8 @@ async function zExportViewingKey(req, res) {
 
 /**
  * To get account balance. Address and min conf (defaults to value of 1) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zGetBalance(req, res) {
@@ -84,8 +84,8 @@ async function zGetBalance(req, res) {
 
 /**
  * To get migration status. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zGetMigrationStatus(req, res) {
@@ -103,8 +103,8 @@ async function zGetMigrationStatus(req, res) {
 
 /**
  * To get new address. Type (defaults to sapling) required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zGetNewAddress(req, res) {
@@ -125,8 +125,8 @@ async function zGetNewAddress(req, res) {
 
 /**
  * To get operation result. Operation ID required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zGetOperationResult(req, res) {
@@ -148,8 +148,8 @@ async function zGetOperationResult(req, res) {
 
 /**
  * To get operation status. Operation ID required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zGetOperationStatus(req, res) {
@@ -171,8 +171,8 @@ async function zGetOperationStatus(req, res) {
 
 /**
  * To get total balance. Min conf (defaults to value of 1) and whether to include watch only (defaults to false) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zGetTotalBalance(req, res) {
@@ -196,8 +196,8 @@ async function zGetTotalBalance(req, res) {
 
 /**
  * To import key. Key, rescan configuration (defaults to when key is new) and start height (defaults to value of 0) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zImportKey(req, res) {
@@ -224,8 +224,8 @@ async function zImportKey(req, res) {
 
 /**
  * To import viewing key. Viewing key, rescan configuration (defaults to when key is new) and start height (defaults to value of 0) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zImportViewingKey(req, res) {
@@ -252,8 +252,8 @@ async function zImportViewingKey(req, res) {
 
 /**
  * To import wallet. File name required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zImportWallet(req, res) {
@@ -277,8 +277,8 @@ async function zImportWallet(req, res) {
 
 /**
  * To list addresses. Whether to include watch only (defaults to false) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zListAddresses(req, res) {
@@ -300,8 +300,8 @@ async function zListAddresses(req, res) {
 
 /**
  * To list Operation IDs. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zListOperationIds(req, res) {
@@ -319,8 +319,8 @@ async function zListOperationIds(req, res) {
 
 /**
  * To list received by address. Address and min conf (defaults to value of 1) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zListReceivedByAddress(req, res) {
@@ -346,8 +346,8 @@ async function zListReceivedByAddress(req, res) {
 
 /**
  * To list unspent. Min conf (defaults to value of 1), max conf (defaults to value of 9999999), whether to include watch only (defaults to false) and addresses required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zListUnspent(req, res) {
@@ -381,8 +381,8 @@ async function zListUnspent(req, res) {
 
 /**
  * To merge to address. Sender address, recipient address, fee (defaults to a value of 0.0001), transparent limit (defaults to a value of 50), shielded limit (defaults to a value of 20) and memo required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zMergeToAddress(req, res) {
@@ -416,8 +416,8 @@ async function zMergeToAddress(req, res) {
 
 /**
  * To send multiple transactions. Sender account, amounts, min conf (defaults to value of 1) and fee (defaults to a value of 0.0001) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zSendMany(req, res) {
@@ -448,8 +448,8 @@ async function zSendMany(req, res) {
 
 /**
  * To send multiple transactions after data is processed. Sender account, amounts, min conf (defaults to value of 1) and fee (defaults to a value of 0.0001) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zSendManyPost(req, res) {
@@ -484,8 +484,8 @@ async function zSendManyPost(req, res) {
 
 /**
  * To set migration. Enabled configuration required as parameter for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zSetMigration(req, res) {
@@ -509,8 +509,8 @@ async function zSetMigration(req, res) {
 
 /**
  * To shield coin base. Sender address, recipient address, fee (defaults to a value of 0.0001) and limit (defaults to a value of 50) required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zShieldCoinBase(req, res) {
@@ -540,8 +540,8 @@ async function zShieldCoinBase(req, res) {
 
 /**
  * To perform benchmark. Benchmark type and sample count required as parameters for RPC call. Only accessible by admins and flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zcBenchmark(req, res) {
@@ -566,8 +566,8 @@ async function zcBenchmark(req, res) {
 
 /**
  * To perform a raw join split. Raw transaction, inputs, outputs, old vpub and new vpub required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zcRawJoinSplit(req, res) {
@@ -598,8 +598,8 @@ async function zcRawJoinSplit(req, res) {
 
 /**
  * To perform a raw join split after data is processed. Raw transaction, inputs, outputs, old vpub and new vpub required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zcRawJoinSplitPost(req, res) {
@@ -632,8 +632,8 @@ async function zcRawJoinSplitPost(req, res) {
 
 /**
  * To generate a raw key. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zcRawKeygen(req, res) {
@@ -650,8 +650,8 @@ async function zcRawKeygen(req, res) {
 
 /**
  * To receive raw transaction. Secret key and encrypted note required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zcRawReceive(req, res) {
@@ -675,8 +675,8 @@ async function zcRawReceive(req, res) {
 
 /**
  * To receive raw transaction after data is processed. Secret key and encrypted note required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zcRawReceivePost(req, res) {
@@ -707,8 +707,8 @@ async function zcRawReceivePost(req, res) {
 
 /**
  * To perform a sample join split. Only accessible by admins and flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function zcSampleJoinSplit(req, res) {

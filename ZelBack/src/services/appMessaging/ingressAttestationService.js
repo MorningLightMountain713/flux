@@ -108,7 +108,7 @@ async function persist(record) {
  * Record and gossip where a register/update entered the network. Best-effort:
  * attribution must never fail the submission, so all errors are swallowed.
  * @param {string} hash - the app-message hash
- * @param {object} req - the ingress HTTP request
+ * @param {import('express').Request} req - the ingress HTTP request
  */
 async function emit(hash, req) {
   try {

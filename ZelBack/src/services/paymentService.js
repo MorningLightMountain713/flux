@@ -17,8 +17,8 @@ const WS_MAX_POLLING_TIME = 65 * 60 * 1000; // 65 minutes (slightly longer than 
 
 /**
  * To return a JSON response with a payment request ID.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function paymentRequest(req, res) {
@@ -51,8 +51,8 @@ async function paymentRequest(req, res) {
 
 /**
  * To receive and verify payment callback from ZelCore.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function verifyPayment(req, res) {
   let body = '';

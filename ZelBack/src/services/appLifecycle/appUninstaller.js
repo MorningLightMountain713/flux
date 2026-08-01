@@ -1243,8 +1243,8 @@ async function recoverOwedTeardowns() {
 
 /**
  * API endpoint for removing application locally
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function removeAppLocallyApi(req, res) {

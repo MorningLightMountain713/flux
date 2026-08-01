@@ -177,8 +177,8 @@ async function fluxShareSharedFiles() {
 
 /**
  * To get shared files. Only accessible by admins.
- * @param {object} req Requet.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareGetSharedFiles(req, res) {
   try {
@@ -209,8 +209,8 @@ async function fluxShareGetSharedFiles(req, res) {
 
 /**
  * To unshare a file. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareUnshareFile(req, res) {
   try {
@@ -244,8 +244,8 @@ async function fluxShareUnshareFile(req, res) {
 
 /**
  * To share a file. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareShareFile(req, res) {
   try {
@@ -279,8 +279,8 @@ async function fluxShareShareFile(req, res) {
 
 /**
  * To download a zip folder for a specified directory. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @param {boolean} authorized False until verified as an admin.
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
@@ -345,8 +345,8 @@ async function fluxShareDownloadFolder(req, res, authorized = false) {
 
 /**
  * To download a specified file. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function fluxShareDownloadFile(req, res) {
@@ -432,8 +432,8 @@ async function fluxShareDownloadFile(req, res) {
 
 /**
  * To rename a file or folder. Oldpath is relative path to default fluxshare directory; newname is just a new name of folder/file. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareRename(req, res) {
   try {
@@ -493,8 +493,8 @@ async function fluxShareRename(req, res) {
 
 /**
  * To remove a specified shared file. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareRemoveFile(req, res) {
   try {
@@ -539,8 +539,8 @@ async function fluxShareRemoveFile(req, res) {
 
 /**
  * To remove a specified shared folder. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareRemoveFolder(req, res) {
   try {
@@ -581,8 +581,8 @@ async function fluxShareRemoveFolder(req, res) {
 
 /**
  * To get a list of files with their details for all files within a shared folder. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareGetFolder(req, res) {
   try {
@@ -653,8 +653,8 @@ async function fluxShareGetFolder(req, res) {
 
 /**
  * To create a folder. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareCreateFolder(req, res) {
   try {
@@ -684,8 +684,8 @@ async function fluxShareCreateFolder(req, res) {
 
 /**
  * To check if a file exists. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareFileExists(req, res) {
   try {
@@ -763,8 +763,8 @@ async function getSpaceAvailableForFluxShare() {
 
 /**
  * To show FluxShare storage stats (GB available, GB used and GB total). Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareStorageStats(req, res) {
   try {
@@ -793,8 +793,8 @@ async function fluxShareStorageStats(req, res) {
 
 /**
  * To upload a specified folder to FluxShare. Checks that there is enough space available. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fluxShareUpload(req, res) {
   try {

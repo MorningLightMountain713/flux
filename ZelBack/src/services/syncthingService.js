@@ -225,8 +225,8 @@ async function performRequest(method = 'get', urlpath = '', data, config) {
 }
 /**
  * To get meta
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getMeta(req, res) {
@@ -238,8 +238,8 @@ async function getMeta(req, res) {
 
 /**
  * To get Syhcthing health
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} System health, {"status": "OK"}.
  */
 async function getHealth(req, res) {
@@ -251,8 +251,8 @@ async function getHealth(req, res) {
 
 /**
  * To get device statistics
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} General statistics about devices.
  */
 async function statsDevice(req, res) {
@@ -262,8 +262,8 @@ async function statsDevice(req, res) {
 
 /**
  * To get folder statistics
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} General statistics about folders.
  */
 async function statsFolder(req, res) {
@@ -275,8 +275,8 @@ async function statsFolder(req, res) {
 
 /**
  * To get list of directories matching the path given by the optional parameter current
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} List of directories in json array format.
  */
 async function systemBrowse(req, res) {
@@ -298,8 +298,8 @@ async function systemBrowse(req, res) {
 
 /**
  * To get the list of configured devices and some metadata associated with them. The list also contains the local device itself as not connected.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} List of configured devices and some metadata in json format.
  */
 async function systemConnections(req, res) {
@@ -309,8 +309,8 @@ async function systemConnections(req, res) {
 
 /**
  * To get the set of debug facilities and which of them are currently enabled.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} List of debug facilities and which of them are currently enabled.
  */
 async function systemDebug(req, res) {
@@ -342,8 +342,8 @@ async function systemDebug(req, res) {
 
 /**
  * To get the contents of the local discovery cache
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Contents of the local discovery cache
  */
 async function systemDiscovery(req, res) {
@@ -372,8 +372,8 @@ async function systemDiscovery(req, res) {
 
 /**
  * Post with empty body to remove all recent errors.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemErrorClear(req, res) {
@@ -389,8 +389,8 @@ async function systemErrorClear(req, res) {
 
 /**
  * Returns the list of recent errors. Post with an error message in the body (plain text) to register a new error.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemError(req, res) {
@@ -413,8 +413,8 @@ async function systemError(req, res) {
 
 /**
  * Post with an error message in the body (plain text) to register a new error.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postSystemError(req, res) {
@@ -443,8 +443,8 @@ async function postSystemError(req, res) {
 
 /**
  * To get the list of recent log entries. The optional {since} parameter limits the results to message newer than the given timestamp in RFC 3339 format.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemLog(req, res) {
@@ -466,8 +466,8 @@ async function systemLog(req, res) {
 
 /**
  * To get the list of recent log entries formatted as a text log instead of a JSON object. The optional {since} parameter limits the results to message newer than the given timestamp in RFC 3339 format.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemLogTxt(req, res) {
@@ -489,8 +489,8 @@ async function systemLogTxt(req, res) {
 
 /**
  * To get the path locations used internally for storing configuration, database, and others.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemPaths(req, res) {
@@ -506,8 +506,8 @@ async function systemPaths(req, res) {
 
 /**
  * To pause the given device or all devices. Takes the optional parameter {device} (device ID). When omitted, pauses all devices.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemPause(req, res) {
@@ -529,8 +529,8 @@ async function systemPause(req, res) {
 
 /**
  * Returns a {"ping": "pong"} object.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemPing(req, res) {
@@ -540,8 +540,8 @@ async function systemPing(req, res) {
 
 /**
  * To erase the current index database and restart Syncthing. With no query parameters, the entire database is erased from disk. By specifying the {folder} parameter with a valid folder ID, only information for that folder will be erased.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemReset(req, res) {
@@ -580,8 +580,8 @@ async function systemResetFolderId(folderId) {
 
 /**
  * To immediately restart Syncthing
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemRestart(req, res) {
@@ -599,8 +599,8 @@ async function systemRestart(req, res) {
 
 /**
  * To resume the given device or all devices. Takes the optional parameter {device} (device ID). When omitted, resumes all devices
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemResume(req, res) {
@@ -622,8 +622,8 @@ async function systemResume(req, res) {
 
 /**
  * To cause Syncthing to exit and not restart.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemShutdown(req, res) {
@@ -639,8 +639,8 @@ async function systemShutdown(req, res) {
 
 /**
  * Returns information about current system status and resource usage.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemStatus(req, res) {
@@ -650,8 +650,8 @@ async function systemStatus(req, res) {
 
 /**
  * To Check for a possible upgrade, returns an object describing the newest version and upgrade possibility.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemUpgrade(req, res) {
@@ -667,8 +667,8 @@ async function systemUpgrade(req, res) {
 
 /**
  * To perform an upgrade to the newest released version and restart.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postSystemUpgrade(req, res) {
@@ -684,8 +684,8 @@ async function postSystemUpgrade(req, res) {
 
 /**
  * Returns the current Syncthing version information.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemVersion(req, res) {
@@ -697,8 +697,8 @@ async function systemVersion(req, res) {
 
 /**
  * Returns the entire config.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfig(req, res) {
@@ -714,8 +714,8 @@ async function getConfig(req, res) {
 
 /**
  * Replaces the entire config.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfig(req, res) {
@@ -745,8 +745,8 @@ async function postConfig(req, res) {
 
 /**
  * Returns whether a restart of Syncthing is required for the current config to take effect.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigRestartRequired(req, res) {
@@ -756,8 +756,8 @@ async function getConfigRestartRequired(req, res) {
 
 /**
  * Returns the folder for the given ID.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigFolders(req, res) {
@@ -784,8 +784,8 @@ async function getConfigFolders(req, res) {
 
 /**
  * Returns the device for the given ID.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigDevices(req, res) {
@@ -832,8 +832,8 @@ async function adjustConfigFolders(method, newConfig, id) {
 
 /**
  * To modify config for folders. PUT replaces the entire config, PATCH replaces only the given child objects and DELETE removes the folder
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigFolders(req, res) {
@@ -885,8 +885,8 @@ async function adjustConfigDevices(method, newConfig, id) {
 
 /**
  * To modify config for devices. PUT replaces the entire config, PATCH replaces only the given child objects and DELETE removes the devices
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigDevices(req, res) {
@@ -918,8 +918,8 @@ async function postConfigDevices(req, res) {
 
 /**
  * Returns a template folder configuration object with all default values, which only needs a unique ID to be applied
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigDefaultsFolder(req, res) {
@@ -929,8 +929,8 @@ async function getConfigDefaultsFolder(req, res) {
 
 /**
  * Returns a template device configuration object with all default values, which only needs a unique ID to be applied
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigDefaultsDevice(req, res) {
@@ -953,8 +953,8 @@ async function adjustConfigDefaultsFolder(method, newConfig) {
 
 /**
  * To modify config for defult values for folders, PUT replaces the default config (omitted values are reset to the hard-coded defaults), PATCH replaces only the given child objects.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigDefaultsFolder(req, res) {
@@ -985,8 +985,8 @@ async function postConfigDefaultsFolder(req, res) {
 
 /**
  * To modify config for defult values for devices, PUT replaces the default config (omitted values are reset to the hard-coded defaults), PATCH replaces only the given child objects.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigDefaultsDevice(req, res) {
@@ -1017,8 +1017,8 @@ async function postConfigDefaultsDevice(req, res) {
 
 /**
  * returns an object listing ignore patterns to be used by default on folders, as an array of single-line strings
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigDefaultsIgnores(req, res) {
@@ -1028,8 +1028,8 @@ async function getConfigDefaultsIgnores(req, res) {
 
 /**
  * To replace the default ignore patterns from an object of the same format
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigDefaultsIgnores(req, res) {
@@ -1060,8 +1060,8 @@ async function postConfigDefaultsIgnores(req, res) {
 
 /**
  * Returns the options object
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigOptions(req, res) {
@@ -1072,8 +1072,8 @@ async function getConfigOptions(req, res) {
 
 /**
  * Returns the gui object
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigGui(req, res) {
@@ -1089,8 +1089,8 @@ async function getConfigGui(req, res) {
 
 /**
  * Returns the ldap object
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigLdap(req, res) {
@@ -1113,8 +1113,8 @@ async function adjustConfigOptions(method, newConfig) {
 
 /**
  * To modify options object, PUT replaces the entire object and PATCH replaces only the given child objects.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigOptions(req, res) {
@@ -1145,8 +1145,8 @@ async function postConfigOptions(req, res) {
 
 /**
  * To modify gui object, PUT replaces the entire object and PATCH replaces only the given child objects.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigGui(req, res) {
@@ -1177,8 +1177,8 @@ async function postConfigGui(req, res) {
 
 /**
  * To modify ldap object, PUT replaces the entire object and PATCH replaces only the given child objects.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigLdap(req, res) {
@@ -1211,8 +1211,8 @@ async function postConfigLdap(req, res) {
 
 /**
  * Lists remote devices which have tried to connect, but are not yet configured in the instance.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getClusterPendigDevices(req, res) {
@@ -1222,8 +1222,8 @@ async function getClusterPendigDevices(req, res) {
 
 /**
  * To remove records about a pending remote device which tried to connect.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postClusterPendigDevices(req, res) {
@@ -1259,8 +1259,8 @@ async function postClusterPendigDevices(req, res) {
 
 /**
  * Lists folders which remote devices have offered to us, but are not yet shared from our instance to them. Takes the optional {device} parameter to only return folders offered by a specific remote device.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getClusterPendigFolders(req, res) {
@@ -1270,8 +1270,8 @@ async function getClusterPendigFolders(req, res) {
 
 /**
  * To remove records about a pending folder announced from a remote device.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postClusterPendigFolders(req, res) {
@@ -1324,8 +1324,8 @@ async function getFolderIdErrors(folderid) {
 
 /**
  * Returns the list of errors encountered during scanning or pulling. Takes one mandatory parameter {folder}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getFolderErrors(req, res) {
@@ -1346,8 +1346,8 @@ async function getFolderErrors(req, res) {
 
 /**
  * Returns the list of archived files that could be recovered. Takes one mandatory parameter {folder}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getFolderVersions(req, res) {
@@ -1371,8 +1371,8 @@ async function getFolderVersions(req, res) {
 
 /**
  * To restore archived versions of a given set of files. Expects an object with attributes named after the relative file paths, with timestamps as values matching valid versionTime entries in the corresponding getFolderVersions() response object. Takes one mandatory parameter {folder}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postFolderVersions(req, res) {
@@ -1410,8 +1410,8 @@ async function postFolderVersions(req, res) {
 
 /**
  * Returns the directory tree of the global model. takes one mandatory {folder} parameter and two optional parameters {levels} and {prefix}.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDbBrowse(req, res) {
@@ -1444,8 +1444,8 @@ async function getDbBrowse(req, res) {
 
 /**
  * Returns the completion percentage (0 to 100) and byte / item counts. Takes optional {device} and {folder} parameters.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDbCompletion(req, res) {
@@ -1475,8 +1475,8 @@ async function getDbCompletion(req, res) {
 
 /**
  * Returns most data available about a given file, including version and availability. Takes {folder} and {file} parameters.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDbFile(req, res) {
@@ -1504,8 +1504,8 @@ async function getDbFile(req, res) {
 
 /**
  * Returns the content of the .stignore as the ignore field. Takes one parameter, {folder}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDbIgnores(req, res) {
@@ -1525,8 +1525,8 @@ async function getDbIgnores(req, res) {
 
 /**
  * Returns the list of files which were changed locally in a receive-only folder. Takes one mandatory parameter, {folder}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDbLocalchanged(req, res) {
@@ -1550,8 +1550,8 @@ async function getDbLocalchanged(req, res) {
 
 /**
  * Returns lists of files which are needed by this device in order for it to become in sync. Takes one mandatory parameter, {folder}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDbNeed(req, res) {
@@ -1575,8 +1575,8 @@ async function getDbNeed(req, res) {
 
 /**
  * Returns the list of files which are needed by that remote device in order for it to become in sync with the shared folder. Takes the mandatory parameters {folder} and {device}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDbRemoteNeed(req, res) {
@@ -1607,8 +1607,8 @@ async function getDbRemoteNeed(req, res) {
 
 /**
  * Returns information about the current status of a folder. Takes the mandatory parameter {folder}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDbStatus(req, res) {
@@ -1631,8 +1631,8 @@ async function getDbStatus(req, res) {
 
 /**
  * Updates the content of the .stignore echoing it back as a response. Takes one parameter {folder}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postDbIgnores(req, res) {
@@ -1668,8 +1668,8 @@ async function postDbIgnores(req, res) {
 
 /**
  * Request override of a send only folder. Override means to make the local version latest, overriding changes made on other devices. This API call does nothing if the folder is not a send only folder. Takes the mandatory parameter {folder}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postDbOverride(req, res) {
@@ -1707,8 +1707,8 @@ async function postDbOverride(req, res) {
 
 /**
  * Moves the file to the top of the download queue.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postDbPrio(req, res) {
@@ -1752,8 +1752,8 @@ async function postDbPrio(req, res) {
 
 /**
  * To request revert of a receive only folder. Reverting a folder means to undo all local changes. This API call does nothing if the folder is not a receive only folder. Takes the mandatory parameter {folder}.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postDbRevert(req, res) {
@@ -1822,8 +1822,8 @@ async function dbScan(folder) {
 
 /**
  * To request immediate scan. Takes the optional parameters {folder} (folder ID), {sub} (path relative to the folder root) and {next} (time in seconds)
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postDbScan(req, res) {
@@ -1868,8 +1868,8 @@ async function postDbScan(req, res) {
 
 /**
  * Summarizes the completion precentage for each remote device.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function debugPeerCompletion(req, res) {
@@ -1885,8 +1885,8 @@ async function debugPeerCompletion(req, res) {
 
 /**
  * Returns statistics about each served REST API endpoint, to diagnose how much time was spent generating the responses.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function debugHttpmetrics(req, res) {
@@ -1902,8 +1902,8 @@ async function debugHttpmetrics(req, res) {
 
 /**
  * To capture a profile of what Syncthing is doing on the CPU
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function debugCpuprof(req, res) {
@@ -1932,8 +1932,8 @@ async function debugCpuprof(req, res) {
 
 /**
  * To capture a profile of what Syncthing is doing with the heap memory.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function debugHeapprof(req, res) {
@@ -1962,8 +1962,8 @@ async function debugHeapprof(req, res) {
 
 /**
  * To Collect information about the running instance for troubleshooting purposes.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function debugSupport(req, res) {
@@ -1979,8 +1979,8 @@ async function debugSupport(req, res) {
 
 /**
  * To Show diagnostics about a certain file in a shared folder. Takes the {folder} and {file} parameters.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function debugFile(req, res) {
@@ -2032,8 +2032,8 @@ async function debugFile(req, res) {
 
 /**
  * To receive Syncthing events. takes {events}, {since}, {limit} and {timeout} parameters to filter the result.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getEvents(req, res) {
@@ -2083,8 +2083,8 @@ async function getEvents(req, res) {
 
 /**
  * To receive LocalChangeDetected and RemoteChangeDetected event types. takes {since}, {limit} and {timeout} parameters to filter the result.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getEventsDisk(req, res) {
@@ -2122,8 +2122,8 @@ async function getEventsDisk(req, res) {
 
 /**
  * Verifies and formats a device ID. Takes one parameter, {id}.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getSvcDeviceID(req, res) {
@@ -2147,8 +2147,8 @@ async function getSvcDeviceID(req, res) {
 
 /**
  * Returns a strong random generated string (alphanumeric) of the specified length. Takes the {length} parameter.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getSvcRandomString(req, res) {
@@ -2178,8 +2178,8 @@ async function getSvcRandomString(req, res) {
 
 /**
  * Returns the data sent in the anonymous usage report.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getSvcReport(req, res) {
@@ -2247,8 +2247,8 @@ async function getDeviceId() {
 
 /**
  * Returns device id, also checks that syncthing is installed and running and we have the api key.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDeviceIdApi(_, res) {
@@ -2888,8 +2888,8 @@ function saveMetricsSnapshot(metrics) {
 
 /**
  * Gets current syncthing metrics
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Current metrics
  */
 async function getSyncthingMetrics(req, res) {
@@ -2912,8 +2912,8 @@ async function getSyncthingMetrics(req, res) {
 
 /**
  * Gets syncthing health summary
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Health summary
  */
 async function getSyncthingHealthSummary(req, res) {
@@ -2964,8 +2964,8 @@ async function getSyncthingHealthSummary(req, res) {
 
 /**
  * Gets syncthing metrics history
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Metrics history
  */
 async function getSyncthingMetricsHistory(req, res) {
@@ -3322,8 +3322,8 @@ async function getPeerSyncDiagnostics() {
 
 /**
  * API endpoint for peer sync diagnostics
- * @param {object} req Request
- * @param {object} res Response
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Peer sync diagnostics
  */
 async function getPeerSyncDiagnosticsApi(req, res) {

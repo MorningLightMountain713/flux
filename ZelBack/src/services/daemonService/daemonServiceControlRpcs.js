@@ -6,8 +6,8 @@ let response = messageHelper.createErrorMessage();
 
 /**
  * To request help message. Command required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function help(req, res) {
@@ -24,8 +24,8 @@ async function help(req, res) {
 
 /**
  * To get info on daemon version and RPC port. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getInfo(req, res) {
@@ -46,8 +46,8 @@ async function getInfo(req, res) {
 
 /**
  * To stop node daemon. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function stop(req, res) { // practically useless

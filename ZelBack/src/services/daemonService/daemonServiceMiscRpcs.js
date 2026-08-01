@@ -40,8 +40,8 @@ function isInsightExplorer() {
 // == NON Daemon ==
 /**
  * To check if daemon is synced.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function isDaemonSynced(req, res) {

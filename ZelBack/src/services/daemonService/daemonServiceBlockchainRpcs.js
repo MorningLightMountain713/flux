@@ -7,8 +7,8 @@ let response = messageHelper.createErrorMessage();
 
 /**
  * To get best block hash.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBestBlockHash(req, res) {
@@ -21,8 +21,8 @@ async function getBestBlockHash(req, res) {
 
 /**
  * To get block. Hash height and verbosity required as parameters for RPC call. Verbosity defaults to an integer value of 2.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBlock(req, res) {
@@ -42,8 +42,8 @@ async function getBlock(req, res) {
 
 /**
  * To get blockchain info.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBlockchainInfo(req, res) {
@@ -56,8 +56,8 @@ async function getBlockchainInfo(req, res) {
 
 /**
  * To get block count.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBlockCount(req, res) {
@@ -70,8 +70,8 @@ async function getBlockCount(req, res) {
 
 /**
  * To get block hash. Index required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBlockHash(req, res) {
@@ -92,8 +92,8 @@ async function getBlockHash(req, res) {
 
 /**
  * To get block deltas. Hash required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBlockDeltas(req, res) {
@@ -113,8 +113,8 @@ async function getBlockDeltas(req, res) {
 
 /**
  * To get block hashes. High and low values and options object required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBlockHashes(req, res) {
@@ -154,8 +154,8 @@ async function getBlockHashes(req, res) {
 
 /**
  * To get block hashes after data is processed. High and low values required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getBlockHashesPost(req, res) {
   let body = '';
@@ -180,8 +180,8 @@ async function getBlockHashesPost(req, res) {
 
 /**
  * To get block header. Hash and verbose (defaults to true) required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBlockHeader(req, res) {
@@ -204,8 +204,8 @@ async function getBlockHeader(req, res) {
 
 /**
  * To get chain tips.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getChainTips(req, res) {
@@ -227,8 +227,8 @@ async function getChainTips(req, res) {
 
 /**
  * To get block hash algorithm difficulty.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getDifficulty(req, res) {
@@ -241,8 +241,8 @@ async function getDifficulty(req, res) {
 
 /**
  * To get mempool (memory pool) info.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getMempoolInfo(req, res) {
@@ -255,8 +255,8 @@ async function getMempoolInfo(req, res) {
 
 /**
  * To get raw mempool (memory pool) info. Verbose (defaults to true) required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getRawMemPool(req, res) {
@@ -275,8 +275,8 @@ async function getRawMemPool(req, res) {
 
 /**
  * To get transaction output. Transaction ID, number and whether to include mempool (defaults to true) required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getTxOut(req, res) {
@@ -302,8 +302,8 @@ async function getTxOut(req, res) {
 
 /**
  * To get transaction output proof. Array of transaction IDs required as parameter for RPC call. Block hash can also be included as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getTxOutProof(req, res) {
@@ -328,8 +328,8 @@ async function getTxOutProof(req, res) {
 
 /**
  * To get transaction output set info.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getTxOutSetInfo(req, res) {
@@ -342,8 +342,8 @@ async function getTxOutSetInfo(req, res) {
 
 /**
  * To verify chain. Check level and number of blocks required as parameters for RPC call. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function verifyChain(req, res) {
@@ -367,8 +367,8 @@ async function verifyChain(req, res) {
 
 /**
  * To verify transaction output proof. Proof required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function verifyTxOutProof(req, res) {
@@ -388,8 +388,8 @@ async function verifyTxOutProof(req, res) {
 
 /**
  * To get spent info. Transaction ID and index required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getSpentInfo(req, res) {
@@ -411,8 +411,8 @@ async function getSpentInfo(req, res) {
 
 /**
  * To get spent info after data is processed. Transaction ID and index required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getSpentInfoPost(req, res) {

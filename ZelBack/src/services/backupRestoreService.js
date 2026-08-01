@@ -62,8 +62,8 @@ function pathValidation(filepath) {
 
 /**
  * Get volume data of an application component.
- * @param {object} req - Request object.
- * @param {object} res - Response object.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} - JSON response containing the volume data of the specified application component.
  * @throws {object} - JSON error response if an error occurs.
  */
@@ -112,8 +112,8 @@ async function getVolumeDataOfComponent(req, res) {
 /**
  * Get the list of local backups based on the provided path.
  * @async
- * @param {object} req - Request object.
- * @param {object} res - Response object.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} - JSON response containing the list of local backups.
  * @throws {object} - JSON error response if an error occurs.
  */
@@ -162,8 +162,8 @@ async function getLocalBackupList(req, res) {
 
 /**
  * Get the size of a remote file.
- * @param {object} req - Request object.
- * @param {object} res - Response object.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} - JSON response containing the file size.
  * @throws {object} - JSON error response if an error occurs.
  */
@@ -209,8 +209,8 @@ async function getRemoteFileSize(req, res) {
 
 /**
  * Remove a backup file specified by the filepath.
- * @param {object} req - Request object.
- * @param {object} res - Response object.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} - JSON response indicating the success of the file removal.
  * @throws {object} - JSON error response if an error occurs.
  */
@@ -250,8 +250,8 @@ async function removeBackupFile(req, res) {
 
 /**
  * Download a local file specified by the filepath.
- * @param {object} req - Request object.
- * @param {object} res - Response object.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} - File download response or JSON error response if an error occurs.
  * @throws {object} - JSON error response if an error occurs.
  */

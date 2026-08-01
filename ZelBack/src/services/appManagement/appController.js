@@ -129,8 +129,8 @@ async function appStart(req, res) {
 
 /**
  * Stop an application
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appStop(req, res) {
@@ -196,8 +196,8 @@ async function appStop(req, res) {
 
 /**
  * Restart an application
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appRestart(req, res) {
@@ -267,8 +267,8 @@ async function appRestart(req, res) {
 
 /**
  * Kill an application
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appKill(req, res) {
@@ -325,8 +325,8 @@ async function appKill(req, res) {
 
 /**
  * Pause an application
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appPause(req, res) {
@@ -394,8 +394,8 @@ async function appPause(req, res) {
 
 /**
  * Unpause an application
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appUnpause(req, res) {

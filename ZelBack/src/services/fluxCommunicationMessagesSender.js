@@ -190,8 +190,8 @@ async function broadcastMessageToIncomingFromUserPost(req, res) {
 
 /**
  * To broadcast message from user. Handles messages to outgoing and incoming peers. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function broadcastMessageFromUser(req, res) {
   try {
@@ -224,8 +224,8 @@ async function broadcastMessageFromUser(req, res) {
 
 /**
  * To broadcast message from user after data is processed. Handles messages to outgoing and incoming peers. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function broadcastMessageFromUserPost(req, res) {
   let body = '';

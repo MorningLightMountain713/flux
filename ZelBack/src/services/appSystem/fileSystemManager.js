@@ -15,8 +15,8 @@ const { resolveVolumeTarget } = require('./volumeTarget');
 
 /**
  * To create a folder in app's volume. Only accessible by app owners and above.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function createAppsFolder(req, res) {
   try {
@@ -50,8 +50,8 @@ async function createAppsFolder(req, res) {
 
 /**
  * To rename a file or folder. Oldpath is relative path to default fluxshare directory; newname is just a new name of folder/file. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function renameAppsObject(req, res) {
   try {
@@ -136,8 +136,8 @@ async function renameAppsObject(req, res) {
 
 /**
  * To remove a specified shared file. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function removeAppsObject(req, res) {
   try {
@@ -204,8 +204,8 @@ async function removeAppsObject(req, res) {
 
 /**
  * To download a zip folder for a specified directory. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @param {boolean} authorized False until verified as an admin.
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
@@ -274,8 +274,8 @@ async function downloadAppsFolder(req, res) {
 
 /**
  * To download a specified file. Only accessible by admins.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function downloadAppsFile(req, res) {
@@ -333,8 +333,8 @@ async function downloadAppsFile(req, res) {
  * module, which is what forced a dependency cycle when volume resolution moved
  * to where it belongs. It sits with the other file handlers now.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function fileUpload(req, res) {
   try {

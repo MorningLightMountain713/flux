@@ -9,8 +9,8 @@ const { resolveVolumeTarget } = require('../appSystem/volumeTarget');
 
 /**
  * To get apps folder contents.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppsFolder(req, res) {
   try {

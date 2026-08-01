@@ -283,8 +283,8 @@ async function recordEvent(appName, eventType, details) {
  * uncapped no-arg query would dump the whole collection to anyone. Documents
  * include _id as a stable paging/identity key.
  * Route: GET /apps/tamperingevents/:appname? (query: ?limit=1..1000)
- * @param {object} req - Express request
- * @param {object} res - Express response
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getEvents(req, res) {
   try {

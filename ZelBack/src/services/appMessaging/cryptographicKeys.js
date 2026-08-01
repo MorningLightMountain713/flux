@@ -46,8 +46,8 @@ async function getAppPublicKey(fluxID, appName, blockHeight) {
 
 /**
  * To get Public Key to Encrypt Enterprise Content.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {string} Key.
  */
 async function getPublicKey(req, res) {
@@ -95,8 +95,8 @@ async function getPublicKey(req, res) {
  * Get the attested per-app X25519 transport public key (v9 HPKE submission
  * direction). The response is returned unmodified — the attestation bytes are
  * load-bearing for the client's signature check and must not be re-encoded.
- * @param {object} req Request — appname in the path, fluxid in the query.
- * @param {object} res Response.
+ * @param {import('express').Request} req Request — appname in the path, fluxid in the query.
+ * @param {import('express').Response} res
  */
 async function getTransportPublicKey(req, res) {
   try {
