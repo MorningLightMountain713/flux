@@ -1270,6 +1270,9 @@ module.exports = (app) => {
   app.get('/apps/installapplocally/:appname?', (req, res) => {
     appInstaller.installApplicationAPI(req, res);
   });
+  // Withdrawn: it ran apps at fabricated resource limits, so a pass meant nothing.
+  // Kept so a caller is told where to go rather than getting a 404. Remove at the
+  // next major version.
   app.get('/apps/testappinstall/:appname?', (req, res) => {
     appInstaller.testInstallApplicationAPI(req, res);
   });

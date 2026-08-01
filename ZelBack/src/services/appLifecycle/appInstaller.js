@@ -15,8 +15,8 @@ const contentSlotService = require('./contentSlotService');
 const appReconciler = require('../appMonitoring/appReconciler');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { storeAppInstallingErrorMessage } = require('../appMessaging/messageStore');
-const { systemArchitecture, checkPlacement, checkNodeResources } = require('../appRequirements/hwRequirements');
-const { isImageBlocked, verifyRepository } = require('../appSecurity/imageManager');
+const { checkPlacement, checkNodeResources } = require('../appRequirements/hwRequirements');
+const { isImageBlocked } = require('../appSecurity/imageManager');
 // pgpService is used in commented out code
 // eslint-disable-next-line no-unused-vars
 const pgpService = require('../pgpService');
@@ -30,8 +30,6 @@ const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
-const { getSpecBackend } = require('../utils/specLibs');
-const { findCommonArchitectures } = require('../utils/appUtilities');
 const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -104,7 +102,7 @@ async function storeAndBroadcastInstallError(appName, hash, error) {
  * before any state is mutated, then registers the app in the database and performs the
  * install. If the install fails after it has started, the app is removed locally.
  * @param {object} instantiated Instantiated app spec.
- * @param {object} [options] onStatus stream callback, test, createVolumes, sendRemovalMessage.
+ * @param {object} [options] onStatus stream callback, createVolumes, sendRemovalMessage.
  * @returns {Promise<{status: string, reason: string|null}>} status is an InstallStatus
  *   value: INSTALLED (success), SKIPPED (already installed), DEFERRED (transient - blocklist
  *   unreachable or node busy, retry later), REJECTED (blocked image - won't change on retry),
@@ -112,7 +110,6 @@ async function storeAndBroadcastInstallError(appName, hash, error) {
  */
 async function installApplication(instantiated, options = {}) {
   const onStatus = options.onStatus || null;
-  const test = options.test || false;
   const createVolumes = options.createVolumes !== false;
   const sendRemovalMessage = options.sendRemovalMessage || false;
   // The identity this install provisions: a replica name (named placement) or
@@ -147,11 +144,8 @@ async function installApplication(instantiated, options = {}) {
     // controller and can abort the upcoming image pull — closing the abort TOCTOU. A
     // cancel/removal of this app calls globalState.abortInstall(appName); the signal is
     // threaded into each component's pull and the controller is cleared in the finally.
-    // Test installs are synchronous and ephemeral, so they do not participate.
-    if (!test) {
-      globalState.installingApps.set(appName, new AbortController());
-      controllerRegistered = true;
-    }
+    globalState.installingApps.set(appName, new AbortController());
+    controllerRegistered = true;
 
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     if (!localSocketAddr) {
@@ -280,11 +274,9 @@ async function installApplication(instantiated, options = {}) {
       // Record this app's telemetry sink (Arcane-only; null/no-op otherwise)
       // so the identity socket can route its containers to its own backend,
       // and make sure the daemon is running before its containers are created.
-      if (!test) {
-        const telemetrySink = telemetrySinkCache.extractSink(deployment);
-        telemetrySinkCache.setSink(appName, telemetrySink);
-        if (telemetrySink) await telemetryConfigService.ensureNode();
-      }
+      const telemetrySink = telemetrySinkCache.extractSink(deployment);
+      telemetrySinkCache.setSink(appName, telemetrySink);
+      if (telemetrySink) await telemetryConfigService.ensureNode();
 
       const { owner } = instantiated;
       const burstEligible = owner
@@ -301,21 +293,18 @@ async function installApplication(instantiated, options = {}) {
         // eslint-disable-next-line no-await-in-loop
         await componentProvisioner.installComponent(component, {
           onStatus,
-          test,
           createVolumes,
           burstEligible,
           restartPolicy,
           owner: instantiated.owner,
           requiresEncryption,
           // Abort the in-flight image pull if a concurrent cancel/removal of this app
-          // fires (globalState.abortInstall). null for a test install (no controller).
+          // fires (globalState.abortInstall).
           abortSignal: globalState.installingApps.get(appName)?.signal || null,
         });
         // Attach the freshly created container to every linked app's network.
-        if (!test) {
-          // eslint-disable-next-line no-await-in-loop
-          await appNetworkLinker.connectComponentToLinkedApps(component.identifier, deployment);
-        }
+        // eslint-disable-next-line no-await-in-loop
+        await appNetworkLinker.connectComponentToLinkedApps(component.identifier, deployment);
       }
 
       // Provision declared content — blobs and slots — onto the now-created mount
@@ -325,33 +314,31 @@ async function installApplication(instantiated, options = {}) {
       // the install (the reconciler retries) rather than starting on empty/stale
       // content. Blobs take their hash from the signed spec; slots take theirs from
       // the latest owner-signed manifest (this node's store, else a running peer).
-      if (!test) {
-        const hasBlobs = deployment.componentEntries().some(([, c]) => c.hasContentBlobs());
-        const hasSlots = deployment.componentEntries().some(([, c]) => c.hasContentSlots());
-        if (hasBlobs || hasSlots) {
-          if (onStatus) onStatus({ status: 'Provisioning content...' });
-          // Locations are normalized ip:port, usable directly as peer URLs; shuffle
-          // so installing nodes don't all hit the same peer first (herd-safety).
-          const locations = await appsRepository.appLocationFromEvents({ appname: appName });
-          const peers = locations.map((loc) => loc.ip).filter(Boolean);
-          for (let i = peers.length - 1; i > 0; i -= 1) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [peers[i], peers[j]] = [peers[j], peers[i]];
-          }
-          if (hasBlobs) {
-            await contentBlobService.provisionContentBlobs(
-              deployment,
-              { appName, fluxID: instantiated.owner, peers },
-              { writeFile: writeInjectedContent, peerFetch: contentBlobService.fetchBlobFromPeer },
-            );
-          }
-          if (hasSlots) {
-            await contentSlotService.provisionContentSlots(
-              deployment,
-              { appName, peers },
-              { peerFetch: contentBlobService.fetchBlobFromPeer },
-            );
-          }
+      const hasBlobs = deployment.componentEntries().some(([, c]) => c.hasContentBlobs());
+      const hasSlots = deployment.componentEntries().some(([, c]) => c.hasContentSlots());
+      if (hasBlobs || hasSlots) {
+        if (onStatus) onStatus({ status: 'Provisioning content...' });
+        // Locations are normalized ip:port, usable directly as peer URLs; shuffle
+        // so installing nodes don't all hit the same peer first (herd-safety).
+        const locations = await appsRepository.appLocationFromEvents({ appname: appName });
+        const peers = locations.map((loc) => loc.ip).filter(Boolean);
+        for (let i = peers.length - 1; i > 0; i -= 1) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [peers[i], peers[j]] = [peers[j], peers[i]];
+        }
+        if (hasBlobs) {
+          await contentBlobService.provisionContentBlobs(
+            deployment,
+            { appName, fluxID: instantiated.owner, peers },
+            { writeFile: writeInjectedContent, peerFetch: contentBlobService.fetchBlobFromPeer },
+          );
+        }
+        if (hasSlots) {
+          await contentSlotService.provisionContentSlots(
+            deployment,
+            { appName, peers },
+            { peerFetch: contentBlobService.fetchBlobFromPeer },
+          );
         }
       }
 
@@ -361,7 +348,7 @@ async function installApplication(instantiated, options = {}) {
       // Per-container labels were stamped at docker-create; this carries the
       // richer plan (preStop argv, drain config) the labels can't hold. The whole
       // handoff is guarded — building or pushing the plan must never break an install.
-      if (!test && shutdownPlan.appRequiresDaemonShutdown(deployment)) {
+      if (shutdownPlan.appRequiresDaemonShutdown(deployment)) {
         try {
           await fluxShutdowndClient.upsertAppPlanBestEffort(
             shutdownPlan.buildShutdownPlan(instantiated, deployment),
@@ -389,7 +376,7 @@ async function installApplication(instantiated, options = {}) {
       // the app failing - only a permanent verdict on the image is network knowledge.
       // A managed backend-TLS cert this node could not get signed is the same class:
       // nothing is wrong with the app, this node just cannot serve it right now.
-      if (!test && !cancelInFlight && error.code !== 'NETWORK_DEPENDENCY_NOT_READY'
+      if (!cancelInFlight && error.code !== 'NETWORK_DEPENDENCY_NOT_READY'
         && error.code !== 'BACKEND_TLS_UNAVAILABLE'
         && error.registryErrorClass !== 'transient') {
         await storeAndBroadcastInstallError(appName, instantiated.hash, error);
@@ -397,14 +384,10 @@ async function installApplication(instantiated, options = {}) {
       throw error;
     }
 
-    log.info(`Flux App: ${appName} is test install: ${test}`);
-
     // Reconnect any locally installed apps that are networked with this app — its private
     // network was (re)created during this install. installApplication is always app-level
-    // (per-component installs go through installComponent), so run it on any non-test install.
-    if (!test) {
-      await appNetworkLinker.reconnectLinkedApps(appName);
-    }
+    // (per-component installs go through installComponent).
+    await appNetworkLinker.reconnectLinkedApps(appName);
 
     log.info(`Flux App ${appName} successfully installed and launched`);
     if (onStatus) onStatus({ status: `Flux App ${appName} successfully installed and launched` });
@@ -414,7 +397,7 @@ async function installApplication(instantiated, options = {}) {
     // snapshot from the installed-app records, so the just-installed app is
     // included in its own announcement. It never throws (it catches internally),
     // so running it here is safe.
-    if (!test && onInstallComplete) {
+    if (onInstallComplete) {
       await onInstallComplete();
       fluxEventBus.publish('app:installed', { name: appName, hash: instantiated.hash });
     }
@@ -424,52 +407,50 @@ async function installApplication(instantiated, options = {}) {
     // failed install by status:"error" chunks, not by parsing prose.
     if (onStatus) onStatus(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
 
-    if (!test) {
-      // Was this throw a concurrent cancel/expiry of THIS app (it aborted the in-flight
-      // pull, or a mid-install backstop fired) rather than a genuine install failure?
-      // Returning FAILED would make the spawner 7-day-poison the hash (never cleared),
-      // stranding a pinned enterprise app. Defer instead — and do NOT run our own
-      // teardown: the in-flight cancel already owns it, so a second uninstall would race
-      // it. installAborted latches the instant the cancel fires (so a fast detached
-      // teardown cannot out-race it clear), with the owed-teardown doc as a fail-closed
-      // fallback.
-      const cancelInFlight = globalState.installAborted(appName)
-        || await pendingTeardownStore.teardownOwedFor(appName);
-      if (cancelInFlight) {
-        log.warn(`Install of ${appName} deferred: a concurrent cancel/removal owns its teardown`);
-        return { status: InstallStatus.DEFERRED, reason: `A concurrent cancel/removal owns ${appName}'s teardown` };
-      }
-      log.info(`Error occured. Initiating Flux App ${appName} removal`);
-      if (onStatus) onStatus(messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appName} removal`));
-      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus, replica });
-      log.info(`Cleanup completed for ${appName} after installation failure`);
+    // Was this throw a concurrent cancel/expiry of THIS app (it aborted the in-flight
+    // pull, or a mid-install backstop fired) rather than a genuine install failure?
+    // Returning FAILED would make the spawner 7-day-poison the hash (never cleared),
+    // stranding a pinned enterprise app. Defer instead — and do NOT run our own
+    // teardown: the in-flight cancel already owns it, so a second uninstall would race
+    // it. installAborted latches the instant the cancel fires (so a fast detached
+    // teardown cannot out-race it clear), with the owed-teardown doc as a fail-closed
+    // fallback.
+    const cancelInFlight = globalState.installAborted(appName)
+      || await pendingTeardownStore.teardownOwedFor(appName);
+    if (cancelInFlight) {
+      log.warn(`Install of ${appName} deferred: a concurrent cancel/removal owns its teardown`);
+      return { status: InstallStatus.DEFERRED, reason: `A concurrent cancel/removal owns ${appName}'s teardown` };
+    }
+    log.info(`Error occured. Initiating Flux App ${appName} removal`);
+    if (onStatus) onStatus(messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appName} removal`));
+    await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus, replica });
+    log.info(`Cleanup completed for ${appName} after installation failure`);
 
-      // A linked dependency's network vanished mid-install (attach-time
-      // NETWORK_DEPENDENCY_NOT_READY). The partial install is cleaned up above; this
-      // is the same transient class the pre-install readiness check DEFERS on, just
-      // detected later - so DEFER, don't FAIL. Returning FAILED would 7-day-poison
-      // the hash in the spawner even though the dependency reinstalls minutes later.
-      if (error.code === 'NETWORK_DEPENDENCY_NOT_READY') {
-        log.warn(`Install of ${appName} deferred: a linked dependency's network vanished mid-install`);
-        return { status: InstallStatus.DEFERRED, reason: error.message };
-      }
+    // A linked dependency's network vanished mid-install (attach-time
+    // NETWORK_DEPENDENCY_NOT_READY). The partial install is cleaned up above; this
+    // is the same transient class the pre-install readiness check DEFERS on, just
+    // detected later - so DEFER, don't FAIL. Returning FAILED would 7-day-poison
+    // the hash in the spawner even though the dependency reinstalls minutes later.
+    if (error.code === 'NETWORK_DEPENDENCY_NOT_READY') {
+      log.warn(`Install of ${appName} deferred: a linked dependency's network vanished mid-install`);
+      return { status: InstallStatus.DEFERRED, reason: error.message };
+    }
 
-      // Registry unreachable/rate-limited (transient class): the node couldn't ask,
-      // which is not a verdict on the app. The partial install is cleaned up above;
-      // DEFER so the spawner retries next cycle instead of 7-day-benching the hash.
-      if (error.registryErrorClass === 'transient') {
-        log.warn(`Install of ${appName} deferred: registry unreachable (${error.message})`);
-        return { status: InstallStatus.DEFERRED, reason: error.message };
-      }
+    // Registry unreachable/rate-limited (transient class): the node couldn't ask,
+    // which is not a verdict on the app. The partial install is cleaned up above;
+    // DEFER so the spawner retries next cycle instead of 7-day-benching the hash.
+    if (error.registryErrorClass === 'transient') {
+      log.warn(`Install of ${appName} deferred: registry unreachable (${error.message})`);
+      return { status: InstallStatus.DEFERRED, reason: error.message };
+    }
 
-      // This node could not get a managed backend-TLS cert signed. Starting the app
-      // without one would leave a container that is up and serving nothing while
-      // peers count it as a live instance, so the install aborts - but the app is
-      // blameless, so DEFER and let it place on a node that can provision it.
-      if (error.code === 'BACKEND_TLS_UNAVAILABLE') {
-        log.warn(`Install of ${appName} deferred: ${error.message}`);
-        return { status: InstallStatus.DEFERRED, reason: error.message };
-      }
+    // This node could not get a managed backend-TLS cert signed. Starting the app
+    // without one would leave a container that is up and serving nothing while
+    // peers count it as a live instance, so the install aborts - but the app is
+    // blameless, so DEFER and let it place on a node that can provision it.
+    if (error.code === 'BACKEND_TLS_UNAVAILABLE') {
+      log.warn(`Install of ${appName} deferred: ${error.message}`);
+      return { status: InstallStatus.DEFERRED, reason: error.message };
     }
 
     return { status: InstallStatus.FAILED, reason: error.message || serviceHelper.ensureString(error) };
@@ -483,14 +464,6 @@ async function installApplication(instantiated, options = {}) {
     // not-installed app must never leak its pending resources. Idempotent with the
     // explicit release after insertInstalledApp.
     admissionControl.release(appName);
-    if (test) {
-      try {
-        await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, replica });
-        log.info(`Test cleanup completed for ${appName}`);
-      } catch (cleanupError) {
-        log.error(`Error during test cleanup for ${appName}: ${cleanupError.message}`);
-      }
-    }
   }
   // Hand off to the reconciler and await convergence: it starts/holds each
   // component and resolves a settled verdict (the install lease released in the
@@ -499,29 +472,27 @@ async function installApplication(instantiated, options = {}) {
   // component that exhausts the install-window start attempts fails the converge ->
   // roll the whole install back (provisioned-but-not-running) so the fleet
   // re-places it; a node issue ('provisional' backstop) never rolls back.
-  if (!test) {
-    const componentIds = deployment.componentEntries().map(([, comp]) => comp.identifier);
-    const { converged, failed } = await appReconciler.awaitConvergence(componentIds);
-    if (!converged) {
-      // A concurrent cancel during convergence condemns the components — the reconciler
-      // then refuses to start them, so they never converge — and owns their teardown.
-      // Classify that as a deferral, not a 7-day-poisoning rollback (and skip our own
-      // teardown, which would race the cancel's). The install's controller is already
-      // cleared by the finally above, so the durable owed-teardown doc is the signal.
-      if (await pendingTeardownStore.teardownOwedFor(appName)) {
-        log.warn(`Convergence of ${appName} aborted by a concurrent cancel/removal; deferring`);
-        return { status: InstallStatus.DEFERRED, reason: `A concurrent cancel/removal owns ${appName}'s teardown` };
-      }
-      log.warn(`REMOVAL REASON: ${appName} provisioned but did not converge (${failed.join(', ')}); rolling back (appInstaller)`);
-      if (onStatus) onStatus(messageHelper.createErrorMessage(`App ${appName} failed to start; rolling back`));
-      // A failed install trial is an install failure the network must learn about,
-      // exactly like a provisioning failure - without this, every node re-discovers
-      // the broken app from scratch.
-      await storeAndBroadcastInstallError(appName, instantiated.hash,
-        new Error(`App ${appName} failed its install trial: ${failed.join(', ')} never completed a successful run`));
-      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus, replica });
-      return { status: InstallStatus.FAILED, reason: `PROVISIONED-BUT-NOT-RUNNING: ${failed.join(', ')}` };
+  const componentIds = deployment.componentEntries().map(([, comp]) => comp.identifier);
+  const { converged, failed } = await appReconciler.awaitConvergence(componentIds);
+  if (!converged) {
+    // A concurrent cancel during convergence condemns the components — the reconciler
+    // then refuses to start them, so they never converge — and owns their teardown.
+    // Classify that as a deferral, not a 7-day-poisoning rollback (and skip our own
+    // teardown, which would race the cancel's). The install's controller is already
+    // cleared by the finally above, so the durable owed-teardown doc is the signal.
+    if (await pendingTeardownStore.teardownOwedFor(appName)) {
+      log.warn(`Convergence of ${appName} aborted by a concurrent cancel/removal; deferring`);
+      return { status: InstallStatus.DEFERRED, reason: `A concurrent cancel/removal owns ${appName}'s teardown` };
     }
+    log.warn(`REMOVAL REASON: ${appName} provisioned but did not converge (${failed.join(', ')}); rolling back (appInstaller)`);
+    if (onStatus) onStatus(messageHelper.createErrorMessage(`App ${appName} failed to start; rolling back`));
+    // A failed install trial is an install failure the network must learn about,
+    // exactly like a provisioning failure - without this, every node re-discovers
+    // the broken app from scratch.
+    await storeAndBroadcastInstallError(appName, instantiated.hash,
+      new Error(`App ${appName} failed its install trial: ${failed.join(', ')} never completed a successful run`));
+    await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus, replica });
+    return { status: InstallStatus.FAILED, reason: `PROVISIONED-BUT-NOT-RUNNING: ${failed.join(', ')}` };
   }
   return { status: InstallStatus.INSTALLED, reason: null };
 }
@@ -573,91 +544,38 @@ async function installApplicationAPI(req, res) {
 }
 
 
-async function testInstallApplication(appname) {
-  const tempMessage = await appsRepository.getTempMessageByName(appname);
-  if (!tempMessage) {
-    throw new Error(`No pending spec found for ${appname}`);
-  }
-
-  const { PendingSpec } = await getSpecBackend();
-  const pending = PendingSpec.fromTempMessage(tempMessage);
-
-  let { spec } = pending;
-  if (pending.isEncrypted) {
-    const provider = await spec.createProvider();
-    ({ spec } = await spec.decrypt(provider));
-  }
-
-  const localArch = await systemArchitecture();
-
-  const componentArchitectures = [];
-  for (const [name, comp] of spec.componentEntries()) {
-    // eslint-disable-next-line no-await-in-loop
-    const repoVerification = await verifyRepository(comp.image, {
-      repoauth: comp.imageAuth || null,
-      appName: spec.name,
-      architecture: localArch,
-    });
-    componentArchitectures.push({
-      name,
-      architectures: repoVerification.supportedArchitectures,
-    });
-  }
-
-  const commonArchitectures = findCommonArchitectures(componentArchitectures);
-
-  if (!commonArchitectures.includes(localArch)) {
-    return {
-      compatible: false,
-      localArch,
-      requiredArchitectures: commonArchitectures,
-    };
-  }
-
-  const instantiated = pending.promote(0);
-  await installApplication(instantiated, { test: true });
-  return { compatible: true };
-}
-
+/**
+ * GET /apps/testappinstall — withdrawn.
+ *
+ * It ran the app at a hardcoded 0.2 CPU and 300 MB regardless of what the spec
+ * declared, so it never tested the app: something needing 4 GB was tested at
+ * 300 MB and could fail for a reason that would never occur in production,
+ * while a pass proved nothing about the real allocation. Only runonflux/orbit
+ * images were health-checked; everything else counted as passing the moment a
+ * container started.
+ *
+ * It was answering two questions with one mechanism, and each has its own
+ * answer now. Does the image exist, what architectures does it have, how big is
+ * it, does it fit the declared rootFsGb — POST /apps/imagepreflight, without
+ * installing anything. Does the app actually run — the playground, at the
+ * spec's real declared resources.
+ *
+ * An error, never a success no-op: a caller who thinks they have tested their
+ * app and has not is worse off than one who is told the endpoint is gone.
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
 async function testInstallApplicationAPI(req, res) {
-  try {
-    let { appname } = req.params;
-    appname = appname || req.query.appname;
-
-    if (!appname) {
-      throw new Error('No Flux App specified');
-    }
-
-    const authorized = await verificationHelper.verifyPrivilege('user', req);
-    if (!authorized) {
-      res.json(messageHelper.errUnauthorizedMessage());
-      return;
-    }
-
-    const result = await testInstallApplication(appname);
-
-    if (!result.compatible) {
-      res.setHeader('Content-Type', 'application/json');
-      res.write(serviceHelper.ensureString({ status: 'Checking architecture compatibility...' }));
-      if (res.flush) res.flush();
-      res.write(serviceHelper.ensureString({
-        status: `Test installation validation passed. Installation skipped due to architecture incompatibility: this node is ${result.localArch} but app requires [${result.requiredArchitectures.join(', ')}]`,
-      }));
-      res.end();
-      return;
-    }
-
-    const successResponse = messageHelper.createSuccessMessage('Test installation successful');
-    res.json(successResponse);
-  } catch (error) {
-    log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    res.json(errorResponse);
-  }
+  const response = messageHelper.createErrorMessage(
+    'testappinstall has been withdrawn. It ran apps at 0.2 CPU / 300MB regardless of '
+    + 'their spec, so a pass meant nothing. Use POST /apps/imagepreflight for image '
+    + 'facts - existence, architectures, sizes and whether rootFsGb fits - or the '
+    + 'playground to watch the app run at its declared resources.',
+    'WithdrawnError',
+    410,
+  );
+  return res.status(410).json(response);
 }
 
 // Worst-first: any failure outranks a rejection outranks a deferral; a fully

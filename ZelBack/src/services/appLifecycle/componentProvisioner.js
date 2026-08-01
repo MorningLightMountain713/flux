@@ -1,7 +1,7 @@
 // Per-component provisioner: builds one component's container substrate — ports,
 // image verify/pull, volumes, swap pool, image-size measurement, appDockerCreate,
 // telemetry identity — and leaves it in Docker `created` for the reconciler to
-// start (a `test` install is the one exception: it starts inline + health-checks).
+// start.
 // Extracted from appInstaller so the reconciler's recreate path
 // (containerHealthMonitor) depends on this provisioner primitive rather than on the
 // install orchestrator (installApplication). That breaks the appReconciler ->
@@ -10,7 +10,6 @@
 // nothing of the reconciler or the operation registry.
 const util = require('util');
 const log = require('../../lib/log');
-const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const upnpService = require('../upnpService');
@@ -47,72 +46,6 @@ async function throwIfCancelledMidInstall(component) {
   if (owed || await appsRuntimeState.isCondemned(component.identifier)) {
     throw new Error(`Install of ${component.identifier} aborted: a removal/cancel of ${component.appName} arrived mid-install`);
   }
-}
-
-/**
- * Checks Orbit (Deploy with Git) app health by polling its /api/status endpoint.
- * Waits for initialTestStatus to become true, then checks if the deployment failed.
- * @param {object} appSpec - Component specifications containing repotag and ports
- * @param {string} appName - Application name
- * @param {boolean} isComponent - Whether this is a component
- * @param {object} res - Response object for streaming status updates
- * @returns {Promise<{passed: boolean, reason: string|null}>} Result with passed status and failure reason
- */
-async function checkOrbitAppHealth(component, onStatus) {
-  if (!component.hostPorts || !component.hostPorts.length) {
-    return { passed: false, reason: 'No ports configured for Orbit component' };
-  }
-  const hostPort = component.hostPorts[0];
-  const statusUrl = `http://127.0.0.1:${hostPort}/api/status`;
-  const pollInterval = 5000;
-  const maxAttempts = 24;
-  const initialWait = 5000;
-
-  const id = component.identifier;
-
-  const msg = `Checking Orbit deployment status for ${id} on port ${hostPort}...`;
-  log.info(msg);
-  if (onStatus) onStatus(msg);
-
-  // Wait for Orbit to initialize before first poll
-  await serviceHelper.delay(initialWait);
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    let pollStatus = '';
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const response = await serviceHelper.axiosGet(statusUrl, { timeout: 5000 });
-
-      if (response.data && response.data.initialTestStatus === true) {
-        if (response.data.failed === true) {
-          const reason = response.data.failure_reason || 'Unknown failure';
-          return { passed: false, reason };
-        }
-        // initialTestStatus is true and failed is false - test passed
-        const successStatus = {
-          status: `Orbit initial test passed for ${id}`,
-        };
-        log.info(successStatus);
-        log.info(successStatus);
-        if (onStatus) onStatus(successStatus);
-        return { passed: true, reason: null };
-      }
-
-      pollStatus = ` | response: ${JSON.stringify(response.data)}`;
-    } catch (error) {
-      pollStatus = ` | error: ${error.message}`;
-      log.info(`Orbit status poll attempt ${attempt}/${maxAttempts} for ${id}: ${error.message}`);
-    }
-
-    const elapsed = attempt * 5;
-    const waitMsg = `Waiting for Orbit initial test... (${elapsed}s/${maxAttempts * 5}s)${pollStatus}`;
-    if (onStatus) onStatus(waitMsg);
-
-    // eslint-disable-next-line no-await-in-loop
-    await serviceHelper.delay(pollInterval);
-  }
-
-  return { passed: false, reason: 'Orbit health check timed out: initial test did not complete within 2 minutes' };
 }
 
 /**
@@ -201,12 +134,11 @@ async function openHostPorts(ports, appName, status = null) {
 /**
  * Install a single app component (pull image, create volume, create + start container).
  * @param {object} component - DeploymentComponent to install
- * @param {object} options - { owner, onStatus, test, createVolumes, skipPorts, burstEligible, restartPolicy, extraEnv }
+ * @param {object} options - { owner, onStatus, createVolumes, skipPorts, burstEligible, restartPolicy, extraEnv }
  * @returns {Promise<void>}
  */
 async function installComponent(component, options = {}) {
   const onStatus = options.onStatus || null;
-  const test = options.test || false;
   const createVolumes = options.createVolumes || false;
   // skipPorts: a redeploy keeps the running app's ufw/UPnP rules in place and reconciles
   // only the port delta itself, so the reinstall must NOT open this component's ports
@@ -234,7 +166,7 @@ async function installComponent(component, options = {}) {
   // so a blank runonflux.owner label silently breaks drain/preStop at node
   // shutdown. Refuse rather than stamp an empty owner. Test installs are
   // ephemeral and carry no plan, so they are exempt.
-  if (!test && !owner) {
+  if (!owner) {
     throw new Error(`installComponent: owner required for ${component.identifier}`);
   }
 
@@ -246,7 +178,7 @@ async function installComponent(component, options = {}) {
     if (onStatus) onStatus(msg);
   };
 
-  if (!test && !skipPorts) {
+  if (!skipPorts) {
     status(`Allowing ${id} ports...`);
     await openHostPorts(component.hostPorts, appName, status);
   }
@@ -254,7 +186,7 @@ async function installComponent(component, options = {}) {
   try {
     const pullConfig = await verifyComponentImage(component);
     // Thread the install's abort signal so a concurrent cancel/removal of this app ends the
-    // in-flight download (docker-modem >=5 makes the pull abortable). null on a test install.
+    // in-flight download (docker-modem >=5 makes the pull abortable).
     if (abortSignal) pullConfig.abortSignal = abortSignal;
     await dockerPullStreamPromise(pullConfig, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null);
     status(`Pulling ${id} was successful`);
@@ -272,13 +204,13 @@ async function installComponent(component, options = {}) {
 
   // Post-pull backstop: a cancel that landed while/after the pull ran (the abort is then a
   // no-op) must not let us build a volume the cancel's teardown is about to rm -rf.
-  if (!test) await throwIfCancelledMidInstall(component);
+  await throwIfCancelledMidInstall(component);
 
   // A stateless component (persistentStorage.sizeGb 0) has no volume to build,
   // so there is also nothing to verify a mount for — verifyAppVolumeMount would
   // fail on the mountpoint that was deliberately never created.
   if (createVolumes && !component.isStateless) {
-    await appVolumeService.createAppVolume(component, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null, test);
+    await appVolumeService.createAppVolume(component, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null);
 
     status(`Verifying volume mount for ${id}...`);
     await volumeService.verifyAppVolumeMount(id);
@@ -337,12 +269,11 @@ async function installComponent(component, options = {}) {
   }
 
   // Pre-create backstop: re-check immediately before the container is created. A data
-  // (r:/g:) app skips the test-only start block below, so for a real install this is the
+  // (r:/g:) app is provisioned only, so for an install this is the
   // last guard between volume-create and appDockerCreate against a racing cancel.
-  if (!test) await throwIfCancelledMidInstall(component);
+  await throwIfCancelledMidInstall(component);
   status(`Creating ${id}...`);
   await dockerService.appDockerCreate(component, {
-    test,
     burstEligible,
     restartPolicy,
     extraEnv,
@@ -353,32 +284,12 @@ async function installComponent(component, options = {}) {
 
   // Set the log ACL and announce identity to flux-telemetryd before the
   // container starts (Arcane-only; no-op for non-telemetry apps).
-  if (!test) {
-    await telemetryIdentityService.onComponentCreated(component);
-  }
+  await telemetryIdentityService.onComponentCreated(component);
 
-  // A real install only PROVISIONS: the container is left in Docker 'created' and
-  // the reconciler is the sole starter (installApplication enqueues + awaits its
-  // convergence). holdStart is gone — the activeStandby/sync-before-start hold is
-  // already the reconciler's controllerDesired -> awaitingController gate. Test
-  // installs are synchronous and fail-fast: they start inline + run the orbit
-  // health check and never hand off (a test that "passes" without ever starting a
-  // container would be a false positive).
-  if (test) {
-    status(`Starting ${id}...`);
-    const app = await dockerService.appDockerStart(id);
-    if (!app) {
-      throw new Error(`Failed to start ${id} container`);
-    }
-    status(`${id} started`);
-
-    if (component.image?.startsWith('runonflux/orbit')) {
-      const orbitHealth = await checkOrbitAppHealth(component, onStatus);
-      if (!orbitHealth.passed) {
-        throw new Error(`Orbit deployment failed: ${orbitHealth.reason}`);
-      }
-    }
-  }
+  // The container is left in Docker 'created' and the reconciler is the sole
+  // starter (installApplication enqueues + awaits its convergence). holdStart is
+  // gone — the activeStandby/sync-before-start hold is already the reconciler's
+  // controllerDesired -> awaitingController gate.
 }
 
 module.exports = {

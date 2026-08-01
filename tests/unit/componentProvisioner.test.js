@@ -157,24 +157,10 @@ describe('componentProvisioner tests', () => {
       expect(threw).to.be.an('error');
       expect(threw.message).to.contain('owner required');
     });
-
-    it('exempts test installs from the owner requirement', async () => {
-      // A test install carries no shutdown plan, so it may proceed without an
-      // owner; it should get past the guard (and fail later, if at all, on the
-      // install machinery rather than the guard).
-      const provisioner = loadProvisioner();
-      let guardError = null;
-      try {
-        await provisioner.installComponent(component, { test: true });
-      } catch (error) {
-        if (error.message.includes('owner required')) guardError = error;
-      }
-      expect(guardError).to.be.null;
-    });
   });
 
   describe('provisions but does not start (the reconciler is the sole starter)', () => {
-    it('never starts the container on a real install, for any sync mode', async () => {
+    it('never starts the container - the reconciler is the only starter', async () => {
       // The activeStandby / sync-before-start hold is now the reconciler's
       // controllerDesired -> awaitingController gate, and a plain install no longer
       // inline-starts at all: installComponent only provisions.
@@ -202,12 +188,6 @@ describe('componentProvisioner tests', () => {
         { owner: 'owner1', createVolumes: true },
       );
       expect(createAppVolumeStub.called, 'no volume for a stateless component').to.be.false;
-    });
-
-    it('starts inline on a test install (synchronous, fail-fast, no handoff)', async () => {
-      const provisioner = loadProvisioner();
-      await provisioner.installComponent(makeComponent(null), { test: true });
-      expect(appDockerStartStub.calledOnceWith('web_syncholdapp')).to.be.true;
     });
 
     it('rejects a component whose measured image exceeds its rootFs budget', async () => {
@@ -252,13 +232,6 @@ describe('componentProvisioner tests', () => {
 
       expect(provisionCertStub.called).to.be.false;
       sinon.assert.calledOnce(appDockerCreateStub);
-    });
-
-    it('rehearses the real thing on a test install', async () => {
-      const provisioner = loadProvisioner();
-      await provisioner.installComponent(makeTlsComponent(), { test: true });
-
-      expect(provisionCertStub.calledOnce).to.be.true;
     });
 
     it('aborts the install when the cert cannot be issued, tagged as a node condition', async () => {

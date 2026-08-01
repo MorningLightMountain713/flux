@@ -52,7 +52,6 @@ describe('reconciler run-authority guard', () => {
     const owners = {
       'appMonitoring/appReconciler.js': 8, // the sole authority: volume-unavailable pending stop, data-clear stop, force kill, graceful stop, restart-gen bounce, unhealthy restart, start, network-detach heal force-remove
       'appLifecycle/appUninstaller.js': 7, // terminal teardown: uninstallComponent (redeploy) kill+stop+force-remove, runTeardown worker kill+stop + 2 paced force-removes
-      'appLifecycle/componentProvisioner.js': 1, // test-install inline start (synchronous fail-fast)
       'appManagement/appController.js': 1, // stopAllNonFluxRunningApps janitor (foreign, non-Flux containers)
       // Owner-declared reload reactions. Both take the primitive as an injected
       // dependency rather than calling it inline, so each shows up as one
