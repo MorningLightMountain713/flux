@@ -8,8 +8,8 @@ let response = messageHelper.createErrorMessage();
 
 /**
  * To get block subsidy. Height required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getBlockSubsidy(req, res) {
@@ -30,8 +30,8 @@ async function getBlockSubsidy(req, res) {
 
 /**
  * To get block template. JSON request object required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Block template.
  */
 async function getBlockTemplate(req, res) {
@@ -52,8 +52,8 @@ async function getBlockTemplate(req, res) {
 
 /**
  * To get local solutions (hash computations created) per second.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getLocalSolPs(req, res) {
@@ -66,8 +66,8 @@ async function getLocalSolPs(req, res) {
 
 /**
  * To get mining info.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getMiningInfo(req, res) {
@@ -80,8 +80,8 @@ async function getMiningInfo(req, res) {
 
 /**
  * To get number of network hashes per second. Blocks (defaults to value of 120) and height (defaults to value of -1) required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getNetworkHashPs(req, res) {
@@ -102,8 +102,8 @@ async function getNetworkHashPs(req, res) {
 
 /**
  * To get network solutions (hash computations created) per second. Blocks (defaults to value of 120) and height (defaults to value of -1) required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getNetworkSolPs(req, res) {
@@ -123,8 +123,8 @@ async function getNetworkSolPs(req, res) {
 
 /**
  * To prioritise transaction. Transaction ID, priority delta and fee delta required as parameters for RPC call. Only accessible by users.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function prioritiseTransaction(req, res) {
@@ -152,8 +152,8 @@ async function prioritiseTransaction(req, res) {
 
 /**
  * To submit a block. Hex data required as parameter for RPC call. JSON parameters object can also be provided as a parameter for RPC call. Only accessible by users.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function submitBlock(req, res) {
@@ -181,8 +181,8 @@ async function submitBlock(req, res) {
 
 /**
  * To submit a block after data is processed. Hex data required as parameter for RPC call. JSON parameters object can also be provided as a parameter for RPC call. Only accessible by users.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function submitBlockPost(req, res) {

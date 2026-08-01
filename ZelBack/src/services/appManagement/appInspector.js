@@ -19,8 +19,8 @@ const dosMessage = null;
 
 /**
  * Get top processes running in an application container
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appTop(req, res) {
@@ -63,8 +63,8 @@ async function appTop(req, res) {
 
 /**
  * Get application logs
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appLog(req, res) {
@@ -104,8 +104,8 @@ async function appLog(req, res) {
 
 /**
  * Poll application logs with filtering
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appLogPolling(req, res) {
@@ -195,8 +195,8 @@ async function appLogPolling(req, res) {
 
 /**
  * Inspect application container
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appInspect(req, res) {
@@ -232,8 +232,8 @@ async function appInspect(req, res) {
 
 /**
  * Get application statistics
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appStats(req, res) {
@@ -503,8 +503,8 @@ function appMonitor(appname, range = null) {
 
 /**
  * Get application monitoring data
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appMonitorAPI(req, res) {
@@ -694,8 +694,8 @@ function ensureAppMonitoring(appName) {
 
 /**
  * Execute command in application container
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appExec(req, res) {
@@ -778,8 +778,8 @@ async function appExec(req, res) {
 
 /**
  * Get application changes/diff
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appChanges(req, res) {
@@ -843,8 +843,8 @@ async function listAppsImages() {
  * handler runs and keys on the request URL alone, so a privilege checked here
  * would be checked for the first caller and no one after them.
  *
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function listAppsImagesApi(req, res) {
@@ -867,8 +867,8 @@ async function listAppsImagesApi(req, res) {
 
 /**
  * Get Apps DOS (Denial of Service) State
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} DOS state information
  */
 function getAppsDOSState(req, res) {

@@ -7,8 +7,8 @@ const log = require('../../lib/log');
 
 /**
  * To get deployment information including prices and specifications.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function deploymentInformation(req, res) {
   try {
@@ -54,8 +54,8 @@ async function deploymentInformation(req, res) {
 
 /**
  * To get application specification usd prices.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Returns object with application specification usd prices.
  */
 async function getAppSpecsUSDPrice(req, res) {

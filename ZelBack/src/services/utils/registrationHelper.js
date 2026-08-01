@@ -8,8 +8,8 @@ const log = require('../../lib/log');
 
 /**
  * Get registration information for the node
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>} Registration information response
  */
 async function registrationInformation(req, res) {

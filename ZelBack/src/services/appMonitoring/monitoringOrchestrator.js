@@ -58,8 +58,8 @@ async function startMonitoringOfApps(appSpecsToMonitor) {
 
 /**
  * Start monitoring API endpoint
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function startAppMonitoringAPI(req, res) {
@@ -69,8 +69,8 @@ async function startAppMonitoringAPI(req, res) {
 
 /**
  * Stop monitoring API endpoint
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function stopAppMonitoringAPI(req, res) {
@@ -87,8 +87,8 @@ const STREAM_DEPRECATION_MESSAGE = 'The stats stream has been removed. Poll /app
 
 /**
  * Stats stream API endpoint
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function appMonitorStreamAPI(req, res) {

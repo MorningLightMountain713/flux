@@ -405,8 +405,8 @@ function imagesOf(appSpecs) {
 
 /**
  * Check Docker accessibility for repository
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>} Docker accessibility result
  */
 async function checkDockerAccessibility(req, res) {

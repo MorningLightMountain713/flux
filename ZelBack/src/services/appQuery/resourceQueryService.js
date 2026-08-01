@@ -11,8 +11,8 @@ const appQueryService = require('./appQueryService');
 
 /**
  * Get application usage statistics
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function fluxUsage(req, res) {
@@ -152,8 +152,8 @@ function unaccountedApps(response) {
  * application it cannot read" is a statement about the node's health that nobody
  * outside it needs.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function appsResourcesApi(req, res) {

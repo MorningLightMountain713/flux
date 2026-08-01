@@ -1147,8 +1147,8 @@ peerManager.hashHandlers = {
 
 /**
  * To get IP addresses for all outgoing connected peers.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 /**
  * @deprecated Use getPeers with direction=outbound instead.
@@ -1213,8 +1213,8 @@ function keepConnectionsAlive() {
 
 /**
  * To remove an outgoing peer by specifying the IP address. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function removePeer(req, res) {
@@ -1256,8 +1256,8 @@ async function removePeer(req, res) {
 
 /**
  * To remove an incoming peer by specifying the IP address. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @param {object} expressWS Express web socket.
  * @returns {Promise<void>}
  */
@@ -1535,8 +1535,8 @@ function openEphemeralConnection(connection) {
 
 /**
  * To add a peer by specifying the IP address. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function addPeer(req, res) {
@@ -1593,8 +1593,8 @@ async function addPeer(req, res) {
 
 /**
  * Function to be called by FluxNodes without the minimum Incoming connections.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function addOutgoingPeer(req, res) {
@@ -1914,8 +1914,8 @@ function peerToDetailedInfo(peer) {
  * GET /flux/peers/outbound — outbound only
  * GET /flux/peers/inbound — inbound only
  * GET /flux/peers/:ip:port — specific peer detail
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 function getPeers(req, res) {
   const { filter } = req.params;
@@ -1947,8 +1947,8 @@ function getPeers(req, res) {
 /**
  * Get list of nodes flagged as unstable (5+ disconnects in 2 hours).
  * GET /flux/unstablenodes
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 function getUnstableNodes(req, res) {
   const unstable = [];
@@ -1973,8 +1973,8 @@ function getUnstableNodes(req, res) {
  * GET /flux/peerhistory?event=disconnected — filter by event type
  * GET /flux/peerhistory?limit=50 — limit results (most recent)
  * GET /flux/peerhistory?since=1773520000000 — events after timestamp
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getPeerHistory(req, res) {
   const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
@@ -1995,8 +1995,8 @@ async function getPeerHistory(req, res) {
 /**
  * Get peer exchange topology — what peers our peers have reported.
  * GET /flux/topology
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 function getTopology(req, res) {
   const topology = {};
@@ -2017,8 +2017,8 @@ function getTopology(req, res) {
 /**
  * Get network health status and diagnosis history.
  * GET /flux/networkhealth
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 function getNetworkHealth(req, res) {
   const data = {

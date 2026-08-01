@@ -407,8 +407,8 @@ async function request(method, urlpath, data, config) {
 
 /**
  * To get meta
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getMeta() {
@@ -430,8 +430,8 @@ async function getHealth() {
 
 /**
  * Post with an error message in the body (plain text) to register a new error.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postSystemError(req, res) {
@@ -474,8 +474,8 @@ async function systemPause(device) {
 
 /**
  * Returns a {"ping": "pong"} object.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function systemPing() {
@@ -510,8 +510,8 @@ async function systemResume(device) {
 
 /**
  * To perform an upgrade to the newest released version and restart.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postSystemUpgrade(req, res) {
@@ -545,8 +545,8 @@ async function getConfig() {
 
 /**
  * Replaces the entire config.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfig(req, res) {
@@ -628,8 +628,8 @@ async function adjustConfigFolders(method, newConfig, id) {
 
 /**
  * To modify config for folders. PUT replaces the entire config, PATCH replaces only the given child objects and DELETE removes the folder
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigFolders(req, res) {
@@ -681,8 +681,8 @@ async function adjustConfigDevices(method, newConfig, id) {
 
 /**
  * To modify config for devices. PUT replaces the entire config, PATCH replaces only the given child objects and DELETE removes the devices
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigDevices(req, res) {
@@ -714,8 +714,8 @@ async function postConfigDevices(req, res) {
 
 /**
  * Returns a template folder configuration object with all default values, which only needs a unique ID to be applied
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigDefaultsFolder() {
@@ -737,8 +737,8 @@ async function adjustConfigDefaultsFolder(method, newConfig) {
 
 /**
  * To modify config for defult values for folders, PUT replaces the default config (omitted values are reset to the hard-coded defaults), PATCH replaces only the given child objects.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigDefaultsFolder(req, res) {
@@ -769,8 +769,8 @@ async function postConfigDefaultsFolder(req, res) {
 
 /**
  * To modify config for defult values for devices, PUT replaces the default config (omitted values are reset to the hard-coded defaults), PATCH replaces only the given child objects.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigDefaultsDevice(req, res) {
@@ -801,8 +801,8 @@ async function postConfigDefaultsDevice(req, res) {
 
 /**
  * Returns the options object
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getConfigOptions() {
@@ -832,8 +832,8 @@ async function adjustConfigOptions(method, newConfig) {
 
 /**
  * To modify options object, PUT replaces the entire object and PATCH replaces only the given child objects.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigOptions(req, res) {
@@ -864,8 +864,8 @@ async function postConfigOptions(req, res) {
 
 /**
  * To modify gui object, PUT replaces the entire object and PATCH replaces only the given child objects.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigGui(req, res) {
@@ -896,8 +896,8 @@ async function postConfigGui(req, res) {
 
 /**
  * To modify ldap object, PUT replaces the entire object and PATCH replaces only the given child objects.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postConfigLdap(req, res) {
@@ -930,8 +930,8 @@ async function postConfigLdap(req, res) {
 
 /**
  * To remove records about a pending remote device which tried to connect.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postClusterPendigDevices(req, res) {
@@ -967,8 +967,8 @@ async function postClusterPendigDevices(req, res) {
 
 /**
  * To remove records about a pending folder announced from a remote device.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postClusterPendigFolders(req, res) {
@@ -1190,8 +1190,8 @@ async function eachDbLocalChanged(folder, onBatch) {
 
 /**
  * Request override of a send only folder. Override means to make the local version latest, overriding changes made on other devices. This API call does nothing if the folder is not a send only folder. Takes the mandatory parameter {folder}
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postDbOverride(req, res) {
@@ -1229,8 +1229,8 @@ async function postDbOverride(req, res) {
 
 /**
  * Moves the file to the top of the download queue.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postDbPrio(req, res) {
@@ -1274,8 +1274,8 @@ async function postDbPrio(req, res) {
 
 /**
  * To request revert of a receive only folder. Reverting a folder means to undo all local changes. This API call does nothing if the folder is not a receive only folder. Takes the mandatory parameter {folder}.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postDbRevert(req, res) {
@@ -1344,8 +1344,8 @@ async function dbScan(folder) {
 
 /**
  * To request immediate scan. Takes the optional parameters {folder} (folder ID), {sub} (path relative to the folder root) and {next} (time in seconds)
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function postDbScan(req, res) {
@@ -1529,8 +1529,8 @@ async function refreshSyncthingHealth() {
 
 /**
  * Returns device id, also checks that syncthing is installed and running and we have the api key.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message
  */
 async function getDeviceIdApi(_, res) {
@@ -2265,8 +2265,8 @@ function saveMetricsSnapshot(metrics) {
 
 /**
  * Gets current syncthing metrics
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Current metrics
  */
 async function getSyncthingMetrics(req, res) {
@@ -2289,8 +2289,8 @@ async function getSyncthingMetrics(req, res) {
 
 /**
  * Gets syncthing health summary
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Health summary
  */
 async function getSyncthingHealthSummary(req, res) {
@@ -2341,8 +2341,8 @@ async function getSyncthingHealthSummary(req, res) {
 
 /**
  * Gets syncthing metrics history
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Metrics history
  */
 async function getSyncthingMetricsHistory(req, res) {
@@ -2699,8 +2699,8 @@ async function getPeerSyncDiagnostics() {
 
 /**
  * API endpoint for peer sync diagnostics
- * @param {object} req Request
- * @param {object} res Response
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Peer sync diagnostics
  */
 async function getPeerSyncDiagnosticsApi(req, res) {

@@ -1594,8 +1594,8 @@ async function initiateBlockProcessor(restoreDatabase, deepRestore, reindexOrRes
 
 /**
  * To get all UTXOs (unspent transaction outputs).
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAllUtxos(req, res) {
   try {
@@ -1630,8 +1630,8 @@ async function getAllUtxos(req, res) {
 
 /**
  * To get all Fusion/Coinbase transactions.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAllFusionCoinbase(req, res) {
   try {
@@ -1666,8 +1666,8 @@ async function getAllFusionCoinbase(req, res) {
 
 /**
  * To get all addresses with transactions.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAllAddressesWithTransactions(req, res) {
   try {
@@ -1699,8 +1699,8 @@ async function getAllAddressesWithTransactions(req, res) {
 
 /**
  * To get all addresses.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAllAddresses(req, res) {
   try {
@@ -1724,8 +1724,8 @@ async function getAllAddresses(req, res) {
 
 /**
  * To get all UTXOs for a specific address.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAddressUtxos(req, res) {
   try {
@@ -1789,8 +1789,8 @@ async function getAddressUtxos(req, res) {
 
 /**
  * To get UTXOs for a specific Fusion/Coinbase address.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAddressFusionCoinbase(req, res) {
   try {
@@ -1830,8 +1830,8 @@ async function getAddressFusionCoinbase(req, res) {
 
 /**
  * To get transactions for a specific address.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAddressTransactions(req, res) {
   try {
@@ -1887,8 +1887,8 @@ async function getAddressTransactions(req, res) {
 
 /**
  * To get scanned block height.
- * @param {object} req Reqest.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getScannedHeight(req, res) {
   try {
@@ -1942,8 +1942,8 @@ async function checkBlockProcessingStopped(i, callback) {
 
 /**
  * To stop block processing. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function stopBlockProcessing(req, res) {
   const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
@@ -1961,8 +1961,8 @@ async function stopBlockProcessing(req, res) {
 
 /**
  * To restart block processing. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function restartBlockProcessing(req, res) {
   const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
@@ -1981,8 +1981,8 @@ async function restartBlockProcessing(req, res) {
 
 /**
  * To reindex Flux explorer database. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function reindexExplorer(req, res) {
   const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
@@ -2029,8 +2029,8 @@ async function reindexExplorer(req, res) {
 
 /**
  * To rescan Flux explorer database from a specific block height. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function rescanExplorer(req, res) {
   try {
@@ -2102,8 +2102,8 @@ async function rescanExplorer(req, res) {
 
 /**
  * To get the Flux balance for a specific address.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAddressBalance(req, res) {
   try {
@@ -2157,8 +2157,8 @@ async function getAddressBalance(req, res) {
 
 /**
  * To get if explorer is synced.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function isExplorerSynced(req, res) {
   const resMessage = messageHelper.createDataMessage(isSynced);

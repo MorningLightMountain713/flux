@@ -142,8 +142,8 @@ async function decryptEnterpriseApps(apps, options = {}) {
 
 /**
  * To list installed apps. Returns apps from local database.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function installedApps(req, res) {
@@ -266,8 +266,8 @@ async function listRunningContainers() {
  * its store before the handler runs, so anything decided from who is asking is
  * decided once and then served to everyone else.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object|undefined} the message when called without a response
  */
 async function listRunningApps(req, res) {
@@ -328,8 +328,8 @@ async function listRunningApps(req, res) {
  * enough to be meaningless against the tens of seconds the window it closes runs
  * for.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message carrying an array of container-name identifiers.
  */
 async function heldComponents(req, res) {
@@ -386,8 +386,8 @@ async function heldComponents(req, res) {
  * folder this node is already holding. The asker treats an unready peer as a
  * reason to wait rather than a clearance.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message carrying { ready, folders }.
  */
 async function promotedFolders(req, res) {
@@ -449,8 +449,8 @@ async function listAllApps() {
 /**
  * GET /apps/listallapps - the public view of every container on this node.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {void}
  */
 async function listAllAppsApi(req, res) {
@@ -464,8 +464,8 @@ async function listAllAppsApi(req, res) {
 
 /**
  * To get latest application specification API version.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getlatestApplicationSpecificationAPI(req, res) {
   const latestSpec = config.fluxapps.latestAppSpecification || 1;
@@ -477,8 +477,8 @@ async function getlatestApplicationSpecificationAPI(req, res) {
 
 /**
  * To get application original owner.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getApplicationOriginalOwner(req, res) {
   try {
@@ -522,8 +522,8 @@ async function getApplicationOriginalOwner(req, res) {
 
 /**
  * To get apps installing locations.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppsInstallingLocations(req, res) {
   try {
@@ -543,8 +543,8 @@ async function getAppsInstallingLocations(req, res) {
 
 /**
  * To get count of app messages by owner.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function getAppsMessagesCount(req, res) {
   try {

@@ -426,8 +426,8 @@ async function isFluxAvailable(ip, port = config.server.apiport) {
 
 /**
  * To check Flux availability for specific IP address/port.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function checkFluxAvailability(req, res) {
@@ -454,8 +454,8 @@ async function checkFluxAvailability(req, res) {
 
 /**
  * To check if application is available
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 /**
@@ -689,8 +689,8 @@ function tcpConnectAndDestroy(host, port, timeout) {
  * between TCP/UDP (they should). So we have to test both protocols.
  * We should just check the mappings themselves - and refresh whatever is open.
  *
- * @param {object} req Request
- * @param {object} res Response
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 /**
@@ -985,8 +985,8 @@ async function closeIncomingConnection(ip, port) {
 
 /**
  * To get IP addresses for incoming connections.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 /**
  * @deprecated Use getPeers with direction=inbound instead.
@@ -1099,8 +1099,8 @@ async function checkFluxbenchVersionAllowed() {
 
 /**
  * To get node uptime in seconds
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 function fluxUptime(req, res) {
   let message;
@@ -1118,8 +1118,8 @@ function fluxUptime(req, res) {
 
 /**
  * To get system uptime in seconds
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 function fluxSystemUptime(req, res) {
   let message;
@@ -1270,8 +1270,8 @@ function getLocalClockOffsetMs() {
 
 /**
  * API handler for clock drift endpoint.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function clockDrift(req, res) {
   try {
@@ -1287,8 +1287,8 @@ async function clockDrift(req, res) {
 
 /**
  * To check if sufficient communication is established. Minimum number of outgoing and incoming peers must be met.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 function isCommunicationEstablished(req, res) {
   const { outboundCount, inboundCount } = peerManager;
@@ -1317,8 +1317,8 @@ function isCommunicationEstablished(req, res) {
 
 /**
  * To get DOS state.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function getDOSState(req, res) {
@@ -1584,8 +1584,8 @@ async function deleteAllowOutPortRule(port) {
 
 /**
  * To allow a port via API. Only accessible by admins and Flux team members.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function allowPortApi(req, res) {

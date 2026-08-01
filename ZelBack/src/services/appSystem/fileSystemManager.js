@@ -180,8 +180,8 @@ function requiredParam(req, name) {
 
 /**
  * To create a folder in app's volume. Only accessible by app owners and above.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function createAppsFolder(req, res) {
   try {
@@ -216,8 +216,8 @@ async function createAppsFolder(req, res) {
  * this case too; the difference is only that a new name here may not contain a
  * path separator, which is why this endpoint could never move anything.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function renameAppsObject(req, res) {
   try {
@@ -255,8 +255,8 @@ async function renameAppsObject(req, res) {
 /**
  * To remove a file or folder from an app's volume. Only accessible by app
  * owners and above.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 /**
  * How long a remove may take before it becomes something to come back for.
@@ -297,8 +297,8 @@ async function removeAppsObject(req, res) {
 
 /**
  * To download a zip folder for a specified directory. The app owner or the flux team.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @param {boolean} authorized False until the caller is verified.
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
@@ -386,8 +386,8 @@ async function downloadAppsFolder(req, res) {
 
 /**
  * To download a specified file. The app owner or the flux team.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function downloadAppsFile(req, res) {
@@ -718,8 +718,8 @@ function archiveFormat(name) {
  *
  * No capacity check - a rename within one filesystem moves no bytes.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function moveAppsObject(req, res) {
   try {
@@ -739,8 +739,8 @@ async function moveAppsObject(req, res) {
 /**
  * Copy a file or folder within the app's volume.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function copyAppsObject(req, res) {
   try {
@@ -789,8 +789,8 @@ async function copyAppsObject(req, res) {
  * browser, this produces an archive the app keeps - the thing you want before a
  * risky upgrade.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function compressAppsObject(req, res) {
   try {
@@ -873,8 +873,8 @@ async function compressAppsObject(req, res) {
  *   a zip bomb fills the app's own volume, which is a fixed-size loop file, so
  *   it cannot reach the host disk.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function extractAppsObject(req, res) {
   try {
@@ -976,8 +976,8 @@ function uploadFolder(req) {
  * bytes expected while the upload runs. A failure is written into it as the
  * standard error envelope, because by then the status line has long gone.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function uploadAppsFiles(req, res) {
   const folder = uploadFolder(req);

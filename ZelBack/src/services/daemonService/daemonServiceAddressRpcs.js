@@ -6,8 +6,8 @@ let response = messageHelper.createErrorMessage();
 
 /**
  * To get transaction IDs for specified address/es. Addresses, start and end required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getAddressTxids(req, res) {
@@ -41,8 +41,8 @@ async function getAddressTxids(req, res) {
 
 /**
  * To get transaction IDs for single specified address. Address, start and end required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getSingleAddresssTxids(req, res) {
@@ -74,8 +74,8 @@ async function getSingleAddresssTxids(req, res) {
 
 /**
  * To get balance of address/es. Addresses required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getAddressBalance(req, res) {
@@ -102,8 +102,8 @@ async function getAddressBalance(req, res) {
 
 /**
  * To get balance of a single address. Address required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getSingleAddressBalance(req, res) {
@@ -124,8 +124,8 @@ async function getSingleAddressBalance(req, res) {
 
 /**
  * To get address deltas. Addresses, start, end and chain info required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getAddressDeltas(req, res) {
@@ -165,8 +165,8 @@ async function getAddressDeltas(req, res) {
 
 /**
  * To get deltas for a single address. Address, start, end and chain info required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getSingleAddressDeltas(req, res) {
@@ -204,8 +204,8 @@ async function getSingleAddressDeltas(req, res) {
 
 /**
  * To get UTXOs for multiple addresses. Addresses and chain info required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getAddressUtxos(req, res) {
@@ -235,8 +235,8 @@ async function getAddressUtxos(req, res) {
 
 /**
  * To get UTXOs for a single address. Address and chain info required as parameters for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getSingleAddressUtxos(req, res) {
@@ -260,8 +260,8 @@ async function getSingleAddressUtxos(req, res) {
 
 /**
  * To get mempool (memory pool) for multiple addresses. Addresses required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getAddressMempool(req, res) {
@@ -290,8 +290,8 @@ async function getAddressMempool(req, res) {
 
 /**
  * To get mempool (memory pool) for a single address. Address required as parameter for RPC call.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {object} Message.
  */
 async function getSingleAddressMempool(req, res) {

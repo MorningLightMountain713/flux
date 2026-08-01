@@ -220,8 +220,8 @@ async function checkSynced() {
  * gained one, and the list itself stopped being maintained shortly after. The route is kept
  * so a caller asking which images are permitted is told the restriction no longer exists,
  * rather than being handed a list that governs nothing or a 404 that says nothing.
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 function whitelistedRepositories(req, res) {
   const message = 'Image whitelisting has been withdrawn - it was not enforced. '
