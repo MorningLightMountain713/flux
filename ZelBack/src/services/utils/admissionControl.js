@@ -32,11 +32,11 @@ const pending = new Map();
  * @returns {Promise<*>} whatever fn returns
  */
 async function withLock(fn) {
-  await admissionLock.enable();
+  const release = await admissionLock.acquire({ label: 'admissionControl' });
   try {
     return await fn();
   } finally {
-    admissionLock.disable();
+    release();
   }
 }
 

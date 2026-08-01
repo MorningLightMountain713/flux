@@ -110,6 +110,16 @@ describe('peerNotification tests', () => {
       '../utils/fluxEventBus': {
         publish: sinon.stub(),
       },
+      // Stubbed explicitly: proxyquire does not recurse, so nodeSigner would
+      // reach the REAL fluxNetworkHelper, find no key, and return null - and a
+      // node that cannot sign as itself announces nothing, which silently turns
+      // every broadcast assertion below into "the cycle returned early".
+      '../utils/nodeSigner': {
+        nodeSigner: sinon.stub().resolves({
+          pubKey: '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab',
+          sign: () => 'signature',
+        }),
+      },
       '../../lib/log': logStub,
     });
   });
@@ -262,6 +272,15 @@ describe('peerNotification tests', () => {
           getAppShutdownPipelineState: () => null,
         },
         '../utils/fluxEventBus': { publish: sinon.stub() },
+        // Same reason as the map above: nodeSigner does not see this map's
+        // fluxNetworkHelper, so unstubbed it answers null and the cycle returns
+        // before broadcasting anything for this test to read.
+        '../utils/nodeSigner': {
+          nodeSigner: sinon.stub().resolves({
+            pubKey: '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab',
+            sign: () => 'signature',
+          }),
+        },
         '../../lib/log': logStub,
         // no dockerService stub: noCallThru would throw on any require of it
         '../dockerService': null,

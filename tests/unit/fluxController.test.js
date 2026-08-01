@@ -50,10 +50,10 @@ describe('fluxController tests', () => {
     const fc = new FluxController();
 
     const dummy = async () => {
-      await fc.lock.enable();
+      const release = await fc.lock.acquire();
       await new Promise((r) => { setTimeout(r, 5000); });
       dummyVar = true;
-      fc.lock.disable();
+      release();
     };
 
     const waiter = async () => {
@@ -200,9 +200,9 @@ describe('fluxController tests', () => {
     expect(fc.active).to.be.true;
 
     const holder = (async () => {
-      await fc.lock.enable();
+      const release = await fc.lock.acquire();
       await new Promise((r) => { setTimeout(r, 5000); });
-      fc.lock.disable();
+      release();
     })();
 
     const stopping = fc.abort();
@@ -260,10 +260,10 @@ describe('fluxController tests', () => {
 
     let workDone = false;
     const work = (async () => {
-      await fc.getLock('teardown').enable();
+      const release = await fc.getLock('teardown').acquire();
       await new Promise((r) => { setTimeout(r, 5000); });
       workDone = true;
-      fc.getLock('teardown').disable();
+      release();
     })();
 
     let doneWhenStopReturned = null;
@@ -289,10 +289,10 @@ describe('fluxController tests', () => {
 
     let workDone = false;
     const work = (async () => {
-      await lock.enable();
+      const release = await lock.acquire();
       await new Promise((r) => { setTimeout(r, 5000); });
       workDone = true;
-      lock.disable();
+      release();
     })();
 
     await fc.abort();
@@ -316,10 +316,10 @@ describe('fluxController tests', () => {
 
     let named = false;
     const namedWork = (async () => {
-      await fc.getLock('fetcher').enable();
+      const release = await fc.getLock('fetcher').acquire();
       await new Promise((r) => { setTimeout(r, 5000); });
       named = true;
-      fc.getLock('fetcher').disable();
+      release();
     })();
 
     await fc.abort();
@@ -336,9 +336,9 @@ describe('fluxController tests', () => {
     const fc = new FluxController();
 
     const holder = (async () => {
-      await fc.lock.enable();
+      const release = await fc.lock.acquire();
       await new Promise((r) => { setTimeout(r, 5000); });
-      fc.lock.disable();
+      release();
     })();
 
     fc.startLoop(() => 1000);

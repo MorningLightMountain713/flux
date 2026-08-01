@@ -42,7 +42,10 @@ const EXECUTOR_LABELS = { 'runonflux.role': 'fileop' };
 // deliberate: a queued request holds its connection open behind someone else's
 // long copy until an intermediate proxy kills it, which reads to the user as a
 // failure with no explanation.
-const nodeLock = new AsyncLock(Number.MAX_SAFE_INTEGER);
+// maxHoldMs: 0 - a file operation runs in a container and can legitimately take
+// hours, so the default 60s watchdog would not be finding a leak, it would be
+// handing a second operation the slot the first is still using.
+const nodeLock = new AsyncLock(Number.MAX_SAFE_INTEGER, { maxHoldMs: 0 });
 const appLocks = new Map();
 
 // Container ids and staging paths of the operations THIS process has in flight.
@@ -56,7 +59,7 @@ const liveContainerIds = new Set();
 const liveStagingPaths = new Set();
 
 function lockForApp(identifier) {
-  if (!appLocks.has(identifier)) appLocks.set(identifier, new AsyncLock(Number.MAX_SAFE_INTEGER));
+  if (!appLocks.has(identifier)) appLocks.set(identifier, new AsyncLock(Number.MAX_SAFE_INTEGER, { maxHoldMs: 0 }));
   return appLocks.get(identifier);
 }
 
@@ -88,9 +91,11 @@ function retryAfterFor(operation) {
 /**
  * Take a slot for this app, or throw.
  *
- * The read of activeCount and the register() that follows are not separated by
+ * The read of activeCount and the tryAcquire() that follows are not separated by
  * an await, so nothing can interleave between them. It reads like a
- * check-then-act race and is not one - do not "fix" it by adding a lock.
+ * check-then-act race and is not one - do not "fix" it by adding a lock, and do
+ * not reach for acquire(), which is async and would introduce the very gap this
+ * relies on not existing.
  *
  * @param {string} identifier
  * @returns {function(): void} release
@@ -134,15 +139,22 @@ function acquireSlot(identifier) {
     throw busy('This node is running its maximum number of file operations; try again shortly');
   }
 
-  appLock.register();
-  nodeLock.register();
+  // Each release is bound to ITS acquisition, so two operations on the same app
+  // finishing out of order each hand back their own slot. The old head-of-list
+  // release could not: above maxConcurrent = 1 it returned whichever slot was
+  // first, and this is the only caller in the tree that runs a real semaphore.
+  //
+  // Both locks are unbounded counters - the real limits are the two settings
+  // checked above - so tryAcquire never refuses here and never returns null.
+  const releaseApp = appLock.tryAcquire({ label: `volume:${identifier}` });
+  const releaseNode = nodeLock.tryAcquire({ label: 'volume:node' });
 
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    appLock.disable();
-    nodeLock.disable();
+    releaseApp();
+    releaseNode();
     if (!appLock.activeCount) appLocks.delete(identifier);
   };
 }
