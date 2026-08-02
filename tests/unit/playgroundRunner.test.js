@@ -5,6 +5,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const CONFIG = {
   fluxapps: {
     playgroundSessionImageMaxBytes: 2e9,
+    playgroundSessionImageTotalMaxBytes: 6e9,
     playgroundProbeTimeoutMs: 180000,
     playgroundProbeStableMs: 30000,
     playgroundLogLines: 50,
@@ -26,7 +27,7 @@ describe('playgroundRunner', () => {
       imageSize: sinon.stub().resolves(0),
       listContainers: sinon.stub().resolves([]),
       removeNetwork: sinon.stub().resolves(),
-      ensureNetwork: sinon.stub().resolves(),
+      createSessionNetwork: sinon.stub().resolves({ slot: 0, bridge: 'flxpg0', subnet: '172.23.255.0/27' }),
       verifyRepository: sinon.stub().resolves({
         decompressedSizeClearanceBytes: opts.imageBytes ?? 100_000_000,
       }),
@@ -55,7 +56,7 @@ describe('playgroundRunner', () => {
         dockerBufferToString: (b) => String(b),
       },
       '../fluxNetworkHelper': { isPortOpen: stubs.isPortOpen },
-      '../appNetwork/appDockerNetwork': { ensureAppDockerNetwork: stubs.ensureNetwork },
+      './playgroundNetwork': { createSessionNetwork: stubs.createSessionNetwork },
       '../appLifecycle/componentProvisioner': { verifyComponentImage: stubs.verifyComponentImage },
       '../appSecurity/imageManager': { verifyRepository: stubs.verifyRepository },
       util: { promisify: () => async () => 'pulled' },
@@ -377,6 +378,53 @@ describe('playgroundRunner', () => {
       expect(stubs.create.called).to.equal(false);
     });
 
+    // The aggregate replaced the old component-count ceiling: it bounds pull
+    // bandwidth, which is the only cost counting components ever stood in for.
+    it('refuses a spec whose images are individually fine but too big together', async () => {
+      // Four components at 1.8 GB each: each passes the per-image cap, the sum
+      // does not.
+      const comp = component();
+      const many = {
+        sessionId: 'op_1',
+        appName: 'demoapp',
+        fluxId: 'zelid1',
+        results: {},
+        deployment: {
+          startupOrder: ['a', 'b', 'c', 'd'],
+          getComponent: () => comp,
+        },
+      };
+      runner = load({ imageBytes: 1.8e9 });
+
+      let threw = null;
+      await runner.runSession(many).catch((e) => { threw = e; });
+
+      expect(threw).to.be.an('error');
+      expect(threw.kind).to.equal('rejected');
+      expect(threw.message).to.include('in total');
+      expect(stubs.createSessionNetwork.called).to.equal(false);
+    });
+
+    it('admits a many-component spec whose images are small', async () => {
+      const comp = component();
+      const many = {
+        sessionId: 'op_1',
+        appName: 'demoapp',
+        fluxId: 'zelid1',
+        results: {},
+        deployment: {
+          startupOrder: ['a', 'b', 'c', 'd', 'e', 'f'],
+          getComponent: () => comp,
+        },
+      };
+      runner = load({ imageBytes: 3e8 });
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(many);
+
+      expect(stubs.createSessionNetwork.calledOnce).to.equal(true);
+    });
+
     it('refuses an oversize image before pulling anything', async () => {
       runner = load({ imageBytes: 6e9 });
       let threw = null;
@@ -385,7 +433,7 @@ describe('playgroundRunner', () => {
       expect(threw.message).to.include('6.00 GB');
       expect(threw.kind).to.equal('rejected');
       expect(stubs.create.called).to.equal(false);
-      expect(stubs.ensureNetwork.called).to.equal(false);
+      expect(stubs.createSessionNetwork.called).to.equal(false);
     });
   });
 });

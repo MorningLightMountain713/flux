@@ -7,7 +7,6 @@ const CONFIG = {
     playgroundSessionCpu: 2,
     playgroundSessionMemoryMb: 4096,
     playgroundSessionRootFsGb: 10,
-    playgroundSessionMaxComponents: 3,
     playgroundSessionImageMaxBytes: 2e9,
     playgroundNodeSessionsPerHour: 2,
     playgroundCallerSessionsPerHour: 3,
@@ -80,10 +79,12 @@ describe('playgroundLimits', () => {
       expect(reason).to.include('10');
     });
 
-    it('refuses too many components', () => {
-      const reason = limits.ceilingShortfall(totals({ componentCount: 5 }));
-      expect(reason).to.include('5');
-      expect(reason).to.include('3');
+    // No component check any more: a five-component app that fits the resource
+    // ceiling costs this node exactly what a one-component app using the same
+    // costs it. Pull bandwidth was the real concern and the runner bounds that
+    // with an aggregate image budget instead.
+    it('admits a many-component spec that fits every resource dimension', () => {
+      expect(limits.ceilingShortfall(totals({ componentCount: 8 }))).to.equal(null);
     });
 
     it('refuses any swap, and says how to make the spec runnable', () => {
