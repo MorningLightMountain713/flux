@@ -2,10 +2,10 @@ const util = require('util');
 const config = require('config');
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
-const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const playgroundNetwork = require('./playgroundNetwork');
 const playgroundSessionRegistry = require('./playgroundSessionRegistry');
+const playgroundWatcher = require('./playgroundWatcher');
 const componentProvisioner = require('../appLifecycle/componentProvisioner');
 const { verifyRepository } = require('../appSecurity/imageManager');
 
@@ -35,6 +35,20 @@ function probeTimeoutMs() {
 
 function probeStableMs() {
   return config.fluxapps.playgroundProbeStableMs ?? 30_000;
+}
+
+// How often to knock on a declared port while waiting for a component with no
+// health check to start serving. Nothing reports "the app has bound its port",
+// so this rung has to ask.
+function tcpRetryMs() {
+  return config.fluxapps.playgroundTcpRetryMs ?? 2_000;
+}
+
+// How often to sample CPU. The only genuine timer left in a session: docker
+// reports state transitions but nothing reports how busy a container is, and
+// mining detection wants an average across the window rather than fine detail.
+function cpuSampleMs() {
+  return config.fluxapps.playgroundCpuSampleMs ?? 15_000;
 }
 
 function logLines() {
@@ -225,26 +239,20 @@ function throwIfCancelled(session, hooks) {
  *
  * @returns {Promise<object>} the component's verdict
  */
-async function probeComponent(component, deadlineNs, shouldCancel = () => false, cpu = null) {
+async function probeComponent(component, watcher, deadlineNs, shouldCancel = () => false) {
   const id = component.identifier;
   const started = process.hrtime.bigint();
   const stableNs = BigInt(probeStableMs()) * 1_000_000n;
 
-  let sawHealthField = false;
-
   for (;;) {
-    // eslint-disable-next-line no-await-in-loop
-    const info = await dockerService.dockerContainerInspect(id);
-    if (!info) {
+    const state = watcher.state(id);
+
+    if (state.gone) {
       return { passed: false, basis: 'container', detail: 'The container disappeared before it could be probed.' };
     }
 
-    const running = Boolean(info.State && info.State.Running);
-    const health = info.State?.Health?.Status ?? null;
-    if (health) sawHealthField = true;
-
-    if (!running) {
-      const exitCode = info.State?.ExitCode ?? null;
+    if (state.known && !state.running) {
+      const { exitCode } = state;
       // Exit 0 is ambiguous and is reported as such rather than guessed at: a
       // job container that finished its work and a server that gave up on its
       // configuration both leave 0 behind.
@@ -258,19 +266,19 @@ async function probeComponent(component, deadlineNs, shouldCancel = () => false,
       };
     }
 
-    if (health === 'healthy') {
+    if (state.health === 'healthy') {
       return { passed: true, basis: 'healthcheck', detail: 'The container reported healthy.' };
     }
-    if (health === 'unhealthy') {
+    if (state.health === 'unhealthy') {
       return { passed: false, basis: 'healthcheck', detail: 'The container reported unhealthy.' };
     }
 
     // No health check on this image at all: fall to the weaker rungs. A
     // 'starting' status means there IS one and it has not settled, so keep
     // waiting for it rather than passing the container on weaker evidence.
-    if (!sawHealthField) {
+    if (!state.hasHealthCheck) {
       // eslint-disable-next-line no-await-in-loop
-      const reached = await probeTcp(component, info);
+      const reached = await probeTcp(component, state.address);
       if (reached) {
         return { passed: true, basis: 'tcp', detail: `Accepted a TCP connection on port ${reached}.` };
       }
@@ -298,22 +306,20 @@ async function probeComponent(component, deadlineNs, shouldCancel = () => false,
       return {
         passed: false,
         basis: 'timeout',
-        detail: health
-          ? `The health check had not passed after ${Math.round(probeTimeoutMs() / 1000)}s (last status: ${health}).`
+        detail: state.health
+          ? `The health check had not passed after ${Math.round(probeTimeoutMs() / 1000)}s (last status: ${state.health}).`
           : `No verdict after ${Math.round(probeTimeoutMs() / 1000)}s.`,
       };
     }
 
-    // Sampled on the same tick as the inspect, so watching a container costs one
-    // extra call rather than a loop of its own.
-    if (cpu) {
-      // eslint-disable-next-line no-await-in-loop
-      const fraction = await sampleCpuFraction(component);
-      if (fraction !== null) cpu.record(fraction);
-    }
-
+    // Wait for the container to DO something rather than asking whether it has.
+    // A health-checked image wakes the instant docker reports a transition; an
+    // image without one has nothing to report a bound port, so its TCP knock is
+    // retried on a cadence - the one question here no event can answer.
+    const remainingNs = deadlineNs - process.hrtime.bigint();
+    const remainingMs = Math.max(1, Number(remainingNs / 1_000_000n));
     // eslint-disable-next-line no-await-in-loop
-    await serviceHelper.delay(2000);
+    await watcher.changedOr(Math.min(tcpRetryMs(), remainingMs));
   }
 }
 
@@ -339,9 +345,7 @@ function probeablePorts(component) {
  *
  * @returns {Promise<number|null>} the port that accepted, or null
  */
-async function probeTcp(component, info) {
-  const networks = info.NetworkSettings?.Networks ?? {};
-  const address = Object.values(networks).map((n) => n.IPAddress).find(Boolean);
+async function probeTcp(component, address) {
   if (!address) return null;
 
   // eslint-disable-next-line no-restricted-syntax
@@ -544,6 +548,14 @@ async function runSession(session, hooks = {}) {
   session.subnet = network.subnet;
   status(`Session network ready on ${network.subnet}, capped and default-deny outbound`);
 
+  // Subscribed BEFORE anything starts, so no transition can happen unobserved.
+  // Inspecting first and subscribing after would leave a window in which a
+  // container that died immediately fires its event into nothing, and the
+  // session would then wait out its whole deadline for a verdict that had
+  // already happened.
+  session.watcher = playgroundWatcher.createSessionWatcher(session.sessionId);
+  await session.watcher.start(components.map((component) => component.identifier));
+
   // eslint-disable-next-line no-restricted-syntax
   for (const component of components) {
     throwIfCancelled(session, hooks);
@@ -574,30 +586,36 @@ async function runSession(session, hooks = {}) {
   // question is whether this SESSION sat at full tilt, and a miner with a
   // sidecar would otherwise dilute its own reading.
   const cpu = cpuAccumulator(config.fluxapps.playgroundMinerCpuBusyFraction ?? 0.9);
+  // Runs for the probe AND the window that follows: the question is what this
+  // session did overall, so the sampling must not stop when the verdict lands.
+  const stopCpuSampler = startCpuSampler(components, session.watcher, cpu);
 
-  // eslint-disable-next-line no-restricted-syntax
-  for (const component of components) {
-    throwIfCancelled(session, hooks);
-    status(`Probing ${component.name}...`);
-    // eslint-disable-next-line no-await-in-loop
-    const probe = await probeComponent(component, deadlineNs, () => Boolean(hooks.isCancelled && hooks.isCancelled()), cpu);
-    // No log snapshot here: the follow keeps writing after this line, so
-    // anything captured now would be stale by the time it was read. The poll
-    // builds the view from the buffer, at the cursor the caller asked for.
-    session.results[component.name] = { started: true, probe };
-    status(`${component.name}: ${probe.passed ? 'passed' : 'failed'} (${probe.basis})`);
+  try {
+    // eslint-disable-next-line no-restricted-syntax
+    for (const component of components) {
+      throwIfCancelled(session, hooks);
+      status(`Probing ${component.name}...`);
+      // eslint-disable-next-line no-await-in-loop
+      const probe = await probeComponent(component, session.watcher, deadlineNs, () => Boolean(hooks.isCancelled && hooks.isCancelled()));
+      // No log snapshot here: the follow keeps writing after this line, so
+      // anything captured now would be stale by the time it was read. The poll
+      // builds the view from the buffer, at the cursor the caller asked for.
+      session.results[component.name] = { started: true, probe };
+      status(`${component.name}: ${probe.passed ? 'passed' : 'failed'} (${probe.basis})`);
+    }
+
+    // The probe has a verdict; the SESSION has not ended. This is the window the
+    // owner actually watches in - logs accumulating, the app staying up or
+    // falling over - and it is what the design's duty cycle is costed against:
+    // two sessions of fifteen running minutes is the "~30 minutes and ~1
+    // core-hour per hour" a node donates.
+    //
+    // Timed from when the containers actually started, not from when the request
+    // was accepted, so a slow registry eats into the pulls rather than into this.
+    await observeSession(session, components, session.watcher, hooks, status);
+  } finally {
+    stopCpuSampler();
   }
-
-  // The probe has a verdict; the SESSION has not ended. This is the window the
-  // owner actually watches in - logs accumulating, the app staying up or falling
-  // over - and it is what the design's duty cycle is costed against: two
-  // sessions of fifteen running minutes is the "~30 minutes and ~1 core-hour per
-  // hour" a node donates. Returning at the verdict, as this used to, ended a
-  // session in well under a minute and gave the owner nothing to watch.
-  //
-  // Timed from when the containers actually started, not from when the request
-  // was accepted, so a slow registry eats into the pulls rather than into this.
-  await observeSession(session, components, cpu, hooks, status);
 
   session.cpuBusyFraction = cpu.result();
 
@@ -615,38 +633,59 @@ async function runSession(session, hooks = {}) {
  * recently, and keeps sampling CPU, which is what makes the running window
  * measurable at all.
  */
-async function observeSession(session, components, cpu, hooks, status) {
+async function observeSession(session, components, watcher, hooks, status) {
   const deadlineNs = process.hrtime.bigint() + BigInt(sessionTtlMs()) * 1_000_000n;
+  const identifiers = components.map((component) => component.identifier);
   session.runningSince = Date.now();
   status(`Running. Watching for up to ${Math.round(sessionTtlMs() / 60000)} minutes.`);
 
   while (process.hrtime.bigint() < deadlineNs) {
     throwIfCancelled(session, hooks);
 
-    let anyRunning = false;
-    // eslint-disable-next-line no-restricted-syntax
-    for (const component of components) {
-      // eslint-disable-next-line no-await-in-loop
-      const info = await dockerService.dockerContainerInspect(component.identifier);
-      if (info && info.State && info.State.Running) {
-        anyRunning = true;
-        // eslint-disable-next-line no-await-in-loop
-        const fraction = await sampleCpuFraction(component);
-        if (fraction !== null) cpu.record(fraction);
-      }
-    }
-
-    if (!anyRunning) {
+    if (!watcher.anyRunning(identifiers)) {
       status('Every component has stopped; ending the session.');
       return;
     }
 
+    // The last container stopping wakes this immediately; otherwise it sleeps
+    // until the deadline. Nothing is asked of docker in between.
+    const remainingNs = deadlineNs - process.hrtime.bigint();
     // eslint-disable-next-line no-await-in-loop
-    await serviceHelper.delay(5000);
+    await watcher.changedOr(Math.max(1, Number(remainingNs / 1_000_000n)));
   }
 
   session.reachedDeadline = true;
   status('Reached the session time limit.');
+}
+
+/**
+ * Sample every running container's CPU on a cadence for as long as the session
+ * lasts, into the session's one accumulator.
+ *
+ * @returns {function} stop handle
+ */
+function startCpuSampler(components, watcher, cpu) {
+  let stopped = false;
+  let timer = null;
+
+  const tick = async () => {
+    // eslint-disable-next-line no-restricted-syntax
+    for (const component of components) {
+      if (stopped) return;
+      if (!watcher.state(component.identifier).running) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const fraction = await sampleCpuFraction(component);
+      if (fraction !== null) cpu.record(fraction);
+    }
+    if (!stopped) timer = setTimeout(tick, cpuSampleMs());
+  };
+
+  timer = setTimeout(tick, cpuSampleMs());
+
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
 }
 
 /**
@@ -659,6 +698,10 @@ async function observeSession(session, components, cpu, hooks, status) {
  */
 async function teardownSession(session) {
   const removed = [];
+
+  // The event subscription goes first: the removals below are this session's
+  // own doing, so there is nothing left to learn from watching them.
+  if (session.watcher) session.watcher.stop();
 
   // Before the containers go: each follow ends when its container does, but a
   // session cancelled while everything is still up would otherwise leave them
