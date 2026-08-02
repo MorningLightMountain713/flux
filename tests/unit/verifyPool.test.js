@@ -1,5 +1,7 @@
 const chai = require('chai');
 const sinon = require('sinon');
+const proxyquire = require('proxyquire');
+const EventEmitter = require('events');
 
 const { expect } = chai;
 
@@ -95,5 +97,164 @@ describe('verifyPool tests', () => {
   it('should handle empty input', async () => {
     const results = await verifyPool.verify([]);
     expect(results).to.deep.equal([]);
+  });
+});
+
+// The real worker replies once per batch, in order, with a length-matched
+// array - so against it the failure modes below are unreachable. They are what
+// happens when that stops being true, which nothing in the worker enforces.
+describe('verifyPool worker protocol', () => {
+  const ITEM = { messageToVerify: 'm', pubKey: 'p', signature: 's' };
+
+  function makePool() {
+    const workers = [];
+
+    class FakeWorker extends EventEmitter {
+      constructor() {
+        super();
+        this.posted = [];
+        this.terminated = false;
+        workers.push(this);
+      }
+
+      postMessage(msg) {
+        this.posted.push(msg);
+      }
+
+      terminate() {
+        this.terminated = true;
+      }
+    }
+
+    const pool = proxyquire('../../ZelBack/src/services/utils/verifyPool', {
+      worker_threads: { Worker: FakeWorker },
+      '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+    });
+
+    return { pool, workers };
+  }
+
+  async function rejection(promise) {
+    try {
+      await promise;
+    } catch (error) {
+      return error;
+    }
+
+    return null;
+  }
+
+  it('matches a reply to its own batch, not to whichever arrived first', async () => {
+    // The defect this closes: resolving by arrival order means one extra
+    // postMessage in the worker shifts every later reply onto the wrong batch,
+    // and the caller maps results back positionally - so the node accepts
+    // signatures it never verified.
+    const { pool, workers } = makePool();
+    pool.start(1);
+
+    const first = pool.verify([ITEM]);
+    const second = pool.verify([ITEM]);
+    const [w] = workers;
+    expect(w.posted).to.have.lengthOf(2);
+
+    // Answer them the wrong way round.
+    w.emit('message', { id: w.posted[1].id, results: [true] });
+    w.emit('message', { id: w.posted[0].id, results: [false] });
+
+    expect(await first).to.deep.equal([false]);
+    expect(await second).to.deep.equal([true]);
+
+    pool.stop();
+  });
+
+  it('ignores a reply for a batch it is not waiting on', async () => {
+    const { pool, workers } = makePool();
+    pool.start(1);
+
+    const result = pool.verify([ITEM]);
+    const [w] = workers;
+
+    w.emit('message', { id: 9999, results: [true] });
+    w.emit('message', { id: w.posted[0].id, results: [false] });
+
+    expect(await result).to.deep.equal([false]);
+
+    pool.stop();
+  });
+
+  it('refuses a reply carrying the wrong number of verdicts', async () => {
+    // A short array would leave the tail of the batch reading as unverified,
+    // so fail closed rather than hand the caller something to index into.
+    const { pool, workers } = makePool();
+    pool.start(1);
+
+    const result = pool.verify([ITEM, ITEM]);
+    const [w] = workers;
+    w.emit('message', { id: w.posted[0].id, results: [true] });
+
+    const error = await rejection(result);
+    expect(error).to.be.an('error');
+    expect(error.message).to.include('1 results for a batch of 2');
+
+    pool.stop();
+  });
+
+  it('resubmits an outstanding batch when its worker exits CLEANLY', async () => {
+    // The defect this closes: only a non-zero exit resubmitted, so a clean one
+    // left the promise unsettled, verify()'s Promise.all never settled, and the
+    // gossip handler awaiting it hung forever holding its references.
+    const { pool, workers } = makePool();
+    pool.start(1);
+
+    const result = pool.verify([ITEM]);
+    workers[0].emit('exit', 0);
+
+    expect(workers).to.have.lengthOf(2);
+    const replacement = workers[1];
+    expect(replacement.posted).to.have.lengthOf(1);
+
+    replacement.emit('message', { id: replacement.posted[0].id, results: [true] });
+    expect(await result).to.deep.equal([true]);
+
+    pool.stop();
+  });
+
+  it('gives up on a batch that keeps killing its worker', async () => {
+    const { pool, workers } = makePool();
+    pool.start(1);
+
+    const result = pool.verify([ITEM]);
+    workers[0].emit('exit', 1);
+    workers[1].emit('exit', 1);
+    workers[2].emit('exit', 1);
+
+    const error = await rejection(result);
+    expect(error).to.be.an('error');
+    expect(error.message).to.include('gave up after 3 attempts');
+
+    pool.stop();
+  });
+
+  it('settles outstanding batches when the pool is stopped', async () => {
+    const { pool, workers } = makePool();
+    pool.start(1);
+
+    const result = pool.verify([ITEM]);
+    pool.stop();
+
+    const error = await rejection(result);
+    expect(error).to.be.an('error');
+    expect(error.message).to.include('stopped');
+    expect(workers[0].terminated).to.equal(true);
+  });
+
+  it('does not respawn a worker that exits after the pool was stopped', async () => {
+    const { pool, workers } = makePool();
+    pool.start(1);
+    pool.stop();
+
+    workers[0].emit('exit', 1);
+
+    expect(workers).to.have.lengthOf(1);
   });
 });
