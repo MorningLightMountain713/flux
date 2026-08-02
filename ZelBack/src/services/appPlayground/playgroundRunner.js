@@ -5,6 +5,7 @@ const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const playgroundNetwork = require('./playgroundNetwork');
+const playgroundSessionRegistry = require('./playgroundSessionRegistry');
 const componentProvisioner = require('../appLifecycle/componentProvisioner');
 const { verifyRepository } = require('../appSecurity/imageManager');
 
@@ -23,11 +24,10 @@ const { verifyRepository } = require('../appSecurity/imageManager');
 
 const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
 
-// Marks every container and network a session owns. The reaper keys on it, and
-// so does the app janitor's orphan sweep, which must leave these alone: it
-// removes containers with no installed-app row, and a playground session is
-// exactly that by design.
-const PLAYGROUND_LABEL = 'flux.playground';
+// Marks every container and network a session owns. Defined in the session
+// registry, which carries no dependencies, because the subsystems that must
+// RECOGNISE a session container cannot import this module.
+const { PLAYGROUND_LABEL } = playgroundSessionRegistry;
 
 function probeTimeoutMs() {
   return config.fluxapps.playgroundProbeTimeoutMs ?? 180_000;

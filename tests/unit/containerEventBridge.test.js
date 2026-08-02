@@ -11,7 +11,7 @@ describe('containerEventBridge', () => {
   beforeEach(() => {
     stubs = {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
-      dockerService: { dockerGetEvents: sinon.stub() },
+      dockerService: { dockerGetEvents: sinon.stub(), dockerListContainers: sinon.stub().resolves([]) },
       dockerEventStream: {
         createDockerEventStream: sinon.stub().callsFake((options) => {
           stubs.subscriptionOptions = options;
@@ -187,6 +187,60 @@ describe('containerEventBridge', () => {
   // The stream plumbing itself - chunk reassembly, one-resubscribe-per-outage,
   // the stale-stream guard - belongs to dockerEventStream and is tested there.
   // What is the bridge's own is WHAT it asks for and WHERE the events go.
+  // A session runs under the spec's own app name, so it passes isFluxContainer.
+  // Recognising it has to happen before anything routes.
+  describe('playground containers', () => {
+    const { PLAYGROUND_LABEL } = require('../../ZelBack/src/services/appPlayground/playgroundSessionRegistry');
+
+    const sessionEvent = (action, name) => ({
+      Action: action,
+      Actor: { Attributes: { name, exitCode: '1', [PLAYGROUND_LABEL]: 'sess-abc' } },
+    });
+
+    it('does not record an exit for a session container', async () => {
+      // recordExit upserts, so this would leave an appsRuntimeState row for a
+      // component that was never installed, and nothing ever removes it.
+      await containerEventBridge.handleContainerEvent(sessionEvent('die', 'fluxmyapp'));
+
+      expect(stubs.appsRuntimeState.recordExit.called).to.be.false;
+    });
+
+    it('does not enqueue a reconcile for a session container', async () => {
+      // A session component that dies IS the verdict its owner is shown; a
+      // restart policy applied to it would report a pass for an app that crashes.
+      await containerEventBridge.handleContainerEvent(sessionEvent('die', 'fluxmyapp'));
+
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
+    });
+
+    it('drops destroy, start and health_status for a session container too', async () => {
+      await containerEventBridge.handleContainerEvent(sessionEvent('destroy', 'fluxmyapp'));
+      await containerEventBridge.handleContainerEvent(sessionEvent('start', 'fluxmyapp'));
+      await containerEventBridge.handleContainerEvent(sessionEvent('health_status: healthy', 'fluxmyapp'));
+
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueDependents.called).to.be.false;
+    });
+
+    it('drops a session container network disconnect without resolving it', async () => {
+      await containerEventBridge.handleContainerEvent({
+        Type: 'network',
+        Action: 'disconnect',
+        Actor: { Attributes: { name: 'fluxDockerNetwork_myapp', container: 'abc', [PLAYGROUND_LABEL]: 'sess-abc' } },
+      });
+
+      expect(stubs.dockerService.dockerListContainers.called).to.be.false;
+      expect(stubs.appReconciler.enqueue.called).to.be.false;
+    });
+
+    it('still handles an ordinary flux container - the drop is label-scoped', async () => {
+      await containerEventBridge.handleContainerEvent(dieEvent('fluxwww_app', 137));
+
+      expect(stubs.appReconciler.enqueue.calledOnceWith('fluxwww_app')).to.be.true;
+      expect(stubs.appsRuntimeState.recordExit.calledOnceWith('fluxwww_app', 137)).to.be.true;
+    });
+  });
+
   describe('event subscription', () => {
     it('asks for the container lifecycle events and network disconnects', async () => {
       await containerEventBridge.start();
