@@ -83,10 +83,12 @@ describe('playgroundRunner', () => {
       return { stream, stop };
     });
 
+    stubs.logError = sinon.stub();
+
     return proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundRunner', {
       config: CONFIG,
       '../../lib/log': {
-        info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),
+        info: sinon.stub(), warn: sinon.stub(), error: stubs.logError,
       },
       '../dockerService': {
         dockerContainerInspect: stubs.inspect,
@@ -414,6 +416,40 @@ describe('playgroundRunner', () => {
       await runner.teardownSession(session());
       expect(stubs.forceRemove.calledWith('web_demoapp')).to.equal(true);
       expect(stubs.removeNetwork.calledWith('demoapp')).to.equal(true);
+    });
+
+    // Every removal swallows its own failure so a session still gets marked
+    // finished. Without a check afterwards, a partial teardown reads in the log
+    // exactly like a clean one.
+    it('says so, loudly, when a container survives the teardown', async () => {
+      stubs.forceRemove.rejects(new Error('device busy'));
+      stubs.listContainers.resolves([{
+        Id: 'abc', Names: ['/web_demoapp'], Labels: { 'flux.playground': 'op_1' },
+      }]);
+
+      await runner.teardownSession(session());
+
+      const said = stubs.logError.args.map((args) => String(args[0])).join(' ');
+      expect(said).to.include('web_demoapp');
+      expect(said).to.include('left');
+    });
+
+    it('says nothing when everything really did go', async () => {
+      stubs.listContainers.resolves([]);
+
+      await runner.teardownSession(session());
+
+      expect(stubs.logError.called).to.equal(false);
+    });
+
+    it('ignores containers belonging to another session', async () => {
+      stubs.listContainers.resolves([{
+        Id: 'abc', Names: ['/web_other'], Labels: { 'flux.playground': 'op_someone_else' },
+      }]);
+
+      await runner.teardownSession(session());
+
+      expect(stubs.logError.called).to.equal(false);
     });
 
     // Teardown runs from the completion path, the deadline timer and the cancel

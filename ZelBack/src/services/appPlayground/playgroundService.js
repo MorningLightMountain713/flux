@@ -326,6 +326,24 @@ async function submitSession(body, caller = {}) {
 
   await assertNameFree(spec.name);
 
+  // Collect anything a previous session left behind, BEFORE this one claims
+  // capacity or a subnet. It reads docker's own labels rather than our record of
+  // what is live, so it is the one check that catches a session we lost track of
+  // rather than one whose teardown merely failed. The periodic sweep does the
+  // same thing; running it here is what makes "at most one session's debris"
+  // true at the only moment it matters, instead of up to a sweep interval later.
+  //
+  // Never fatal: a docker that cannot list containers will fail the session a
+  // few steps further on, with a better message than this could give.
+  try {
+    const collected = await playgroundRunner.reapOrphans(playgroundSessionRegistry.liveIds());
+    if (collected.removed) {
+      log.warn(`playground: collected ${collected.removed} abandoned session container(s) before starting a new session`);
+    }
+  } catch (error) {
+    log.warn(`playground: could not check for abandoned containers before starting: ${error.message}`);
+  }
+
   const session = {
     appName: spec.name,
     fluxId,
@@ -401,15 +419,6 @@ function getSession(jobId, fluxId = null) {
 }
 
 /**
- * Remove playground containers this node no longer has a session for. Run at
- * startup, where it collects everything a restart abandoned, and periodically
- * after that for whatever a failed teardown left.
- */
-async function reap() {
-  return playgroundRunner.reapOrphans(playgroundSessionRegistry.liveIds());
-}
-
-/**
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
@@ -454,6 +463,5 @@ module.exports = {
   submitSessionAPI,
   getSession,
   sessionDetail,
-  reap,
   reset,
 };

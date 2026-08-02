@@ -736,7 +736,37 @@ async function teardownSession(session) {
     log.warn(`playground: could not remove network for ${session.appName}: ${error.message}`);
   }
 
+  // Check rather than assume. Every removal above swallows its own failure so a
+  // session still gets marked finished, which means without this a partial
+  // teardown is indistinguishable in the log from a clean one. Asking docker
+  // what is actually still labelled turns that into a stated fact - and names
+  // the containers, so whoever reads it knows what the sweep will be collecting.
+  try {
+    const survivors = await labelledContainers(session.sessionId);
+    if (survivors.length) {
+      log.error(
+        `playground: teardown of ${session.appName} left ${survivors.length} container(s) behind `
+        + `(${survivors.join(', ')}); the orphan sweep will collect them`,
+      );
+    }
+  } catch (error) {
+    log.warn(`playground: could not confirm teardown of ${session.appName}: ${error.message}`);
+  }
+
   return removed;
+}
+
+/** Which session a container belongs to, or null if it is not a session's. */
+function sessionIdOf(container) {
+  return (container.Labels && container.Labels[PLAYGROUND_LABEL]) || null;
+}
+
+/** The container names docker still holds for one session. */
+async function labelledContainers(sessionId) {
+  const containers = await dockerService.dockerListContainers(true);
+  return containers
+    .filter((container) => sessionIdOf(container) === sessionId)
+    .map((container) => ((container.Names && container.Names[0]) ? container.Names[0].slice(1) : container.Id));
 }
 
 /**
@@ -759,7 +789,7 @@ async function reapOrphans(liveSessionIds) {
   }
 
   const orphans = containers.filter((container) => {
-    const sessionId = container.Labels && container.Labels[PLAYGROUND_LABEL];
+    const sessionId = sessionIdOf(container);
     return sessionId && !liveSessionIds.has(sessionId);
   });
 
