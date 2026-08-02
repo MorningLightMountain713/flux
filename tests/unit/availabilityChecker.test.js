@@ -290,6 +290,10 @@ describe('availabilityChecker tests', () => {
       listInstalledAppsStub.resolves(apps);
       sinon.stub(upnpService, 'isUPNP').returns(true);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
+      // The port under test is chosen at random from portMin..portMax, and the
+      // test config bans 81-442 for UPNP - so leaving this unstubbed returns
+      // early on roughly one run in 180 and never reaches the mapping at all.
+      sinon.stub(fluxNetworkHelper, 'isPortUPNPBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomSocketAddress').resolves('192.168.1.200:16127');
       sinon.stub(fluxNetworkHelper, 'isFirewallActive').resolves(true);
       sinon.stub(fluxNetworkHelper, 'allowPort').resolves();
@@ -318,6 +322,9 @@ describe('availabilityChecker tests', () => {
       listInstalledAppsStub.resolves(apps);
       sinon.stub(upnpService, 'isUPNP').returns(true);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
+      // Same randomness as above: unstubbed, a banned random port returns before
+      // the mapping is ever attempted.
+      sinon.stub(fluxNetworkHelper, 'isPortUPNPBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomSocketAddress').resolves('192.168.1.200:16127');
       sinon.stub(fluxNetworkHelper, 'isFirewallActive').resolves(true);
       sinon.stub(fluxNetworkHelper, 'allowPort').resolves();
