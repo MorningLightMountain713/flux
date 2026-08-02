@@ -28,6 +28,9 @@ const JOB_TIMEOUT_MS = 60000;
 
 let slots = [];
 let queue = [];
+// Monotonic for the life of the process, never reset by stop(): an id a
+// terminated worker might still reply with must never name a live batch.
+let nextBatchId = 0;
 let reapTimer = null;
 let workerPath = DEFAULT_WORKER_PATH;
 
@@ -89,7 +92,7 @@ function dispatch() {
       job.attempts += 1;
 
       try {
-        slot.worker.postMessage(job.chunk);
+        slot.worker.postMessage({ id: job.id, items: job.chunk });
       } catch (error) {
         // The handover never happened, so the slot is still free - claiming it
         // before posting would retire the slot for the life of the process.
@@ -166,9 +169,32 @@ function createSlot() {
 
   worker.on('error', (err) => log.error(`Verify worker error: ${err.message}`));
 
-  worker.on('message', (results) => {
-    const job = clearJob(slot);
-    if (job) job.resolve(results);
+  worker.on('message', (reply) => {
+    // By id, never by arrival: the caller maps results back positionally
+    // (fluxCommunication.js batchVerifyBroadcasts), so a reply attached to the
+    // wrong batch would have this node accept signatures it never verified,
+    // silently. A slot holds one job at a time, so the id check is a second lock
+    // on the same door - and it is the one that still holds if a future worker
+    // posts twice for one request, which nothing in verifyWorker enforces.
+    const { job } = slot;
+    if (!job || !reply || reply.id !== job.id) {
+      log.warn(`Verify worker replied for batch ${reply && reply.id}, which this slot is not holding; dropped`);
+      return;
+    }
+    clearJob(slot);
+
+    // One verdict per item or the whole reply is untrustworthy: a short array
+    // would leave the tail of the batch reading as unverified, and a long one
+    // means the worker is not answering the question that was asked. Resolved
+    // as unverified rather than rejected, which is this pool's rule everywhere
+    // else - a caller drops the batch it could not check instead of losing the
+    // sync response the rest of it arrived in.
+    if (!Array.isArray(reply.results) || reply.results.length !== job.chunk.length) {
+      abandonJob(job, `worker returned ${Array.isArray(reply.results) ? reply.results.length : 'no'} `
+        + `results for a batch of ${job.chunk.length}`);
+    } else {
+      job.resolve(reply.results);
+    }
     dispatch();
     scheduleReap();
   });
@@ -248,7 +274,10 @@ async function verify(items) {
   const jobs = [];
   for (let offset = 0; offset < items.length; offset += CHUNK_SIZE) {
     const chunk = items.slice(offset, offset + CHUNK_SIZE);
-    const job = { chunk, attempts: 0, resolve: null };
+    nextBatchId += 1;
+    const job = {
+      id: nextBatchId, chunk, attempts: 0, resolve: null,
+    };
     job.promise = new Promise((resolve) => { job.resolve = resolve; });
     jobs.push(job);
   }
