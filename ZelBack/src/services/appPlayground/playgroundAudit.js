@@ -6,6 +6,7 @@ const fluxBroadcastHelper = require('../utils/fluxBroadcastHelper');
 const ingressEncryptionKey = require('../utils/ingressEncryptionKey');
 const ingressCapture = require('../utils/ingressCapture');
 const { getSpecBackend } = require('../utils/specLibs');
+const playgroundAbuse = require('./playgroundAbuse');
 
 // What a node keeps about a playground session it ran.
 //
@@ -48,11 +49,13 @@ async function captureIngress(req) {
  * The behavioural summary a miner profile is read from.
  *
  * The shape is unmistakable and it is the shape, not any single number, that
- * identifies it: CPU pegged for the whole session, nothing ever listening, the
- * probe absent or failing, and one long-lived outbound flow. A legitimate app is
- * the inverse - it starts, binds, answers, and then mostly idles. Recorded as
- * facts rather than a verdict, so the judgement can be revised without the
- * evidence having to be re-gathered.
+ * identifies it: CPU pegged for the whole session, nothing ever answering, and
+ * running to the deadline rather than exiting. A legitimate app is the inverse -
+ * it starts, binds, answers, and then mostly idles.
+ *
+ * Recorded as facts rather than as a verdict, so the judgement can be revised
+ * later without the evidence having to be gathered again. playgroundAbuse turns
+ * these into the verdict.
  */
 function behaviour(session) {
   const components = Object.values(session.results || {});
@@ -67,7 +70,13 @@ function behaviour(session) {
     // than serving.
     everAcceptedConnection: probes.some((p) => p.basis === 'tcp' || p.basis === 'healthcheck'),
     weakPassOnly: probes.length > 0 && probes.every((p) => p.basis === 'uptime'),
-    ranToDeadline: session.outcome === 'expired',
+    // Fraction of the session spent at full tilt against its OWN allocation.
+    // null means it could not be sampled, which the miner check treats as
+    // "cannot tell" rather than as "idle".
+    cpuBusyFraction: session.cpuBusyFraction ?? null,
+    // Ran its full window rather than stopping on its own. Set by the runner,
+    // which owns the running clock and times it from the containers starting.
+    ranToDeadline: Boolean(session.reachedDeadline),
     durationMs: session.endedAt && session.startedAt ? session.endedAt - session.startedAt : null,
   };
 }
@@ -104,6 +113,14 @@ async function build(session) {
   const observedAt = Date.now();
   const node = await fluxNetworkHelper.getFluxNodePublicKey();
   const summary = behaviour(session);
+  const flagged = playgroundAbuse.looksLikeMining(summary);
+
+  // In the clear alongside the summary, NOT inside the seal. The node has to be
+  // able to match a returning caller against it, which it could never do with a
+  // value only fluxteam can open - that is the whole reason this field exists
+  // rather than the identity being read back out. One-way and node-local: it
+  // cannot be reversed into a FluxID, and it does not compare across nodes.
+  const callerFingerprint = await playgroundAbuse.fingerprint(session.fluxId, session.sourceIp);
 
   // Signed over the sealed bytes and the cleartext summary together, so neither
   // half can be swapped for another session's while the signature still checks.
@@ -124,6 +141,8 @@ async function build(session) {
     startedAt: session.startedAt,
     endedAt: session.endedAt,
     behaviour: summary,
+    callerFingerprint,
+    flagged,
   };
 }
 
@@ -153,8 +172,29 @@ async function record(session) {
   }
 }
 
+/**
+ * Whether this node flagged the same caller within the given window.
+ *
+ * Matched on the fingerprint, which is all the node has: the identity itself is
+ * sealed and unreadable here. Indexed lookup on two equality fields plus a
+ * range, so it stays cheap on the admission path.
+ *
+ * @param {string} fingerprint - from playgroundAbuse.fingerprint()
+ * @param {number} since - epoch ms; records older than this do not count
+ * @returns {Promise<object|null>}
+ */
+async function findFlaggedSince(fingerprint, since) {
+  return dbHelper.findOneInDatabase(
+    localDb(),
+    collection(),
+    { callerFingerprint: fingerprint, flagged: true, observedAt: { $gte: since } },
+    { projection: { _id: 1, observedAt: 1 } },
+  );
+}
+
 module.exports = {
   AUDIT_DOMAIN,
+  findFlaggedSince,
   captureIngress,
   behaviour,
   build,

@@ -12,6 +12,7 @@ const nodeIdentityCollection = config.database.local.collections.nodeIdentity;
 
 const PGP_IDENTITY_KEY = 'pgpIdentity';
 const LAST_KNOWN_IP_KEY = 'lastKnownIp';
+const PLAYGROUND_FINGERPRINT_KEY = 'playgroundFingerprintSecret';
 
 function db() {
   const connection = dbHelper.databaseConnection();
@@ -90,11 +91,59 @@ async function setLastKnownIp(ip) {
   return true;
 }
 
+/**
+ * The secret this node fingerprints playground callers with, minting one on
+ * first use.
+ *
+ * Persisted rather than held in memory because it has to outlive a restart: the
+ * fingerprints already written into audit records are only comparable against
+ * the secret that produced them, so a fresh secret would silently void every
+ * outstanding block rather than expiring it.
+ *
+ * Node-local and never shared. It exists so the node can recognise a caller it
+ * refused earlier without keeping their identity in readable form — a fingerprint
+ * is meaningless to anyone who does not hold this.
+ *
+ * @param {() => string} mint - generates a new secret when none is stored
+ * @returns {Promise<string|null>} the secret, or null when the DB is not up
+ */
+async function getOrCreatePlaygroundFingerprintSecret(mint) {
+  const database = db();
+  if (!database) return null;
+
+  const doc = await dbHelper.findOneInDatabase(
+    database,
+    nodeIdentityCollection,
+    { _id: PLAYGROUND_FINGERPRINT_KEY },
+  );
+  if (doc && doc.secret) return doc.secret;
+
+  const secret = mint();
+  // upsert rather than insert: two callers racing on first use must converge on
+  // one secret, or they would fingerprint the same person differently.
+  await dbHelper.findOneAndUpdateInDatabase(
+    database,
+    nodeIdentityCollection,
+    { _id: PLAYGROUND_FINGERPRINT_KEY },
+    { $setOnInsert: { secret, createdAt: Date.now() } },
+    { upsert: true },
+  );
+
+  const stored = await dbHelper.findOneInDatabase(
+    database,
+    nodeIdentityCollection,
+    { _id: PLAYGROUND_FINGERPRINT_KEY },
+  );
+  return stored ? stored.secret : secret;
+}
+
 module.exports = {
+  getOrCreatePlaygroundFingerprintSecret,
   getPgpIdentity,
   setPgpIdentity,
   getLastKnownIp,
   setLastKnownIp,
   PGP_IDENTITY_KEY,
   LAST_KNOWN_IP_KEY,
+  PLAYGROUND_FINGERPRINT_KEY,
 };

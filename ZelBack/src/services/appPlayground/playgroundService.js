@@ -15,6 +15,7 @@ const playgroundLimits = require('./playgroundLimits');
 const playgroundRunner = require('./playgroundRunner');
 const playgroundSessionRegistry = require('./playgroundSessionRegistry');
 const playgroundAudit = require('./playgroundAudit');
+const playgroundAbuse = require('./playgroundAbuse');
 
 // The playground: an owner watches their own spec boot on a real node, at the
 // resources it declares, before anything is registered, signed or paid for.
@@ -156,29 +157,8 @@ async function finishSession(session, outcome) {
   if (session.finished) return;
   session.finished = true;
 
-  if (session.ttlTimer) {
-    clearTimeout(session.ttlTimer);
-    session.ttlTimer = null;
-  }
-
   session.endedAt = Date.now();
   session.outcome = outcome;
-
-  // The deadline can fire while the run is still going, and that path has no
-  // other way to close the job out. Without this the operation stays Running
-  // forever: retention is only scheduled on a terminal status, so it would never
-  // age out either. Failed rather than Succeeded because the caller asked for a
-  // verdict and the deadline is precisely not getting one - whatever partial
-  // results were gathered are still in the detail. jobRegistry ignores this on a
-  // job the run already settled, so the normal path is unaffected.
-  if (outcome === 'expired') {
-    jobRegistry.fail(session.sessionId, {
-      title: 'SessionExpired',
-      status: 504,
-      detail: `The session reached its ${Math.round(sessionTtlMs() / 60000)}-minute limit and was torn down.`,
-      code: 'PLAYGROUND_SESSION_EXPIRED',
-    });
-  }
 
   await playgroundRunner.teardownSession(session);
 
@@ -252,9 +232,15 @@ function sessionDetail(session) {
     verdict: session.verdict,
     startedAt: session.startedAt,
     endedAt: session.endedAt,
-    expiresInMs: session.finished
-      ? 0
-      : Math.max(0, session.startedAt + sessionTtlMs() - Date.now()),
+    // Counted from when the containers started, because that is when the
+    // session began. Before that it is still preparing and the window has not
+    // opened yet, which is reported as null rather than as a full window.
+    runningSince: session.runningSince ?? null,
+    expiresInMs: (() => {
+      if (session.finished) return 0;
+      if (!session.runningSince) return null;
+      return Math.max(0, session.runningSince + sessionTtlMs() - Date.now());
+    })(),
     components: session.results,
     proves: 'The image boots and answers its probe at the resources this spec declares, on one node.',
     doesNotProve: 'Nothing about multiple instances, syncthing, domains or load balancing. '
@@ -286,6 +272,17 @@ async function submitSession(body, caller = {}) {
   if (!eligibility.eligible) {
     const refused = new Error(eligibility.reason);
     refused.kind = 'ineligible';
+    throw refused;
+  }
+
+  // Checked before anything expensive, and deliberately vague. Naming the
+  // signal would tell someone grinding at this exactly which of the three to
+  // defeat; a caller who was flagged in error loses this node for a day and can
+  // use another, which is the cheaper of the two mistakes.
+  const blocked = await playgroundAbuse.isBlocked(fluxId, sourceIp, playgroundAudit.findFlaggedSince);
+  if (blocked) {
+    const refused = new Error('This node is not running further playground sessions for you today. Try another node.');
+    refused.kind = 'busy';
     throw refused;
   }
 
@@ -323,7 +320,6 @@ async function submitSession(body, caller = {}) {
     endedAt: null,
     finished: false,
     reserved: false,
-    ttlTimer: null,
   };
 
   // Capacity before the duty cycle, because capacity is the refusal a caller can
@@ -358,16 +354,13 @@ async function submitSession(body, caller = {}) {
 
   playgroundSessionRegistry.add(session);
 
-  // The hard deadline. It is a timer rather than a check inside the run loop
-  // because it has to fire on a session that is not making progress at all - a
-  // container that hangs on start, a pull that stalls past its own watchdog.
-  session.ttlTimer = setTimeout(() => {
-    log.info(`playground: session ${session.sessionId} reached its ${sessionTtlMs() / 1000}s deadline`);
-    jobRegistry.progress(session.sessionId, 'The session reached its time limit and was torn down.');
-    finishSession(session, 'expired').catch((error) => {
-      log.error(`playground: expiry teardown of ${session.sessionId} failed: ${error.message}`);
-    });
-  }, sessionTtlMs());
+  // No timer here on purpose. The running window is the runner's, armed by the
+  // EVENT of the containers starting; and every preparation step before that is
+  // already bounded by something that observes progress rather than by a clock.
+  // The pull - the only genuinely long step - aborts on "no progress for 90s"
+  // via dockerPullStream's stall watchdog; verifying, creating and starting each
+  // return or throw. A blanket allowance on top of those would be a number
+  // invented to stand in for information the steps already report.
 
   // Deliberately not awaited: the caller already has the poll URL, and the run
   // takes minutes.

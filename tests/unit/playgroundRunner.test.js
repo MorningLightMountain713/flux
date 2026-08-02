@@ -8,7 +8,13 @@ const CONFIG = {
     playgroundSessionImageTotalMaxBytes: 6e9,
     playgroundProbeTimeoutMs: 180000,
     playgroundProbeStableMs: 30000,
-    playgroundLogLines: 50,
+    playgroundLogLines: 200,
+    playgroundLogRetainedLines: 2000,
+    playgroundMinerCpuBusyFraction: 0.9,
+    // Tiny running window so the observation loop finishes in test time; the
+    // delay stub below is a real short wait so it iterates a handful of times
+    // rather than spinning.
+    playgroundSessionTtlMs: 60,
   },
 };
 
@@ -20,19 +26,20 @@ describe('playgroundRunner', () => {
     stubs = {
       inspect: sinon.stub(),
       isPortOpen: sinon.stub().resolves(false),
-      logs: sinon.stub().resolves(null),
+      logs: sinon.stub().resolves(opts.logs ?? null),
       forceRemove: sinon.stub().resolves('removed'),
       start: sinon.stub().resolves('started'),
       create: sinon.stub().resolves(),
       imageSize: sinon.stub().resolves(0),
       listContainers: sinon.stub().resolves([]),
+      stats: sinon.stub().resolves(opts.stats ?? null),
       removeNetwork: sinon.stub().resolves(),
       createSessionNetwork: sinon.stub().resolves({ slot: 0, bridge: 'flxpg0', subnet: '172.23.255.0/27' }),
       verifyRepository: sinon.stub().resolves({
         decompressedSizeClearanceBytes: opts.imageBytes ?? 100_000_000,
       }),
       verifyComponentImage: sinon.stub().resolves({ repoTag: 'nginx:latest' }),
-      delay: sinon.stub().resolves(),
+      delay: sinon.stub().callsFake(() => new Promise((r) => { setTimeout(r, 5); })),
     };
 
     return proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundRunner', {
@@ -48,6 +55,7 @@ describe('playgroundRunner', () => {
         appDockerCreate: stubs.create,
         appDockerImageSize: stubs.imageSize,
         dockerListContainers: stubs.listContainers,
+        dockerContainerStats: stubs.stats,
         forceRemoveFluxAppDockerNetwork: stubs.removeNetwork,
         dockerPullStream: sinon.stub(),
       },
@@ -63,12 +71,63 @@ describe('playgroundRunner', () => {
     });
   }
 
+
+  /**
+   * Docker's raw stats shape. cpuShare is the fraction of the whole host used,
+   * which is what the daemon reports — the runner has to scale it against the
+   * component's own allocation before it means anything.
+   */
+  function dockerStats(cpuShare, hostCores = 8) {
+    return {
+      cpu_stats: {
+        cpu_usage: { total_usage: cpuShare * hostCores * 1e9 },
+        system_cpu_usage: hostCores * 1e9,
+        online_cpus: hostCores,
+      },
+      precpu_stats: { cpu_usage: { total_usage: 0 }, system_cpu_usage: 0 },
+    };
+  }
+
+  /** Same module, but retaining fewer lines than the test emits. */
+  function proxyquireWithRetention(retained, logs) {
+    const cfg = {
+      fluxapps: { ...CONFIG.fluxapps, playgroundLogRetainedLines: retained },
+    };
+    const saved = load({ logs });
+    saved.__cfg = cfg;
+    return proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundRunner', {
+      config: cfg,
+      '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+      '../dockerService': {
+        dockerContainerInspect: stubs.inspect,
+        dockerContainerLogs: stubs.logs,
+        appDockerForceRemove: stubs.forceRemove,
+        appDockerStart: stubs.start,
+        appDockerCreate: stubs.create,
+        appDockerImageSize: stubs.imageSize,
+        dockerListContainers: stubs.listContainers,
+        dockerContainerStats: stubs.stats,
+        forceRemoveFluxAppDockerNetwork: stubs.removeNetwork,
+        dockerPullStream: sinon.stub(),
+      },
+      '../serviceHelper': { delay: stubs.delay, dockerBufferToString: (b) => String(b) },
+      '../fluxNetworkHelper': { isPortOpen: stubs.isPortOpen },
+      './playgroundNetwork': { createSessionNetwork: stubs.createSessionNetwork },
+      '../appLifecycle/componentProvisioner': { verifyComponentImage: stubs.verifyComponentImage },
+      '../appSecurity/imageManager': { verifyRepository: stubs.verifyRepository },
+      util: { promisify: () => async () => 'pulled' },
+    });
+  }
+
   function component(overrides = {}) {
     return {
       name: 'web',
       appName: 'demoapp',
       identifier: 'web_demoapp',
       image: 'nginx:latest',
+      // Load-bearing: the CPU reading is scaled against the component's own
+      // allocation, so a fixture without one is genuinely unmeasurable.
+      cpu: 2,
       imageAuth: null,
       portBindings: [{ containerPort: 80, hostPort: 31000, protocol: 'tcp' }],
       ...overrides,
@@ -423,6 +482,134 @@ describe('playgroundRunner', () => {
       await runner.runSession(many);
 
       expect(stubs.createSessionNetwork.calledOnce).to.equal(true);
+    });
+
+    // Measured against the container's OWN allocation. A 2-core component using
+    // 2 host cores is flat out; the same component using half a core is not,
+    // and docker's raw figure cannot tell them apart on its own.
+    it('records a pegged session as busy, scaled to what the spec asked for', async () => {
+      const s2 = session();
+      runner = load({ stats: dockerStats(2 / 8) }); // 2 host cores of 8
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      expect(s2.cpuBusyFraction).to.equal(1);
+    });
+
+    it('records a mostly idle session as not busy', async () => {
+      const s2 = session();
+      runner = load({ stats: dockerStats(0.1 / 8) }); // a tenth of one core
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      expect(s2.cpuBusyFraction).to.equal(0);
+    });
+
+    // null, never 0: "could not tell" must not read downstream as "was idle",
+    // or an unsampleable session looks like an innocent one.
+    it('reports null rather than zero when the cpu could not be sampled', async () => {
+      const s2 = session();
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      expect(s2.cpuBusyFraction).to.equal(null);
+    });
+
+    // A terminal needs a stream: everything it has not seen, in order, once.
+    // Re-reading the last N lines cannot give that - reads overlap, so the
+    // client must guess what is new, and anything faster than N lines per tick
+    // is lost before anyone sees it.
+    it('numbers log lines so a client can tell exactly what is new', async () => {
+      const s2 = session();
+      runner = load({ logs: '2026-08-02T10:00:00.000000000Z hello\n2026-08-02T10:00:01.000000000Z world\n' });
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      const { lines } = s2.results.web.logs;
+      expect(lines.map((l) => l.text)).to.include.members(['hello', 'world']);
+      expect(lines.map((l) => l.seq)).to.deep.equal(lines.map((_, i) => i + 1));
+    });
+
+    // Docker's `since` is second-granular and inclusive, so consecutive reads
+    // overlap by design. The buffer must not show a line twice for it.
+    it('does not repeat a line across overlapping reads', async () => {
+      const s2 = session();
+      runner = load({ logs: '2026-08-02T10:00:00.000000000Z hello\n' });
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      const { lines } = s2.results.web.logs;
+      expect(lines.filter((l) => l.text === 'hello')).to.have.lengthOf(1);
+      // Read many times over the window, and still only one line.
+      expect(stubs.logs.callCount).to.be.greaterThan(1);
+    });
+
+    it('asks docker only for what it has not already read', async () => {
+      const s2 = session();
+      runner = load({ logs: '2026-08-02T10:00:00.000000000Z hello\n' });
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      // First read has no cursor; later ones carry `since`.
+      expect(stubs.logs.firstCall.args[2].since).to.equal(undefined);
+      expect(stubs.logs.lastCall.args[2].since).to.be.a('number');
+      expect(stubs.logs.lastCall.args[2].timestamps).to.equal(true);
+    });
+
+    it('reports how many lines it dropped, so a truncated log is not read as complete', async () => {
+      const many = Array.from({ length: 40 }, (_, i) => `2026-08-02T10:00:${String(i).padStart(2, '0')}.000000000Z line${i}`).join('\n');
+      const s2 = session();
+      // Retain far fewer than were emitted.
+      runner = proxyquireWithRetention(5, many);
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      const { lines, dropped, total } = s2.results.web.logs;
+      expect(lines).to.have.lengthOf(5);
+      expect(dropped).to.equal(total - 5);
+      expect(total).to.equal(40);
+    });
+
+    // The session is the RUNNING window. It ends on whichever comes first: the
+    // deadline, a cancel, or every container stopping on its own.
+    it('keeps running after the probe reaches a verdict', async () => {
+      const s2 = session();
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      // Inspected far more than the single probe call: the observation loop
+      // kept watching after the verdict was in.
+      expect(stubs.inspect.callCount).to.be.greaterThan(3);
+      expect(s2.reachedDeadline).to.equal(true);
+    });
+
+    it('ends early when every container has stopped, without waiting out the window', async () => {
+      const s2 = session();
+      // Healthy for the probe, then gone.
+      stubs.inspect.onFirstCall().resolves(running('healthy'));
+      stubs.inspect.resolves({ State: { Running: false, ExitCode: 0 } });
+
+      await runner.runSession(s2);
+
+      expect(s2.reachedDeadline).to.equal(undefined);
+    });
+
+    it('refreshes the logs while it watches, so a poll returns recent output', async () => {
+      const s2 = session();
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      // Once per probe, then once per component per observation tick.
+      expect(stubs.logs.callCount).to.be.greaterThan(1);
     });
 
     it('refuses an oversize image before pulling anything', async () => {
