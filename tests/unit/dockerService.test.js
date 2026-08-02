@@ -6,6 +6,7 @@ const chaiAsPromised = require('chai-as-promised');
 const Dockerode = require('dockerode');
 const sinon = require('sinon');
 const path = require('path');
+const { PassThrough } = require('stream');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
@@ -14,7 +15,52 @@ const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper'
 chai.use(chaiAsPromised);
 const { expect } = chai;
 
+// Almost everything here reaches docker only to turn a name into a container
+// handle - getDockerContainer lists containers and matches on Names[0] - and
+// then asserts something we own: which docker call was made, how a lease was
+// held, how an error was classified. Those need a container to EXIST, not a
+// container to be RUNNING, so the listing is stubbed and the suite no longer
+// depends on a fixture container started by the npm script.
+//
+// The few tests whose subject really is docker's own behaviour say so, and
+// stub only as far as the boundary they are testing.
+const FIXTURE_ID = '46274c58c9a969e93c1f91a057f0a371c7b952e31a7aec73839afe1433fdee94';
+const FIXTURE_NAME = 'fluxwebsite';
+
+/** One entry, shaped as docker lists it, for the container the tests name. */
+function fixtureListing(overrides = {}) {
+  return [{
+    Id: FIXTURE_ID,
+    Names: [`/${FIXTURE_NAME}`],
+    Image: 'runonflux/website',
+    State: 'running',
+    ...overrides,
+  }];
+}
+
+/**
+ * Set what docker reports, whether or not the listing is already stubbed - the
+ * suite-wide hook below gets there first, and a test wanting its own listing
+ * must be able to say so without tripping over it.
+ */
+function stubListing(entries) {
+  const { listContainers } = Dockerode.prototype;
+  if (listContainers.restore) return listContainers.resolves(entries);
+  return sinon.stub(Dockerode.prototype, 'listContainers').resolves(entries);
+}
+
 describe('dockerService tests', () => {
+  beforeEach(() => {
+    stubListing(fixtureListing());
+  });
+
+  // Suite-wide, because several nested suites had no restore of their own and a
+  // stub leaking into the next test shows up as "already wrapped" somewhere
+  // unrelated. Runs after any nested afterEach, and restoring twice is harmless.
+  afterEach(() => {
+    sinon.restore();
+  });
+
   describe('getDockerContainerHandle tests', () => {
     it('should return a container with a proper ID', () => {
       const dockerContainer = dockerService.getDockerContainerHandle('46274c58c9a969e93c1f91a057f0a371c7b952e31a7aec73839afe1433fdee94');
@@ -211,16 +257,24 @@ describe('dockerService tests', () => {
   });
 
   describe('dockerContainerInspect tests', () => {
-    it('should return a valid inspect object', async () => {
-      const containerName = 'website';
+    it('resolves the name to its container and returns what docker reports', async () => {
+      // What this owns is the resolution and the hand-back. Asserting the shape
+      // of docker's inspect payload would be testing dockerode, not us.
+      const payload = { Id: FIXTURE_ID, State: { Status: 'running' }, Config: { Image: 'runonflux/website' } };
+      const inspect = sinon.stub(Dockerode.Container.prototype, 'inspect').resolves(payload);
 
-      const inspectResult = await dockerService.dockerContainerInspect(containerName);
+      const result = await dockerService.dockerContainerInspect('website');
 
-      expect(inspectResult).to.exist;
-      expect(inspectResult.State.Status).to.equal('running');
-      expect(inspectResult.Id).to.be.a('string');
-      expect(inspectResult.Platform).to.equal('linux');
-      expect(inspectResult.Config.Image).to.equal('runonflux/website');
+      expect(result).to.equal(payload);
+      expect(inspect.calledOnce).to.equal(true);
+    });
+
+    it('passes inspect options through untouched', async () => {
+      const inspect = sinon.stub(Dockerode.Container.prototype, 'inspect').resolves({});
+
+      await dockerService.dockerContainerInspect('website', { size: true });
+
+      expect(inspect.firstCall.args[0]).to.deep.equal({ size: true });
     });
 
     it('should throw error if the container does not exist', async () => {
@@ -403,16 +457,16 @@ describe('dockerService tests', () => {
   });
 
   describe('dockerContainerStats tests', () => {
-    it('should return a valid stats object', async () => {
-      const containerName = 'website';
+    it('asks for a single sample, not a stream, and returns it', async () => {
+      // `stream: false` is the part that matters: asking without it hands back
+      // an open stream and the caller waits forever.
+      const payload = { name: `/${FIXTURE_NAME}`, cpu_stats: {}, memory_stats: {} };
+      const stats = sinon.stub(Dockerode.Container.prototype, 'stats').resolves(payload);
 
-      const statsResult = await dockerService.dockerContainerStats(containerName);
+      const result = await dockerService.dockerContainerStats('website');
 
-      expect(statsResult.name).to.equal('/fluxwebsite');
-      expect(statsResult.id).to.be.a('string');
-      expect(statsResult.memory_stats.stats).to.exist;
-      expect(statsResult.cpu_stats.cpu_usage).to.exist;
-      expect(statsResult.precpu_stats.cpu_usage).to.exist;
+      expect(result).to.equal(payload);
+      expect(stats.firstCall.args[0]).to.include({ stream: false });
     });
 
     it('should throw error if the container does not exist', async () => {
@@ -424,13 +478,13 @@ describe('dockerService tests', () => {
   });
 
   describe('dockerContainerChanges tests', () => {
-    it('should return a valid stats object', async () => {
-      const containerName = 'website';
+    it('returns the filesystem changes docker reports', async () => {
+      const payload = [{ Path: '/var/log/nginx', Kind: 0 }];
+      sinon.stub(Dockerode.Container.prototype, 'changes').resolves(payload);
 
-      const changesResult = await dockerService.dockerContainerChanges(containerName);
+      const result = await dockerService.dockerContainerChanges('website');
 
-      expect(changesResult).to.be.an('array');
-      expect(changesResult[0].Path).to.exist;
+      expect(result).to.equal(payload);
     });
 
     it('should throw error if the container does not exist', async () => {
@@ -442,57 +496,82 @@ describe('dockerService tests', () => {
   });
 
   describe('dockerContainerLogsStream tests', () => {
-    // Collect until the stream ends or the budget runs out, whichever is first:
-    // a follow against a live container never ends on its own.
-    function collect(stream, budgetMs = 1500) {
+    // Docker multiplexes stdout and stderr down one connection, each write
+    // prefixed with an 8-byte header: stream id, three zero bytes, then a
+    // big-endian length. This is docker's wire format, not a convenience of the
+    // test - feeding it is what makes the demux assertion mean anything.
+    function dockerFrame(text, streamId = 1) {
+      const payload = Buffer.from(text, 'utf8');
+      const header = Buffer.alloc(8);
+      header.writeUInt8(streamId, 0);
+      header.writeUInt32BE(payload.length, 4);
+      return Buffer.concat([header, payload]);
+    }
+
+    function stubLogs() {
+      const raw = new PassThrough();
+      const logs = sinon.stub(Dockerode.Container.prototype, 'logs').resolves(raw);
+      return { raw, logs };
+    }
+
+    function collect(stream) {
       return new Promise((resolve) => {
         let text = '';
-        const done = () => resolve(text);
-        const budget = setTimeout(done, budgetMs);
         stream.on('data', (chunk) => { text += chunk.toString('utf8'); });
-        stream.on('end', () => { clearTimeout(budget); done(); });
+        stream.on('end', () => resolve(text));
       });
     }
 
-    it('hands back a stream carrying the container output, and a stop handle', async () => {
-      const follow = await dockerService.dockerContainerLogsStream('website', { tail: 10 });
-      try {
-        expect(follow.stream).to.exist;
-        expect(follow.stop).to.be.a('function');
+    it('follows, and forwards the options it was given', async () => {
+      const { logs } = stubLogs();
 
-        const text = await collect(follow.stream);
-        expect(text).to.be.a('string').that.is.not.empty;
-      } finally {
-        follow.stop();
-      }
+      const follow = await dockerService.dockerContainerLogsStream('website', { tail: 10, timestamps: true });
+
+      expect(follow.stream).to.exist;
+      expect(follow.stop).to.be.a('function');
+      expect(logs.firstCall.args[0]).to.include({
+        follow: true, stdout: true, stderr: true, tail: 10, timestamps: true,
+      });
     });
 
-    it('demuxes rather than handing back framed bytes', async () => {
-      // Docker prefixes each frame with an 8-byte header carrying the stream id
-      // and length. Passed through undemuxed those bytes land in the log text.
-      const follow = await dockerService.dockerContainerLogsStream('website', { tail: 5 });
-      try {
-        const text = await collect(follow.stream);
-        // eslint-disable-next-line no-control-regex
-        expect(/[ -]/.test(text), 'frame headers leaked into the output').to.be.false;
-      } finally {
-        follow.stop();
-      }
+    it('strips docker frame headers rather than passing them through', async () => {
+      const { raw } = stubLogs();
+      const follow = await dockerService.dockerContainerLogsStream('website');
+      const collected = collect(follow.stream);
+
+      raw.write(dockerFrame('hello from stdout\n'));
+      raw.write(dockerFrame('and from stderr\n', 2));
+      raw.end();
+
+      const text = await collected;
+      expect(text).to.equal('hello from stdout\nand from stderr\n');
+    });
+
+    it('ends its stream when docker ends the connection', async () => {
+      // A short-lived container's log simply finishing is the normal case, not
+      // a failure, so this has to surface as an end rather than an error.
+      const { raw } = stubLogs();
+      const follow = await dockerService.dockerContainerLogsStream('website');
+      const collected = collect(follow.stream);
+
+      raw.write(dockerFrame('done\n'));
+      raw.end();
+
+      expect(await collected).to.equal('done\n');
     });
 
     it('stop ends the stream, after what is already buffered', async () => {
       // stop() ends rather than destroys, so a consumer still receives whatever
       // had arrived - which also means the end only surfaces once something is
       // reading, exactly as any piped stream behaves.
-      const follow = await dockerService.dockerContainerLogsStream('website', { tail: 1 });
-      const ended = new Promise((resolve) => {
-        follow.stream.on('data', () => {});
-        follow.stream.on('end', resolve);
-      });
+      const { raw } = stubLogs();
+      const follow = await dockerService.dockerContainerLogsStream('website');
+      const collected = collect(follow.stream);
 
+      raw.write(dockerFrame('last words\n'));
       follow.stop();
 
-      await ended;
+      expect(await collected).to.equal('last words\n');
     });
 
     it('rejects for a container that does not exist', async () => {
@@ -978,13 +1057,13 @@ describe('dockerService tests', () => {
   describe('appDockerTop tests', () => {
     const appName = 'website';
 
-    it('should return processes running on docker', async () => {
+    it('returns the process table docker reports', async () => {
+      const payload = { Titles: ['PID', 'CMD'], Processes: [['1', 'nginx']] };
+      sinon.stub(Dockerode.Container.prototype, 'top').resolves(payload);
+
       const dockerTopResult = await dockerService.appDockerTop(appName);
 
-      expect(dockerTopResult.Processes).to.be.an('array');
-      expect(dockerTopResult.Processes).to.be.not.empty;
-      expect(dockerTopResult.Titles).to.be.an('array');
-      expect(dockerTopResult.Titles).to.be.not.empty;
+      expect(dockerTopResult).to.equal(payload);
     });
 
     it('should throw error if app name is not correct or app does not exist', async () => {
@@ -1271,7 +1350,7 @@ describe('dockerService tests', () => {
     });
 
     it('returns multi-component and legacy single-component containers, anchored to flux', async () => {
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([
+      stubListing([
         { Names: ['/fluxweb_myapp'] },
         { Names: ['/fluxapi_myapp'] },
         { Names: ['/fluxother_differentapp'] },
@@ -1287,7 +1366,7 @@ describe('dockerService tests', () => {
     });
 
     it('escapes regex metacharacters in the app name', async () => {
-      sinon.stub(Dockerode.prototype, 'listContainers').resolves([
+      stubListing([
         { Names: ['/fluxweb_my-app'] },
       ]);
 
