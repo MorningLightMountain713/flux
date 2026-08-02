@@ -46,9 +46,6 @@ function liveAppNames() {
 }
 
 function reset() {
-  for (const session of sessions.values()) {
-    if (session.ttlTimer) clearTimeout(session.ttlTimer);
-  }
   sessions.clear();
 }
 

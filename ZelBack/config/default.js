@@ -355,6 +355,21 @@ module.exports = {
     // share with up to maxAppsPerNode apps.
     playgroundNetworkOctet: 255,
     playgroundNetworkPrefix: 27,
+    playgroundEgressKbit: 1000,
+    // Mining looks like: pegged CPU against its own allocation, nothing ever
+    // answering a probe, and running to the deadline instead of exiting. All
+    // three together, because each alone describes something ordinary - a queue
+    // worker also answers nothing and runs to the deadline, and a transcoder
+    // also pegs a core. The block that follows is deliberately node-local and
+    // keyed on a one-way fingerprint, so a node can refuse a returning caller
+    // without holding anything that says who they are.
+    playgroundMinerCpuBusyFraction: 0.9,
+    playgroundMinerBlockMs: 86400000,
+    // The RUNNING window: containers up, owner watching. Ends on whichever comes
+    // first - this deadline, a cancel, or every container stopping on its own.
+    // Pulls sit outside it, which is what makes the duty cycle's arithmetic hold:
+    // two sessions of fifteen running minutes is the ~30 minutes and ~1 core-hour
+    // per hour a node donates.
     playgroundSessionTtlMs: 900000,
     playgroundNodeConcurrentSessions: 1,
     playgroundNodeSessionsPerHour: 2,
@@ -365,7 +380,14 @@ module.exports = {
     // verdict is reached and reported rather than cut off by the teardown.
     playgroundProbeTimeoutMs: 180000,
     playgroundProbeStableMs: 30000,
-    playgroundLogLines: 50,
+    // Lines fetched per read, and how many the session keeps for the client.
+    // The poll returns numbered lines so a terminal can render a real stream -
+    // everything after the highest number it has - rather than re-reading the
+    // last N and guessing what is new. Retention is bounded, and a client is
+    // told how many lines were dropped so a truncated log never reads as a
+    // complete one.
+    playgroundLogLines: 200,
+    playgroundLogRetainedLines: 2000,
     // How long a session's sealed audit record is kept. Long enough to answer an
     // abuse report, short enough that an operator is not indefinitely holding
     // sealed records of strangers' sessions on their own hardware.

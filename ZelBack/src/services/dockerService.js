@@ -486,16 +486,24 @@ async function dockerContainerLogsStream(idOrName, res, callback) {
  *
  * @returns {buffer}
  */
-async function dockerContainerLogs(idOrName, lines) {
+async function dockerContainerLogs(idOrName, lines, options = {}) {
   const dockerContainer = await getDockerContainer(idOrName);
   if (!dockerContainer) return null;
-  const options = {
+  const logOptions = {
     follow: false,
     stdout: true,
     stderr: true,
     tail: lines,
+    // Both off by default, so every existing caller reads exactly as before.
+    // A reader that wants to follow a log INCREMENTALLY needs them: `since`
+    // bounds what comes back to what is new, and timestamps are what let the
+    // caller work out where it got to for the next read. Without them the only
+    // way to follow a log is to re-read the last N lines and guess which are
+    // new, which loses anything that arrived faster than the poll.
+    ...(options.since && { since: options.since }),
+    ...(options.timestamps && { timestamps: true }),
   };
-  const logs = await dockerContainer.logs(options);
+  const logs = await dockerContainer.logs(logOptions);
   return logs;
 }
 

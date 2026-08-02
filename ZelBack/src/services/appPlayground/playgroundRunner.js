@@ -41,6 +41,14 @@ function logLines() {
   return config.fluxapps.playgroundLogLines ?? 50;
 }
 
+function logRetainedLines() {
+  return config.fluxapps.playgroundLogRetainedLines ?? 2000;
+}
+
+function sessionTtlMs() {
+  return config.fluxapps.playgroundSessionTtlMs ?? 900_000;
+}
+
 function imageMaxBytes() {
   return config.fluxapps.playgroundSessionImageMaxBytes ?? 2e9;
 }
@@ -124,6 +132,71 @@ async function startComponent(component, session, status) {
 }
 
 /**
+ * Collects CPU samples across a whole session and reduces them to one number:
+ * the fraction of samples that were at or above the busy threshold.
+ *
+ * A fraction of TIME AT FULL TILT, not an average. An average is dragged down by
+ * a slow start or a quiet tail and would let something that pegged a core for
+ * fourteen of fifteen minutes read as moderate; what the miner profile turns on
+ * is precisely that it never stops.
+ */
+function cpuAccumulator(threshold) {
+  let samples = 0;
+  let busy = 0;
+
+  return {
+    record(fraction) {
+      samples += 1;
+      if (fraction >= threshold) busy += 1;
+    },
+    // null, never 0, when nothing was sampled: "could not tell" must not be
+    // mistaken for "was idle" by anything downstream.
+    result() {
+      return samples ? busy / samples : null;
+    },
+  };
+}
+
+/**
+ * How hard a container is working, as a fraction of what its spec asked for.
+ *
+ * Measured against the container's OWN allocation, not the host. Docker reports
+ * raw CPU time, so a container allowed two cores and using two cores and one
+ * allowed half a core and using half a core both look "busy" in absolute terms
+ * while meaning completely different things about whether the owner is using
+ * what they paid for.
+ *
+ * @returns {Promise<number|null>} 0..1, or null when it could not be sampled -
+ *   which reads as "cannot tell" and never as "idle"
+ */
+async function sampleCpuFraction(component) {
+  try {
+    const stats = await dockerService.dockerContainerStats(component.identifier);
+    if (!stats || !stats.cpu_stats || !stats.precpu_stats) return null;
+
+    const cpuDelta = stats.cpu_stats.cpu_usage.total_usage
+      - stats.precpu_stats.cpu_usage.total_usage;
+    const systemDelta = stats.cpu_stats.system_cpu_usage
+      - stats.precpu_stats.system_cpu_usage;
+    if (!systemDelta || cpuDelta < 0) return null;
+
+    const hostCores = stats.cpu_stats.online_cpus
+      || (stats.cpu_stats.cpu_usage.percpu_usage || []).length;
+    if (!hostCores) return null;
+
+    // Fraction of the whole host, scaled by the cores this component declared.
+    const hostFraction = (cpuDelta / systemDelta) * hostCores;
+    const allocated = component.cpu || 0;
+    if (!allocated) return null;
+
+    return Math.min(hostFraction / allocated, 1);
+  } catch (error) {
+    log.warn(`playground: could not sample cpu for ${component.identifier}: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Stop at the next checkpoint if the caller has cancelled.
  *
  * A cancel raises a flag and the worker notices; it does not interrupt a docker
@@ -152,7 +225,7 @@ function throwIfCancelled(session, hooks) {
  *
  * @returns {Promise<object>} the component's verdict
  */
-async function probeComponent(component, deadlineNs, shouldCancel = () => false) {
+async function probeComponent(component, deadlineNs, shouldCancel = () => false, cpu = null) {
   const id = component.identifier;
   const started = process.hrtime.bigint();
   const stableNs = BigInt(probeStableMs()) * 1_000_000n;
@@ -231,6 +304,14 @@ async function probeComponent(component, deadlineNs, shouldCancel = () => false)
       };
     }
 
+    // Sampled on the same tick as the inspect, so watching a container costs one
+    // extra call rather than a loop of its own.
+    if (cpu) {
+      // eslint-disable-next-line no-await-in-loop
+      const fraction = await sampleCpuFraction(component);
+      if (fraction !== null) cpu.record(fraction);
+    }
+
     // eslint-disable-next-line no-await-in-loop
     await serviceHelper.delay(2000);
   }
@@ -272,19 +353,105 @@ async function probeTcp(component, info) {
   return null;
 }
 
+// Docker prefixes each line with an RFC3339Nano timestamp when asked for them.
+const LOG_LINE = /^(\S+)\s([\s\S]*)$/;
+
 /**
- * The last lines a component wrote. Best effort: logs are the most useful part
- * of a failed session, so a container that has already gone must not turn a
- * reportable failure into an unreportable one.
+ * An append-only view of one component's output.
+ *
+ * A terminal wants a STREAM: give me what I have not seen, in order, once. The
+ * obvious implementation - re-read the last N lines every few seconds - is not
+ * that. Consecutive reads overlap, so the client has to guess which lines are
+ * new, and anything that arrived faster than N lines per interval is lost
+ * before anyone sees it. A log you cannot trust to be complete is worse than no
+ * log, because the missing lines are invisible.
+ *
+ * So each line gets a sequence number that only ever increases, and a poll
+ * returns lines with their numbers. A client renders everything after the
+ * highest it has, and knows immediately if it skipped any. This is the same
+ * shape jobRegistry.progress already uses for its steps.
  */
-async function tailLogs(component) {
+function logBuffer(maxLines) {
+  const lines = [];
+  let seq = 0;
+  let dropped = 0;
+  // Docker's `since` is inclusive and second-granular, so consecutive reads
+  // always overlap by up to a second. That overlap is the only place duplicates
+  // can arrive from, so it is the only place that needs de-duplicating.
+  let since = 0;
+  // The newest timestamp held, and the lines carrying exactly it. Anything
+  // older has certainly been seen; anything at the same instant is checked
+  // against this small set; anything newer is new and resets it.
+  //
+  // Deliberately NOT a set of every line ever seen: that grows without bound,
+  // and pruning it alongside the retained lines breaks it - an evicted line
+  // would be re-admitted as new by the next overlapping read.
+  let newestAt = null;
+  let atNewest = new Set();
+
+  return {
+    /** @param {Buffer|null} raw docker's timestamped log output */
+    append(raw) {
+      if (!raw) return;
+
+      const text = serviceHelper.dockerBufferToString(raw);
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+
+        const match = LOG_LINE.exec(line);
+        const at = match ? match[1] : null;
+        const body = match ? match[2] : line;
+
+        if (at && newestAt) {
+          if (at < newestAt) continue;
+          // Several lines can share one instant, so identity at the boundary is
+          // the text, not the timestamp.
+          if (at === newestAt && atNewest.has(body)) continue;
+        }
+
+        if (at && at !== newestAt) {
+          newestAt = at;
+          atNewest = new Set();
+        }
+        if (at) atNewest.add(body);
+
+        seq += 1;
+        lines.push({ seq, at, text: body });
+
+        if (at) {
+          const epochSeconds = Math.floor(Date.parse(at) / 1000);
+          if (Number.isFinite(epochSeconds)) since = epochSeconds;
+        }
+      }
+
+      // Bounded, and the client is TOLD how many went. A silently truncated log
+      // reads as a complete one.
+      while (lines.length > maxLines) {
+        lines.shift();
+        dropped += 1;
+      }
+    },
+    since() { return since; },
+    view() { return { lines: [...lines], dropped, total: seq }; },
+  };
+}
+
+/**
+ * Read whatever a component has written since the last read, into its buffer.
+ *
+ * Best effort: logs are the most useful part of a failed session, so a container
+ * that has already gone must not turn a reportable failure into an unreportable
+ * one.
+ */
+async function readLogsInto(component, buffer) {
   try {
-    const buffer = await dockerService.dockerContainerLogs(component.identifier, logLines());
-    if (!buffer) return [];
-    return serviceHelper.dockerBufferToString(buffer).split('\n').slice(-logLines());
+    const raw = await dockerService.dockerContainerLogs(component.identifier, logLines(), {
+      timestamps: true,
+      ...(buffer.since() ? { since: buffer.since() } : {}),
+    });
+    buffer.append(raw);
   } catch (error) {
     log.warn(`playground: could not read logs for ${component.identifier}: ${error.message}`);
-    return [];
   }
 }
 
@@ -300,6 +467,10 @@ async function tailLogs(component) {
 async function runSession(session, hooks = {}) {
   const status = hooks.onStatus || (() => {});
   const { deployment } = session;
+
+  // Held for the whole session, not rebuilt per read: they are what make the
+  // log a stream rather than a series of overlapping snapshots.
+  session.logBuffers = {};
 
   const components = deployment.startupOrder.map((name) => deployment.getComponent(name));
 
@@ -352,7 +523,8 @@ async function runSession(session, hooks = {}) {
     // this map, so a component that fails half way through its own start - image
     // pulled, container created, start refused - has to already be in it or its
     // container survives the session that created it.
-    session.results[component.name] = { started: false, probe: null, logs: [] };
+    session.results[component.name] = { started: false, probe: null, logs: { lines: [], dropped: 0, total: 0 } };
+    session.logBuffers[component.name] = logBuffer(logRetainedLines());
     // eslint-disable-next-line no-await-in-loop
     await startComponent(component, session, status);
     session.results[component.name].started = true;
@@ -364,19 +536,87 @@ async function runSession(session, hooks = {}) {
   // own deadline is what bounds the pulls.
   const deadlineNs = process.hrtime.bigint() + BigInt(probeTimeoutMs()) * 1_000_000n;
 
+  // One accumulator for the whole session rather than per component: the
+  // question is whether this SESSION sat at full tilt, and a miner with a
+  // sidecar would otherwise dilute its own reading.
+  const cpu = cpuAccumulator(config.fluxapps.playgroundMinerCpuBusyFraction ?? 0.9);
+
   // eslint-disable-next-line no-restricted-syntax
   for (const component of components) {
     throwIfCancelled(session, hooks);
     status(`Probing ${component.name}...`);
     // eslint-disable-next-line no-await-in-loop
-    const probe = await probeComponent(component, deadlineNs, () => Boolean(hooks.isCancelled && hooks.isCancelled()));
+    const probe = await probeComponent(component, deadlineNs, () => Boolean(hooks.isCancelled && hooks.isCancelled()), cpu);
     // eslint-disable-next-line no-await-in-loop
-    const logs = await tailLogs(component);
-    session.results[component.name] = { started: true, probe, logs };
+    await readLogsInto(component, session.logBuffers[component.name]);
+    session.results[component.name] = {
+      started: true, probe, logs: session.logBuffers[component.name].view(),
+    };
     status(`${component.name}: ${probe.passed ? 'passed' : 'failed'} (${probe.basis})`);
   }
 
+  // The probe has a verdict; the SESSION has not ended. This is the window the
+  // owner actually watches in - logs accumulating, the app staying up or falling
+  // over - and it is what the design's duty cycle is costed against: two
+  // sessions of fifteen running minutes is the "~30 minutes and ~1 core-hour per
+  // hour" a node donates. Returning at the verdict, as this used to, ended a
+  // session in well under a minute and gave the owner nothing to watch.
+  //
+  // Timed from when the containers actually started, not from when the request
+  // was accepted, so a slow registry eats into the pulls rather than into this.
+  await observeSession(session, components, cpu, hooks, status);
+
+  session.cpuBusyFraction = cpu.result();
+
   return session.results;
+}
+
+/**
+ * Hold the session open for its running window, watching it.
+ *
+ * Ends on whichever comes first: the deadline, a cancel, or every container
+ * having stopped on its own - there is nothing left to watch once they are all
+ * gone, and holding the slot open would only delay the next caller.
+ *
+ * Refreshes the logs each tick so a poll returns what the app has said most
+ * recently, and keeps sampling CPU, which is what makes the running window
+ * measurable at all.
+ */
+async function observeSession(session, components, cpu, hooks, status) {
+  const deadlineNs = process.hrtime.bigint() + BigInt(sessionTtlMs()) * 1_000_000n;
+  session.runningSince = Date.now();
+  status(`Running. Watching for up to ${Math.round(sessionTtlMs() / 60000)} minutes.`);
+
+  while (process.hrtime.bigint() < deadlineNs) {
+    throwIfCancelled(session, hooks);
+
+    let anyRunning = false;
+    // eslint-disable-next-line no-restricted-syntax
+    for (const component of components) {
+      // eslint-disable-next-line no-await-in-loop
+      const info = await dockerService.dockerContainerInspect(component.identifier);
+      if (info && info.State && info.State.Running) {
+        anyRunning = true;
+        // eslint-disable-next-line no-await-in-loop
+        const fraction = await sampleCpuFraction(component);
+        if (fraction !== null) cpu.record(fraction);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await readLogsInto(component, session.logBuffers[component.name]);
+      session.results[component.name].logs = session.logBuffers[component.name].view();
+    }
+
+    if (!anyRunning) {
+      status('Every component has stopped; ending the session.');
+      return;
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    await serviceHelper.delay(5000);
+  }
+
+  session.reachedDeadline = true;
+  status('Reached the session time limit.');
 }
 
 /**
