@@ -133,6 +133,32 @@ describe('playgroundService', () => {
     await new Promise((resolve) => { setImmediate(resolve); });
   }
 
+  // Docker's labels are the ground truth, not our record of what is live, so
+  // this is the one check that catches a session we lost track of rather than
+  // one whose teardown merely failed. Running it here bounds the debris to one
+  // session's worth at the only moment it matters, instead of up to a sweep
+  // interval later.
+  describe('collecting debris before a new session', () => {
+    it('reaps abandoned containers before the session claims anything', async () => {
+      await service.submitSession({}, caller);
+
+      expect(stubs.reapOrphans.calledOnce).to.equal(true);
+      expect(stubs.reapOrphans.calledBefore(stubs.runSession)).to.equal(true);
+      await settle();
+    });
+
+    it('starts the session anyway when the check itself fails', async () => {
+      // A docker that cannot list containers will fail this session a few steps
+      // further on, with a better message than this could give.
+      stubs.reapOrphans.rejects(new Error('docker unreachable'));
+
+      const handle = await service.submitSession({}, caller);
+
+      expect(handle.sessionId).to.match(/^op_/);
+      await settle();
+    });
+  });
+
   describe('eligibility', () => {
     it('accepts a session on a nimbus node', async () => {
       const handle = await service.submitSession({}, caller);
