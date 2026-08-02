@@ -225,7 +225,27 @@ async function driveSession(session) {
  * an owner who reads a pass as "ready to register" because the response did not
  * say otherwise has been misled by omission.
  */
-function sessionDetail(session) {
+/**
+ * Each component's result with its log view attached, built now rather than
+ * snapshotted when the probe finished: the follow keeps writing for the whole
+ * session, so a stored copy would be stale the moment it was taken.
+ *
+ * @param {object} session
+ * @param {number} sinceSeq what the caller already has
+ */
+function componentsView(session, sinceSeq) {
+  const view = {};
+  for (const [name, result] of Object.entries(session.results || {})) {
+    const buffer = session.logBuffers && session.logBuffers[name];
+    view[name] = {
+      ...result,
+      logs: buffer ? buffer.view(sinceSeq) : { lines: [], dropped: 0, total: 0 },
+    };
+  }
+  return view;
+}
+
+function sessionDetail(session, { sinceSeq = 0 } = {}) {
   return {
     sessionId: session.sessionId,
     appName: session.appName,
@@ -241,7 +261,7 @@ function sessionDetail(session) {
       if (!session.runningSince) return null;
       return Math.max(0, session.runningSince + sessionTtlMs() - Date.now());
     })(),
-    components: session.results,
+    components: componentsView(session, sinceSeq),
     proves: 'The image boots and answers its probe at the resources this spec declares, on one node.',
     doesNotProve: 'Nothing about multiple instances, syncthing, domains or load balancing. '
       + 'A session runs one copy with no inbound network path.',
@@ -348,7 +368,7 @@ async function submitSession(body, caller = {}) {
     // Owner-scoped: a session names the images and the spec an owner is working
     // on, so only the identity that asked can read it.
     owner: fluxId,
-    detail: () => sessionDetail(session),
+    detail: (readOptions) => sessionDetail(session, readOptions),
   });
   session.sessionId = handle.jobId;
 

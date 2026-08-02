@@ -16,6 +16,11 @@ const util = require('util');
 const dosState = 0;
 const dosMessage = null;
 
+// How long GET /apps/applog/:appname follows the log before closing the
+// response. Long enough to carry what a container has said recently, short
+// enough that a browser tab does not hold a follow open indefinitely.
+const LOG_STREAM_WINDOW_MS = 2000;
+
 const dockerStatsStreamPromise = util.promisify(dockerService.dockerContainerStatsStream);
 
 /**
@@ -116,19 +121,23 @@ async function appLogStream(req, res) {
     const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
     if (authorized === true) {
       res.setHeader('Content-Type', 'application/json');
-      dockerService.dockerContainerLogsStream(appname, res, (error) => {
-        if (error) {
-          log.error(error);
-          const errorResponse = messageHelper.createErrorMessage(
-            error.message || error,
-            error.name,
-            error.code,
-          );
-          res.write(errorResponse);
-          res.end();
-        } else {
-          res.end();
-        }
+      const { stream, stop } = await dockerService.dockerContainerLogsStream(appname);
+      // A burst, not a subscription: this endpoint answers "what has it said
+      // lately" and closes. The window is the caller's to choose, which is why
+      // the docker layer no longer bakes it in.
+      const window = setTimeout(stop, LOG_STREAM_WINDOW_MS);
+      stream.on('data', (chunk) => {
+        res.write(serviceHelper.ensureString(chunk.toString('utf8')));
+        if (res.flush) res.flush();
+      });
+      stream.on('error', (error) => {
+        clearTimeout(window);
+        log.error(error);
+        res.end();
+      });
+      stream.on('end', () => {
+        clearTimeout(window);
+        res.end();
       });
     } else {
       const errMessage = messageHelper.errUnauthorizedMessage();

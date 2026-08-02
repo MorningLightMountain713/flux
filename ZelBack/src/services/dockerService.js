@@ -429,53 +429,46 @@ async function dockerContainerExec(container, cmd, env, res, callback) {
 }
 
 /**
- * Subscribes to logs stream.
+ * Follow a container's log output.
+ *
+ * Returns the stream and its stop handle rather than writing anywhere itself:
+ * how long to follow for, and where the bytes go, are the caller's business.
+ * An HTTP endpoint pipes it to a response and stops on its own schedule; the
+ * playground follows one for the length of a session.
+ *
+ * The returned stream ends by itself when the container goes, which for a
+ * short-lived container is the normal end of the log rather than a failure.
  *
  * @param {string} idOrName
- * @param {object} res
- * @param {function} callback
+ * @param {object} [options] since / timestamps / tail, forwarded to docker
+ * @returns {Promise<{stream: object, stop: function}>}
  */
-async function dockerContainerLogsStream(idOrName, res, callback) {
-  try {
-    // container ID or name
-    const containers = await dockerListContainers(true);
-    const myContainer = containers.find((container) => (container.Names[0] === getAppDockerNameIdentifier(idOrName) || container.Id === idOrName));
-    const dockerContainer = docker.getContainer(myContainer.Id);
-    const logStream = new stream.PassThrough();
-    logStream.on('data', (chunk) => {
-      res.write(serviceHelper.ensureString(chunk.toString('utf8')));
-      if (res.flush) res.flush();
-    });
+async function dockerContainerLogsStream(idOrName, options = {}) {
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
-    dockerContainer.logs(
-      {
-        follow: true,
-        stdout: true,
-        stderr: true,
-      },
-      (err, mystream) => {
-        if (err) {
-          callback(err);
-        } else {
-          try {
-            dockerContainer.modem.demuxStream(mystream, logStream, logStream);
-            mystream.on('end', () => {
-              logStream.end();
-              callback(null);
-            });
+  const logStream = new stream.PassThrough();
+  const raw = await dockerContainer.logs({
+    follow: true,
+    stdout: true,
+    stderr: true,
+    ...options,
+  });
 
-            setTimeout(() => {
-              mystream.destroy();
-            }, 2000);
-          } catch (error) {
-            throw new Error('An error obtaining log data of an application has occured');
-          }
-        }
-      },
-    );
-  } catch (error) {
-    callback(error);
-  }
+  // Docker multiplexes stdout and stderr down one connection with a per-frame
+  // header; both are demuxed into the one stream because a log reader wants the
+  // container's output in the order it was written, not split by descriptor.
+  dockerContainer.modem.demuxStream(raw, logStream, logStream);
+  raw.on('end', () => logStream.end());
+  raw.on('error', (err) => logStream.destroy(err));
+
+  return {
+    stream: logStream,
+    stop() {
+      raw.destroy();
+      logStream.end();
+    },
+  };
 }
 
 /**

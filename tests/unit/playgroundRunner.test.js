@@ -1,6 +1,10 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { PassThrough } = require('stream');
+
+/** Let the follow's data events reach the buffer before asserting on it. */
+const settle = () => new Promise((resolve) => { setImmediate(resolve); });
 
 const CONFIG = {
   fluxapps: {
@@ -26,7 +30,9 @@ describe('playgroundRunner', () => {
     stubs = {
       inspect: sinon.stub(),
       isPortOpen: sinon.stub().resolves(false),
-      logs: sinon.stub().resolves(opts.logs ?? null),
+      // Each follow gets its own PassThrough, kept so a test can write into it
+      // mid-session exactly as a container writing to its log would.
+      follows: [],
       forceRemove: sinon.stub().resolves('removed'),
       start: sinon.stub().resolves('started'),
       create: sinon.stub().resolves(),
@@ -42,6 +48,14 @@ describe('playgroundRunner', () => {
       delay: sinon.stub().callsFake(() => new Promise((r) => { setTimeout(r, 5); })),
     };
 
+    stubs.logStream = sinon.stub().callsFake(async () => {
+      const stream = new PassThrough();
+      const stop = sinon.stub().callsFake(() => stream.end());
+      stubs.follows.push({ stream, stop });
+      if (opts.logs) stream.write(opts.logs);
+      return { stream, stop };
+    });
+
     return proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundRunner', {
       config: CONFIG,
       '../../lib/log': {
@@ -49,7 +63,7 @@ describe('playgroundRunner', () => {
       },
       '../dockerService': {
         dockerContainerInspect: stubs.inspect,
-        dockerContainerLogs: stubs.logs,
+        dockerContainerLogsStream: stubs.logStream,
         appDockerForceRemove: stubs.forceRemove,
         appDockerStart: stubs.start,
         appDockerCreate: stubs.create,
@@ -100,7 +114,7 @@ describe('playgroundRunner', () => {
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       '../dockerService': {
         dockerContainerInspect: stubs.inspect,
-        dockerContainerLogs: stubs.logs,
+        dockerContainerLogsStream: stubs.logStream,
         appDockerForceRemove: stubs.forceRemove,
         appDockerStart: stubs.start,
         appDockerCreate: stubs.create,
@@ -375,16 +389,19 @@ describe('playgroundRunner', () => {
   });
 
   describe('runSession', () => {
-    function session() {
-      const comp = component();
+    function session({ components: names = ['web'] } = {}) {
+      const comps = new Map(names.map((name) => [
+        name,
+        component({ name, identifier: `${name}_demoapp` }),
+      ]));
       return {
         sessionId: 'op_1',
         appName: 'demoapp',
         fluxId: 'zelid1',
         results: {},
         deployment: {
-          startupOrder: ['web'],
-          getComponent: () => comp,
+          startupOrder: names,
+          getComponent: (name) => comps.get(name),
         },
       };
     }
@@ -529,41 +546,128 @@ describe('playgroundRunner', () => {
 
       await runner.runSession(s2);
 
-      const { lines } = s2.results.web.logs;
+      const { lines } = s2.logBuffers.web.view();
       expect(lines.map((l) => l.text)).to.include.members(['hello', 'world']);
       expect(lines.map((l) => l.seq)).to.deep.equal(lines.map((_, i) => i + 1));
     });
 
-    // Docker's `since` is second-granular and inclusive, so consecutive reads
-    // overlap by design. The buffer must not show a line twice for it.
-    it('does not repeat a line across overlapping reads', async () => {
-      const s2 = session();
-      runner = load({ logs: '2026-08-02T10:00:00.000000000Z hello\n' });
+    // One counter for the session, so a client tracks a single number and
+    // "everything above N" means the same thing whichever component wrote it.
+    it('numbers across components from one session-wide sequence', async () => {
+      const s2 = session({ components: ['web', 'db'] });
       stubs.inspect.resolves(running('healthy'));
 
-      await runner.runSession(s2);
+      const run = runner.runSession(s2);
+      await settle();
+      stubs.follows[0].stream.write('2026-08-02T10:00:00.000000000Z from web\n');
+      await settle();
+      stubs.follows[1].stream.write('2026-08-02T10:00:01.000000000Z from db\n');
+      await run;
 
-      const { lines } = s2.results.web.logs;
-      expect(lines.filter((l) => l.text === 'hello')).to.have.lengthOf(1);
-      // Read many times over the window, and still only one line.
-      expect(stubs.logs.callCount).to.be.greaterThan(1);
+      const web = s2.logBuffers.web.view().lines;
+      const db = s2.logBuffers.db.view().lines;
+      const allSeqs = [...web, ...db].map((l) => l.seq);
+      expect(new Set(allSeqs).size, 'a sequence number must identify one line in the session').to.equal(allSeqs.length);
     });
 
-    it('asks docker only for what it has not already read', async () => {
+    it('returns only what is above the caller cursor, and keeps the rest', async () => {
+      const s2 = session();
+      runner = load({ logs: '2026-08-02T10:00:00.000000000Z one\n2026-08-02T10:00:01.000000000Z two\n' });
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      const all = s2.logBuffers.web.view().lines;
+      expect(all).to.have.lengthOf(2);
+
+      const after = s2.logBuffers.web.view(all[0].seq).lines;
+      expect(after.map((l) => l.text)).to.deep.equal(['two']);
+
+      // Read, not consumed: asking again from the same cursor answers the same,
+      // so a response that never arrived costs nothing.
+      expect(s2.logBuffers.web.view(all[0].seq).lines.map((l) => l.text)).to.deep.equal(['two']);
+      expect(s2.logBuffers.web.view().lines).to.have.lengthOf(2);
+    });
+
+    // Duplicates used to be possible because docker's `since` is inclusive and
+    // second-granular, so consecutive reads overlapped and the buffer had to
+    // de-duplicate them. A follow has no overlap, so that guarantee is now
+    // structural; what this pins is that it really is following, once each.
+    it('follows each component once instead of re-reading it', async () => {
       const s2 = session();
       runner = load({ logs: '2026-08-02T10:00:00.000000000Z hello\n' });
       stubs.inspect.resolves(running('healthy'));
 
       await runner.runSession(s2);
 
-      // First read has no cursor; later ones carry `since`.
-      expect(stubs.logs.firstCall.args[2].since).to.equal(undefined);
-      expect(stubs.logs.lastCall.args[2].since).to.be.a('number');
-      expect(stubs.logs.lastCall.args[2].timestamps).to.equal(true);
+      expect(stubs.logStream.callCount).to.equal(1);
+      expect(stubs.logStream.firstCall.args[0]).to.equal('web_demoapp');
+      expect(stubs.logStream.firstCall.args[1].timestamps).to.equal(true);
+      expect(s2.logBuffers.web.view().lines.filter((l) => l.text === 'hello')).to.have.lengthOf(1);
+    });
+
+    it('reassembles a line delivered across two chunks', async () => {
+      // A stream breaks on no particular boundary, so half a line is normal.
+      const s2 = session();
+      stubs.inspect.resolves(running('healthy'));
+
+      const run = runner.runSession(s2);
+      await settle();
+      stubs.follows[0].stream.write('2026-08-02T10:00:00.000000000Z hel');
+      await settle();
+      stubs.follows[0].stream.write('lo world\n');
+      await run;
+
+      expect(s2.logBuffers.web.view().lines.map((l) => l.text)).to.include('hello world');
+    });
+
+    it('keeps a final line that never got its newline', async () => {
+      // A container killed mid-write leaves exactly this, and it is often the
+      // most interesting line in the log.
+      const s2 = session();
+      stubs.inspect.resolves(running('healthy'));
+
+      const run = runner.runSession(s2);
+      await settle();
+      stubs.follows[0].stream.write('2026-08-02T10:00:00.000000000Z died right here');
+      await run;
+      await runner.teardownSession(s2);
+      await settle();
+
+      expect(s2.logBuffers.web.view().lines.map((l) => l.text)).to.include('died right here');
+    });
+
+    it('captures output written while it is watching, not only at the start', async () => {
+      const s2 = session();
+      stubs.inspect.resolves(running('healthy'));
+
+      const run = runner.runSession(s2);
+      await settle();
+      stubs.follows[0].stream.write('2026-08-02T10:00:00.000000000Z early\n');
+      await settle();
+      stubs.follows[0].stream.write('2026-08-02T10:00:05.000000000Z later\n');
+      await run;
+
+      expect(s2.logBuffers.web.view().lines.map((l) => l.text)).to.include.members(['early', 'later']);
+    });
+
+    it('stops every follow at teardown', async () => {
+      // A follow outliving its session holds a docker connection open for
+      // nothing, and a cancelled session's containers are still up.
+      const s2 = session();
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+      await runner.teardownSession(s2);
+
+      expect(stubs.follows).to.have.lengthOf(1);
+      expect(stubs.follows[0].stop.calledOnce).to.equal(true);
     });
 
     it('reports how many lines it dropped, so a truncated log is not read as complete', async () => {
-      const many = Array.from({ length: 40 }, (_, i) => `2026-08-02T10:00:${String(i).padStart(2, '0')}.000000000Z line${i}`).join('\n');
+      // Trailing newline included: forty COMPLETE lines. Without it the last one
+      // is a partial, held back until flush, which is its own test.
+      const many = `${Array.from({ length: 40 }, (_, i) => `2026-08-02T10:00:${String(i).padStart(2, '0')}.000000000Z line${i}`).join('\n')}\n`;
       const s2 = session();
       // Retain far fewer than were emitted.
       runner = proxyquireWithRetention(5, many);
@@ -571,9 +675,11 @@ describe('playgroundRunner', () => {
 
       await runner.runSession(s2);
 
-      const { lines, dropped, total } = s2.results.web.logs;
+      const { lines, dropped, total } = s2.logBuffers.web.view();
       expect(lines).to.have.lengthOf(5);
       expect(dropped).to.equal(total - 5);
+      // `total` counts what THIS component produced, which is no longer the
+      // sequence number now that the sequence is session-wide.
       expect(total).to.equal(40);
     });
 
@@ -602,14 +708,17 @@ describe('playgroundRunner', () => {
       expect(s2.reachedDeadline).to.equal(undefined);
     });
 
-    it('refreshes the logs while it watches, so a poll returns recent output', async () => {
+    it('follows the log for the whole session, not just around the probe', async () => {
       const s2 = session();
       stubs.inspect.resolves(running('healthy'));
 
-      await runner.runSession(s2);
+      const run = runner.runSession(s2);
+      await settle();
+      // Written well after the probe would have reached its verdict.
+      stubs.follows[0].stream.write('2026-08-02T10:05:00.000000000Z still here\n');
+      await run;
 
-      // Once per probe, then once per component per observation tick.
-      expect(stubs.logs.callCount).to.be.greaterThan(1);
+      expect(s2.logBuffers.web.view().lines.map((l) => l.text)).to.include('still here');
     });
 
     it('refuses an oversize image before pulling anything', async () => {

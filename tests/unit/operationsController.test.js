@@ -109,6 +109,45 @@ describe('operationsController tests', () => {
       expect(res.setHeader.args.map((args) => args[0])).to.include('Expires');
     });
 
+    // The cursor is caller input, so it is parsed rather than trusted. A
+    // client's own bookkeeping decides what it has already read; the server
+    // never discards, so a lost response costs nothing to re-ask for.
+    describe('the read cursor', () => {
+      function detailFor(query) {
+        const controller = build();
+        const seen = [];
+        const handle = jobRegistry.start({
+          kind: 'test',
+          detail: (readOptions) => {
+            seen.push(readOptions);
+            return {};
+          },
+        });
+        const res = mkRes();
+
+        return controller
+          .getOperation(mkReq({ params: { jobId: handle.jobId }, query }), res)
+          .then(() => seen[0]);
+      }
+
+      it('passes a supplied cursor through to the operation', async () => {
+        expect(await detailFor({ sinceSeq: '42' })).to.deep.equal({ sinceSeq: 42 });
+      });
+
+      it('reads no cursor as the whole retained view', async () => {
+        expect(await detailFor({})).to.deep.equal({ sinceSeq: 0 });
+      });
+
+      it('ignores a cursor that is not a whole number, rather than truncating', async () => {
+        // Answering a garbage cursor with "nothing new" would look identical to
+        // a quiet log, and the client would never learn it had asked wrongly.
+        for (const bad of ['abc', '-1', '1.5', 'Infinity', 'NaN', '1e400']) {
+          // eslint-disable-next-line no-await-in-loop
+          expect(await detailFor({ sinceSeq: bad }), bad).to.deep.equal({ sinceSeq: 0 });
+        }
+      });
+    });
+
     it('404s an unknown job', async () => {
       const controller = build();
       const res = mkRes();

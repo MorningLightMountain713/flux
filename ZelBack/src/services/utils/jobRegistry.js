@@ -193,7 +193,7 @@ function cancelled(jobId) {
  * @param {string|null} [owner] the authenticated caller, when the job has one
  * @returns {object|null}
  */
-function get(jobId, owner = null) {
+function get(jobId, owner = null, readOptions = {}) {
   pruneExpired();
 
   const job = jobs.get(jobId);
@@ -208,7 +208,9 @@ function get(jobId, owner = null) {
     lastUpdatedAt: job.lastUpdatedAt,
     progress: job.progress,
     error: job.error,
-    detail: job.detail ? job.detail() : null,
+    // Built at read time, and given the reader's options: an operation whose
+    // detail is a growing log needs to know where the caller got to.
+    detail: job.detail ? job.detail(readOptions) : null,
   };
 }
 

@@ -42,6 +42,23 @@ function accepted(res, handle, extra = {}) {
 }
 
 /**
+ * How far through an operation's line-numbered output the caller has already
+ * read. Anything that is not a non-negative whole number is treated as no
+ * cursor at all - a client sending nonsense gets the whole retained view rather
+ * than a silently truncated one.
+ *
+ * @param {import('express').Request} req
+ * @returns {number} 0 when absent or unusable
+ */
+function readCursor(req) {
+  const raw = req.query && req.query.sinceSeq;
+  if (raw === undefined || raw === null || raw === '') return 0;
+  const seq = Number(raw);
+  if (!Number.isSafeInteger(seq) || seq < 0) return 0;
+  return seq;
+}
+
+/**
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
@@ -52,7 +69,7 @@ async function getOperation(req, res) {
       return res.status(400).json(messageHelper.createErrorMessage('Missing jobId'));
     }
 
-    const view = jobRegistry.get(jobId, await callerFluxId(req));
+    const view = jobRegistry.get(jobId, await callerFluxId(req), { sinceSeq: readCursor(req) });
     // Unknown, expired and not-yours are one answer: a jobId must not tell a
     // caller whether someone else has an operation running.
     if (!view) {
