@@ -24,25 +24,15 @@ services:
     #   test: ["CMD", "mongosh", "--eval", "db.runCommand('ping').ok", "--quiet"]
     #   interval: 3s
     #   timeout: 5s
-  fluxwebsite:
-    container_name: fluxwebsite
-    image: "runonflux/website"
-    init: true
-    networks:
-      - fluxos_test
-    labels:
-      com.runonflux.container_type: "fluxos_test"
   tester:
     build: .
     image: runonflux/testerimage:latest
     container_name: tester
     init: true
-    depends_on: [mongo, socat, fluxwebsite]
+    depends_on: [mongo, socat]
       # mongo:
       #   condition: service_healthy
       # socat:
-      #   condition: service_started
-      # fluxwebsite:
       #   condition: service_started
     environment:
       DOCKER_HOST: socat:2375
