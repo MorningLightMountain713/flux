@@ -1554,7 +1554,11 @@ async function getFreeFluxAppNetworkOctet(excludeOctets = new Set()) {
   networks.forEach((network) => {
     const configs = (network.IPAM && network.IPAM.Config) || [];
     configs.forEach((cfg) => {
-      const match = /^172\.23\.(\d{1,3})\.0\/24$/.exec((cfg && cfg.Subnet) || '');
+      // Any prefix length, not just /24: an octet carved into smaller subnets
+      // (the playground allocates /27s inside one) is still fully spoken for,
+      // and a /24 create over the top of it would fail. Matching only /24 here
+      // would leave that octet looking free.
+      const match = /^172\.23\.(\d{1,3})\.\d{1,3}\/\d{1,2}$/.exec((cfg && cfg.Subnet) || '');
       if (match) used.add(Number(match[1]));
     });
   });
@@ -1567,9 +1571,29 @@ async function getFreeFluxAppNetworkOctet(excludeOctets = new Set()) {
 /**
  * Creates flux application docker network if doesn't exist
  *
+ * The subnet is sized by the caller rather than fixed at /24. An app gets the
+ * whole octet, which is the default; the playground carves one reserved octet
+ * into /27s so that a feature running one session at a time does not take
+ * sixteen octets out of a pool of 255 that also has to serve maxAppsPerNode
+ * apps. Both go through here, so subnet arithmetic lives in one place.
+ *
+ * @param {string} appname - names the network and stamps its ownership label
+ * @param {number} number - third octet, from getFreeFluxAppNetworkOctet
+ * @param {object} [options]
+ * @param {number} [options.prefix] - prefix length; default 24 (the whole octet)
+ * @param {number} [options.base] - fourth-octet offset for a sub-/24 subnet, so
+ *   /27s sit at .0, .32, .64 and so on. Ignored at /24.
+ * @param {string} [options.bridgeName] - explicit kernel interface name for the
+ *   bridge. Left unset, docker derives br-<network id>, which is unpredictable
+ *   until the network exists. The playground names its bridges so its firewall
+ *   and traffic-shaping rules can be written once against a name pattern rather
+ *   than rebuilt per session against whatever id docker happened to mint.
  * @returns {object} response
  */
-async function createFluxAppDockerNetwork(appname, number) {
+async function createFluxAppDockerNetwork(appname, number, options = {}) {
+  const prefix = options.prefix ?? 24;
+  const base = options.base ?? 0;
+  const { bridgeName } = options;
   // check if fluxDockerNetwork of an appexists
   const fluxNetworkOptions = {
     Name: `fluxDockerNetwork_${appname}`,
@@ -1577,10 +1601,13 @@ async function createFluxAppDockerNetwork(appname, number) {
     // decisions (e.g. the reconciler disconnecting a stale membership) key on
     // this label, never on name matching.
     Labels: { 'runonflux.app-network': appname },
+    ...(bridgeName && { Options: { 'com.docker.network.bridge.name': bridgeName } }),
     IPAM: {
       Config: [{
-        Subnet: `172.23.${number}.0/24`,
-        Gateway: `172.23.${number}.1`,
+        Subnet: `172.23.${number}.${base}/${prefix}`,
+        // .0 is the network address, so the gateway is the first host in
+        // whichever block this is - .1 for a /24, .33 for the /27 at .32.
+        Gateway: `172.23.${number}.${base + 1}`,
       }],
     },
   };

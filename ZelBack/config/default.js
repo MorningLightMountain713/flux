@@ -338,8 +338,23 @@ module.exports = {
     playgroundSessionCpu: 2,
     playgroundSessionMemoryMb: 4096,
     playgroundSessionRootFsGb: 10,
-    playgroundSessionMaxComponents: 3,
+    // Per image, and across the whole spec. There is deliberately no component
+    // count here: a five-component app that fits in 2 cores and 4 GB costs this
+    // node exactly what a one-component app using the same costs it, so counting
+    // components would refuse ordinary apps (web + worker + database + cache is
+    // already four) for no gain. What component count was really standing in for
+    // is pull bandwidth, and that is what the aggregate budget bounds directly.
+    // flux-spec caps a spec at 10 components anyway, which is what the session
+    // subnet below is sized to hold.
     playgroundSessionImageMaxBytes: 2000000000,
+    playgroundSessionImageTotalMaxBytes: 6000000000,
+    // One reserved third octet, carved into /27s. A session needs at most ten
+    // container addresses plus a gateway; a /27 has 29 usable, and eight of them
+    // fit in the octet against a default of one concurrent session. Reserving
+    // whole /24s instead would cost eight octets out of the 255 a node has to
+    // share with up to maxAppsPerNode apps.
+    playgroundNetworkOctet: 255,
+    playgroundNetworkPrefix: 27,
     playgroundSessionTtlMs: 900000,
     playgroundNodeConcurrentSessions: 1,
     playgroundNodeSessionsPerHour: 2,

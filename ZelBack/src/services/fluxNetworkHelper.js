@@ -11,6 +11,7 @@ const messageHelper = require('./messageHelper');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const benchmarkService = require('./benchmarkService');
 const verificationHelper = require('./verificationHelper');
+const playgroundEgress = require('./appPlayground/playgroundEgress');
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const { peerManager } = require('./utils/peerState');
 const { CLOSE_CODES, DIRECTION } = require('./utils/FluxPeerSocket');
@@ -1550,6 +1551,17 @@ async function removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces) {
     return false;
   }
   log.info('IPTABLES: DOCKER-USER explicit return to FORWARD chain added');
+
+  // The flush above destroyed the jump to the playground's egress chain along
+  // with everything else in DOCKER-USER. The chain itself survives - it is a
+  // separate chain for exactly this reason - but without the jump nothing
+  // reaches it, and a live session would silently regain unrestricted egress.
+  // Re-added last so it sits at the head, ahead of the accepts above.
+  const jumped = await playgroundEgress.ensureEgressJump();
+  if (!jumped) {
+    log.error('IPTABLES: playground egress jump could not be restored after the DOCKER-USER rebuild');
+    return false;
+  }
 
   return true;
 }
