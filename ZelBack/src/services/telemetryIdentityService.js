@@ -4,6 +4,7 @@ const path = require('node:path');
 
 const log = require('../lib/log');
 const dockerService = require('./dockerService');
+const dockerEventStream = require('./utils/dockerEventStream');
 const serviceHelper = require('./serviceHelper');
 const geolocationService = require('./geolocationService');
 const telemetrySinkCache = require('./telemetrySinkCache');
@@ -418,52 +419,14 @@ async function handleDockerEvent(event) {
 }
 
 async function subscribeEvents() {
-  if (eventStream) return;
-  let lineBuf = '';
-
-  try {
-    eventStream = await dockerService.dockerGetEvents({
+  if (!eventStream) {
+    eventStream = dockerEventStream.createDockerEventStream({
+      label: 'telemetry identity',
       filters: { type: ['container'], event: ['start', 'die', 'destroy'] },
+      onEvent: handleDockerEvent,
     });
-
-    eventStream.on('data', (buf) => {
-      if (stopped) return;
-      lineBuf += buf.toString();
-      const lines = lineBuf.split('\n');
-      lineBuf = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let event;
-        try {
-          event = JSON.parse(line);
-        } catch (parseErr) {
-          log.error(`telemetry identity: failed to parse docker event: ${parseErr.message}`);
-          continue;
-        }
-        handleDockerEvent(event).catch((err) => {
-          log.error(`telemetry identity: event handler error: ${err.message}`);
-        });
-      }
-    });
-
-    eventStream.on('error', (err) => {
-      log.error(`telemetry identity: event stream error: ${err.message}`);
-      eventStream = null;
-      if (!stopped) setTimeout(() => subscribeEvents(), 10000);
-    });
-
-    eventStream.on('end', () => {
-      log.warn('telemetry identity: event stream ended');
-      eventStream = null;
-      if (!stopped) setTimeout(() => subscribeEvents(), 10000);
-    });
-
-    log.info('telemetry identity: listening for container start/stop events');
-  } catch (err) {
-    log.error(`telemetry identity: failed to subscribe to docker events: ${err.message}`);
-    eventStream = null;
-    if (!stopped) setTimeout(() => subscribeEvents(), 10000);
   }
+  await eventStream.start();
 }
 
 // Kept for forward-compat: the daemon may issue ad-hoc lookups.
@@ -595,10 +558,7 @@ async function stop() {
     sinkResyncTimer = null;
   }
 
-  if (eventStream) {
-    eventStream.destroy();
-    eventStream = null;
-  }
+  if (eventStream) eventStream.stop();
 
   for (const socket of sockets) socket.destroy();
   sockets.clear();

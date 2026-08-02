@@ -1,7 +1,6 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
-const { EventEmitter } = require('node:events');
 // Real registry singleton - un-stubbed in proxyquire, so the bridge and the test share it.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
@@ -13,6 +12,12 @@ describe('containerEventBridge', () => {
     stubs = {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       dockerService: { dockerGetEvents: sinon.stub() },
+      dockerEventStream: {
+        createDockerEventStream: sinon.stub().callsFake((options) => {
+          stubs.subscriptionOptions = options;
+          return { start: sinon.stub().resolves(), stop: sinon.stub(), connected: () => true };
+        }),
+      },
       globalState: { bootContainerStateSettled: true },
       appsRuntimeState: { recordExit: sinon.stub().resolves() },
       appReconciler: {
@@ -24,6 +29,7 @@ describe('containerEventBridge', () => {
     containerEventBridge = proxyquire('../../ZelBack/src/services/appMonitoring/containerEventBridge', {
       '../../lib/log': stubs.log,
       '../dockerService': stubs.dockerService,
+      '../utils/dockerEventStream': stubs.dockerEventStream,
       '../utils/globalState': stubs.globalState,
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
       './appReconciler': stubs.appReconciler,
@@ -178,69 +184,56 @@ describe('containerEventBridge', () => {
     });
   });
 
-  // The event stream is the reconciler's primary trigger; losing it silently
-  // means events go unnoticed until the hourly sweep. Every way the stream
-  // can die must lead to exactly ONE resubscribe: 'close' can fire without
-  // 'error'/'end' (raw socket teardown), and one outage firing several of the
-  // signals must not double the stream (each duplicate doubles every event's
-  // handling from then on).
-  describe('event stream lifecycle', () => {
-    const makeStream = () => {
-      const stream = new EventEmitter();
-      stream.destroy = sinon.stub();
-      return stream;
-    };
+  // The stream plumbing itself - chunk reassembly, one-resubscribe-per-outage,
+  // the stale-stream guard - belongs to dockerEventStream and is tested there.
+  // What is the bridge's own is WHAT it asks for and WHERE the events go.
+  describe('event subscription', () => {
+    it('asks for the container lifecycle events and network disconnects', async () => {
+      await containerEventBridge.start();
 
-    it('subscribes to the container lifecycle events and network disconnects', async () => {
-      stubs.dockerService.dockerGetEvents.resolves(makeStream());
-      try {
-        await containerEventBridge.start();
-        const { filters } = stubs.dockerService.dockerGetEvents.firstCall.args[0];
-        expect(filters.type).to.have.members(['container', 'network']);
-        expect(filters.event).to.have.members(['die', 'destroy', 'start', 'health_status', 'disconnect']);
-      } finally {
-        containerEventBridge.stop();
-      }
+      const { filters } = stubs.subscriptionOptions;
+      expect(filters.type).to.have.members(['container', 'network']);
+      expect(filters.event).to.have.members(['die', 'destroy', 'start', 'health_status', 'disconnect']);
+      containerEventBridge.stop();
     });
 
-    it('resubscribes when the stream closes without error or end', async () => {
-      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-      try {
-        const first = makeStream();
-        stubs.dockerService.dockerGetEvents.resolves(makeStream());
-        stubs.dockerService.dockerGetEvents.onFirstCall().resolves(first);
-        await containerEventBridge.start();
-        expect(stubs.dockerService.dockerGetEvents.callCount).to.equal(1);
+    it('routes received events through its own handler', async () => {
+      await containerEventBridge.start();
 
-        first.emit('close');
-        clock.tick(10000 + 1);
-        await new Promise((resolve) => { setImmediate(resolve); });
-        expect(stubs.dockerService.dockerGetEvents.callCount, 'a closed stream must be resubscribed').to.equal(2);
-      } finally {
-        containerEventBridge.stop();
-        clock.restore();
-      }
+      await stubs.subscriptionOptions.onEvent(dieEvent('fluxwww_app', 137));
+
+      expect(stubs.appReconciler.enqueue.calledOnceWith('fluxwww_app')).to.be.true;
+      containerEventBridge.stop();
     });
 
-    it('collapses error+end+close from one outage into a single resubscribe', async () => {
-      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-      try {
-        const first = makeStream();
-        stubs.dockerService.dockerGetEvents.resolves(makeStream());
-        stubs.dockerService.dockerGetEvents.onFirstCall().resolves(first);
-        await containerEventBridge.start();
+    it('reconciles everything on a reconnect - the outage hid whatever died in it', async () => {
+      await containerEventBridge.start();
 
-        first.emit('error', new Error('stream died'));
-        first.emit('end');
-        first.emit('close');
-        clock.tick(10000 + 1);
-        await new Promise((resolve) => { setImmediate(resolve); });
-        await new Promise((resolve) => { setImmediate(resolve); });
-        expect(stubs.dockerService.dockerGetEvents.callCount, 'one outage must produce exactly one new stream').to.equal(2);
-      } finally {
-        containerEventBridge.stop();
-        clock.restore();
-      }
+      await stubs.subscriptionOptions.onReconnect();
+
+      expect(stubs.appReconciler.enqueueAll.calledOnceWith('reconnect')).to.be.true;
+      containerEventBridge.stop();
+    });
+
+    it('does not reconcile on reconnect before boot container state has settled', async () => {
+      // Enqueuing everything against a half-known world would fight the boot
+      // path rather than help it.
+      stubs.globalState.bootContainerStateSettled = false;
+      await containerEventBridge.start();
+
+      await stubs.subscriptionOptions.onReconnect();
+
+      expect(stubs.appReconciler.enqueueAll.called).to.be.false;
+      containerEventBridge.stop();
+    });
+
+    it('reuses one subscription across start/stop cycles', async () => {
+      await containerEventBridge.start();
+      containerEventBridge.stop();
+      await containerEventBridge.start();
+
+      expect(stubs.dockerEventStream.createDockerEventStream.calledOnce).to.be.true;
+      containerEventBridge.stop();
     });
   });
 

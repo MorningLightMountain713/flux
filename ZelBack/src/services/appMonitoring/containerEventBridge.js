@@ -1,5 +1,6 @@
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
+const dockerEventStream = require('../utils/dockerEventStream');
 const globalState = require('../utils/globalState');
 const operationRegistry = require('../utils/operationRegistry');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -34,28 +35,7 @@ const appReconciler = require('./appReconciler');
 //                    (confirm, persistence window, storm guard), so a spurious or already-
 //                    stale event is at most one no-op reconcile.
 
-let eventStream = null;
-let stopped = false;
-let subscribing = false; // a subscribe is mid-await (its stream not yet assigned)
-let resubscribeTimer = null; // exactly one pending resubscribe, however many signals fired
-let lineBuf = '';
-let hasConnected = false;
-
-const RESUBSCRIBE_DELAY_MS = 10000;
-
-// Every way a stream can die ('error', 'end', a raw 'close', or a failed
-// subscribe) funnels here, and the timer guard collapses them: one outage
-// produces exactly one new stream. Unguarded, error+end firing together
-// doubled the stream - and every event was then handled twice.
-function scheduleResubscribe(reason) {
-  if (stopped || resubscribeTimer || eventStream) return;
-  log.warn(`containerEventBridge - event stream ${reason}; resubscribing in ${RESUBSCRIBE_DELAY_MS / 1000}s`);
-  resubscribeTimer = setTimeout(() => {
-    resubscribeTimer = null;
-    // eslint-disable-next-line no-use-before-define
-    subscribe();
-  }, RESUBSCRIBE_DELAY_MS);
-}
+let subscription = null;
 
 function isFluxContainer(name) {
   return name.startsWith('flux') || name.startsWith('zel');
@@ -168,85 +148,29 @@ function handleContainerEvent(event) {
   return undefined;
 }
 
-async function subscribe() {
-  if (eventStream || subscribing) return;
-  subscribing = true;
-  lineBuf = '';
-
-  try {
-    const stream = await dockerService.dockerGetEvents({
-      filters: { type: ['container', 'network'], event: ['die', 'destroy', 'start', 'health_status', 'disconnect'] },
-    });
-    eventStream = stream;
-
-    // handlers are scoped to THIS stream: a late signal from an already
-    // replaced stream must not retire its healthy successor
-    const onGone = (reason) => {
-      if (eventStream === stream) eventStream = null;
-      scheduleResubscribe(reason);
-    };
-
-    stream.on('data', (buf) => {
-      if (stopped || eventStream !== stream) return;
-      lineBuf += buf.toString();
-      const lines = lineBuf.split('\n');
-      lineBuf = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line);
-          Promise.resolve(handleContainerEvent(event)).catch((err) => {
-            log.error(`containerEventBridge - event handler error: ${err.message}`);
-          });
-        } catch (parseErr) {
-          log.error(`containerEventBridge - failed to parse docker event: ${parseErr.message}`);
-        }
-      }
-    });
-
-    stream.on('error', (err) => {
-      log.error(`containerEventBridge - event stream error: ${err.message}`);
-      onGone('errored');
-    });
-    stream.on('end', () => onGone('ended'));
-    // a raw socket teardown can emit 'close' without 'error' or 'end'
-    stream.on('close', () => onGone('closed'));
-
-    log.info('containerEventBridge - listening for container lifecycle events');
-
-    // a re-established stream may have missed events while it was down;
-    // reconcile every component from actual state to catch orphans
-    if (hasConnected && globalState.bootContainerStateSettled) {
-      log.info('containerEventBridge - stream reconnected, reconciling all components');
-      appReconciler.enqueueAll('reconnect').catch((err) => {
-        log.error(`containerEventBridge - reconnect reconcile failed: ${err.message}`);
-      });
-    }
-    hasConnected = true;
-  } catch (err) {
-    log.error(`containerEventBridge - failed to subscribe to docker events: ${err.message}`);
-    scheduleResubscribe('subscribe failed');
-  } finally {
-    subscribing = false;
-  }
+// Events during an outage are gone, so a re-established stream cannot assume it
+// saw every death: reconcile every component from actual state to catch the
+// containers orphaned while it was down.
+function onReconnect() {
+  if (!globalState.bootContainerStateSettled) return undefined;
+  log.info('containerEventBridge - stream reconnected, reconciling all components');
+  return appReconciler.enqueueAll('reconnect');
 }
 
 async function start() {
-  stopped = false;
-  hasConnected = false;
-  await subscribe();
+  if (!subscription) {
+    subscription = dockerEventStream.createDockerEventStream({
+      label: 'containerEventBridge',
+      filters: { type: ['container', 'network'], event: ['die', 'destroy', 'start', 'health_status', 'disconnect'] },
+      onEvent: handleContainerEvent,
+      onReconnect,
+    });
+  }
+  await subscription.start();
 }
 
 function stop() {
-  stopped = true;
-  if (resubscribeTimer) {
-    clearTimeout(resubscribeTimer);
-    resubscribeTimer = null;
-  }
-  if (eventStream) {
-    eventStream.destroy();
-    eventStream = null;
-  }
+  if (subscription) subscription.stop();
 }
 
 module.exports = {
