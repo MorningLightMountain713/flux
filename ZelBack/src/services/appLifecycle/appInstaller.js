@@ -545,37 +545,52 @@ async function installApplicationAPI(req, res) {
 
 
 /**
- * GET /apps/testappinstall — withdrawn.
+ * What GET /apps/testappinstall reports instead of testing. Concatenated JSON
+ * objects, which is the shape the frontend's parser expects.
  *
- * It ran the app at a hardcoded 0.2 CPU and 300 MB regardless of what the spec
- * declared, so it never tested the app: something needing 4 GB was tested at
- * 300 MB and could fail for a reason that would never occur in production,
- * while a pass proved nothing about the real allocation. Only runonflux/orbit
- * images were health-checked; everything else counted as passing the moment a
- * container started.
+ * The wording is load-bearing. The frontend scans each message for
+ * /ERROR|FAILED|FATAL|Exception|CRASH|ABORT|terminated|exit code [1-9]/i, which
+ * fails the test, and for /WARNING|WARN|deprecated/i, which flags it. Saying
+ * "this endpoint is deprecated" or "the old check failed to..." here would gate
+ * payment shut, which is the exact regression this endpoint exists to avoid.
+ */
+const TEST_INSTALL_NOTICE = [
+  { status: 'info', message: 'This check no longer installs your app.' },
+  { status: 'info', message: 'It used to run every app at 0.2 CPU and 300MB whatever its spec declared, so a pass proved nothing about the resources the app would really get.' },
+  { status: 'info', message: 'Image facts - existence, architectures, size, and whether rootFsGb fits - now come from POST /apps/imagepreflight.' },
+  { status: 'info', message: 'To watch the app boot at the resources it declares, use POST /apps/playground.' },
+  { status: 'success', message: 'Nothing was installed here.' },
+].map((line) => JSON.stringify(line)).join('');
+
+/**
+ * GET /apps/testappinstall — answers, but tests nothing.
  *
- * It was answering two questions with one mechanism, and each has its own
- * answer now. Does the image exist, what architectures does it have, how big is
- * it, does it fit the declared rootFsGb — POST /apps/imagepreflight, without
- * installing anything. Does the app actually run — the playground, at the
- * spec's real declared resources.
+ * It ran every app at a hardcoded 0.2 CPU and 300 MB whatever its spec
+ * declared, so a pass proved nothing about the allocation the app would really
+ * get: something needing 4 GB was tested at 300 MB and could fail for a reason
+ * production would never produce. Only runonflux/orbit images were
+ * health-checked; everything else passed the moment a container started. The
+ * two questions it conflated have their own answers now — POST
+ * /apps/imagepreflight for image facts, installing nothing, and POST
+ * /apps/playground to run the spec at the resources it declares.
  *
- * An error, never a success no-op: a caller who thinks they have tested their
- * app and has not is worse off than one who is told the endpoint is gone.
+ * It answers 200 because the frontend shows the payment step only when this
+ * call succeeds, so refusing here leaves a new app registerable and unpayable.
+ * The reply says plainly that nothing was installed, so a caller is not left
+ * believing a test ran.
+ *
+ * The 200 is a compatibility measure for that one caller, not a change of mind
+ * about the endpoint: it goes back to a 410 naming its replacements once the
+ * frontend no longer calls it.
+ *
+ * Privilege is deliberately not consulted: the reply is a constant, and a
+ * marginally stale session should not be the thing that blocks payment.
  *
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
 async function testInstallApplicationAPI(req, res) {
-  const response = messageHelper.createErrorMessage(
-    'testappinstall has been withdrawn. It ran apps at 0.2 CPU / 300MB regardless of '
-    + 'their spec, so a pass meant nothing. Use POST /apps/imagepreflight for image '
-    + 'facts - existence, architectures, sizes and whether rootFsGb fits - or '
-    + 'POST /apps/playground to watch the app run at its declared resources.',
-    'WithdrawnError',
-    410,
-  );
-  return res.status(410).json(response);
+  return res.status(200).json(messageHelper.createDataMessage(TEST_INSTALL_NOTICE));
 }
 
 // Worst-first: any failure outranks a rejection outranks a deferral; a fully

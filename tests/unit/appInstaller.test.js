@@ -279,33 +279,70 @@ describe('appInstaller tests', () => {
     });
   });
 
-  describe('testInstallApplicationAPI (withdrawn)', () => {
-    it('refuses with 410 and points at what replaced it', async () => {
-      // An error, never a success no-op: a caller who believes they have tested
-      // their app and have not is worse off than one told the endpoint is gone.
+  describe('testInstallApplicationAPI (tests nothing)', () => {
+    // How the frontend reads the reply, so the assertions below are the real
+    // contract rather than a guess at one: it fails the test on a non-success
+    // status, then parses `data` as concatenated JSON and scans each message.
+    const FRONTEND_ERROR_PATTERN = /ERROR|FAILED|FATAL|Exception|CRASH|ABORT|terminated|exit code [1-9]/i;
+    const FRONTEND_WARNING_PATTERN = /WARNING|WARN|deprecated/i;
+
+    function callEndpoint() {
       const req = { params: { appname: 'testapp' }, query: {} };
       const res = { status: sinon.stub().returnsThis(), json: sinon.stub() };
-      messageHelperStub.createErrorMessage.callsFake((message) => ({ status: 'error', data: { message } }));
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
-      await appInstaller.testInstallApplicationAPI(req, res);
+      return { req, res, done: appInstaller.testInstallApplicationAPI(req, res) };
+    }
 
-      expect(res.status.calledWith(410)).to.be.true;
-      const { message } = res.json.firstCall.args[0].data;
-      expect(message).to.include('/apps/imagepreflight');
-      expect(message).to.include('playground');
-      // Says WHY, so the reason the old answer was worthless travels with it.
-      expect(message).to.include('0.2 CPU / 300MB');
+    function parseNotice(res) {
+      const raw = res.json.firstCall.args[0].data;
+
+      return JSON.parse(`[${raw.replace(/}{/g, '},{')}]`);
+    }
+
+    it('answers 200 and success, because payment is gated on it', async () => {
+      // A new app reaches the payment step only when this call resolves with a
+      // non-error body, so anything else leaves it registerable and unpayable.
+      const { res, done } = callEndpoint();
+      await done;
+
+      expect(res.status.calledWith(200)).to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('success');
     });
 
-    it('does not consult privilege - it is gone for everyone', async () => {
-      const req = { params: {}, query: {} };
-      const res = { status: sinon.stub().returnsThis(), json: sinon.stub() };
-      messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'withdrawn' } });
+    it('says nothing was installed, and names what replaced it', async () => {
+      const { res, done } = callEndpoint();
+      await done;
 
-      await appInstaller.testInstallApplicationAPI(req, res);
+      const messages = parseNotice(res).map((line) => line.message).join(' ');
+      expect(messages).to.include('no longer installs your app');
+      expect(messages).to.include('Nothing was installed');
+      expect(messages).to.include('/apps/imagepreflight');
+      expect(messages).to.include('/apps/playground');
+      // Says WHY, so the reason the old answer was worthless travels with it.
+      expect(messages).to.include('0.2 CPU and 300MB');
+    });
+
+    it('words the notice so the frontend does not read it as a failure', async () => {
+      // The frontend scans the text it renders, not just the status field, so
+      // describing the withdrawal with a word like "deprecated" or "failed"
+      // would gate payment shut - the exact regression this endpoint prevents.
+      const { res, done } = callEndpoint();
+      await done;
+
+      for (const line of parseNotice(res)) {
+        expect(line.status).to.be.oneOf(['info', 'success']);
+        expect(FRONTEND_ERROR_PATTERN.test(line.message), `error pattern in: ${line.message}`).to.be.false;
+        expect(FRONTEND_WARNING_PATTERN.test(line.message), `warning pattern in: ${line.message}`).to.be.false;
+      }
+    });
+
+    it('does not consult privilege - the reply is a constant', async () => {
+      const { res, done } = callEndpoint();
+      await done;
 
       expect(verificationHelperStub.verifyPrivilege.called).to.be.false;
-      expect(res.status.calledWith(410)).to.be.true;
+      expect(res.status.calledWith(200)).to.be.true;
     });
   });
 

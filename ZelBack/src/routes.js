@@ -1278,9 +1278,10 @@ module.exports = (app) => {
   app.get('/apps/installapplocally/:appname?', (req, res) => {
     appInstaller.installApplicationAPI(req, res);
   });
-  // Withdrawn: it ran apps at fabricated resource limits, so a pass meant nothing.
-  // Kept so a caller is told where to go rather than getting a 404. Remove at the
-  // next major version.
+  // Tests nothing: it ran apps at fabricated resource limits, so a pass meant
+  // nothing. It still answers 200 only because the frontend gates the payment step
+  // on this call succeeding; the reply says nothing was installed and names what
+  // replaced it. Restore the 410 once the frontend no longer calls it.
   app.get('/apps/testappinstall/:appname?', (req, res) => {
     appInstaller.testInstallApplicationAPI(req, res);
   });
