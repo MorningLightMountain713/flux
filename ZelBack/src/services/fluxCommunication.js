@@ -159,7 +159,11 @@ async function batchVerifyBroadcasts(broadcasts, label) {
     log.warn(`${label} - ${nodeCheckFailed.size} broadcasts failed node lookup`);
   }
 
-  if (items.length === 0) return [];
+  // Same shape as every other exit. Returning a bare array here left callers
+  // destructuring `verified` out of it as undefined, and the throw that followed
+  // was caught by the handler - skipping the rest of it, including the
+  // sync-complete signal, so the round never finished.
+  if (items.length === 0) return { verified: [], announcers: new Map() };
 
   // The worker reads only the three fields it needs, so items go across as they
   // are rather than being copied into a narrower shape first

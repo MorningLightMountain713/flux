@@ -20,9 +20,9 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
+const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
 const { PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
-const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
 
 let localWsServer;
 let localWsUrl;
@@ -2110,6 +2110,58 @@ describe('fluxCommunication tests', () => {
         expect(progressAtWork, 'the peer was still silent when its own answer was already in hand')
           .to.deep.equal([PEER]);
       });
+    });
+  });
+
+  describe('sync chunk where every broadcast fails node lookup', () => {
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('still completes the sync round', async () => {
+      // A peer sending events for nodes this node does not have in its list yet
+      // - normal while the network view is still loading - leaves nothing to
+      // verify. That path used to hand callers a bare array instead of the
+      // { verified, announcers } pair, so reading `verified.length` threw, the
+      // handler's catch swallowed it, and everything below was skipped:
+      // the state events went unstored and the round was never marked done.
+      // The handlers gate on isSyncResponseWanted(socket), not on the ephemeral
+      // isSyncRequested(key) this test was written against - see the REBASE-ADAPTER
+      // note in serviceManager, which is the only place the two are bridged.
+      sinon.stub(peerManager, 'isSyncResponseWanted').returns(true);
+      sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+        .resolves({ result: fluxCommunicationUtils.VerifyResult.OK });
+      sinon.stub(fluxCommunicationUtils, 'resolveBroadcastAnnouncer')
+        .resolves({ result: fluxCommunicationUtils.VerifyResult.NODE_NOT_FOUND, announcer: null });
+
+      const peerKey = '10.20.30.40:16127';
+      const msgObj = {
+        data: {
+          type: 'fluxapprunningsync',
+          done: true,
+          messages: [{
+            type: 'apprunning',
+            envelope: {
+              version: 1, pubKey: 'unknownnodepubkey', timestamp: 1700000000000, signature: 'sig',
+            },
+            data: { type: 'fluxapprunning', name: 'someapp', ip: '1.2.3.4' },
+          }],
+        },
+      };
+
+      const completed = [];
+      const onComplete = (...args) => completed.push(args);
+      appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+      try {
+        // The handler directly, as the block above does: syncResponseDispatcher is
+        // null until the peer manager is wired at boot, so driving through it here
+        // would test nothing at all.
+        await fluxCommunication.handleAppRunningSyncResponse(msgObj, { key: peerKey });
+      } finally {
+        appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+      }
+
+      expect(completed).to.deep.equal([['apprunning', peerKey]]);
     });
   });
 });
