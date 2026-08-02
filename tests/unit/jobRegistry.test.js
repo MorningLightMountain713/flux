@@ -144,6 +144,39 @@ describe('jobRegistry tests', () => {
       jobRegistry.succeed(handle.jobId);
       expect(jobRegistry.requestCancel(handle.jobId)).to.equal(false);
     });
+
+    // "Notices at its next checkpoint" is only true if it reaches one. Work
+    // that waits on events has no next checkpoint until an event arrives, so a
+    // cancel has to be delivered rather than left to be discovered.
+    it('tells the work a cancel was requested', () => {
+      const onCancel = sinon.stub();
+      const handle = jobRegistry.start({ kind: 'test', onCancel });
+
+      jobRegistry.requestCancel(handle.jobId);
+
+      expect(onCancel.calledOnce).to.equal(true);
+    });
+
+    it('does not call the handler for a cancel it refuses', () => {
+      const onCancel = sinon.stub();
+      const handle = jobRegistry.start({ kind: 'test', onCancel });
+      jobRegistry.succeed(handle.jobId);
+
+      jobRegistry.requestCancel(handle.jobId);
+
+      expect(onCancel.called).to.equal(false);
+    });
+
+    it('still records the cancel when the handler throws', () => {
+      // A handler is a courtesy to the work; the flag is the contract.
+      const handle = jobRegistry.start({
+        kind: 'test',
+        onCancel: () => { throw new Error('watcher already gone'); },
+      });
+
+      expect(jobRegistry.requestCancel(handle.jobId)).to.equal(true);
+      expect(jobRegistry.isCanceled(handle.jobId)).to.equal(true);
+    });
   });
 
   describe('retention', () => {

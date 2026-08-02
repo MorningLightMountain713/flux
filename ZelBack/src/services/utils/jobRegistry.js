@@ -93,12 +93,17 @@ function scrubCredentials(detail) {
  * @param {() => object} [params.detail] called at read time for the operation's
  *   own payload, so a service keeps its domain state where it already lives
  *   instead of copying it in here on every transition
+ * @param {() => void} [params.onCancel] called when a cancel is REQUESTED, so
+ *   work that is waiting on something can be woken and see the flag. Without it
+ *   a cancel is only observed the next time the work happens to look.
  * @returns {{jobId: string, statusUrl: string}}
  */
 function start(params) {
   pruneExpired();
 
-  const { kind, owner = null, detail = null } = params;
+  const {
+    kind, owner = null, detail = null, onCancel = null,
+  } = params;
   const jobId = `op_${crypto.randomUUID()}`;
   const now = Date.now();
 
@@ -107,6 +112,7 @@ function start(params) {
     kind,
     owner,
     detail,
+    onCancel,
     status: JobStatus.RUNNING,
     createdAt: now,
     lastUpdatedAt: now,
@@ -168,6 +174,17 @@ function requestCancel(jobId) {
   if (!job || isTerminal(job.status)) return false;
   job.canceled = true;
   job.lastUpdatedAt = Date.now();
+  // A cancel is a thing that HAPPENED, so the work is told rather than left to
+  // notice. An operation that waits on events would otherwise not see the flag
+  // until whatever it is waiting for arrives - which for a quiet playground
+  // session is its full fifteen-minute deadline.
+  if (job.onCancel) {
+    try {
+      job.onCancel();
+    } catch (err) {
+      log.error(`Operation ${jobId} cancel handler failed: ${err.message}`);
+    }
+  }
   return true;
 }
 
