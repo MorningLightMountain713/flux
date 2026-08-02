@@ -1,0 +1,23 @@
+# Dedicated cgroup slice for playground session containers, mirrored from the
+# Arcane image (flux_iso/flux_fs/systemd/system/flux-playground.slice). FluxOS
+# places every playground container here (Docker
+# CgroupParent=flux-playground.slice), separately from flux-apps.slice, so a
+# guest's load is capped independently of the apps this node is paid to run.
+#
+# The limits below are the AGGREGATE backstop, not the per-session limit — each
+# container already carries its own NanoCPUs/Memory from the spec it declared.
+# They exist for the case where the per-session numbers are wrong or the
+# concurrency setting is raised: whatever else changes, the total a node donates
+# to strangers stays bounded by this file. They are set to one session's ceiling
+# (2 cores / 4 GB) because the node runs one session at a time; raising
+# playgroundNodeConcurrentSessions without raising these will throttle sessions
+# rather than silently multiply what the node gives away, which is the intended
+# direction of failure.
+[Unit]
+Description=Flux playground session containers
+
+[Slice]
+MemoryAccounting=yes
+CPUAccounting=yes
+MemoryMax=4G
+CPUQuota=200%
