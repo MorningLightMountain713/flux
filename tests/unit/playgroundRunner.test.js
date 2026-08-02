@@ -16,9 +16,12 @@ const CONFIG = {
     playgroundLogRetainedLines: 2000,
     playgroundMinerCpuBusyFraction: 0.9,
     // Tiny running window so the observation loop finishes in test time; the
-    // delay stub below is a real short wait so it iterates a handful of times
-    // rather than spinning.
+    // fake watcher's changedOr is a real short wait so it iterates a handful of
+    // times rather than spinning.
     playgroundSessionTtlMs: 60,
+    playgroundTcpRetryMs: 5,
+    // Fast enough to take several samples inside that window.
+    playgroundCpuSampleMs: 5,
   },
 };
 
@@ -47,6 +50,30 @@ describe('playgroundRunner', () => {
       verifyComponentImage: sinon.stub().resolves({ repoTag: 'nginx:latest' }),
       delay: sinon.stub().callsFake(() => new Promise((r) => { setTimeout(r, 5); })),
     };
+
+    // What the event stream would have told the session. Tests vary this to
+    // say what the containers are doing; the runner never asks docker itself.
+    stubs.watched = {
+      known: true,
+      running: true,
+      gone: false,
+      exitCode: null,
+      health: 'healthy',
+      hasHealthCheck: true,
+      address: '172.23.1.5',
+      ...(opts.watched ?? {}),
+    };
+    stubs.watcherStopped = 0;
+    stubs.createSessionWatcher = sinon.stub().callsFake(() => ({
+      start: sinon.stub().resolves(),
+      stop: () => { stubs.watcherStopped += 1; },
+      state: () => ({ ...stubs.watched }),
+      anyRunning: () => stubs.watched.running,
+      // A real wait, bounded, so the observation loop advances toward its
+      // deadline instead of spinning.
+      changedOr: (ms) => new Promise((resolve) => { setTimeout(resolve, Math.min(ms, 10)); }),
+      refresh: sinon.stub().resolves(),
+    }));
 
     stubs.logStream = sinon.stub().callsFake(async () => {
       const stream = new PassThrough();
@@ -79,6 +106,7 @@ describe('playgroundRunner', () => {
       },
       '../fluxNetworkHelper': { isPortOpen: stubs.isPortOpen },
       './playgroundNetwork': { createSessionNetwork: stubs.createSessionNetwork },
+      './playgroundWatcher': { createSessionWatcher: stubs.createSessionWatcher },
       '../appLifecycle/componentProvisioner': { verifyComponentImage: stubs.verifyComponentImage },
       '../appSecurity/imageManager': { verifyRepository: stubs.verifyRepository },
       util: { promisify: () => async () => 'pulled' },
@@ -127,6 +155,7 @@ describe('playgroundRunner', () => {
       '../serviceHelper': { delay: stubs.delay, dockerBufferToString: (b) => String(b) },
       '../fluxNetworkHelper': { isPortOpen: stubs.isPortOpen },
       './playgroundNetwork': { createSessionNetwork: stubs.createSessionNetwork },
+      './playgroundWatcher': { createSessionWatcher: stubs.createSessionWatcher },
       '../appLifecycle/componentProvisioner': { verifyComponentImage: stubs.verifyComponentImage },
       '../appSecurity/imageManager': { verifyRepository: stubs.verifyRepository },
       util: { promisify: () => async () => 'pulled' },
@@ -152,22 +181,6 @@ describe('playgroundRunner', () => {
     State: { Running: true, ...(health ? { Health: { Status: health } } : {}) },
     NetworkSettings: { Networks: { fluxDockerNetwork_demoapp: { IPAddress: '172.23.1.5' } } },
   });
-
-  /**
-   * Drive the probe's clock from the inspect call count, so a test that needs
-   * time to pass is deterministic rather than dependent on how fast it runs.
-   */
-  function clockPerInspect(msPerCall) {
-    const base = process.hrtime.bigint();
-    let calls = 0;
-    stubs.inspect.callsFake(() => {
-      calls += 1;
-      return Promise.resolve(stubs.inspectResult);
-    });
-    sinon.stub(process.hrtime, 'bigint').callsFake(
-      () => base + BigInt(calls) * BigInt(msPerCall) * 1_000_000n,
-    );
-  }
 
   beforeEach(() => {
     runner = load();
@@ -210,24 +223,54 @@ describe('playgroundRunner', () => {
   describe('probeComponent — the ladder', () => {
     const farDeadline = () => process.hrtime.bigint() + 600n * 1_000_000_000n;
 
+    /**
+     * The container state the probe reads, under the test's control.
+     *
+     * The probe no longer asks docker anything - it reads what the watcher has
+     * been told by the event stream - so what a test varies is that state.
+     * `msPerWait` advances a virtual clock once per wait, so a test that needs
+     * time to pass is deterministic rather than dependent on how fast it runs.
+     */
+    function watcherWith(state = {}, { msPerWait = 0 } = {}) {
+      const current = {
+        known: true,
+        running: true,
+        gone: false,
+        exitCode: null,
+        health: null,
+        hasHealthCheck: false,
+        address: '172.23.1.5',
+        ...state,
+      };
+      let waits = 0;
+      if (msPerWait) {
+        const base = process.hrtime.bigint();
+        sinon.stub(process.hrtime, 'bigint').callsFake(
+          () => base + BigInt(waits) * BigInt(msPerWait) * 1_000_000n,
+        );
+      }
+      return {
+        state: () => ({ ...current }),
+        anyRunning: () => current.running,
+        async changedOr() { waits += 1; },
+      };
+    }
+
     it('passes on a healthy docker health check', async () => {
-      stubs.inspect.resolves(running('healthy'));
-      const probe = await runner.probeComponent(component(), farDeadline());
+      const probe = await runner.probeComponent(component(), watcherWith({ hasHealthCheck: true, health: 'healthy' }), farDeadline());
       expect(probe.passed).to.equal(true);
       expect(probe.basis).to.equal('healthcheck');
     });
 
     it('fails on an unhealthy docker health check', async () => {
-      stubs.inspect.resolves(running('unhealthy'));
-      const probe = await runner.probeComponent(component(), farDeadline());
+      const probe = await runner.probeComponent(component(), watcherWith({ hasHealthCheck: true, health: 'unhealthy' }), farDeadline());
       expect(probe.passed).to.equal(false);
       expect(probe.basis).to.equal('healthcheck');
     });
 
     it('falls to a TCP connect when the image declares no health check', async () => {
-      stubs.inspect.resolves(running());
       stubs.isPortOpen.resolves(true);
-      const probe = await runner.probeComponent(component(), farDeadline());
+      const probe = await runner.probeComponent(component(), watcherWith(), farDeadline());
       expect(probe.passed).to.equal(true);
       expect(probe.basis).to.equal('tcp');
       expect(probe.detail).to.include('80');
@@ -236,9 +279,8 @@ describe('playgroundRunner', () => {
     // The probe dials the container from the node, the same direction real
     // traffic would arrive from, so a process bound only to loopback fails here.
     it('dials the container address, not the host', async () => {
-      stubs.inspect.resolves(running());
       stubs.isPortOpen.resolves(true);
-      await runner.probeComponent(component(), farDeadline());
+      await runner.probeComponent(component(), watcherWith(), farDeadline());
       expect(stubs.isPortOpen.firstCall.args[0]).to.equal('172.23.1.5');
       expect(stubs.isPortOpen.firstCall.args[1]).to.equal(80);
     });
@@ -246,19 +288,14 @@ describe('playgroundRunner', () => {
     // A UDP port has no accept to observe, so connecting to it proves nothing
     // either way and is not worth reporting as evidence.
     it('does not probe UDP ports', async () => {
-      stubs.inspect.resolves(running());
       const udpOnly = component({ portBindings: [{ containerPort: 53, hostPort: 31000, protocol: 'udp' }] });
-      stubs.inspectResult = running();
-      clockPerInspect(20_000);
-      const probe = await runner.probeComponent(udpOnly, farDeadline());
+      const probe = await runner.probeComponent(udpOnly, watcherWith({}, { msPerWait: 20_000 }), farDeadline());
       expect(stubs.isPortOpen.called).to.equal(false);
       expect(probe.basis).to.equal('uptime');
     });
 
     it('reports a weak uptime pass when nothing ever accepts, and says so', async () => {
-      stubs.inspectResult = running();
-      clockPerInspect(20_000);
-      const probe = await runner.probeComponent(component(), farDeadline());
+      const probe = await runner.probeComponent(component(), watcherWith({}, { msPerWait: 20_000 }), farDeadline());
       expect(probe.passed).to.equal(true);
       expect(probe.basis).to.equal('uptime');
       expect(probe.weak).to.equal(true);
@@ -266,8 +303,7 @@ describe('playgroundRunner', () => {
     });
 
     it('fails a container that exited non-zero, naming the status', async () => {
-      stubs.inspect.resolves({ State: { Running: false, ExitCode: 137 } });
-      const probe = await runner.probeComponent(component(), farDeadline());
+      const probe = await runner.probeComponent(component(), watcherWith({ running: false, exitCode: 137 }), farDeadline());
       expect(probe.passed).to.equal(false);
       expect(probe.basis).to.equal('exit');
       expect(probe.exitCode).to.equal(137);
@@ -276,25 +312,33 @@ describe('playgroundRunner', () => {
     // Exit 0 is genuinely ambiguous - a finished job and a server that gave up
     // both leave it - so it is reported as ambiguous rather than guessed at.
     it('fails a clean exit but does not claim to know why', async () => {
-      stubs.inspect.resolves({ State: { Running: false, ExitCode: 0 } });
-      const probe = await runner.probeComponent(component(), farDeadline());
+      const probe = await runner.probeComponent(component(), watcherWith({ running: false, exitCode: 0 }), farDeadline());
       expect(probe.passed).to.equal(false);
       expect(probe.detail).to.include('exited cleanly');
+    });
+
+    // Nothing is known until the first snapshot lands. Reading that silence as
+    // "not running" would report every component as exited before it had been
+    // looked at once.
+    it('waits rather than calling an unknown container exited', async () => {
+      const probe = await runner.probeComponent(
+        component(),
+        watcherWith({ known: false, running: false, hasHealthCheck: true }, { msPerWait: 20_000 }),
+        process.hrtime.bigint() + 100n * 1_000_000_000n,
+      );
+      expect(probe.basis).to.equal('timeout');
     });
 
     // The probe wait is the longest stretch of a session, so a cancel that only
     // landed between components could take the whole probe timeout to be felt.
     it('gives up the probe promptly when the session is cancelled', async () => {
-      stubs.inspectResult = running('starting');
-      clockPerInspect(1000);
-      const probe = await runner.probeComponent(component(), farDeadline(), () => true);
+      const probe = await runner.probeComponent(component(), watcherWith({ hasHealthCheck: true, health: 'starting' }), farDeadline(), () => true);
       expect(probe.passed).to.equal(false);
       expect(probe.basis).to.equal('cancelled');
     });
 
     it('fails when the container has gone', async () => {
-      stubs.inspect.resolves(null);
-      const probe = await runner.probeComponent(component(), farDeadline());
+      const probe = await runner.probeComponent(component(), watcherWith({ gone: true }), farDeadline());
       expect(probe.passed).to.equal(false);
       expect(probe.basis).to.equal('container');
     });
@@ -303,10 +347,12 @@ describe('playgroundRunner', () => {
     // it on the weaker uptime rung would report a container as good on evidence
     // its own image says is not yet sufficient.
     it('keeps waiting on a starting health check rather than dropping to a weaker rung', async () => {
-      stubs.inspectResult = running('starting');
-      clockPerInspect(20_000);
       const deadline = process.hrtime.bigint() + 100n * 1_000_000_000n;
-      const probe = await runner.probeComponent(component(), deadline);
+      const probe = await runner.probeComponent(
+        component(),
+        watcherWith({ hasHealthCheck: true, health: 'starting' }, { msPerWait: 20_000 }),
+        deadline,
+      );
       expect(probe.passed).to.equal(false);
       expect(probe.basis).to.equal('timeout');
       expect(probe.detail).to.include('starting');
@@ -687,25 +733,50 @@ describe('playgroundRunner', () => {
     // deadline, a cancel, or every container stopping on its own.
     it('keeps running after the probe reaches a verdict', async () => {
       const s2 = session();
-      stubs.inspect.resolves(running('healthy'));
 
       await runner.runSession(s2);
 
-      // Inspected far more than the single probe call: the observation loop
-      // kept watching after the verdict was in.
-      expect(stubs.inspect.callCount).to.be.greaterThan(3);
+      // The verdict lands almost immediately; the session still holds open for
+      // its whole window, which is the thing the owner actually watches.
+      expect(s2.results.web.probe.basis).to.equal('healthcheck');
       expect(s2.reachedDeadline).to.equal(true);
     });
 
     it('ends early when every container has stopped, without waiting out the window', async () => {
       const s2 = session();
-      // Healthy for the probe, then gone.
-      stubs.inspect.onFirstCall().resolves(running('healthy'));
-      stubs.inspect.resolves({ State: { Running: false, ExitCode: 0 } });
+
+      // The probe passes on the health check, then the container stops - which
+      // reaches the session as a die event, not as a poll noticing later.
+      const run = runner.runSession(s2);
+      await settle();
+      stubs.watched.running = false;
+      await run;
+
+      expect(s2.reachedDeadline).to.equal(undefined);
+    });
+
+    it('watches by subscription, not by asking docker', async () => {
+      // The whole point: a fifteen-minute session used to cost thousands of
+      // inspect and stats calls. Container state now arrives on the event
+      // stream, and the runner never inspects at all.
+      const s2 = session();
 
       await runner.runSession(s2);
 
-      expect(s2.reachedDeadline).to.equal(undefined);
+      expect(stubs.inspect.called, 'the runner must not poll docker for state').to.equal(false);
+      expect(stubs.createSessionWatcher.calledOnce).to.equal(true);
+    });
+
+    it('subscribes before starting anything, so no transition happens unobserved', async () => {
+      // Inspect-then-subscribe leaves a window in which a container that dies
+      // immediately fires its event into nothing, and the session then waits
+      // out its whole deadline for a verdict that already happened.
+      const s2 = session();
+
+      await runner.runSession(s2);
+
+      expect(stubs.createSessionWatcher.calledBefore(stubs.create)).to.equal(true);
+      expect(stubs.createSessionWatcher.calledBefore(stubs.start)).to.equal(true);
     });
 
     it('follows the log for the whole session, not just around the probe', async () => {
