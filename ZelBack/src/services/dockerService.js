@@ -1,5 +1,6 @@
 const config = require('config');
 const fs = require('fs').promises;
+const stream = require('stream');
 const tar = require('tar');
 const Docker = require('dockerode');
 const path = require('path');
@@ -428,6 +429,48 @@ async function dockerContainerExec(container, cmd, env, res, callback) {
   }
 }
 
+/**
+ * Follow a container's log output.
+ *
+ * Returns the stream and its stop handle rather than writing anywhere itself:
+ * how long to follow for, and where the bytes go, are the caller's business.
+ * An HTTP endpoint pipes it to a response and stops on its own schedule; the
+ * playground follows one for the length of a session.
+ *
+ * The returned stream ends by itself when the container goes, which for a
+ * short-lived container is the normal end of the log rather than a failure.
+ *
+ * @param {string} idOrName
+ * @param {object} [options] since / timestamps / tail, forwarded to docker
+ * @returns {Promise<{stream: object, stop: function}>}
+ */
+async function dockerContainerLogsStream(idOrName, options = {}) {
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
+
+  const logStream = new stream.PassThrough();
+  const raw = await dockerContainer.logs({
+    follow: true,
+    stdout: true,
+    stderr: true,
+    ...options,
+  });
+
+  // Docker multiplexes stdout and stderr down one connection with a per-frame
+  // header; both are demuxed into the one stream because a log reader wants the
+  // container's output in the order it was written, not split by descriptor.
+  dockerContainer.modem.demuxStream(raw, logStream, logStream);
+  raw.on('end', () => logStream.end());
+  raw.on('error', (err) => logStream.destroy(err));
+
+  return {
+    stream: logStream,
+    stop() {
+      raw.destroy();
+      logStream.end();
+    },
+  };
+}
 
 /**
  * Returns requested number of lines of logs from the container.
@@ -2656,6 +2699,7 @@ module.exports = {
   dockerContainerExec,
   dockerContainerInspect,
   dockerContainerLogs,
+  dockerContainerLogsStream,
   dockerContainerLogsPolling,
   dockerContainerStats,
   dockerCreateNetwork,
