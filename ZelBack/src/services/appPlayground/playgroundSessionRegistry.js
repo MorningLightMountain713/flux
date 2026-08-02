@@ -13,6 +13,12 @@
 // it was running, which is exactly why the reaper treats every labelled
 // container it cannot account for as abandoned.
 
+// What marks a container as a session's. It lives here rather than beside the
+// code that applies it because the modules that need to RECOGNISE a session
+// container - appJanitor, containerEventBridge - must not have to import
+// playgroundRunner, which reaches dockerService and fluxNetworkHelper.
+const PLAYGROUND_LABEL = 'flux.playground';
+
 const sessions = new Map();
 
 function add(session) {
@@ -50,6 +56,7 @@ function reset() {
 }
 
 module.exports = {
+  PLAYGROUND_LABEL,
   add,
   remove,
   get,
