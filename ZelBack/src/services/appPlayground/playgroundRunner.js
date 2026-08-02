@@ -4,7 +4,7 @@ const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const appDockerNetwork = require('../appNetwork/appDockerNetwork');
+const playgroundNetwork = require('./playgroundNetwork');
 const componentProvisioner = require('../appLifecycle/componentProvisioner');
 const { verifyRepository } = require('../appSecurity/imageManager');
 
@@ -43,6 +43,10 @@ function logLines() {
 
 function imageMaxBytes() {
   return config.fluxapps.playgroundSessionImageMaxBytes ?? 2e9;
+}
+
+function imageTotalMaxBytes() {
+  return config.fluxapps.playgroundSessionImageTotalMaxBytes ?? 6e9;
 }
 
 /**
@@ -301,6 +305,14 @@ async function runSession(session, hooks = {}) {
 
   // Every image is measured before ANY of them is pulled, so a session that is
   // going to be refused for size costs the node no bandwidth at all.
+  //
+  // Two bounds, and they answer different questions. The per-image one refuses a
+  // single image too big to be worth a donated node's bandwidth; the aggregate
+  // refuses a spec whose images are individually reasonable but together are
+  // not. The aggregate is what replaced the old component-count ceiling - it
+  // bounds the thing counting components was really standing in for, without
+  // refusing an ordinary four-component app.
+  let totalBytes = 0;
   // eslint-disable-next-line no-restricted-syntax
   for (const component of components) {
     // eslint-disable-next-line no-await-in-loop
@@ -310,10 +322,28 @@ async function runSession(session, hooks = {}) {
       refusal.kind = 'rejected';
       throw refusal;
     }
+    totalBytes += verdict.bytes;
   }
 
+  if (totalBytes > imageTotalMaxBytes()) {
+    const refusal = new Error(
+      `The spec's images come to about ${(totalBytes / 1e9).toFixed(2)} GB in total; `
+      + `a playground session pulls up to ${(imageTotalMaxBytes() / 1e9).toFixed(2)} GB. `
+      + 'Install it to run it at full size.',
+    );
+    refusal.kind = 'rejected';
+    throw refusal;
+  }
+
+  // The session's own network, on a reserved slot, with the default-deny egress
+  // policy in force before any guest container is attached to it. Not
+  // ensureAppDockerNetwork: an app network gets a whole /24 out of a pool of 255
+  // that also serves maxAppsPerNode apps, and carries no egress policy.
   status('Creating the session network...');
-  await appDockerNetwork.ensureAppDockerNetwork(session.appName);
+  const network = await playgroundNetwork.createSessionNetwork(session.appName);
+  session.bridge = network.bridge;
+  session.subnet = network.subnet;
+  status(`Session network ready on ${network.subnet}, capped and default-deny outbound`);
 
   // eslint-disable-next-line no-restricted-syntax
   for (const component of components) {

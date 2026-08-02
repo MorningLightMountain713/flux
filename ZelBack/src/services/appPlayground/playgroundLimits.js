@@ -26,8 +26,8 @@ function sessionCeiling() {
     cpu: config.fluxapps.playgroundSessionCpu ?? 2,
     memoryMb: config.fluxapps.playgroundSessionMemoryMb ?? 4096,
     rootFsGb: config.fluxapps.playgroundSessionRootFsGb ?? 10,
-    componentCount: config.fluxapps.playgroundSessionMaxComponents ?? 3,
     imageMaxBytes: config.fluxapps.playgroundSessionImageMaxBytes ?? 2e9,
+    imageTotalMaxBytes: config.fluxapps.playgroundSessionImageTotalMaxBytes ?? 6e9,
   };
 }
 
@@ -56,9 +56,11 @@ function ceilingShortfall(totals) {
 
   const ceiling = sessionCeiling();
 
-  if (totals.componentCount > ceiling.componentCount) {
-    return `The spec has ${totals.componentCount} components; a playground session runs at most ${ceiling.componentCount}.`;
-  }
+  // Deliberately no component-count check. The dimensions below bound what the
+  // session actually costs this node, and a spec that fits them costs the same
+  // whether it arrives as one component or six. Pull bandwidth is the one cost
+  // component count was standing in for, and the runner bounds that directly
+  // with an aggregate image budget.
   if (totals.cpu > ceiling.cpu) {
     return `The spec asks for ${totals.cpu} CPU cores; a playground session allows ${ceiling.cpu}.`;
   }
