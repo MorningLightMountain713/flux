@@ -380,12 +380,19 @@ module.exports = {
     // verdict is reached and reported rather than cut off by the teardown.
     playgroundProbeTimeoutMs: 180000,
     playgroundProbeStableMs: 30000,
-    // Lines fetched per read, and how many the session keeps for the client.
-    // The poll returns numbered lines so a terminal can render a real stream -
-    // everything after the highest number it has - rather than re-reading the
-    // last N and guessing what is new. Retention is bounded, and a client is
-    // told how many lines were dropped so a truncated log never reads as a
-    // complete one.
+    // A session learns what its containers are doing from docker's event
+    // stream, so these are the two questions no event can answer. Nothing
+    // reports that an app has bound its port, so the TCP rung knocks; and
+    // nothing reports how busy a container is, so CPU is sampled. Mining
+    // detection wants an average across the window rather than fine detail,
+    // which is why the sampling is coarse.
+    playgroundTcpRetryMs: 2000,
+    playgroundCpuSampleMs: 15000,
+    // Lines tailed when a follow attaches, and how many the session keeps for
+    // the client. The log is FOLLOWED, so the poll returns numbered lines above
+    // whatever cursor the client sends rather than re-reading and guessing.
+    // Retention is bounded, and a client is told how many lines were dropped so
+    // a truncated log never reads as a complete one.
     playgroundLogLines: 200,
     playgroundLogRetainedLines: 2000,
     // How long a session's sealed audit record is kept. Long enough to answer an
