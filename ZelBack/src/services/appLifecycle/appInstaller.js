@@ -570,8 +570,8 @@ async function testInstallApplicationAPI(req, res) {
   const response = messageHelper.createErrorMessage(
     'testappinstall has been withdrawn. It ran apps at 0.2 CPU / 300MB regardless of '
     + 'their spec, so a pass meant nothing. Use POST /apps/imagepreflight for image '
-    + 'facts - existence, architectures, sizes and whether rootFsGb fits - or the '
-    + 'playground to watch the app run at its declared resources.',
+    + 'facts - existence, architectures, sizes and whether rootFsGb fits - or '
+    + 'POST /apps/playground to watch the app run at its declared resources.',
     'WithdrawnError',
     410,
   );

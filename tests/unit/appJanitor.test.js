@@ -6,6 +6,9 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 // Real registry singleton - un-stubbed in proxyquire, so the module and the test share it.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+// Real registry singleton for the same reason: the janitor and the test must
+// agree on which playground sessions are live.
+const playgroundSessionRegistry = require('../../ZelBack/src/services/appPlayground/playgroundSessionRegistry');
 
 describe('appJanitor tests', () => {
   let appJanitor;
@@ -70,6 +73,7 @@ describe('appJanitor tests', () => {
 
   afterEach(() => {
     operationRegistry.clear();
+    playgroundSessionRegistry.reset();
     sinon.restore();
   });
 
@@ -233,6 +237,80 @@ describe('appJanitor tests', () => {
       const [installedAppNames] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
       expect([...installedAppNames].sort()).to.deep.equal(['liveapp', 'stoppedapp']);
       expect(result.networksRemoved).to.equal(1);
+    });
+
+    // A live playground session owns a real app network under the spec's own
+    // name and deliberately has no installed row, so on the installed set alone
+    // it reads as debris and its network is force-removed out from under a
+    // running container.
+    it('protects the network of a live playground session', async () => {
+      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [{ name: 'liveapp' }] });
+      playgroundSessionRegistry.add({ sessionId: 'op_1', appName: 'guestapp' });
+
+      await appJanitor.sweepDockerDebris();
+
+      const [protectedNames] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
+      expect([...protectedNames].sort()).to.deep.equal(['guestapp', 'liveapp']);
+    });
+
+    it('stops protecting a session name once the session ends', async () => {
+      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [] });
+      playgroundSessionRegistry.add({ sessionId: 'op_1', appName: 'guestapp' });
+      playgroundSessionRegistry.remove('op_1');
+
+      await appJanitor.sweepDockerDebris();
+
+      const [protectedNames] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
+      expect([...protectedNames]).to.deep.equal([]);
+    });
+  });
+
+  describe('playground containers are not app debris', () => {
+    const playgroundContainer = (name, sessionId) => ({
+      Names: [name],
+      Labels: { 'runonflux.app': 'guestapp', 'flux.playground': sessionId },
+    });
+
+    // The orphan sweep removes containers with no installed-app row by running a
+    // full app uninstall - ports, mounts, crontab, data - against an app that was
+    // never installed. A playground session is exactly that shape by design.
+    it('never hands a playground container to the uninstaller', async () => {
+      appQueryServiceStub.listAllApps.resolves({
+        status: 'success',
+        data: [playgroundContainer('/fluxweb_guestapp', 'op_1')],
+      });
+
+      await appJanitor.sweepDockerOrphans();
+
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
+    });
+
+    // Even after the session is gone: its containers are the playground reaper's
+    // to collect, and the uninstaller would still be the wrong tool.
+    it('leaves an abandoned playground container to the playground reaper', async () => {
+      appQueryServiceStub.listAllApps.resolves({
+        status: 'success',
+        data: [playgroundContainer('/fluxweb_guestapp', 'op_gone')],
+      });
+      playgroundSessionRegistry.reset();
+
+      await appJanitor.sweepDockerOrphans();
+
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
+    });
+
+    it('still removes a genuine orphan sitting alongside a playground container', async () => {
+      appQueryServiceStub.listAllApps.resolves({
+        status: 'success',
+        data: [
+          playgroundContainer('/fluxweb_guestapp', 'op_1'),
+          container('/fluxweb_realghost', { 'runonflux.app': 'realghost' }),
+        ],
+      });
+
+      await appJanitor.sweepDockerOrphans();
+
+      sinon.assert.calledOnceWithMatch(appUninstallerStub.uninstallApplication, 'realghost');
     });
 
     it('leaves containers to the orphan sweep - it removes them through the uninstaller', async () => {

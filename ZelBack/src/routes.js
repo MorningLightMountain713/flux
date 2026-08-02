@@ -38,6 +38,7 @@ const appOperations = require('./services/appLifecycle/appOperations');
 const contentSlotService = require('./services/appLifecycle/contentSlotService');
 const imageManager = require('./services/appSecurity/imageManager');
 const imagePreflight = require('./services/appSecurity/imagePreflight');
+const playgroundService = require('./services/appPlayground/playgroundService');
 const operationsController = require('./services/appManagement/operationsController');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
@@ -472,6 +473,13 @@ module.exports = (app) => {
   // serial and registry-paced, so it answers 202 + jobId and the client polls.
   app.post('/apps/imagepreflight', (req, res) => {
     imagePreflight.submitPreflightAPI(req, res);
+  });
+  // Run an unsigned spec on this node, once, at the resources it declares, so an
+  // owner can watch it boot before anything is registered, signed or paid for.
+  // Nothing touches the chain and no other node is told the session exists.
+  // Answers 202 + jobId; the run takes minutes, so the client polls.
+  app.post('/apps/playground', (req, res) => {
+    playgroundService.submitSessionAPI(req, res);
   });
   // Every endpoint that answers 202 points here: one status resource, one
   // status enum, one error shape, so a client polls the same way whatever it

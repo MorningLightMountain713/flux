@@ -5,6 +5,7 @@ const { getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const fluxEventBus = require('../utils/fluxEventBus');
 const ingressEncryptionKey = require('../utils/ingressEncryptionKey');
+const ingressCapture = require('../utils/ingressCapture');
 
 // Wire message type for the standalone ingress-attestation gossip.
 const INGRESS_ATTESTATION_TYPE = 'fluxappingress';
@@ -15,33 +16,6 @@ const INGRESS_ATTESTATION_TYPE = 'fluxappingress';
 const QUARANTINE_TTL_MS = 2 * 60 * 60 * 1000;
 
 /**
- * IPv4-mapped IPv6 (::ffff:1.2.3.4) → 1.2.3.4; a genuine IPv6 address is left
- * intact. Uses the raw socket peer, never x-forwarded-for — no trust proxy is
- * configured, so the header is client-controlled and unsafe for attribution.
- */
-function normalizeIp(raw) {
-  if (typeof raw !== 'string' || !raw) return null;
-  return raw.replace(/^::ffff:/, '');
-}
-
-function truncate(value, max) {
-  return typeof value === 'string' && value.length > 0 ? value.slice(0, max) : null;
-}
-
-function captureIngress(req, caps) {
-  return {
-    observed: {
-      ip: normalizeIp(req.socket && req.socket.remoteAddress),
-      port: (req.socket && req.socket.remotePort) ?? null,
-    },
-    asserted: {
-      userAgent: truncate(req.headers && req.headers['user-agent'], caps.USER_AGENT_MAX),
-      forwardedFor: truncate(req.headers && req.headers['x-forwarded-for'], caps.FORWARDED_FOR_MAX),
-    },
-  };
-}
-
-/**
  * Build and sign this node's attestation for a submission. Returns null if the
  * source address cannot be determined (nothing meaningful to attest).
  *
@@ -50,11 +24,9 @@ function captureIngress(req, caps) {
  * envelope, binding the attestation to the exact sealed bytes.
  */
 async function build(hash, req) {
-  const {
-    buildIngressAttestMessage, seal, USER_AGENT_MAX, FORWARDED_FOR_MAX,
-  } = await getSpecBackend();
+  const { buildIngressAttestMessage, seal } = await getSpecBackend();
 
-  const { observed, asserted } = captureIngress(req, { USER_AGENT_MAX, FORWARDED_FOR_MAX });
+  const { observed, asserted } = await ingressCapture.captureIngress(req);
   if (!observed.ip) return null;
 
   const { kid, publicKey } = ingressEncryptionKey.current();

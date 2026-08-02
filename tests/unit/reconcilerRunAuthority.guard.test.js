@@ -61,6 +61,13 @@ describe('reconciler run-authority guard', () => {
       // exceptions rather than routes through it.
       'appLifecycle/contentSlotService.js': 1, // onUpdate: { action: 'restart' }
       'appLifecycle/backendTlsRenewal.js': 1, // backendTls.reload: { action: 'restart' }
+      // The playground runs a guest's unsigned spec for 15 minutes and destroys
+      // it. Its containers are NOT managed apps: they have no registry row, no
+      // desired state and no spec the reconciler could converge them towards, so
+      // there is nothing for it to arbitrate. Routing them through it would mean
+      // teaching the reconciler about containers it must never try to keep alive.
+      // start, teardown force-remove, orphan-reaper force-remove.
+      'appPlayground/playgroundRunner.js': 3,
     };
     // No `\(` — a bare reference is a mutation too; see the header.
     const call = /\.appDocker(Start|Stop|Restart|Kill|ForceRemove)\b/;

@@ -8,6 +8,8 @@ const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
 const appQueryService = require('../appQuery/appQueryService');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
+const playgroundRunner = require('../appPlayground/playgroundRunner');
+const playgroundSessionRegistry = require('../appPlayground/playgroundSessionRegistry');
 const appUninstaller = require('./appUninstaller');
 
 // The janitor owns debris: things that exist on this node with no desired-state
@@ -69,8 +71,18 @@ async function dockerOrphanSweep() {
   }
   const appsInstalled = installedAppsRes.data;
 
-  const dockerAppNames = [...new Set(dockerAppsReported.data.map(containerAppName))]
-    .filter((appName) => !EXEMPT_APP_NAMES.includes(appName));
+  // Playground containers are orphans by definition - a session deliberately has
+  // no installed-app row - so they would match this sweep exactly, and it would
+  // run a full app uninstall (ports, mounts, crontab, data) against an app that
+  // was never installed. They are filtered out here, at the CONTAINER level
+  // rather than by name, because a session runs under the spec's own app name
+  // and nothing about that name marks it. playgroundService owns their lifecycle
+  // and its own reaper collects the ones a restart or a failed teardown left.
+  const dockerAppNames = [...new Set(
+    dockerAppsReported.data
+      .filter((container) => !(container.Labels && container.Labels[playgroundRunner.PLAYGROUND_LABEL]))
+      .map(containerAppName),
+  )].filter((appName) => !EXEMPT_APP_NAMES.includes(appName));
 
   const removed = [];
   // eslint-disable-next-line no-restricted-syntax
@@ -177,9 +189,16 @@ async function dockerDebrisSweep() {
     log.warn('appJanitor - debris sweep skipped: unable to list installed apps');
     return { skipped: 'installed list failed' };
   }
-  const installedAppNames = new Set(installedAppsRes.data.map((app) => app.name));
+  // A live playground session owns a real app network under the spec's own name
+  // and has no installed row, so on the installed set alone it reads as debris
+  // and its network would be force-removed out from under a running container.
+  // Its name is protected for exactly as long as the session holds it.
+  const protectedNames = new Set([
+    ...installedAppsRes.data.map((app) => app.name),
+    ...playgroundSessionRegistry.liveAppNames(),
+  ]);
 
-  const { removed, unidentified } = await appDockerNetwork.removeUnownedAppNetworks(installedAppNames);
+  const { removed, unidentified } = await appDockerNetwork.removeUnownedAppNetworks(protectedNames);
 
   if (unidentified > 0) {
     log.info(`appJanitor - debris sweep left ${unidentified} unattributable network(s) in place`);
@@ -189,10 +208,28 @@ async function dockerDebrisSweep() {
   return { networksRemoved: removed.length, unidentified };
 }
 
+/**
+ * Collect playground containers no live session claims.
+ *
+ * Separate from the orphan sweep above rather than folded into it, because the
+ * two answer different questions from different sources of truth. That one asks
+ * the installed-apps database and removes a whole app; this one asks the
+ * in-memory session registry and removes a container. It also deliberately does
+ * NOT skip while an operation is in flight: a session holds no operation lease
+ * between its start and its teardown, and the containers this collects are ones
+ * nothing is coming back for.
+ *
+ * @returns {Promise<object>} sweep summary
+ */
+async function playgroundOrphanSweep() {
+  return playgroundRunner.reapOrphans(playgroundSessionRegistry.liveIds());
+}
+
 const SWEEPS = {
   dockerOrphans: dockerOrphanSweep,
   registryExpiry: registryExpirySweep,
   dockerDebris: dockerDebrisSweep,
+  playgroundOrphans: playgroundOrphanSweep,
 };
 
 const sweepsRunning = new Set();
@@ -233,6 +270,11 @@ async function sweepDockerDebris() {
   return result;
 }
 
+async function sweepPlaygroundOrphans() {
+  const result = await runSweep('playgroundOrphans');
+  return result;
+}
+
 let started = false;
 
 /**
@@ -254,6 +296,11 @@ function start() {
 
   schedule('dockerOrphans', 30 * 60 * 1000, config.fluxapps.orphanSweepIntervalMs);
   schedule('dockerDebris', 45 * 60 * 1000, config.fluxapps.dockerDebrisIntervalMs);
+  // Much earlier than the other two: sessions live only in memory, so at this
+  // point every playground container on the node belongs to a session that no
+  // longer exists. Waiting half an hour to collect them would leave a restarted
+  // node running strangers' containers with nothing watching them.
+  schedule('playgroundOrphans', 2 * 60 * 1000, config.fluxapps.playgroundReapIntervalMs);
 
   // Every entry into READY (first sync and every resync recovery): the node
   // just (re)gained an authoritative view, so clear what the registry says is
@@ -268,4 +315,5 @@ module.exports = {
   sweepDockerOrphans,
   sweepRegistryExpiry,
   sweepDockerDebris,
+  sweepPlaygroundOrphans,
 };

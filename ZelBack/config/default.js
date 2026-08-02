@@ -67,6 +67,7 @@ module.exports = {
         appsRuntimeState: 'zelappsruntimestate', // node-local per-component controller state: desiredState, restartHistory (crash backoff), last exit
         pendingAppTeardowns: 'zelappspendingteardowns', // durable owed-teardown records: the crash-safe handoff between the removal prelude and the deferred destructive teardown
         cachedImages: 'cachedimages', // enterprise image cache: owner-pinned docker images (the durable pin the uninstall retention gate + per-fluxId quota consult)
+        playgroundSessions: 'playgroundsessions', // node-local, never gossiped: one sealed+signed record per playground session, self-reaping on its retention TTL
       },
     },
     appsglobal: {
@@ -323,6 +324,41 @@ module.exports = {
     // stays pollable, and the poll cadence handed to clients as Retry-After.
     operationRetentionMs: 3600000,
     operationRetryAfterSeconds: 2,
+    // The playground: one unsigned spec, run once on this node, at the resources
+    // it declares. The ceiling is an ADMISSION FILTER, never a degrade - a spec
+    // above it is refused with the numbers, because running an app at resources
+    // its owner did not ask for is the testappinstall lie this replaces.
+    //
+    // The duty cycle is the security wall, and it is identity-blind on purpose:
+    // the per-caller limit below is fairness and attribution (FluxIDs are free to
+    // mint), while one session at a time and two per hour bound what this node
+    // donates to ~30 minutes and ~1 core-hour per hour however many identities
+    // ask. That, times the 2-core ceiling, is what makes mining uneconomic rather
+    // than merely inconvenient.
+    playgroundSessionCpu: 2,
+    playgroundSessionMemoryMb: 4096,
+    playgroundSessionRootFsGb: 10,
+    playgroundSessionMaxComponents: 3,
+    playgroundSessionImageMaxBytes: 2000000000,
+    playgroundSessionTtlMs: 900000,
+    playgroundNodeConcurrentSessions: 1,
+    playgroundNodeSessionsPerHour: 2,
+    playgroundCallerSessionsPerHour: 3,
+    playgroundWindowMs: 3600000,
+    // How long a container is given to reach a probe verdict, and how long a
+    // "stayed up" pass has to stay up for. Both well inside the session TTL, so a
+    // verdict is reached and reported rather than cut off by the teardown.
+    playgroundProbeTimeoutMs: 180000,
+    playgroundProbeStableMs: 30000,
+    playgroundLogLines: 50,
+    // How long a session's sealed audit record is kept. Long enough to answer an
+    // abuse report, short enough that an operator is not indefinitely holding
+    // sealed records of strangers' sessions on their own hardware.
+    playgroundAuditRetentionMs: 2592000000,
+    // How often the node collects playground containers no live session claims.
+    // Also runs once at startup, which is what cleans up after a restart: sessions
+    // live in memory, so a restart abandons every container one owned.
+    playgroundReapIntervalMs: 300000,
     minimumInstances: 3,
     minimumInstancesV8: 1,
     minimumInstancesV8Block: 2176519, // block height where v8+ apps can have 1 instance - expected around December 19th 2025

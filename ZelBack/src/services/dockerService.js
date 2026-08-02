@@ -723,18 +723,38 @@ async function getNextAvailableIPForApp(appName) {
 
 
 /**
- * Creates an app container.
+ * Creates an app container. The single container-creation chokepoint: every
+ * label, resource limit and network placement a flux container carries is
+ * decided here, so nothing else in the tree calls docker's create.
  *
- * @param {object} appSpecifications
- * @param {string} appName
- * @param {bool} isComponent
- * @returns {object}
+ * @param {object} deployComp - DeploymentComponent, the resolved per-component view
+ * @param {object} [options]
+ * @param {boolean} [options.burstEligible] stamp the CPU-burst labels
+ * @param {string} [options.restartPolicy] docker restart policy name; defaults to 'no'
+ * @param {string[]} [options.extraEnv] env entries appended to the component's own
+ * @param {number} [options.measuredImageSizeBytes] on-disk image size, for the writable-layer cap
+ * @param {string} [options.owner] FluxID stamped as runonflux.owner
+ * @param {boolean} [options.requiresEncryption] stamp the shutdown-budget labels
+ * @param {object} [options.labels] extra container labels merged over the standard set
+ * @param {boolean} [options.publishPorts] bind the component's ports on the host; default true
+ * @param {string} [options.cgroupSlice] cgroup parent; default 'flux-apps.slice'
+ * @returns {Promise<object>} the created dockerode container
  */
 async function appDockerCreate(deployComp, options = {}) {
   const burstEligible = options.burstEligible || false;
   const restartPolicyOverride = options.restartPolicy || null;
   const extraEnv = options.extraEnv || [];
   const measuredImageSizeBytes = options.measuredImageSizeBytes || 0;
+  // The playground runs a spec with no inbound path at all: no host port is
+  // bound, so no firewall hole or UPnP mapping is needed and nothing outside the
+  // node can reach the container. The ports stay EXPOSED, so the component's own
+  // probe and its sibling components still reach them inside the app network -
+  // what is withdrawn is the binding on the host, not the port itself.
+  const publishPorts = options.publishPorts !== false;
+  // Which cgroup slice the container lands in. Apps get flux-apps.slice; the
+  // playground passes its own so a guest's load is capped in aggregate
+  // independently of the apps this node is paid to run.
+  const cgroupSlice = options.cgroupSlice || 'flux-apps.slice';
   // Managed-storage host (host-swap fence + flux-apps.slice + xfs/prjquota). Cached, local check.
   const managedStorage = await hostStorageCapability.supportsManagedStorage();
 
@@ -800,7 +820,7 @@ async function appDockerCreate(deployComp, options = {}) {
     ? shutdownPlan.componentBudgetLabels(deployComp)
     : null;
   const containerLabels = {
-    ...identityLabels, ...(budgetLabels || {}), ...(burstLabels || {}),
+    ...identityLabels, ...(budgetLabels || {}), ...(burstLabels || {}), ...(options.labels || {}),
   };
   if (burstEligible) {
     log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${effectiveCpu})`);
@@ -830,7 +850,7 @@ async function appDockerCreate(deployComp, options = {}) {
       // Place app containers in the dedicated app slice so they sit outside the
       // fenced host slices (their per-container memory.swap.max draws from the app
       // swap pool, not the host's). Only on nodes carrying the new-mechanism config.
-      ...(managedStorage && { CgroupParent: 'flux-apps.slice' }),
+      ...(managedStorage && { CgroupParent: cgroupSlice }),
       NanoCPUs: nanoCpus,
       Memory: memoryBytes,
       MemorySwap: memorySwapBytes,
@@ -844,7 +864,7 @@ async function appDockerCreate(deployComp, options = {}) {
           Hard: 100000,
         },
       ],
-      PortBindings: portBindings,
+      PortBindings: publishPorts ? portBindings : {},
       RestartPolicy: {
         Name: restartPolicy,
       },
