@@ -387,6 +387,13 @@ async function submitSession(body, caller = {}) {
     // on, so only the identity that asked can read it.
     owner: fluxId,
     detail: (readOptions) => sessionDetail(session, readOptions),
+    // The run waits on docker events, and a cancel is not one: a session whose
+    // containers are quiet would otherwise not notice it until the deadline.
+    // The watcher exists once the run reaches its containers; before that every
+    // preparation step checks the flag between its own steps anyway.
+    onCancel: () => {
+      if (session.watcher) session.watcher.wake();
+    },
   });
   session.sessionId = handle.jobId;
 

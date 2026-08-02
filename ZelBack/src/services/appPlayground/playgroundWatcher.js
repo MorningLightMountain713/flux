@@ -145,6 +145,14 @@ function createSessionWatcher(sessionId) {
       wake();
     },
 
+    /**
+     * Release anyone waiting, without anything having changed in docker.
+     *
+     * For things that happen to a session rather than to its containers - a
+     * cancel, an eviction - which no docker event will ever report.
+     */
+    wake,
+
     /** @returns {object} the last known state of one container */
     state(identifier) {
       return { ...stateFor(identifier) };
