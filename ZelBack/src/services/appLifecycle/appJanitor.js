@@ -80,7 +80,7 @@ async function dockerOrphanSweep() {
   // and its own reaper collects the ones a restart or a failed teardown left.
   const dockerAppNames = [...new Set(
     dockerAppsReported.data
-      .filter((container) => !(container.Labels && container.Labels[playgroundRunner.PLAYGROUND_LABEL]))
+      .filter((container) => !(container.Labels && container.Labels[playgroundSessionRegistry.PLAYGROUND_LABEL]))
       .map(containerAppName),
   )].filter((appName) => !EXEMPT_APP_NAMES.includes(appName));
 
