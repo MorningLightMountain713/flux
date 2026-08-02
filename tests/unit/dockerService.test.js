@@ -442,19 +442,70 @@ describe('dockerService tests', () => {
   });
 
   describe('dockerContainerLogsStream tests', () => {
-    it('should return a valid stats object', async () => {
-      const appName = 'website';
+    // Collect until the stream ends or the budget runs out, whichever is first:
+    // a follow against a live container never ends on its own.
+    function collect(stream, budgetMs = 1500) {
+      return new Promise((resolve) => {
+        let text = '';
+        const done = () => resolve(text);
+        const budget = setTimeout(done, budgetMs);
+        stream.on('data', (chunk) => { text += chunk.toString('utf8'); });
+        stream.on('end', () => { clearTimeout(budget); done(); });
+      });
+    }
 
-      const res = await dockerService.dockerContainerLogs(appName, 2);
-      expect(res).to.be.an.instanceOf(Buffer);
-      expect(res).to.exist;
+    it('hands back a stream carrying the container output, and a stop handle', async () => {
+      const follow = await dockerService.dockerContainerLogsStream('website', { tail: 10 });
+      try {
+        expect(follow.stream).to.exist;
+        expect(follow.stop).to.be.a('function');
+
+        const text = await collect(follow.stream);
+        expect(text).to.be.a('string').that.is.not.empty;
+      } finally {
+        follow.stop();
+      }
     });
 
-    it('should throw an error if container does not exist', async () => {
-      const appName = 'testing1234';
+    it('demuxes rather than handing back framed bytes', async () => {
+      // Docker prefixes each frame with an 8-byte header carrying the stream id
+      // and length. Passed through undemuxed those bytes land in the log text.
+      const follow = await dockerService.dockerContainerLogsStream('website', { tail: 5 });
+      try {
+        const text = await collect(follow.stream);
+        // eslint-disable-next-line no-control-regex
+        expect(/[ -]/.test(text), 'frame headers leaked into the output').to.be.false;
+      } finally {
+        follow.stop();
+      }
+    });
 
-      const result = await dockerService.dockerContainerLogs(appName, 2);
-      expect(result).to.be.null;
+    it('stop ends the stream, after what is already buffered', async () => {
+      // stop() ends rather than destroys, so a consumer still receives whatever
+      // had arrived - which also means the end only surfaces once something is
+      // reading, exactly as any piped stream behaves.
+      const follow = await dockerService.dockerContainerLogsStream('website', { tail: 1 });
+      const ended = new Promise((resolve) => {
+        follow.stream.on('data', () => {});
+        follow.stream.on('end', resolve);
+      });
+
+      follow.stop();
+
+      await ended;
+    });
+
+    it('rejects for a container that does not exist', async () => {
+      // Unlike dockerContainerLogs, which answers null: there is no stream to
+      // hand back, and a caller about to pipe one needs to know now.
+      let error = null;
+      try {
+        await dockerService.dockerContainerLogsStream('testing1234');
+      } catch (err) {
+        error = err;
+      }
+      expect(error).to.be.an('error');
+      expect(error.message).to.include('not found');
     });
   });
 

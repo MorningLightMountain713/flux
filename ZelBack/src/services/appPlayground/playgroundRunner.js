@@ -371,87 +371,111 @@ const LOG_LINE = /^(\S+)\s([\s\S]*)$/;
  * highest it has, and knows immediately if it skipped any. This is the same
  * shape jobRegistry.progress already uses for its steps.
  */
-function logBuffer(maxLines) {
-  const lines = [];
+/**
+ * One counter for the whole session rather than one per component, so a client
+ * tracks a single number: "everything above N" is unambiguous across every
+ * component, where per-component counters would make component A's line 40 and
+ * component B's line 40 unrelated.
+ */
+function sessionSequence() {
   let seq = 0;
+  return () => {
+    seq += 1;
+    return seq;
+  };
+}
+
+function logBuffer(maxLines, nextSeq) {
+  const lines = [];
+  // What this component has produced, which is NOT the sequence number: the
+  // sequence is session-wide, so `total` has to be counted separately or a
+  // truncated log's arithmetic stops adding up.
+  let produced = 0;
   let dropped = 0;
-  // Docker's `since` is inclusive and second-granular, so consecutive reads
-  // always overlap by up to a second. That overlap is the only place duplicates
-  // can arrive from, so it is the only place that needs de-duplicating.
-  let since = 0;
-  // The newest timestamp held, and the lines carrying exactly it. Anything
-  // older has certainly been seen; anything at the same instant is checked
-  // against this small set; anything newer is new and resets it.
-  //
-  // Deliberately NOT a set of every line ever seen: that grows without bound,
-  // and pruning it alongside the retained lines breaks it - an evicted line
-  // would be re-admitted as new by the next overlapping read.
-  let newestAt = null;
-  let atNewest = new Set();
+  // Whatever arrived after the last newline. A stream is bytes, not lines, so a
+  // line straddling two chunks is held here until the rest of it comes.
+  let partial = '';
+
+  function admit(line) {
+    if (!line.trim()) return;
+    const match = LOG_LINE.exec(line);
+    produced += 1;
+    lines.push({ seq: nextSeq(), at: match ? match[1] : null, text: match ? match[2] : line });
+
+    // Bounded, and the client is TOLD how many went. A silently truncated log
+    // reads as a complete one.
+    while (lines.length > maxLines) {
+      lines.shift();
+      dropped += 1;
+    }
+  }
 
   return {
-    /** @param {Buffer|null} raw docker's timestamped log output */
-    append(raw) {
-      if (!raw) return;
-
-      const text = serviceHelper.dockerBufferToString(raw);
-      for (const line of text.split('\n')) {
-        if (!line.trim()) continue;
-
-        const match = LOG_LINE.exec(line);
-        const at = match ? match[1] : null;
-        const body = match ? match[2] : line;
-
-        if (at && newestAt) {
-          if (at < newestAt) continue;
-          // Several lines can share one instant, so identity at the boundary is
-          // the text, not the timestamp.
-          if (at === newestAt && atNewest.has(body)) continue;
-        }
-
-        if (at && at !== newestAt) {
-          newestAt = at;
-          atNewest = new Set();
-        }
-        if (at) atNewest.add(body);
-
-        seq += 1;
-        lines.push({ seq, at, text: body });
-
-        if (at) {
-          const epochSeconds = Math.floor(Date.parse(at) / 1000);
-          if (Number.isFinite(epochSeconds)) since = epochSeconds;
-        }
-      }
-
-      // Bounded, and the client is TOLD how many went. A silently truncated log
-      // reads as a complete one.
-      while (lines.length > maxLines) {
-        lines.shift();
-        dropped += 1;
-      }
+    /**
+     * @param {Buffer|string} chunk a piece of the follow stream, on no
+     *   particular boundary
+     */
+    append(chunk) {
+      if (!chunk) return;
+      partial += chunk.toString('utf8');
+      const parts = partial.split('\n');
+      partial = parts.pop();
+      for (const line of parts) admit(line);
     },
-    since() { return since; },
-    view() { return { lines: [...lines], dropped, total: seq }; },
+    /** Whatever the container wrote without a trailing newline before it died. */
+    flush() {
+      if (!partial) return;
+      const last = partial;
+      partial = '';
+      admit(last);
+    },
+    /**
+     * @param {number} [sinceSeq] what the caller already has; 0 means everything
+     *   still retained. Filtering here rather than discarding on read is what
+     *   lets a lost response be re-fetched with the same cursor, and lets two
+     *   readers each see the whole log.
+     */
+    view(sinceSeq = 0) {
+      return {
+        lines: sinceSeq > 0 ? lines.filter((line) => line.seq > sinceSeq) : [...lines],
+        dropped,
+        total: produced,
+      };
+    },
   };
 }
 
 /**
- * Read whatever a component has written since the last read, into its buffer.
+ * Follow a component's output into its buffer for the rest of the session.
  *
- * Best effort: logs are the most useful part of a failed session, so a container
- * that has already gone must not turn a reportable failure into an unreportable
- * one.
+ * Following rather than re-reading is what makes the log trustworthy: docker's
+ * `since` filter is inclusive and only accurate to the second, so polled reads
+ * always overlap and anything faster than the page size is lost between them. A
+ * stream has neither problem, and the buffer needs no de-duplication at all.
+ *
+ * Best effort: logs are the most useful part of a failed session, so a
+ * container that has already gone must not turn a reportable failure into an
+ * unreportable one. The stream ending is the normal end of a short-lived
+ * container's output, not an error.
+ *
+ * @returns {Promise<function|null>} stop handle, or null if it could not follow
  */
-async function readLogsInto(component, buffer) {
+async function followLogsInto(component, buffer) {
   try {
-    const raw = await dockerService.dockerContainerLogs(component.identifier, logLines(), {
+    const { stream, stop } = await dockerService.dockerContainerLogsStream(component.identifier, {
       timestamps: true,
-      ...(buffer.since() ? { since: buffer.since() } : {}),
+      tail: logLines(),
     });
-    buffer.append(raw);
+    stream.on('data', (chunk) => buffer.append(chunk));
+    stream.on('end', () => buffer.flush());
+    stream.on('error', (error) => {
+      buffer.flush();
+      log.warn(`playground: log stream for ${component.identifier} ended: ${error.message}`);
+    });
+    return stop;
   } catch (error) {
-    log.warn(`playground: could not read logs for ${component.identifier}: ${error.message}`);
+    log.warn(`playground: could not follow logs for ${component.identifier}: ${error.message}`);
+    return null;
   }
 }
 
@@ -471,6 +495,10 @@ async function runSession(session, hooks = {}) {
   // Held for the whole session, not rebuilt per read: they are what make the
   // log a stream rather than a series of overlapping snapshots.
   session.logBuffers = {};
+  // One stop handle per component's follow, closed by the teardown. A follow
+  // outliving its session would hold a docker connection open for nothing.
+  session.logFollows = [];
+  const nextSeq = sessionSequence();
 
   const components = deployment.startupOrder.map((name) => deployment.getComponent(name));
 
@@ -523,11 +551,17 @@ async function runSession(session, hooks = {}) {
     // this map, so a component that fails half way through its own start - image
     // pulled, container created, start refused - has to already be in it or its
     // container survives the session that created it.
-    session.results[component.name] = { started: false, probe: null, logs: { lines: [], dropped: 0, total: 0 } };
-    session.logBuffers[component.name] = logBuffer(logRetainedLines());
+    session.results[component.name] = { started: false, probe: null };
+    session.logBuffers[component.name] = logBuffer(logRetainedLines(), nextSeq);
     // eslint-disable-next-line no-await-in-loop
     await startComponent(component, session, status);
     session.results[component.name].started = true;
+    // Follow from the moment it is up: a container that says something and dies
+    // in the next second has still said it, and a reader attached later would
+    // never see it.
+    // eslint-disable-next-line no-await-in-loop
+    const stopLogs = await followLogsInto(component, session.logBuffers[component.name]);
+    if (stopLogs) session.logFollows.push(stopLogs);
   }
 
   // The probe budget starts when probing does. Folding the pulls into it would
@@ -547,11 +581,10 @@ async function runSession(session, hooks = {}) {
     status(`Probing ${component.name}...`);
     // eslint-disable-next-line no-await-in-loop
     const probe = await probeComponent(component, deadlineNs, () => Boolean(hooks.isCancelled && hooks.isCancelled()), cpu);
-    // eslint-disable-next-line no-await-in-loop
-    await readLogsInto(component, session.logBuffers[component.name]);
-    session.results[component.name] = {
-      started: true, probe, logs: session.logBuffers[component.name].view(),
-    };
+    // No log snapshot here: the follow keeps writing after this line, so
+    // anything captured now would be stale by the time it was read. The poll
+    // builds the view from the buffer, at the cursor the caller asked for.
+    session.results[component.name] = { started: true, probe };
     status(`${component.name}: ${probe.passed ? 'passed' : 'failed'} (${probe.basis})`);
   }
 
@@ -601,9 +634,6 @@ async function observeSession(session, components, cpu, hooks, status) {
         const fraction = await sampleCpuFraction(component);
         if (fraction !== null) cpu.record(fraction);
       }
-      // eslint-disable-next-line no-await-in-loop
-      await readLogsInto(component, session.logBuffers[component.name]);
-      session.results[component.name].logs = session.logBuffers[component.name].view();
     }
 
     if (!anyRunning) {
@@ -629,6 +659,17 @@ async function observeSession(session, components, cpu, hooks, status) {
  */
 async function teardownSession(session) {
   const removed = [];
+
+  // Before the containers go: each follow ends when its container does, but a
+  // session cancelled while everything is still up would otherwise leave them
+  // open. Stopping is what flushes a trailing unterminated line into the buffer.
+  for (const stopLogs of session.logFollows || []) {
+    try {
+      stopLogs();
+    } catch (error) {
+      log.warn(`playground: could not stop a log follow for ${session.appName}: ${error.message}`);
+    }
+  }
 
   const names = Object.keys(session.results || {});
   const components = session.deployment
