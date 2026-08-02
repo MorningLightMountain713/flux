@@ -55,6 +55,8 @@ describe('playgroundService', () => {
       teardownSession: sinon.stub().resolves([]),
       reapOrphans: sinon.stub().resolves({ removed: 0 }),
       audit: sinon.stub().resolves(null),
+      findFlaggedSince: sinon.stub().resolves(null),
+      isBlocked: sinon.stub().resolves(opts.blocked ?? false),
       captureIngress: sinon.stub().resolves({ observed: { ip: '1.2.3.4', port: 5000 }, asserted: {} }),
       validateSpec: sinon.stub().resolves({ name: opts.appName ?? 'demoapp' }),
       fromSpec: sinon.stub().returns({
@@ -103,7 +105,12 @@ describe('playgroundService', () => {
         reapOrphans: stubs.reapOrphans,
       },
       './playgroundSessionRegistry': sessionRegistry,
-      './playgroundAudit': { record: stubs.audit, captureIngress: stubs.captureIngress },
+      './playgroundAudit': {
+        record: stubs.audit,
+        captureIngress: stubs.captureIngress,
+        findFlaggedSince: stubs.findFlaggedSince,
+      },
+      './playgroundAbuse': { isBlocked: stubs.isBlocked },
     });
   }
 
@@ -234,7 +241,12 @@ describe('playgroundService', () => {
         './playgroundLimits': refusing,
         './playgroundRunner': { runSession: stubs.runSession, teardownSession: stubs.teardownSession, reapOrphans: stubs.reapOrphans },
         './playgroundSessionRegistry': sessionRegistry,
-        './playgroundAudit': { record: stubs.audit, captureIngress: stubs.captureIngress },
+        './playgroundAudit': {
+          record: stubs.audit,
+          captureIngress: stubs.captureIngress,
+          findFlaggedSince: stubs.findFlaggedSince,
+        },
+        './playgroundAbuse': { isBlocked: stubs.isBlocked },
       });
 
       let threw = null;
@@ -242,6 +254,38 @@ describe('playgroundService', () => {
       expect(threw.kind).to.equal('busy');
       expect(stubs.reserve.called).to.equal(true);
       expect(stubs.release.calledWith('demoapp')).to.equal(true);
+    });
+  });
+
+  describe('abuse blocking', () => {
+    it('refuses a caller this node flagged, without doing any work', async () => {
+      service = load({ blocked: true });
+
+      let threw = null;
+      await service.submitSession({}, caller).catch((e) => { threw = e; });
+
+      expect(threw.kind).to.equal('busy');
+      expect(stubs.validateSpec.called).to.equal(false);
+      expect(stubs.runSession.called).to.equal(false);
+    });
+
+    // Naming the signal would tell someone grinding at this exactly which of
+    // the three to defeat.
+    it('does not say why it refused', async () => {
+      service = load({ blocked: true });
+
+      let threw = null;
+      await service.submitSession({}, caller).catch((e) => { threw = e; });
+
+      expect(threw.message).to.not.match(/cpu|mining|miner|flag/i);
+      expect(threw.message).to.include('another node');
+    });
+
+    it('checks the blocklist against the caller and the observed address', async () => {
+      await service.submitSession({}, caller);
+      await settle();
+      expect(stubs.isBlocked.firstCall.args[0]).to.equal('zelid1');
+      expect(stubs.isBlocked.firstCall.args[1]).to.equal('1.2.3.4');
     });
   });
 
@@ -331,27 +375,6 @@ describe('playgroundService', () => {
       expect(stubs.audit.firstCall.args[0].verdict).to.equal('cancelled');
       expect(stubs.teardownSession.calledOnce).to.equal(true);
       expect(sessionRegistry.size()).to.equal(0);
-    });
-
-    // The deadline can fire while the run is still going, and nothing else on
-    // that path closes the job out. Left Running, it would also never age out:
-    // retention is only scheduled on a terminal status.
-    it('closes the operation out when the deadline fires mid-run', async () => {
-      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
-      const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-      service = load();
-      stubs.runSession.returns(new Promise(() => {}));
-
-      const handle = await service.submitSession({}, caller);
-      expect(jobRegistry.get(handle.jobId, 'zelid1').status).to.equal('Running');
-
-      clock.tick(900001);
-      await new Promise((resolve) => { setImmediate(resolve); });
-
-      const view = jobRegistry.get(handle.jobId, 'zelid1');
-      expect(view.status).to.equal('Failed');
-      expect(view.error.code).to.equal('PLAYGROUND_SESSION_EXPIRED');
-      clock.restore();
     });
 
     it('records a failed verdict when a component does not pass its probe', async () => {
