@@ -42,6 +42,7 @@ const appOperations = require('./services/appLifecycle/appOperations');
 const contentSlotService = require('./services/appLifecycle/contentSlotService');
 const imageManager = require('./services/appSecurity/imageManager');
 const imagePreflight = require('./services/appSecurity/imagePreflight');
+const playgroundService = require('./services/appPlayground/playgroundService');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
@@ -517,6 +518,13 @@ module.exports = (app) => {
   // serial and registry-paced, so it answers 202 + jobId and the client polls.
   app.post('/apps/imagepreflight', asyncRoute((req, res) => {
     return imagePreflight.submitPreflightAPI(req, res);
+  }));
+  // Run an unsigned spec on this node, once, at the resources it declares, so an
+  // owner can watch it boot before anything is registered, signed or paid for.
+  // Nothing touches the chain and no other node is told the session exists.
+  // Answers 202 + jobId; the run takes minutes, so the client polls.
+  app.post('/apps/playground', asyncRoute((req, res) => {
+    return playgroundService.submitSessionAPI(req, res);
   }));
   app.post('/apps/placementfeasibility', asyncRoute((req, res) => { // fault domains and per-domain instance share for a prospective spec
     return placementFeasibility.placementFeasibilityAPI(req, res);
