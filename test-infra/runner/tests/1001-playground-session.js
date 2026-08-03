@@ -154,6 +154,10 @@ describe('playground: a session runs on a real node and reports what happened', 
           // at its own settings.
           playgroundNodeSessionsPerHour: NODE_SESSION_BUDGET,
           playgroundCallerSessionsPerHour: NODE_SESSION_BUDGET,
+          // Production is 2. Pinned to 1 here so the concurrency refusal can be
+          // provoked with one extra session instead of three, and so every other
+          // test in this file runs alone rather than racing a leftover.
+          playgroundNodeConcurrentSessions: 1,
         },
       },
     });
@@ -229,7 +233,11 @@ describe('playground: a session runs on a real node and reports what happened', 
       expect(res.data.message).to.include('keeps nothing');
     });
 
-    it('refuses a second session while one is running, and says to try another node', async function () {
+    // Production runs TWO at once. This file pins the node to one (see the env
+    // above) so the refusal can be provoked with a single extra session rather
+    // than by holding three, which would triple the wall clock for a test about
+    // the gate rather than about concurrency.
+    it('refuses a session past the concurrency limit, and says to try another node', async function () {
       this.timeout(240000);
       const jobId = await startSession(client, zelidauth, oneComponent({ name: uniqueName(), image: appImage }));
       await verdictFor(client, zelidauth, jobId, 'web');
@@ -456,9 +464,20 @@ describe('playground: a session runs on a real node and reports what happened', 
       const jobId = await startSession(client, zelidauth, spec);
       await verdictFor(client, zelidauth, jobId, 'web');
 
-      const { stdout } = await execInContainer(client.container, ['docker', 'ps', '--format', '{{.Names}} {{.Ports}}']);
-      const row = stdout.split('\n').find((line) => line.includes(appName));
+      // Found by the session's LABEL, not by the spec's name. A session's
+      // containers are named for the SESSION (fluxweb_pg-<hex>) precisely so
+      // they cannot collide with a same-named paid app's, so the app name does
+      // not appear in `docker ps` at all — and the label is what every sweep on
+      // the node uses to recognise one anyway.
+      const { stdout } = await execInContainer(client.container, [
+        'docker', 'ps',
+        '--filter', 'label=flux.playground',
+        '--format', '{{.Names}} {{.Ports}}',
+      ]);
+      const row = stdout.split('\n').find((line) => line.trim());
       expect(row, 'the session container is running').to.be.a('string');
+      expect(row, 'named for the session, never for the spec').to.not.include(appName);
+      expect(row).to.match(/pg-[0-9a-f]{12}/);
       expect(row).to.not.include('0.0.0.0');
       expect(row).to.not.include('31000');
 
@@ -476,6 +495,16 @@ describe('playground: a session runs on a real node and reports what happened', 
       // session for the life of the node.
       const { stdout } = await execInContainer(client.container, ['ip', '-o', 'link', 'show']);
       expect(stdout).to.match(/flxpg\d/);
+
+      // And the network sits in its own namespace. An app network is created
+      // idempotently — an existing one of the same name is ADOPTED, not refused
+      // — so a session named like a running app would have silently handed that
+      // app the session's rate-capped /27, or attached a stranger's containers
+      // to the app's /24 with no egress policy at all.
+      const networks = await execInContainer(client.container, ['docker', 'network', 'ls', '--format', '{{.Name}}']);
+      const session = networks.stdout.split('\n').filter((n) => n.startsWith('fluxPlayground_'));
+      expect(session.length, 'the session owns exactly one network, in its own namespace').to.equal(1);
+      expect(session[0], 'never named for the spec').to.not.include(appName);
 
       await endSession(client, zelidauth, jobId);
     });
@@ -628,5 +657,47 @@ describe('playground: an ineligible node refuses before doing any work', functio
 
     expect(res.status).to.equal('error');
     expect(res.data.message).to.include('cumulus');
+  });
+});
+
+// A session is the one thing a node runs for a stranger, and what contains it is
+// the Arcane environment: the systemd slice its aggregate load is capped in, the
+// managed iptables its egress policy is written into, the tc rules that cap its
+// bandwidth. On a node without them the containment is not weaker, it is absent.
+//
+// Its own env because the capability verdict is decided at boot.
+describe('playground: a node that is not Arcane refuses whatever its tier', function () {
+  let env;
+  let client;
+  let zelidauth;
+
+  before(async function () {
+    this.timeout(360000);
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: 1,
+      // Big enough to run one — so the tier is not what refuses it.
+      nodeTiers: { 0: 'STRATUS' },
+      arcane: false,
+    });
+    [client] = env.clients;
+    await waitForDaemonReady(client);
+    ({ zelidauth } = await authenticate(client.url, userKey()));
+  });
+
+  after(async function () {
+    this.timeout(60000);
+    await env?.teardown();
+  });
+
+  it('refuses on Arcane, before it ever looks at the tier', async function () {
+    this.timeout(60000);
+    const spec = oneComponent({ name: uniqueName(), image: `${REGISTRY_REPO_HOST}/e2e-playground-app:v1` });
+
+    const res = await client.post('/apps/playground', spec, { zelidauth });
+
+    expect(res.status).to.equal('error');
+    expect(res.data.message).to.include('ArcaneOS');
+    expect(res.data.message, 'the tier is not the reason').to.not.include('stratus');
   });
 });
