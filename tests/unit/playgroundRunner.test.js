@@ -118,7 +118,7 @@ describe('playgroundRunner', () => {
       './playgroundWatcher': { createSessionWatcher: stubs.createSessionWatcher },
       '../appLifecycle/componentProvisioner': { verifyComponentImage: stubs.verifyComponentImage },
       '../appSecurity/imageManager': { verifyRepository: stubs.verifyRepository },
-      util: { promisify: () => async () => 'pulled' },
+      util: { promisify: () => (opts.pull ?? (async () => 'pulled')) },
     });
   }
 
@@ -503,6 +503,41 @@ describe('playgroundRunner', () => {
         },
       };
     }
+
+    // Concurrent sessions are the point; only their PULLS contend, for bandwidth
+    // shared with the paid apps this node is installing. So the stagger is a
+    // queue on the pull rather than a delay before starting — a delay would be a
+    // number standing in for "is anyone else pulling", which is knowable.
+    it('never lets two sessions pull at the same time', async () => {
+      let pulling = 0;
+      let everOverlapped = false;
+      const gate = [];
+      const pull = async () => {
+        pulling += 1;
+        if (pulling > 1) everOverlapped = true;
+        await new Promise((resolve) => { gate.push(resolve); });
+        pulling -= 1;
+        return 'pulled';
+      };
+
+      const runnerA = load({ pull });
+      stubs.inspect.resolves(running('healthy'));
+      const first = runnerA.runSession({ ...session(), sessionId: 'op_a' });
+      const second = runnerA.runSession({ ...session(), sessionId: 'op_b' });
+
+      // Let both reach the pull. Only one may be inside it.
+      await new Promise((resolve) => { setImmediate(resolve); });
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(pulling, 'exactly one session is pulling').to.equal(1);
+
+      // Release them in turn; the second only starts once the first is done.
+      while (gate.length) gate.shift()();
+      await new Promise((resolve) => { setImmediate(resolve); });
+      while (gate.length) gate.shift()();
+      await Promise.all([first, second]).catch(() => {});
+
+      expect(everOverlapped, 'the pulls never overlapped').to.equal(false);
+    });
 
     it('creates the container with no host port bindings', async () => {
       stubs.inspect.resolves(running('healthy'));

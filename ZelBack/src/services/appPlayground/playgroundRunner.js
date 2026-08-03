@@ -1,6 +1,7 @@
 const util = require('util');
 const config = require('config');
 const log = require('../../lib/log');
+const { AsyncLock } = require('../utils/asyncLock');
 const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const playgroundNetwork = require('./playgroundNetwork');
@@ -23,6 +24,28 @@ const { verifyRepository } = require('../appSecurity/imageManager');
 // it starts once, is watched, and is destroyed on a timer.
 
 const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
+
+// One session pulls at a time, node-wide.
+//
+// This is what "staggered starts" means, and it is a queue on the contended
+// resource rather than a delay before starting: concurrent sessions are the
+// point, and only their PULLS actually contend. Bandwidth is what the aggregate
+// image budget bounds, and it is shared with the paid apps this node is
+// installing - two sessions each pulling their allowance at once doubles the
+// peak for work nobody is paying for. A delay would be a number invented to
+// stand in for "is anyone else pulling", which is a thing we can simply know.
+//
+// Held per IMAGE, not per session, so the hold is bounded by the per-image
+// ceiling rather than by the whole aggregate, and a second session's first
+// image starts as soon as the first session's current one lands.
+//
+// No hold watchdog: the pull is already bounded by dockerPullStream's own
+// stall abort (no progress for 90s), so a limit here would be a second,
+// invented deadline for the same thing - and it would fire mid-pull on a slow
+// link, handing the slot to a second puller while the first is still going,
+// which is the exact situation this exists to prevent. The release is in a
+// finally, so the only way to hold it forever is a pull that never settles.
+const pullLock = new AsyncLock(1, { maxHoldMs: 0 });
 
 // Marks every container and network a session owns. Defined in the session
 // registry, which carries no dependencies, because the subsystems that must
@@ -116,10 +139,19 @@ async function checkImageSize(component) {
 async function startComponent(component, session, status) {
   const id = component.identifier;
 
-  status(`Pulling ${component.name}...`);
   const pullConfig = await componentProvisioner.verifyComponentImage(component);
-  await dockerPullStreamPromise(pullConfig, null);
-  status(`Pulled ${component.name}`);
+  // Says so when it is actually waiting, rather than reporting a pull that has
+  // not begun: a session whose progress reads "Pulling..." for two minutes
+  // because another session holds the slot looks stuck to its owner.
+  if (pullLock.locked) status(`Waiting to pull ${component.name} (another session is pulling)...`);
+  const releasePull = await pullLock.acquire({ label: `playground pull ${id}` });
+  try {
+    status(`Pulling ${component.name}...`);
+    await dockerPullStreamPromise(pullConfig, null);
+    status(`Pulled ${component.name}`);
+  } finally {
+    releasePull();
+  }
 
   const measuredImageSizeBytes = await dockerService.appDockerImageSize(component.image);
 

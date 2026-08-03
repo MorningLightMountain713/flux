@@ -371,7 +371,14 @@ module.exports = {
     // two sessions of fifteen running minutes is the ~30 minutes and ~1 core-hour
     // per hour a node donates.
     playgroundSessionTtlMs: 900000,
-    playgroundNodeConcurrentSessions: 1,
+    // Peak commitment, NOT total donation - the two knobs are independent. Two
+    // sessions is 2 x the session ceiling held at once (4 cores, 8 GB); how much
+    // a node gives away per hour is playgroundNodeSessionsPerHour below, and
+    // raising this does not change it. Eight bridge slots and a /27 each were
+    // sized for concurrency from the start; running one at a time was a duty
+    // cycle decision rather than a limit. Their pulls are serialised node-wide,
+    // because bandwidth is the one thing two sessions genuinely contend for.
+    playgroundNodeConcurrentSessions: 2,
     playgroundNodeSessionsPerHour: 2,
     playgroundCallerSessionsPerHour: 3,
     playgroundWindowMs: 3600000,
