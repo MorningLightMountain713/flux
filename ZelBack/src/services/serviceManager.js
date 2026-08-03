@@ -67,6 +67,7 @@ const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
 const appsRepository = require('./appDatabase/appsRepository');
+const playgroundAudit = require('./appPlayground/playgroundAudit');
 const nodeIdentityMigration = require('./appDatabase/nodeIdentityMigration');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
@@ -255,6 +256,10 @@ async function startFluxFunctions() {
     // (name, replica). The collection carried no index at all, so one-row-per-app
     // rested on a racy exists-then-insert; co-located replicas need the key anyway.
     await appsRepository.prepareInstalledAppsCollection();
+    // playgroundsessions (localzelapps): the retention TTL the collection's own
+    // comment promises, plus the (callerFingerprint, flagged, observedAt) index
+    // the admission-path miner check reads
+    await playgroundAudit.prepareCollection();
     // Replay any owed teardowns that survived a crash: re-condemn their components
     // (synchronously, before the reconciler starts) then drain them in the background,
     // so an interrupted removal always completes and a being-torn-down app is never

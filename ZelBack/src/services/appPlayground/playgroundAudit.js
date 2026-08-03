@@ -192,6 +192,28 @@ async function findFlaggedSince(fingerprint, since) {
   );
 }
 
+/**
+ * The TTL that makes the retention real, and the index findFlaggedSince reads.
+ *
+ * The TTL is the enforcement half of the promise in record(): the record carries
+ * an expireAt, but nothing removes it without this index. The other is ordered
+ * for the query it serves - two equality fields then the range - so the
+ * admission path never scans the collection.
+ *
+ * Called at boot beside the other prepares. Idempotent, and a failure is logged
+ * rather than thrown: a node whose indexes could not be built still has to come
+ * up, and every read here works (more slowly) without them.
+ */
+async function prepareCollection() {
+  try {
+    const database = localDb();
+    await database.collection(collection()).createIndex({ expireAt: 1 }, { expireAfterSeconds: 0, name: 'playground_audit_retention_ttl' });
+    await database.collection(collection()).createIndex({ callerFingerprint: 1, flagged: 1, observedAt: 1 }, { name: 'flagged_caller_since' });
+  } catch (err) {
+    log.error(`playground: could not prepare the audit collection: ${err.message}`);
+  }
+}
+
 module.exports = {
   AUDIT_DOMAIN,
   findFlaggedSince,
@@ -199,4 +221,5 @@ module.exports = {
   behaviour,
   build,
   record,
+  prepareCollection,
 };
