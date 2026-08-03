@@ -26,6 +26,16 @@ const TERMINAL = Object.freeze([JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus
 
 const jobs = new Map();
 
+/**
+ * An operation id, mintable before the operation is registered.
+ *
+ * The format lives here rather than at each caller so `op_` stays one fact.
+ * @returns {string}
+ */
+function mintJobId() {
+  return `op_${crypto.randomUUID()}`;
+}
+
 function retentionMs() {
   return config.fluxapps.operationRetentionMs ?? 60 * 60 * 1000;
 }
@@ -96,6 +106,12 @@ function scrubCredentials(detail) {
  * @param {() => void} [params.onCancel] called when a cancel is REQUESTED, so
  *   work that is waiting on something can be woken and see the flag. Without it
  *   a cancel is only observed the next time the work happens to look.
+ * @param {string} [params.jobId] a caller-minted id, from mintJobId(). For work
+ *   whose identity is needed BEFORE it is certain to run: the playground names
+ *   its containers and network after its session, and has to do so while
+ *   deciding whether to accept it - long before there is a job to poll. The
+ *   registration still happens last, so a refusal is still an answer on the
+ *   request rather than a job someone has to poll to discover.
  * @returns {{jobId: string, statusUrl: string}}
  */
 function start(params) {
@@ -104,7 +120,7 @@ function start(params) {
   const {
     kind, owner = null, detail = null, onCancel = null,
   } = params;
-  const jobId = `op_${crypto.randomUUID()}`;
+  const jobId = params.jobId ?? mintJobId();
   const now = Date.now();
 
   jobs.set(jobId, {
@@ -241,6 +257,7 @@ module.exports = {
   isTerminal,
   retryAfterSeconds,
   statusUrlFor,
+  mintJobId,
   start,
   touch,
   progress,

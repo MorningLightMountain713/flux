@@ -660,11 +660,15 @@ function parseCidrSubnet(cidr) {
  * subnet range. It avoids allocated IPs and the gateway address.
  *
  * @param {string} appName - The name of the application.
+ * @param {string} [networkName] - the network to allocate within, when it is not
+ *   the app's own. The network's own Containers map is the authority for what is
+ *   already taken; the by-name container sweep below only ever adds addresses
+ *   from other subnets, which are never candidates here.
  * @returns {Promise<string|null>} - The next available IP address, or null if no IP is available.
  */
-async function getNextAvailableIPForApp(appName) {
+async function getNextAvailableIPForApp(appName, networkName = `fluxDockerNetwork_${appName}`) {
   try {
-    const { IPAM, Containers } = await docker.getNetwork(`fluxDockerNetwork_${appName}`).inspect();
+    const { IPAM, Containers } = await docker.getNetwork(networkName).inspect();
     if (!IPAM?.Config?.length) throw new Error('No IPAM configuration found');
 
     const { Subnet, Gateway } = IPAM.Config[0];
@@ -690,7 +694,7 @@ async function getNextAvailableIPForApp(appName) {
       try {
         // eslint-disable-next-line no-await-in-loop
         const containerInfo = await docker.getContainer(container.Id).inspect();
-        const containerIP = containerInfo.NetworkSettings.Networks[`fluxDockerNetwork_${appName}`]?.IPAMConfig?.IPv4Address;
+        const containerIP = containerInfo.NetworkSettings.Networks[networkName]?.IPAMConfig?.IPv4Address;
         if (containerIP && !allocatedIPs.has(containerIP)) {
           allocatedIPs.add(containerIP);
         }
@@ -739,6 +743,11 @@ async function getNextAvailableIPForApp(appName) {
  * @param {object} [options.labels] extra container labels merged over the standard set
  * @param {boolean} [options.publishPorts] bind the component's ports on the host; default true
  * @param {string} [options.cgroupSlice] cgroup parent; default 'flux-apps.slice'
+ * @param {string} [options.networkName] the docker network to attach to, when it
+ *   is not the app's own. Defaults to fluxDockerNetwork_<appName>. A playground
+ *   session states it, because its network belongs to the session rather than to
+ *   the app whose spec it is running — deriving it from the name would attach a
+ *   guest to a paid app's network, or a paid app to the guest's.
  * @returns {Promise<object>} the created dockerode container
  */
 async function appDockerCreate(deployComp, options = {}) {
@@ -761,6 +770,7 @@ async function appDockerCreate(deployComp, options = {}) {
 
   const { appName } = deployComp;
   const { identifier } = deployComp;
+  const networkName = options.networkName ?? `fluxDockerNetwork_${appName}`;
 
   const effectiveCpu = deployComp.cpu;
 
@@ -803,7 +813,7 @@ async function appDockerCreate(deployComp, options = {}) {
       'max-size': '20m',
     },
   };
-  const autoAssignedIP = await getNextAvailableIPForApp(appName);
+  const autoAssignedIP = await getNextAvailableIPForApp(appName, networkName);
 
   const burstLabels = burstEligible
     ? {
@@ -869,14 +879,14 @@ async function appDockerCreate(deployComp, options = {}) {
       RestartPolicy: {
         Name: restartPolicy,
       },
-      NetworkMode: `fluxDockerNetwork_${appName}`,
+      NetworkMode: networkName,
       LogConfig: logConfig,
       ExtraHosts: [`fluxnode.service:${config.server.fluxNodeServiceAddress}`],
     },
     ...(autoAssignedIP && {
       NetworkingConfig: {
         EndpointsConfig: {
-          [`fluxDockerNetwork_${appName}`]: {
+          [networkName]: {
             IPAMConfig: {
               IPv4Address: autoAssignedIP,
             },
@@ -1512,6 +1522,22 @@ async function getFluxDockerNetworks() {
 }
 
 /**
+ * Every docker network carrying a label, whatever it is named.
+ *
+ * The name filter above is a SUBSTRING match on a naming convention; this asks
+ * who owns a network instead, which is the question a sweep or an allocator
+ * actually has. Networks outside the app namespace are reachable no other way.
+ *
+ * @param {string} label - label key; presence is the test, not its value
+ * @returns {Promise<Docker.NetworkInspectInfo[]>}
+ */
+async function dockerListNetworksByLabel(label) {
+  return docker.listNetworks({
+    filters: JSON.stringify({ label: [label] }),
+  });
+}
+
+/**
  *
  * @returns {Promise<string[]>}
  */
@@ -1589,6 +1615,12 @@ async function getFreeFluxAppNetworkOctet(excludeOctets = new Set()) {
  *   until the network exists. The playground names its bridges so its firewall
  *   and traffic-shaping rules can be written once against a name pattern rather
  *   than rebuilt per session against whatever id docker happened to mint.
+ * @param {string} [options.networkName] - the docker network name, when the
+ *   caller's network is not an app's. Defaults to fluxDockerNetwork_<appname>.
+ * @param {object} [options.labels] - ownership labels, replacing the app-network
+ *   stamp. A network carrying a different stamp is invisible to the app debris
+ *   sweep, which is the point: a playground session's network is not an app's
+ *   and must not be reaped by the machinery that reclaims one.
  * @returns {object} response
  */
 async function createFluxAppDockerNetwork(appname, number, options = {}) {
@@ -1597,11 +1629,11 @@ async function createFluxAppDockerNetwork(appname, number, options = {}) {
   const { bridgeName } = options;
   // check if fluxDockerNetwork of an appexists
   const fluxNetworkOptions = {
-    Name: `fluxDockerNetwork_${appname}`,
+    Name: options.networkName ?? `fluxDockerNetwork_${appname}`,
     // Ownership stamp, same scheme as container identity labels: management
     // decisions (e.g. the reconciler disconnecting a stale membership) key on
     // this label, never on name matching.
-    Labels: { 'runonflux.app-network': appname },
+    Labels: options.labels ?? { 'runonflux.app-network': appname },
     ...(bridgeName && { Options: { 'com.docker.network.bridge.name': bridgeName } }),
     IPAM: {
       Config: [{
@@ -1654,12 +1686,13 @@ async function removeFluxAppDockerNetwork(appname) {
  * Force removes flux application docker network by disconnecting all endpoints first
  *
  * @param {string} appname - Application name
+ * @param {object} [options]
+ * @param {string} [options.networkName] - the docker network name, when the
+ *   caller's network is not an app's. Defaults to fluxDockerNetwork_<appname>.
  * @returns {object} response
  */
-async function forceRemoveFluxAppDockerNetwork(appname) {
-  // eslint-disable-next-line no-shadow, global-require
-  const log = require('../lib/log');
-  const fluxAppNetworkName = `fluxDockerNetwork_${appname}`;
+async function forceRemoveFluxAppDockerNetwork(appname, options = {}) {
+  const fluxAppNetworkName = options.networkName ?? `fluxDockerNetwork_${appname}`;
   const network = docker.getNetwork(fluxAppNetworkName);
 
   // Check if network exists
@@ -1667,7 +1700,7 @@ async function forceRemoveFluxAppDockerNetwork(appname) {
   try {
     networkInfo = await dockerNetworkInspect(network);
   } catch (error) {
-    return `Flux App Network of ${appname} already does not exist.`;
+    return `Network ${fluxAppNetworkName} already does not exist.`;
   }
 
   // Disconnect all containers from the network
@@ -2083,6 +2116,7 @@ module.exports = {
   getDockerContainer,
   getDockerContainerHandle,
   getFluxDockerNetworks,
+  dockerListNetworksByLabel,
   getFluxDockerNetworkPhysicalInterfaceNames,
   getFluxDockerNetworkSubnets,
   getFreeFluxAppNetworkOctet,

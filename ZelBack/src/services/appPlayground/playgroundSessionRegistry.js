@@ -46,11 +46,6 @@ function liveIds() {
   return new Set(sessions.keys());
 }
 
-/** The app names whose containers and networks must survive a debris sweep. */
-function liveAppNames() {
-  return new Set([...sessions.values()].map((session) => session.appName));
-}
-
 function reset() {
   sessions.clear();
 }
@@ -63,6 +58,5 @@ module.exports = {
   size,
   all,
   liveIds,
-  liveAppNames,
   reset,
 };

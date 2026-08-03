@@ -279,7 +279,8 @@ describe('playgroundService', () => {
       await service.submitSession({}, caller).catch((e) => { threw = e; });
       expect(threw.kind).to.equal('busy');
       expect(stubs.reserve.called).to.equal(true);
-      expect(stubs.release.calledWith('demoapp')).to.equal(true);
+      // Released under the key it was reserved under, whatever that key is.
+      expect(stubs.release.calledWith(stubs.reserve.firstCall.args[0])).to.equal(true);
     });
   });
 
@@ -338,23 +339,46 @@ describe('playgroundService', () => {
     });
   });
 
-  describe('name collision', () => {
-    // A session runs under the spec's own name, so an installed app of that name
-    // would collide on both the container name and the docker network.
-    it('refuses a spec whose name an installed app already holds', async () => {
+  // A name is a lease — it says which app holds it right now, and an expiry
+  // hands it to whoever registers it next. Everything a session leaves on the
+  // node can outlive the session, so none of it is named after the spec.
+  describe('session identity', () => {
+    it('names nothing after the spec, so an installed app of that name is no obstacle', async () => {
       service = load({ installed: [{ name: 'demoapp' }] });
-      let threw = null;
-      await service.submitSession({}, caller).catch((e) => { threw = e; });
-      expect(threw.kind).to.equal('busy');
-      expect(threw.message).to.include('demoapp');
+      const handle = await service.submitSession({}, caller);
+      expect(handle.sessionId).to.match(/^op_/);
+      await settle();
     });
 
-    it('refuses rather than guesses when the installed list cannot be read', async () => {
-      service = load();
-      stubs.installedApps.resolves({ status: 'error', data: 'db down' });
-      let threw = null;
-      await service.submitSession({}, caller).catch((e) => { threw = e; });
-      expect(threw.message).to.include('installed apps');
+    it('builds the deployment against the session, never against the app name', async () => {
+      await service.submitSession({}, caller);
+      const [, , opts] = stubs.fromSpec.firstCall.args;
+      expect(opts.identity).to.match(/^pg-[0-9a-f]{12}$/);
+      expect(opts.identity).to.not.include('demoapp');
+      await settle();
+    });
+
+    // The reservation key is the defect this closes: admission is keyed by name
+    // and an install reserves under the app's, so a session reserving under the
+    // spec's name is overwritten by a same-named install and then deleted by its
+    // release — the session's capacity silently stops being counted while its
+    // containers run.
+    it('reserves capacity under the session, not the app name', async () => {
+      const handle = await service.submitSession({}, caller);
+      expect(stubs.reserve.firstCall.args[0]).to.equal(handle.sessionId);
+      expect(stubs.reserve.firstCall.args[0]).to.not.equal('demoapp');
+      await settle();
+    });
+
+    // The identity has to exist before the spec is built against it, which is
+    // earlier than the job used to be registered. The poll handle is still the
+    // same id, so a caller sees one number.
+    it('polls under the same id the session was built against', async () => {
+      const handle = await service.submitSession({}, caller);
+      expect(handle.jobId).to.equal(handle.sessionId);
+      expect(handle.statusUrl).to.include(handle.sessionId);
+      expect(service.getSession(handle.sessionId, caller.fluxId)).to.not.equal(null);
+      await settle();
     });
   });
 
@@ -379,7 +403,7 @@ describe('playgroundService', () => {
     it('releases the capacity reservation on teardown', async () => {
       await service.submitSession({}, caller);
       await settle();
-      expect(stubs.release.calledWith('demoapp')).to.equal(true);
+      expect(stubs.release.calledWith(stubs.reserve.firstCall.args[0])).to.equal(true);
     });
 
     it('writes the audit record once the verdict is known', async () => {

@@ -126,6 +126,9 @@ async function startComponent(component, session, status) {
   status(`Creating ${component.name}...`);
   await dockerService.appDockerCreate(component, {
     measuredImageSizeBytes,
+    // The session's own network, stated rather than derived from the spec's
+    // app name - which would attach a guest to a same-named paid app's network.
+    networkName: session.networkName,
     // No host binding, no firewall hole, no UPnP mapping: a session is reachable
     // from nowhere. The ports stay exposed inside the session's own network so
     // components can still talk to each other and the TCP probe can connect.
@@ -543,9 +546,10 @@ async function runSession(session, hooks = {}) {
   // ensureAppDockerNetwork: an app network gets a whole /24 out of a pool of 255
   // that also serves maxAppsPerNode apps, and carries no egress policy.
   status('Creating the session network...');
-  const network = await playgroundNetwork.createSessionNetwork(session.appName);
+  const network = await playgroundNetwork.createSessionNetwork(session.sessionId);
   session.bridge = network.bridge;
   session.subnet = network.subnet;
+  session.networkName = network.networkName;
   status(`Session network ready on ${network.subnet}, capped and default-deny outbound`);
 
   // Subscribed BEFORE anything starts, so no transition can happen unobserved.
@@ -730,10 +734,13 @@ async function teardownSession(session) {
     }
   }
 
+  // By session, never by app name: removing an app-named network here would
+  // force-disconnect every container on it, a same-named paid app's included.
+  const networkName = session.networkName ?? playgroundNetwork.networkNameFor(session.sessionId);
   try {
-    await dockerService.forceRemoveFluxAppDockerNetwork(session.appName);
+    await dockerService.forceRemoveFluxAppDockerNetwork(null, { networkName });
   } catch (error) {
-    log.warn(`playground: could not remove network for ${session.appName}: ${error.message}`);
+    log.warn(`playground: could not remove ${networkName}: ${error.message}`);
   }
 
   // Check rather than assume. Every removal above swallows its own failure so a
@@ -770,22 +777,29 @@ async function labelledContainers(sessionId) {
 }
 
 /**
- * Remove playground containers no live session claims.
+ * Remove the playground containers and networks no live session claims.
  *
  * This is what makes a restart safe. Sessions live only in memory, so after a
- * restart there are no live ids and every labelled container is by definition
+ * restart there are no live ids and everything labelled is by definition
  * abandoned - the sweep collects the lot. During normal running it collects
  * whatever a failed teardown left behind.
+ *
+ * Networks are swept here rather than by the app debris sweep, which used to
+ * collect them incidentally while they were named like an app's. They are not,
+ * any more, so it cannot see them - and an abandoned network holds its bridge
+ * slot for the life of the node.
  *
  * @param {Set<string>} liveSessionIds ids the service still owns
  */
 async function reapOrphans(liveSessionIds) {
+  const networks = await playgroundNetwork.reapOrphanNetworks(liveSessionIds);
+
   let containers;
   try {
     containers = await dockerService.dockerListContainers(true);
   } catch (error) {
     log.warn(`playground: orphan sweep could not list containers: ${error.message}`);
-    return { skipped: 'docker list failed' };
+    return { skipped: 'docker list failed', networksRemoved: networks.removed };
   }
 
   const orphans = containers.filter((container) => {
@@ -807,7 +821,7 @@ async function reapOrphans(liveSessionIds) {
     }
   }
 
-  return { removed: removed.length, containers: removed };
+  return { removed: removed.length, containers: removed, networksRemoved: networks.removed };
 }
 
 module.exports = {

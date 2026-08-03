@@ -43,7 +43,10 @@ describe('playgroundRunner', () => {
       listContainers: sinon.stub().resolves([]),
       stats: sinon.stub().resolves(opts.stats ?? null),
       removeNetwork: sinon.stub().resolves(),
-      createSessionNetwork: sinon.stub().resolves({ slot: 0, bridge: 'flxpg0', subnet: '172.23.255.0/27' }),
+      createSessionNetwork: sinon.stub().resolves({
+        slot: 0, bridge: 'flxpg0', networkName: 'fluxPlayground_op_1', subnet: '172.23.255.0/27',
+      }),
+      reapOrphanNetworks: sinon.stub().resolves({ removed: 0, networks: [] }),
       verifyRepository: sinon.stub().resolves({
         decompressedSizeClearanceBytes: opts.imageBytes ?? 100_000_000,
       }),
@@ -107,7 +110,11 @@ describe('playgroundRunner', () => {
         dockerBufferToString: (b) => String(b),
       },
       '../fluxNetworkHelper': { isPortOpen: stubs.isPortOpen },
-      './playgroundNetwork': { createSessionNetwork: stubs.createSessionNetwork },
+      './playgroundNetwork': {
+        createSessionNetwork: stubs.createSessionNetwork,
+        reapOrphanNetworks: stubs.reapOrphanNetworks,
+        networkNameFor: (id) => `fluxPlayground_${id}`,
+      },
       './playgroundWatcher': { createSessionWatcher: stubs.createSessionWatcher },
       '../appLifecycle/componentProvisioner': { verifyComponentImage: stubs.verifyComponentImage },
       '../appSecurity/imageManager': { verifyRepository: stubs.verifyRepository },
@@ -156,7 +163,11 @@ describe('playgroundRunner', () => {
       },
       '../serviceHelper': { delay: stubs.delay, dockerBufferToString: (b) => String(b) },
       '../fluxNetworkHelper': { isPortOpen: stubs.isPortOpen },
-      './playgroundNetwork': { createSessionNetwork: stubs.createSessionNetwork },
+      './playgroundNetwork': {
+        createSessionNetwork: stubs.createSessionNetwork,
+        reapOrphanNetworks: stubs.reapOrphanNetworks,
+        networkNameFor: (id) => `fluxPlayground_${id}`,
+      },
       './playgroundWatcher': { createSessionWatcher: stubs.createSessionWatcher },
       '../appLifecycle/componentProvisioner': { verifyComponentImage: stubs.verifyComponentImage },
       '../appSecurity/imageManager': { verifyRepository: stubs.verifyRepository },
@@ -415,7 +426,10 @@ describe('playgroundRunner', () => {
     it('removes the containers and the network', async () => {
       await runner.teardownSession(session());
       expect(stubs.forceRemove.calledWith('web_demoapp')).to.equal(true);
-      expect(stubs.removeNetwork.calledWith('demoapp')).to.equal(true);
+      // By session, never by app name. Removing an app-named network here
+      // force-disconnects every container attached to it, so a same-named paid
+      // app would be cut off its own network by a guest's teardown.
+      expect(stubs.removeNetwork.calledWith(null, { networkName: 'fluxPlayground_op_1' })).to.equal(true);
     });
 
     // Every removal swallows its own failure so a session still gets marked
@@ -463,10 +477,12 @@ describe('playgroundRunner', () => {
       expect(threw).to.equal(null);
     });
 
+    // A session torn down before its network was recorded still has to have it
+    // removed: the name is derivable from the session id, which always exists.
     it('still removes the network when there are no containers', async () => {
       const bare = { sessionId: 'op_1', appName: 'demoapp', results: {} };
       await runner.teardownSession(bare);
-      expect(stubs.removeNetwork.calledWith('demoapp')).to.equal(true);
+      expect(stubs.removeNetwork.calledWith(null, { networkName: 'fluxPlayground_op_1' })).to.equal(true);
     });
   });
 
