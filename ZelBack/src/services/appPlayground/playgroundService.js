@@ -15,6 +15,7 @@ const { appsFolder } = require('../utils/appConstants');
 const playgroundLimits = require('./playgroundLimits');
 const playgroundRunner = require('./playgroundRunner');
 const playgroundSessionRegistry = require('./playgroundSessionRegistry');
+const playgroundServingSet = require('./playgroundServingSet');
 const playgroundAudit = require('./playgroundAudit');
 const playgroundAbuse = require('./playgroundAbuse');
 
@@ -371,6 +372,25 @@ async function submitSession(body, caller = {}) {
   if (!eligibility.eligible) {
     const refused = new Error(eligibility.reason);
     refused.kind = 'ineligible';
+    throw refused;
+  }
+
+  // Whether this node serves this caller at all, before anything else about
+  // them is read. A pure local computation over a list already in memory, and
+  // the only control here that a simultaneous fan-out cannot outrun: every
+  // other one is enforced from a gossiped record and so has a window in which
+  // every node independently says yes.
+  //
+  // This refusal is the one that can say where to go instead, because the set
+  // is the answer to "which node, then".
+  const serving = await playgroundServingSet.servesLocalNode(fluxId);
+  if (!serving.serves) {
+    const elsewhere = serving.candidates.slice(0, 5);
+    const refused = new Error(
+      'This node is not one of the nodes serving your FluxID today.'
+      + (elsewhere.length ? ` Try: ${elsewhere.join(', ')}.` : ' Try another node.'),
+    );
+    refused.kind = 'busy';
     throw refused;
   }
 

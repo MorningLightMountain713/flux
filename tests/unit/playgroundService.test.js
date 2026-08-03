@@ -45,6 +45,11 @@ describe('playgroundService', () => {
     stubs = {
       tier: sinon.stub().resolves(opts.tier ?? 'nimbus'),
       isArcane: sinon.stub().returns(opts.arcane ?? true),
+      servesLocalNode: sinon.stub().resolves(
+        opts.serves === false
+          ? { serves: false, candidates: ['10.0.0.9:16127', '10.0.0.8:16127'] }
+          : { serves: true, candidates: [] },
+      ),
       installedApps: sinon.stub().resolves({ status: 'success', data: opts.installed ?? [] }),
       nodeCapacity: sinon.stub().resolves({ availableSpace: 500, availableCpu: 100, availableRam: 30000 }),
       capacityShortfall: sinon.stub().returns(opts.shortfall ?? null),
@@ -108,6 +113,7 @@ describe('playgroundService', () => {
         reapOrphans: stubs.reapOrphans,
       },
       './playgroundSessionRegistry': sessionRegistry,
+      './playgroundServingSet': { servesLocalNode: stubs.servesLocalNode },
       './playgroundAudit': {
         record: stubs.audit,
         captureIngress: stubs.captureIngress,
@@ -185,6 +191,25 @@ describe('playgroundService', () => {
       await service.submitSession({}, caller).catch((e) => { threw = e; });
       expect(threw.kind).to.equal('ineligible');
       expect(threw.message).to.include('cumulus');
+    });
+
+    // The only control here a simultaneous fan-out cannot outrun. Everything
+    // else is enforced from a gossiped record, so every other control has a
+    // window in which every node independently says yes to the same caller.
+    it('refuses a caller this node does not serve, and says where to go', async () => {
+      service = load({ serves: false });
+      let threw = null;
+      await service.submitSession({}, caller).catch((e) => { threw = e; });
+
+      expect(threw.kind).to.equal('busy');
+      expect(threw.message).to.include('10.0.0.9:16127');
+    });
+
+    it('decides that before reading anything else about the caller', async () => {
+      service = load({ serves: false });
+      await service.submitSession({}, caller).catch(() => {});
+      expect(stubs.isBlocked.called, 'no DB read for a caller this node never serves').to.equal(false);
+      expect(stubs.validateSpec.called, 'and no spec validation either').to.equal(false);
     });
 
     // A session is the one thing this node runs for a stranger, and what contains
@@ -293,6 +318,7 @@ describe('playgroundService', () => {
         './playgroundLimits': refusing,
         './playgroundRunner': { runSession: stubs.runSession, teardownSession: stubs.teardownSession, reapOrphans: stubs.reapOrphans },
         './playgroundSessionRegistry': sessionRegistry,
+      './playgroundServingSet': { servesLocalNode: stubs.servesLocalNode },
         './playgroundAudit': {
           record: stubs.audit,
           captureIngress: stubs.captureIngress,
