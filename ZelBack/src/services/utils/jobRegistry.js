@@ -20,9 +20,16 @@ const JobStatus = Object.freeze({
   SUCCEEDED: 'Succeeded',
   FAILED: 'Failed',
   CANCELED: 'Canceled',
+  // The node took the work away. Distinct from both neighbours on purpose: a
+  // cancel says the caller asked for this, and a failure says their input was at
+  // fault. Neither is true here, and reporting it as either misattributes the
+  // node's decision to the person it was made against.
+  EVICTED: 'Evicted',
 });
 
-const TERMINAL = Object.freeze([JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELED]);
+const TERMINAL = Object.freeze([
+  JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELED, JobStatus.EVICTED,
+]);
 
 const jobs = new Map();
 
@@ -218,6 +225,26 @@ function cancelled(jobId) {
 }
 
 /**
+ * The node reclaimed what this operation was using.
+ *
+ * Carries a reason, because this is the one terminal state the caller had no
+ * part in and cannot infer: a status alone would leave them looking for what
+ * they did wrong.
+ *
+ * @param {string} jobId
+ * @param {string} reason - shown to the caller as-is
+ */
+function evicted(jobId, reason) {
+  const job = jobs.get(jobId);
+  if (!job || isTerminal(job.status)) return;
+  job.status = JobStatus.EVICTED;
+  job.error = { title: 'Ended by the node', detail: reason, instance: statusUrlFor(jobId) };
+  job.lastUpdatedAt = Date.now();
+  scheduleExpiry(job);
+  log.info(`Operation ${jobId} (${job.kind}) evicted: ${reason}`);
+}
+
+/**
  * The public view of an operation, or null when it is unknown, has aged out, or
  * belongs to someone else. Unknown and not-yours are the same answer on
  * purpose: a jobId must not be a probe for whether other people have jobs.
@@ -266,6 +293,7 @@ module.exports = {
   requestCancel,
   isCanceled,
   cancelled,
+  evicted,
   get,
   reset,
 };

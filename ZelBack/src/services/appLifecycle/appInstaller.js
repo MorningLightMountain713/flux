@@ -15,7 +15,8 @@ const contentSlotService = require('./contentSlotService');
 const appReconciler = require('../appMonitoring/appReconciler');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { storeAppInstallingErrorMessage } = require('../appMessaging/messageStore');
-const { checkPlacement, checkNodeResources } = require('../appRequirements/hwRequirements');
+const hwRequirements = require('../appRequirements/hwRequirements');
+const { checkPlacement, capacityShortfall } = hwRequirements;
 const { isImageBlocked } = require('../appSecurity/imageManager');
 // pgpService is used in commented out code
 // eslint-disable-next-line no-unused-vars
@@ -200,10 +201,41 @@ async function installApplication(instantiated, options = {}) {
     // different apps must not both pass before either is accounted (the in-flight
     // double-admit race). The reservation is released once the app is durably in
     // the DB (counted by appsResources) or the install fails (the finally).
-    await admissionControl.withLock(async () => {
-      await checkNodeResources(deployment);
-      admissionControl.reserve(appName, deployment);
+    //
+    // A shortfall is not automatically this app's verdict. Some of what the node
+    // has committed is free, interruptible work - a playground session - and if
+    // that is the ONLY reason this app does not fit, the right answer is to ask
+    // for it back rather than to refuse. Both readings are taken here, under the
+    // lock, because they have to describe the same instant.
+    const admitted = await admissionControl.withLock(async () => {
+      const shortfall = capacityShortfall(await hwRequirements.nodeCapacity(), deployment.resourceTotals());
+      if (!shortfall) {
+        admissionControl.reserve(appName, deployment);
+        return { reserved: true };
+      }
+      const withoutReclaimable = await hwRequirements.nodeCapacity({ ignoreReclaimable: true });
+      const stillShort = capacityShortfall(withoutReclaimable, deployment.resourceTotals());
+      return { reserved: false, shortfall, reclaimable: !stillShort };
     });
+
+    if (!admitted.reserved) {
+      if (!admitted.reclaimable) throw new Error(admitted.shortfall);
+
+      // Outside the lock, and it must stay that way: reclaiming tears down
+      // containers, and AsyncLock force-releases a slot held past its watchdog -
+      // so reclaiming under it would silently drop the check-and-reserve
+      // atomicity every other admission depends on.
+      //
+      // DEFERRED, never FAILED. The spawner benches a failed hash for SEVEN DAYS,
+      // so reporting a transient shortfall as a failure would cost a paid app a
+      // week over a fifteen-minute session. wakeIdleLoop pulls the spawn loop out
+      // of its idle delay once the capacity is actually back.
+      await admissionControl.requestReclaim(deployment.resourceTotals());
+      const reason = `${appName} is waiting on capacity held by a playground session; the session is being ended and the install will retry`;
+      log.info(`appInstaller - ${reason}`);
+      if (onStatus) onStatus(messageHelper.createErrorMessage(reason));
+      return { status: InstallStatus.DEFERRED, reason };
+    }
 
     // Admission decision, taken before any state is mutated so neither outcome needs
     // cleanup: a blocked image is a rejection (won't change on retry); an unreachable

@@ -6,6 +6,7 @@ const benchmarkService = require('../benchmarkService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
+const admissionControl = require('../utils/admissionControl');
 const log = require('../../lib/log');
 
 // Node specifications (shared state)
@@ -156,9 +157,15 @@ async function appsResources() {
  * whole candidate list per cycle, so it takes one reading and applies it many
  * times rather than re-reading per candidate.
  *
+ * @param {object} [options]
+ * @param {boolean} [options.ignoreReclaimable] - read as though the reclaimable
+ *   reservations were not held. A DIFFERENT question from the default: not "does
+ *   this fit", but "is free, interruptible work the only reason it does not".
+ *   Paid work asks it before giving up, because the honest answer to a shortfall
+ *   a playground session is causing is to reclaim rather than to refuse.
  * @returns {Promise<Object>} the node's free capacity
  */
-async function nodeCapacity() {
+async function nodeCapacity(options = {}) {
   const resourcesLocked = await appsResources();
   if (resourcesLocked.status !== 'success') {
     throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
@@ -171,14 +178,22 @@ async function nodeCapacity() {
   const useableCpu = (specs.cpuCores * 10) - config.lockedSystemResources.cpu;
   const useableRam = specs.ram - config.lockedSystemResources.ram;
 
+  // Added back rather than measured separately: appsResources already counted
+  // every pending admission, reclaimable or not, so this undoes that half. One
+  // code path means the two readings cannot drift.
+  const reclaimed = options.ignoreReclaimable
+    ? admissionControl.reclaimableResources()
+    : { cpu: 0, memory: 0, hdd: 0 };
+  const cpusLocked = resourcesLocked.data.appsCpusLocked - reclaimed.cpu;
+
   return {
     totalSpaceOnNode,
-    availableSpace: useableSpaceOnNode - resourcesLocked.data.appsHddLocked,
-    availableCpu: useableCpu - (resourcesLocked.data.appsCpusLocked * 10),
-    availableRam: useableRam - resourcesLocked.data.appsRamLocked,
+    availableSpace: useableSpaceOnNode - resourcesLocked.data.appsHddLocked + reclaimed.hdd,
+    availableCpu: useableCpu - (cpusLocked * 10),
+    availableRam: useableRam - resourcesLocked.data.appsRamLocked + reclaimed.memory,
     freeCores: specs.cpuCores
       - (config.lockedSystemResources.cpu / 10)
-      - resourcesLocked.data.appsCpusLocked,
+      - cpusLocked,
   };
 }
 
@@ -228,15 +243,39 @@ function burstHeadroomShortfall(capacity, totals) {
   return null;
 }
 
-async function checkNodeResources(deployment) {
-  const shortfall = capacityShortfall(await nodeCapacity(), deployment.resourceTotals());
+async function checkNodeResources(deployment, options = {}) {
+  const shortfall = capacityShortfall(await nodeCapacity(options), deployment.resourceTotals());
   if (shortfall) throw new Error(shortfall);
   return true;
 }
 
-async function checkCpuBurstHeadroom(deployment) {
-  const shortfall = burstHeadroomShortfall(await nodeCapacity(), deployment.resourceTotals());
+async function checkCpuBurstHeadroom(deployment, options = {}) {
+  const shortfall = burstHeadroomShortfall(await nodeCapacity(options), deployment.resourceTotals());
   if (shortfall) throw new Error(shortfall);
+  return true;
+}
+
+/**
+ * The capacity check for an app that is ALREADY INSTALLED and mid-operation.
+ *
+ * A redeploy and an update both remove containers before this runs, so a throw
+ * here leaves a paid app destroyed rather than merely not started - there is no
+ * "defer" available, because the thing that would be deferred has already
+ * happened. Free, interruptible work must therefore never be what fails it.
+ *
+ * So the verdict ignores reclaimable reservations, and the reclaim is requested
+ * for real rather than assumed: the app is about to use that capacity, and a
+ * session holding it would otherwise overcommit the node until its deadline.
+ *
+ * Not for admitting NEW work - that is the install path's gate, which can and
+ * does defer.
+ */
+async function checkNodeResourcesReclaiming(deployment) {
+  const totals = deployment.resourceTotals();
+  await checkNodeResources(deployment, { ignoreReclaimable: true });
+
+  const shortfallIfHeld = capacityShortfall(await nodeCapacity(), totals);
+  if (shortfallIfHeld) await admissionControl.requestReclaim(totals);
   return true;
 }
 
@@ -247,6 +286,7 @@ module.exports = {
   systemArchitecture,
   checkPlacement,
   checkNodeResources,
+  checkNodeResourcesReclaiming,
   checkCpuBurstHeadroom,
   nodeCapacity,
   capacityShortfall,

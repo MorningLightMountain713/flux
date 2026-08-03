@@ -74,6 +74,10 @@ describe('appInstaller tests', () => {
       systemArchitecture: sinon.stub().resolves('amd64'),
       checkPlacement: sinon.stub().resolves(),
       checkNodeResources: sinon.stub().resolves(),
+      // The admission gate reads capacity and decides for itself, so it can tell
+      // "does not fit" from "does not fit only because a session is holding it".
+      nodeCapacity: sinon.stub().resolves({ availableSpace: 500, availableCpu: 100, availableRam: 30000 }),
+      capacityShortfall: sinon.stub().returns(null),
     };
 
     logStub = {
@@ -677,6 +681,65 @@ describe('appInstaller tests', () => {
         expect(result.status, 'a real failure fails').to.equal(appInstaller.InstallStatus.FAILED);
         expect(uninstallApplication.calledWith('newapp'), 'a real failure rolls back').to.be.true;
         expect(broadcastMessageToAll.called, 'a real failure broadcasts the install error').to.be.true;
+      });
+
+      // The headline defect: a free playground session held capacity, the gate
+      // threw, the installer returned FAILED, and the spawner benched the app's
+      // hash for SEVEN DAYS. A fifteen-minute session cost a paid app a week.
+      describe('capacity held by reclaimable work', () => {
+        const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
+
+        afterEach(() => {
+          admissionControl.setReclaimer(null);
+          admissionControl.clear();
+        });
+
+        it('DEFERS and asks for the capacity back when a session is the only obstacle', async () => {
+          // Short on the plain reading, fits once the reclaimable share is added back.
+          hwRequirementsStub.capacityShortfall
+            .onFirstCall().returns('Not enough cpu')
+            .onSecondCall().returns(null);
+          const asked = [];
+          admissionControl.setReclaimer(async (totals) => { asked.push(totals); });
+
+          const { installer, installComponent } = loadFresh({ components: [['web', mockComponent]] });
+          const result = await installer.installApplication(mockInstantiated, {});
+
+          expect(result.status, 'DEFERRED — FAILED is the 7-day poison').to.equal(appInstaller.InstallStatus.DEFERRED);
+          expect(asked.length, 'asked for the capacity back').to.equal(1);
+          expect(installComponent.called, 'provisioned nothing').to.be.false;
+        });
+
+        it('still FAILS when the node is genuinely too small, reclaim or not', async () => {
+          // Short on both readings: no session is holding it, the app does not fit.
+          hwRequirementsStub.capacityShortfall.returns('Not enough cpu');
+          const asked = [];
+          admissionControl.setReclaimer(async (totals) => { asked.push(totals); });
+
+          const { installer } = loadFresh({ components: [['web', mockComponent]] });
+          const result = await installer.installApplication(mockInstantiated, {});
+
+          expect(result.status).to.equal(appInstaller.InstallStatus.FAILED);
+          expect(asked.length, 'nothing to reclaim, so nothing asked').to.equal(0);
+        });
+
+        it('does not hold the admission lock across the reclaim', async () => {
+          // AsyncLock force-releases a slot held past 60s, so reclaiming under it
+          // would silently drop the check-and-reserve atomicity. The reclaimer
+          // must therefore be able to take the lock itself while it runs.
+          hwRequirementsStub.capacityShortfall
+            .onFirstCall().returns('Not enough cpu')
+            .onSecondCall().returns(null);
+          let lockWasFree = false;
+          admissionControl.setReclaimer(async () => {
+            await admissionControl.withLock(async () => { lockWasFree = true; });
+          });
+
+          const { installer } = loadFresh({ components: [['web', mockComponent]] });
+          await installer.installApplication(mockInstantiated, {});
+
+          expect(lockWasFree, 'the lock was free while reclaiming').to.equal(true);
+        });
       });
 
       it('defers (not fails) when a shareWith dependency is not installed yet — no mutation, no rollback', async () => {

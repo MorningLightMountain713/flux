@@ -434,11 +434,100 @@ describe('hwRequirements', () => {
 
   // ── Exports ─────────────────────────────────────────────────────
 
+  // Some of what a node has committed is free, interruptible work. Asking for a
+  // reading without it answers a different question from "does this fit": it
+  // answers "is a playground session the only reason it does not".
+  describe('reclaimable capacity', () => {
+    const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
+    const deploymentOf = (cpu, memory, hdd) => ({
+      resourceTotals: () => ({ cpu, memoryMb: memory }),
+      reservableHostDiskGb: () => hdd,
+    });
+
+    afterEach(() => {
+      admissionControl.clear();
+      admissionControl.setReclaimer(null);
+    });
+
+    it('reads the same both ways when nothing reclaimable is held', async () => {
+      const hw = buildHw();
+      admissionControl.reserve('paidapp', deploymentOf(2, 4000, 50));
+
+      const held = await hw.nodeCapacity();
+      const ignoring = await hw.nodeCapacity({ ignoreReclaimable: true });
+      expect(ignoring).to.deep.equal(held);
+    });
+
+    // The invariant, stated as a difference so it holds whatever the node's own
+    // numbers are: ignoring reclaimable work frees exactly what that work holds.
+    it('frees exactly the reclaimable share, on every dimension', async () => {
+      const hw = buildHw();
+      admissionControl.reserve('op_s1', deploymentOf(2, 4000, 50), { reclaimable: true });
+
+      const held = await hw.nodeCapacity();
+      const ignoring = await hw.nodeCapacity({ ignoreReclaimable: true });
+
+      expect(ignoring.availableCpu - held.availableCpu).to.equal(20); // tenths of a core
+      expect(ignoring.availableRam - held.availableRam).to.equal(4000);
+      expect(ignoring.availableSpace - held.availableSpace).to.equal(50);
+      expect(ignoring.freeCores - held.freeCores).to.equal(2);
+    });
+  });
+
+  // A redeploy and an update both remove containers BEFORE checking capacity, so
+  // a throw there leaves a paid app destroyed rather than merely not started.
+  describe('checkNodeResourcesReclaiming', () => {
+    const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
+    const deploymentOf = (cpu, memory, hdd) => ({
+      resourceTotals: () => ({
+        cpu, memoryMb: memory, storageGb: 0, rootFsGb: hdd, swapGb: 0, hostDiskGb: hdd,
+      }),
+      reservableHostDiskGb: () => hdd,
+    });
+
+    afterEach(() => {
+      admissionControl.clear();
+      admissionControl.setReclaimer(null);
+    });
+
+    it('passes where the plain check would throw, and asks for the capacity back', async () => {
+      // 2 cores free, all of it held by a session.
+      const hw = buildHw({ cpucores: 3, appsCpusLocked: 2, lockedCpu: 10 });
+      admissionControl.reserve('op_s1', deploymentOf(2, 0, 0), { reclaimable: true });
+      const asked = [];
+      admissionControl.setReclaimer(async (totals) => { asked.push(totals); });
+
+      let threw = null;
+      await hw.checkNodeResources(deploymentOf(2, 0, 0)).catch((e) => { threw = e; });
+      expect(threw, 'the plain check refuses a paid app mid-redeploy').to.be.an('error');
+
+      expect(await hw.checkNodeResourcesReclaiming(deploymentOf(2, 0, 0))).to.equal(true);
+      expect(asked.length, 'and the session is actually asked to yield').to.equal(1);
+    });
+
+    it('asks for nothing when the app fits without reclaiming', async () => {
+      const hw = buildHw({ cpucores: 8, appsCpusLocked: 0, lockedCpu: 10 });
+      const asked = [];
+      admissionControl.setReclaimer(async (totals) => { asked.push(totals); });
+
+      expect(await hw.checkNodeResourcesReclaiming(deploymentOf(1, 0, 0))).to.equal(true);
+      expect(asked.length).to.equal(0);
+    });
+
+    it('still throws when the node is genuinely too small', async () => {
+      const hw = buildHw({ cpucores: 2, appsCpusLocked: 0, lockedCpu: 10 });
+      let threw = null;
+      await hw.checkNodeResourcesReclaiming(deploymentOf(8, 0, 0)).catch((e) => { threw = e; });
+      expect(threw).to.be.an('error');
+    });
+  });
+
   describe('exports', () => {
     it('exports the expected functions', () => {
       const hw = buildHw();
       expect(hw.checkPlacement).to.be.a('function');
       expect(hw.checkNodeResources).to.be.a('function');
+      expect(hw.checkNodeResourcesReclaiming).to.be.a('function');
       expect(hw.checkCpuBurstHeadroom).to.be.a('function');
       expect(hw.systemArchitecture).to.be.a('function');
       expect(hw.getNodeSpecs).to.be.a('function');

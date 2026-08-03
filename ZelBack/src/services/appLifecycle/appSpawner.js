@@ -502,7 +502,12 @@ async function trySpawningGlobalApplication() {
       // install-time gate decides it, which is the pre-existing behaviour.
       if (globalAppNamesLocation.length > 0) {
         try {
-          const capacity = await hwRequirements.nodeCapacity();
+          // Read as though reclaimable reservations were not held, because this
+          // screen decides what the install-time gate ever SEES. A candidate that
+          // a playground session is the only obstacle to would be filtered out
+          // here and never reach the one place that can ask for that capacity
+          // back - the screen would quietly defeat the eviction it precedes.
+          const capacity = await hwRequirements.nodeCapacity({ ignoreReclaimable: true });
           globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
             let totals;
             try {
@@ -733,10 +738,17 @@ async function trySpawningGlobalApplication() {
 
     // Per identity: each replica reserves its own resources, and the sequential
     // installs below re-check with the running reservation applied.
+    //
+    // Reclaimable reservations are ignored here for the same reason as the
+    // pre-screen: this gate throws into a catch that benches the hash for SIX
+    // HOURS, so refusing on capacity a playground session is holding would cost
+    // a paid app most of a day over a fifteen-minute session. The install-time
+    // gate is the authority and the only place that can reclaim; this one must
+    // not decide the question before it is reached.
     // eslint-disable-next-line no-restricted-syntax
     for (const identityDeployment of deployments) {
       // eslint-disable-next-line no-await-in-loop
-      await hwRequirements.checkNodeResources(identityDeployment);
+      await hwRequirements.checkNodeResources(identityDeployment, { ignoreReclaimable: true });
       if (isEnterpriseNode) {
         // eslint-disable-next-line no-await-in-loop
         await hwRequirements.checkCpuBurstHeadroom(identityDeployment);
