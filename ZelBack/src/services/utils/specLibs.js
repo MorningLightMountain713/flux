@@ -6,10 +6,10 @@ const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
 // too — that pair is what turns a mismatch into a startup error instead of a runtime
 // mystery.
 //
-// FluxOS runs against a PINNED flux-spec (`file:../flux-spec/packages/*`, vendored into
-// the node image), so the deployed copy can be older than the code reading it while every
-// dev checkout is current. Destructuring an absent export then yields undefined and fails
-// far away as "<name> is not a function": verifySignature did exactly that, its TypeError
+// flux-spec is a published package, so the copy installed on a node can be older than the
+// code reading it while every dev checkout — on a `file:` dep resolving to the working
+// tree — is current. Destructuring an absent export then yields undefined and fails far
+// away as "<name> is not a function": verifySignature did exactly that, its TypeError
 // caught and handed to callers as "Invalid signature", so the network refused every login
 // while the real cause sat in a per-request log line naming a missing function.
 //
