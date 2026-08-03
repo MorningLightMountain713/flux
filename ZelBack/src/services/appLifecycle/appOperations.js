@@ -248,7 +248,7 @@ async function redeployComponent(appName, componentName, options = {}) {
       // eslint-disable-next-line no-await-in-loop
       const freshDeployment = await deploymentProvider.buildDeployment(instantiated, { replica: deployComp.replica ?? null });
       // eslint-disable-next-line no-await-in-loop
-      await hwRequirements.checkNodeResources(freshDeployment);
+      await hwRequirements.checkNodeResourcesReclaiming(freshDeployment);
 
       status(`Installing ${deployComp.identifier}...`);
       // eslint-disable-next-line no-await-in-loop
@@ -372,7 +372,7 @@ async function redeployApplication(appName, options = {}) {
         throw new Error(`Application ${appName} deployment not found after requirement check`);
       }
       // eslint-disable-next-line no-await-in-loop
-      await hwRequirements.checkNodeResources(freshDeployment);
+      await hwRequirements.checkNodeResourcesReclaiming(freshDeployment);
 
       // Re-seed telemetry routing before recreating containers, in case the
       // redeploy carries a rotated sink (or dropped telemetry entirely).
@@ -1643,7 +1643,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // Rebuild THIS identity's fresh view - handing a co-located sibling's view to
   // the reinstalls below would apply its ports/env to the wrong containers.
   const freshDeployment = await deploymentProvider.buildDeployment(registrySpec, { replica: newDeployment.replica ?? null });
-  await hwRequirements.checkNodeResources(freshDeployment);
+  await hwRequirements.checkNodeResourcesReclaiming(freshDeployment);
 
   // Re-seed telemetry routing from the updated spec. A sink change (key
   // rotation, added/dropped telemetry) can arrive with no component diff,

@@ -8,6 +8,7 @@ const hwRequirements = require('../appRequirements/hwRequirements');
 const admissionControl = require('../utils/admissionControl');
 const jobRegistry = require('../utils/jobRegistry');
 const operationsController = require('../appManagement/operationsController');
+const appSpawner = require('../appLifecycle/appSpawner');
 const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
 const { appsFolder } = require('../utils/appConstants');
 const playgroundLimits = require('./playgroundLimits');
@@ -145,9 +146,68 @@ async function admitSession(session) {
       throw busy;
     }
 
-    admissionControl.reserve(session.sessionId, session.deployment);
+    // Reclaimable: a session is free, interruptible work, so a paid install that
+    // cannot otherwise fit asks for this back rather than being refused. Without
+    // the class the installer's only options are to admit or to fail, and a
+    // failure benches the app's hash for seven days.
+    admissionControl.reserve(session.sessionId, session.deployment, { reclaimable: true });
     session.reserved = true;
   });
+}
+
+/**
+ * Give capacity back to paid work that cannot otherwise fit.
+ *
+ * Ends whole sessions, oldest first, until enough is free. Whole, because a
+ * session's resources are the containers it is running - there is no partial
+ * yield - and oldest first because that session has had the most of what it came
+ * for, and its owner has seen the most of their app.
+ *
+ * Never a cancel. The owner did not ask for this and nothing they did caused it;
+ * a cancel would tell them they stopped their own session, and a failure would
+ * tell them their spec was at fault. It is its own outcome with its own sentence.
+ *
+ * @param {object} needed - ResourceTotals the paid work could not fit
+ * @returns {Promise<number>} how many sessions were ended
+ */
+async function reclaimFor(needed) {
+  const live = playgroundSessionRegistry.all()
+    .filter((session) => session.reserved && !session.finished)
+    .sort((a, b) => a.startedAt - b.startedAt);
+
+  let freedCpu = 0;
+  let freedMemory = 0;
+  let freedHdd = 0;
+  let ended = 0;
+
+  // eslint-disable-next-line no-restricted-syntax
+  for (const session of live) {
+    if (freedCpu >= needed.cpu && freedMemory >= needed.memoryMb && freedHdd >= needed.hostDiskGb) break;
+
+    const totals = session.deployment.resourceTotals();
+    log.warn(`playground: ending session ${session.sessionId} to release capacity for a paid application`);
+    session.verdict = 'evicted';
+    jobRegistry.evicted(
+      session.sessionId,
+      'This node needed the capacity for a paid application, so the session was ended early. '
+      + 'Nothing about your spec caused this - try another node.',
+    );
+    // eslint-disable-next-line no-await-in-loop
+    await finishSession(session, 'evicted').catch((error) => {
+      log.error(`playground: could not end ${session.sessionId} for eviction: ${error.message}`);
+    });
+
+    freedCpu += totals.cpu;
+    freedMemory += totals.memoryMb;
+    freedHdd += totals.hostDiskGb;
+    ended += 1;
+  }
+
+  // The capacity is back, so let the spawn loop try again now rather than at the
+  // end of its idle delay - the install that asked returned DEFERRED and is
+  // waiting on exactly this.
+  if (ended) appSpawner.wakeIdleLoop();
+  return ended;
 }
 
 /**
@@ -489,6 +549,7 @@ function reset() {
 
 module.exports = {
   ELIGIBLE_TIERS,
+  reclaimFor,
   submitSession,
   submitSessionAPI,
   getSession,

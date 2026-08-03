@@ -88,4 +88,53 @@ describe('admissionControl', () => {
       expect(seenByB).to.deep.equal({ cpu: 2, memory: 4000, hdd: 50 });
     });
   });
+
+  // Some of what a node has committed is free, interruptible work. Paid work
+  // that cannot otherwise fit asks for it back rather than being refused —
+  // a refusal costs the app seven days in the spawner's error cache.
+  describe('reclaimable reservations', () => {
+    it('counts a reclaimable reservation in the pending total like any other', () => {
+      admissionControl.reserve('op_s1', deploymentOf(2, 4000, 50), { reclaimable: true });
+      // It IS committed capacity — a second session must not be admitted against it.
+      expect(admissionControl.pendingResources()).to.deep.equal({ cpu: 2, memory: 4000, hdd: 50 });
+    });
+
+    it('reports only the reclaimable share separately', () => {
+      admissionControl.reserve('paidapp', deploymentOf(4, 8000, 100));
+      admissionControl.reserve('op_s1', deploymentOf(2, 4000, 50), { reclaimable: true });
+
+      expect(admissionControl.pendingResources()).to.deep.equal({ cpu: 6, memory: 12000, hdd: 150 });
+      expect(admissionControl.reclaimableResources()).to.deep.equal({ cpu: 2, memory: 4000, hdd: 50 });
+    });
+
+    it('treats an unclassified reservation as not reclaimable', () => {
+      admissionControl.reserve('paidapp', deploymentOf(4, 8000, 100));
+      expect(admissionControl.reclaimableResources()).to.deep.equal({ cpu: 0, memory: 0, hdd: 0 });
+    });
+
+    it('stops counting a reclaimable reservation once it is released', () => {
+      admissionControl.reserve('op_s1', deploymentOf(2, 4000, 50), { reclaimable: true });
+      admissionControl.release('op_s1');
+      expect(admissionControl.reclaimableResources()).to.deep.equal({ cpu: 0, memory: 0, hdd: 0 });
+    });
+  });
+
+  describe('requestReclaim', () => {
+    afterEach(() => admissionControl.setReclaimer(null));
+
+    it('asks the registered reclaimer for what the caller could not fit', async () => {
+      const asked = [];
+      admissionControl.setReclaimer(async (totals) => { asked.push(totals); });
+
+      const totals = { cpu: 2, memoryMb: 4000, hostDiskGb: 50 };
+      expect(await admissionControl.requestReclaim(totals)).to.equal(true);
+      expect(asked).to.deep.equal([totals]);
+    });
+
+    // A node with no reclaimable work registered must still answer, so the
+    // caller can tell "nothing to reclaim" from "reclaim failed".
+    it('answers false when nothing has registered', async () => {
+      expect(await admissionControl.requestReclaim({ cpu: 1 })).to.equal(false);
+    });
+  });
 });

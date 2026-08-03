@@ -57,6 +57,7 @@ describe('playgroundService', () => {
       audit: sinon.stub().resolves(null),
       findFlaggedSince: sinon.stub().resolves(null),
       isBlocked: sinon.stub().resolves(opts.blocked ?? false),
+      wakeIdleLoop: sinon.stub(),
       captureIngress: sinon.stub().resolves({ observed: { ip: '1.2.3.4', port: 5000 }, asserted: {} }),
       validateSpec: sinon.stub().resolves({ name: opts.appName ?? 'demoapp' }),
       fromSpec: sinon.stub().returns({
@@ -111,6 +112,7 @@ describe('playgroundService', () => {
         findFlaggedSince: stubs.findFlaggedSince,
       },
       './playgroundAbuse': { isBlocked: stubs.isBlocked },
+      '../appLifecycle/appSpawner': { wakeIdleLoop: stubs.wakeIdleLoop },
     });
   }
 
@@ -379,6 +381,106 @@ describe('playgroundService', () => {
       expect(handle.statusUrl).to.include(handle.sessionId);
       expect(service.getSession(handle.sessionId, caller.fluxId)).to.not.equal(null);
       await settle();
+    });
+  });
+
+  // A session is free, interruptible work. When paid work cannot otherwise fit,
+  // the node asks for the capacity back rather than refusing the paid app — a
+  // refusal benches its hash in the spawner's error cache for seven days.
+  describe('reclaiming capacity for paid work', () => {
+    const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+
+    it('ends a live session and gives its capacity back', async () => {
+      const handle = await service.submitSession({}, caller);
+      await settle();
+      sessionRegistry.add({
+        sessionId: handle.sessionId,
+        appName: 'demoapp',
+        startedAt: Date.now(),
+        reserved: true,
+        finished: false,
+        deployment: { resourceTotals: () => totals() },
+        results: {},
+      });
+
+      const ended = await service.reclaimFor({ cpu: 1, memoryMb: 1024, hostDiskGb: 4 });
+
+      expect(ended).to.equal(1);
+      expect(stubs.teardownSession.called).to.equal(true);
+    });
+
+    // Eviction is NOT a cancel and must not report as one. The owner asked for a
+    // session and the node took it away; a cancel would tell them they stopped
+    // it themselves, and a failure would tell them their spec was at fault.
+    it('reports its own terminal state, not a cancel and not a failure', async () => {
+      // A job of its own rather than one from submitSession, whose run settles on
+      // its own and would reach a terminal state first — evicted() will not
+      // overwrite one, which is the correct behaviour and not what this asserts.
+      const handle = jobRegistry.start({ kind: 'playground', owner: caller.fluxId });
+      const session = {
+        sessionId: handle.jobId,
+        appName: 'demoapp',
+        startedAt: Date.now(),
+        reserved: true,
+        finished: false,
+        deployment: { resourceTotals: () => totals() },
+        results: {},
+      };
+      sessionRegistry.add(session);
+
+      await service.reclaimFor({ cpu: 1, memoryMb: 1024, hostDiskGb: 4 });
+
+      const job = jobRegistry.get(handle.jobId, caller.fluxId);
+      expect(job.status).to.equal(jobRegistry.JobStatus.EVICTED);
+      expect(job.status).to.not.equal(jobRegistry.JobStatus.CANCELED);
+      expect(job.status).to.not.equal(jobRegistry.JobStatus.FAILED);
+      // And it says why, because this is the one outcome the owner had no part in.
+      expect(job.error.detail).to.include('paid application');
+      expect(session.verdict).to.equal('evicted');
+      await settle();
+    });
+
+    it('stops as soon as enough has been freed, rather than clearing the node', async () => {
+      const make = (id, startedAt) => ({
+        sessionId: id,
+        appName: 'demoapp',
+        startedAt,
+        reserved: true,
+        finished: false,
+        deployment: { resourceTotals: () => totals() },
+        results: {},
+      });
+      // Oldest first: that session has had the most of what it came for.
+      sessionRegistry.add(make('op_old', 1000));
+      sessionRegistry.add(make('op_new', 2000));
+
+      const ended = await service.reclaimFor({ cpu: 1, memoryMb: 1024, hostDiskGb: 4 });
+
+      expect(ended).to.equal(1);
+      expect(sessionRegistry.get('op_new'), 'the newer session survives').to.not.equal(null);
+    });
+
+    it('wakes the spawn loop, so the deferred install retries now rather than in five minutes', async () => {
+      sessionRegistry.add({
+        sessionId: 'op_x',
+        appName: 'demoapp',
+        startedAt: Date.now(),
+        reserved: true,
+        finished: false,
+        deployment: { resourceTotals: () => totals() },
+        results: {},
+      });
+
+      await service.reclaimFor({ cpu: 1, memoryMb: 1024, hostDiskGb: 4 });
+
+      expect(stubs.wakeIdleLoop.calledOnce).to.equal(true);
+    });
+
+    it('does nothing, and wakes nothing, when there is no session to end', async () => {
+      const ended = await service.reclaimFor({ cpu: 1, memoryMb: 1024, hostDiskGb: 4 });
+
+      expect(ended).to.equal(0);
+      expect(stubs.wakeIdleLoop.called).to.equal(false);
     });
   });
 

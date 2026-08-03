@@ -304,6 +304,10 @@ describe('appOperations tests', () => {
       sinon.stub(appsRepository, 'getInstalledApp').resolves({ version: 8, owner: 'owner1' });
       sinon.stub(deploymentProvider, 'buildDeployment').resolves({ marker: 'fresh', componentEntries: () => [] });
       sinon.stub(hwRequirements, 'checkNodeResources').resolves();
+      // The redeploy/update path uses the reclaiming variant: these run AFTER
+      // the containers are gone, so a shortfall leaves a paid app destroyed and
+      // free session capacity must never be what causes one.
+      sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
       sinon.stub(appReconciler, 'enqueue');
@@ -585,8 +589,7 @@ describe('appOperations tests', () => {
       // can't be sinon-stubbed on the module object; proxyquire (callThru) overrides just that
       // one dependency while every other dep (delay, axiosGet, getLocalSocketAddress, docker,
       // deploymentProvider) is object-accessed and so is controlled by the sinon stubs below.
-      const config = require('config');
-const proxyquire = require('proxyquire');
+      const proxyquire = require('proxyquire');
       const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
       // The active-standby component is currently running on THIS node.
       const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
@@ -630,8 +633,7 @@ const proxyquire = require('proxyquire');
       // IP-granular ipsMatch must still recognise this node as the primary, so it must NOT stop
       // its own running container. (Port-sensitive matching would wrongly stop it.)
       const identifier = 'n8n_n8napp';
-      const config = require('config');
-const proxyquire = require('proxyquire');
+      const proxyquire = require('proxyquire');
       const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
       const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
       const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
@@ -987,6 +989,10 @@ const proxyquire = require('proxyquire');
       // blocks, leaving the port close + gated open as the only port effects under test.
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(null);
       sinon.stub(hwRequirements, 'checkNodeResources').resolves();
+      // The redeploy/update path uses the reclaiming variant: these run AFTER
+      // the containers are gone, so a shortfall leaves a paid app destroyed and
+      // free session capacity must never be what causes one.
+      sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       sinon.stub(appUninstaller, 'reclaimUnusedImages').resolves();
       uninstallComponentStub = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       denyPortsStub = sinon.stub(appUninstaller, 'denyPorts').resolves();

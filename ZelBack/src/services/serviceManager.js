@@ -89,6 +89,8 @@ const appPlacements = require('./appManagement/appPlacements');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
 const appsRepository = require('./appDatabase/appsRepository');
 const playgroundAudit = require('./appPlayground/playgroundAudit');
+const playgroundService = require('./appPlayground/playgroundService');
+const admissionControl = require('./utils/admissionControl');
 const nodeIdentityMigration = require('./appDatabase/nodeIdentityMigration');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
@@ -411,6 +413,11 @@ async function startFluxFunctions() {
     fluxadmService.start();
     log.info('Fluxadm access service initiated');
     await untilSucceeds('Database schema preparation', prepareDatabaseSchema);
+    // Who gives capacity back when paid work cannot otherwise fit. Registered
+    // rather than imported: admissionControl is depended on by every resource
+    // check, and it must not in turn depend on whichever feature happens to hold
+    // reclaimable reservations.
+    admissionControl.setReclaimer(playgroundService.reclaimFor);
     // Replay any owed teardowns that survived a crash: re-condemn their components
     // (synchronously, before the reconciler starts) then drain them in the background,
     // so an interrupted removal always completes and a being-torn-down app is never
