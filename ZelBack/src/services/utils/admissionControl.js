@@ -19,9 +19,15 @@ const { AsyncLock } = require('./asyncLock');
 // Single slot => a mutex over the check-and-reserve critical section.
 const admissionLock = new AsyncLock(1);
 
-// appName -> { cpu, memory, hdd } (same units appsResources sums:
+// key -> { cpu, memory, hdd, reclaimable } (same units appsResources sums:
 // cpu cores, memory MB, hdd GB)
 const pending = new Map();
+
+// Called to give reclaimable capacity back, registered by whoever holds it.
+// A registration rather than an import so this module - which every resource
+// check already depends on - does not acquire a dependency on the feature that
+// happens to hold reclaimable reservations today.
+let reclaimer = null;
 
 /**
  * Run the check-and-reserve critical section under the admission mutex. The
@@ -42,14 +48,21 @@ async function withLock(fn) {
 
 /**
  * Record an admitted-but-not-yet-installed app's resource footprint so subsequent
- * resource checks account for it. Idempotent per app (re-reserve overwrites).
- * @param {string} appName
+ * resource checks account for it. Idempotent per key (re-reserve overwrites).
+ * @param {string} key - unique per admission; an app's name for an install, the
+ *   session id for a playground session
  * @param {object} deployment - a DeploymentSpec
+ * @param {object} [options]
+ * @param {boolean} [options.reclaimable] - this reservation can be given back on
+ *   demand, because the work behind it is free and interruptible. Paid work that
+ *   cannot otherwise fit asks for it back rather than being refused.
  */
-function reserve(appName, deployment) {
+function reserve(key, deployment, options = {}) {
   const { cpu, memoryMb: memory } = deployment.resourceTotals();
   const hdd = deployment.reservableHostDiskGb();
-  pending.set(appName, { cpu, memory, hdd });
+  pending.set(key, {
+    cpu, memory, hdd, reclaimable: options.reclaimable === true,
+  });
 }
 
 /**
@@ -76,11 +89,68 @@ function pendingResources() {
   return { cpu, memory, hdd };
 }
 
+/**
+ * The summed footprint of the pending admissions that can be given back.
+ *
+ * A subset of pendingResources, never a separate total: it is what a capacity
+ * reading ADDS BACK to answer "would this fit if the reclaimable work were not
+ * here", which is a different question from "does this fit".
+ * @returns {{cpu: number, memory: number, hdd: number}}
+ */
+function reclaimableResources() {
+  let cpu = 0;
+  let memory = 0;
+  let hdd = 0;
+  pending.forEach((r) => {
+    if (!r.reclaimable) return;
+    cpu += r.cpu;
+    memory += r.memory;
+    hdd += r.hdd;
+  });
+  return { cpu, memory, hdd };
+}
+
+/**
+ * Register the handler that gives reclaimable capacity back.
+ *
+ * @param {(totals: object) => Promise<void>} fn - asked to free at least this
+ *   much; it decides what to give up and how
+ */
+function setReclaimer(fn) {
+  reclaimer = fn;
+}
+
+/**
+ * Ask for reclaimable capacity back, for work that cannot otherwise fit.
+ *
+ * MUST NOT be called while holding the admission lock. Reclaiming tears down
+ * containers, and AsyncLock force-releases a slot held past its watchdog - so a
+ * caller that reclaimed under the lock would silently lose the check-and-reserve
+ * atomicity this module exists to provide. Ask outside it, and re-check on the
+ * next attempt rather than assuming the capacity is now yours: nothing promises
+ * another admission did not take it first.
+ *
+ * @param {object} totals - ResourceTotals the caller could not fit
+ * @returns {Promise<boolean>} whether anything was asked to yield
+ */
+async function requestReclaim(totals) {
+  if (!reclaimer) return false;
+  await reclaimer(totals);
+  return true;
+}
+
 /** Drop all pending reservations. In-memory only, so this is for boot reset and tests. */
 function clear() {
   pending.clear();
 }
 
 module.exports = {
-  withLock, reserve, release, pendingResources, clear,
+  withLock,
+  reserve,
+  release,
+  pendingResources,
+  reclaimableResources,
+  setReclaimer,
+  requestReclaim,
+  clear,
 };
