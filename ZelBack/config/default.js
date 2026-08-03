@@ -371,6 +371,26 @@ module.exports = {
     // two sessions of fifteen running minutes is the ~30 minutes and ~1 core-hour
     // per hour a node donates.
     playgroundSessionTtlMs: 900000,
+    // Which nodes will serve a given caller this window, by rendezvous hash over
+    // the deterministic node list. Every other control here is enforced from a
+    // gossiped record and so has a window a simultaneous fan-out sits inside;
+    // this one needs no message, so there is nothing for a burst to outrun.
+    //
+    // The size is the dial. Larger is friendlier to a caller whose nodes are
+    // busy and permits a larger burst; smaller bounds harder. It is deliberately
+    // well above the per-identity daily budget: places are spent on nodes that
+    // are in the set but not Arcane (unknowable from chain data, so not filtered)
+    // or simply busy.
+    playgroundServingSetSize: 32,
+    // A day. Its floor is the session TTL — a shorter window would move a
+    // caller's set out from under a running session.
+    playgroundServingSetWindowMs: 86400000,
+    // OFF, and it must stay off until FDM forwards the client address and
+    // FluxOS resolves it. A browser reaches a node through FDM, so the socket
+    // peer is the load balancer: enforcing this now would map every caller
+    // arriving through FDM onto the same handful of nodes and take the feature
+    // down for everyone else. Not a weaker control — an outage.
+    playgroundServingSetAddressAxis: false,
     // Peak commitment, NOT total donation - the two knobs are independent. Two
     // sessions is 2 x the session ceiling held at once (4 cores, 8 GB); how much
     // a node gives away per hour is playgroundNodeSessionsPerHour below, and
