@@ -1,6 +1,7 @@
 const config = require('config');
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
+const playgroundSessionRegistry = require('./playgroundSessionRegistry');
 const playgroundEgress = require('./playgroundEgress');
 
 // The docker network a playground session runs on: which slot it takes out of
@@ -10,8 +11,26 @@ const playgroundEgress = require('./playgroundEgress');
 // The firewall and rate-cap work lives in playgroundEgress, which deliberately
 // does not import dockerService - fluxNetworkHelper has to call into it to
 // restore the DOCKER-USER jump, and dockerService imports fluxNetworkHelper.
+//
+// A session's network is named for the SESSION, never for the spec's app name.
+// An app network is created idempotently - an existing one of the same name is
+// adopted, not rejected - so a session sharing the name of an app this node
+// runs would silently hand a paid app the session's rate-capped /27, or attach
+// a stranger's containers to the app's /24 with no egress policy at all. The
+// two namespaces cannot overlap, so neither can happen.
 
 const { BRIDGE_PREFIX } = playgroundEgress;
+const { PLAYGROUND_LABEL } = playgroundSessionRegistry;
+
+// Names the docker network. Distinct from fluxDockerNetwork_ by construction,
+// which also takes session networks out of the app debris sweep - it enumerates
+// on the app prefix, so it can no longer reap one out from under a live session.
+const NETWORK_PREFIX = 'fluxPlayground_';
+
+/** The docker network one session owns. */
+function networkNameFor(sessionId) {
+  return `${NETWORK_PREFIX}${sessionId}`;
+}
 
 function networkOctet() {
   return config.fluxapps.playgroundNetworkOctet ?? 255;
@@ -45,10 +64,15 @@ function bridgeFor(slot) {
  * Read from docker rather than tracked in memory, so a restart cannot hand out
  * a slot whose network still exists.
  *
+ * Enumerated by LABEL rather than by name. Session networks sit outside the app
+ * namespace, so the app-prefixed listing does not see them at all - asking it
+ * would report every slot free and hand the same bridge name to two concurrent
+ * sessions.
+ *
  * @returns {Promise<number|null>} slot index, or null when all are taken
  */
 async function allocateSlot() {
-  const networks = await dockerService.getFluxDockerNetworks();
+  const networks = await dockerService.dockerListNetworksByLabel(PLAYGROUND_LABEL);
   const taken = new Set();
 
   networks.forEach((network) => {
@@ -66,6 +90,47 @@ async function allocateSlot() {
 }
 
 /**
+ * Remove the session networks no live session claims.
+ *
+ * The app debris sweep used to collect these incidentally, back when a session
+ * network was named like an app's and looked unowned. It cannot see them any
+ * more, and a leaked network holds its bridge slot for the life of the node -
+ * so the sweep the playground already runs over its containers has to cover its
+ * networks too. After a restart there are no live ids and every one of them is
+ * by definition abandoned.
+ *
+ * @param {Set<string>} liveSessionIds ids the service still owns
+ * @returns {Promise<{removed: number, networks: string[]}>}
+ */
+async function reapOrphanNetworks(liveSessionIds) {
+  let networks;
+  try {
+    networks = await dockerService.dockerListNetworksByLabel(PLAYGROUND_LABEL);
+  } catch (error) {
+    log.warn(`playground: network sweep could not list networks: ${error.message}`);
+    return { removed: 0, networks: [] };
+  }
+
+  const removed = [];
+  // eslint-disable-next-line no-restricted-syntax
+  for (const network of networks) {
+    const sessionId = network.Labels && network.Labels[PLAYGROUND_LABEL];
+    // eslint-disable-next-line no-continue
+    if (!sessionId || liveSessionIds.has(sessionId)) continue;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await dockerService.forceRemoveFluxAppDockerNetwork(null, { networkName: network.Name });
+      removed.push(network.Name);
+      log.info(`playground: reaped orphaned session network ${network.Name}`);
+    } catch (error) {
+      log.warn(`playground: could not reap ${network.Name}: ${error.message}`);
+    }
+  }
+
+  return { removed: removed.length, networks: removed };
+}
+
+/**
  * Create the network a session runs on, and put its rate cap in place.
  *
  * The egress policy is ensured on every session rather than once at startup: it
@@ -73,10 +138,10 @@ async function allocateSlot() {
  * else flushed is rebuilt BEFORE a guest's container is attached to it rather
  * than after.
  *
- * @param {string} appName - names the docker network
- * @returns {Promise<{slot: number, bridge: string, subnet: string}>}
+ * @param {string} sessionId - names the docker network and stamps its ownership
+ * @returns {Promise<{slot: number, bridge: string, subnet: string, networkName: string}>}
  */
-async function createSessionNetwork(appName) {
+async function createSessionNetwork(sessionId) {
   const inForce = await playgroundEgress.ensureEgressPolicy();
   if (!inForce) {
     // Refused rather than run unshielded. A session with no egress policy is
@@ -94,11 +159,17 @@ async function createSessionNetwork(appName) {
   const octet = networkOctet();
   const base = slotBase(slot);
   const bridge = bridgeFor(slot);
+  const networkName = networkNameFor(sessionId);
 
-  await dockerService.createFluxAppDockerNetwork(appName, octet, {
+  await dockerService.createFluxAppDockerNetwork(null, octet, {
     prefix: networkPrefix(),
     base,
     bridgeName: bridge,
+    networkName,
+    // The session's own stamp, not an app-network one. It is what the slot
+    // allocator and the network sweep enumerate on, and what keeps the app
+    // debris sweep from ever attributing this network to an app.
+    labels: { [PLAYGROUND_LABEL]: sessionId },
   });
 
   const shaped = await playgroundEgress.shapeBridge(bridge);
@@ -108,13 +179,18 @@ async function createSessionNetwork(appName) {
     log.warn(`playground: ${bridge} is running without a rate cap`);
   }
 
-  return { slot, bridge, subnet: `172.23.${octet}.${base}/${networkPrefix()}` };
+  return {
+    slot, bridge, networkName, subnet: `172.23.${octet}.${base}/${networkPrefix()}`,
+  };
 }
 
 module.exports = {
+  NETWORK_PREFIX,
+  networkNameFor,
   slotCount,
   slotBase,
   bridgeFor,
   allocateSlot,
   createSessionNetwork,
+  reapOrphanNetworks,
 };

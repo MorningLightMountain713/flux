@@ -239,29 +239,18 @@ describe('appJanitor tests', () => {
       expect(result.networksRemoved).to.equal(1);
     });
 
-    // A live playground session owns a real app network under the spec's own
-    // name and deliberately has no installed row, so on the installed set alone
-    // it reads as debris and its network is force-removed out from under a
-    // running container.
-    it('protects the network of a live playground session', async () => {
+    // A session's network is named and stamped for the SESSION, so this sweep
+    // cannot see it and needs no exception for it. The protected set is the
+    // installed apps and nothing else - a live session no longer contributes a
+    // name to defend, because there is no longer a name to defend.
+    it('protects only installed apps, and never names a live session', async () => {
       appQueryServiceStub.installedApps.resolves({ status: 'success', data: [{ name: 'liveapp' }] });
       playgroundSessionRegistry.add({ sessionId: 'op_1', appName: 'guestapp' });
 
       await appJanitor.sweepDockerDebris();
 
       const [protectedNames] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
-      expect([...protectedNames].sort()).to.deep.equal(['guestapp', 'liveapp']);
-    });
-
-    it('stops protecting a session name once the session ends', async () => {
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [] });
-      playgroundSessionRegistry.add({ sessionId: 'op_1', appName: 'guestapp' });
-      playgroundSessionRegistry.remove('op_1');
-
-      await appJanitor.sweepDockerDebris();
-
-      const [protectedNames] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
-      expect([...protectedNames]).to.deep.equal([]);
+      expect([...protectedNames]).to.deep.equal(['liveapp']);
     });
   });
 

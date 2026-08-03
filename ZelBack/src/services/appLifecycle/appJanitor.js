@@ -189,14 +189,11 @@ async function dockerDebrisSweep() {
     log.warn('appJanitor - debris sweep skipped: unable to list installed apps');
     return { skipped: 'installed list failed' };
   }
-  // A live playground session owns a real app network under the spec's own name
-  // and has no installed row, so on the installed set alone it reads as debris
-  // and its network would be force-removed out from under a running container.
-  // Its name is protected for exactly as long as the session holds it.
-  const protectedNames = new Set([
-    ...installedAppsRes.data.map((app) => app.name),
-    ...playgroundSessionRegistry.liveAppNames(),
-  ]);
+  // Session networks are outside the app namespace and carry the session's own
+  // ownership label, so this sweep cannot see them and needs no exception for
+  // them. playgroundRunner's own sweep collects the ones a restart or a failed
+  // teardown left.
+  const protectedNames = new Set(installedAppsRes.data.map((app) => app.name));
 
   const { removed, unidentified } = await appDockerNetwork.removeUnownedAppNetworks(protectedNames);
 

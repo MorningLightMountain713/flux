@@ -14,6 +14,7 @@ describe('playgroundNetwork', () => {
       createNetwork: sinon.stub().resolves('created'),
       ensurePolicy: sinon.stub().resolves(opts.policyInForce ?? true),
       shapeBridge: sinon.stub().resolves(opts.shaped ?? true),
+      removeNetwork: sinon.stub().resolves('removed'),
     };
 
     net = proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundNetwork', {
@@ -22,9 +23,11 @@ describe('playgroundNetwork', () => {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),
       },
       '../dockerService': {
-        getFluxDockerNetworks: stubs.listNetworks,
+        dockerListNetworksByLabel: stubs.listNetworks,
         createFluxAppDockerNetwork: stubs.createNetwork,
+        forceRemoveFluxAppDockerNetwork: stubs.removeNetwork,
       },
+      './playgroundSessionRegistry': { PLAYGROUND_LABEL: 'flux.playground' },
       './playgroundEgress': {
         BRIDGE_PREFIX: 'flxpg',
         ensureEgressPolicy: stubs.ensurePolicy,
@@ -104,13 +107,25 @@ describe('playgroundNetwork', () => {
 
   describe('createSessionNetwork', () => {
     it('creates the network on the allocated slot with its own bridge name', async () => {
-      const result = await net.createSessionNetwork('demoapp');
+      const result = await net.createSessionNetwork('op_sess1');
 
-      expect(result).to.deep.equal({ slot: 0, bridge: 'flxpg0', subnet: '172.23.255.0/27' });
+      expect(result).to.deep.equal({
+        slot: 0, bridge: 'flxpg0', networkName: 'fluxPlayground_op_sess1', subnet: '172.23.255.0/27',
+      });
       const [appName, octet, options] = stubs.createNetwork.firstCall.args;
-      expect(appName).to.equal('demoapp');
+      // Named and stamped for the SESSION. An app-namespaced name is adopted
+      // rather than refused when it already exists, so a session sharing a
+      // running app's name would silently share its network - in either
+      // direction, and the loser's teardown removes it from under the other.
+      expect(appName).to.equal(null);
       expect(octet).to.equal(255);
-      expect(options).to.deep.equal({ prefix: 27, base: 0, bridgeName: 'flxpg0' });
+      expect(options).to.deep.equal({
+        prefix: 27,
+        base: 0,
+        bridgeName: 'flxpg0',
+        networkName: 'fluxPlayground_op_sess1',
+        labels: { 'flux.playground': 'op_sess1' },
+      });
     });
 
     it('places a second session on its own subnet and bridge', async () => {
@@ -155,6 +170,55 @@ describe('playgroundNetwork', () => {
       load({ shaped: false });
       const result = await net.createSessionNetwork('demoapp');
       expect(result.bridge).to.equal('flxpg0');
+    });
+  });
+
+  // The app debris sweep used to collect these incidentally, while a session
+  // network was named like an app's and read as unowned. It cannot see them any
+  // more, and a leaked one holds its bridge slot for the life of the node — so
+  // the playground has to sweep its own.
+  describe('reapOrphanNetworks', () => {
+    const labelled = (...ids) => ids.map((id) => ({
+      Name: `fluxPlayground_${id}`,
+      Labels: { 'flux.playground': id },
+    }));
+
+    it('removes the networks no live session claims', async () => {
+      load({ networks: labelled('op_gone') });
+      const result = await net.reapOrphanNetworks(new Set());
+
+      expect(result.removed).to.equal(1);
+      expect(stubs.removeNetwork.calledOnceWith(null, { networkName: 'fluxPlayground_op_gone' })).to.equal(true);
+    });
+
+    it('leaves a live session alone', async () => {
+      load({ networks: labelled('op_live') });
+      const result = await net.reapOrphanNetworks(new Set(['op_live']));
+
+      expect(result.removed).to.equal(0);
+      expect(stubs.removeNetwork.called).to.equal(false);
+    });
+
+    // Sessions live only in memory, so after a restart nothing is live and every
+    // labelled network is by definition abandoned.
+    it('collects the lot after a restart, when nothing is live', async () => {
+      load({ networks: labelled('op_a', 'op_b', 'op_c') });
+      const result = await net.reapOrphanNetworks(new Set());
+      expect(result.removed).to.equal(3);
+    });
+
+    it('keeps going when one removal fails', async () => {
+      load({ networks: labelled('op_a', 'op_b') });
+      stubs.removeNetwork.onFirstCall().rejects(new Error('in use'));
+
+      const result = await net.reapOrphanNetworks(new Set());
+      expect(result.removed).to.equal(1);
+    });
+
+    it('never throws when docker cannot list networks', async () => {
+      load();
+      stubs.listNetworks.rejects(new Error('docker down'));
+      expect(await net.reapOrphanNetworks(new Set())).to.deep.equal({ removed: 0, networks: [] });
     });
   });
 });
