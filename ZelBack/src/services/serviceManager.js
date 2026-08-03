@@ -88,6 +88,7 @@ const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const appPlacements = require('./appManagement/appPlacements');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
 const appsRepository = require('./appDatabase/appsRepository');
+const playgroundAudit = require('./appPlayground/playgroundAudit');
 const nodeIdentityMigration = require('./appDatabase/nodeIdentityMigration');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
@@ -192,6 +193,10 @@ async function prepareDatabaseSchema() {
   // zelappsinformation (localzelapps): one row per deployed identity, unique on
   // (name, replica), which co-located replicas need.
   await appsRepository.prepareInstalledAppsCollection();
+  // playgroundsessions (localzelapps): the retention TTL the collection's own
+  // comment promises, plus the (callerFingerprint, flagged, observedAt) index
+  // the admission-path miner check reads
+  await playgroundAudit.prepareCollection();
   // appPlacements (localzelapps): one record per app
   await appPlacements.prepareCollection();
   // The explorer's collections: their indexes are the explorer's to declare.
