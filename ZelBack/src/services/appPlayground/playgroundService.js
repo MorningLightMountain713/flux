@@ -6,7 +6,6 @@ const verificationHelper = require('../verificationHelper');
 const generalService = require('../generalService');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const admissionControl = require('../utils/admissionControl');
-const appQueryService = require('../appQuery/appQueryService');
 const jobRegistry = require('../utils/jobRegistry');
 const operationsController = require('../appManagement/operationsController');
 const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
@@ -67,6 +66,25 @@ async function nodeEligible() {
 }
 
 /**
+ * The identity a session's containers, network and host dirs are built from.
+ *
+ * Derived from the session id rather than the spec's name, because a name is a
+ * LEASE - it says which app holds it right now, and an expiry hands it to
+ * whoever registers it next - while everything named here can outlive the
+ * session that made it. A failed teardown leaves containers and dirs behind,
+ * and if those carry an app's name then the next thing to hold that name
+ * inherits them.
+ *
+ * Short because the identifier it lands in is bounded, and short is enough: it
+ * has to be unique against one node's app names and its own live sessions, not
+ * against the network. The app's real name stays on the session for display and
+ * the audit record.
+ */
+function sessionIdentity(sessionId) {
+  return `pg-${sessionId.replace('op_', '').replace(/-/g, '').slice(0, 12)}`;
+}
+
+/**
  * Turn a submitted spec into something runnable, or throw the reason it is not.
  *
  * Validation is flux-spec's own submission validator - the same code the
@@ -81,40 +99,21 @@ async function nodeEligible() {
  * current chain height is a registration verdict, not a statement about whether
  * the thing boots.
  */
-async function buildDeployment(rawSpec) {
+async function buildDeployment(rawSpec, identity) {
   const spec = await validateSubmissionSpec(rawSpec, {});
   const { DeploymentSpec } = await getSpecBackend();
 
   // The declared view: a session is one copy on one node, so `instances` and the
   // whole placement block are not merely ignored - they have no meaning here.
   // replica: null is that view, the same one pricing uses.
-  const deployment = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null });
+  //
+  // The identity is the session's, so every identifier this produces - container
+  // names, host dirs, every mount source - belongs to the session rather than to
+  // the name in the spec. `deployment.appName` is untouched and still that name,
+  // which is what the image check and the audit record want.
+  const deployment = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, identity });
 
   return { spec, deployment };
-}
-
-/**
- * Refuse a name this node is already using.
- *
- * A session runs under the spec's own name, so its containers and network are
- * named exactly as they would be in production - which is most of what makes
- * reading the logs useful. The cost is that an installed app of the same name
- * would collide on both, so that case is refused rather than worked around: a
- * synthetic name would make every identifier in the output a thing the owner has
- * to mentally translate, to buy a case that another node solves for free.
- */
-async function assertNameFree(appName) {
-  const installed = await appQueryService.installedApps();
-  if (installed.status !== 'success') {
-    throw new Error('This node cannot check its installed apps right now, so it is not starting a session. Try another node.');
-  }
-  if (installed.data.some((app) => app.name === appName)) {
-    const clash = new Error(
-      `This node already runs an app called '${appName}', and a session would collide with it. Try another node.`,
-    );
-    clash.kind = 'busy';
-    throw clash;
-  }
 }
 
 /**
@@ -125,6 +124,12 @@ async function assertNameFree(appName) {
  * session and a concurrent app install cannot both be told yes for the same
  * capacity. The reservation is released the moment the session ends, by
  * whichever path ends it.
+ *
+ * Reserved under the SESSION id. Admission is keyed by name, and an install
+ * reserves under the app's - so a session reserving under the spec's name would
+ * be overwritten by a same-named install and then deleted by its release, and
+ * the session's capacity would silently stop being counted while its containers
+ * ran. The reverse held too: the session's own teardown deleted the installer's.
  */
 async function admitSession(session) {
   const totals = session.deployment.resourceTotals();
@@ -140,7 +145,7 @@ async function admitSession(session) {
       throw busy;
     }
 
-    admissionControl.reserve(session.appName, session.deployment);
+    admissionControl.reserve(session.sessionId, session.deployment);
     session.reserved = true;
   });
 }
@@ -163,7 +168,7 @@ async function finishSession(session, outcome) {
   await playgroundRunner.teardownSession(session);
 
   if (session.reserved) {
-    admissionControl.release(session.appName);
+    admissionControl.release(session.sessionId);
     session.reserved = false;
   }
 
@@ -312,7 +317,17 @@ async function submitSession(body, caller = {}) {
     throw busy;
   }
 
-  const { spec, deployment } = await buildDeployment(serviceHelper.ensureObject(body));
+  // Minted before anything is built, because the identity is what the spec is
+  // built AGAINST: container names, host dirs and the network all come from it,
+  // and the reservation is keyed on it. The job is still registered last - this
+  // is an id, not a job, and a refusal below is still an immediate answer on the
+  // request rather than something a caller has to poll to discover.
+  const sessionId = jobRegistry.mintJobId();
+
+  const { spec, deployment } = await buildDeployment(
+    serviceHelper.ensureObject(body),
+    sessionIdentity(sessionId),
+  );
 
   const ceiling = playgroundLimits.ceilingShortfall(deployment.resourceTotals());
   if (ceiling) {
@@ -324,7 +339,11 @@ async function submitSession(body, caller = {}) {
     throw refused;
   }
 
-  await assertNameFree(spec.name);
+  // No name check. A session's containers, network and dirs are named for the
+  // session, so a name this node already runs cannot collide with them - and
+  // refusing that case was never sound anyway: it read the installed-app table,
+  // which an install populates AFTER creating its network, leaving a window in
+  // which both checks passed and the two shared everything.
 
   // Collect anything a previous session left behind, BEFORE this one claims
   // capacity or a subnet. It reads docker's own labels rather than our record of
@@ -345,6 +364,9 @@ async function submitSession(body, caller = {}) {
   }
 
   const session = {
+    sessionId,
+    // The owner's own name for their app, for the poll and the audit record.
+    // Nothing is named after it.
     appName: spec.name,
     fluxId,
     sourceIp,
@@ -369,7 +391,7 @@ async function submitSession(body, caller = {}) {
   const slot = playgroundLimits.consumeSessionSlot(fluxId, sourceIp);
   if (!slot.allowed) {
     if (session.reserved) {
-      admissionControl.release(session.appName);
+      admissionControl.release(session.sessionId);
       session.reserved = false;
     }
     const busy = new Error(slot.message);
@@ -383,6 +405,8 @@ async function submitSession(body, caller = {}) {
   // never a job the caller has to poll to discover the outcome of.
   const handle = jobRegistry.start({
     kind: 'playground',
+    // The id the session has been building against since before it was admitted.
+    jobId: sessionId,
     // Owner-scoped: a session names the images and the spec an owner is working
     // on, so only the identity that asked can read it.
     owner: fluxId,
@@ -395,7 +419,6 @@ async function submitSession(body, caller = {}) {
       if (session.watcher) session.watcher.wake();
     },
   });
-  session.sessionId = handle.jobId;
 
   playgroundSessionRegistry.add(session);
 
