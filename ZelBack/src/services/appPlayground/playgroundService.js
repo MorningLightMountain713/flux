@@ -7,6 +7,7 @@ const generalService = require('../generalService');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const admissionControl = require('../utils/admissionControl');
 const jobRegistry = require('../utils/jobRegistry');
+const globalState = require('../utils/globalState');
 const operationsController = require('../appManagement/operationsController');
 const appSpawner = require('../appLifecycle/appSpawner');
 const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
@@ -49,11 +50,24 @@ function maxConcurrent() {
 /**
  * Whether this node offers the playground at all.
  *
- * A tier that cannot be read is treated as ineligible. The alternative - assume
- * the node is big enough - puts guest containers on exactly the nodes least able
- * to absorb them, which is the one outcome the tier rule exists to prevent.
+ * Arcane AND a big enough tier, and both fail safe. A tier that cannot be read
+ * is treated as ineligible - assuming a node is big enough puts guest containers
+ * on exactly the nodes least able to absorb them - and an unresolved capability
+ * verdict reads as not-Arcane, which globalState.isArcane() already guarantees.
+ *
+ * Arcane because a session is the one thing this node runs for a stranger, and
+ * what contains it is the Arcane environment: the systemd slice the guest's
+ * aggregate load is capped in, the managed iptables the egress policy is written
+ * into, the tc rules that cap its bandwidth. On a node without them the
+ * containment is not weaker, it is absent - and the feature would be handing an
+ * anonymous caller an uncontained container.
+ *
+ * Checked before the tier, because it is a local read and the tier is not.
  */
 async function nodeEligible() {
+  if (!globalState.isArcane()) {
+    return { eligible: false, reason: 'The playground runs on ArcaneOS nodes; this node is not one.' };
+  }
   try {
     const tier = await generalService.getNewNodeTier();
     if (!ELIGIBLE_TIERS.includes(tier)) {
@@ -372,7 +386,9 @@ async function submitSession(body, caller = {}) {
   }
 
   if (playgroundSessionRegistry.size() >= maxConcurrent()) {
-    const busy = new Error('This node is already running a playground session. Try another node.');
+    const busy = new Error(
+      `This node is already running its ${maxConcurrent()} playground session(s). Try another node.`,
+    );
     busy.kind = 'busy';
     throw busy;
   }

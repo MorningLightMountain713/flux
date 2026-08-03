@@ -44,6 +44,7 @@ describe('playgroundService', () => {
 
     stubs = {
       tier: sinon.stub().resolves(opts.tier ?? 'nimbus'),
+      isArcane: sinon.stub().returns(opts.arcane ?? true),
       installedApps: sinon.stub().resolves({ status: 'success', data: opts.installed ?? [] }),
       nodeCapacity: sinon.stub().resolves({ availableSpace: 500, availableCpu: 100, availableRam: 30000 }),
       capacityShortfall: sinon.stub().returns(opts.shortfall ?? null),
@@ -80,6 +81,7 @@ describe('playgroundService', () => {
       },
       '../serviceHelper': { ensureObject: (o) => o },
       '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
+      '../utils/globalState': { isArcane: stubs.isArcane },
       '../generalService': { getNewNodeTier: stubs.tier },
       '../appRequirements/hwRequirements': {
         nodeCapacity: stubs.nodeCapacity,
@@ -185,6 +187,27 @@ describe('playgroundService', () => {
       expect(threw.message).to.include('cumulus');
     });
 
+    // A session is the one thing this node runs for a stranger, and what contains
+    // it is the Arcane environment: the systemd slice its load is capped in, the
+    // managed iptables its egress policy is written into, the tc rules that cap
+    // its bandwidth. Without them the containment is absent, not weaker.
+    it('refuses on a node that is not Arcane, whatever its tier', async () => {
+      service = load({ arcane: false, tier: 'stratus' });
+      let threw = null;
+      await service.submitSession({}, caller).catch((e) => { threw = e; });
+      expect(threw.kind).to.equal('ineligible');
+      expect(threw.message).to.include('ArcaneOS');
+    });
+
+    // isArcane() reads a verdict that is null until resolved, and null is not
+    // true — so a node that has not yet decided refuses, which is the safe
+    // direction. Checked before the tier because it is a local read.
+    it('decides Arcane before asking for the tier at all', async () => {
+      service = load({ arcane: false });
+      await service.submitSession({}, caller).catch(() => {});
+      expect(stubs.tier.called, 'never went looking for the tier').to.equal(false);
+    });
+
     // Assuming a node is big enough puts guest containers on exactly the nodes
     // least able to absorb them - the outcome the tier rule exists to prevent.
     it('refuses when the tier cannot be read at all', async () => {
@@ -251,6 +274,7 @@ describe('playgroundService', () => {
         '../messageHelper': { createErrorMessage: (m) => m, errUnauthorizedMessage: () => 'unauth', createDataMessage: (d) => d },
         '../serviceHelper': { ensureObject: (o) => o },
         '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
+        '../utils/globalState': { isArcane: stubs.isArcane },
         '../generalService': { getNewNodeTier: stubs.tier },
         '../appRequirements/hwRequirements': {
           nodeCapacity: stubs.nodeCapacity,
