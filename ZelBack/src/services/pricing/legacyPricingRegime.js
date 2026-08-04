@@ -450,6 +450,30 @@ async function registrationFee(spec, height) {
 }
 
 /**
+ * The permanent message a v1-v8 update supersedes, resolved as this network has
+ * always resolved it: newest message at or before the update's own timestamp.
+ *
+ * The update is already stored when this is asked, and its own record satisfies
+ * that cutoff at the greatest height, so the answer is the update itself. Every
+ * term of updateFee below then cancels — same spec, same height, zero height
+ * difference, full unused-time credit — and the fee is the minPrice floor.
+ *
+ * That IS the legacy rule: the chain floor and the display price are two
+ * numbers on purpose, and the floor is what the network has enforced for every
+ * legacy update since height 1004000. It is reproduced exactly rather than
+ * corrected, because a node demanding the prorated figure would reject updates
+ * every other node accepts, and no node can reprice history.
+ *
+ * @param {string} name - App name
+ * @param {{height: number, timestamp: number}} confirming - the update's
+ *   confirming height and message timestamp
+ * @returns {Promise<object|null>}
+ */
+async function supersededMessage(name, confirming) {
+  return appsRepository.getPreviousPermanentMessage(name, confirming.timestamp);
+}
+
+/**
  * Consensus update fee in satoshis, crediting the unused portion of the prior
  * subscription. prevRegisteredAt and nowBlockTime are part of the shared regime
  * interface and unused here: legacy credits unused time by block count, not by
@@ -492,6 +516,7 @@ module.exports = {
   onChainDisplayPrice,
   fiatAndFluxDisplayPrice,
   registrationFee,
+  supersededMessage,
   updateFee,
   checkLegacyFreeUpdate,
   getDefaultExpire,

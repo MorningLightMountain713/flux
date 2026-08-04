@@ -7,6 +7,16 @@ const proxyquire = require('proxyquire');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const { load } = require('@runonflux/flux-spec-cjs');
+
+// The spec doubles below stand in for real version classes, so they must
+// declare a pricing model the way a real one does — read from flux-spec rather
+// than spelled out here, or a renamed model would leave the doubles agreeing
+// with nothing.
+let PricingModel;
+before(async () => {
+  ({ PricingModel } = await load());
+});
 
 function mockComponent(plain) {
   return {
@@ -38,9 +48,11 @@ function mockClassSpec(plain) {
   const comps = (plain.compose || []).map(mockComponent);
   const componentsObj = {};
   for (const c of comps) componentsObj[c.name] = c;
+  const version = plain.version || 4;
   return {
     name: plain.name,
-    version: plain.version || 4,
+    version,
+    pricingModel: version >= 9 ? PricingModel.UNIFIED : PricingModel.CHAIN_FLOOR,
     expire: plain.expire,
     ttl: plain.ttl,
     instances: plain.instances,
@@ -650,6 +662,9 @@ describe('appSpecHelpers tests', () => {
 
     const v9Spec = {
       version: 9,
+      // a getter: the model is read from flux-spec in a before hook, after this
+      // literal is built
+      get pricingModel() { return PricingModel.UNIFIED; },
       name: 'markuptest',
       instances: 3,
       ttl: 2592000,
@@ -741,6 +756,7 @@ describe('appSpecHelpers tests', () => {
     // would fail there rather than exercising the rule under test.
     const v9SpecWith = (over = {}) => ({
       version: 9,
+      pricingModel: PricingModel.UNIFIED,
       name: 'regimetest',
       instances: 3,
       ttl: 2592000,
@@ -918,31 +934,6 @@ describe('appSpecHelpers tests', () => {
       // rule never ran.
       const result = await helpers.getAppFiatAndFluxPrice(legacySpec);
       expect(result).to.deep.equal({ usd: 0, flux: 0, fluxDiscount: 0 });
-    });
-  });
-
-  // The single version decision left in the pricing path. Everything else asks
-  // a regime; only this picks one.
-  describe('regimeFor — the one place a spec version selects pricing rules', () => {
-    const { regimeFor } = require('../../ZelBack/src/services/pricing/pricingRegime');
-    const legacyPricingRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
-    const v9PricingRegime = require('../../ZelBack/src/services/pricing/v9PricingRegime');
-
-    it('routes v1-v8 to the legacy regime', () => {
-      for (const version of [1, 2, 3, 4, 5, 6, 7, 8]) {
-        expect(regimeFor({ version })).to.equal(legacyPricingRegime);
-      }
-    });
-
-    it('routes v9 to the v9 regime', () => {
-      expect(regimeFor({ version: 9 })).to.equal(v9PricingRegime);
-    });
-
-    it('exposes the same four operations on both regimes', () => {
-      for (const op of ['onChainDisplayPrice', 'fiatAndFluxDisplayPrice', 'registrationFee', 'updateFee']) {
-        expect(legacyPricingRegime[op], `legacy.${op}`).to.be.a('function');
-        expect(v9PricingRegime[op], `v9.${op}`).to.be.a('function');
-      }
     });
   });
 

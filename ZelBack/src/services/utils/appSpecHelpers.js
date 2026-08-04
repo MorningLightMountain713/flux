@@ -17,7 +17,7 @@ const log = require('../../lib/log');
  */
 async function getAppFluxOnChainPrice(appSpecification) {
   const spec = await resolveSpec(appSpecification);
-  return regimeFor(spec).onChainDisplayPrice(spec);
+  return (await regimeFor(spec)).onChainDisplayPrice(spec);
 }
 
 /**
@@ -43,7 +43,7 @@ async function getAppFiatAndFluxPrice(appSpecification) {
   }
   const spec = await resolveSpec(appSpecification);
 
-  return regimeFor(spec).fiatAndFluxDisplayPrice(spec, appSpecification);
+  return (await regimeFor(spec)).fiatAndFluxDisplayPrice(spec, appSpecification);
 }
 
 /**
