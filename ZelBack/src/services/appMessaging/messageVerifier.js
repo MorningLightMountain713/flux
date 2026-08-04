@@ -356,6 +356,38 @@ async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegister
   );
 }
 
+/**
+ * The state to store for a confirmed update, with its term start decided.
+ *
+ * A v9 app expires at registeredAt + ttl, and an update's registeredAt is its
+ * own confirming block — so applying one restarts the clock. That is right when
+ * the update paid for its term: the fee already credited back whatever time was
+ * left on the old one.
+ *
+ * A free update paid nothing, so it bought no time and must not move the expiry.
+ * It keeps the term start it supersedes. The free-update policy stops the ttl
+ * growing; this stops the clock restarting, which is the same guard on the other
+ * axis — without it, resubmitting an unchanged spec renews an app for nothing,
+ * indefinitely.
+ *
+ * The signed spec is never touched. Shortening the ttl to fit the remaining term
+ * would rewrite content the owner signed and its hash covers; the term start is
+ * FluxOS's own record of when the app's current term began.
+ *
+ * @param {object} InstantiatedSpec - the domain class, from the spec backend
+ * @param {object} confirmedEvent - the confirmed update event
+ * @param {bigint} requiredSats - the fee this update had to pay
+ * @param {object} prevMessage - the permanent message being superseded
+ * @returns {object} the InstantiatedSpec to store
+ */
+function instantiatedForStorage(InstantiatedSpec, confirmedEvent, requiredSats, prevMessage) {
+  const projection = confirmedEvent.toInstantiatedSpec();
+  const keepsTerm = requiredSats === 0n && Boolean(prevMessage.registeredAt);
+  return InstantiatedSpec.fromEvent(
+    keepsTerm ? { ...projection, registeredAt: prevMessage.registeredAt } : projection,
+  );
+}
+
 async function handleExpiredApp(name) {
   log.warn(`App ${name} has expired. Cleaning up stale data.`);
   const existingGlobal = await appsRepository.existsGlobalApp(name);
@@ -516,7 +548,10 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         prevMessage.registeredAt || 0, confirmedBlockTime,
       );
       if (BigInt(valueSat) >= requiredSats) {
-        await updateAppSpecifications(instantiated.serialize());
+        const stored = instantiatedForStorage(
+          InstantiatedSpec, confirmedEvent, requiredSats, prevMessage,
+        );
+        await updateAppSpecifications(stored.serialize());
       } else {
         log.warn(`App ${hash} update underpaid: ${valueSat} < ${requiredSats}`);
       }

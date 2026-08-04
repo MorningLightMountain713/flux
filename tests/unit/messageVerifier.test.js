@@ -632,6 +632,9 @@ describe('messageVerifier tests', () => {
     });
 
     describe('promoting an update', () => {
+      // The confirming block's time, which is the term start a paid update takes.
+      const BLOCK_TIME = 1760000000;
+
       function updateStubs(activeRow) {
         const serializedEvent = {
           type: 'fluxappupdate',
@@ -643,14 +646,25 @@ describe('messageVerifier tests', () => {
           isUpdate: true,
           spec: { name: 'testapp', version: 8 },
           serialize: sinon.stub().returns(serializedEvent),
-          toInstantiatedSpec: sinon.stub().returns({}),
+          // mirrors ConfirmedAppEvent: the projection carries the confirming
+          // block's time as this version's term start
+          toInstantiatedSpec: sinon.stub().returns({
+            spec: { name: 'testapp', version: 8 },
+            hash: 'updHash',
+            height: 2000000,
+            registeredAt: BLOCK_TIME,
+          }),
         };
-        const mockInstantiated = {
+        // mirrors InstantiatedSpec: whatever term start it is built with is the
+        // one it serializes for storage
+        const fromEvent = sinon.stub().callsFake((projection) => ({
           name: 'testapp',
           spec: { name: 'testapp', version: 8 },
           isExpired: sinon.stub().returns(false),
-          serialize: sinon.stub().returns(serializedEvent),
-        };
+          serialize: sinon.stub().returns({
+            ...serializedEvent, registeredAt: projection.registeredAt,
+          }),
+        }));
 
         const made = makeBaseStubs();
         const { stubs } = made;
@@ -666,7 +680,7 @@ describe('messageVerifier tests', () => {
         stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
           AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
           ConfirmedAppEvent: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-          InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
+          InstantiatedSpec: { fromEvent },
           deserializeSpec: sinon.stub().returnsArg(0),
         });
         return made;
@@ -778,6 +792,50 @@ describe('messageVerifier tests', () => {
           await mv.checkAndRequestApp('updHash', 'txid', 2000000, 0, null, 2);
 
           sinon.assert.calledOnce(stubs['../appDatabase/registryManager'].updateAppSpecifications);
+        });
+
+        // A v9 app expires at registeredAt + ttl, so what is stored as the term
+        // start decides whether an update renewed the app. A paid update bought
+        // its term and starts a new one; a free update bought nothing.
+        describe('whether an update renews the term', () => {
+          function storedRow(stubs) {
+            const { updateAppSpecifications } = stubs['../appDatabase/registryManager'];
+            sinon.assert.calledOnce(updateAppSpecifications);
+            return updateAppSpecifications.firstCall.args[0];
+          }
+
+          it('starts a new term when the update paid for one', async () => {
+            const { stubs } = pricedUpdate({ fee: 100000000n });
+            const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+            await mv.checkAndRequestApp('updHash', 'txid', 2000000, 100000000, 1760000000, 2);
+
+            expect(storedRow(stubs).registeredAt).to.equal(1760000000);
+          });
+
+          // Without this an owner resubmits an unchanged spec near expiry, pays
+          // nothing because nothing grew, and walks away with a fresh full term
+          // — for as long as they like.
+          it('keeps the superseded term start when the update was free', async () => {
+            const { stubs } = pricedUpdate({ fee: 0n });
+            const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+            await mv.checkAndRequestApp('updHash', 'txid', 2000000, 0, 1760000000, 2);
+
+            expect(storedRow(stubs).registeredAt).to.equal(predecessor.registeredAt);
+          });
+
+          it('starts a new term when the superseded message records none', async () => {
+            const { stubs } = pricedUpdate({
+              fee: 0n,
+              superseded: { ...predecessor, registeredAt: undefined },
+            });
+            const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+            await mv.checkAndRequestApp('updHash', 'txid', 2000000, 0, 1760000000, 2);
+
+            expect(storedRow(stubs).registeredAt).to.equal(1760000000);
+          });
         });
 
         it('does not apply an update with nothing to supersede', async () => {
