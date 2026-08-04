@@ -158,6 +158,31 @@ export async function registerAndConfirm(nodeUrl, adminKeypair, spec, nodes, {
   return { status: 'success', appHash, ...confirm };
 }
 
+/**
+ * Wait until a node has reached a pricing verdict on a confirmed message.
+ *
+ * Promotion stores the permanent message BEFORE it prices anything, so the
+ * message arriving means the fee has been computed and acted on. Waiting for it
+ * is what lets a refusal be asserted as a refusal, rather than as a race with an
+ * acceptance that had not landed yet — no sleep standing in for a signal.
+ *
+ * @param {object} client - node client, for the post-promotion settle
+ * @param {object} db - dbClient for the same node
+ * @param {string} appHash - the confirmed message hash
+ */
+export async function waitForPricingVerdict(client, db, appHash) {
+  await waitFor(
+    async () => Boolean(await db.getPermanentMessage(appHash)),
+    { timeout: 60000, interval: 1000, label: `permanent message ${appHash.slice(0, 12)}` },
+  );
+  // The registry write follows in the same promotion, so let the node settle it
+  // before the row is read.
+  await waitFor(
+    async () => (await client.isExplorerSynced()).data === true,
+    { timeout: 60000, interval: 1000, label: 'explorer settled after promotion' },
+  );
+}
+
 export async function checkPermanentSpec(nodes, appName) {
   let count = 0;
   for (const node of nodes) {
