@@ -1243,7 +1243,7 @@ async function testAppMount() {
  * @param {number} specifications.version - Specification version (1-4+)
  * @param {string} [specifications.repotag] - Docker image repository:tag (v1-3)
  * @param {Array} [specifications.compose] - Component definitions (v4+)
- * @param {object} previousAppSpecs - Previous app specifications (from appSpecHistory.getPreviousSpec)
+ * @param {object} previousAppSpecs - The specifications this update replaces
  * @returns {Promise<boolean>} Returns true if update is compatible
  * @throws {Error} When update violates version-specific compatibility rules:
  *   - Component count mismatch (v4+)

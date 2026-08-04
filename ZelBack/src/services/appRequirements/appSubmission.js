@@ -13,7 +13,7 @@ const messageVerifier = require('../appMessaging/messageVerifier');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
 const { validateSubmissionSpec, getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
-const { ensureProvidersRegistered } = require('../utils/specCutover');
+const { ensureProvidersRegistered, resolveInstantiatedSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const entitlementsState = require('../entitlementsState');
@@ -236,11 +236,17 @@ async function validateAppUpdate(appSpecification, meta = {}) {
     contentHash, timestamp, type: type || 'fluxappupdate', daemonHeight,
   });
 
-  const verificationTimestamp = timestamp || Date.now();
-  const { getPreviousSpec } = require('../appDatabase/appSpecHistory');
-  const previousSpec = await getPreviousSpec(spec, verificationTimestamp);
-  if (!previousSpec) {
+  // The app as it stands now, from its active registry row — the same authority
+  // the submission path itself uses, so a preflight cannot pass an update that
+  // the submission then rejects. An enterprise app's stored spec is sealed and
+  // the invariants compare cleartext, so resolve it first.
+  const appInfo = await appsRepository.getGlobalAppInfo(spec.name);
+  if (!appInfo) {
     throw new Error(`Flux App ${spec.name} does not exist and cannot be updated`);
+  }
+  const previousSpec = await resolveInstantiatedSpec(appInfo);
+  if (!previousSpec) {
+    throw new Error(`Flux App ${spec.name} specifications cannot be read on this node`);
   }
 
   // Registration-locked invariants (e.g. referral) — compare cleartext specs.

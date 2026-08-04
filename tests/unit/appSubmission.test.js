@@ -33,8 +33,7 @@ describe('appSubmission tests', () => {
       '../marketplace/marketplaceTemplateCache': stubs.marketplaceTemplateCache,
       '../appDatabase/registryManager': stubs.registryManager,
       '../daemonService/daemonServiceMiscRpcs': stubs.daemonServiceMiscRpcs,
-      '../appDatabase/appSpecHistory': stubs.appSpecHistory,
-      '../appDatabase/appsRepository': {},
+      '../appDatabase/appsRepository': stubs.appsRepository,
       '../appMessaging/messageVerifier': {},
       '../appMessaging/appEventVerifier': {},
       '../fluxCommunicationMessagesSender': {},
@@ -53,7 +52,12 @@ describe('appSubmission tests', () => {
         encryptAndUploadBlobs: sinon.stub().resolves([]),
       },
       transportHelper: { openTransportEnvelope: sinon.stub(), openContentEnvelope: sinon.stub() },
-      specCutover: { ensureProvidersRegistered: sinon.stub().resolves() },
+      specCutover: {
+        ensureProvidersRegistered: sinon.stub().resolves(),
+        // the row's spec, cleartext — an update's prior state comes from the
+        // active registry row, sealed for an enterprise app
+        resolveInstantiatedSpec: sinon.stub().callsFake((row) => Promise.resolve(row?.spec ?? null)),
+      },
       specLibs: {
         validateSubmissionSpec: sinon.stub(),
         getSpec: sinon.stub().resolves({ FluxAppSpecV9: { fromSubmission: sinon.stub().returns({ templateSpec: true }) } }),
@@ -65,7 +69,7 @@ describe('appSubmission tests', () => {
       marketplaceTemplateCache: { getTemplate: sinon.stub().resolves({ spec: { version: 9 }, userConfigurable: [] }) },
       registryManager: { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
       daemonServiceMiscRpcs: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
-      appSpecHistory: { getPreviousSpec: sinon.stub() },
+      appsRepository: { getGlobalAppInfo: sinon.stub().resolves(null) },
     };
     // resolveSubmission parses via the strict backend deserializer; the default
     // backend carries only that (a test needing sealForStorage adds it).
@@ -213,7 +217,7 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
-      stubs.appSpecHistory.getPreviousSpec.resolves(v9Spec());
+      stubs.appsRepository.getGlobalAppInfo.resolves({ spec: v9Spec() });
       const lockErr = new Error('referral is registration-locked and cannot change');
       stubs.specLibs.assertUpdateInvariants.rejects(lockErr);
 
@@ -232,7 +236,7 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
-      stubs.appSpecHistory.getPreviousSpec.resolves(null);
+      stubs.appsRepository.getGlobalAppInfo.resolves(null);
 
       try {
         await appSubmission.validateAppUpdate({ version: 9 }, { contentHash: 'HASH123' });
@@ -258,7 +262,7 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 8 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(updateSpec);
-      stubs.appSpecHistory.getPreviousSpec.resolves(previousSpec);
+      stubs.appsRepository.getGlobalAppInfo.resolves({ spec: previousSpec });
 
       try {
         await appSubmission.validateAppUpdate({ version: 8 }, {});

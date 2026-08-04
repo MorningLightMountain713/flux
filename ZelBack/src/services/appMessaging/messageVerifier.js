@@ -13,7 +13,6 @@ const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover')
 const { regimeFor } = require('../pricing/pricingRegime');
 const appsRepository = require('../appDatabase/appsRepository');
 const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
-const { getPreviousSpec } = require('../appDatabase/appSpecHistory');
 const appEventVerifier = require('./appEventVerifier');
 const {
   globalAppsMessages,
@@ -432,19 +431,19 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
     }
     const confirmedEvent = await constructConfirmedEvent(tempMessage, txid, height, valueSat, confirmedBlockTime);
 
-    // Re-verify signature for updates against current permanent state.
-    // Prevents race: two updates verified against same state at temp time,
-    // but the first one changed the owner before the second is promoted.
+    // Re-verify an update against the app's active row at promotion time.
+    // Prevents a race: two updates verified against the same state while
+    // temporary, where the first changes the owner before the second promotes.
+    // The row is the only authority here — the name's message history spans
+    // every app that has ever held the name, so an expired app's owner would
+    // still authorize an update to whoever holds the name now.
     if (confirmedEvent.isUpdate) {
-      const previousSpec = await getPreviousSpec(specifications, tempMessage.timestamp);
-      if (previousSpec) {
-        const currentState = await appsRepository.getGlobalAppInfo(specifications.name);
-        await appEventVerifier.authorize({
-          appEvent: confirmedEvent,
-          previousState: currentState ?? null,
-          daemonHeight: getDaemonHeight(),
-        });
-      }
+      const currentState = await appsRepository.getGlobalAppInfo(specifications.name);
+      await appEventVerifier.authorize({
+        appEvent: confirmedEvent,
+        previousState: currentState,
+        daemonHeight: getDaemonHeight(),
+      });
     }
 
     // Store the permanent message

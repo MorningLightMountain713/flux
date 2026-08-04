@@ -242,6 +242,35 @@ describe('appEventVerifier', () => {
       expect(result.signer).to.equal('oldOwner');
     });
 
+    // The owner named in an incoming update is a claim, not an authority. If it
+    // were a signer, anyone could take an app over by naming themselves in an
+    // update and signing it with their own key.
+    it('refuses an update signed by the owner it names rather than the owner it has', async () => {
+      const appEvent = new FakeAppEvent({
+        spec: { owner: 'attacker', name: 'myapp' },
+        isUpdate: true,
+        validSignersByIteration: [new Set(['attacker']), new Set(['attacker'])],
+      });
+
+      await expect(appEventVerifier.authorize({
+        appEvent,
+        previousState: { owner: 'realOwner' },
+        daemonHeight: 1000,
+      })).to.be.rejectedWith(/does not correspond with Flux App owner/);
+    });
+
+    it('refuses an update with no app to update, however it is signed', async () => {
+      const appEvent = new FakeAppEvent({
+        spec: { owner: 'anyone', name: 'myapp' },
+        isUpdate: true,
+        validSignersByIteration: [new Set(['anyone'])],
+      });
+
+      await expect(appEventVerifier.authorize({
+        appEvent, previousState: null, daemonHeight: 1000,
+      })).to.be.rejectedWith(/no registration to update/);
+    });
+
     it('adds the team-support address as an allowed signer for marketplace apps', async () => {
       chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([
         { address: 'teamSupport', height: 1000000 },
@@ -375,7 +404,7 @@ describe('appEventVerifier', () => {
 
       const backend = await specLibsStub.getSpecBackend();
       expect(backend.computeMessageHash.calledOnce).to.be.true;
-      const args = backend.computeMessageHash.firstCall.args;
+      const { args } = backend.computeMessageHash.firstCall;
       expect(args).to.deep.equal([
         'fluxappregister', 1, { name: 'myapp', version: 8 }, 12345, 'sig',
       ]);
@@ -394,7 +423,7 @@ describe('appEventVerifier', () => {
 
       const backend = await specLibsStub.getSpecBackend();
       expect(backend.computeMessageHashV2.calledOnce).to.be.true;
-      const args = backend.computeMessageHashV2.firstCall.args;
+      const { args } = backend.computeMessageHashV2.firstCall;
       // extend must sit between timestamp and signature — its omission was a real
       // hash-mismatch bug (signature landed in the extend slot).
       expect(args).to.deep.equal([

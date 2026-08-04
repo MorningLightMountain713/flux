@@ -7,7 +7,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
 const { getSpec, validateGossipSpec } = require('../utils/specLibs');
-const { getPreviousState } = require('../appDatabase/appSpecHistory');
+const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const {
   globalAppsMessages,
@@ -170,7 +170,15 @@ async function storeAppTemporaryMessage(message, options = {}) {
 
     let previousState = null;
     if (!appEvent.isRegistration) {
-      previousState = await getPreviousState(appEvent.spec, appEvent.timestamp);
+      // Who this update has to be signed by. A live message is judged against
+      // the app that holds the name NOW — its active registry row. A message
+      // already on chain is a replay: the node is catching up on something the
+      // network accepted at a past height, so it is judged against the state at
+      // that height (isAppRequested is set from the confirming block, so `block`
+      // is that height rather than the tip).
+      previousState = isAppRequested
+        ? await getStateBeforeHeight(appEvent.spec.name, block)
+        : await appsRepository.getGlobalAppInfo(appEvent.spec.name);
       if (!previousState) {
         log.info(`Queueing update for ${appEvent.spec.name} - registration not yet stored`);
         globalState.queuePendingUpdate(appEvent.spec.name, message, block);

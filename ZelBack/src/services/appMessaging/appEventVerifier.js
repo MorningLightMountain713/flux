@@ -42,6 +42,21 @@ function resolveTeamSupportAddress(daemonHeight) {
   return intervals[intervals.length - 1].address;
 }
 
+/**
+ * Authorize an app event against the party entitled to make it.
+ *
+ * A registration is self-signed: the spec names its owner and that owner signs
+ * it, because nothing precedes it. An update is signed by the owner the app
+ * ALREADY has — carried on previousState, which the caller resolves from the
+ * app's active registry row. The owner named in an incoming update is a claim
+ * about where ownership is going, never the authority for the change: honouring
+ * it would let anyone take over any app by naming themselves and signing.
+ * A transfer is therefore the outgoing owner signing a spec that names the
+ * incoming one.
+ *
+ * @param {{appEvent: object, previousState: object|null, daemonHeight: number,
+ *   verifyHash?: boolean, extraSigners?: string[]}} params
+ */
 async function authorize({
   appEvent, previousState, daemonHeight, verifyHash = true, extraSigners = [],
 }) {
@@ -52,22 +67,27 @@ async function authorize({
     }
   }
 
-  const signers = [appEvent.spec.owner, ...extraSigners];
+  const signers = [...extraSigners];
 
-  if (appEvent.isUpdate && previousState) {
-    if (previousState.owner && previousState.owner !== appEvent.spec.owner) {
-      signers.push(previousState.owner);
+  if (appEvent.isUpdate) {
+    if (!previousState || !previousState.owner) {
+      throw new Error(
+        `Flux App ${appEvent.spec.name} update cannot be authorized: no registration to update`,
+      );
     }
+    signers.push(previousState.owner);
     const teamSupport = resolveTeamSupportAddress(daemonHeight);
     if (teamSupport && isMarketplaceApp(appEvent.spec.name)) {
       signers.push(teamSupport);
     }
+  } else {
+    signers.push(appEvent.spec.owner);
   }
 
   let result = await appEvent.verifySignature(verifyFn, signers);
   if (result.valid) return result;
 
-  if (appEvent.isUpdate && previousState) {
+  if (appEvent.isUpdate) {
     // usersToExtend (subscription-renewal) signers may authorize a renewal whose
     // content is unchanged. The event encapsulates the per-version assessment
     // (v9: extend flag + contentHash; v1-8: spec compare, decrypting enterprise

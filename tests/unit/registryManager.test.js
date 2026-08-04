@@ -30,19 +30,6 @@ describe('registryManager tests', () => {
     sinon.restore();
   });
 
-  describe('previous app specifications (appSpecHistory)', () => {
-    it('should return null if no previous message found', async () => {
-      // eslint-disable-next-line global-require
-      const appSpecHistory = require('../../ZelBack/src/services/appDatabase/appSpecHistory');
-      // eslint-disable-next-line global-require
-      const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
-      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
-
-      const result = await appSpecHistory.getPreviousSpec({ name: 'NewApp' }, Date.now());
-      expect(result).to.be.null;
-    });
-  });
-
   describe('getApplicationOwner tests', () => {
     beforeEach(async () => {
       const collection = config.database.appsglobal.collections.appsInformation;
