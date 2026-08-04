@@ -334,7 +334,7 @@ async function constructConfirmedEvent(tempMessage, txid, height, valueSat, bloc
  * @returns {Promise<bigint>}
  */
 async function computeRegistrationFee(spec, height) {
-  return regimeFor(spec).registrationFee(spec, height);
+  return (await regimeFor(spec)).registrationFee(spec, height);
 }
 
 /**
@@ -351,7 +351,7 @@ async function computeRegistrationFee(spec, height) {
  * @returns {Promise<bigint>}
  */
 async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime) {
-  return regimeFor(spec).updateFee(
+  return (await regimeFor(spec)).updateFee(
     spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime,
   );
 }
@@ -491,9 +491,14 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         log.warn(`App ${hash} registration underpaid: ${valueSat} < ${requiredSats}`);
       }
     } else {
-      const prevMessage = await appsRepository.getPreviousPermanentMessage(
-        spec.name, tempMessage.timestamp,
-      );
+      // The state this update supersedes, and so what it is priced against.
+      // Each regime resolves it its own way — this message is already stored
+      // above, and whether that matters is a property of the economics, not of
+      // this function.
+      const regime = await regimeFor(pricingSpec);
+      const prevMessage = await regime.supersededMessage(spec.name, {
+        height, timestamp: tempMessage.timestamp,
+      });
       if (!prevMessage) {
         log.error(`Last permanent message for ${spec.name} not found`);
         return true;

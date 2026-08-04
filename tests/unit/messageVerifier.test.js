@@ -38,6 +38,7 @@ function makeBaseStubs(overrides = {}) {
     onChainDisplayPrice: sinon.stub().resolves(1),
     fiatAndFluxDisplayPrice: sinon.stub().resolves({ usd: 1, flux: 1, fluxDiscount: 0 }),
     registrationFee: sinon.stub().resolves(100000000n),
+    supersededMessage: sinon.stub().resolves(null),
     updateFee: sinon.stub().resolves(100000000n),
   };
 
@@ -699,6 +700,95 @@ describe('messageVerifier tests', () => {
         expect(result).to.be.false;
         expect(storePermanentStub.called).to.be.false;
         expect(logStub.error.called).to.be.true;
+      });
+
+      // The seam the free-update collapse lived in: the fee is computed from a
+      // message somebody else selected, and nothing used to check which one.
+      describe('what the fee is computed against', () => {
+        const predecessor = {
+          hash: 'prevHash',
+          height: 1999000,
+          registeredAt: 1750000000,
+          appSpecifications: { name: 'testapp', version: 8, owner: 'owner1' },
+        };
+
+        function pricedUpdate(overrides = {}) {
+          const { stubs, regimeStub } = updateStubs({ name: 'testapp', owner: 'owner1' });
+          regimeStub.supersededMessage = sinon.stub().resolves(
+            'superseded' in overrides ? overrides.superseded : predecessor,
+          );
+          regimeStub.updateFee = sinon.stub().resolves(overrides.fee ?? 100000000n);
+          stubs['../appDatabase/registryManager'].updateAppSpecifications = sinon.stub().resolves();
+          return { stubs, regimeStub };
+        }
+
+        it('asks the regime which message this update supersedes, by height and timestamp', async () => {
+          const { stubs, regimeStub } = pricedUpdate();
+          const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, null, 2);
+
+          sinon.assert.calledOnce(regimeStub.supersededMessage);
+          const [name, confirming] = regimeStub.supersededMessage.firstCall.args;
+          expect(name).to.equal('testapp');
+          expect(confirming.height).to.equal(2000000);
+          expect(confirming.timestamp).to.be.a('number');
+        });
+
+        // Priced against itself, a spec matches itself on every rule the
+        // free-update policy tests, so the update costs nothing. The fee must
+        // see the superseded message's spec and its height, never this one's.
+        it('prices against the superseded message, not the message being promoted', async () => {
+          const { stubs, regimeStub } = pricedUpdate();
+          const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, null, 2);
+
+          sinon.assert.calledOnce(regimeStub.updateFee);
+          const [, prevSpec, height, prevHeight, prevRegisteredAt] = regimeStub.updateFee.firstCall.args;
+          expect(prevSpec).to.deep.equal(predecessor.appSpecifications);
+          expect(height).to.equal(2000000);
+          expect(prevHeight).to.equal(predecessor.height);
+          expect(prevRegisteredAt).to.equal(predecessor.registeredAt);
+          expect(prevHeight).to.not.equal(height);
+        });
+
+        it('applies an update that pays the fee its regime asks for', async () => {
+          const { stubs } = pricedUpdate({ fee: 100000000n });
+          const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 100000000, null, 2);
+
+          sinon.assert.calledOnce(stubs['../appDatabase/registryManager'].updateAppSpecifications);
+        });
+
+        it('does not apply an underpaid update', async () => {
+          const { stubs } = pricedUpdate({ fee: 100000000n });
+          const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 99999999, null, 2);
+
+          sinon.assert.notCalled(stubs['../appDatabase/registryManager'].updateAppSpecifications);
+        });
+
+        it('applies a free update, which is a fee of zero and not a missing fee', async () => {
+          const { stubs } = pricedUpdate({ fee: 0n });
+          const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 0, null, 2);
+
+          sinon.assert.calledOnce(stubs['../appDatabase/registryManager'].updateAppSpecifications);
+        });
+
+        it('does not apply an update with nothing to supersede', async () => {
+          const { stubs, regimeStub } = pricedUpdate({ superseded: null });
+          const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, null, 2);
+
+          sinon.assert.notCalled(regimeStub.updateFee);
+          sinon.assert.notCalled(stubs['../appDatabase/registryManager'].updateAppSpecifications);
+        });
       });
     });
 
