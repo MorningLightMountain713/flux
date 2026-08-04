@@ -798,6 +798,49 @@ describe('messageVerifier tests', () => {
         // start decides whether an update renewed the app. A paid update bought
         // its term and starts a new one; a free update bought nothing.
         describe('whether an update renews the term', () => {
+          // The tests below drive a double for InstantiatedSpec, so they pin the
+          // wiring and not the domain type. This one uses the real class, on the
+          // single property the wiring depends on: a term start handed to
+          // fromEvent is the one that reaches storage, and a free update's
+          // inherited start therefore survives into the row.
+          it('really does round-trip a term start through InstantiatedSpec', async () => {
+            const { InstantiatedSpec, FluxAppSpecV9 } = await require('@runonflux/flux-spec-cjs').load();
+            const spec = FluxAppSpecV9.fromSubmission({
+              version: 9,
+              name: 'termapp',
+              description: 'fixture',
+              owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+              instances: 3,
+              ttl: 2_592_000,
+              contacts: { email: ['test@example.com'] },
+              components: {
+                web: {
+                  name: 'web',
+                  image: 'nginx:latest',
+                  cpu: 1,
+                  memory: 1000,
+                  swapGb: 2,
+                  rootFsGb: 2,
+                  persistentStorage: { sizeGb: 10, mounts: {} },
+                  ports: { tcp_80: { containerPort: 80, hostPort: 31000, protocol: 'tcp' } },
+                },
+              },
+            });
+            const projection = {
+              spec, hash: 'updHash', height: 2000000, registeredAt: 1760000000,
+            };
+
+            const asConfirmed = InstantiatedSpec.fromEvent(projection);
+            const inheritingTerm = InstantiatedSpec.fromEvent({ ...projection, registeredAt: 1750000000 });
+
+            expect(asConfirmed.serialize().registeredAt).to.equal(1760000000);
+            expect(inheritingTerm.serialize().registeredAt).to.equal(1750000000);
+            // and the term start is what decides expiry, so inheriting it is
+            // exactly declining to renew
+            expect(inheritingTerm.isExpired(1750000000 + 2_592_000 + 1, 2000000)).to.equal(true);
+            expect(asConfirmed.isExpired(1750000000 + 2_592_000 + 1, 2000000)).to.equal(false);
+          });
+
           function storedRow(stubs) {
             const { updateAppSpecifications } = stubs['../appDatabase/registryManager'];
             sinon.assert.calledOnce(updateAppSpecifications);
