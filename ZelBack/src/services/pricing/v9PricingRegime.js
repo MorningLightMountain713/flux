@@ -219,6 +219,26 @@ async function registrationFee(spec, height) {
 }
 
 /**
+ * The permanent message a v9 update supersedes, resolved by confirming height.
+ *
+ * The height is the only cutoff that works here. The update is already stored
+ * when this is asked, so a cutoff admitting its own height returns the update
+ * itself — and a spec priced against itself passes every rule in the free-update
+ * policy (same ttl, same instances, same placement, same components, same
+ * resources, same features), so the update costs nothing. Height also fixes the
+ * cutoff on chain rather than on a timestamp the sender writes, so a backdated
+ * update cannot reach behind a message that supersedes it.
+ *
+ * @param {string} name - App name
+ * @param {{height: number, timestamp: number}} confirming - the update's
+ *   confirming height and message timestamp
+ * @returns {Promise<object|null>}
+ */
+async function supersededMessage(name, confirming) {
+  return appsRepository.getPermanentMessageBeforeHeight(name, confirming.height);
+}
+
+/**
  * Consensus update fee in satoshis. Returns 0n when priceUpdate rules the
  * update free.
  *
@@ -288,6 +308,7 @@ module.exports = {
   onChainDisplayPrice,
   fiatAndFluxDisplayPrice,
   registrationFee,
+  supersededMessage,
   updateFee,
   isOnChainPricingActive,
 };

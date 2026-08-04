@@ -511,4 +511,76 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       expect(result.total).to.be.above(0);
     });
   });
+
+  // Every rule in the free-update policy compares the old spec against the new
+  // one, so handing it one spec twice answers "nothing changed" by
+  // construction. The promotion path did exactly that — it resolved the
+  // superseded message after storing the message being promoted, and got that
+  // message back — which made every v9 update free, however much it grew.
+  //
+  // These price the same growth both ways. The contrast is the point: what the
+  // fee is computed against decides whether there is a fee at all.
+  describe('an update priced against itself cannot be charged', () => {
+    function baseSpec(overrides = {}) {
+      return FluxAppSpecV9.fromSubmission({
+        version: 9,
+        name: 'growapp',
+        description: 'fixture',
+        owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+        instances: 3,
+        ttl: 2_592_000,
+        contacts: { email: ['test@example.com'] },
+        components: {
+          web: {
+            name: 'web',
+            image: 'nginx:latest',
+            cpu: 1,
+            memory: 1000,
+            swapGb: 2,
+            rootFsGb: 2,
+            persistentStorage: { sizeGb: 10, mounts: { '/data': { source: 'data', destination: '/data' } } },
+            ports: { tcp_80: { containerPort: 80, hostPort: 31000, protocol: 'tcp' } },
+            ...overrides,
+          },
+        },
+      });
+    }
+
+    // The predecessor's term is fully spent, so no unused-time credit offsets
+    // the charge — the plainest case for the fee to be visible.
+    async function priceGrowthAgainst(previous) {
+      const h = buildTestHistories();
+      stubHistories(h);
+      const grown = baseSpec({ cpu: 4 });
+      const engine = await buildPricingEngine(h.queryHeight);
+      const oldBreakdown = await engine.price(previous, {
+        height: h.queryHeight, duration: previous.ttl, isEncrypted: false,
+      });
+
+      return engine.priceUpdate(previous, grown, {
+        height: h.queryHeight,
+        duration: grown.ttl,
+        now: Date.now(),
+        recentEvents: [],
+        oldScaledPriceMicrodollars: oldBreakdown.marketplaceAdjustedMicrodollars,
+        oldFeatures: usedFeatureKeys(oldBreakdown.features),
+        remainingSeconds: 0,
+        oldTtl: previous.ttl,
+        isEncrypted: false,
+      });
+    }
+
+    it('charges a quadrupled cpu when priced against the spec it supersedes', async () => {
+      const result = await priceGrowthAgainst(baseSpec());
+      expect(result.free).to.not.equal(true);
+      expect(result.total).to.be.above(0);
+    });
+
+    it('rules that same growth free when the predecessor is the update itself', async () => {
+      const grown = baseSpec({ cpu: 4 });
+      const result = await priceGrowthAgainst(grown);
+      expect(result.free).to.equal(true);
+      expect(result.total).to.be.undefined;
+    });
+  });
 });
