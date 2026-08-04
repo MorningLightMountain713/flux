@@ -172,8 +172,8 @@ describe('specReconciler tests', () => {
       });
       // The node still runs s1 AND s2, but the spec now assigns only s1.
       dockerService.getAppContainerObjects.resolves([
-        { Names: ['/fluxweb_myapp_s1'], Labels: { 'runonflux.app': 'myapp', 'runonflux.replica': 's1' } },
-        { Names: ['/fluxweb_myapp_s2'], Labels: { 'runonflux.app': 'myapp', 'runonflux.replica': 's2' } },
+        { Names: ['/fluxweb_myapp_s1'], Labels: { 'io.runonflux.app': 'myapp', 'io.runonflux.replica': 's1' } },
+        { Names: ['/fluxweb_myapp_s2'], Labels: { 'io.runonflux.app': 'myapp', 'io.runonflux.replica': 's2' } },
       ]);
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true, replica: 's2' }))).to.equal(true);
@@ -186,7 +186,7 @@ describe('specReconciler tests', () => {
         globalRows: [await specWith(blob)],
       });
       dockerService.getAppContainerObjects.resolves([
-        { Names: ['/fluxweb_myapp'], Labels: { 'runonflux.app': 'myapp' } },
+        { Names: ['/fluxweb_myapp'], Labels: { 'io.runonflux.app': 'myapp' } },
       ]);
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true, replica: null }))).to.equal(true);
@@ -219,7 +219,7 @@ describe('specReconciler tests', () => {
       // shed the installed row keeps its replica key and the reconciler starts
       // the stale identity forever.
       dockerService.getAppContainerObjects.resolves([
-        { Names: ['/fluxweb_myapp_m1'], Labels: { 'runonflux.app': 'myapp', 'runonflux.replica': 'm1' } },
+        { Names: ['/fluxweb_myapp_m1'], Labels: { 'io.runonflux.app': 'myapp', 'io.runonflux.replica': 'm1' } },
       ]);
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true, replica: 'm1' }))).to.equal(true);
@@ -231,7 +231,7 @@ describe('specReconciler tests', () => {
         globalRows: [await specWith(looseBlob)],
       });
       dockerService.getAppContainerObjects.resolves([
-        { Names: ['/fluxweb_myapp'], Labels: { 'runonflux.app': 'myapp' } },
+        { Names: ['/fluxweb_myapp'], Labels: { 'io.runonflux.app': 'myapp' } },
       ]);
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.called).to.equal(false);

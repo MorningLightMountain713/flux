@@ -91,7 +91,7 @@ describe('appJanitor tests', () => {
     it('resolves the app from the runonflux.app label, not the container name', async () => {
       appQueryServiceStub.listAllApps.resolves({
         status: 'success',
-        data: [container('/fluxweb_misleading', { 'runonflux.app': 'labelapp' })],
+        data: [container('/fluxweb_misleading', { 'io.runonflux.app': 'labelapp' })],
       });
 
       await appJanitor.sweepDockerOrphans();
@@ -114,7 +114,7 @@ describe('appJanitor tests', () => {
     it('leaves apps with an installed row alone', async () => {
       appQueryServiceStub.listAllApps.resolves({
         status: 'success',
-        data: [container('/fluxweb_owned', { 'runonflux.app': 'owned' })],
+        data: [container('/fluxweb_owned', { 'io.runonflux.app': 'owned' })],
       });
       appQueryServiceStub.installedApps.resolves({ status: 'success', data: [{ name: 'owned' }] });
 
@@ -139,8 +139,8 @@ describe('appJanitor tests', () => {
       appQueryServiceStub.listAllApps.resolves({
         status: 'success',
         data: [
-          container('/fluxweb_located', { 'runonflux.app': 'located' }),
-          container('/fluxweb_unlocated', { 'runonflux.app': 'unlocated' }),
+          container('/fluxweb_located', { 'io.runonflux.app': 'located' }),
+          container('/fluxweb_unlocated', { 'io.runonflux.app': 'unlocated' }),
         ],
       });
       appsRepositoryStub.appLocationFromEvents.callsFake(async ({ appname }) => (appname === 'located' ? [{ name: appname }] : []));
@@ -257,7 +257,7 @@ describe('appJanitor tests', () => {
   describe('playground containers are not app debris', () => {
     const playgroundContainer = (name, sessionId) => ({
       Names: [name],
-      Labels: { 'runonflux.app': 'guestapp', 'flux.playground': sessionId },
+      Labels: { 'io.runonflux.app': 'guestapp', 'io.runonflux.playground': sessionId },
     });
 
     // The orphan sweep removes containers with no installed-app row by running a
@@ -293,7 +293,7 @@ describe('appJanitor tests', () => {
         status: 'success',
         data: [
           playgroundContainer('/fluxweb_guestapp', 'op_1'),
-          container('/fluxweb_realghost', { 'runonflux.app': 'realghost' }),
+          container('/fluxweb_realghost', { 'io.runonflux.app': 'realghost' }),
         ],
       });
 

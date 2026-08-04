@@ -1,7 +1,7 @@
 const config = require('config');
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
-const playgroundSessionRegistry = require('./playgroundSessionRegistry');
+const { getSpecBackend } = require('../utils/specLibs');
 const playgroundEgress = require('./playgroundEgress');
 
 // The docker network a playground session runs on: which slot it takes out of
@@ -20,7 +20,6 @@ const playgroundEgress = require('./playgroundEgress');
 // two namespaces cannot overlap, so neither can happen.
 
 const { BRIDGE_PREFIX } = playgroundEgress;
-const { PLAYGROUND_LABEL } = playgroundSessionRegistry;
 
 // Names the docker network. Distinct from fluxDockerNetwork_ by construction,
 // which also takes session networks out of the app debris sweep - it enumerates
@@ -72,7 +71,8 @@ function bridgeFor(slot) {
  * @returns {Promise<number|null>} slot index, or null when all are taken
  */
 async function allocateSlot() {
-  const networks = await dockerService.dockerListNetworksByLabel(PLAYGROUND_LABEL);
+  const { LABEL_KEYS } = await getSpecBackend();
+  const networks = await dockerService.dockerListNetworksByLabel(LABEL_KEYS.PLAYGROUND_SESSION);
   const taken = new Set();
 
   networks.forEach((network) => {
@@ -103,9 +103,10 @@ async function allocateSlot() {
  * @returns {Promise<{removed: number, networks: string[]}>}
  */
 async function reapOrphanNetworks(liveSessionIds) {
+  const { LABEL_KEYS } = await getSpecBackend();
   let networks;
   try {
-    networks = await dockerService.dockerListNetworksByLabel(PLAYGROUND_LABEL);
+    networks = await dockerService.dockerListNetworksByLabel(LABEL_KEYS.PLAYGROUND_SESSION);
   } catch (error) {
     log.warn(`playground: network sweep could not list networks: ${error.message}`);
     return { removed: 0, networks: [] };
@@ -114,7 +115,7 @@ async function reapOrphanNetworks(liveSessionIds) {
   const removed = [];
   // eslint-disable-next-line no-restricted-syntax
   for (const network of networks) {
-    const sessionId = network.Labels && network.Labels[PLAYGROUND_LABEL];
+    const sessionId = network.Labels && network.Labels[LABEL_KEYS.PLAYGROUND_SESSION];
     // eslint-disable-next-line no-continue
     if (!sessionId || liveSessionIds.has(sessionId)) continue;
     try {
@@ -142,6 +143,7 @@ async function reapOrphanNetworks(liveSessionIds) {
  * @returns {Promise<{slot: number, bridge: string, subnet: string, networkName: string}>}
  */
 async function createSessionNetwork(sessionId) {
+  const { LABEL_KEYS } = await getSpecBackend();
   const inForce = await playgroundEgress.ensureEgressPolicy();
   if (!inForce) {
     // Refused rather than run unshielded. A session with no egress policy is
@@ -169,7 +171,7 @@ async function createSessionNetwork(sessionId) {
     // The session's own stamp, not an app-network one. It is what the slot
     // allocator and the network sweep enumerate on, and what keeps the app
     // debris sweep from ever attributing this network to an app.
-    labels: { [PLAYGROUND_LABEL]: sessionId },
+    labels: { [LABEL_KEYS.PLAYGROUND_SESSION]: sessionId },
   });
 
   const shaped = await playgroundEgress.shapeBridge(bridge);

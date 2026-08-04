@@ -11,7 +11,7 @@ const fluxNetworkHelper = require('./fluxNetworkHelper');
 const log = require('../lib/log');
 const { extractIp } = require('./utils/socketAddressUtils');
 const { storageLinkOf } = require('./utils/fluxStorage');
-const { getSpec } = require('./utils/specLibs');
+const { getSpec, getSpecBackend } = require('./utils/specLibs');
 const { obtainPayloadFromStorage } = require('./utils/fluxStorageRefs');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
 const LogFrameDecoder = require('./utils/logFrameDecoder');
@@ -1083,23 +1083,28 @@ async function appDockerCreate(deployComp, options = {}) {
   };
   const autoAssignedIP = await getNextAvailableIPForApp(appName, networkName);
 
+  const { LABEL_KEYS, identityLabels, shutdownBudgetLabels } = await getSpecBackend();
+
   const burstLabels = burstEligible
     ? {
-      'flux.burst.eligible': 'true',
-      'flux.burst.cores': String(effectiveCpu),
+      [LABEL_KEYS.BURST_ELIGIBLE]: 'true',
+      [LABEL_KEYS.BURST_CORES]: String(effectiveCpu),
     }
     : null;
-  // Identity labels go on every flux container at this single create chokepoint so
+  // Identity goes on every flux container at this single create chokepoint so
   // flux-shutdownd can enumerate and stop any app. Budget labels (drain/preStop/
   // graceful timing) are added only for apps that use a graceful feature; a plain
-  // app drains on the daemon's defaults. owner is provenance threaded in from the
-  // orchestrator (it isn't on DeploymentComponent).
-  const identityLabels = shutdownPlan.componentIdentityLabels(deployComp, options.owner || null);
+  // app drains on the daemon's defaults. owner is provenance threaded in from
+  // the orchestrator (it is not on DeploymentComponent).
+  const identity = identityLabels(deployComp, { owner: options.owner || null });
   const budgetLabels = options.requiresEncryption
-    ? shutdownPlan.componentBudgetLabels(deployComp)
+    ? shutdownBudgetLabels(deployComp, shutdownPlan.maxDrainTimeout(deployComp))
     : null;
+  // Identity is merged LAST so it always wins. A caller-supplied label that
+  // happened to reuse an identity key would otherwise silently retag the
+  // container as a different app, and every reader downstream believes it.
   const containerLabels = {
-    ...identityLabels, ...(budgetLabels || {}), ...(burstLabels || {}), ...(options.labels || {}),
+    ...(options.labels || {}), ...(burstLabels || {}), ...(budgetLabels || {}), ...identity,
   };
   if (burstEligible) {
     log.info(`CPU burst: marking ${identifier} as burst-eligible (cores=${effectiveCpu})`);
@@ -1388,8 +1393,12 @@ async function appDockerStart(idOrName) {
     try {
       const containerInspect = await dockerContainer.inspect();
       const dockerLabels = containerInspect.Config?.Labels || {};
-      if (dockerLabels['flux.burst.eligible'] === 'true') {
-        const cpuCores = parseFloat(dockerLabels['flux.burst.cores']);
+      const { LABEL_KEYS, readLabel } = await getSpecBackend();
+      // Through readLabel: a container created before the label scheme was
+      // unified carries the old key, and reading only the current one would
+      // silently stop reapplying its burst for the rest of its life.
+      if (readLabel(dockerLabels, LABEL_KEYS.BURST_ELIGIBLE) === 'true') {
+        const cpuCores = parseFloat(readLabel(dockerLabels, LABEL_KEYS.BURST_CORES));
         const pid = containerInspect.State?.Pid;
         if (pid && cpuCores > 0) {
           await cpuBurstHelper.applyBurst(pid, cpuCores, idOrName);
@@ -2258,13 +2267,14 @@ async function createFluxAppDockerNetwork(appname, number, options = {}) {
   const prefix = options.prefix ?? 24;
   const base = options.base ?? 0;
   const { bridgeName } = options;
+  const { LABEL_KEYS } = await getSpecBackend();
   // check if fluxDockerNetwork of an appexists
   const fluxNetworkOptions = {
     Name: options.networkName ?? `fluxDockerNetwork_${appname}`,
     // Ownership stamp, same scheme as container identity labels: management
     // decisions (e.g. the reconciler disconnecting a stale membership) key on
     // this label, never on name matching.
-    Labels: options.labels ?? { 'runonflux.app-network': appname },
+    Labels: options.labels ?? { [LABEL_KEYS.APP_NETWORK]: appname },
     ...(bridgeName && { Options: { 'com.docker.network.bridge.name': bridgeName } }),
     IPAM: {
       Config: [{
@@ -2449,9 +2459,9 @@ async function appDockerNetworkDisconnect(componentIdentifier, networkName) {
 }
 
 /**
- * Whether a docker network is a flux app network — carries the
- * runonflux.app-network ownership label stamped at creation. False for a
- * network that is gone (404): nothing there is ours to manage.
+ * Whether a docker network is a flux app network — carries the app-network
+ * ownership label stamped at creation. False for a network that is gone (404):
+ * nothing there is ours to manage.
  *
  * @param {string} networkName - docker network name
  * @returns {Promise<boolean>}
@@ -2459,7 +2469,9 @@ async function appDockerNetworkDisconnect(componentIdentifier, networkName) {
 async function isFluxAppNetwork(networkName) {
   try {
     const info = await docker.getNetwork(networkName).inspect();
-    return !!(info && info.Labels && Object.prototype.hasOwnProperty.call(info.Labels, 'runonflux.app-network'));
+    const { LABEL_KEYS } = await getSpecBackend();
+    return !!(info && info.Labels
+      && Object.prototype.hasOwnProperty.call(info.Labels, LABEL_KEYS.APP_NETWORK));
   } catch (error) {
     if (error.statusCode === 404) {
       return false;
@@ -2514,12 +2526,13 @@ async function getAppContainerObjects(appName) {
   const singleComponentSlashName = getAppDockerNameIdentifier(appName);
   // The optional third segment is a replica name (co-located named replicas).
   const componentRegex = new RegExp(`^/(?:flux|zel)[a-zA-Z0-9]+_${escapeRegExp(appName)}(?:_[a-z0-9-]+)?$`);
+  const { LABEL_KEYS } = await getSpecBackend();
 
   return (containers || []).filter((container) => {
     // Labels are the identity authority; the name regex remains for pre-label
     // containers (created before identity labels shipped, never recreated).
-    if (container.Labels && container.Labels['runonflux.app']) {
-      return container.Labels['runonflux.app'] === appName;
+    if (container.Labels && container.Labels[LABEL_KEYS.APP]) {
+      return container.Labels[LABEL_KEYS.APP] === appName;
     }
     const names = container.Names || [];
     return names.some((name) => name === singleComponentSlashName || componentRegex.test(name));

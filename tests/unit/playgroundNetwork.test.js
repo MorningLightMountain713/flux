@@ -27,7 +27,6 @@ describe('playgroundNetwork', () => {
         createFluxAppDockerNetwork: stubs.createNetwork,
         forceRemoveFluxAppDockerNetwork: stubs.removeNetwork,
       },
-      './playgroundSessionRegistry': { PLAYGROUND_LABEL: 'flux.playground' },
       './playgroundEgress': {
         BRIDGE_PREFIX: 'flxpg',
         ensureEgressPolicy: stubs.ensurePolicy,
@@ -124,7 +123,7 @@ describe('playgroundNetwork', () => {
         base: 0,
         bridgeName: 'flxpg0',
         networkName: 'fluxPlayground_op_sess1',
-        labels: { 'flux.playground': 'op_sess1' },
+        labels: { 'io.runonflux.playground': 'op_sess1' },
       });
     });
 
@@ -180,7 +179,7 @@ describe('playgroundNetwork', () => {
   describe('reapOrphanNetworks', () => {
     const labelled = (...ids) => ids.map((id) => ({
       Name: `fluxPlayground_${id}`,
-      Labels: { 'flux.playground': id },
+      Labels: { 'io.runonflux.playground': id },
     }));
 
     it('removes the networks no live session claims', async () => {

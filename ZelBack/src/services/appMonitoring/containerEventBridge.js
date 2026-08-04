@@ -1,7 +1,7 @@
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 const dockerEventStream = require('../utils/dockerEventStream');
-const playgroundSessionRegistry = require('../appPlayground/playgroundSessionRegistry');
+const { getSpecBackend } = require('../utils/specLibs');
 const globalState = require('../utils/globalState');
 const operationRegistry = require('../utils/operationRegistry');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -136,7 +136,7 @@ async function handleNetworkDisconnect(event) {
   appReconciler.enqueue(containerName);
 }
 
-function handleContainerEvent(event) {
+async function handleContainerEvent(event) {
   // Dropped at the edge, before anything routes. A playground session runs under
   // the spec's own app name, so it passes isFluxContainer and would otherwise be
   // recorded and enqueued like an installed component - leaving an
@@ -147,7 +147,8 @@ function handleContainerEvent(event) {
   // owner is being shown, so restarting it would report a passing session for an
   // app that in fact crashes. playgroundRunner owns these containers and watches
   // them on its own subscription.
-  if (event.Actor?.Attributes?.[playgroundSessionRegistry.PLAYGROUND_LABEL]) return undefined;
+  const { LABEL_KEYS } = await getSpecBackend();
+  if (event.Actor?.Attributes?.[LABEL_KEYS.PLAYGROUND_SESSION]) return undefined;
 
   const action = event.Action || event.status || '';
   if (event.Type === 'network') {
