@@ -244,10 +244,14 @@ describe('appDockerNetwork tests', () => {
   });
 
   describe('appNetworkOwner', () => {
+    // The schema is the caller's to resolve, so the function stays pure and
+    // synchronously testable rather than reaching for it.
+    const labelKeys = { APP_NETWORK: 'io.runonflux.app-network' };
+
     it('reads the ownership label when one is stamped', () => {
       const owner = appDockerNetwork.appNetworkOwner({
-        Name: 'fluxDockerNetwork_myapp', Labels: { 'runonflux.app-network': 'myapp' },
-      });
+        Name: 'fluxDockerNetwork_myapp', Labels: { 'io.runonflux.app-network': 'myapp' },
+      }, labelKeys);
 
       expect(owner).to.equal('myapp');
     });
@@ -255,22 +259,22 @@ describe('appDockerNetwork tests', () => {
     it('falls back to the name for a pre-label network', () => {
       // The whole estate is unlabelled until each network is recreated, so the
       // name convention has to carry ownership for them.
-      const owner = appDockerNetwork.appNetworkOwner({ Name: 'fluxDockerNetwork_legacyapp' });
+      const owner = appDockerNetwork.appNetworkOwner({ Name: 'fluxDockerNetwork_legacyapp' }, labelKeys);
 
       expect(owner).to.equal('legacyapp');
     });
 
     it('prefers the label over the name when they disagree', () => {
       const owner = appDockerNetwork.appNetworkOwner({
-        Name: 'fluxDockerNetwork_stalename', Labels: { 'runonflux.app-network': 'realowner' },
-      });
+        Name: 'fluxDockerNetwork_stalename', Labels: { 'io.runonflux.app-network': 'realowner' },
+      }, labelKeys);
 
       expect(owner).to.equal('realowner');
     });
 
     it('returns null for a network it cannot attribute', () => {
-      expect(appDockerNetwork.appNetworkOwner({ Name: 'bridge' })).to.equal(null);
-      expect(appDockerNetwork.appNetworkOwner({ Name: 'fluxDockerNetwork_' })).to.equal(null);
+      expect(appDockerNetwork.appNetworkOwner({ Name: 'bridge' }, labelKeys)).to.equal(null);
+      expect(appDockerNetwork.appNetworkOwner({ Name: 'fluxDockerNetwork_' }, labelKeys)).to.equal(null);
     });
   });
 
@@ -286,7 +290,7 @@ describe('appDockerNetwork tests', () => {
       // The bug this exists to prevent: docker calls a network unused the moment
       // nothing is attached, which is true of every crash-looping or stopped app.
       dockerServiceStub.getFluxDockerNetworks.resolves([
-        net('fluxDockerNetwork_stoppedapp', { 'runonflux.app-network': 'stoppedapp' }),
+        net('fluxDockerNetwork_stoppedapp', { 'io.runonflux.app-network': 'stoppedapp' }),
       ]);
 
       const result = await appDockerNetwork.removeUnownedAppNetworks(new Set(['stoppedapp']));
@@ -297,7 +301,7 @@ describe('appDockerNetwork tests', () => {
 
     it('removes the network of an app that is not installed', async () => {
       dockerServiceStub.getFluxDockerNetworks.resolves([
-        net('fluxDockerNetwork_goneapp', { 'runonflux.app-network': 'goneapp' }),
+        net('fluxDockerNetwork_goneapp', { 'io.runonflux.app-network': 'goneapp' }),
       ]);
 
       const result = await appDockerNetwork.removeUnownedAppNetworks(new Set(['liveapp']));

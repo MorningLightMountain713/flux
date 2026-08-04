@@ -1147,7 +1147,7 @@ describe('dockerService tests', () => {
       expect(inspectResult.Id).to.be.a('string');
       expect(inspectResult.IPAM.Config).to.eql(fluxNetworkOptions.IPAM.Config);
       // the ownership stamp management decisions key on (never name matching)
-      expect(inspectResult.Labels).to.eql({ 'runonflux.app-network': 'MyAppName' });
+      expect(inspectResult.Labels).to.eql({ 'io.runonflux.app-network': 'MyAppName' });
     });
 
     it('isFluxAppNetwork is true for a labelled app network, false for docker defaults and missing networks', async () => {

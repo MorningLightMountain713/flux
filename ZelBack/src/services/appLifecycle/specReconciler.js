@@ -10,6 +10,7 @@ const generalService = require('../generalService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const globalState = require('../utils/globalState');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
+const { getSpecBackend } = require('../utils/specLibs');
 const imageManager = require('../appSecurity/imageManager');
 const shutdownPlan = require('./shutdownPlan');
 const appUninstaller = require('./appUninstaller');
@@ -182,7 +183,8 @@ async function convergeApp(installed, registrySpec, ctx) {
   // stale by the same rule. Missing assigned identities install via the
   // spawner, not here.
   const present = await dockerService.getAppContainerObjects(installed.name).catch(() => []);
-  const presentIdentities = [...new Set(present.map((c) => (c.Labels && c.Labels['runonflux.replica']) || null))];
+  const { LABEL_KEYS } = await getSpecBackend();
+  const presentIdentities = [...new Set(present.map((c) => (c.Labels && c.Labels[LABEL_KEYS.REPLICA]) || null))];
   const stale = presentIdentities.filter((identity) => !assigned.includes(identity));
   if (present.length > 0 && stale.length > 0) {
     let removedOne = false;

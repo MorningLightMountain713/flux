@@ -109,26 +109,26 @@ describe('containerEventBridge', () => {
   describe('destroy', () => {
     const destroyEvent = (name) => ({ Action: 'destroy', Actor: { Attributes: { name } } });
 
-    it('enqueues a reconcile for an out-of-band removal of a flux container', () => {
+    it('enqueues a reconcile for an out-of-band removal of a flux container', async () => {
       containerEventBridge.handleContainerDestroy(destroyEvent('fluxwww_app'));
       expect(stubs.appReconciler.enqueue.calledOnceWith('fluxwww_app')).to.be.true;
     });
 
-    it('does NOT reconcile a teardown-owned destroy while the removing lease is held', () => {
+    it('does NOT reconcile a teardown-owned destroy while the removing lease is held', async () => {
       operationRegistry.acquire('fluxwww_app', 'removing', 'test'); // an in-flight uninstall
       containerEventBridge.handleContainerDestroy(destroyEvent('fluxwww_app'));
       expect(stubs.appReconciler.enqueue.called).to.be.false;
       expect(operationRegistry.isHeld('fluxwww_app')).to.be.true;
     });
 
-    it('ignores non-flux containers', () => {
+    it('ignores non-flux containers', async () => {
       containerEventBridge.handleContainerDestroy(destroyEvent('some_other_container'));
       expect(stubs.appReconciler.enqueue.called).to.be.false;
     });
   });
 
   describe('start', () => {
-    it('wakes the dependents of a started container (satisfies a dependsOn started)', () => {
+    it('wakes the dependents of a started container (satisfies a dependsOn started)', async () => {
       containerEventBridge.handleContainerStart(startEvent('fluxdb_app'));
       expect(stubs.appReconciler.enqueueDependents.calledOnceWith('fluxdb_app')).to.be.true;
       // a start event for the container itself is a no-op for the container - the
@@ -136,7 +136,7 @@ describe('containerEventBridge', () => {
       expect(stubs.appReconciler.enqueue.called).to.be.false;
     });
 
-    it('ignores non-flux containers', () => {
+    it('ignores non-flux containers', async () => {
       containerEventBridge.handleContainerStart(startEvent('postgres'));
       expect(stubs.appReconciler.enqueueDependents.called).to.be.false;
     });
@@ -149,19 +149,19 @@ describe('containerEventBridge', () => {
     // authoritative .State.Health.Status from inspect and restarts it if unhealthy) and
     // re-evaluates its dependents (a dependsOn 'healthy' dependent starts once the target
     // reads healthy).
-    it('re-reconciles the container and re-evaluates its dependents on any health event', () => {
+    it('re-reconciles the container and re-evaluates its dependents on any health event', async () => {
       containerEventBridge.handleContainerHealth(healthEvent('fluxweb_app', 'unhealthy'));
       expect(stubs.appReconciler.enqueue.calledOnceWith('fluxweb_app')).to.be.true;
       expect(stubs.appReconciler.enqueueDependents.calledOnceWith('fluxweb_app')).to.be.true;
     });
 
-    it('behaves identically for a free-form health Action (which the old colon-parse would mangle)', () => {
-      containerEventBridge.handleContainerEvent({ Action: 'health_status: probe failed: connection refused', Actor: { Attributes: { name: 'fluxdb_app' } } });
+    it('behaves identically for a free-form health Action (which the old colon-parse would mangle)', async () => {
+      await containerEventBridge.handleContainerEvent({ Action: 'health_status: probe failed: connection refused', Actor: { Attributes: { name: 'fluxdb_app' } } });
       expect(stubs.appReconciler.enqueue.calledOnceWith('fluxdb_app')).to.be.true;
       expect(stubs.appReconciler.enqueueDependents.calledOnceWith('fluxdb_app')).to.be.true;
     });
 
-    it('ignores non-flux containers', () => {
+    it('ignores non-flux containers', async () => {
       containerEventBridge.handleContainerHealth(healthEvent('redis', 'unhealthy'));
       expect(stubs.appReconciler.enqueue.called).to.be.false;
       expect(stubs.appReconciler.enqueueDependents.called).to.be.false;
@@ -173,13 +173,13 @@ describe('containerEventBridge', () => {
       await containerEventBridge.handleContainerEvent(dieEvent('fluxa_app', 5));
       expect(stubs.appReconciler.enqueue.calledWith('fluxa_app'), 'die -> enqueue self').to.be.true;
 
-      containerEventBridge.handleContainerEvent({ Action: 'destroy', Actor: { Attributes: { name: 'fluxd_app' } } });
+      await containerEventBridge.handleContainerEvent({ Action: 'destroy', Actor: { Attributes: { name: 'fluxd_app' } } });
       expect(stubs.appReconciler.enqueue.calledWith('fluxd_app'), 'destroy -> enqueue self').to.be.true;
 
-      containerEventBridge.handleContainerEvent(startEvent('fluxb_app'));
+      await containerEventBridge.handleContainerEvent(startEvent('fluxb_app'));
       expect(stubs.appReconciler.enqueueDependents.calledWith('fluxb_app'), 'start -> wake dependents').to.be.true;
 
-      containerEventBridge.handleContainerEvent(healthEvent('fluxc_app', 'unhealthy'));
+      await containerEventBridge.handleContainerEvent(healthEvent('fluxc_app', 'unhealthy'));
       expect(stubs.appReconciler.enqueue.calledWith('fluxc_app'), 'unhealthy -> enqueue self').to.be.true;
     });
   });
@@ -190,11 +190,10 @@ describe('containerEventBridge', () => {
   // A session runs under the spec's own app name, so it passes isFluxContainer.
   // Recognising it has to happen before anything routes.
   describe('playground containers', () => {
-    const { PLAYGROUND_LABEL } = require('../../ZelBack/src/services/appPlayground/playgroundSessionRegistry');
 
     const sessionEvent = (action, name) => ({
       Action: action,
-      Actor: { Attributes: { name, exitCode: '1', [PLAYGROUND_LABEL]: 'sess-abc' } },
+      Actor: { Attributes: { name, exitCode: '1', ['io.runonflux.playground']: 'sess-abc' } },
     });
 
     it('does not record an exit for a session container', async () => {
@@ -226,7 +225,7 @@ describe('containerEventBridge', () => {
       await containerEventBridge.handleContainerEvent({
         Type: 'network',
         Action: 'disconnect',
-        Actor: { Attributes: { name: 'fluxDockerNetwork_myapp', container: 'abc', [PLAYGROUND_LABEL]: 'sess-abc' } },
+        Actor: { Attributes: { name: 'fluxDockerNetwork_myapp', container: 'abc', ['io.runonflux.playground']: 'sess-abc' } },
       });
 
       expect(stubs.dockerService.dockerListContainers.called).to.be.false;

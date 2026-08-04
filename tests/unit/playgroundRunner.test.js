@@ -377,7 +377,7 @@ describe('playgroundRunner', () => {
     const labelled = (id, name) => ({
       Id: id,
       Names: [`/${name}`],
-      Labels: { 'flux.playground': id },
+      Labels: { 'io.runonflux.playground': id },
     });
 
     it('removes containers no live session claims', async () => {
@@ -398,7 +398,7 @@ describe('playgroundRunner', () => {
     // apps above all - is somebody else's to remove.
     it('never touches a container without the playground label', async () => {
       stubs.listContainers.resolves([
-        { Id: 'x', Names: ['/fluxweb_realapp'], Labels: { 'runonflux.app': 'realapp' } },
+        { Id: 'x', Names: ['/fluxweb_realapp'], Labels: { 'io.runonflux.app': 'realapp' } },
       ]);
       const result = await runner.reapOrphans(new Set());
       expect(result.removed).to.equal(0);
@@ -438,7 +438,7 @@ describe('playgroundRunner', () => {
     it('says so, loudly, when a container survives the teardown', async () => {
       stubs.forceRemove.rejects(new Error('device busy'));
       stubs.listContainers.resolves([{
-        Id: 'abc', Names: ['/web_demoapp'], Labels: { 'flux.playground': 'op_1' },
+        Id: 'abc', Names: ['/web_demoapp'], Labels: { 'io.runonflux.playground': 'op_1' },
       }]);
 
       await runner.teardownSession(session());
@@ -458,7 +458,7 @@ describe('playgroundRunner', () => {
 
     it('ignores containers belonging to another session', async () => {
       stubs.listContainers.resolves([{
-        Id: 'abc', Names: ['/web_other'], Labels: { 'flux.playground': 'op_someone_else' },
+        Id: 'abc', Names: ['/web_other'], Labels: { 'io.runonflux.playground': 'op_someone_else' },
       }]);
 
       await runner.teardownSession(session());
@@ -548,7 +548,7 @@ describe('playgroundRunner', () => {
     it('labels the container with the session id so the reaper can find it', async () => {
       stubs.inspect.resolves(running('healthy'));
       await runner.runSession(session());
-      expect(stubs.create.firstCall.args[1].labels['flux.playground']).to.equal('op_1');
+      expect(stubs.create.firstCall.args[1].labels['io.runonflux.playground']).to.equal('op_1');
     });
 
     it('puts the container in the playground slice, not the app slice', async () => {

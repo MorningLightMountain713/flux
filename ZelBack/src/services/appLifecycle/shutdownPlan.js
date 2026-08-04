@@ -1,14 +1,14 @@
 /**
- * Builds the FluxOS-side graceful-shutdown artifacts handed to flux-shutdownd:
- * the per-container `runonflux.*` labels and the per-app shutdown plan.
- *
- * These are FluxOS consumer concerns — they join provenance (InstantiatedSpec:
- * owner, message hash) with operational data (DeploymentComponent: shutdown,
- * preStop, loadBalancing, ports). They are deliberately built here, at the
- * deployment bridge, NOT on the domain types: DeploymentSpec stays purely
- * operational and InstantiatedSpec keeps the provenance. Everything is read
- * through domain-class getters — no raw `instantiated.spec.components[...]`
+ * Builds the per-app shutdown plan handed to flux-shutdownd, joining provenance
+ * (InstantiatedSpec: owner, message hash) with operational data
+ * (DeploymentComponent: shutdown, preStop, loadBalancing, ports). Everything is
+ * read through domain-class getters — no raw `instantiated.spec.components[...]`
  * reach-ins.
+ *
+ * The container LABELS are not built here. Their keys are a contract with
+ * flux-shutdownd, which reads them off containers to know what to drain, so
+ * they are defined once in flux-spec (`containerLabels`) alongside the forward
+ * naming rather than spelled out at each end.
  */
 
 /** Longest drain timeout across a component's load-balanced ports (0 if none). */
@@ -63,45 +63,6 @@ function appRequiresDaemonShutdown(deployment) {
     if (deployComp.shutdown || deployComp.preStop) return true;
     return maxDrainTimeout(deployComp) > 0;
   });
-}
-
-/**
- * Identity labels stamped on EVERY flux app container (graceful or not), so
- * flux-shutdownd can enumerate and stop any app on the node — they must never be
- * gated. `owner` is provenance supplied by the caller (it isn't on
- * DeploymentComponent).
- *
- * @param {object} deployComp - a DeploymentComponent
- * @param {string} [owner] - the app owner's flux id
- * @returns {Object<string, string>}
- */
-function componentIdentityLabels(deployComp, owner) {
-  const labels = {
-    'runonflux.app': deployComp.appName,
-    'runonflux.component': deployComp.name,
-  };
-  if (owner) labels['runonflux.owner'] = owner;
-  // Labels are the identity authority (the container name is display only);
-  // a named replica's containers carry which replica they are.
-  if (deployComp.replica != null) labels['runonflux.replica'] = deployComp.replica;
-  return labels;
-}
-
-/**
- * Budget labels carrying a component's drain/preStop/graceful timing, read by the
- * daemon to size each drain stage. Stamped only for apps that use a graceful
- * feature; a plain app drains on the daemon's defaults — which equal these values
- * for a plain component anyway, so gating them is about intent, not behavior.
- *
- * @param {object} deployComp - a DeploymentComponent
- * @returns {Object<string, string>}
- */
-function componentBudgetLabels(deployComp) {
-  return {
-    'runonflux.shutdown.drain-s': String(maxDrainTimeout(deployComp)),
-    'runonflux.shutdown.prestop-s': String(deployComp.preStop ? deployComp.preStop.timeout : 0),
-    'runonflux.shutdown.graceful-s': String(deployComp.shutdown ? deployComp.shutdown.gracefulTimeout : 10),
-  };
 }
 
 function buildPorts(deployComp) {
@@ -167,8 +128,7 @@ function buildShutdownPlan(instantiated, deployment) {
 }
 
 module.exports = {
-  componentIdentityLabels,
-  componentBudgetLabels,
+  maxDrainTimeout,
   buildShutdownPlan,
   appShutdownBudgetSeconds,
   appRequiresDaemonShutdown,

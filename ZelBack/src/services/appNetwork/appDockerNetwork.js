@@ -2,6 +2,7 @@ const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
+const { getSpecBackend } = require('../utils/specLibs');
 
 // Ownership of the per-app docker network (fluxDockerNetwork_<app>) and the
 // 172.23.x.0/24 subnet it sits on. Every caller that creates, repairs or reaps
@@ -15,9 +16,10 @@ const log = require('../../lib/log');
 // whose owner is NOT installed and the reconciler only creates them for apps
 // that ARE, the two can never fight over the same network.
 
-// The per-app network name prefix, and the ownership label stamped at creation.
+// The per-app network name prefix. The ownership label stamped at creation is
+// read from the shared schema at call time (flux-spec loads asynchronously, so
+// there is nothing to bind to at require time).
 const APP_NETWORK_PREFIX = 'fluxDockerNetwork_';
-const APP_NETWORK_OWNER_LABEL = 'runonflux.app-network';
 
 // The node-wide flux network (no app suffix) — not an app network, never reaped.
 const NODE_NETWORK_NAME = 'fluxDockerNetwork';
@@ -141,10 +143,11 @@ async function ensureAppNetworkPresent(appName) {
  * an owner, and on a removal path that distinction is the whole safety story.
  *
  * @param {object} network - docker network list entry (Name, Labels)
+ * @param {object} labelKeys - the label schema, resolved by the caller
  * @returns {string|null} owning app name, or null when unidentifiable
  */
-function appNetworkOwner(network) {
-  const labelled = network.Labels && network.Labels[APP_NETWORK_OWNER_LABEL];
+function appNetworkOwner(network, labelKeys) {
+  const labelled = network.Labels && network.Labels[labelKeys.APP_NETWORK];
   if (labelled) return labelled;
   const name = network.Name || '';
   if (name.startsWith(APP_NETWORK_PREFIX)) {
@@ -167,6 +170,7 @@ function appNetworkOwner(network) {
  */
 async function removeUnownedAppNetworks(installedAppNames) {
   const networks = await dockerService.getFluxDockerNetworks();
+  const { LABEL_KEYS } = await getSpecBackend();
   const removed = [];
   let unidentified = 0;
 
@@ -174,7 +178,7 @@ async function removeUnownedAppNetworks(installedAppNames) {
   for (const network of networks) {
     // eslint-disable-next-line no-continue
     if (network.Name === NODE_NETWORK_NAME) continue;
-    const owner = appNetworkOwner(network);
+    const owner = appNetworkOwner(network, LABEL_KEYS);
     if (!owner) {
       unidentified += 1;
       // eslint-disable-next-line no-continue

@@ -1,7 +1,7 @@
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 const dockerEventStream = require('../utils/dockerEventStream');
-const playgroundSessionRegistry = require('./playgroundSessionRegistry');
+const { getSpecBackend } = require('../utils/specLibs');
 
 /**
  * What one session's containers are doing, kept current from Docker's event
@@ -123,12 +123,13 @@ function createSessionWatcher(sessionId) {
      * @param {string[]} identifiers the session's container names
      */
     async start(identifiers) {
+      const { LABEL_KEYS } = await getSpecBackend();
       subscription = dockerEventStream.createDockerEventStream({
         label: `playground ${sessionId}`,
         filters: {
           type: ['container'],
           event: ['start', 'die', 'destroy', 'health_status'],
-          label: [`${playgroundSessionRegistry.PLAYGROUND_LABEL}=${sessionId}`],
+          label: [`${LABEL_KEYS.PLAYGROUND_SESSION}=${sessionId}`],
         },
         onEvent,
         // Events during an outage are gone, so re-read everything rather than

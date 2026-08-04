@@ -50,37 +50,16 @@ function deploymentOf(...comps) {
 }
 
 describe('shutdownPlan', () => {
-  describe('componentIdentityLabels', () => {
-    it('stamps app + component + owner (always, never gated)', () => {
-      expect(shutdownPlan.componentIdentityLabels(webComponent(), '1owner')).to.deep.equal({
-        'runonflux.app': 'myapp',
-        'runonflux.component': 'web',
-        'runonflux.owner': '1owner',
-      });
+  // The label BUILDERS live in flux-spec, where the keys are defined and tested
+  // (containerLabels). What stays here is the arithmetic over a component's
+  // load-balanced ports that feeds them.
+  describe('maxDrainTimeout', () => {
+    it('takes the longest drain across a component load-balanced ports', () => {
+      expect(shutdownPlan.maxDrainTimeout(webComponent())).to.equal(180);
     });
 
-    it('omits owner when absent (never stamps an empty owner)', () => {
-      const labels = shutdownPlan.componentIdentityLabels(bareComponent(), null);
-      expect(labels).to.deep.equal({ 'runonflux.app': 'myapp', 'runonflux.component': 'worker' });
-      expect(labels).to.not.have.property('runonflux.owner');
-    });
-  });
-
-  describe('componentBudgetLabels', () => {
-    it('builds the drain/preStop/graceful budget from a configured component', () => {
-      expect(shutdownPlan.componentBudgetLabels(webComponent())).to.deep.equal({
-        'runonflux.shutdown.drain-s': '180',
-        'runonflux.shutdown.prestop-s': '30',
-        'runonflux.shutdown.graceful-s': '60',
-      });
-    });
-
-    it('falls back to defaults for a plain component', () => {
-      expect(shutdownPlan.componentBudgetLabels(bareComponent())).to.deep.equal({
-        'runonflux.shutdown.drain-s': '0',
-        'runonflux.shutdown.prestop-s': '0',
-        'runonflux.shutdown.graceful-s': '10',
-      });
+    it('is zero for a component with no load balancing at all', () => {
+      expect(shutdownPlan.maxDrainTimeout(bareComponent())).to.equal(0);
     });
   });
 

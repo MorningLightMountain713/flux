@@ -127,7 +127,7 @@ describe('deploymentProvider tests', () => {
     });
 
     function container(replica) {
-      return { Labels: { 'runonflux.app': 'myapp', ...(replica ? { 'runonflux.replica': replica } : {}) } };
+      return { Labels: { 'io.runonflux.app': 'myapp', ...(replica ? { 'io.runonflux.replica': replica } : {}) } };
     }
 
     // localIdentities takes an InstantiatedSpec, not a bare spec: a cleartext
