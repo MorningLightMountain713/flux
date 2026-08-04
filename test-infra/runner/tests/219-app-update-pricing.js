@@ -12,7 +12,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { nodeKey } from '../framework/keys.js';
-import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
+import { buildAppSpec, registerAndConfirm, waitForPricingVerdict } from '../framework/app-helper.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
 import { waitForDaemonReady, waitFor, waitForBlockProcessed, waitForNodeStatus } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
@@ -26,28 +26,6 @@ const FLOOR_SAT = 1000000;
 async function specOnNode(client, appName) {
   const res = await client.getAppSpecs(appName);
   return res.status === 'success' && res.data ? res.data : null;
-}
-
-/**
- * Wait until the node has reached a verdict on a confirmed message.
- *
- * Promotion stores the permanent message before it prices anything, so the
- * message appearing means the fee has been computed and acted on. Waiting for
- * it is what lets a refusal be asserted as a refusal rather than as a race with
- * an acceptance that had not landed yet.
- */
-async function waitForVerdict(client, appHash) {
-  const db = dbClient(1);
-  await waitFor(
-    async () => Boolean(await db.getPermanentMessage(appHash)),
-    { timeout: 60000, interval: 1000, label: `permanent message ${appHash.slice(0, 12)}` },
-  );
-  // The registry write follows in the same promotion, so let the node settle it
-  // before reading the row.
-  await waitFor(
-    async () => (await client.isExplorerSynced()).data === true,
-    { timeout: 60000, interval: 1000, label: 'explorer settled after promotion' },
-  );
 }
 
 describe('App update pricing', function () {
@@ -82,7 +60,7 @@ describe('App update pricing', function () {
       );
       expect(result.status).to.equal('success');
       await waitForBlockProcessed(env.clients[0], (d) => d.height >= result.targetHeight, 60000);
-      await waitForVerdict(env.clients[0], result.appHash);
+      await waitForPricingVerdict(env.clients[0], dbClient(1), result.appHash);
 
       expect(await specOnNode(env.clients[0], appName)).to.equal(null);
     });
@@ -142,7 +120,7 @@ describe('App update pricing', function () {
       );
       expect(result.status).to.equal('success');
       await waitForBlockProcessed(env.clients[0], (d) => d.height >= result.targetHeight, 60000);
-      await waitForVerdict(env.clients[0], result.appHash);
+      await waitForPricingVerdict(env.clients[0], dbClient(1), result.appHash);
 
       const current = await specOnNode(env.clients[0], appName);
       expect(current.description).to.equal(previous.description);
@@ -154,6 +132,47 @@ describe('App update pricing', function () {
         const specs = await Promise.all(env.clients.map((c) => specOnNode(c, appName)));
         return specs.every((s) => s && s.description === UPDATED);
       }, { timeout: 90000, label: `updated spec on all ${env.clients.length} nodes` });
+    });
+  });
+
+  // The defining property of the chain-floor regime: the floor is the whole fee
+  // however big the app is. A big app's registration costs many times a small
+  // one's, and its update costs the same 0.01 FLUX — which is the "two numbers,
+  // on purpose" split, not an accident of size.
+  describe('the floor does not scale with the app', function () {
+    const appName = `e2eBig${Date.now()}`;
+
+    function bigSpec(overrides = {}) {
+      const spec = buildAppSpec({ name: appName, ...overrides });
+      spec.compose = [{ ...spec.compose[0], cpu: 2, ram: 4000, hdd: 40 }];
+      return spec;
+    }
+
+    before(async function () {
+      this.timeout(180000);
+      const registered = await registerAndConfirm(env.clients[0].url, nodeKey(1), bigSpec(), env.clients);
+      expect(registered.status).to.equal('success');
+      await waitForBlockProcessed(env.clients[0], (d) => d.height >= registered.targetHeight, 60000);
+      await waitFor(
+        async () => Boolean(await specOnNode(env.clients[0], appName)),
+        { timeout: 60000, label: `registration row for ${appName}` },
+      );
+    });
+
+    it('charges a large app the same floor to update as a small one', async function () {
+      this.timeout(180000);
+      const updated = bigSpec({ description: 'big app, floor fee' });
+      const result = await registerAndConfirm(
+        env.clients[0].url, nodeKey(1), updated, env.clients,
+        { type: 'fluxappupdate', valueSat: FLOOR_SAT },
+      );
+      expect(result.status).to.equal('success');
+      await waitForBlockProcessed(env.clients[0], (d) => d.height >= result.targetHeight, 60000);
+
+      await waitFor(async () => {
+        const current = await specOnNode(env.clients[0], appName);
+        return current && current.description === 'big app, floor fee';
+      }, { timeout: 60000, label: `big-app update applied for ${appName}` });
     });
   });
 });
