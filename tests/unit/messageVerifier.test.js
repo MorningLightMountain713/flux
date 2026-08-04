@@ -112,9 +112,6 @@ function makeBaseStubs(overrides = {}) {
       insertAppSpecifications: sinon.stub().resolves(),
       updateAppSpecifications: sinon.stub().resolves(),
     },
-    '../appDatabase/appSpecHistory': {
-      getPreviousSpec: sinon.stub().resolves(null),
-    },
     './appEventVerifier': {
       authorize: sinon.stub().resolves(),
     },
@@ -631,6 +628,78 @@ describe('messageVerifier tests', () => {
 
       expect(result).to.be.false;
       expect(storePermanentStub.called).to.be.false;
+    });
+
+    describe('promoting an update', () => {
+      function updateStubs(activeRow) {
+        const serializedEvent = {
+          type: 'fluxappupdate',
+          appSpecifications: { name: 'testapp', version: 8, owner: 'owner1' },
+          hash: 'updHash',
+        };
+        const mockConfirmedEvent = {
+          isRegistration: false,
+          isUpdate: true,
+          spec: { name: 'testapp', version: 8 },
+          serialize: sinon.stub().returns(serializedEvent),
+          toInstantiatedSpec: sinon.stub().returns({}),
+        };
+        const mockInstantiated = {
+          name: 'testapp',
+          spec: { name: 'testapp', version: 8 },
+          isExpired: sinon.stub().returns(false),
+          serialize: sinon.stub().returns(serializedEvent),
+        };
+
+        const made = makeBaseStubs();
+        const { stubs } = made;
+        stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
+          type: 'fluxappupdate',
+          version: 1,
+          appSpecifications: { name: 'testapp', version: 8, owner: 'owner1' },
+          hash: 'updHash',
+          timestamp: Date.now(),
+          signature: 'sig',
+        });
+        stubs['../appDatabase/appsRepository'].getGlobalAppInfo = sinon.stub().resolves(activeRow);
+        stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
+          AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
+          ConfirmedAppEvent: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
+          InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
+          deserializeSpec: sinon.stub().returnsArg(0),
+        });
+        return made;
+      }
+
+      it('authorizes against the app active on this node, not the name history', async () => {
+        const activeRow = { name: 'testapp', owner: 'currentOwner' };
+        const { stubs } = updateStubs(activeRow);
+        const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+        await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, null, 2);
+
+        const { authorize } = stubs['./appEventVerifier'];
+        sinon.assert.calledOnce(authorize);
+        expect(authorize.firstCall.args[0].previousState).to.equal(activeRow);
+      });
+
+      // The old shape only re-verified when the name had message history, so an
+      // update to a name with no app on this node authorized against nothing.
+      it('refuses to promote an update the verifier will not authorize', async () => {
+        const storePermanentStub = sinon.stub().resolves();
+        const { stubs, logStub } = updateStubs(null);
+        stubs['../appDatabase/appsRepository'].storePermanentMessage = storePermanentStub;
+        stubs['./appEventVerifier'].authorize = sinon.stub().rejects(
+          new Error('Flux App testapp update cannot be authorized: no registration to update'),
+        );
+        const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+        const result = await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, null, 2);
+
+        expect(result).to.be.false;
+        expect(storePermanentStub.called).to.be.false;
+        expect(logStub.error.called).to.be.true;
+      });
     });
 
     it('should return false and log error when an exception occurs', async () => {

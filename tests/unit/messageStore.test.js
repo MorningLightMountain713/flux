@@ -56,7 +56,7 @@ describe('messageStore tests', () => {
         checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
       },
       '../appDatabase/appSpecHistory': {
-        getPreviousState: sinon.stub().resolves({ spec: { owner: 'owner1' }, contentHash: null }),
+        getStateBeforeHeight: sinon.stub().resolves({ owner: 'owner1', spec: { owner: 'owner1' }, contentHash: null }),
       },
       '../utils/specLibs': {
         validateGossipSpec: sinon.stub().resolves(),
@@ -107,6 +107,7 @@ describe('messageStore tests', () => {
     appsRepositoryStub = {
       getPermanentMessage: sinon.stub(),
       getTempMessage: sinon.stub(),
+      getGlobalAppInfo: sinon.stub().resolves({ owner: 'owner1', spec: { owner: 'owner1' }, contentHash: null }),
     };
 
     appEventVerifierStub = {
@@ -283,6 +284,72 @@ describe('messageStore tests', () => {
         expect(err).to.equal(error);
         expect(logStub.error.calledWith(error)).to.be.true;
       }
+    });
+
+    describe('who an update is judged against', () => {
+      function updateMessage() {
+        return {
+          type: 'fluxappupdate',
+          version: 1,
+          appSpecifications: { name: 'test', owner: 'owner1', version: 6 },
+          hash: 'hash123',
+          timestamp: Date.now(),
+          signature: 'sig123',
+        };
+      }
+
+      beforeEach(() => {
+        appsRepositoryStub.getPermanentMessage.resolves(null);
+        appsRepositoryStub.getTempMessage.resolves(null);
+        dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns('database') });
+        dbHelperStub.insertOneToDatabase.resolves();
+      });
+
+      // A live message is judged against the app that holds the name now. The
+      // name's message history spans every app that has ever held it, so an
+      // expired app's owner would otherwise authorize an update to whoever
+      // holds the name today.
+      it('reads the active registry row for a message not yet on chain', async () => {
+        const stubs = buildProxyquireStubs();
+        dbHelperStub.findOneInDatabase.resolves(null);
+        messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
+
+        await messageStore.storeAppTemporaryMessage(updateMessage());
+
+        sinon.assert.calledOnceWithExactly(appsRepositoryStub.getGlobalAppInfo, 'test');
+        sinon.assert.notCalled(stubs['../appDatabase/appSpecHistory'].getStateBeforeHeight);
+      });
+
+      // A message already on chain is a replay: the node is catching up on
+      // something the network accepted at a past height, so it is judged
+      // against the state at that height rather than the state now.
+      it('reads the state at the confirming height for a message already on chain', async () => {
+        const stubs = buildProxyquireStubs();
+        dbHelperStub.findOneInDatabase.resolves({
+          height: 500, txid: 'txid123', value: 10000, blockTime: 1750000000,
+        });
+        messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
+
+        await messageStore.storeAppTemporaryMessage(updateMessage());
+
+        sinon.assert.calledOnceWithExactly(
+          stubs['../appDatabase/appSpecHistory'].getStateBeforeHeight, 'test', 500,
+        );
+        sinon.assert.notCalled(appsRepositoryStub.getGlobalAppInfo);
+      });
+
+      it('queues the update when there is no app of that name to update', async () => {
+        const stubs = buildProxyquireStubs();
+        dbHelperStub.findOneInDatabase.resolves(null);
+        appsRepositoryStub.getGlobalAppInfo.resolves(null);
+        messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
+
+        const result = await messageStore.storeAppTemporaryMessage(updateMessage());
+
+        expect(result).to.equal(false);
+        sinon.assert.calledOnce(stubs['../utils/globalState'].queuePendingUpdate);
+        sinon.assert.notCalled(stubs['./appEventVerifier'].authorizeWithReplayFallback);
+      });
     });
 
     it('should not enforce version upgrade policy (enforced at API layer)', async () => {

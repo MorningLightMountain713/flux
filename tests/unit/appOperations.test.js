@@ -4,7 +4,6 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const sinon = require('sinon');
 const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
-const appSpecHistory = require('../../ZelBack/src/services/appDatabase/appSpecHistory');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const componentProvisioner = require('../../ZelBack/src/services/appLifecycle/componentProvisioner');
@@ -44,21 +43,6 @@ describe('appOperations tests', () => {
   afterEach(() => {
     sinon.restore();
     operationRegistry.clear();
-  });
-
-  describe('previous spec lookup', () => {
-    it('should return null if no previous message found', async () => {
-      const specifications = { name: 'NewApp' };
-      const verificationTimestamp = Date.now();
-
-      sinon.stub(dbHelper, 'databaseConnection').returns({
-        db: () => ({}),
-      });
-      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
-
-      const result = await appSpecHistory.getPreviousSpec(specifications, verificationTimestamp);
-      expect(result).to.be.null;
-    });
   });
 
   describe('contentBlobServeApi tests', () => {
