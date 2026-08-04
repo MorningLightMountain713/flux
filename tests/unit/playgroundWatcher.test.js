@@ -2,7 +2,6 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-const { PLAYGROUND_LABEL } = require('../../ZelBack/src/services/appPlayground/playgroundSessionRegistry');
 
 describe('playgroundWatcher', () => {
   let stubs;
@@ -52,7 +51,7 @@ describe('playgroundWatcher', () => {
       const watcher = createSessionWatcher('sess-1');
       await watcher.start(['web_demoapp']);
 
-      expect(stubs.options.filters.label).to.deep.equal([`${PLAYGROUND_LABEL}=sess-1`]);
+      expect(stubs.options.filters.label).to.deep.equal([`io.runonflux.playground=sess-1`]);
       expect(stubs.options.filters.type).to.deep.equal(['container']);
       expect(stubs.options.filters.event).to.have.members(['start', 'die', 'destroy', 'health_status']);
     });

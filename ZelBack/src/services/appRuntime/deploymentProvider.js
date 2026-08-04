@@ -134,7 +134,8 @@ async function localIdentities(instantiated) {
   const assignedIdentities = assigned === null ? [null] : assigned;
 
   const present = await dockerService.getAppContainerObjects(instantiated.name).catch(() => []);
-  const replicasPresent = present.map((c) => (c.Labels && c.Labels['runonflux.replica']) || null);
+  const { LABEL_KEYS } = await getSpecBackend();
+  const replicasPresent = present.map((c) => (c.Labels && c.Labels[LABEL_KEYS.REPLICA]) || null);
 
   const owed = [...new Set([...assignedIdentities, ...replicasPresent])];
   return owed.length > 0 ? owed : [null];

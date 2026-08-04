@@ -5,10 +5,10 @@ const { AsyncLock } = require('../utils/asyncLock');
 const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const playgroundNetwork = require('./playgroundNetwork');
-const playgroundSessionRegistry = require('./playgroundSessionRegistry');
 const playgroundWatcher = require('./playgroundWatcher');
 const componentProvisioner = require('../appLifecycle/componentProvisioner');
 const { verifyRepository } = require('../appSecurity/imageManager');
+const { getSpecBackend } = require('../utils/specLibs');
 
 // The container half of a playground session: pull, create, start, probe, tear
 // down. Deliberately NOT componentProvisioner - a playground container is not an
@@ -46,11 +46,6 @@ const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
 // which is the exact situation this exists to prevent. The release is in a
 // finally, so the only way to hold it forever is a pull that never settles.
 const pullLock = new AsyncLock(1, { maxHoldMs: 0 });
-
-// Marks every container and network a session owns. Defined in the session
-// registry, which carries no dependencies, because the subsystems that must
-// RECOGNISE a session container cannot import this module.
-const { PLAYGROUND_LABEL } = playgroundSessionRegistry;
 
 function probeTimeoutMs() {
   return config.fluxapps.playgroundProbeTimeoutMs ?? 180_000;
@@ -138,6 +133,7 @@ async function checkImageSize(component) {
  */
 async function startComponent(component, session, status) {
   const id = component.identifier;
+  const { LABEL_KEYS: labelKeys } = await getSpecBackend();
 
   const pullConfig = await componentProvisioner.verifyComponentImage(component);
   // Says so when it is actually waiting, rather than reporting a pull that has
@@ -171,7 +167,7 @@ async function startComponent(component, session, status) {
     // Never restart: a session is a single observation with a deadline. A crash
     // is a RESULT the owner needs to see, not something to paper over.
     restartPolicy: 'no',
-    labels: { [PLAYGROUND_LABEL]: session.sessionId },
+    labels: { [labelKeys.PLAYGROUND_SESSION]: session.sessionId },
     owner: session.fluxId,
   });
 
@@ -796,15 +792,16 @@ async function teardownSession(session) {
 }
 
 /** Which session a container belongs to, or null if it is not a session's. */
-function sessionIdOf(container) {
-  return (container.Labels && container.Labels[PLAYGROUND_LABEL]) || null;
+function sessionIdOf(container, labelKeys) {
+  return (container.Labels && container.Labels[labelKeys.PLAYGROUND_SESSION]) || null;
 }
 
 /** The container names docker still holds for one session. */
 async function labelledContainers(sessionId) {
   const containers = await dockerService.dockerListContainers(true);
+  const { LABEL_KEYS } = await getSpecBackend();
   return containers
-    .filter((container) => sessionIdOf(container) === sessionId)
+    .filter((container) => sessionIdOf(container, LABEL_KEYS) === sessionId)
     .map((container) => ((container.Names && container.Names[0]) ? container.Names[0].slice(1) : container.Id));
 }
 
@@ -834,8 +831,9 @@ async function reapOrphans(liveSessionIds) {
     return { skipped: 'docker list failed', networksRemoved: networks.removed };
   }
 
+  const { LABEL_KEYS } = await getSpecBackend();
   const orphans = containers.filter((container) => {
-    const sessionId = sessionIdOf(container);
+    const sessionId = sessionIdOf(container, LABEL_KEYS);
     return sessionId && !liveSessionIds.has(sessionId);
   });
 
@@ -857,7 +855,6 @@ async function reapOrphans(liveSessionIds) {
 }
 
 module.exports = {
-  PLAYGROUND_LABEL,
   checkImageSize,
   probeComponent,
   runSession,
