@@ -111,6 +111,7 @@ export async function registerApp(nodeUrl, adminKeypair, spec, type = 'fluxappre
 export async function confirmOnChain(appHash, nodes, {
   propagationTimeoutMs = 30000,
   explorerTimeoutMs = 120000,
+  valueSat,
 } = {}) {
   let tempCount = 0;
   await waitFor(async () => {
@@ -124,7 +125,7 @@ export async function confirmOnChain(appHash, nodes, {
     return tempCount === nodes.length;
   }, { timeout: propagationTimeoutMs, interval: 2000, label: `temp message propagation to ${nodes.length} nodes` });
 
-  const queueResult = await daemon.queueAppTx(appHash);
+  const queueResult = await daemon.queueAppTx(appHash, valueSat);
   const targetHeight = queueResult.nextBlockHeight + 2;
 
   await waitFor(async () => {
@@ -144,12 +145,15 @@ export async function registerAndConfirm(nodeUrl, adminKeypair, spec, nodes, {
   type = 'fluxappregister',
   propagationTimeoutMs = 30000,
   explorerTimeoutMs = 120000,
+  valueSat,
 } = {}) {
   const regResult = await registerApp(nodeUrl, adminKeypair, spec, type);
   if (regResult.status !== 'success') return regResult;
 
   const appHash = regResult.data;
-  const confirm = await confirmOnChain(appHash, nodes, { propagationTimeoutMs, explorerTimeoutMs });
+  const confirm = await confirmOnChain(appHash, nodes, {
+    propagationTimeoutMs, explorerTimeoutMs, valueSat,
+  });
 
   return { status: 'success', appHash, ...confirm };
 }

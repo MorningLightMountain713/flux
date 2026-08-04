@@ -427,8 +427,8 @@ function tickBlock() {
   currentHeight += 1;
   const txs = [];
   while (pendingAppTxQueue.length > 0) {
-    const appHash = pendingAppTxQueue.shift();
-    txs.push(buildAppRegistrationTx(appHash, currentHeight));
+    const { appHash, valueSat } = pendingAppTxQueue.shift();
+    txs.push(buildAppRegistrationTx(appHash, currentHeight, valueSat));
   }
   if (txs.length > 0) {
     pendingBlocks.push({
@@ -496,7 +496,11 @@ control.post('/ticker/stop', (req, res) => {
   res.json({ tickerRunning: false, stopped });
 });
 
-function buildAppRegistrationTx(appHash, height) {
+// What an app tx pays by default: comfortably above any registration or update
+// fee, so a test that is not about pricing never has to think about it.
+const DEFAULT_APP_TX_VALUE_SAT = 200000000;
+
+function buildAppRegistrationTx(appHash, height, valueSat = DEFAULT_APP_TX_VALUE_SAT) {
   const opReturnHex = Buffer.from(appHash, 'utf-8').toString('hex');
   return {
     txid: `apptx-${appHash.substring(0, 16)}-${height}`,
@@ -504,7 +508,7 @@ function buildAppRegistrationTx(appHash, height) {
     vin: [{ txid: 'prev-tx-stub', vout: 0, address: 'stub-sender-address' }],
     vout: [
       {
-        valueSat: 200000000,
+        valueSat,
         scriptPubKey: {
           addresses: ['t3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX'],
           asm: '',
@@ -570,10 +574,15 @@ control.post('/set-node-list', (req, res) => {
   res.json({ nodeCount: deterministicNodeList.length });
 });
 
+// valueSat is what the tx pays. A pricing test names it to sit either side of a
+// fee; everything else omits it and gets the default.
 control.post('/queue-app-tx', (req, res) => {
-  const { appHash } = req.body;
+  const { appHash, valueSat } = req.body;
   if (!appHash) return res.status(400).json({ error: 'appHash required' });
-  pendingAppTxQueue.push(appHash);
+  if (valueSat !== undefined && !Number.isInteger(valueSat)) {
+    return res.status(400).json({ error: 'valueSat must be an integer number of satoshis' });
+  }
+  pendingAppTxQueue.push({ appHash, valueSat });
   return res.json({ queued: true, queueLength: pendingAppTxQueue.length, nextBlockHeight: currentHeight + 1 });
 });
 
@@ -622,14 +631,14 @@ control.get('/node-status', (req, res) => {
 // -- Deterministic list manipulation --
 
 control.post('/node-list/remove/:ip', (req, res) => {
-  const ip = req.params.ip;
+  const { ip } = req.params;
   const before = deterministicNodeList.length;
   deterministicNodeList = deterministicNodeList.filter((n) => n.ip.split(':')[0] !== ip);
   res.json({ ip, removed: deterministicNodeList.length < before, nodeCount: deterministicNodeList.length });
 });
 
 control.post('/node-list/restore/:ip', (req, res) => {
-  const ip = req.params.ip;
+  const { ip } = req.params;
   const original = originalNodeList.find((n) => n.ip.split(':')[0] === ip);
   if (!original) return res.status(404).json({ error: `${ip} not in original list` });
   const exists = deterministicNodeList.some((n) => n.ip.split(':')[0] === ip);
@@ -645,7 +654,7 @@ control.post('/node-list/reset', (req, res) => {
 // -- Per-node tier control --
 
 control.post('/node-tier/:ip', (req, res) => {
-  const ip = req.params.ip;
+  const { ip } = req.params;
   const { tier } = req.body;
   if (!tier || !['CUMULUS', 'NIMBUS', 'STRATUS'].includes(tier)) {
     return res.status(400).json({ error: 'tier must be CUMULUS, NIMBUS, or STRATUS' });
