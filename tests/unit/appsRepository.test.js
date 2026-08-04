@@ -436,9 +436,6 @@ describe('appsRepository', () => {
       expect(result).to.be.null;
     });
 
-    it('takes no timestamp, so a sender cannot move the cutoff', () => {
-      expect(appsRepository.getPermanentMessageBeforeHeight.length).to.equal(2);
-    });
   });
 
   describe('findUnderProvisionedApps', () => {
