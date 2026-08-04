@@ -63,6 +63,15 @@ export function dbClient(nodeNum) {
       return globalDb.collection('zelappsmessages').countDocuments({});
     },
 
+    // This node's permanent record of one app message. Promotion stores it
+    // BEFORE deciding whether the message was paid for, so its arrival is the
+    // signal that the pricing verdict has been reached — which is what lets a
+    // test assert a message was refused without waiting out a timeout.
+    async getPermanentMessage(hash) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('zelappsmessages').findOne({ hash }, { projection: { _id: 0 } });
+    },
+
     async appSpecCount() {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('zelappsinformation').countDocuments({});

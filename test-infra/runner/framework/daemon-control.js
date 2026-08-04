@@ -149,8 +149,10 @@ export async function setHeight(height) {
   return post('/set-height', { height });
 }
 
-export async function queueAppTx(appHash) {
-  return post('/queue-app-tx', { appHash });
+// valueSat: what the confirming tx pays, in satoshis. Omit it for the stub's
+// default, which clears any fee; name it to sit either side of one.
+export async function queueAppTx(appHash, valueSat) {
+  return post('/queue-app-tx', valueSat === undefined ? { appHash } : { appHash, valueSat });
 }
 
 // -- Where the network believes a node is --
