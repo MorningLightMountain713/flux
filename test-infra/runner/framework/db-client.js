@@ -72,6 +72,15 @@ export function dbClient(nodeNum) {
       return globalDb.collection('zelappsmessages').findOne({ hash }, { projection: { _id: 0 } });
     },
 
+    // This node's registry row for an app — the materialized global state, with
+    // the fields the API projection drops. `registeredAt` is the app's current
+    // term start, so it is what says whether an update renewed the app.
+    async getGlobalApp(appName) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('zelappsinformation')
+        .findOne({ name: appName }, { projection: { _id: 0 } });
+    },
+
     async appSpecCount() {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('zelappsinformation').countDocuments({});
