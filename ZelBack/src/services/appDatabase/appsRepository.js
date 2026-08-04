@@ -872,21 +872,6 @@ async function listIngressAttestationsByApp(name) {
 }
 
 /**
- * The most recent on-chain owner of an app that differs from currentOwner.
- * Used to replay pre-v8.10.0 owner-change races: a confirmed update whose
- * signature was made by an owner older than the immediate previous one.
- * @returns {Promise<string|null>}
- */
-async function getPreviousOwner(appName, currentOwner) {
-  const doc = await dbHelper.findOneInDatabase(
-    globalDb(), globalAppsMessages,
-    { 'appSpecifications.name': appName, 'appSpecifications.owner': { $ne: currentOwner } },
-    { projection: { _id: 0, 'appSpecifications.owner': 1 }, sort: { height: -1 } },
-  );
-  return doc?.appSpecifications?.owner ?? null;
-}
-
-/**
  * The newest permanent message for a name, cut off at a timestamp.
  *
  * v1-v8 update pricing only. The cutoff is the message's own timestamp and the
@@ -1406,7 +1391,6 @@ module.exports = {
   getTempMessageByName,
   storePermanentMessage,
   listAppMessagesByName,
-  getPreviousOwner,
   getPreviousPermanentMessage,
   getPermanentMessageBeforeHeight,
   // ingress attestations

@@ -21,8 +21,10 @@ describe('appEventVerifier', () => {
     constructor({
       spec, hashValid = true, isUpdate = false,
       validSignersByIteration = [], renewalVerdict = 'changed',
+      hash = 'not-a-grandfathered-hash',
     }) {
       this.spec = spec;
+      this.hash = hash;
       this.isUpdate = isUpdate;
       this.isRegistration = !isUpdate;
       this._hashValid = hashValid;
@@ -494,51 +496,57 @@ describe('appEventVerifier', () => {
     });
   });
 
-  describe('authorizeWithReplayFallback', () => {
-    it('accepts a replayed update signed by an older on-chain owner', async () => {
+  describe('the one update that predates update re-verification', () => {
+    const RACE_HASH = '70b2d8a546f003b906055e168d3e7921bfedfe9c83b5bd8fc79b84d979977b76';
+    const RACE_SIGNER = '1GTMhsaa55GaH7sGYif9d5dEzkGrGXYW4N';
+
+    it('accepts the named message from the signer the entry names', async () => {
+      // wordpress1735018430692: the transfer confirmed at h=1880959 and this
+      // update, mined two blocks later, was already signed by the owner that
+      // transfer replaced. The network accepted it, so resync must too.
       const appEvent = new FakeAppEvent({
-        spec: { owner: 'newOwner', name: 'myapp' },
+        spec: { owner: '1GygtXKccaXPbJfB5ZZg2Xu9ukCG7tkrUs', name: 'wordpress1735018430692' },
         isUpdate: true,
-        // primary pass (current/previous owners) fails; retry with the historical owner succeeds
-        validSignersByIteration: [new Set(), new Set(['oldestOwner'])],
+        hash: RACE_HASH,
+        validSignersByIteration: [new Set([RACE_SIGNER])],
       });
-      const result = await appEventVerifier.authorizeWithReplayFallback({
+      const result = await appEventVerifier.authorize({
         appEvent,
-        previousState: { owner: 'midOwner' },
-        daemonHeight: 1000,
-        isReplay: true,
-        resolveHistoricalOwner: async () => 'oldestOwner',
+        previousState: { owner: '1GygtXKccaXPbJfB5ZZg2Xu9ukCG7tkrUs' },
+        daemonHeight: 1880961,
       });
-      expect(result.signer).to.equal('oldestOwner');
+      expect(result.signer).to.equal(RACE_SIGNER);
     });
 
-    it('does not apply the historical-owner fallback for live gossip (isReplay false)', async () => {
+    it('refuses a former owner on every other message', async () => {
+      // The takeover a general relaxation would grant: a former owner of a name
+      // signs an update to the app holding it now and pays the fee. Nothing
+      // about the message can put it in the set — the set is keyed by hash, and
+      // a hash commits to the content it authorizes.
       const appEvent = new FakeAppEvent({
-        spec: { owner: 'newOwner', name: 'myapp' },
+        spec: { owner: 'currentOwner', name: 'myapp' },
         isUpdate: true,
-        validSignersByIteration: [new Set(), new Set(['oldestOwner'])],
+        hash: 'attacker-message-hash',
+        validSignersByIteration: [new Set(['formerOwner'])],
       });
-      await expect(appEventVerifier.authorizeWithReplayFallback({
+      await expect(appEventVerifier.authorize({
         appEvent,
-        previousState: { owner: 'midOwner' },
-        daemonHeight: 1000,
-        isReplay: false,
-        resolveHistoricalOwner: async () => 'oldestOwner',
+        previousState: { owner: 'currentOwner' },
+        daemonHeight: 2831782,
       })).to.be.rejectedWith(/does not correspond with Flux App owner/);
     });
 
-    it('rejects when no older on-chain owner is found', async () => {
+    it('does not let the named signer authorize a different message', async () => {
       const appEvent = new FakeAppEvent({
-        spec: { owner: 'newOwner', name: 'myapp' },
+        spec: { owner: 'currentOwner', name: 'wordpress1735018430692' },
         isUpdate: true,
-        validSignersByIteration: [new Set(), new Set(['oldestOwner'])],
+        hash: 'some-other-hash-for-the-same-app',
+        validSignersByIteration: [new Set([RACE_SIGNER])],
       });
-      await expect(appEventVerifier.authorizeWithReplayFallback({
+      await expect(appEventVerifier.authorize({
         appEvent,
-        previousState: { owner: 'midOwner' },
-        daemonHeight: 1000,
-        isReplay: true,
-        resolveHistoricalOwner: async () => null,
+        previousState: { owner: 'currentOwner' },
+        daemonHeight: 2831782,
       })).to.be.rejectedWith(/does not correspond with Flux App owner/);
     });
   });
