@@ -8,7 +8,7 @@ const serviceHelper = require('../serviceHelper');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
 const { deserializeSpec } = require('../utils/specCutover');
-const { validateGossipSpec, getSpec, getSpecBackend } = require('../utils/specLibs');
+const { validateGossipSpec, getSpecBackend } = require('../utils/specLibs');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
@@ -366,7 +366,6 @@ async function processMessages(messages, records, onProgress) {
         const appSpecFormatted = wireSpec.serialize();
         const height = serviceHelper.ensureNumber(appMessage.height);
         const messageTimestamp = serviceHelper.ensureNumber(appMessage.timestamp);
-        const valueSat = serviceHelper.ensureNumber(appMessage.valueSat);
         const isRegistration = appMessage.type === 'fluxappregister' || appMessage.type === 'zelappregister';
 
         let validationBlob;
@@ -410,23 +409,10 @@ async function processMessages(messages, records, onProgress) {
           });
         }
 
-        await appEventVerifier.authorizeWithReplayFallback({
+        await appEventVerifier.authorize({
           appEvent,
           previousState,
           daemonHeight,
-          isReplay: true,
-          // bulk resync: the DB is stale until permInserts flush, so the historical
-          // owner for an owner-change race comes from the in-memory batch map, not the DB
-          resolveHistoricalOwner: (name, currentOwner) => {
-            let found = null;
-            for (const m of (prevMessagesMap.get(name) || [])) {
-              const owner = m.appSpecifications?.owner;
-              if (owner && owner !== currentOwner && (!found || m.height > found.height)) {
-                found = { owner, height: m.height };
-              }
-            }
-            return found?.owner ?? null;
-          },
         });
 
         // Verified — add to batch and update map for subsequent messages

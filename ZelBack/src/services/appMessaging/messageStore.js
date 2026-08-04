@@ -196,11 +196,10 @@ async function storeAppTemporaryMessage(message, options = {}) {
       }
     }
 
-    await appEventVerifier.authorizeWithReplayFallback({
+    await appEventVerifier.authorize({
       appEvent,
       previousState,
       daemonHeight: block,
-      isReplay: isAppRequested,
     });
   }
 

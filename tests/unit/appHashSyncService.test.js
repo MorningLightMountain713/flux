@@ -108,7 +108,6 @@ describe('appHashSyncService tests', () => {
     appEventVerifierStub = {
       deserializeMessage: sinon.stub().callsFake(async (msg) => ({ serialize: () => ({ ...msg }) })),
       authorize: sinon.stub().resolves(),
-      authorizeWithReplayFallback: sinon.stub().resolves(),
     };
 
     deserializeSpecStub = makeDeserializeSpecStub();
@@ -741,7 +740,6 @@ describe('appHashSyncService tests', () => {
       localAppEventVerifierStub = {
         deserializeMessage: sinon.stub().callsFake(async (msg) => ({ serialize: () => ({ ...msg }) })),
         authorize: sinon.stub().resolves(),
-        authorizeWithReplayFallback: sinon.stub().resolves(),
       };
 
       localDeserializeSpecStub = makeDeserializeSpecStub();
@@ -829,11 +827,11 @@ describe('appHashSyncService tests', () => {
       // appEventVerifier.deserializeMessage called for each message
       expect(localAppEventVerifierStub.deserializeMessage.callCount).to.equal(2);
       // appEventVerifier.authorize called for each message
-      expect(localAppEventVerifierStub.authorizeWithReplayFallback.callCount).to.equal(2);
+      expect(localAppEventVerifierStub.authorize.callCount).to.equal(2);
       // previous spec resolved and passed to authorize for each update message
       // (first update sees the registered owner; second sees the first update's owner)
-      expect(localAppEventVerifierStub.authorizeWithReplayFallback.firstCall.args[0].previousState.spec).to.have.property('owner', 'oldOwner');
-      expect(localAppEventVerifierStub.authorizeWithReplayFallback.secondCall.args[0].previousState.spec).to.have.property('owner', 'newOwner');
+      expect(localAppEventVerifierStub.authorize.firstCall.args[0].previousState.spec).to.have.property('owner', 'oldOwner');
+      expect(localAppEventVerifierStub.authorize.secondCall.args[0].previousState.spec).to.have.property('owner', 'newOwner');
       // Both messages should be inserted
       expect(localCollectionStub.insertMany.called).to.be.true;
       const inserted = localCollectionStub.insertMany.firstCall.args[0];
@@ -869,7 +867,7 @@ describe('appHashSyncService tests', () => {
       });
 
       // authorize throws -- message should be skipped
-      localAppEventVerifierStub.authorizeWithReplayFallback.rejects(new Error('Invalid signature'));
+      localAppEventVerifierStub.authorize.rejects(new Error('Invalid signature'));
 
       await localModule.syncMissingHashes();
 

@@ -4,7 +4,7 @@ const signatureVerifier = require('../signatureVerifier');
 const benchmarkService = require('../benchmarkService');
 const { ARCANE_ATTESTATION_PUBKEY, verifyAttestationSignature } = require('../utils/arcaneAttestation');
 const { getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
-const appsRepository = require('../appDatabase/appsRepository');
+const { ownerChangeRaceSigner } = require('./ownerChangeRaces');
 
 async function deserializeMessage(message) {
   const { AppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
@@ -54,6 +54,9 @@ function resolveTeamSupportAddress(daemonHeight) {
  * A transfer is therefore the outgoing owner signing a spec that names the
  * incoming one.
  *
+ * One mined message predates update re-verification and cannot satisfy that
+ * rule; it is named, with its signer, in ownerChangeRaces.
+ *
  * @param {{appEvent: object, previousState: object|null, daemonHeight: number,
  *   verifyHash?: boolean, extraSigners?: string[]}} params
  */
@@ -76,6 +79,10 @@ async function authorize({
       );
     }
     signers.push(previousState.owner);
+    const raceSigner = ownerChangeRaceSigner(appEvent.hash);
+    if (raceSigner) {
+      signers.push(raceSigner);
+    }
     const teamSupport = resolveTeamSupportAddress(daemonHeight);
     if (teamSupport && isMarketplaceApp(appEvent.spec.name)) {
       signers.push(teamSupport);
@@ -106,39 +113,6 @@ async function authorize({
   throw new Error(
     'Received signature does not correspond with Flux App owner or Flux App specifications are not properly formatted',
   );
-}
-
-/**
- * authorize() with the replay-only owner-change-race fallback.
- *
- * When two updates landed close together pre-v8.10.0 and the first changed the
- * owner, the second was signed by the OLD owner — accepted by the network at the
- * time (re-verification did not exist yet). Replaying such an already-mined
- * message, the immediate previous owner no longer matches; find the older on-chain
- * owner and retry. Gated on isReplay (the message is confirmed/on-chain, mined and
- * paid) — live gossip is never relaxed this way.
- *
- * The historical owner comes from resolveHistoricalOwner, which differs by caller:
- * the single-message store path reads the committed DB (default), while bulk resync
- * must read its in-memory batch map (the DB is stale until the batch flushes).
- *
- * @param {{appEvent: object, previousState: object, daemonHeight: number,
- *   isReplay?: boolean, resolveHistoricalOwner?: Function}} params
- */
-async function authorizeWithReplayFallback({
-  appEvent, previousState, daemonHeight, isReplay = false,
-  resolveHistoricalOwner = (name, currentOwner) => appsRepository.getPreviousOwner(name, currentOwner),
-}) {
-  try {
-    return await authorize({ appEvent, previousState, daemonHeight });
-  } catch (err) {
-    if (!isReplay || !appEvent.isUpdate || !previousState || !previousState.owner) throw err;
-    const historicalOwner = await resolveHistoricalOwner(appEvent.spec.name, previousState.owner);
-    if (!historicalOwner) throw err;
-    return authorize({
-      appEvent, previousState, daemonHeight, extraSigners: [historicalOwner],
-    });
-  }
 }
 
 /**
@@ -201,7 +175,6 @@ module.exports = {
   deserializeMessage,
   deserializeTempMessage,
   authorize,
-  authorizeWithReplayFallback,
   requestAttestation,
   verifyAttestation,
   computeOutboundHash,
