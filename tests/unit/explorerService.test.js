@@ -24,6 +24,12 @@ const { expect } = chai;
 describe('explorerService tests', () => {
   before(requireMongo);
 
+  // initiateBlockProcessor ends by starting the scan loop. Stop it between tests so a
+  // loop from one test cannot still be advancing during the next one's assertions.
+  afterEach(async () => {
+    await explorerService.stopScanning();
+  });
+
   describe('getVerboseBlock tests', () => {
     let daemonServiceBlockchainRpcsStub;
     const hash = '12345';
@@ -237,7 +243,7 @@ describe('explorerService tests', () => {
     });
   });
 
-  describe('processBlock tests', () => {
+  describe('processOneBlock tests', () => {
     let dbStubUpdate;
     let dbStubCollectionStats;
     let logInfoSpy;
@@ -272,28 +278,12 @@ describe('explorerService tests', () => {
       sinon.restore();
     });
 
-    it('should return and retry function if daemon is not synced', async () => {
-      const blockHeight = 100000;
-      const isInsightExplorer = true;
-      daemonServiceMiscRpcsStub.returns({
-        data:
-        {
-          synced: false,
-        },
-      });
-
-      const result = await explorerService.processBlock(blockHeight, isInsightExplorer);
-
-      expect(result).to.be.undefined;
-    });
-
     it('should update db if all parameters are passed correctly, block height == 695000', async () => {
       const blockHeight = 695000;
       const isInsightExplorer = true;
       dbStubUpdate.returns(true);
       sweepRegistryExpiryStub.returns(true);
       // prevent infinite func loop while testing
-      explorerService.setBlockProccessingCanContinue(false);
       dbStubCollectionStats.returns({
         size: 10000,
         count: 15,
@@ -335,7 +325,7 @@ describe('explorerService tests', () => {
         },
       });
 
-      await explorerService.processBlock(blockHeight, isInsightExplorer);
+      await explorerService.processOneBlock(blockHeight, isInsightExplorer, { atTip: true });
 
       sinon.assert.calledOnce(sweepRegistryExpiryStub);
       sinon.assert.notCalled(restorePortsSupportStub);
@@ -356,7 +346,6 @@ describe('explorerService tests', () => {
       dbStubUpdate.returns(true);
       reconcileInstalledAppsStub.returns(true);
       // prevent infinite func loop while testing
-      explorerService.setBlockProccessingCanContinue(false);
       dbStubCollectionStats.returns({
         size: 10000,
         count: 15,
@@ -398,7 +387,7 @@ describe('explorerService tests', () => {
         },
       });
 
-      await explorerService.processBlock(blockHeight, isInsightExplorer);
+      await explorerService.processOneBlock(blockHeight, isInsightExplorer, { atTip: true });
 
       sinon.assert.notCalled(sweepRegistryExpiryStub);
       sinon.assert.notCalled(restorePortsSupportStub);
@@ -418,7 +407,6 @@ describe('explorerService tests', () => {
       dbStubUpdate.returns(true);
       reconcileInstalledAppsStub.returns(true);
       // prevent infinite func loop while testing
-      explorerService.setBlockProccessingCanContinue(false);
       dbStubCollectionStats.returns({
         size: 10000,
         count: 15,
@@ -460,7 +448,7 @@ describe('explorerService tests', () => {
         },
       });
 
-      await explorerService.processBlock(blockHeight, isInsightExplorer);
+      await explorerService.processOneBlock(blockHeight, isInsightExplorer, { atTip: true });
 
       sinon.assert.notCalled(sweepRegistryExpiryStub);
       sinon.assert.calledOnceWithMatch(
@@ -540,7 +528,7 @@ describe('explorerService tests', () => {
     it('should return right away if isInInitiationOfBP is true', async () => {
       explorerService.setIsInInitiationOfBP(true);
 
-      const result = await explorerService.initiateBlockProcessor(true, true);
+      const result = await explorerService.initiateBlockProcessor({ restoreDatabase: true, deepRestore: true });
 
       expect(result).to.be.undefined;
       sinon.assert.notCalled(findInDatabaseStub);
@@ -549,7 +537,6 @@ describe('explorerService tests', () => {
     it('should throw and log error if getBlockCount does not return success', async () => {
       explorerService.setZelAppSpecsMigrationDone(true);
       sinon.stub(dbHelper, 'countInDatabase').resolves(1);
-      explorerService.setBlockProccessingCanContinue(false);
       getBlockCountStub.returns({
         status: 'error',
         data: {
@@ -557,7 +544,7 @@ describe('explorerService tests', () => {
         },
       });
 
-      await explorerService.initiateBlockProcessor(false, false);
+      await explorerService.initiateBlockProcessor({});
       await serviceHelper.delay(200);
 
       sinon.assert.calledOnce(logErrorSpy);
@@ -580,9 +567,8 @@ describe('explorerService tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: [] });
       sinon.stub(daemonServiceUtils, 'executeBatchCall').resolves({ status: 'success', data: [] });
-      explorerService.setBlockProccessingCanContinue(false);
 
-      await explorerService.initiateBlockProcessor(false, false, false);
+      await explorerService.initiateBlockProcessor({});
       await serviceHelper.delay(200);
 
       sinon.assert.notCalled(logErrorSpy);
@@ -604,13 +590,14 @@ describe('explorerService tests', () => {
       getBlockCountStub.returns({ status: 'success', data: 200000 });
       sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'error', data: { message: 'RPC unavailable' } });
-      explorerService.setBlockProccessingCanContinue(false);
 
-      await explorerService.initiateBlockProcessor(false, false, false);
+      await explorerService.initiateBlockProcessor({});
       await serviceHelper.delay(200);
 
       sinon.assert.calledWithMatch(logErrorSpy, 'Bootstrap failed, falling back to block-by-block scan');
-      sinon.assert.calledWithMatch(logInfoSpy, 'Processing Explorer Block Height: 695000');
+      // initiateBlockProcessor now leaves the cursor where scanning should resume and
+      // enables scanning; which block gets written next is the drain's business.
+      expect(explorerService.scanning()).to.equal(true);
     });
 
     it('should run the block processor, restoreDatabase set to true, height > 0', async () => {
@@ -629,13 +616,14 @@ describe('explorerService tests', () => {
         data: 200000,
       });
       sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
-      explorerService.setBlockProccessingCanContinue(false);
 
-      await explorerService.initiateBlockProcessor(true, false, false);
+      await explorerService.initiateBlockProcessor({ restoreDatabase: true });
       await serviceHelper.delay(200);
 
       sinon.assert.notCalled(logErrorSpy);
-      sinon.assert.calledWithMatch(logInfoSpy, 'Processing Explorer Block Height: 695000');
+      // initiateBlockProcessor now leaves the cursor where scanning should resume and
+      // enables scanning; which block gets written next is the drain's business.
+      expect(explorerService.scanning()).to.equal(true);
       sinon.assert.calledWithMatch(logInfoSpy, 'Restoring database...');
       sinon.assert.calledWithMatch(logInfoSpy, 'Rescan completed');
       sinon.assert.calledWithMatch(logInfoSpy, 'Rescan completed');
@@ -658,13 +646,14 @@ describe('explorerService tests', () => {
         data: 200000,
       });
       sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
-      explorerService.setBlockProccessingCanContinue(false);
 
-      await explorerService.initiateBlockProcessor(true, true, false);
+      await explorerService.initiateBlockProcessor({ restoreDatabase: true, deepRestore: true });
       await serviceHelper.delay(200);
 
       sinon.assert.notCalled(logErrorSpy);
-      sinon.assert.calledWithMatch(logInfoSpy, 'Processing Explorer Block Height: 695000');
+      // initiateBlockProcessor now leaves the cursor where scanning should resume and
+      // enables scanning; which block gets written next is the drain's business.
+      expect(explorerService.scanning()).to.equal(true);
       sinon.assert.calledWithMatch(logInfoSpy, 'Deep restoring of database...');
       sinon.assert.calledWithMatch(logInfoSpy, 'Rescan completed');
       sinon.assert.calledWithMatch(logInfoSpy, 'Rescan completed');
@@ -689,9 +678,8 @@ describe('explorerService tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: [] });
       sinon.stub(daemonServiceUtils, 'executeBatchCall').resolves({ status: 'success', data: [] });
-      explorerService.setBlockProccessingCanContinue(false);
 
-      await explorerService.initiateBlockProcessor(false, false, true);
+      await explorerService.initiateBlockProcessor({ rescanGlobalApps: true });
       await serviceHelper.delay(200);
 
       sinon.assert.notCalled(logErrorSpy);

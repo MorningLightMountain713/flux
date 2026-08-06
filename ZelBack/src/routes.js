@@ -959,16 +959,16 @@ module.exports = (app) => {
   }));
 
   app.get('/explorer/reindex/:reindexapps?', asyncRoute((req, res) => {
-    return explorerService.reindexExplorer(req, res);
+    return explorerService.reindexExplorerApi(req, res);
   }));
   app.get('/explorer/restart', asyncRoute((req, res) => {
-    return explorerService.restartBlockProcessing(req, res);
+    return explorerService.restartBlockProcessingApi(req, res);
   }));
   app.get('/explorer/stop', asyncRoute((req, res) => {
-    return explorerService.stopBlockProcessing(req, res);
+    return explorerService.stopBlockProcessingApi(req, res);
   }));
   app.get('/explorer/rescan/:blockheight?/:rescanapps?', asyncRoute((req, res) => {
-    return explorerService.rescanExplorer(req, res);
+    return explorerService.rescanExplorerApi(req, res);
   }));
 
   app.get('/apps/appconvert/:appname', asyncRoute((req, res) => {
