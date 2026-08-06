@@ -1,4 +1,5 @@
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
+const nodeListSource = require('./nodeListSource');
 const networkStateManager = require('./utils/networkStateManager');
 
 /**
@@ -23,46 +24,28 @@ const lastDaemonCallResult = [];
 // eslint-disable-next-line no-unused-vars
 const DAEMON_CALL_THROTTLE_MS = 30000; // 30 seconds
 
+const fetcher = async (filter = null) => {
+  // this is not how the function is supposed to be used, but it shouldn't take
+  // an express req, res pair either. There should be an api function in front of it
+  const rpcOptions = { params: { useCache: false, filter }, query: { filter: null } };
+
+  const res = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(
+    rpcOptions,
+  );
+
+  const nodes = res.status === 'success' ? res.data : [];
+
+  return nodes;
+};
+
 /**
- * Uses polling or an event emitter to get the flux network state
- * (Can use zmq here in the future)
- * @param {{
- *   waitTimeoutMs?: number,
- *   stateEmitter?: EventEmitter
- * }} options waitTimeoutMs - How long to wait for the promise to resolve  \
- * stateEmitter - the block eventEmitter
- * @returns {Promise<void>}
+ * Waits for the manager to fill itself by fetching, driven either by block events or
+ * by its own timer. Used when the daemon does not publish the delta topic.
+ * @param {number} waitTimeoutMs How long to wait before giving up, 0 for forever.
+ * @returns {Promise<void>} Resolves once the state is populated.
  */
-async function start(options = {}) {
-  return new Promise((resolve, reject) => { // eslint-disable-line consistent-return
-    if (stateManager) {
-      resolve();
-      return;
-    }
-
-    const waitTimeoutMs = options.waitTimeoutMs || 0;
-    const stateEmitter = options.stateEmitter || null;
-
-    const fetcher = async (filter = null) => {
-      // this is not how the function is supposed to be used, but it shouldn't take
-      // an express req, res pair either. There should be an api function in front of it
-      const rpcOptions = { params: { useCache: false, filter }, query: { filter: null } };
-
-      const res = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(
-        rpcOptions,
-      );
-
-      const nodes = res.status === 'success' ? res.data : [];
-
-      return nodes;
-    };
-
-    stateManager = new networkStateManager.NetworkStateManager(fetcher, {
-      stateEmitter,
-      stateEvent: 'blocksProcessed',
-      progressEvent: 'syncProgress',
-    });
-
+function startByFetching(waitTimeoutMs) {
+  return new Promise((resolve, reject) => {
     const timeout = waitTimeoutMs ? setTimeout(
       () => reject(new Error('Unable To start NetworkStateService: Timeout reached')),
       waitTimeoutMs,
@@ -78,12 +61,48 @@ async function start(options = {}) {
 }
 
 /**
+ * Brings up the flux network state.
+ *
+ * Prefers the delta stream, which keeps the list current for ~3 KB a block instead of
+ * refetching ~7 MB. Falls back to fetching — on block events where an emitter is
+ * supplied, on a timer otherwise — when the daemon does not publish the topic.
+ *
+ * @param {{
+ *   waitTimeoutMs?: number,
+ *   stateEmitter?: EventEmitter
+ * }} options waitTimeoutMs - How long to wait for the promise to resolve  \
+ * stateEmitter - the block eventEmitter
+ * @returns {Promise<void>}
+ */
+async function start(options = {}) {
+  if (stateManager) return;
+
+  const waitTimeoutMs = options.waitTimeoutMs || 0;
+  const stateEmitter = options.stateEmitter || null;
+
+  stateManager = new networkStateManager.NetworkStateManager(fetcher, {
+    stateEmitter,
+    stateEvent: 'blocksProcessed',
+    progressEvent: 'syncProgress',
+  });
+
+  const usingDeltas = await nodeListSource.start({ stateManager, listFetcher: fetcher });
+
+  // The snapshot that anchors the delta stream has already populated the state, so
+  // there is nothing left to wait for.
+  if (usingDeltas) return;
+
+  await startByFetching(waitTimeoutMs);
+}
+
+/**
  *
  * @returns {Promise<void>}
  */
 async function stop() {
   if (!stateManager) return;
 
+  nodeListSource.stop();
   await stateManager.stop();
   stateManager = null;
 }

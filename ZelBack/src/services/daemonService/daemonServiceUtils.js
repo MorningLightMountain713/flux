@@ -186,6 +186,57 @@ function getBlockCache(key) {
  * @param {string} parameter Config key.
  * @returns {string} Config value.
  */
+/**
+ * Drops cached daemon results that a reorg has invalidated.
+ *
+ * Until there was a reorg signal these caches had no invalidation at all — a block
+ * rolled off the chain stayed cached under its height for the full hour, and
+ * `getVerboseBlock` would serve the orphan back during the re-scan.
+ *
+ * Blocks are dropped selectively by height. An entry keyed by block *hash* stays: that
+ * hash still names the same block, it is merely no longer on the main chain. It is the
+ * height keys that now point at a different block.
+ *
+ * Transactions are dropped wholesale, because a txid gives no way to tell which block
+ * carried it, and a transaction from a rolled-back block may no longer be mined at all.
+ *
+ * @param {number} forkHeight Last height common to both chains.
+ * @returns {{blocks: number, transactions: number, generic: number}} Entries dropped.
+ */
+function invalidateCachesFromHeight(forkHeight) {
+  let blocks = 0;
+
+  [...blockCache.keys()].forEach((key) => {
+    if (typeof key !== 'string' || !key.startsWith('getBlock')) return;
+
+    let params = null;
+    try {
+      params = JSON.parse(key.slice('getBlock'.length));
+    } catch {
+      // Unrecognised key shape: drop it rather than reason about it.
+      blockCache.delete(key);
+      blocks += 1;
+      return;
+    }
+
+    const identifier = Array.isArray(params) ? params[0] : params;
+
+    if (typeof identifier === 'number' && identifier > forkHeight) {
+      blockCache.delete(key);
+      blocks += 1;
+    }
+  });
+
+  const transactions = rawTxCache.size;
+  rawTxCache.clear();
+
+  // Holds getBlockCount, getChainTips and friends, all of which the reorg changed.
+  const generic = cache.size;
+  cache.clear();
+
+  return { blocks, transactions, generic };
+}
+
 function getConfigValue(parameter) {
   if (!fluxdConfig) return undefined;
 
@@ -276,6 +327,7 @@ module.exports = {
   executeCall,
   executeBatchCall,
   getConfigValue,
+  invalidateCachesFromHeight,
   getFluxdClient,
   getFluxdConfig,
   getFluxdConfigPath,

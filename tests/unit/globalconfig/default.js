@@ -113,6 +113,17 @@ module.exports = {
     rpcport: 16124,
     porttestnet: 26125,
     rpcporttestnet: 26124,
+    zmqport: 16123,
+    subscriptions: {
+      receiveHighWaterMark: 400,
+      silenceThresholdMs: 90000,
+      probeIntervalMs: 30000,
+      // Push carries the tip every block; this only keeps `headers` honest, which push
+      // cannot supply — a post-IBD daemon still catching up publishes a block per
+      // connection and would otherwise read as synced.
+      headerRefreshIntervalMs: 300000,
+      livenessCheckIntervalMs: 10000,
+    },
   },
   minimumFluxBenchAllowedVersion: '6.2.0',
   minimumFluxOSAllowedVersion: '8.0.0',

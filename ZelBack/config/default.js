@@ -145,6 +145,19 @@ module.exports = {
     porttestnet: 26125,
     rpcporttestnet: 26124,
     zmqport: 16123,
+    subscriptions: {
+      // Shallow on purpose: falling behind becomes a sequence gap, and the gap
+      // handlers resync from one RPC call. A deep queue would hide the stall.
+      receiveHighWaterMark: 400,
+      // Blocks are ~30s, so this is three missed in a row before we spend an RPC.
+      silenceThresholdMs: 90000,
+      probeIntervalMs: 30000,
+      // Push carries the tip every block; this only keeps `headers` honest, which push
+      // cannot supply — a post-IBD daemon still catching up publishes a block per
+      // connection and would otherwise read as synced.
+      headerRefreshIntervalMs: 300000,
+      livenessCheckIntervalMs: 10000,
+    },
   },
   minimumFluxBenchAllowedVersion: '6.2.0',
   minimumFluxOSAllowedVersion: '8.13.1',

@@ -43,6 +43,18 @@ class NetworkStateManager extends EventEmitter {
 
   #socketAddressIndex = new Map();
 
+  // Keyed `txhash:outidx`. A delta identifies nodes by outpoint, so without this an
+  // apply would be a linear scan of ~13k entries per changed node.
+  #outpointIndex = new Map();
+
+  /**
+   * The transition this state was last brought to, as {height, hash}. Deltas chain by
+   * hash, so this is what the next delta's `fromHash` must match. Null until a
+   * snapshot anchors it.
+   * @type {{height: number, hash: string} | null}
+   */
+  #chainAnchor = null;
+
   #controller = new FluxController();
 
   #started = false;
@@ -215,9 +227,45 @@ class NetworkStateManager extends EventEmitter {
     };
   }
 
-  #setIndexes(pubkeyIndex, socketAddressIndex) {
+  #setIndexes(pubkeyIndex, socketAddressIndex, outpointIndex) {
     this.#pubkeyIndex = pubkeyIndex;
     this.#socketAddressIndex = socketAddressIndex;
+    this.#outpointIndex = outpointIndex;
+  }
+
+  /**
+   * The key a delta identifies a node by.
+   * @param {{txhash: string, outidx: number|string}} node Node or outpoint.
+   * @returns {string} Outpoint key.
+   */
+  static outpointKey(node) {
+    return `${node.txhash}:${node.outidx}`;
+  }
+
+  #indexNode(node) {
+    const nodesByPubkey = this.#pubkeyIndex.get(node.pubkey)
+      || this.#pubkeyIndex.set(node.pubkey, new Map()).get(node.pubkey);
+
+    nodesByPubkey.set(node.ip, node);
+    this.#socketAddressIndex.set(normalizeSocketAddress(node.ip), node);
+    this.#outpointIndex.set(NetworkStateManager.outpointKey(node), node);
+  }
+
+  #deindexNode(node) {
+    const nodesByPubkey = this.#pubkeyIndex.get(node.pubkey);
+    if (nodesByPubkey) {
+      nodesByPubkey.delete(node.ip);
+      if (!nodesByPubkey.size) this.#pubkeyIndex.delete(node.pubkey);
+    }
+
+    const socketAddress = normalizeSocketAddress(node.ip);
+    // Only clear the entry if it still points at this node; an ip that has moved to
+    // another node must not have the new owner's entry deleted underneath it.
+    if (this.#socketAddressIndex.get(socketAddress) === node) {
+      this.#socketAddressIndex.delete(socketAddress);
+    }
+
+    this.#outpointIndex.delete(NetworkStateManager.outpointKey(node));
   }
 
   async #buildIndexes(nodes) {
@@ -229,6 +277,7 @@ class NetworkStateManager extends EventEmitter {
 
     const pubkeyIndex = new Map();
     const socketAddressIndex = new Map();
+    const outpointIndex = new Map();
 
     function iterIndexes(startIndex, callback) {
       const endIndex = startIndex + 1000;
@@ -244,6 +293,7 @@ class NetworkStateManager extends EventEmitter {
         // appends the default port only to a bare ip; explicit (UPnP) ports pass
         // through unchanged. Lookups normalize the same way, so both forms resolve.
         socketAddressIndex.set(normalizeSocketAddress(node.ip), node);
+        outpointIndex.set(NetworkStateManager.outpointKey(node), node);
       });
 
       if (endIndex >= nodeCount) {
@@ -261,7 +311,7 @@ class NetworkStateManager extends EventEmitter {
 
     return new Promise((resolve) => {
       iterIndexes(0, () => {
-        this.#setIndexes(pubkeyIndex, socketAddressIndex);
+        this.#setIndexes(pubkeyIndex, socketAddressIndex, outpointIndex);
         release();
         resolve();
       });
@@ -385,10 +435,165 @@ class NetworkStateManager extends EventEmitter {
     return clone;
   }
 
+  /**
+   * Replaces the held state with an atomic snapshot and anchors it to that block.
+   *
+   * The snapshot RPC returns height, blockhash and nodes under one lock, which is why
+   * it is used rather than the plain list: an anchor taken from a separate call could
+   * name a block the node set never matched.
+   *
+   * @param {Array<Fluxnode>} nodes The snapshot's node list.
+   * @param {number} height Snapshot height.
+   * @param {string} hash Snapshot block hash.
+   * @returns {Promise<void>} Resolves once indexes are rebuilt.
+   */
+  async applySnapshot(nodes, height, hash) {
+    if (!Array.isArray(nodes) || !nodes.length) {
+      throw new Error('Refusing to replace network state with an empty snapshot');
+    }
+
+    const populated = Boolean(this.#state.length);
+
+    this.#state = nodes;
+    await this.#buildIndexes(this.#state);
+    this.#chainAnchor = { height, hash };
+
+    log.info(`Network state snapshot applied at ${height}: ${nodes.length} nodes`);
+
+    if (!populated) {
+      this.emit('populated');
+      if (this.#onStartComplete) this.#onStartComplete();
+      this.#started = true;
+    }
+
+    this.emit('updated');
+  }
+
+  /**
+   * The transition this state currently sits at, or null if unanchored.
+   * @returns {{height: number, hash: string} | null} Anchor.
+   */
+  get chainAnchor() {
+    return this.#chainAnchor ? { ...this.#chainAnchor } : null;
+  }
+
+  /**
+   * Anchors the state to a block, so subsequent deltas can be chained onto it. Set
+   * from the snapshot that produced the state.
+   * @param {number} height Snapshot height.
+   * @param {string} hash Snapshot block hash.
+   * @returns {void}
+   */
+  setChainAnchor(height, hash) {
+    this.#chainAnchor = hash ? { height, hash } : null;
+  }
+
+  /**
+   * Applies one fluxnodelistdelta to the held state.
+   *
+   * Deltas are final state rather than an event log: a node that was added, removed
+   * and re-added inside one block arrives as a single update, so every entry is
+   * applied as an overwrite and never replayed.
+   *
+   * Rejected rather than force-applied when it does not chain onto what we hold — the
+   * caller's repair is a full snapshot, because a delta stream has no replay. Height
+   * is not the test: after a reorg it can go backwards or repeat, so the hash is what
+   * decides.
+   *
+   * @param {object} delta Decoded fluxnodelistdelta.
+   * @param {(outpoints: Array<object>) => Promise<Array<object>>} resolveAdded Called
+   *   with the outpoints of added nodes, returns their full records. Adds carry fewer
+   *   fields on the wire than the list exposes — `added_height` and `payment_address`
+   *   are not in the delta — and both have consumers.
+   * @returns {Promise<{applied: boolean, reason?: string}>} Outcome.
+   */
+  async applyDelta(delta, resolveAdded) {
+    if (!this.#chainAnchor) {
+      return { applied: false, reason: 'state is not anchored to a block' };
+    }
+
+    if (delta.fromHash !== this.#chainAnchor.hash) {
+      return {
+        applied: false,
+        reason: `delta starts at ${delta.fromHash.slice(0, 16)} but state is at ${this.#chainAnchor.hash.slice(0, 16)}`,
+      };
+    }
+
+    let added = [];
+    if (delta.added.length) {
+      added = await resolveAdded(delta.added);
+
+      if (added.length !== delta.added.length) {
+        return {
+          applied: false,
+          reason: `resolved ${added.length} of ${delta.added.length} added nodes`,
+        };
+      }
+    }
+
+    const removedKeys = new Set(
+      delta.removed.map((outpoint) => `${outpoint.txid}:${outpoint.index}`),
+    );
+
+    removedKeys.forEach((key) => {
+      const node = this.#outpointIndex.get(key);
+      if (node) this.#deindexNode(node);
+    });
+
+    delta.updated.forEach((entry) => {
+      const key = NetworkStateManager.outpointKey(entry);
+      const existing = this.#outpointIndex.get(key);
+
+      // An update for a node we never held cannot be merged onto anything. Rather
+      // than invent a partial record, let it surface as a mismatch at the next
+      // snapshot comparison.
+      if (!existing) return;
+
+      // The ip is an index key, so a move has to be re-keyed rather than overwritten
+      // in place.
+      const ipChanged = existing.ip !== entry.ip;
+      if (ipChanged) this.#deindexNode(existing);
+
+      existing.ip = entry.ip;
+      existing.tier = entry.tier;
+      existing.confirmed_height = entry.confirmedHeight;
+      existing.last_paid_height = entry.lastPaidHeight;
+      existing.pubkey = entry.pubkey;
+
+      if (ipChanged) this.#indexNode(existing);
+    });
+
+    if (removedKeys.size) {
+      this.#state = this.#state.filter(
+        (node) => !removedKeys.has(NetworkStateManager.outpointKey(node)),
+      );
+    }
+
+    added.forEach((node) => {
+      const key = NetworkStateManager.outpointKey(node);
+      if (this.#outpointIndex.has(key)) return;
+
+      this.#state.push(node);
+      this.#indexNode(node);
+    });
+
+    this.#chainAnchor = { height: delta.toHeight, hash: delta.toHash };
+
+    log.info(
+      `Network state delta ${delta.fromHeight}->${delta.toHeight}: `
+      + `+${added.length} -${removedKeys.size} ~${delta.updated.length} (total: ${this.#state.length})`,
+    );
+
+    this.emit('updated');
+    return { applied: true };
+  }
+
   reset() {
     this.#stateEmitter = null;
     this.#pubkeyIndex = new Map();
     this.#socketAddressIndex = new Map();
+    this.#outpointIndex = new Map();
+    this.#chainAnchor = null;
     this.#state = [];
   }
 

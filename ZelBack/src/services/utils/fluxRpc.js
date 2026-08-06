@@ -53,6 +53,7 @@ class FluxRpc {
       ['getdoslist', null],
       ['getfluxnodecount', null],
       ['getfluxnodeoutputs', null],
+      ['getfluxnodesnapshot', null],
       ['getfluxnodestatus', null],
       ['getmigrationcount', null],
       ['getstartlist', null],

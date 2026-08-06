@@ -46,6 +46,7 @@ const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
 
+const chainReadApi = require('./services/chainReadApi');
 const explorerService = require('./services/explorerService');
 const fluxshareService = require('./services/fluxshareService');
 const generalService = require('./services/generalService');
@@ -549,33 +550,17 @@ module.exports = (app) => {
     appTamperingDetectionService.getEvents(req, res);
   });
 
-  // app.get('/explorer/allutxos', (req, res) => {
-  //   explorerService.getAllUtxos(req, res);
-  // });
-  // app.get('/explorer/alladdresseswithtransactions', (req, res) => {
-  //   explorerService.getAllAddressesWithTransactions(req, res);
-  // });
-  // app.get('/explorer/alladdresses', (req, res) => {
-  //   explorerService.getAllAddresses(req, res);
-  // });
-
   app.get('/explorer/utxo/:address?', cache('30 seconds'), (req, res) => {
-    explorerService.getAddressUtxos(req, res);
+    chainReadApi.getAddressUtxos(req, res);
   });
   app.get('/explorer/transactions/:address?', cache('30 seconds'), (req, res) => {
-    explorerService.getAddressTransactions(req, res);
+    chainReadApi.getAddressTransactions(req, res);
   });
   app.get('/explorer/balance/:address?', cache('30 seconds'), (req, res) => {
-    explorerService.getAddressBalance(req, res);
+    chainReadApi.getAddressBalance(req, res);
   });
   app.get('/explorer/scannedheight', cache('30 seconds'), (req, res) => {
-    explorerService.getScannedHeight(req, res);
-  });
-  // app.get('/explorer/fusion/coinbase/all', cache('30 seconds'), (req, res) => {
-  //   explorerService.getAllFusionCoinbase(req, res);
-  // });
-  app.get('/explorer/fusion/coinbase/:address?', cache('30 seconds'), (req, res) => { // deprecated
-    explorerService.getAddressFusionCoinbase(req, res);
+    chainReadApi.getScannedHeight(req, res);
   });
 
   // GET PROTECTED API - User level

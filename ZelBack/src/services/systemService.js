@@ -817,7 +817,10 @@ async function enableFluxdZmq(zmqEndpoint) {
 
   if (!fluxConfigDir) return false;
 
-  const zmqEnabledPath = path.join(fluxConfigDir, '.zmqEnabled');
+  // Each marker names the topic set it was written for, so a node configured against an
+  // earlier set is rewritten once and skipped from then on.
+  const supersededMarkerPath = path.join(fluxConfigDir, '.zmqEnabled');
+  const zmqEnabledPath = path.join(fluxConfigDir, '.zmqEnabledSubscriptions');
 
   const exists = Boolean(await fs.stat(zmqEnabledPath).catch(() => false));
 
@@ -859,12 +862,14 @@ async function enableFluxdZmq(zmqEndpoint) {
     return false;
   }
 
+  // Mirrors the topic set flux_configd writes on Arcane nodes. hashblock is included
+  // because it is the key other code reads to decide whether this daemon publishes zmq.
   const topics = [
-    'zmqpubhashtx',
     'zmqpubhashblock',
-    'zmqpubrawblock',
-    'zmqpubrawtx',
-    'zmqpubsequence',
+    'zmqpubhashblockheight',
+    'zmqpubchainreorg',
+    'zmqpubfluxnodestatus',
+    'zmqpubfluxnodelistdelta',
   ];
 
   const fluxdConfigPath = daemonServiceUtils.getFluxdConfigPath();
@@ -888,6 +893,9 @@ async function enableFluxdZmq(zmqEndpoint) {
 
   if (syntaxError) {
     log.error('Parsing error on new zmq fluxd config file... skipping');
+    // The topics were set on the in memory config before we knew the write was good.
+    // Re-read from disk so a later call sees the config as it actually is.
+    await daemonServiceUtils.getFluxdConfig().parseConfig();
     return false;
   }
 
@@ -902,9 +910,11 @@ async function enableFluxdZmq(zmqEndpoint) {
     log.error('Error restarting zelcash.service after config update');
     await fs.rename(fluxdConfigBackupAbsolutePath, fluxdConfigPath);
     await restartSystemdService('zelcash.service');
+    await daemonServiceUtils.getFluxdConfig().parseConfig();
     return false;
   }
 
+  await fs.rm(supersededMarkerPath, { force: true }).catch(() => { });
   await fs.writeFile(zmqEnabledPath, '').catch(() => { });
 
   log.info('ZMQ pub/sub enabled');

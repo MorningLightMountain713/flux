@@ -18,7 +18,37 @@ function getDefaultDaemonHeader() {
 let currentDaemonHeight = 0;
 let currentDaemonHeader = getDefaultDaemonHeader();
 let isDaemonInsightExplorer = null;
-let lastSuccessfulRpcCall = null; // Track last successful getBlockchainInfo call
+// Monotonic. A wall clock jump — an NTP correction, a resumed VM — must not be able to
+// age this out, because a stale reading here is what sheds every app on the node.
+let lastChainUpdateAt = null;
+
+// Ten blocks at ~30s. Long enough that an ordinary slow block is not suspicious.
+const CHAIN_STALE_AFTER_MS = 300_000;
+
+function elapsedSinceChainUpdateMs() {
+  if (lastChainUpdateAt === null) return null;
+  return Number(process.hrtime.bigint() - lastChainUpdateAt) / 1_000_000;
+}
+
+/**
+ * Records a new chain tip seen on the push socket.
+ *
+ * Height only. `headers` is what the chain claims to be, and a daemon that is past
+ * initial download but still catching up publishes a block per connection — so
+ * inferring headers from a pushed height would call it synced while it is behind.
+ * The authoritative pair still comes from RPC, just far less often.
+ *
+ * @param {number} height Height of the block just connected.
+ * @returns {void}
+ */
+function recordChainTip(height) {
+  if (!Number.isInteger(height)) return;
+
+  currentDaemonHeight = height;
+  // A reorg genuinely shortens the chain, so the tip is allowed to move down.
+  if (height > currentDaemonHeader) currentDaemonHeader = height;
+  lastChainUpdateAt = process.hrtime.bigint();
+}
 
 /**
  * To check if Insight Explorer is activated in the daemon configuration file.
@@ -51,15 +81,12 @@ function isDaemonSynced(req, res) {
     synced: false,
   };
 
-  // Check if we have recent successful RPC communication (within 10 blocks = 300 seconds)
-  const RPC_TIMEOUT_MS = 10 * 30 * 1000; // 10 blocks * 30 seconds per block
-  const now = Date.now();
+  const elapsed = elapsedSinceChainUpdateMs();
 
-  if (lastSuccessfulRpcCall === null || (now - lastSuccessfulRpcCall) > RPC_TIMEOUT_MS) {
-    // No recent successful RPC call - daemon is not responding
+  if (elapsed === null || elapsed > CHAIN_STALE_AFTER_MS) {
+    // Nothing recent from either the socket or RPC, so we cannot claim to know.
     isSynced.synced = false;
   } else if (currentDaemonHeight > currentDaemonHeader - 5) {
-    // Recent RPC call AND height is close to header
     isSynced.synced = true;
   }
 
@@ -78,10 +105,11 @@ async function fluxDaemonBlockchainInfo() {
       return false;
     }
     currentDaemonHeight = daemonBlockChainInfo.data.blocks;
-    if (daemonBlockChainInfo.data.headers >= currentDaemonHeader) {
-      currentDaemonHeader = daemonBlockChainInfo.data.headers;
-    }
-    lastSuccessfulRpcCall = Date.now();
+    // Authoritative in both directions. A reorg lowers both, and clamping the header
+    // to its high water mark would leave the node reading as unsynced against a
+    // height that no longer exists.
+    currentDaemonHeader = daemonBlockChainInfo.data.headers;
+    lastChainUpdateAt = process.hrtime.bigint();
     fluxEventBus.publish('daemon:polled', { height: currentDaemonHeight, headers: currentDaemonHeader });
     log.info(`Daemon Sync status: ${currentDaemonHeight}/${currentDaemonHeader}`);
     return true;
@@ -169,12 +197,23 @@ function getCurrentDaemonHeader() {
   return currentDaemonHeader;
 }
 
-function getLastSuccessfulRpcCall() {
-  return lastSuccessfulRpcCall;
+function getElapsedSinceChainUpdateMs() {
+  return elapsedSinceChainUpdateMs();
 }
 
-function setLastSuccessfulRpcCall(newValue) {
-  lastSuccessfulRpcCall = newValue;
+/**
+ * Places the last chain update a given age in the past. Tests express staleness as an
+ * age because the clock behind it is monotonic and has no wall-clock equivalent.
+ * @param {number|null} ageMs Age in milliseconds, or null for "never updated".
+ * @returns {void}
+ */
+function setLastChainUpdateAgeMs(ageMs) {
+  if (ageMs === null) {
+    lastChainUpdateAt = null;
+    return;
+  }
+
+  lastChainUpdateAt = process.hrtime.bigint() - BigInt(Math.round(ageMs * 1_000_000));
 }
 
 module.exports = {
@@ -182,6 +221,7 @@ module.exports = {
   // == NON Daemon ==
   isDaemonSynced,
   daemonBlockchainInfoService,
+  recordChainTip,
   waitForDaemonRpc,
 
   // exports for testing purposes
@@ -192,6 +232,6 @@ module.exports = {
   setCurrentDaemonHeader,
   getCurrentDaemonHeight,
   getCurrentDaemonHeader,
-  getLastSuccessfulRpcCall,
-  setLastSuccessfulRpcCall,
+  getElapsedSinceChainUpdateMs,
+  setLastChainUpdateAgeMs,
 };

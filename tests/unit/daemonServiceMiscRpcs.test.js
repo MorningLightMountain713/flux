@@ -1,7 +1,6 @@
 const sinon = require('sinon');
 const { expect } = require('chai');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
-const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const log = require('../../ZelBack/src/lib/log');
 
@@ -68,8 +67,7 @@ describe('daemonServiceMiscRpcs tests', () => {
   describe('isDaemonSynced tests', () => {
     beforeEach(() => {
       daemonServiceMiscRpcs.setCurrentDaemonHeight(0);
-      // Set recent RPC call timestamp for tests that expect synced behavior
-      daemonServiceMiscRpcs.setLastSuccessfulRpcCall(Date.now());
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(0);
     });
 
     afterEach(() => {
@@ -79,7 +77,7 @@ describe('daemonServiceMiscRpcs tests', () => {
     it('should return isDaemonSynced message if current height is less than header height, no response passed', () => {
       daemonServiceMiscRpcs.setCurrentDaemonHeight(0);
       daemonServiceMiscRpcs.setCurrentDaemonHeader(249187);
-      daemonServiceMiscRpcs.setLastSuccessfulRpcCall(Date.now());
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(0);
       const expectedResponse = {
         status: 'success',
         data: { header: 249187, height: 0, synced: false },
@@ -93,7 +91,7 @@ describe('daemonServiceMiscRpcs tests', () => {
     it('should return isDaemonSynced message if current height is more than header height, no response passed', () => {
       daemonServiceMiscRpcs.setCurrentDaemonHeight(259187);
       daemonServiceMiscRpcs.setCurrentDaemonHeader(249187);
-      daemonServiceMiscRpcs.setLastSuccessfulRpcCall(Date.now());
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(0);
       const expectedResponse = {
         status: 'success',
         data: { header: 249187, height: 259187, synced: true },
@@ -107,7 +105,7 @@ describe('daemonServiceMiscRpcs tests', () => {
     it('should return isDaemonSynced message if current height is more than header height, response passed', () => {
       daemonServiceMiscRpcs.setCurrentDaemonHeight(249192);
       daemonServiceMiscRpcs.setCurrentDaemonHeader(249187);
-      daemonServiceMiscRpcs.setLastSuccessfulRpcCall(Date.now());
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(0);
       const expectedResponse = {
         status: 'success',
         data: { header: 249187, height: 249192, synced: true },
@@ -120,10 +118,10 @@ describe('daemonServiceMiscRpcs tests', () => {
       sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
     });
 
-    it('should return unsynced if lastSuccessfulRpcCall is null', () => {
+    it('should return unsynced when the chain has never been updated', () => {
       daemonServiceMiscRpcs.setCurrentDaemonHeight(249192);
       daemonServiceMiscRpcs.setCurrentDaemonHeader(249187);
-      daemonServiceMiscRpcs.setLastSuccessfulRpcCall(null);
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(null);
       const expectedResponse = {
         status: 'success',
         data: { header: 249187, height: 249192, synced: false },
@@ -134,11 +132,10 @@ describe('daemonServiceMiscRpcs tests', () => {
       expect(result).to.eql(expectedResponse);
     });
 
-    it('should return unsynced if lastSuccessfulRpcCall is older than 10 blocks (300 seconds)', () => {
+    it('should return unsynced when the last chain update is older than 300 seconds', () => {
       daemonServiceMiscRpcs.setCurrentDaemonHeight(249192);
       daemonServiceMiscRpcs.setCurrentDaemonHeader(249187);
-      // Set timestamp to 301 seconds ago (just over threshold)
-      daemonServiceMiscRpcs.setLastSuccessfulRpcCall(Date.now() - (301 * 1000));
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(301 * 1000);
       const expectedResponse = {
         status: 'success',
         data: { header: 249187, height: 249192, synced: false },
@@ -149,11 +146,10 @@ describe('daemonServiceMiscRpcs tests', () => {
       expect(result).to.eql(expectedResponse);
     });
 
-    it('should return synced if lastSuccessfulRpcCall is within 10 blocks (300 seconds) and height is close to header', () => {
+    it('should return synced when the chain updated recently and height is close to header', () => {
       daemonServiceMiscRpcs.setCurrentDaemonHeight(249192);
       daemonServiceMiscRpcs.setCurrentDaemonHeader(249187);
-      // Set timestamp to 299 seconds ago (just under threshold)
-      daemonServiceMiscRpcs.setLastSuccessfulRpcCall(Date.now() - (299 * 1000));
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(299 * 1000);
       const expectedResponse = {
         status: 'success',
         data: { header: 249187, height: 249192, synced: true },
@@ -191,22 +187,18 @@ describe('daemonServiceMiscRpcs tests', () => {
         },
       });
 
-      const beforeCall = Date.now();
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(60000);
+
       await daemonServiceMiscRpcs.fluxDaemonBlockchainInfo();
-      const afterCall = Date.now();
 
       expect(daemonServiceMiscRpcs.getCurrentDaemonHeader()).to.eql(555555);
       expect(daemonServiceMiscRpcs.getCurrentDaemonHeight()).to.eql(123456);
-
-      // Verify lastSuccessfulRpcCall was updated
-      const lastRpcCall = daemonServiceMiscRpcs.getLastSuccessfulRpcCall();
-      expect(lastRpcCall).to.be.at.least(beforeCall);
-      expect(lastRpcCall).to.be.at.most(afterCall);
+      expect(daemonServiceMiscRpcs.getElapsedSinceChainUpdateMs()).to.be.below(1000);
 
       sinon.assert.calledOnceWithExactly(logInfoSpy, `Daemon Sync status: ${123456}/${555555}`);
     });
 
-    it('should not set a new header if the number is lower', async () => {
+    it('should follow the header down, because a reorg genuinely shortens the chain', async () => {
       daemonServiceBlockchainRpcsStub.resolves({
         status: 'success',
         data: {
@@ -218,14 +210,13 @@ describe('daemonServiceMiscRpcs tests', () => {
 
       await daemonServiceMiscRpcs.fluxDaemonBlockchainInfo();
 
-      expect(daemonServiceMiscRpcs.getCurrentDaemonHeader()).to.eql(249187);
+      expect(daemonServiceMiscRpcs.getCurrentDaemonHeader()).to.eql(1234);
       expect(daemonServiceMiscRpcs.getCurrentDaemonHeight()).to.eql(123456);
-      sinon.assert.calledOnceWithExactly(logInfoSpy, `Daemon Sync status: ${123456}/${249187}`);
+      sinon.assert.calledOnceWithExactly(logInfoSpy, `Daemon Sync status: ${123456}/${1234}`);
     });
 
-    it('should not update lastSuccessfulRpcCall when RPC call fails', async () => {
-      const initialTimestamp = Date.now() - 60000; // 1 minute ago
-      daemonServiceMiscRpcs.setLastSuccessfulRpcCall(initialTimestamp);
+    it('should not refresh the chain update time when the RPC call fails', async () => {
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(60000);
 
       daemonServiceBlockchainRpcsStub.resolves({
         status: 'error',
@@ -236,20 +227,69 @@ describe('daemonServiceMiscRpcs tests', () => {
 
       await daemonServiceMiscRpcs.fluxDaemonBlockchainInfo();
 
-      // Verify lastSuccessfulRpcCall was NOT updated
-      expect(daemonServiceMiscRpcs.getLastSuccessfulRpcCall()).to.eql(initialTimestamp);
+      expect(daemonServiceMiscRpcs.getElapsedSinceChainUpdateMs()).to.be.at.least(60000);
     });
 
-    it('should not update lastSuccessfulRpcCall when RPC call throws exception', async () => {
-      const initialTimestamp = Date.now() - 60000; // 1 minute ago
-      daemonServiceMiscRpcs.setLastSuccessfulRpcCall(initialTimestamp);
+    it('should not refresh the chain update time when the RPC call throws', async () => {
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(60000);
 
       daemonServiceBlockchainRpcsStub.rejects(new Error('Network error'));
 
       await daemonServiceMiscRpcs.fluxDaemonBlockchainInfo();
 
-      // Verify lastSuccessfulRpcCall was NOT updated
-      expect(daemonServiceMiscRpcs.getLastSuccessfulRpcCall()).to.eql(initialTimestamp);
+      expect(daemonServiceMiscRpcs.getElapsedSinceChainUpdateMs()).to.be.at.least(60000);
+    });
+  });
+
+  describe('recordChainTip tests', () => {
+    beforeEach(() => {
+      daemonServiceMiscRpcs.setCurrentDaemonHeight(0);
+      daemonServiceMiscRpcs.setCurrentDaemonHeader(249187);
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(null);
+    });
+
+    it('should set the height and refresh the chain update time', () => {
+      daemonServiceMiscRpcs.recordChainTip(300000);
+
+      expect(daemonServiceMiscRpcs.getCurrentDaemonHeight()).to.eql(300000);
+      expect(daemonServiceMiscRpcs.getElapsedSinceChainUpdateMs()).to.be.below(1000);
+    });
+
+    it('should carry the header up with the tip so a pushed height reads as synced', () => {
+      daemonServiceMiscRpcs.recordChainTip(300000);
+
+      expect(daemonServiceMiscRpcs.getCurrentDaemonHeader()).to.eql(300000);
+      expect(daemonServiceMiscRpcs.isDaemonSynced().data.synced).to.eql(true);
+    });
+
+    it('should let the tip move down on a reorg without lowering the header', () => {
+      daemonServiceMiscRpcs.recordChainTip(300000);
+      daemonServiceMiscRpcs.recordChainTip(299998);
+
+      expect(daemonServiceMiscRpcs.getCurrentDaemonHeight()).to.eql(299998);
+      expect(daemonServiceMiscRpcs.getCurrentDaemonHeader()).to.eql(300000);
+    });
+
+    it('should ignore a non integer height rather than corrupt the tip', () => {
+      daemonServiceMiscRpcs.recordChainTip(300000);
+      daemonServiceMiscRpcs.recordChainTip(undefined);
+
+      expect(daemonServiceMiscRpcs.getCurrentDaemonHeight()).to.eql(300000);
+    });
+  });
+
+  describe('isDaemonSynced staleness tests', () => {
+    it('should not be aged out by a wall clock jump', () => {
+      daemonServiceMiscRpcs.setCurrentDaemonHeight(249192);
+      daemonServiceMiscRpcs.setCurrentDaemonHeader(249187);
+      daemonServiceMiscRpcs.setLastChainUpdateAgeMs(0);
+
+      const clock = sinon.useFakeTimers({ now: Date.now() + 3600000, toFake: ['Date'] });
+      try {
+        expect(daemonServiceMiscRpcs.isDaemonSynced().data.synced).to.eql(true);
+      } finally {
+        clock.restore();
+      }
     });
   });
 });
