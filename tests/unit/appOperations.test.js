@@ -196,7 +196,7 @@ describe('appOperations tests', () => {
 
       await appOperations.redeployComponentAPI(req, res);
 
-      // Should attempt to call hardRedeployComponent but will fail because app not found
+      // Should attempt to rebuild the component but will fail because app not found
       expect(res.json.calledOnce).to.be.true;
     });
   });
@@ -214,7 +214,7 @@ describe('appOperations tests', () => {
       expect(messages[0]).to.include('Another operation is in progress');
     });
 
-    it('holds a softRedeploy lease during the redeploy and releases it', async () => {
+    it('holds a redeploy lease during the redeploy and releases it', async () => {
       let leaseTypeDuring = null;
       // The lease is acquired before the first await; observe it as getInstalledDeployment
       // runs, then return null so the catch path releases it (and hands off to the reconciler).
@@ -226,7 +226,7 @@ describe('appOperations tests', () => {
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
-      expect(leaseTypeDuring, 'a softRedeploy lease must be held while the redeploy runs').to.equal('softRedeploy');
+      expect(leaseTypeDuring, 'a redeploy lease must be held while the redeploy runs').to.equal('redeploy');
       expect(operationRegistry.isHeld('myapp'), 'the redeploy lease must release when the operation settles').to.be.false;
     });
 
@@ -368,7 +368,7 @@ describe('appOperations tests', () => {
       expect(messages[0]).to.include('Another operation is in progress');
     });
 
-    it('holds a hardRedeploy lease during the rebuild and releases it', async () => {
+    it('holds a rebuild lease during the rebuild and releases it', async () => {
       let leaseTypeDuring = null;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').callsFake(async () => {
         leaseTypeDuring = operationRegistry.get('myapp')?.type ?? null;
@@ -378,7 +378,7 @@ describe('appOperations tests', () => {
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
-      expect(leaseTypeDuring, 'a hardRedeploy lease must be held while the rebuild runs').to.equal('hardRedeploy');
+      expect(leaseTypeDuring, 'a rebuild lease must be held while the rebuild runs').to.equal('rebuild');
       expect(operationRegistry.isHeld('myapp'), 'the rebuild lease must release when the operation settles').to.be.false;
     });
 

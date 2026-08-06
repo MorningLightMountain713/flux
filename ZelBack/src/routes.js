@@ -43,6 +43,7 @@ const contentSlotService = require('./services/appLifecycle/contentSlotService')
 const imageManager = require('./services/appSecurity/imageManager');
 const imagePreflight = require('./services/appSecurity/imagePreflight');
 const playgroundService = require('./services/appPlayground/playgroundService');
+const limitCounterController = require('./services/utils/limitCounterController');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
@@ -525,6 +526,24 @@ module.exports = (app) => {
   // Answers 202 + jobId; the run takes minutes, so the client polls.
   app.post('/apps/playground', asyncRoute((req, res) => {
     return playgroundService.submitSessionAPI(req, res);
+  }));
+  // Which nodes serve the CALLER today. No parameter: the FluxID comes off the
+  // auth header, so the endpoint can only ever answer for whoever asked. Lets a
+  // client go straight to a node that will accept its session instead of finding
+  // the set by being refused.
+  app.get('/apps/playground/servingset', asyncRoute((req, res) => {
+    return playgroundService.servingSetAPI(req, res);
+  }));
+  // Node-to-node: the tally for one caller lives on one node, and every other node
+  // asks it rather than deciding alone. Unauthenticated by design - the request
+  // carries a hash of the caller and no credential, so a peer can spend someone's
+  // allowance but can never become them. The handler declines any key this node
+  // does not actually hold.
+  app.post('/flux/limitcounter/reserve', asyncRoute((req, res) => {
+    return limitCounterController.reserve(req, res);
+  }));
+  app.post('/flux/limitcounter/release', asyncRoute((req, res) => {
+    return limitCounterController.release(req, res);
   }));
   app.post('/apps/placementfeasibility', asyncRoute((req, res) => { // fault domains and per-domain instance share for a prospective spec
     return placementFeasibility.placementFeasibilityAPI(req, res);

@@ -2,7 +2,6 @@ const log = require('../../lib/log');
 const componentProvisioner = require('../appLifecycle/componentProvisioner');
 const appVolumeService = require('../appLifecycle/appVolumeService');
 const syncthingMonitorHelpers = require('./syncthingMonitorHelpers');
-const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const shutdownPlan = require('../appLifecycle/shutdownPlan');
 const { verifyAppVolumeMount } = require('../utils/volumeService');
@@ -22,14 +21,20 @@ const { verifyAppVolumeMount } = require('../utils/volumeService');
  * retry rather than reformat.
  *
  * @param {string} componentIdentifier
+ * @param {object|null} instantiated - InstantiatedSpec of the app that owns this
+ *   component, resolved by the caller. Taken rather than looked up: this used to
+ *   recover the app by splitting the identifier, which yields the APP-IDENTITY
+ *   SEGMENT and not a name — the two coincide only for an app whose identity was
+ *   borrowed from its name. The reconciler has already resolved the app for the
+ *   pass that got here, so asking again could also answer differently.
  * @param {{abortSignal?: AbortSignal, allowVolumeCreation?: boolean}} [options]
  */
-async function recreateMissingContainers(componentIdentifier, { abortSignal = null, allowVolumeCreation = true } = {}) {
-  const mainAppName = componentIdentifier.split('_')[1] || componentIdentifier;
-  const instantiated = await appsRepository.getInstalledApp(mainAppName);
+async function recreateMissingContainers(componentIdentifier, instantiated, { abortSignal = null, allowVolumeCreation = true } = {}) {
   if (!instantiated) {
-    throw new Error(`App ${mainAppName} not found in local database`);
+    throw new Error(`App for ${componentIdentifier} not found in local database`);
   }
+  const mainAppName = instantiated.name;
+  const identity = instantiated.identity ?? mainAppName;
 
   // The app's docker network is a precondition of the recreate below, and the
   // reconciler guarantees it before reaching any path that runs a container -
@@ -61,8 +66,9 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
     // container keeps its budget labels — never silently downgraded.
     requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(matched.deployment);
     components = [[matched.component.name, matched.component]];
-  } else if (componentIdentifier === mainAppName) {
-    // A bare app name recreates every installed identity's containers.
+  } else if (componentIdentifier === identity) {
+    // An APP-level identifier (the bare identity, no component segment)
+    // recreates every installed identity's containers.
     requiresEncryption = deployments.length > 0 && shutdownPlan.appRequiresDaemonShutdown(deployments[0]);
     components = deployments.flatMap((deployment) => deployment.componentEntries());
   } else {
@@ -77,10 +83,10 @@ async function recreateMissingContainers(componentIdentifier, { abortSignal = nu
       // volume not mounted
     }
     if (volumeMounted) {
-      // Soft recreate reuses the mounted volume; a bind-mount source can have
+      // A recreate that keeps the volume remounts it; a bind-mount source can have
       // vanished while the container was down (e.g. Syncthing pruning a replicated
       // subdir), and Docker's Mounts API errors on a missing source rather than
-      // creating it, so remake them first. (Hard recreate skips this: createAppVolume
+      // creating it, so remake them first. (A rebuild skips this: createAppVolume
       // makes the sources after it mounts the fresh volume.) ensureMountSourcesExist
       // is race-free internally, but a residual TOCTOU remains — installComponent
       // pulls the image before appDockerCreate binds, so a re-prune in that window

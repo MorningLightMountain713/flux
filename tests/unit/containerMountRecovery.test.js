@@ -21,8 +21,22 @@ describe('containerMountRecovery tests', () => {
 
     // Docker service stub
     dockerServiceStub = {
+      isManagedContainer: ({ labels, name }, labelKeys) => {
+        if (labels && labels[labelKeys.IDENTIFIER]) return true;
+        if (!name) return false;
+        const bare = name.startsWith('/') ? name.slice(1) : name;
+        return bare.startsWith('flux') || bare.startsWith('zel');
+      },
+
       dockerContainerInspect: sinon.stub(),
       dockerListContainers: sinon.stub(),
+      // mirrors the real semantics: a constant would make the identifier
+      // assertions below pass while testing nothing
+      getBaseAppName: (name) => {
+        if (name.startsWith('flux')) return name.slice(4);
+        if (name.startsWith('zel')) return name.slice(3);
+        return name;
+      },
     };
 
     // Service helper stub
@@ -364,6 +378,33 @@ describe('containerMountRecovery tests', () => {
       expect(result[0].id).to.equal('abc123');
     });
 
+    it('carries the identity label through as the restart key', async () => {
+      dockerServiceStub.dockerListContainers.resolves([
+        {
+          Id: 'abc123',
+          Names: ['/fluxfluxproxy_App1'],
+          Labels: { 'io.runonflux.identifier': 'fluxproxy_App1' },
+        },
+      ]);
+      dockerServiceStub.dockerContainerInspect.resolves({
+        State: { Running: true, StartedAt: '2024-01-01T10:00:00Z' },
+        Mounts: [{ Source: '/path/to/mount1', Destination: '/app/data' }],
+      });
+      fsStub.stat.resolves({
+        birthtime: new Date('2024-01-01T10:05:00Z'),
+        mtime: new Date('2024-01-01T10:05:00Z'),
+      });
+
+      const result = await containerMountRecovery.getContainersNeedingRestart();
+
+      expect(result).to.have.length(1);
+      // `fluxproxy` is a real component name, so the container is
+      // `fluxfluxproxy_App1`. Deriving the key by sniffing the identifier would
+      // give `proxy_App1` — another component entirely.
+      expect(result[0].identifier).to.equal('fluxproxy_App1');
+      expect(result[0].name).to.equal('fluxfluxproxy_App1');
+    });
+
     it('should skip containers that throw errors during check', async () => {
       const containers = [
         {
@@ -416,8 +457,8 @@ describe('containerMountRecovery tests', () => {
 
     it('should restart containers successfully', async () => {
       const containers = [
-        { id: 'abc123', name: 'fluxApp1' },
-        { id: 'def456', name: 'fluxApp2' },
+        { id: 'abc123', name: 'fluxApp1', identifier: 'App1' },
+        { id: 'def456', name: 'fluxApp2', identifier: 'App2' },
       ];
 
       const result = await containerMountRecovery.restartContainersWithProperMounts(containers);
@@ -429,6 +470,11 @@ describe('containerMountRecovery tests', () => {
       expect(appsRuntimeStateStub.requestRestart.callCount).to.equal(2);
       expect(reconcilerQueueStub.enqueue.callCount).to.equal(2);
       expect(serviceHelperStub.delay.callCount).to.equal(2);
+      // the durable restart generation and the queue are keyed by the bare
+      // identifier — bumping the docker name's key restarts nothing and leaves
+      // an orphan runtime-state document behind
+      expect(appsRuntimeStateStub.requestRestart.getCall(0).args[0]).to.equal('App1');
+      expect(reconcilerQueueStub.enqueue.getCall(0).args[0]).to.equal('App1');
     });
 
     it('should handle restart failures', async () => {

@@ -150,7 +150,7 @@ async function imageIsPresent(repotag) {
 }
 
 // Re-reconcile pinned cache records for a repotag whose local image just changed —
-// e.g. imageUpdateService soft-redeployed an app onto a newer digest. Docker moves the
+// e.g. imageUpdateService redeployed an app onto a newer digest. Docker moves the
 // tag to the new image (the old one goes dangling and is later pruned), so without this
 // the pin would keep the superseded digest/imageId/size: the quota (summed by real
 // imageId) would miss the new image and `inspect` would report the wrong snapshot.

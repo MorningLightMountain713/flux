@@ -6,6 +6,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const setReconciler = require('../appMessaging/setReconciler');
 const MongoStorageProvider = require('../providers/MongoStorageProvider');
 const { expireHeightExpr } = require('./appsMaintenance');
+const { mintAppUuid } = require('../utils/appIdentity');
 const {
   globalAppsInformation,
   localAppsInformation,
@@ -210,9 +211,22 @@ async function upsertGlobalAppInfo(specDoc, { upsert = true } = {}) {
   if (!specDoc || !specDoc.name) {
     throw new Error('appsRepository.upsertGlobalAppInfo: specDoc.name required');
   }
+  // `uuid` and `identity` are minted ONCE, from the transaction that carried the
+  // registration. Every later write here is a REPLACE, and an update arrives in a
+  // different transaction carrying neither — so without this it would clear both,
+  // and the app's next deployment would be named from something other than what
+  // its containers, volume and syncthing folder already carry.
+  const existing = await dbHelper.findOneInDatabase(
+    globalDb(), globalAppsInformation,
+    { name: specDoc.name },
+    { projection: { _id: 0, uuid: 1, identity: 1 } },
+  );
+  const doc = { ...specDoc };
+  if (doc.uuid == null && existing?.uuid != null) doc.uuid = existing.uuid;
+  if (doc.identity == null && existing?.identity != null) doc.identity = existing.identity;
   return dbHelper.replaceOneInDatabase(
     globalDb(), globalAppsInformation,
-    { name: specDoc.name }, specDoc, { upsert },
+    { name: specDoc.name }, doc, { upsert },
   );
 }
 
@@ -430,14 +444,115 @@ async function prepareInstalledAppsCollection() {
   // stores. Runs before the unique index so the index is built over a complete
   // key.
   await collection.updateMany({ replica: { $exists: false } }, { $set: { replica: null } });
+  // Every row states the app identity its containers, volumes and syncthing
+  // folder are named from. Rows predating the field state it as their own name,
+  // which is the segment those artifacts already carry — so this pass is a
+  // no-op on disk and the value can then be READ everywhere instead of being
+  // recomputed from a name that a later owner of that name could change under
+  // it. Idempotent by construction: only rows without the field are touched.
+  await collection.updateMany({ identity: { $exists: false } }, [{ $set: { identity: '$name' } }]);
   await dbHelper.ensureIndex(collection, { name: 1, replica: 1 }, { unique: true, name: 'installed app identity' });
   await dbHelper.ensureIndex(collection, { name: 1 }, { name: 'installed apps by name' });
+  // NOT unique: a co-located app holds one row per replica, all sharing the
+  // app's single identity.
+  await dbHelper.ensureIndex(collection, { identity: 1 }, { name: 'installed apps by app identity' });
+}
+
+/**
+ * Give every global app row the instance identity it was always entitled to.
+ *
+ * An app registered before identities existed has one available retroactively:
+ * its uuid is a pure function of its name and the txid of the transaction that
+ * registered it, both of which are on chain and unchanged. So this is a read of
+ * history, not an assignment — every node computes the same values from the same
+ * messages, and a node that runs this twice gets the same answer.
+ *
+ * It deliberately does NOT set `identity`. The uuid records WHICH app this is;
+ * `identity` decides what its containers, volume directory and syncthing folder
+ * are NAMED. Those artifacts already exist under the app's name, and writing a
+ * uuid-derived identity onto an existing row would rename them out from under a
+ * running app. Only a registration arriving from here on states one.
+ *
+ * Idempotent by construction rather than by a marker: it only ever looks at rows
+ * that have no uuid, so an interrupted pass simply resumes.
+ */
+async function backfillGlobalAppUuids() {
+  const rows = await dbHelper.findInDatabase(
+    globalDb(), globalAppsInformation,
+    { uuid: { $exists: false } },
+    { projection: { _id: 0, name: 1 } },
+  );
+  if (rows.length === 0) return { backfilled: 0, unresolved: 0 };
+
+  let backfilled = 0;
+  let unresolved = 0;
+  for (const row of rows) {
+    // The FIRST registration of this name. A name can have been held by several
+    // apps over time, and it is the one that minted the CURRENT holder we want -
+    // so this takes the most recent registration, not the oldest message.
+    // eslint-disable-next-line no-await-in-loop
+    const registration = await dbHelper.findOneInDatabase(
+      globalDb(), globalAppsMessages,
+      { 'appSpecifications.name': nameRegex(row.name), type: { $in: ['fluxappregister', 'zelappregister'] } },
+      { projection: { _id: 0, txid: 1, height: 1 }, sort: { height: -1 } },
+    );
+    if (!registration || !registration.txid) {
+      // Its registration message was never obtained by this node. Nothing to
+      // derive from, and inventing one would give this node a different answer
+      // from every other - leave it, and a later pass picks it up if the message
+      // arrives.
+      unresolved += 1;
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await dbHelper.updateOneInDatabase(
+      globalDb(), globalAppsInformation,
+      { name: row.name },
+      { $set: { uuid: mintAppUuid(row.name, registration.txid) } },
+      {},
+    );
+    backfilled += 1;
+  }
+  if (unresolved > 0) {
+    log.warn(`appsRepository - ${unresolved} app(s) have no registration message here, so no instance identity could be derived for them yet`);
+  }
+  log.info(`appsRepository - instance identity derived for ${backfilled} app(s)`);
+  return { backfilled, unresolved };
 }
 
 async function getInstalledApp(name) {
   const doc = await dbHelper.findOneInDatabase(
     localDb(), localAppsInformation,
     { name: nameRegex(name) },
+    { projection: { _id: 0 } },
+  );
+  return hydrate(doc);
+}
+
+/**
+ * The installed app a container identifier belongs to, found by the APP-identity
+ * segment that identifier is built from.
+ *
+ * This is the inverse every runtime lookup wants and no string rule can supply.
+ * Splitting `component_identity[_replica]` recovers the identity SEGMENT
+ * reliably — every segment forbids `_` — but a segment is not a name, and once
+ * identities stop being minted from names it stops resembling one. Only the row
+ * that stated the identity can say which app holds it.
+ *
+ * Exact match, not `nameRegex`: an identity is machine-minted and is compared
+ * against the same stored string the containers were named from, so case can
+ * neither drift nor be typed in by a user here.
+ *
+ * @param {string} identity
+ * @returns {Promise<object|null>} InstantiatedSpec, or null when nothing here
+ *   claims that identity
+ */
+async function getInstalledAppByIdentity(identity) {
+  if (!identity) return null;
+  const doc = await dbHelper.findOneInDatabase(
+    localDb(), localAppsInformation,
+    { identity },
     { projection: { _id: 0 } },
   );
   return hydrate(doc);
@@ -615,25 +730,54 @@ async function insertInstalledApp(specDoc, replica = null) {
 }
 
 /**
+ * The `(replica, identity)` pair of every row an app holds here. `identity` is
+ * the APP-identity segment (the thing container names are built from), not this
+ * collection's replica key — the two senses of the word meet in this module, so
+ * they are named apart wherever both are in scope.
+ */
+async function listInstalledRowKeys(name) {
+  const docs = await dbHelper.findInDatabase(
+    localDb(), localAppsInformation,
+    { name: nameRegex(name) },
+    { projection: { _id: 0, replica: 1, identity: 1 } },
+  );
+  return docs.map((d) => ({ replica: d.replica ?? null, identity: d.identity ?? null }));
+}
+
+/**
+ * An app's identity is minted once and never changes: every container name,
+ * volume path and syncthing folder id on this node is built from it, and that
+ * folder id is shared with every OTHER node running the app. The writes below
+ * are replaces, so a spec update whose document does not state an identity
+ * would clear it — and the next deployment build would fall back to deriving
+ * one from the name, renaming a live app's containers and stranding its folder
+ * from its peers. A stored identity therefore always beats an absent one.
+ */
+function withStoredIdentity(doc, stored) {
+  if (doc.identity != null || stored == null) return doc;
+  return { ...doc, identity: stored };
+}
+
+/**
  * Refresh the stored spec for EVERY identity of an app, preserving each row's
- * identity — a spec update applies to every replica this node runs, and one
+ * replica — a spec update applies to every replica this node runs, and one
  * replica's update must not erase a sibling's row. Inserts a loose row when the
  * app is not installed at all.
  */
 async function upsertInstalledApp(name, specDoc) {
   if (!name) throw new Error('appsRepository.upsertInstalledApp: name required');
   if (!specDoc) throw new Error('appsRepository.upsertInstalledApp: specDoc required');
-  const identities = await listInstalledIdentities(name);
-  if (identities.length === 0) {
+  const rows = await listInstalledRowKeys(name);
+  if (rows.length === 0) {
     return insertInstalledApp(specDoc, null);
   }
   const results = [];
-  for (const identity of identities) {
+  for (const row of rows) {
     // eslint-disable-next-line no-await-in-loop
     const result = await dbHelper.replaceOneInDatabase(
       localDb(), localAppsInformation,
-      { name: nameRegex(name), replica: replicaKey(identity) },
-      { ...specDoc, replica: replicaKey(identity) },
+      { name: nameRegex(name), replica: replicaKey(row.replica) },
+      withStoredIdentity({ ...specDoc, replica: replicaKey(row.replica) }, row.identity),
       { upsert: true },
     );
     results.push(result);
@@ -649,10 +793,15 @@ async function upsertInstalledApp(name, specDoc) {
 async function upsertInstalledIdentity(name, replica, specDoc) {
   if (!name) throw new Error('appsRepository.upsertInstalledIdentity: name required');
   if (!specDoc) throw new Error('appsRepository.upsertInstalledIdentity: specDoc required');
+  const existing = await dbHelper.findOneInDatabase(
+    localDb(), localAppsInformation,
+    { name: nameRegex(name), replica: replicaKey(replica) },
+    { projection: { _id: 0, identity: 1 } },
+  );
   return dbHelper.replaceOneInDatabase(
     localDb(), localAppsInformation,
     { name: nameRegex(name), replica: replicaKey(replica) },
-    { ...specDoc, replica: replicaKey(replica) },
+    withStoredIdentity({ ...specDoc, replica: replicaKey(replica) }, existing?.identity ?? null),
     { upsert: true },
   );
 }
@@ -1369,7 +1518,9 @@ module.exports = {
   removeAppInstallingErrorRecords,
   // installed apps
   prepareInstalledAppsCollection,
+  backfillGlobalAppUuids,
   getInstalledApp,
+  getInstalledAppByIdentity,
   getInstalledAppAttribution,
   countInstalledApps,
   existsInstalledApp,

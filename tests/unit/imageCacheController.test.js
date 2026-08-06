@@ -49,6 +49,12 @@ describe('imageCacheController tests', () => {
         getCachedAllowedOwnersForNode: stubs.getCachedAllowedOwnersForNode,
       },
       '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
+      // The REAL operations controller - the 202 shape is the contract under test -
+      // with only its network reach stubbed. It resolves this node's own address to
+      // build an absolute status URL, and unstubbed that asks the benchmark daemon.
+      './operationsController': proxyquire('../../ZelBack/src/services/appManagement/operationsController', {
+        '../fluxNetworkHelper': { getLocalSocketAddress: async () => '185.209.30.228:16127' },
+      }),
       '../appLifecycle/imageCacheService': {
         submitEncrypted: stubs.submitEncrypted,
         getJob: stubs.getJob,
@@ -100,8 +106,12 @@ describe('imageCacheController tests', () => {
       expect(stubs.submitEncrypted.calledOnceWith('F1', 'BLOB')).to.equal(true);
       expect(res.status.calledWith(202)).to.equal(true);
       // Points at the shared operation resource, not a per-feature status URL.
-      expect(res.json.firstCall.args[0].data).to.include({ jobId: 'op_J1', statusUrl: '/apps/operations/op_J1' });
-      expect(res.setHeader.calledWith('Location', '/apps/operations/op_J1')).to.equal(true);
+      // Absolute, against THIS node's own name: an operation is node-local, so a poll
+      // landing anywhere else 404s - and the client may have reached us via the load
+      // balancer rather than the node directly.
+      const statusUrl = 'https://185-209-30-228-16127.node.api.runonflux.io/apps/operations/op_J1';
+      expect(res.json.firstCall.args[0].data).to.include({ jobId: 'op_J1', statusUrl });
+      expect(res.setHeader.calledWith('Location', statusUrl)).to.equal(true);
       expect(res.setHeader.calledWith('Operation-Id', 'op_J1')).to.equal(true);
     });
 

@@ -1,7 +1,6 @@
 const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
-const dockerService = require('../dockerService');
 
 // Node-local, per-component controller state. Sits between the app spec
 // (desired config, in appsInformation) and Docker (actual state). Holds the
@@ -39,14 +38,12 @@ function collection() {
   return db.db(appsLocalDatabase);
 }
 
-// The collection is keyed by the bare component identifier (`component_app`, or
-// the app name for v1-3). Callers pass that form by convention, but convention
-// across files is not an invariant: a docker-prefixed form would silently key a
-// same-component twin the unique index cannot collapse (different key strings).
-// Normalize at the storage boundary so the namespace is enforced in one place.
-function canonical(identifier) {
-  return dockerService.getBaseAppName(identifier);
-}
+// The collection is keyed by the bare component identifier (`component_app`, or the
+// app name for v1-3), and every caller passes that form. This layer deliberately does
+// NOT normalise: it cannot tell a docker name from a bare identifier — `fluxproxy_myapp`
+// is a legitimate value of both — so a strip here keyed a DIFFERENT component's durable
+// operator intent (operatorStopped, condemned, hasEverStarted). Callers holding a docker
+// name convert at their own boundary, where they know which form they hold.
 
 /**
  * Returns the persisted runtime-state document for a component identifier
@@ -55,8 +52,7 @@ function canonical(identifier) {
  * @param {string} identifier
  * @returns {Promise<object|null>}
  */
-async function getState(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function getState(identifier) {
   try {
     const database = collection();
     return await dbHelper.findOneInDatabase(database, appsRuntimeState, { identifier }, { projection: { _id: 0 } });
@@ -92,8 +88,7 @@ async function upsertState(identifier, update) {
   }
 }
 
-async function setFields(rawIdentifier, fields) {
-  const identifier = canonical(rawIdentifier);
+async function setFields(identifier, fields) {
   await upsertState(identifier, { $set: { identifier, ...fields, updatedAt: Date.now() } });
 }
 
@@ -171,9 +166,9 @@ async function setCondemned(identifier, condemned, opts = {}) {
  * No catch, for setOperatorStopped's reason: a request that did not persist must
  * not be reported to the operator as one that did.
  *
- * @param {string} identifier
+ * @param {string} identifier The bare component identifier.
  */
-async function requestRestart(rawIdentifier) {
+async function requestRestart(identifier) {
   // Incremented by the database, never read and rewritten here. Reading first
   // asked getState for a number and got null for two different answers - "no
   // record yet" and "the read failed" - and treating the second as zero wrote a
@@ -183,7 +178,6 @@ async function requestRestart(rawIdentifier) {
   // the read was for. It also counts two concurrent requests as two, where
   // read-then-write had both read the same number and one silently overwrite the
   // other.
-  const identifier = canonical(rawIdentifier);
   await upsertState(identifier, {
     $inc: { restartGeneration: 1 },
     $set: { identifier, updatedAt: Date.now() },
@@ -467,8 +461,7 @@ async function setNetworkHealRemoval(identifier, removed) {
  * @param {string} identifier
  * @returns {Promise<boolean>} - throws if the state cannot be read
  */
-async function isNetworkHealRemoval(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function isNetworkHealRemoval(identifier) {
   const database = collection();
   const state = await dbHelper.findOneInDatabase(database, appsRuntimeState, { identifier }, { projection: { _id: 0 } });
   return state?.networkHealRemoval === true;
@@ -604,8 +597,7 @@ async function removeControllerState(rawIdentifier) {
  * @param {string} identifier
  * @returns {Promise<boolean>} whether the state was dropped
  */
-async function remove(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function remove(identifier) {
   try {
     const database = collection();
     await dbHelper.removeDocumentsFromCollection(database, appsRuntimeState, { identifier });

@@ -12,7 +12,6 @@ const proxyquire = require('proxyquire').noCallThru();
 
 describe('containerHealthMonitor tests', () => {
   let containerHealthMonitor;
-  let appsRepositoryStub;
   let deploymentProviderStub;
   let shutdownPlanStub;
   let dockerServiceStub;
@@ -44,7 +43,6 @@ describe('containerHealthMonitor tests', () => {
       ),
     };
 
-    appsRepositoryStub = { getInstalledApp: sinon.stub().resolves(instantiated) };
     deploymentProviderStub = {
       buildDeployment: sinon.stub().resolves(fakeDeployment),
       // Delegates at call time so per-test overrides of buildDeployment flow
@@ -94,7 +92,6 @@ describe('containerHealthMonitor tests', () => {
       '../appLifecycle/componentProvisioner': componentProvisionerStub,
       '../appLifecycle/appVolumeService': appVolumeServiceStub,
       '../appLifecycle/appUninstaller': appUninstallerStub,
-      '../appDatabase/appsRepository': appsRepositoryStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
       '../appLifecycle/appNetworkLinker': appNetworkLinkerStub,
       '../appLifecycle/shutdownPlan': shutdownPlanStub,
@@ -125,7 +122,7 @@ describe('containerHealthMonitor tests', () => {
         volumeServiceStub.verifyAppVolumeMount.resolves(false);
         let err;
         try {
-          await containerHealthMonitor.recreateMissingContainers('web_testapp', { allowVolumeCreation: false });
+          await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated, { allowVolumeCreation: false });
         } catch (e) { err = e; }
 
         expect(err).to.be.an('error');
@@ -137,7 +134,7 @@ describe('containerHealthMonitor tests', () => {
         volumeServiceStub.verifyAppVolumeMount.resolves(false);
         let err;
         try {
-          await containerHealthMonitor.recreateMissingContainers('testapp', { allowVolumeCreation: false });
+          await containerHealthMonitor.recreateMissingContainers('testapp', instantiated, { allowVolumeCreation: false });
         } catch (e) { err = e; }
 
         expect(err).to.be.an('error');
@@ -147,7 +144,7 @@ describe('containerHealthMonitor tests', () => {
       it('still recreates normally (no volume creation) when the volume is verified', async () => {
         volumeServiceStub.verifyAppVolumeMount.resolves(true);
 
-        await containerHealthMonitor.recreateMissingContainers('web_testapp', { allowVolumeCreation: false });
+        await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated, { allowVolumeCreation: false });
 
         expect(componentProvisionerStub.installComponent.calledOnce).to.be.true;
         expect(componentProvisionerStub.installComponent.firstCall.args[1].createVolumes).to.be.false;
@@ -156,7 +153,7 @@ describe('containerHealthMonitor tests', () => {
       it('leaves the default (vanished-container) path free to create the volume', async () => {
         volumeServiceStub.verifyAppVolumeMount.resolves(false);
 
-        await containerHealthMonitor.recreateMissingContainers('web_testapp');
+        await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
 
         expect(componentProvisionerStub.installComponent.calledOnce, 'a container that is gone anyway may still be rebuilt from scratch').to.be.true;
         expect(componentProvisionerStub.installComponent.firstCall.args[1].createVolumes).to.be.true;
@@ -165,11 +162,10 @@ describe('containerHealthMonitor tests', () => {
   });
 
   describe('recreateMissingContainers', () => {
-    it('throws when the app is not in the local database', async () => {
-      appsRepositoryStub.getInstalledApp.resolves(null);
+    it('throws when the caller could not resolve the app', async () => {
       let err;
       try {
-        await containerHealthMonitor.recreateMissingContainers('web_testapp');
+        await containerHealthMonitor.recreateMissingContainers('web_testapp', null);
       } catch (e) { err = e; }
       expect(err).to.be.an('error');
       expect(err.message).to.include('not found in local database');
@@ -179,7 +175,7 @@ describe('containerHealthMonitor tests', () => {
     it('throws when the component is not part of the app', async () => {
       let err;
       try {
-        await containerHealthMonitor.recreateMissingContainers('ghost_testapp');
+        await containerHealthMonitor.recreateMissingContainers('ghost_testapp', instantiated);
       } catch (e) { err = e; }
       expect(err).to.be.an('error');
       // Reports the identifier it was asked for, not a component name carved
@@ -190,16 +186,16 @@ describe('containerHealthMonitor tests', () => {
 
     it('keeps existing volumes when the component volume is still mounted', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(true);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
       expect(componentProvisionerStub.installComponent.calledOnce).to.be.true;
       const [deployComp, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(deployComp.name).to.equal('web');
       expect(opts.createVolumes).to.be.false;
     });
 
-    it('remakes vanished bind-mount sources before a soft recreate', async () => {
+    it('remakes vanished bind-mount sources before a recreate that keeps the volume', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(true);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
       expect(appVolumeServiceStub.ensureMountSourcesExist.calledOnce).to.be.true;
       expect(appVolumeServiceStub.ensureMountSourcesExist.firstCall.args[0]).to.equal(webComp);
       // the sources must exist before the container is recreated
@@ -208,34 +204,34 @@ describe('containerHealthMonitor tests', () => {
 
     it('recreates volumes when the component volume is gone', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(false);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
       expect(componentProvisionerStub.installComponent.calledOnce).to.be.true;
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.createVolumes).to.be.true;
     });
 
-    it('does not remake sources on a hard recreate (the fresh volume creates them)', async () => {
+    it('does not remake sources on a rebuild (the fresh volume creates them)', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(false);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
       expect(appVolumeServiceStub.ensureMountSourcesExist.called).to.be.false;
     });
 
     it('treats an unreadable volume state as not mounted', async () => {
       volumeServiceStub.verifyAppVolumeMount.rejects(new Error('mount probe failed'));
-      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.createVolumes).to.be.true;
     });
 
     it('forwards the app owner to the create path (load-bearing shutdown label)', async () => {
-      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.owner).to.equal('1OwnerAddress');
     });
 
     it('recomputes the graceful-shutdown gate and forwards it, so a recreate keeps its budget labels', async () => {
       shutdownPlanStub.appRequiresDaemonShutdown.returns(true);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
       expect(shutdownPlanStub.appRequiresDaemonShutdown.calledWith(fakeDeployment)).to.be.true;
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.requiresEncryption).to.equal(true);
@@ -243,7 +239,7 @@ describe('containerHealthMonitor tests', () => {
 
     it('forwards requiresEncryption=false for a non-graceful app (budget labels skipped)', async () => {
       shutdownPlanStub.appRequiresDaemonShutdown.returns(false);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.requiresEncryption).to.equal(false);
     });
@@ -252,7 +248,7 @@ describe('containerHealthMonitor tests', () => {
       // The network is still a precondition of the recreate, but it is
       // guaranteed once above every path that runs a container. Two owners of
       // one guarantee is how they drift apart, so this path must not re-ensure.
-      await containerHealthMonitor.recreateMissingContainers('web_testapp');
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
 
       expect(componentProvisionerStub.installComponent.called).to.be.true;
       expect(appDockerNetworkStub.ensureAppDockerNetwork.called).to.be.false;
@@ -260,7 +256,7 @@ describe('containerHealthMonitor tests', () => {
     });
 
     it('recreates every component for a whole-app identifier', async () => {
-      await containerHealthMonitor.recreateMissingContainers('testapp');
+      await containerHealthMonitor.recreateMissingContainers('testapp', instantiated);
       expect(componentProvisionerStub.installComponent.callCount).to.equal(2);
       const recreated = componentProvisionerStub.installComponent.getCalls().map((c) => c.args[0].name);
       expect(recreated).to.deep.equal(['web', 'db']);

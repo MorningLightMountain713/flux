@@ -68,7 +68,7 @@ const operationRegistry = require('../utils/operationRegistry');
 // The node-wide app operations the spawner gives way to - the same set
 // appOperations and syncthingMonitor stand down for. Per-app leases like
 // 'backup' and 'stopping' are not on it: they hold one app, not the node.
-const NODE_WIDE_OPERATIONS = ['install', 'remove', 'softRedeploy', 'hardRedeploy', 'reconcile'];
+const NODE_WIDE_OPERATIONS = ['install', 'remove', 'redeploy', 'rebuild', 'reconcile'];
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const { FluxCacheManager } = require('../utils/cacheManager');
 const deploymentProvider = require('../appRuntime/deploymentProvider');

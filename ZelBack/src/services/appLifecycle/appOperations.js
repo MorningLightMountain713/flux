@@ -4,13 +4,11 @@
  * active/standby coordination, backup/restore task append, test-app-mount, and
  * the installation/removal/restore in-progress state flags.
  *
- * WARNING: this is a grab-bag. It was inherited as "advancedWorkflows" and is a
- * dumping ground of loosely-related concerns that happen to sit above the
- * installer/uninstaller/docker primitives. It SHOULD be split along its real
- * seams — e.g. lifecycle commands (start/stop/restart/redeploy), the global
- * update intake, reconciliation, and the in-progress state tracker each belong
- * in their own module. Renaming it to appOperations is only a holding action;
- * do not keep adding to it.
+ * WARNING: this is a grab-bag — loosely-related concerns that happen to sit above
+ * the installer/uninstaller/docker primitives. It SHOULD be split along its real
+ * seams: lifecycle commands (start/stop/restart/redeploy), the global update
+ * intake, reconciliation, and the in-progress state tracker each belong in their
+ * own module. Do not keep adding to it.
  */
 const config = require('config');
 const fs = require('node:fs/promises');
@@ -186,8 +184,9 @@ async function redeployComponent(appName, componentName, options = {}) {
   const createVolumes = options.createVolumes || false;
   const onStatus = options.onStatus || null;
 
-  const leaseType = createVolumes ? 'hardRedeploy' : 'softRedeploy';
-  const label = createVolumes ? 'rebuild' : 'redeploy';
+  // One word per operation: the registry lease type, and the word every message
+  // uses. They were two vocabularies for one thing.
+  const operation = createVolumes ? 'rebuild' : 'redeploy';
 
   const status = (msg) => {
     log.info(msg);
@@ -202,7 +201,7 @@ async function redeployComponent(appName, componentName, options = {}) {
   // A successful whole-app redeploy loops uninstall/installComponent (no
   // app-level install/remove lease), so this app-scoped lease is the only
   // registry record of an in-flight redeploy.
-  const redeployToken = operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
+  const redeployToken = operationRegistry.acquire(appName, operation, 'appOperations', `${operation} ${appName}`);
 
   try {
     const deployments = await deploymentProvider.getInstalledDeployments(appName);
@@ -228,7 +227,7 @@ async function redeployComponent(appName, componentName, options = {}) {
 
     for (const deployComp of targets) {
       if (createVolumes) {
-        log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployComponent)`);
+        log.warn(`REMOVAL REASON: ${operation} initiated - ${deployComp.identifier} (redeployComponent)`);
       }
       // Same-spec redeploy: the port set is identical, so leave the app's ufw/UPnP rules
       // in place across the teardown+reinstall (no firewall flap, no ~1s/port UPnP re-map).
@@ -257,10 +256,11 @@ async function redeployComponent(appName, componentName, options = {}) {
         skipPorts: true,
         specVersion: instantiated.version,
         owner: instantiated.owner,
+        uuid: instantiated.uuid,
         requiresEncryption: shutdownPlan.appRequiresDaemonShutdown(freshDeployment),
       });
 
-      status(`Component ${deployComp.identifier} ${label} complete`);
+      status(`Component ${deployComp.identifier} ${operation} complete`);
     }
     operationRegistry.release(appName, redeployToken);
     appReconciler.enqueue(appName);
@@ -271,7 +271,7 @@ async function redeployComponent(appName, componentName, options = {}) {
     // missing containers and, if they can't be rebuilt, applies the §14.5 gate — a
     // has-run app degrades to down + retry; only a never-ran one is removed. No
     // direct uninstall, no fleet-wide removal broadcast over a bad update.
-    log.warn(`${label} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
+    log.warn(`${operation} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
     operationRegistry.release(appName, redeployToken);
     appReconciler.enqueue(appName);
   }
@@ -289,7 +289,9 @@ async function redeployApplication(appName, options = {}) {
   const createVolumes = options.createVolumes || false;
   const onStatus = options.onStatus || null;
 
-  const label = createVolumes ? 'rebuild' : 'redeploy';
+  // One word per operation: the registry lease type, and the word every message
+  // uses. They were two vocabularies for one thing.
+  const operation = createVolumes ? 'rebuild' : 'redeploy';
 
   const status = (msg) => {
     log.info(msg);
@@ -301,10 +303,9 @@ async function redeployApplication(appName, options = {}) {
     return;
   }
 
-  const leaseType = createVolumes ? 'hardRedeploy' : 'softRedeploy';
   // See redeployComponent: the success path loops uninstall/installComponent
   // (no app-level install/remove lease), so this is the sole registry record.
-  const redeployToken = operationRegistry.acquire(appName, leaseType, 'appOperations', `${label} ${appName}`);
+  const redeployToken = operationRegistry.acquire(appName, operation, 'appOperations', `${operation} ${appName}`);
 
   try {
     const deployments = await deploymentProvider.getInstalledDeployments(appName);
@@ -312,7 +313,7 @@ async function redeployApplication(appName, options = {}) {
       throw new Error(`Application ${appName} not found`);
     }
 
-    status(`Beginning ${label} of ${appName}...`);
+    status(`Beginning ${operation} of ${appName}...`);
 
     // Pre-flight: prove every component's image is pullable BEFORE tearing anything
     // down, so a broken redeploy aborts with the old version still running (see
@@ -345,7 +346,7 @@ async function redeployApplication(appName, options = {}) {
       // re-map churn). skipPorts on both the teardown and the reinstall below.
       for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
         if (createVolumes) {
-          log.warn(`REMOVAL REASON: ${label} initiated - ${deployComp.identifier} (redeployApplication)`);
+          log.warn(`REMOVAL REASON: ${operation} initiated - ${deployComp.identifier} (redeployApplication)`);
         }
         // eslint-disable-next-line no-await-in-loop
         await appUninstaller.uninstallComponent(deployComp, {
@@ -391,6 +392,7 @@ async function redeployApplication(appName, options = {}) {
           skipPorts: true,
           specVersion: instantiated.version,
           owner: instantiated.owner,
+          uuid: instantiated.uuid,
           requiresEncryption,
         });
         // Re-attach the recreated container to every linked app's network.
@@ -416,14 +418,14 @@ async function redeployApplication(appName, options = {}) {
       }
     }
 
-    status(`Application ${appName} ${label} complete`);
+    status(`Application ${appName} ${operation} complete`);
     operationRegistry.release(appName, redeployToken);
     appReconciler.enqueue(appName);
   } catch (error) {
     log.error(error);
     // See redeployComponent: never destroy on a redeploy failure — hand recovery to
     // the reconciler (the §14.5 gate decides down-vs-remove on the rebuild attempt).
-    log.warn(`${label} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
+    log.warn(`${operation} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
     operationRegistry.release(appName, redeployToken);
     appReconciler.enqueue(appName);
   }
@@ -535,8 +537,8 @@ async function redeployApplicationAPI(req, res) {
 
     if (isGlobal) {
       globalCommand.executeAppGlobalCommand(appname, 'redeploy', req.headers.zelidauth, force);
-      const label = force ? 'hard' : 'soft';
-      res.json(messageHelper.createSuccessMessage(`${appname} queried for global ${label} redeploy`));
+      const operation = force ? 'rebuild' : 'redeploy';
+      res.json(messageHelper.createSuccessMessage(`${appname} queried for global ${operation}`));
       return;
     }
 
@@ -1863,7 +1865,7 @@ async function coordinateActiveStandbyApps() {
     // folder-set-changing operation is in flight (install/remove/redeploy/reconcile),
     // node-wide. NOT backup/restore - those are skipped per-app in the loop below,
     // so one app's backup never freezes the whole election.
-    if (operationRegistry.anyHeldOfType('install', 'remove', 'softRedeploy', 'hardRedeploy', 'reconcile')) {
+    if (operationRegistry.anyHeldOfType('install', 'remove', 'redeploy', 'rebuild', 'reconcile')) {
       return;
     }
 

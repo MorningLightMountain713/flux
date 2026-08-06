@@ -38,22 +38,41 @@ const appReconciler = require('./appReconciler');
 
 let subscription = null;
 
-function isFluxContainer(name) {
-  return name.startsWith('flux') || name.startsWith('zel');
+// Docker puts a container's labels in the same Actor.Attributes bag it puts
+// `name` in, so an event carries everything the ownership test needs.
+function eventContainer(event) {
+  return { labels: event.Actor?.Attributes, name: event.Actor?.Attributes?.name };
+}
+
+// The bare component identifier the reconciler and appsRuntimeState are keyed by.
+// This bridge holds a DOCKER NAME, so it converts here, at its own boundary, rather
+// than handing the name on for a shared layer to guess at: `fluxproxy_myapp` is both
+// a docker name and a bare identifier, and only the holder knows which it has.
+//
+// The identity label states it outright and is preferred. The strip is the fallback
+// for containers created before the labels shipped — exact here, because this value
+// is known to be a docker name.
+function identifierFor(container, labelKeys) {
+  const labelled = container.labels && container.labels[labelKeys.IDENTIFIER];
+  if (labelled) return labelled;
+  return container.name ? dockerService.getBaseAppName(container.name) : null;
 }
 
 // Wake the dependents of a container that just reached a dependsOn milestone.
 // Fire-and-forget with a guard: enqueueDependents already logs spec-read failures,
 // this only catches anything unexpected so a bad event can never crash the handler.
-function wakeDependents(containerName) {
-  appReconciler.enqueueDependents(containerName).catch((err) => {
-    log.error(`containerEventBridge - enqueueDependents ${containerName} failed: ${err.message}`);
+function wakeDependents(identifier) {
+  appReconciler.enqueueDependents(identifier).catch((err) => {
+    log.error(`containerEventBridge - enqueueDependents ${identifier} failed: ${err.message}`);
   });
 }
 
-async function handleContainerDie(event) {
-  const containerName = event.Actor?.Attributes?.name;
-  if (!containerName || !isFluxContainer(containerName)) return;
+async function handleContainerDie(event, labelKeys) {
+  const container = eventContainer(event);
+  const containerName = container.name;
+  if (!dockerService.isManagedContainer(container, labelKeys)) return;
+  const identifier = identifierFor(container, labelKeys);
+  if (!identifier) return;
 
   // A deliberate teardown of the container (a stop/kill/restart, or a teardown's
   // remove) holds a stop-aligned component lease for the duration of the operation;
@@ -71,38 +90,41 @@ async function handleContainerDie(event) {
   const parsed = parseInt(event.Actor?.Attributes?.exitCode, 10);
   const exitCode = Number.isNaN(parsed) ? null : parsed;
 
-  // Pass the raw docker name; recordExit and enqueue both canonicalise to the bare
-  // component id (single strip, one place), exactly like every other enqueue caller.
   // best-effort diagnostics; the reconciler reads the authoritative exit code
   // from Docker, so a failure here (e.g. DB not ready during boot) is harmless
-  await appsRuntimeState.recordExit(containerName, exitCode);
-  appReconciler.enqueue(containerName);
+  await appsRuntimeState.recordExit(identifier, exitCode);
+  appReconciler.enqueue(identifier);
   // a clean exit can satisfy a dependsOn 'completed' (run-once init/migration) -
   // wake the dependents so they re-evaluate their gate.
-  if (exitCode === 0) wakeDependents(containerName);
+  if (exitCode === 0) wakeDependents(identifier);
 }
 
-function handleContainerDestroy(event) {
-  const containerName = event.Actor?.Attributes?.name;
-  if (!containerName || !isFluxContainer(containerName)) return;
+function handleContainerDestroy(event, labelKeys) {
+  const container = eventContainer(event);
+  if (!dockerService.isManagedContainer(container, labelKeys)) return;
+  const identifier = identifierFor(container, labelKeys);
+  if (!identifier) return;
   // same skip as die: a deliberate teardown (uninstall/redeploy remove) holds a
   // stop-aligned lease while it destroys — its removal needs no reconcile.
-  const lease = operationRegistry.get(containerName);
+  const lease = operationRegistry.get(container.name);
   if (lease && operationRegistry.isStopAligned(lease.type)) {
     return;
   }
-  appReconciler.enqueue(containerName);
+  appReconciler.enqueue(identifier);
 }
 
-function handleContainerStart(event) {
-  const containerName = event.Actor?.Attributes?.name;
-  if (!containerName || !isFluxContainer(containerName)) return;
-  wakeDependents(containerName);
+function handleContainerStart(event, labelKeys) {
+  const container = eventContainer(event);
+  if (!dockerService.isManagedContainer(container, labelKeys)) return;
+  const identifier = identifierFor(container, labelKeys);
+  if (identifier) wakeDependents(identifier);
 }
 
-function handleContainerHealth(event) {
-  const containerName = event.Actor?.Attributes?.name;
-  if (!containerName || !isFluxContainer(containerName)) return;
+function handleContainerHealth(event, labelKeys) {
+  const container = eventContainer(event);
+  if (!dockerService.isManagedContainer(container, labelKeys)) return;
+  const identifier = identifierFor(container, labelKeys);
+  if (!identifier) return;
   // Don't parse the status out of the event — docker only carries it as a free-form
   // Action suffix ("health_status: unhealthy"), with no structured field. Re-reconcile
   // the container (the reconciler reads the authoritative .State.Health.Status from
@@ -110,11 +132,11 @@ function handleContainerHealth(event) {
   // hasOperationLease guard) and its dependents (a dependsOn 'healthy' dependent starts
   // once the target reads healthy). Health events are transition-only, so this is at most
   // one no-op reconcile per transition.
-  appReconciler.enqueue(containerName);
-  wakeDependents(containerName);
+  appReconciler.enqueue(identifier);
+  wakeDependents(identifier);
 }
 
-async function handleNetworkDisconnect(event) {
+async function handleNetworkDisconnect(event, labelKeys) {
   const networkName = event.Actor?.Attributes?.name;
   if (!networkName || !networkName.startsWith('fluxDockerNetwork_')) return;
   const containerId = event.Actor?.Attributes?.container;
@@ -126,19 +148,22 @@ async function handleNetworkDisconnect(event) {
   const match = containers.find((c) => c.Id === containerId);
   if (!match) return; // container already gone - absence belongs to the destroy handler
   const containerName = (match.Names?.[0] || '').replace(/^\//, '');
-  if (!containerName || !isFluxContainer(containerName)) return;
+  const container = { labels: match.Labels, name: containerName };
+  if (!dockerService.isManagedContainer(container, labelKeys)) return;
+  const identifier = identifierFor(container, labelKeys);
+  if (!identifier) return;
   // same skip as die/destroy: a deliberate teardown disconnects its own endpoints
   // under a stop-aligned lease - that disconnect needs no reconcile.
   const lease = operationRegistry.get(containerName);
   if (lease && operationRegistry.isStopAligned(lease.type)) {
     return;
   }
-  appReconciler.enqueue(containerName);
+  appReconciler.enqueue(identifier);
 }
 
 async function handleContainerEvent(event) {
   // Dropped at the edge, before anything routes. A playground session runs under
-  // the spec's own app name, so it passes isFluxContainer and would otherwise be
+  // the spec's own app name, so it is a managed container and would otherwise be
   // recorded and enqueued like an installed component - leaving an
   // appsRuntimeState row for something that was never installed, and asking the
   // reconciler to converge a container with no desired state.
@@ -152,13 +177,13 @@ async function handleContainerEvent(event) {
 
   const action = event.Action || event.status || '';
   if (event.Type === 'network') {
-    if (action === 'disconnect') return handleNetworkDisconnect(event);
+    if (action === 'disconnect') return handleNetworkDisconnect(event, LABEL_KEYS);
     return undefined;
   }
-  if (action === 'die') return handleContainerDie(event);
-  if (action === 'destroy') return handleContainerDestroy(event);
-  if (action === 'start') return handleContainerStart(event);
-  if (action.startsWith('health_status')) return handleContainerHealth(event);
+  if (action === 'die') return handleContainerDie(event, LABEL_KEYS);
+  if (action === 'destroy') return handleContainerDestroy(event, LABEL_KEYS);
+  if (action === 'start') return handleContainerStart(event, LABEL_KEYS);
+  if (action.startsWith('health_status')) return handleContainerHealth(event, LABEL_KEYS);
   return undefined;
 }
 

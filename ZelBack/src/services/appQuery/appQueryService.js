@@ -17,6 +17,7 @@ const { Privilege, authOf } = require('../utils/privileges');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const networkStateService = require('../networkStateService');
 const operationRegistry = require('../utils/operationRegistry');
+const { getSpecBackend } = require('../utils/specLibs');
 const log = require('../../lib/log');
 
 // Database collections
@@ -231,19 +232,25 @@ async function listRunningContainers() {
 
   if (appsInBackupRestore.length > 0) {
     // Get all containers including stopped ones
+    const { LABEL_KEYS } = await getSpecBackend();
     const allContainers = await dockerService.dockerListContainers(true);
-    const fluxContainers = allContainers.filter((app) => dockerService.isAppContainer(app));
+    const fluxContainers = allContainers.filter(
+      (app) => dockerService.isManagedContainer({ labels: app.Labels, name: app.Names?.[0] }, LABEL_KEYS),
+    );
 
     // Find stopped containers that are in backup/restore and add them to running list
     fluxContainers.forEach((container) => {
-      const containerName = container.Names[0].slice(1); // Remove leading '/'
-      const appName = containerName.replace(/^flux/, ''); // Remove flux prefix
-      // backup/restore hold the bare MAIN app name; composed containers are
-      // component_app, so compare on the main name
-      const mainAppName = appName.split('_')[1] || appName;
+      // backup/restore hold the bare MAIN app name. The container states its own
+      // app in a label; the name is read only for containers created before the
+      // labels shipped, because a name-derived answer is the app's identity
+      // segment, which is not a name for anything registered since identity
+      // minting and so would match nothing.
+      const mainAppName = dockerService.containerAppName(
+        { labels: container.Labels, name: container.Names?.[0] }, LABEL_KEYS,
+      );
 
       // If this app is in backup/restore and not already in running list, add it
-      if (appsInBackupRestore.includes(mainAppName)) {
+      if (mainAppName && appsInBackupRestore.includes(mainAppName)) {
         const alreadyIncluded = apps.some((app) => app.Names[0] === container.Names[0]);
         if (!alreadyIncluded) {
           // Keep original state - FDM treats any container in list as active

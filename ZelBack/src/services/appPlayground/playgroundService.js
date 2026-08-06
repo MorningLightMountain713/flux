@@ -1,6 +1,8 @@
 const config = require('config');
 const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
+const { nodeApiUrl } = require('../utils/socketAddressUtils');
+const limitCounter = require('../utils/limitCounter');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const generalService = require('../generalService');
@@ -247,6 +249,17 @@ async function finishSession(session, outcome) {
     session.reserved = false;
   }
 
+  // Give the fleet-wide slot back to the node that issued it. Best-effort: the
+  // lease expires on its own, so a failure here costs a slot held for the rest of
+  // its lease rather than one held indefinitely.
+  if (session.fleetSlot) {
+    const { token, at, fluxId } = session.fleetSlot;
+    session.fleetSlot = null;
+    await limitCounter.release('playground', 'identity', fluxId, token, at).catch((error) => {
+      log.warn(`playground: could not return the fleet slot for ${session.sessionId}: ${error.message}`);
+    });
+  }
+
   playgroundSessionRegistry.remove(session.sessionId);
 
   // The audit record is written at the END, so it carries the verdict and the
@@ -385,7 +398,9 @@ async function submitSession(body, caller = {}) {
   // is the answer to "which node, then".
   const serving = await playgroundServingSet.servesLocalNode(fluxId);
   if (!serving.serves) {
-    const elsewhere = serving.candidates.slice(0, 5);
+    // Named as URLs for the same reason the servingset endpoint answers in them:
+    // a bare address is not somewhere a client can send its next request.
+    const elsewhere = serving.candidates.map(nodeApiUrl).filter(Boolean).slice(0, 5);
     const refused = new Error(
       'This node is not one of the nodes serving your FluxID today.'
       + (elsewhere.length ? ` Try: ${elsewhere.join(', ')}.` : ' Try another node.'),
@@ -484,12 +499,41 @@ async function submitSession(body, caller = {}) {
   // never runs leaves nothing behind either way.
   await admitSession(session);
 
+  // The fleet-wide ask. Everything above this line is what THIS node is willing
+  // to give away; this is the only control that knows what the caller is doing
+  // anywhere else. One node holds that tally, so thirty-two simultaneous requests
+  // become thirty-two questions to it rather than thirty-two independent yeses.
+  const fleetSlot = await limitCounter.reserve('playground', 'identity', fluxId);
+  if (!fleetSlot.allowed) {
+    if (session.reserved) {
+      admissionControl.release(session.sessionId);
+      session.reserved = false;
+    }
+    const busy = new Error(fleetSlot.reason === 'counterUnreachable'
+      ? 'The node holding your playground allowance cannot be reached right now. Try again shortly.'
+      : 'You are already running your allowance of playground sessions. Try again when one finishes.');
+    busy.kind = 'busy';
+    throw busy;
+  }
+  // Held on the session so the teardown can give it back to the node that issued
+  // it. A lost release costs one lease-length of a slot staying held, never a slot
+  // held forever.
+  session.fleetSlot = { token: fleetSlot.token, at: fleetSlot.at, fluxId };
+  // Tell the fleet, so the count survives the node holding it restarting or
+  // leaving. Not awaited for correctness - the slot is already taken; this only
+  // makes it durable.
+  limitCounter.announce('playground', 'identity', fluxId, session.sessionId, Date.now() + sessionTtlMs())
+    .catch((error) => log.warn(`playground: could not announce the session record: ${error.message}`));
+
   const slot = playgroundLimits.consumeSessionSlot(fluxId, sourceIp);
   if (!slot.allowed) {
     if (session.reserved) {
       admissionControl.release(session.sessionId);
       session.reserved = false;
     }
+    await limitCounter.release('playground', 'identity', fluxId, fleetSlot.token, fleetSlot.at)
+      .catch(() => {});
+    session.fleetSlot = null;
     const busy = new Error(slot.message);
     busy.kind = 'busy';
     busy.retryAfterMs = slot.retryAfterMs;
@@ -565,7 +609,9 @@ async function submitSessionAPI(req, res) {
       ingress,
     });
 
-    return operationsController.accepted(res, handle, { sessionId: handle.sessionId });
+    // awaited, not returned bare: accepted resolves this node's own address to
+    // build the status URL, and a rejection must land in this catch
+    return await operationsController.accepted(res, handle, { sessionId: handle.sessionId });
   } catch (error) {
     if (error.kind === 'busy' || error.kind === 'ineligible') {
       if (error.retryAfterMs) {
@@ -583,11 +629,58 @@ function reset() {
   playgroundSessionRegistry.reset();
 }
 
+/**
+ * The nodes serving this caller today.
+ *
+ * Answers only for the caller: the FluxID comes off the auth header, never off a
+ * parameter, so there is nothing to validate and no way to enumerate another
+ * identity's set. That is also why it needs no rate limit of its own — a caller
+ * can only ever ask about themselves, and the answer is one they could already
+ * obtain by trying nodes until one accepted.
+ *
+ * The same question a refused submission answers with its "try these" list, asked
+ * up front so a client can go straight to a node that will take it instead of
+ * discovering the set by rejection. Both read the one set function, so they cannot
+ * disagree.
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+async function servingSetAPI(req, res) {
+  try {
+    const authorized = await verificationHelper.verifyPrivilege('user', req);
+    if (!authorized) {
+      return res.status(401).json(messageHelper.errUnauthorizedMessage());
+    }
+    const auth = serviceHelper.ensureObject(req.headers.zelidauth);
+    const fluxId = auth ? auth.zelid : null;
+    if (!fluxId) {
+      return res.status(401).json(messageHelper.errUnauthorizedMessage());
+    }
+
+    const set = await playgroundServingSet.servingSet(fluxId);
+    return res.json(messageHelper.createDataMessage({
+      // URLs, in set order, not bare ip:port. A node serves its API under a
+      // certificate issued for its *.node.api.runonflux.io name, so an address is
+      // not something a client can connect to — handing one back would leave every
+      // caller to repeat the same transform. Same values the refusal offers.
+      nodes: set.map((node) => nodeApiUrl(node.ip)).filter(Boolean),
+      // Which window this answer belongs to. The set rotates, so a client that
+      // cached one can tell whether it is still the current answer.
+      window: playgroundServingSet.windowIndex(),
+    }));
+  } catch (error) {
+    log.error(error);
+    return res.status(503).json(messageHelper.createErrorMessage(error.message));
+  }
+}
+
 module.exports = {
   ELIGIBLE_TIERS,
   reclaimFor,
   submitSession,
   submitSessionAPI,
+  servingSetAPI,
   getSession,
   sessionDetail,
   reset,

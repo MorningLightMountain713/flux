@@ -5,6 +5,22 @@ const proxyquire = require('proxyquire').noCallThru();
 
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
 
+// The seam appInspector resolves a container through. Callers name an app, or one
+// of its components as `<component>_<app>`; the container identifier is whatever
+// the deployment states, which is NOT the request string for any app registered
+// since identity minting. Tests that care about that difference override
+// resolveRequestContainer; the default answers with the request so the endpoint
+// tests below keep asserting their own behaviour.
+function deploymentProviderStub(overrides = {}) {
+  return {
+    appNameFromRequest: (appname) => appname.split('_')[1] || appname,
+    resolveRequestContainer: sinon.stub().callsFake(async (appname) => appname),
+    resolveRequestTargets: sinon.stub().callsFake(async (appname) => ({ ids: [appname] })),
+    listInstalledDeployments: sinon.stub().resolves([]),
+    ...overrides,
+  };
+}
+
 describe('appInspector tests', () => {
   let appInspector;
   let dockerServiceStub;
@@ -67,6 +83,7 @@ describe('appInspector tests', () => {
     };
 
     appInspector = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+      '../appRuntime/deploymentProvider': deploymentProviderStub(),
       config: configStub,
       '../utils/globalState': globalStateStub,
       '../dockerService': dockerServiceStub,
@@ -730,6 +747,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+      '../appRuntime/deploymentProvider': deploymentProviderStub(),
         config: configStub,
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
@@ -782,6 +800,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges, appQueryService unstubbed', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+      '../appRuntime/deploymentProvider': deploymentProviderStub(),
         config: configStub,
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
@@ -860,6 +879,40 @@ describe('appInspector tests', () => {
       expect(dockerServiceStub.appDockerTop.calledWith('test_myappname')).to.be.true;
     });
 
+    it('tops the container the deployment names, not the request string', async () => {
+      // `test_myappname` names component `test` of app `myappname`. Its container
+      // identifier is built from the app's minted identity, so the request string
+      // is not one — driving it would inspect a container that does not exist.
+      const resolveRequestContainer = sinon.stub().resolves('test_a1b2c3d4e5f6');
+      const appInspectorResolving = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+        config: configStub,
+        '../dockerService': dockerServiceStub,
+        '../appRuntime/deploymentProvider': deploymentProviderStub({ resolveRequestContainer }),
+        '../messageHelper': messageHelperStub,
+        '../../lib/log': logStub,
+        '../appQuery/appQueryService': {},
+        '../serviceHelper': { ensureString: sinon.stub().returnsArg(0) },
+        '../dbHelper': { databaseConnection: sinon.stub() },
+        '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
+        '../utils/appConstants': { appConstants: {} },
+        '../utils/appUtilities': { getContainerStorage: sinon.stub().returns(0) },
+      });
+
+      dockerServiceStub.appDockerTop = sinon.stub().resolves('some data');
+      messageHelperStub.createDataMessage.returns({ status: 'success', data: 'some data' });
+
+      const req = { params: { appname: 'test_myappname' }, query: {} };
+      // appTop answers through res on every path in this tree - there is no
+      // res-less return - so the assertion reads what it wrote.
+      const res = { json: sinon.stub().returnsArg(0) };
+      const result = await appInspectorResolving.appTop(req, res);
+
+      expect(result).to.have.property('status', 'success');
+      sinon.assert.calledWith(resolveRequestContainer, 'test_myappname');
+      expect(dockerServiceStub.appDockerTop.calledWith('test_a1b2c3d4e5f6')).to.be.true;
+      expect(dockerServiceStub.appDockerTop.calledWith('test_myappname')).to.be.false;
+    });
+
     it('should top app, no underscore in the name', async () => {
       const req = {
         params: {
@@ -918,6 +971,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+      '../appRuntime/deploymentProvider': deploymentProviderStub(),
         config: configStub,
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
@@ -971,6 +1025,7 @@ describe('appInspector tests', () => {
 
     it('should log app, underscore in the name', async () => {
       const appInspectorWithHelper = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+      '../appRuntime/deploymentProvider': deploymentProviderStub(),
         config: configStub,
         '../dockerService': {
           ...dockerServiceStub,
@@ -1021,6 +1076,7 @@ describe('appInspector tests', () => {
 
     it('should log app, no underscore in the name', async () => {
       const appInspectorWithHelper = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+      '../appRuntime/deploymentProvider': deploymentProviderStub(),
         config: configStub,
         '../dockerService': {
           ...dockerServiceStub,
@@ -1071,6 +1127,7 @@ describe('appInspector tests', () => {
 
     it('should log app, no underscore in the name, no lines param', async () => {
       const appInspectorWithHelper = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+      '../appRuntime/deploymentProvider': deploymentProviderStub(),
         config: configStub,
         '../dockerService': {
           ...dockerServiceStub,
@@ -1150,6 +1207,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+      '../appRuntime/deploymentProvider': deploymentProviderStub(),
         config: configStub,
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
@@ -1562,6 +1620,9 @@ describe('appInspector tests', () => {
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
+        // The handler resolves the container through this seam before reading the
+        // monitoring store; unstubbed it reaches the database.
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../appQuery/appQueryService': {
           decryptEnterpriseApps: sinon.stub().returnsArg(0),
         },
@@ -1662,6 +1723,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+      '../appRuntime/deploymentProvider': deploymentProviderStub(),
         config: configStub,
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
@@ -1825,6 +1887,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+      '../appRuntime/deploymentProvider': deploymentProviderStub(),
         config: configStub,
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,

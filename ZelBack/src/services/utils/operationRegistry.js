@@ -7,8 +7,8 @@ const log = require('../../lib/log');
 // mid-operation instead of a node-wide "something is happening" bit.
 //
 // Three lease scopes, one uniform shape:
-//   app-scoped (key = app name)            : install | remove | softRedeploy |
-//                                            hardRedeploy | reconcile | backup | restore
+//   app-scoped (key = app name)            : install | remove | redeploy |
+//                                            rebuild | reconcile | backup | restore
 //   component-scoped (key = component id)  : actuating (a create/start heading to
 //                                            running) | stopping (a stop/kill/restart
 //                                            heading to stopped, was stoppingContainers) |
@@ -37,8 +37,8 @@ const log = require('../../lib/log');
 const TTL_MS = {
   install: 30 * 60 * 1000,
   remove: 30 * 60 * 1000,
-  softRedeploy: 30 * 60 * 1000,
-  hardRedeploy: 30 * 60 * 1000,
+  redeploy: 30 * 60 * 1000,
+  rebuild: 30 * 60 * 1000,
   reconcile: 30 * 60 * 1000,
   backup: 60 * 60 * 1000,
   restore: 60 * 60 * 1000,

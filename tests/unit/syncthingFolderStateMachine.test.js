@@ -397,6 +397,7 @@ describe('syncthingFolderStateMachine tests', () => {
     beforeEach(() => {
       mockParams = {
         appId: 'test-app',
+        identifier: 'bare-app',
         syncFolder: null,
         requiresSyncBeforeStart: true,
         syncthingAppsFirstRun: false,
@@ -425,7 +426,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
       expect(result.cache).to.deep.equal({ restarted: true, marker: 'kept' });
       expect(result.syncthingFolder).to.equal(mockParams.syncthingFolder);
     });
@@ -438,7 +439,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
     });
 
     it('requests a start for a stopped syncFirst component whose folder is already sendreceive', async () => {
@@ -450,7 +451,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
     });
 
     it('does not request a start for a stopped activeStandby component (the election decides)', async () => {
@@ -476,7 +477,7 @@ describe('syncthingFolderStateMachine tests', () => {
       expect(result.cache.numberOfExecutions).to.equal(1);
       // the stop+wipe is now declared to the reconciler (the sole actuator), not done
       // imperatively here - so a start can never race the wipe (S1)
-      sinon.assert.calledOnceWithExactly(appReconcilerMock.requestStopAndClearData, 'test-app', sinon.match.string);
+      sinon.assert.calledOnceWithExactly(appReconcilerMock.requestStopAndClearData, 'bare-app', sinon.match.string);
     });
 
     it('should handle first run with existing receiveonly folder', async () => {
@@ -535,7 +536,7 @@ describe('syncthingFolderStateMachine tests', () => {
       expect(result.cache.designationPending).to.be.true;
       expect(result.cache.designatedLeader).to.not.equal(true);
       // the start is now declared to the reconciler, not done imperatively here
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
     });
 
     it('does not crown itself while its own peers are silent - an isolated node cannot seed', async () => {
@@ -561,7 +562,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       expect(result.syncthingFolder.type).to.not.equal('sendreceive');
       expect(result.cache.designatedLeader).to.not.equal(true);
-      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
       // The confirmation itself must not survive isolation: a heal is followed
       // by LEADER_CONFIRM_COUNT clean passes, not an instant seed on stale wins.
       expect(result.cache.leaderStreak).to.equal(0);
@@ -624,7 +625,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       expect(result.syncthingFolder.type).to.equal('receiveonly');
       expect(result.cache.restarted).to.not.equal(true);
-      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
     });
 
     it('takes over when the elected holder is gone and this node is well connected', async () => {
@@ -1124,7 +1125,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
       expect(result.syncthingFolder.type).to.equal('sendreceive');
       expect(result.cache.restarted).to.be.true;
       sinon.assert.notCalled(appUninstallerMock.uninstallApplication);
@@ -1171,7 +1172,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       expect(result.syncthingFolder.type).to.equal('sendreceive');
       expect(result.cache.restarted).to.be.true;
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
     });
 
     // Contract: a receive-only folder with LOCAL changes must never be promoted to
@@ -1285,7 +1286,7 @@ describe('syncthingFolderStateMachine tests', () => {
       expect(result.syncthingFolder.type).to.equal('sendreceive');
       expect(result.cache.restarted).to.be.true;
       sinon.assert.notCalled(syncthingServiceMock.dbRevert);
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
     });
 
     // Pre-flip safety: completion metrics come from the index, and a stale index
@@ -1348,7 +1349,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       expect(result.syncthingFolder.type).to.equal('sendreceive');
       expect(result.cache.restarted).to.be.true;
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
     });
 
     it('should NOT start on unsynced data while sync is still progressing (no force-start)', async () => {
@@ -1395,7 +1396,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       expect(result.syncthingFolder.type).to.equal('receiveonly');
       expect(result.cache.numberOfExecutions).to.equal(1);
-      sinon.assert.calledOnceWithExactly(appReconcilerMock.requestStopAndClearData, 'test-app', sinon.match.string);
+      sinon.assert.calledOnceWithExactly(appReconcilerMock.requestStopAndClearData, 'bare-app', sinon.match.string);
     });
 
     it('should process skipped app on second encounter', async () => {
@@ -1407,7 +1408,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       expect(result.syncthingFolder.type).to.equal('receiveonly');
       expect(result.cache.numberOfExecutions).to.equal(1);
-      sinon.assert.calledOnceWithExactly(appReconcilerMock.requestStopAndClearData, 'test-app', sinon.match.string);
+      sinon.assert.calledOnceWithExactly(appReconcilerMock.requestStopAndClearData, 'bare-app', sinon.match.string);
     });
 
     it('never force-starts when sync status is unavailable (stays receiveonly on unverified data)', async () => {
@@ -1749,12 +1750,14 @@ describe('syncthingFolderStateMachine tests', () => {
       volumeServiceMock.isPathMounted.resolves(false);
       fsMock.promises.readdir.resolves([dirent('leaked.db')]);
 
-      const result = await stateMachine.verifyFolderMountSafety('test-app', '/apps/test-app');
+      const result = await stateMachine.verifyFolderMountSafety('test-app', '/apps/test-app', 'MyApp');
 
       expect(result.isSafe).to.be.false;
       expect(result.reason).to.equal('unmounted_with_content');
       expect(result.hasContent).to.be.true;
-      sinon.assert.calledWith(appTamperingDetectionServiceMock.recordEvent, 'test-app', 'mount_vanished');
+      // the incident rolls up under the APP, not the folder id: one app's events
+      // must not split across two documents
+      sinon.assert.calledWith(appTamperingDetectionServiceMock.recordEvent, 'MyApp', 'mount_vanished');
     });
 
     it('is unsafe when the dir is not mounted and empty', async () => {
@@ -1858,14 +1861,14 @@ describe('syncthingFolderStateMachine tests', () => {
     const log = require('../../ZelBack/src/lib/log');
     it('requests a start for a stopped syncFirst container', async () => {
       dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
-      await stateMachine.ensureContainerRunning('test-app', true);
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'running');
+      await stateMachine.ensureContainerRunning('test-app', 'bare-app', true);
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
     });
     it('treats a null inspect as confirmed absence, not an error (recreate owns missing containers)', async () => {
       const errorSpy = sinon.spy(log, 'error');
       try {
         dockerServiceMock.dockerContainerInspect.resolves(null);
-        await stateMachine.ensureContainerRunning('test-app', true);
+        await stateMachine.ensureContainerRunning('test-app', 'bare-app', true);
         sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
         sinon.assert.notCalled(errorSpy);
       } finally {
@@ -2012,10 +2015,9 @@ describe('syncthingFolderStateMachine tests', () => {
         globalBytes: 100000, inSyncBytes: 0, globalFiles: 3, state: 'idle',
       });
 
-      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', [
-        '/apps/test-app/config.yaml',
-        '/apps/test-app/io.runonflux',
-      ]);
+      const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', {
+        injectedExcludePaths: ['/apps/test-app/config.yaml', '/apps/test-app/io.runonflux'],
+      });
 
       expect(result.isSafe).to.be.false;
       expect(result.reason).to.equal('phantom_index_empty_disk');
@@ -2097,6 +2099,7 @@ describe('syncthingFolderStateMachine tests', () => {
     beforeEach(() => {
       mockParams = {
         appId: 'test-app',
+        identifier: 'bare-app',
         syncFolder: { type: 'sendreceive', path: '/apps/test-app' },
         requiresSyncBeforeStart: false,
         syncthingAppsFirstRun: false,
@@ -2121,7 +2124,7 @@ describe('syncthingFolderStateMachine tests', () => {
       // it, and honouring it would suppress the config rewrite a changed device list
       // needs), so "proceeded" is the folder staying sendreceive.
       expect(result.syncthingFolder.type).to.equal('sendreceive');
-      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'test-app', 'stopped');
+      sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'stopped');
     });
 
     it('demotes to receiveonly and holds the container when the volume cannot be mounted', async () => {
@@ -2132,7 +2135,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       expect(result.syncthingFolder.type).to.equal('receiveonly');
       expect(result.cache.mountSafetyBlocked).to.be.true;
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'stopped');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'stopped');
     });
 
     it('still demotes after a successful mount when the index is phantom over an empty volume', async () => {
@@ -2146,7 +2149,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
       expect(result.syncthingFolder.type).to.equal('receiveonly');
       expect(result.cache.blockedReason).to.equal('phantom_index_empty_disk');
-      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'test-app', 'stopped');
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'stopped');
     });
   });
 

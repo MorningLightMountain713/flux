@@ -6,6 +6,7 @@ const sinon = require('sinon');
 
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
 const deviceHelper = require('../../ZelBack/src/services/deviceHelper');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 
 describe('IOUtils getVolumeInfo tests', () => {
   // findmnt (listMountedFilesystems) records: the node disks plus the loop-backed
@@ -29,6 +30,11 @@ describe('IOUtils getVolumeInfo tests', () => {
 
   beforeEach(() => {
     listStub = sinon.stub(deviceHelper, 'listMountedFilesystems').resolves(filesystems);
+    // Volume paths are now built FORWARD from the app's stored identity rather
+    // than decoded back out of the mount table. These fixtures are pre-mint apps,
+    // whose identity is their own name.
+    sinon.stub(appsRepository, 'getInstalledApp').callsFake(async (name) => ({ name, identity: null }));
+    sinon.stub(appsRepository, 'listInstalledIdentities').resolves([null]);
   });
 
   afterEach(() => {

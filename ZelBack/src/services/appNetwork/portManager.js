@@ -48,12 +48,15 @@ const monotonicMs = () => Number(process.hrtime.bigint() / 1000000n);
  * this node was never meant to hold: an enterprise application only ever
  * installs on ArcaneOS (appSpawner), so a node holding one can always read it.
  *
- * @returns {Promise<Array<{name: string, ports: number[]}>>} the applications
- *   and the ports each holds
+ * @returns {Promise<Array<{identity: string, name: string, ports: number[]}>>} the
+ *   applications and the ports each holds. Identity, not just name: a port clash
+ *   is decided on it, because a name is briefly held by two apps at once
  */
 async function assignedPortsInstalledApps() {
   const deployments = await deploymentProvider.listInstalledDeployments();
-  return deployments.map((deployment) => ({ name: deployment.appName, ports: deployment.allHostPorts() }));
+  return deployments.map((deployment) => ({
+    identity: deployment.identity, name: deployment.appName, ports: deployment.allHostPorts(),
+  }));
 }
 
 /**
@@ -92,7 +95,7 @@ async function assignedPortsGlobalApps(appNames) {
       const deployments = await deploymentProvider.buildDeployments(inst);
       const ports = deployments.flatMap((deployment) => deployment.allHostPorts());
       if (ports.length > 0) {
-        apps.push({ name: inst.name, ports });
+        apps.push({ identity: deployments[0].identity, name: inst.name, ports });
       }
     } catch (err) {
       log.warn(`assignedPortsGlobalApps: skipping ${inst.name}: ${err.message}`);
@@ -118,7 +121,11 @@ async function ensureApplicationPortsNotUsed(deployment, globalCheckedApps) {
 
   for (const port of deployment.allHostPorts()) {
     const portAssigned = currentAppsPorts.find((app) => app.ports.includes(port));
-    if (portAssigned && portAssigned.name !== deployment.appName) {
+    // Compared on IDENTITY, not name. A name is briefly held by two apps at
+    // once - the one expiring and the one re-registering it - and a leftover
+    // install of the previous holder would otherwise read as "myself", let the
+    // install through, and fail at the docker port bind instead of here.
+    if (portAssigned && portAssigned.identity !== deployment.identity) {
       throw new Error(`Flux App ${deployment.appName} port ${port} already used with different application. Installation aborted.`);
     }
   }
