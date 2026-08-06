@@ -22,7 +22,7 @@ const daemonServiceControlRpcs = require('./daemonService/daemonServiceControlRp
 const benchmarkService = require('./benchmarkService');
 const cloudUIUpdateService = require('./cloudUIUpdateService');
 const generalService = require('./generalService');
-const explorerService = require('./explorerService');
+const chainReadApi = require('./chainReadApi');
 const fluxCommunication = require('./fluxCommunication');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const fluxNetworkMonitor = require('./fluxNetworkMonitor');
@@ -1651,7 +1651,7 @@ async function getFluxInfo(req, res) {
     info.appsHashesTotal = hashesOk.length;
     const mesOK = hashesOk.filter((mes) => mes.message === true);
     info.hashesPresent = mesOK.length;
-    const explorerScannedHeight = await explorerService.getScannedHeight();
+    const explorerScannedHeight = await chainReadApi.getScannedHeight();
     if (explorerScannedHeight.status === 'error') {
       throw explorerScannedHeight.data;
     }

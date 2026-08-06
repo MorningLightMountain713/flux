@@ -49,6 +49,7 @@ const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
 
+const chainReadApi = require('./services/chainReadApi');
 const explorerService = require('./services/explorerService');
 const generalService = require('./services/generalService');
 const upnpService = require('./services/upnpService');
@@ -527,27 +528,27 @@ module.exports = (app) => {
   // sees it (owner and above); the levers mutate trust surfaces — forced
   // certificate renewal, authority rotation, refuse-set edits — and are
   // admin/fluxteam only, enforced in the handlers.
-  app.get('/apps/mesh/status/:appname?', (req, res) => {
-    meshOperatorService.meshAppStatusAPI(req, res);
-  });
-  app.post('/apps/mesh/renewcertificate', (req, res) => {
-    meshOperatorService.meshRenewCertificateAPI(req, res);
-  });
-  app.post('/apps/mesh/rotationbegin', (req, res) => {
-    meshOperatorService.meshRotationBeginAPI(req, res);
-  });
-  app.post('/apps/mesh/rotationadopt', (req, res) => {
-    meshOperatorService.meshRotationAdoptAPI(req, res);
-  });
-  app.post('/apps/mesh/rotationconclude', (req, res) => {
-    meshOperatorService.meshRotationConcludeAPI(req, res);
-  });
-  app.post('/apps/mesh/refuse', (req, res) => {
-    meshOperatorService.meshRefuseAPI(req, res);
-  });
-  app.post('/apps/mesh/unrefuse', (req, res) => {
-    meshOperatorService.meshUnrefuseAPI(req, res);
-  });
+  app.get('/apps/mesh/status/:appname?', asyncRoute((req, res) => {
+    return meshOperatorService.meshAppStatusAPI(req, res);
+  }));
+  app.post('/apps/mesh/renewcertificate', asyncRoute((req, res) => {
+    return meshOperatorService.meshRenewCertificateAPI(req, res);
+  }));
+  app.post('/apps/mesh/rotationbegin', asyncRoute((req, res) => {
+    return meshOperatorService.meshRotationBeginAPI(req, res);
+  }));
+  app.post('/apps/mesh/rotationadopt', asyncRoute((req, res) => {
+    return meshOperatorService.meshRotationAdoptAPI(req, res);
+  }));
+  app.post('/apps/mesh/rotationconclude', asyncRoute((req, res) => {
+    return meshOperatorService.meshRotationConcludeAPI(req, res);
+  }));
+  app.post('/apps/mesh/refuse', asyncRoute((req, res) => {
+    return meshOperatorService.meshRefuseAPI(req, res);
+  }));
+  app.post('/apps/mesh/unrefuse', asyncRoute((req, res) => {
+    return meshOperatorService.meshUnrefuseAPI(req, res);
+  }));
 
   // Nothing touches the chain and no other node is told the session exists.
   // Answers 202 + jobId; the run takes minutes, so the client polls.
@@ -591,33 +592,17 @@ module.exports = (app) => {
     return appTamperingDetectionService.getEvents(req, res);
   }));
 
-  // app.get('/explorer/allutxos', (req, res) => {
-  //   explorerService.getAllUtxos(req, res);
-  // });
-  // app.get('/explorer/alladdresseswithtransactions', (req, res) => {
-  //   explorerService.getAllAddressesWithTransactions(req, res);
-  // });
-  // app.get('/explorer/alladdresses', (req, res) => {
-  //   explorerService.getAllAddresses(req, res);
-  // });
-
   app.get('/explorer/utxo/:address?', cache('30 seconds'), asyncRoute((req, res) => {
-    return explorerService.getAddressUtxos(req, res);
+    return chainReadApi.getAddressUtxos(req, res);
   }));
   app.get('/explorer/transactions/:address?', cache('30 seconds'), asyncRoute((req, res) => {
-    return explorerService.getAddressTransactions(req, res);
+    return chainReadApi.getAddressTransactions(req, res);
   }));
   app.get('/explorer/balance/:address?', cache('30 seconds'), asyncRoute((req, res) => {
-    return explorerService.getAddressBalance(req, res);
+    return chainReadApi.getAddressBalance(req, res);
   }));
   app.get('/explorer/scannedheight', cache('30 seconds'), asyncRoute((req, res) => {
-    return explorerService.getScannedHeight(req, res);
-  }));
-  // app.get('/explorer/fusion/coinbase/all', cache('30 seconds'), (req, res) => {
-  //   explorerService.getAllFusionCoinbase(req, res);
-  // });
-  app.get('/explorer/fusion/coinbase/:address?', cache('30 seconds'), asyncRoute((req, res) => { // deprecated
-    return explorerService.getAddressFusionCoinbase(req, res);
+    return chainReadApi.getScannedHeight(req, res);
   }));
 
   // GET PROTECTED API - User level
