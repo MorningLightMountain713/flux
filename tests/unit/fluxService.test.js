@@ -18,7 +18,7 @@ const proxyquire = require('proxyquire');
 
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
-const explorerService = require('../../ZelBack/src/services/explorerService');
+const chainReadApi = require('../../ZelBack/src/services/chainReadApi');
 const generalService = require('../../ZelBack/src/services/generalService');
 const fluxCommunication = require('../../ZelBack/src/services/fluxCommunication');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
@@ -1808,7 +1808,7 @@ describe('fluxService tests', () => {
       appsServiceListRunningAppsStub = sinon.stub(appQueryService, 'listRunningApps');
       appsServiceAppsResourcesStub = sinon.stub(resourceQueryService, 'appsResources');
       appsServiceGetAppHashesStub = sinon.stub(registryManager, 'getAppHashes');
-      explorerServiceStub = sinon.stub(explorerService, 'getScannedHeight');
+      explorerServiceStub = sinon.stub(chainReadApi, 'getScannedHeight');
       fluxCommunicationStub = sinon.stub(fluxCommunication, 'connectedPeersInfo');
       fluxNetworkHelperStub = sinon.stub(fluxNetworkHelper, 'getIncomingConnectionsInfo');
       syncthingServiceStub = sinon.stub(syncthingService, 'systemVersion');

@@ -1246,16 +1246,16 @@ module.exports = (app) => {
   });
 
   app.get('/explorer/reindex/:reindexapps?', (req, res) => {
-    explorerService.reindexExplorer(req, res);
+    explorerService.reindexExplorerApi(req, res);
   });
   app.get('/explorer/restart', (req, res) => {
-    explorerService.restartBlockProcessing(req, res);
+    explorerService.restartBlockProcessingApi(req, res);
   });
   app.get('/explorer/stop', (req, res) => {
-    explorerService.stopBlockProcessing(req, res);
+    explorerService.stopBlockProcessingApi(req, res);
   });
   app.get('/explorer/rescan/:blockheight?/:rescanapps?', (req, res) => {
-    explorerService.rescanExplorer(req, res);
+    explorerService.rescanExplorerApi(req, res);
   });
 
   app.get('/apps/checkhashes', (req, res) => {

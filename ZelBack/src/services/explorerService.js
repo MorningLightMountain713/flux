@@ -5,6 +5,7 @@ const secp256k1 = require('secp256k1');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const chainRollback = require('./chainRollback');
+const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
 const reorgSource = require('./daemonService/reorgSource');
 const dbHelper = require('./dbHelper');
 const verificationHelper = require('./verificationHelper');
@@ -39,16 +40,61 @@ const oracleKeyMessagesCollection = config.database.chainparams.collections.orac
 const marketplacePricingMessagesCollection = config.database.chainparams.collections.marketplacePricingMessages;
 const policyGroupMessagesCollection = config.database.chainparams.collections.policyGroupMessages;
 
-let blockProccessingCanContinue = true;
-let someBlockIsProcessing = false;
 let isInInitiationOfBP = false;
 let zelAppSpecsMigrationDone = false;
 let explorerReadyEmitted = false;
 let operationBlocked = false;
-let pollTimeout = null;
 let appsTransactions = [];
 let isSynced = false;
 let cachedDaemonVersion = null;
+
+// Scan state. A healthy node has none of this armed between blocks: a drain runs when
+// a block event arrives, and finishes. The single timer exists only for a failure
+// backoff, and for a daemon that publishes no block events at all.
+let scanStopped = true;
+let scanDraining = false;
+let scanDrainPromise = null;
+let scanRequestPending = false;
+let scanFallbackPolling = false;
+let scanTimer = null;
+let scanBlockInFlight = false;
+
+/**
+ * Whether a block is being written right now.
+ *
+ * This replaces the old `someBlockIsProcessing` flag, and the difference is ownership:
+ * the loop sets it around exactly one call and clears it in a `finally`, so it cannot
+ * be observed as false part-way through the block it guards. The old flag was cleared
+ * before the last await of its own block, which is what let a stop land mid-block and
+ * see quiescence.
+ *
+ * @returns {boolean} True while a block is in flight.
+ */
+function blockInFlight() {
+  return scanBlockInFlight;
+}
+
+/**
+ * Whether scanning is enabled.
+ * @returns {boolean} True while scanning is enabled.
+ */
+function scanning() {
+  return !scanStopped;
+}
+
+/**
+ * How many blocks between cursor writes while catching up.
+ *
+ * At the tip the cursor moves every block. During an initial sync it moves in batches,
+ * which is only worth anything on the one full scan a node ever does — a crash costs
+ * re-doing at most this many blocks, and re-doing them is safe because app hashes are
+ * uniquely indexed and chain parameter messages are upserts.
+ *
+ * @returns {number} Batch size.
+ */
+function cursorBatchSize() {
+  return config.fluxapps.explorerCursorBatchSize ?? 500;
+}
 
 
 const blockEmitter = new EventEmitter();
@@ -485,16 +531,9 @@ async function insertAndRequestAppHashes(apps, database) {
  * @param {boolean} isInsightExplorer True if node is insight explorer based.
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
-async function processBlock(blockHeight, isInsightExplorer) {
-  try {
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-    if (!syncStatus.data.synced) {
-      setTimeout(() => {
-        processBlock(blockHeight, isInsightExplorer);
-      }, 2 * 60 * 1000);
-      return;
-    }
-    someBlockIsProcessing = true;
+async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
+  {
+    const atTip = Boolean(loopOptions && loopOptions.atTip);
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.daemon.database);
     // get Block information
@@ -505,8 +544,7 @@ async function processBlock(blockHeight, isInsightExplorer) {
     }
     if (isInsightExplorer && blockDataVerbose.height > 699420 && blockDataVerbose.height < 862002) {
       // speed up sync as there were no app messages between these two blocks
-      processBlock(862002, isInsightExplorer);
-      return;
+      return 862002;
     }
     await processInsight(blockDataVerbose, database);
 
@@ -520,11 +558,12 @@ async function processBlock(blockHeight, isInsightExplorer) {
     const options = {
       upsert: true,
     };
-    // this should run only when node is synced
-    isSynced = !(blockDataVerbose.confirmations >= 2);
+    // Decided by comparison against the daemon's tip rather than inferred from the
+    // block's own confirmation count. getblock returns -1 for a block that is not on
+    // the main chain, which satisfies "confirmations < 2" — so an orphan used to read
+    // as being at the tip and took the tip path.
+    isSynced = atTip;
     if (isSynced) {
-      blockEmitter.emit('blocksProcessed', scannedHeight);
-
       if (globalState.dbReady && blockDataVerbose.height >= config.fluxapps.epochstart) {
         // Desired-state convergence at every tip block: cheap (this node's
         // handful of installed rows), level-triggered, and the reconciler
@@ -541,10 +580,7 @@ async function processBlock(blockHeight, isInsightExplorer) {
         if (blockDataVerbose.height % (config.fluxapps.reconstructAppMessagesHashPeriod * speedMultiplier) === 0) {
           try {
             const reconstructResult = await registryManager.reconstructAppMessagesHashCollection();
-            log.info(`Validation of App Messages Hash Collection — ${reconstructResult.changed} corrected`);
-            if (reconstructResult.changed > 0) {
-              blockEmitter.emit('hashesChanged');
-            }
+            log.info(`Validation of App Messages Hash Collection — ${reconstructResult}`);
           } catch (error) {
             log.error(error);
           }
@@ -579,7 +615,10 @@ async function processBlock(blockHeight, isInsightExplorer) {
       await insertAndRequestAppHashes(appsTransactions, database, true);
       await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
       fluxEventBus.publish('block:processed', { height: scannedHeight });
-    } else if (blockDataVerbose.height % 500 === 0) {
+      // After the cursor, never before it: a subscriber that reads the persisted
+      // height in response to this event would otherwise read the previous block.
+      blockEmitter.emit('blocksProcessed', scannedHeight);
+    } else if (blockDataVerbose.height % cursorBatchSize() === 0) {
       log.info(`Processing Explorer Number of Transactions: ${appsTransactions.length}.`);
       await appJanitor.sweepRegistryExpiry(); // in case node was shutdown for a while and it is started
       await insertTransactions(appsTransactions, database);
@@ -587,33 +626,8 @@ async function processBlock(blockHeight, isInsightExplorer) {
       fluxEventBus.publish('block:processed', { height: scannedHeight });
       blockEmitter.emit('syncProgress', scannedHeight);
     }
-    someBlockIsProcessing = false;
-    if (blockProccessingCanContinue) {
-      if (blockDataVerbose.confirmations > 1) {
-        processBlock(blockDataVerbose.height + 1, isInsightExplorer);
-      } else {
-        const daemonBlockCount = await daemonServiceBlockchainRpcs.getBlockCount();
-        if (daemonBlockCount.status !== 'success') {
-          throw new Error(daemonBlockCount.data.message || daemonBlockCount.data);
-        }
-        const daemonHeight = daemonBlockCount.data;
-        if (daemonHeight > blockDataVerbose.height) {
-          processBlock(blockDataVerbose.height + 1, isInsightExplorer);
-        } else {
-          // eslint-disable-next-line no-use-before-define
-          pollForNewBlocks();
-        }
-      }
-    }
-  } catch (error) {
-    someBlockIsProcessing = false;
-    log.error('Block processor encountered an error.');
-    log.error(error);
-    if (blockProccessingCanContinue) {
-      const deep = error.message && error.message.includes('duplicate key');
-      // eslint-disable-next-line no-use-before-define
-      recoverAndRestart(true, deep);
-    }
+
+    return blockDataVerbose.height + 1;
   }
 }
 
@@ -689,7 +703,7 @@ async function migrateZelAppSpecifications(databaseGlobal) {
  * To start the block processor.
  * @param {boolean} restoreDatabase True if database is to be restored.
  * @param {boolean} deepRestore True if a deep restore is required.
- * @param {boolean} reindexOrRescanGlobalApps True if apps collections are to be reindexed.
+ * @param {boolean} rescanGlobalApps True if apps collections are to be reindexed.
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
 
@@ -988,76 +1002,245 @@ async function checkAndHandleReorgs(database, scannedBlockHeight) {
   return height;
 }
 
-async function pollForNewBlocks() {
-  if (!blockProccessingCanContinue) return;
-  try {
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-    if (!syncStatus.data.synced) {
-      pollTimeout = setTimeout(pollForNewBlocks, 5000);
-      return;
-    }
-
-    const daemonHeight = syncStatus.data.height;
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.daemon.database);
-    const scannedBlockHeight = await getScannedBlockHeightFromDb(database);
-
-    if (daemonHeight > scannedBlockHeight) {
-      const isInsightExplorer = daemonServiceMiscRpcs.isInsightExplorer();
-      processBlock(scannedBlockHeight + 1, isInsightExplorer);
-      return;
-    }
-
-    const restoredHeight = await checkAndHandleReorgs(database, scannedBlockHeight);
-    if (restoredHeight < scannedBlockHeight) {
-      const isInsightExplorer = daemonServiceMiscRpcs.isInsightExplorer();
-      processBlock(restoredHeight + 1, isInsightExplorer);
-      return;
-    }
-
-    pollTimeout = setTimeout(pollForNewBlocks, 5000);
-  } catch (error) {
-    log.error(`Explorer poll error: ${error.message}`);
-    pollTimeout = setTimeout(pollForNewBlocks, 5000);
+/**
+ * Cancels whatever the scan has scheduled. There is at most one thing.
+ * @returns {void}
+ */
+function clearScanTimer() {
+  if (scanTimer) {
+    clearTimeout(scanTimer);
+    scanTimer = null;
   }
 }
 
-async function recoverAndRestart(restoreDatabase, deepRestore) {
-  if (!blockProccessingCanContinue) return;
-  try {
-    await waitForDaemonSync();
+/**
+ * Schedules one future scan attempt, replacing any already scheduled.
+ *
+ * Only two things schedule: a failure, which backs off rather than retrying straight
+ * away, and the fallback for a daemon that does not publish block events. Neither
+ * exists on the push path, so a healthy node has nothing armed between blocks.
+ *
+ * @param {number} delayMs How long to wait.
+ * @param {string} reason What scheduled it, for the log.
+ * @returns {void}
+ */
+function scheduleScan(delayMs, reason) {
+  if (scanStopped) return;
 
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.daemon.database);
-    let scannedBlockHeight = await getScannedBlockHeightFromDb(database);
+  clearScanTimer();
 
-    if (scannedBlockHeight !== 0 && restoreDatabase) {
-      const deepRestoreBlocks = config.fluxapps.explorerDeepRestoreBlocks ?? 100;
-      if (deepRestore && deepRestoreBlocks > 0) {
-        log.info('Deep restoring of database...');
-        scannedBlockHeight = Math.max(scannedBlockHeight - deepRestoreBlocks, 0);
-        await chainRollback.rollbackTo(scannedBlockHeight);
-      } else {
-        log.info('Restoring database...');
-        await chainRollback.restoreDatabaseToBlockheightState(scannedBlockHeight);
-      }
-      log.info('Database restored OK');
-    }
+  scanTimer = setTimeout(() => {
+    scanTimer = null;
+    // eslint-disable-next-line no-use-before-define
+    requestScan(reason);
+  }, delayMs);
+}
 
-    const isInsightExplorer = daemonServiceMiscRpcs.isInsightExplorer();
-    if (isInsightExplorer && scannedBlockHeight < config.fluxapps.epochstart - 1) {
-      scannedBlockHeight = config.fluxapps.epochstart - 1;
-    }
-    processBlock(scannedBlockHeight + 1, isInsightExplorer);
-  } catch (error) {
-    log.error(`Recovery failed: ${error.message}`);
-    setTimeout(() => recoverAndRestart(true, true), 15 * 60 * 1000);
+/**
+ * Brings the scan up to the daemon's tip, then returns.
+ *
+ * Iterates because block N+1 cannot be written before block N, but it does not idle
+ * and it does not schedule: when there is nothing left to do it simply finishes, and
+ * the next block event starts it again. That is the difference from the loop this
+ * replaces, which slept five seconds between checks forever, and — because a failure
+ * could return without delay — could spin at full CPU when the database was
+ * unavailable.
+ *
+ * @returns {Promise<void>} Resolves when caught up, stopped, or backed off.
+ */
+async function drainToTip() {
+  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+
+  if (!syncStatus.data.synced) {
+    scheduleScan(config.fluxapps.explorerUnsyncedRetryMs ?? 5000, 'daemon unsynced');
+    return;
   }
+
+  const daemonHeight = syncStatus.data.height;
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.database.daemon.database);
+
+  // Read once. The durable cursor only moves every `cursorBatchSize()` blocks while
+  // catching up, so re-reading it each time would ask the same question forever — the
+  // drain would never see progress and never terminate. Advancement comes from the
+  // height the previous block returned, which is also what the batching is safe
+  // against: the cursor lagging is expected, standing still is not.
+  let next = (await getScannedBlockHeightFromDb(database)) + 1;
+
+  if (next > daemonHeight) {
+    // Reorgs normally arrive as an event naming the fork block. A daemon that does not
+    // publish the topic still needs them found, so the chain-tips check remains for
+    // exactly that case, on its own 100-block gate.
+    if (!daemonSubscriptionService.isTopicAvailable(daemonSubscriptionService.TOPICS.chainReorg)) {
+      await checkAndHandleReorgs(database, next - 1);
+    }
+
+    // Nothing to wake us on a daemon without block events, so that case keeps a timer.
+    // On the push path this returns with nothing scheduled at all.
+    if (scanFallbackPolling) {
+      scheduleScan(config.fluxapps.explorerIdlePollMs ?? 5000, 'fallback poll');
+    }
+
+    return;
+  }
+
+  const isInsightExplorer = daemonServiceMiscRpcs.isInsightExplorer();
+
+  while (!scanStopped && next <= daemonHeight) {
+    const current = next;
+
+    scanBlockInFlight = true;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      next = await processOneBlock(current, isInsightExplorer, { atTip: current >= daemonHeight });
+    } finally {
+      scanBlockInFlight = false;
+    }
+
+    // A block that does not move the scan forward would be an infinite drain. Nothing
+    // should be able to produce it, which is exactly why it is worth refusing rather
+    // than trusting.
+    if (!Number.isInteger(next) || next <= current) {
+      throw new Error(`Block ${current} did not advance the scan (next: ${next})`);
+    }
+  }
+}
+
+/**
+ * Asks for the scan to run.
+ *
+ * Called by the block event, by the fallback timer, and once at startup. Single
+ * flight: a request arriving while a drain is in progress is remembered rather than
+ * starting a second one, and the drain re-checks before finishing. Exactly one drain
+ * exists at a time, which is what makes "a block is in flight" answerable at all.
+ *
+ * @param {string} reason What asked for it, for the log.
+ * @returns {Promise<void>} Resolves when the drain this call caused has finished.
+ */
+async function requestScan(reason = 'requested') {
+  if (scanStopped) return;
+
+  if (scanDraining) {
+    scanRequestPending = true;
+    return;
+  }
+
+  scanDraining = true;
+  scanDrainPromise = (async () => {
+    try {
+      do {
+        scanRequestPending = false;
+        // eslint-disable-next-line no-await-in-loop
+        await drainToTip();
+      } while (scanRequestPending && !scanStopped);
+    } catch (error) {
+      log.error(`Block processor encountered an error (${reason})`);
+      log.error(error);
+
+      const deep = error.message && error.message.includes('duplicate key');
+
+      try {
+        await recoverFromError(deep);
+      } catch (recoveryError) {
+        log.error(`Recovery failed: ${recoveryError.message}`);
+      }
+
+      // Backed off rather than retried immediately: a database that is gone stays
+      // gone for a while, and an immediate retry is a busy loop.
+      scheduleScan(config.fluxapps.explorerRecoveryRetryMs ?? 60000, 'after error');
+    } finally {
+      scanDraining = false;
+      scanDrainPromise = null;
+    }
+  })();
+
+  await scanDrainPromise;
+}
+
+/**
+ * Enables scanning and runs it once. Blocks then arrive by event.
+ * @returns {Promise<void>} Resolves once the initial drain has finished.
+ */
+async function startScanning() {
+  scanStopped = false;
+
+  // A daemon that publishes no block events has nothing to wake us, so that case —
+  // and only that case — keeps a timer.
+  if (!daemonSubscriptionService.isTopicAvailable(daemonSubscriptionService.TOPICS.hashBlockHeight)) {
+    scanFallbackPolling = true;
+  }
+
+  await requestScan('startup');
+}
+
+/**
+ * Stops scanning and waits for the block in flight to finish.
+ *
+ * Stays stopped: the flag is not restored for the caller, and the single timer is
+ * cancelled rather than left armed.
+ *
+ * @returns {Promise<void>} Resolves once nothing is running or scheduled.
+ */
+async function stopScanning() {
+  scanStopped = true;
+  scanFallbackPolling = false;
+  clearScanTimer();
+
+  if (scanDrainPromise) await scanDrainPromise;
+}
+
+/**
+ * Called when the daemon reports a new block. The only thing that drives scanning on
+ * a healthy node.
+ * @param {number} height The new tip height.
+ * @returns {void}
+ */
+function onNewBlock(height) {
+  if (scanStopped) return;
+
+  requestScan(`block ${height}`).catch((error) => {
+    log.error(`Block processor scan request failed: ${error.message}`);
+  });
+}
+
+/**
+ * Rewinds after a block failed, so the retry starts from a consistent point.
+ *
+ * Only repairs; it neither retries nor schedules. The caller backs off and asks again,
+ * which is what stops a failure from becoming a busy loop. The 15-minute uncancellable
+ * retry this replaces could fire long after the scan had been restarted by another
+ * route, and start a second one.
+ *
+ * @param {boolean} deepRestore Whether to rewind further than the last block.
+ * @returns {Promise<void>} Resolves once the rollback has been applied.
+ */
+async function recoverFromError(deepRestore) {
+  await waitForDaemonSync();
+
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.database.daemon.database);
+  const scannedBlockHeight = await getScannedBlockHeightFromDb(database);
+
+  if (scannedBlockHeight === 0) return;
+
+  const deepRestoreBlocks = config.fluxapps.explorerDeepRestoreBlocks ?? 100;
+
+  if (deepRestore && deepRestoreBlocks > 0) {
+    log.info('Deep restoring of database...');
+    await chainRollback.rollbackTo(Math.max(scannedBlockHeight - deepRestoreBlocks, 0));
+  } else {
+    log.info('Restoring database...');
+    await chainRollback.restoreDatabaseToBlockheightState(scannedBlockHeight);
+  }
+
+  log.info('Database restored OK');
 }
 
 // do a deepRestore of 100 blocks if daemon if enouncters an error (mostly flux daemon was down) or if its initial start of flux
 // use reindexGlobalApps with caution!!!
-async function initiateBlockProcessor(restoreDatabase, deepRestore, reindexOrRescanGlobalApps) {
+async function initiateBlockProcessor(options = {}) {
+  const { restoreDatabase = false, deepRestore = false, rescanGlobalApps = false } = options;
+
   try {
     await waitForDaemonSync();
 
@@ -1119,7 +1302,7 @@ async function initiateBlockProcessor(restoreDatabase, deepRestore, reindexOrRes
 
       const databaseGlobal = db.db(config.database.appsglobal.database);
       log.info('Preparing apps collections');
-      if (reindexOrRescanGlobalApps === true) {
+      if (rescanGlobalApps === true) {
         const resultE = await dbHelper.dropCollection(databaseGlobal, config.database.appsglobal.collections.appsMessages).catch((error) => {
           if (error.message !== 'ns not found') throw error;
         });
@@ -1174,11 +1357,11 @@ async function initiateBlockProcessor(restoreDatabase, deepRestore, reindexOrRes
         if (deepRestore && deepRestoreBlocks > 0) {
           log.info('Deep restoring of database...');
           scannedBlockHeight = Math.max(scannedBlockHeight - deepRestoreBlocks, 0);
-          await chainRollback.rollbackTo(scannedBlockHeight, { rescanGlobalApps: reindexOrRescanGlobalApps });
+          await chainRollback.rollbackTo(scannedBlockHeight, { rescanGlobalApps });
           log.info('Database restored OK');
         } else if (!deepRestore) {
           log.info('Restoring database...');
-          await chainRollback.restoreDatabaseToBlockheightState(scannedBlockHeight, reindexOrRescanGlobalApps);
+          await chainRollback.restoreDatabaseToBlockheightState(scannedBlockHeight, rescanGlobalApps);
           log.info('Database restored OK');
         }
       }
@@ -1197,7 +1380,7 @@ async function initiateBlockProcessor(restoreDatabase, deepRestore, reindexOrRes
       if (lastchainTipCheck === 0) {
         lastchainTipCheck = scannedBlockHeight - 1;
       }
-      pollForNewBlocks();
+      await startScanning();
       return;
     }
 
@@ -1206,49 +1389,122 @@ async function initiateBlockProcessor(restoreDatabase, deepRestore, reindexOrRes
         log.info('Bootstrap: Using address-index fast path');
         await bootstrapAppHashes(daemonHeight);
         log.info('Bootstrap complete, entering steady-state block processing');
-        processBlock(daemonHeight + 1, isInsightExplorer);
       } catch (error) {
         log.error('Bootstrap failed, falling back to block-by-block scan');
         log.error(error);
-        processBlock(config.fluxapps.epochstart, isInsightExplorer);
+        await chainRollback.setScannedHeight(database, config.fluxapps.epochstart - 1);
       }
-    } else {
-      if (isInsightExplorer && scannedBlockHeight < config.fluxapps.epochstart - 1) {
-        scannedBlockHeight = config.fluxapps.epochstart - 1;
-      }
-      processBlock(scannedBlockHeight + 1, isInsightExplorer);
+    } else if (isInsightExplorer && scannedBlockHeight < config.fluxapps.epochstart - 1) {
+      await chainRollback.setScannedHeight(database, config.fluxapps.epochstart - 1);
     }
+
+    // The loop reads the cursor itself, so everything above only has to leave the
+    // cursor where scanning should resume from.
+    await startScanning();
   } catch (error) {
     log.error(error);
     isInInitiationOfBP = false;
-    recoverAndRestart(true, true);
+    await recoverFromError(true);
+    await startScanning();
   }
 }
 
 /**
- * To check if block processing has stopped.
- * @param {number} i Value.
- * @param {callback} callback Callback function.
+ * Stops the scan and waits for it, so a caller can safely mutate what it reads.
+ *
+ * The version this replaces polled a flag for up to twelve seconds and then set the
+ * guard back to `true` before handing control to the caller — so every reindex and
+ * rescan ran with block processing free to resume underneath it. Awaiting the loop
+ * removes both the timeout and the window.
+ *
+ * @returns {Promise<void>} Resolves once the scan has stopped.
  */
-async function checkBlockProcessingStopped(i, callback) {
-  blockProccessingCanContinue = false;
-  clearTimeout(pollTimeout);
-  pollTimeout = null;
-  if (someBlockIsProcessing === false && isInInitiationOfBP === false) {
-    const succMessage = messageHelper.createSuccessMessage('Block processing is stopped');
-    blockProccessingCanContinue = true;
-    callback(succMessage);
-  } else {
-    setTimeout(() => {
-      const j = i + 1;
-      if (j < 12) {
-        checkBlockProcessingStopped(j, callback);
-      } else {
-        const errMessage = messageHelper.createErrorMessage('Unknown error occured. Try again later.');
-        callback(errMessage);
-      }
-    }, 1000);
+async function stopBlockProcessing() {
+  await stopScanning();
+
+  // An initiation parked on waitForDaemonSync has not started the loop yet, so it
+  // would restart the scan the moment the daemon answers.
+  if (isInInitiationOfBP) {
+    throw new Error('Block processor is still initiating. Try again later.');
   }
+}
+
+/**
+ * Stops the scan, then starts it again from a restored database.
+ * @returns {Promise<void>} Resolves once the processor has been asked to start.
+ */
+async function restartBlockProcessing() {
+  await stopBlockProcessing();
+  initiateBlockProcessor({ restoreDatabase: true });
+}
+
+/**
+ * Drops the scan cursor so the next start rebuilds from the beginning.
+ * @param {{rescanGlobalApps?: boolean}} options
+ * @returns {Promise<void>} Resolves once the reindex has been started.
+ */
+async function reindexExplorer(options = {}) {
+  await stopBlockProcessing();
+
+  if (operationBlocked) throw new Error('Operation blocked');
+  operationBlocked = true;
+
+  try {
+    const dbopen = dbHelper.databaseConnection();
+    const database = dbopen.db(config.database.daemon.database);
+
+    await dbHelper.dropCollection(database, scannedHeightCollection).catch((error) => {
+      if (error.message !== 'ns not found') throw error;
+    });
+  } finally {
+    operationBlocked = false;
+  }
+
+  initiateBlockProcessor({
+    restoreDatabase: true,
+    rescanGlobalApps: options.rescanGlobalApps === true,
+  });
+}
+
+/**
+ * Rewinds the scan cursor to a height and restarts from there.
+ * @param {{blockheight: number, rescanGlobalApps?: boolean}} options
+ * @returns {Promise<number>} The height rescanning will resume from.
+ */
+async function rescanExplorer(options = {}) {
+  const blockheight = serviceHelper.ensureNumber(options.blockheight);
+
+  if (!Number.isFinite(blockheight)) throw new Error('No blockheight provided');
+  if (blockheight < 0) throw new Error('BlockHeight lower than 0');
+
+  const dbopen = dbHelper.databaseConnection();
+  const database = dbopen.db(config.database.daemon.database);
+  const query = { generalScannedHeight: { $gte: 0 } };
+  const projection = { projection: { _id: 0, generalScannedHeight: 1 } };
+
+  const currentHeight = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
+  if (!currentHeight) throw new Error('No scanned height found');
+  if (currentHeight.generalScannedHeight <= blockheight) {
+    throw new Error('Block height shall be lower than currently scanned');
+  }
+
+  await stopBlockProcessing();
+
+  if (operationBlocked) throw new Error('Operation blocked');
+  operationBlocked = true;
+
+  try {
+    await chainRollback.setScannedHeight(database, blockheight);
+  } finally {
+    operationBlocked = false;
+  }
+
+  initiateBlockProcessor({
+    restoreDatabase: true,
+    rescanGlobalApps: options.rescanGlobalApps === true,
+  });
+
+  return blockheight;
 }
 
 /**
@@ -1256,17 +1512,19 @@ async function checkBlockProcessingStopped(i, callback) {
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
-async function stopBlockProcessing(req, res) {
+async function stopBlockProcessingApi(req, res) {
   const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
-  if (authorized === true) {
-    const i = 0;
-    checkBlockProcessingStopped(i, async (response) => {
-      // put blockProccessingCanContinue status to true.
-      res.json(response);
-    });
-  } else {
-    const errMessage = messageHelper.errUnauthorizedMessage();
-    res.json(errMessage);
+  if (authorized !== true) {
+    res.json(messageHelper.errUnauthorizedMessage());
+    return;
+  }
+
+  try {
+    await stopBlockProcessing();
+    res.json(messageHelper.createSuccessMessage('Block processing is stopped'));
+  } catch (error) {
+    log.error(error);
+    res.json(messageHelper.createErrorMessage(error.message, error.name, error.code));
   }
 }
 
@@ -1275,18 +1533,19 @@ async function stopBlockProcessing(req, res) {
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
-async function restartBlockProcessing(req, res) {
+async function restartBlockProcessingApi(req, res) {
   const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
-  if (authorized === true) {
-    const i = 0;
-    checkBlockProcessingStopped(i, async () => {
-      initiateBlockProcessor(true, false);
-      const message = messageHelper.createSuccessMessage('Block processing initiated');
-      res.json(message);
-    });
-  } else {
-    const errMessage = messageHelper.errUnauthorizedMessage();
-    res.json(errMessage);
+  if (authorized !== true) {
+    res.json(messageHelper.errUnauthorizedMessage());
+    return;
+  }
+
+  try {
+    await restartBlockProcessing();
+    res.json(messageHelper.createSuccessMessage('Block processing initiated'));
+  } catch (error) {
+    log.error(error);
+    res.json(messageHelper.createErrorMessage(error.message, error.name, error.code));
   }
 }
 
@@ -1295,119 +1554,49 @@ async function restartBlockProcessing(req, res) {
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
-async function reindexExplorer(req, res) {
+async function reindexExplorerApi(req, res) {
   const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
-  if (authorized === true) {
-    // stop block processing
-    const i = 0;
-    let { reindexapps } = req?.params || {};
-    reindexapps = reindexapps ?? req?.query?.rescanapps ?? false;
-    reindexapps = serviceHelper.ensureBoolean(reindexapps);
-    checkBlockProcessingStopped(i, async (response) => {
-      if (response.status === 'error') {
-        res.json(response);
-      } else if (operationBlocked) {
-        const errMessage = messageHelper.createErrorMessage('Operation blocked');
-        res.json(errMessage);
-      } else {
-        operationBlocked = true;
-        const dbopen = dbHelper.databaseConnection();
-        const database = dbopen.db(config.database.daemon.database);
-        const resultOfDropping = await dbHelper.dropCollection(database, scannedHeightCollection).catch((error) => {
-          if (error.message !== 'ns not found') {
-            operationBlocked = false;
-            log.error(error);
-            const errMessage = messageHelper.createErrorMessage(error.message, error.name, error.code);
-            res.json(errMessage);
-          }
-        });
-        operationBlocked = false;
-        if (resultOfDropping === true || resultOfDropping === undefined) {
-          initiateBlockProcessor(true, false, reindexapps); // restore database and possibly do reindex of apps
-          const message = messageHelper.createSuccessMessage('Explorer database reindex initiated');
-          res.json(message);
-        } else {
-          const errMessage = messageHelper.createErrorMessage(resultOfDropping, 'Collection dropping error');
-          res.json(errMessage);
-        }
-      }
-    });
-  } else {
-    const errMessage = messageHelper.errUnauthorizedMessage();
-    res.json(errMessage);
+  if (authorized !== true) {
+    res.json(messageHelper.errUnauthorizedMessage());
+    return;
+  }
+
+  try {
+    const raw = req?.params?.reindexapps ?? req?.query?.reindexapps ?? false;
+    await reindexExplorer({ rescanGlobalApps: serviceHelper.ensureBoolean(raw) });
+    res.json(messageHelper.createSuccessMessage('Explorer database reindex initiated'));
+  } catch (error) {
+    log.error(error);
+    res.json(messageHelper.createErrorMessage(error.message, error.name, error.code));
   }
 }
 
 /**
- * To rescan Flux explorer database from a specific block height. Only accessible by admins and Flux team members.
+ * To rescan Flux explorer database from a specific block height. Only accessible by
+ * admins and Flux team members.
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
-async function rescanExplorer(req, res) {
+async function rescanExplorerApi(req, res) {
+  const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
+  if (authorized !== true) {
+    res.json(messageHelper.errUnauthorizedMessage());
+    return;
+  }
+
   try {
-    const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
-    if (authorized === true) {
-      // since what blockheight
-      let { blockheight } = req?.params || {}; // we accept both help/command and help?command=getinfo
-      blockheight = blockheight || req?.query?.blockheight;
-      if (!blockheight) {
-        const errMessage = messageHelper.createErrorMessage('No blockheight provided');
-        res.json(errMessage);
-      }
-      blockheight = serviceHelper.ensureNumber(blockheight);
-      const dbopen = dbHelper.databaseConnection();
-      const database = dbopen.db(config.database.daemon.database);
-      const query = { generalScannedHeight: { $gte: 0 } };
-      const projection = {
-        projection: {
-          _id: 0,
-          generalScannedHeight: 1,
-        },
-      };
-      const currentHeight = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
-      if (!currentHeight) {
-        throw new Error('No scanned height found');
-      }
-      if (currentHeight.generalScannedHeight <= blockheight) {
-        throw new Error('Block height shall be lower than currently scanned');
-      }
-      if (blockheight < 0) {
-        throw new Error('BlockHeight lower than 0');
-      }
-      let { rescanapps } = req?.params || {};
-      rescanapps = rescanapps ?? req?.query?.rescanapps ?? false;
-      rescanapps = serviceHelper.ensureBoolean(rescanapps);
-      // stop block processing
-      const i = 0;
-      checkBlockProcessingStopped(i, async (response) => {
-        if (response.status === 'error') {
-          res.json(response);
-        } else {
-          if (operationBlocked) {
-            throw new Error('Operation blocked');
-          }
-          operationBlocked = true;
-          const update = { $set: { generalScannedHeight: blockheight } };
-          const options = {
-            upsert: true,
-          };
-          // update scanned Height in scannedBlockHeightCollection
-          await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
-          operationBlocked = false;
-          initiateBlockProcessor(true, false, rescanapps); // restore database and possibly do rescan of apps
-          const message = messageHelper.createSuccessMessage(`Explorer rescan from blockheight ${blockheight} initiated`);
-          res.json(message);
-        }
-      });
-    } else {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-    }
+    const blockheight = req?.params?.blockheight ?? req?.query?.blockheight;
+    const rawRescan = req?.params?.rescanapps ?? req?.query?.rescanapps ?? false;
+
+    const from = await rescanExplorer({
+      blockheight,
+      rescanGlobalApps: serviceHelper.ensureBoolean(rawRescan),
+    });
+
+    res.json(messageHelper.createSuccessMessage(`Explorer rescan from blockheight ${from} initiated`));
   } catch (error) {
-    operationBlocked = false;
     log.error(error);
-    const errMessage = messageHelper.createErrorMessage(error.message, error.name, error.code);
-    res.json(errMessage);
+    res.json(messageHelper.createErrorMessage(error.message, error.name, error.code));
   }
 }
 
@@ -1422,11 +1611,6 @@ async function isExplorerSynced(req, res) {
 }
 
 // testing purposes
-function setBlockProccessingCanContinue(value) {
-  blockProccessingCanContinue = value;
-}
-
-// testing purposes
 function setIsInInitiationOfBP(value) {
   isInInitiationOfBP = value;
 }
@@ -1436,16 +1620,33 @@ function setZelAppSpecsMigrationDone(value) {
   zelAppSpecsMigrationDone = value;
 }
 
+// Registered at require time so the subscription service opens its socket with these
+// already attached. A topic the daemon does not publish simply never delivers, and the
+// scan falls back to its own timer.
 reorgSource.onReorg(handleChainReorg);
+
+daemonSubscriptionService.subscribe(daemonSubscriptionService.TOPICS.hashBlockHeight, {
+  onMessage: (decoded) => onNewBlock(decoded.height),
+});
 
 module.exports = {
   initiateBlockProcessor,
-  processBlock,
+  processOneBlock,
   reindexExplorer,
+  reindexExplorerApi,
   rescanExplorer,
+  rescanExplorerApi,
   stopBlockProcessing,
+  stopBlockProcessingApi,
   restartBlockProcessing,
+  restartBlockProcessingApi,
+  blockInFlight,
   getBlockEmitter,
+  onNewBlock,
+  requestScan,
+  scanning,
+  startScanning,
+  stopScanning,
   handleChainReorg,
 
   // exports for testing purposes
@@ -1456,7 +1657,6 @@ module.exports = {
   getVerboseBlock,
   decodeMessage,
   processInsight,
-  setBlockProccessingCanContinue,
   setIsInInitiationOfBP,
   setZelAppSpecsMigrationDone,
   isOracleSigner,

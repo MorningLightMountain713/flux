@@ -48,7 +48,10 @@ const enterpriseConfig = require('./utils/enterpriseConfig');
 const policyStore = require('./policy/policyStore');
 const ipLocationTable = require('./appPlacement/ipLocationTable');
 const appQueryService = require('./appQuery/appQueryService');
+const chainTipSource = require('./daemonService/chainTipSource');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
+const reorgSource = require('./daemonService/reorgSource');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const fluxService = require('./fluxService');
 const geolocationService = require('./geolocationService');
@@ -407,8 +410,16 @@ async function startFluxFunctions() {
     // before daemonReady is set so its timeout/removal logic can trigger.
     await daemonServiceUtils.buildFluxdClient();
     await daemonServiceMiscRpcs.waitForDaemonRpc();
-    // awaited so isDaemonSynced cache is populated before hash sync reads it
-    await daemonServiceMiscRpcs.daemonBlockchainInfoService();
+
+    // After buildFluxdClient, which parses flux.conf — capability detection reads it
+    // to decide which topics this daemon actually publishes. Consumers registered
+    // their interest at require time, so the socket opens with them already attached.
+    daemonSubscriptionService.start();
+    reorgSource.start();
+
+    // awaited so isDaemonSynced is populated before hash sync reads it. Takes the push
+    // path where the daemon offers it, and the old 30s poll where it does not.
+    await chainTipSource.start();
     globalState.daemonReady = true;
 
     // Initialize app sync orchestrator and spawner
@@ -588,7 +599,7 @@ async function startFluxFunctions() {
         log.error(err);
       }
     }, bootDelay(20 * 60 * 1000));
-    explorerService.initiateBlockProcessor(true, true);
+    explorerService.initiateBlockProcessor({ restoreDatabase: true, deepRestore: true });
     log.info('Flux Block Processing Service started');
     setTimeout(() => {
       appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
